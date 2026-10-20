@@ -16,6 +16,7 @@ import '../../../lib/inference/config.server'
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Collector } from '@boundaryml/baml'
+import { createInjectionGuard } from '@hames-ai/harness-patterns/patterns'
 import type { LLMCallRecord } from '@hames-ai/harness-patterns/types'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -176,9 +177,29 @@ describe('screen call record', () => {
 
   it('records nothing when the call never reached a model', async () => {
     readings = { last: null, logs: [] } as unknown as Collector
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { createInjectionScreen } = await ops()
     await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink })
     expect(records).toHaveLength(0)
+    // Mutation: delete the `!last` guard in `reportCallRecord` → the record is
+    // built from nothing and the TypeError is swallowed by the same catch, so
+    // the count above stays 0; only the log gives it away.
+    expect(err).not.toHaveBeenCalled()
+  })
+
+  // Mutation: swap the two lines in `withUsageAccounting`'s `finally` (account
+  // first) → the refusal throws before the sink is handed the record.
+  it('records a call that the thinking-leaf policy then refuses', async () => {
+    // `VerdaQwenThink` is designated for `PlannerThinking` only; the screen is not.
+    readings = collectorOn('VerdaQwenThink', { durationMs: 1_000 })
+    const { createInjectionScreen } = await ops()
+
+    await expect(
+      createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink }),
+    ).rejects.toThrow(/thinking leaf/)
+
+    expect(records).toHaveLength(1)
+    expect(records[0].clientName).toBe('VerdaQwenThink')
   })
 
   it('runs without a sink exactly as before', async () => {
@@ -205,6 +226,34 @@ describe('screen call record', () => {
     expect(verdict.injection_detected).toBe(false)
     expect(err).toHaveBeenCalled()
     expect(String(err.mock.calls[0][0])).toContain('ScreenUntrustedContent')
+  })
+
+  // The BAML screen THROUGH the guard, with the guard's own recorder failing.
+  // Mutation (adapter half): remove the try/catch in `reportCallRecord` → the
+  // throw lands in `withUsageAccounting`'s `finally`, replaces the verdict and
+  // the guard reports `screenUnavailable`. (Removing only the guard's own
+  // try/catch stays green here — the adapter contains it first; the guard's half
+  // is pinned with a screen that does not catch, in `model-call-event.test.ts`.)
+  it('a recorder that throws in the guard leaves the BAML screen verdict intact', async () => {
+    readings = collectorOn('VerdaQwen', { durationMs: 1_000 })
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { createInjectionScreen } = await ops()
+    const events: { type: string }[] = []
+    const guard = createInjectionGuard(
+      { tools: ['fetch_content'], screen: createInjectionScreen() },
+      (e) => {
+        if (e.type === 'model_call') throw new Error('recorder is down')
+        events.push(e)
+      },
+      'guard',
+    )
+
+    const { summary, data } = await guard.sanitize('fetch_content', 'a clean page')
+
+    expect(summary?.screenUnavailable).toBeUndefined()
+    expect(data).toBe('a clean page')
+    expect(events.map((e) => e.type)).not.toContain('content_sanitized')
+    expect(err).toHaveBeenCalled()
   })
 })
 

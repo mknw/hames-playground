@@ -1135,7 +1135,12 @@ silently degraded second layer must be visible).
   reaches the conversation. `model_call` is in `ALWAYS_COMMIT_TYPES`. The
   describe-tier summaries are recorded the same way by `compactBulkData`
   (`role: 'describe'`; `DescribeFn` / `DescribeBatchFn` take the same trailing
-  `onCall`).
+  `onCall`). Screen rows are live; describe rows are not — `compactBulkData` runs
+  after the answer has gone out and pushes to the context without a live emit, so
+  they and their cost reach the panel and the cost summaries on the conversation's
+  next load, through the trailing save. Recording is best effort and isolated: a
+  recorder that throws is logged and never changes a screen verdict, withholds
+  content or fails the call.
 
 **The verbatim-span invariant.** Neutralization is destructive at source: the
 event store holds the sanitized text, because the store IS LLM-visible via `ref:`

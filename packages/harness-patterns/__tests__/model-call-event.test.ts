@@ -26,6 +26,7 @@ import { withRunFrame } from '../run-frame.server'
 import { __clearReferenceCache, withReferences } from '../patterns/with-references.server'
 import { foldEvents } from '../metrics/aggregate'
 import { foldTokenTotals } from '../observability/token-totals'
+import { getEventPreview } from '../observability/projection'
 import type {
   CallRecordSink,
   ConfiguredPattern,
@@ -130,6 +131,48 @@ describe('the guard records the screen call', () => {
     const { guard, events } = guardWith(async () => clean)
     await guard.sanitize('fetch_content', 'a page')
     expect(modelCalls(events)).toHaveLength(0)
+  })
+
+  // Mutation: drop the try/catch around `emit` in the guard's `onCall` → a
+  // screen with no catch of its own (anything but the BAML adapter) lets the
+  // recording failure reach the guard's `catch`, which reports the screen as
+  // unavailable and, on general-next, withholds a clean page.
+  it('a recorder that throws changes neither the verdict nor the content', async () => {
+    const injected = { injection_detected: false, reason: 'clean', spans: [] }
+    const run = async (throwing: boolean) => {
+      const events: ContextEvent[] = []
+      const guard = createInjectionGuard(
+        {
+          tools: ['fetch_content'],
+          // Calls the sink and does NOT catch what it throws.
+          screen: async ({ onCall }) => {
+            onCall?.(record())
+            return injected
+          },
+        },
+        (e) => {
+          if (throwing && e.type === 'model_call') throw new Error('recorder is down')
+          events.push(e)
+        },
+        'guard',
+      )
+      const out = await guard.sanitize('fetch_content', 'a clean page')
+      return { out, events }
+    }
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const ok = await run(false)
+    const broken = await run(true)
+
+    expect(broken.out.summary).toEqual(ok.out.summary)
+    expect(broken.out.summary?.screenUnavailable).toBeUndefined()
+    expect(broken.out.data).toEqual(ok.out.data)
+    expect(broken.events.map((e) => e.type)).not.toContain('content_sanitized')
+    expect(modelCalls(broken.events)).toHaveLength(0)
+    // Visible, not silent.
+    expect(err).toHaveBeenCalledTimes(1)
+    expect(String(err.mock.calls[0][0])).toContain('recording the screen call failed')
+    err.mockRestore()
   })
 
   // Mutation: emit `{ ...event, llmCall: call }` unredacted → the page text the
@@ -303,6 +346,14 @@ describe('model_call event', () => {
     const totals = foldTokenTotals(events)
     expect(totals.llmCalls).toBe(2)
     expect(totals.costEur).toBeCloseTo(0.0036, 10)
+  })
+
+  // Mutation: blank `head` in the `model_call` case of `getEventPreview` → the
+  // panel lists the row with no role and nothing it read.
+  it('labels its panel row with the role and what it read', () => {
+    expect(getEventPreview('model_call', { role: 'screen', source: 'web/x' })).toBe('screen web/x')
+    expect(getEventPreview('model_call', { role: 'describe', items: 3 })).toBe('describe ×3')
+    expect(getEventPreview('model_call', { role: 'describe' })).toBe('describe')
   })
 
   it('is never rendered into an LLM-facing view as more than its label', () => {

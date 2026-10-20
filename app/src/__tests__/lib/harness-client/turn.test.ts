@@ -287,8 +287,9 @@ const dbClaimOwnership = vi.fn(async (sessionId: string, userId: string, _ttl: n
   sessionClaims.set(sessionId, userId)
   return userId
 })
+const dbReadClaimOwner = vi.fn(async (sessionId: string) => sessionClaims.get(sessionId) ?? null)
 vi.mock('../../../lib/db/session-claims.server', () => ({
-  getSessionClaimOwner: async (sessionId: string) => sessionClaims.get(sessionId) ?? null,
+  getSessionClaimOwner: (sessionId: string) => dbReadClaimOwner(sessionId),
   claimSession: (sessionId: string, userId: string, ttl: number) =>
     dbClaimOwnership(sessionId, userId, ttl),
 }))
@@ -1873,8 +1874,14 @@ function pausedBlob(over: Record<string, unknown> = {}, request = pendingRequest
   })
 }
 
+/** A resume names a conversation that already exists and is its caller's —
+ *  the turn's gate only verifies, it never records — so the request registers
+ *  the owner the way the row it resumes would have. The ownership pins build
+ *  their own requests when they need an id nobody owns. */
 function resume(over: Record<string, unknown> = {}) {
-  return { mode: 'resume' as const, sessionId: 'sess-r', userId: 'user-1', ...over }
+  const req = { mode: 'resume' as const, sessionId: 'sess-r', userId: 'user-1', ...over }
+  if (!conversationOwners.has(req.sessionId)) conversationOwners.set(req.sessionId, req.userId)
+  return req
 }
 
 /** The claimed row a paused conversation reads as. */
@@ -1946,7 +1953,7 @@ describe('resume turns (#433 S7)', () => {
   it('refuses a session the user does not own, flipping nothing', async () => {
     claimSession.mockResolvedValue(null)
 
-    await expect(runTurnAndPersist(resume())).rejects.toThrow('No active session')
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('Session not found')
 
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(saveSession).not.toHaveBeenCalled()
@@ -2675,10 +2682,17 @@ describe('session ownership on the turn path', () => {
   const NOT_FOUND = 'Session not found'
 
   /** Every entry point, as the request it sends for a session id it names. */
-  const ENTRY_POINTS: Array<[string, (userId: string) => Record<string, unknown>]> = [
-    ['new', (userId) => interactive({ sessionId: 'sess-o', userId })],
-    ['continue', (userId) => interactive({ sessionId: 'sess-o', userId, message: 'follow up' })],
-    ['resume', (userId) => resume({ sessionId: 'sess-o', userId })],
+  const ENTRY_POINTS: Array<
+    [string, (userId: string) => Record<string, unknown>, 'claim' | 'verify']
+  > = [
+    ['new', (userId) => interactive({ sessionId: 'sess-o', userId }), 'claim'],
+    [
+      'continue',
+      (userId) => interactive({ sessionId: 'sess-o', userId, message: 'follow up' }),
+      'claim',
+    ],
+    // Verify-only: a resume never establishes an owner.
+    ['resume', (userId) => ({ mode: 'resume' as const, sessionId: 'sess-o', userId }), 'verify'],
     [
       'triggered',
       (userId) => ({
@@ -2690,6 +2704,7 @@ describe('session ownership on the turn path', () => {
         data: { trigger: TRIGGER },
         claimVersion: 'v-trig',
       }),
+      'claim',
     ],
   ]
 
@@ -2773,7 +2788,48 @@ describe('session ownership on the turn path', () => {
     expect(sessionClaims.has('sess-down')).toBe(false)
   })
 
-  describe.each(ENTRY_POINTS)('the %s entry point', (_name, request) => {
+  describe('a resume is verify-only and refuses like every other mode', () => {
+    it("reads the same for an absent id and for another user's id", async () => {
+      const refusal = async (setup: () => void, userId = 'user-b') => {
+        conversationOwners.clear()
+        sessionClaims.clear()
+        claimSession.mockResolvedValue(null)
+        setup()
+        return runTurnAndPersist({ mode: 'resume', sessionId: 'sess-o', userId }).then(
+          () => {
+            throw new Error('resume was not refused')
+          },
+          (err: Error) => err.message,
+        )
+      }
+
+      const absent = await refusal(() => {})
+      const notYours = await refusal(() => {
+        conversationOwners.set('sess-o', 'user-a')
+        sessionClaims.set('sess-o', 'user-a')
+      })
+
+      // The caller's own live claim passes the gate, but no conversation row
+      // loads: the refusal inside `claimTurn`, a different line from the gate's.
+      const claimedNoRow = await refusal(() => sessionClaims.set('sess-o', 'user-b'))
+
+      expect(absent).toBe(NOT_FOUND)
+      expect(notYours).toBe(absent)
+      expect(claimedNoRow).toBe(absent)
+    })
+
+    it('leaves no claim behind when the id is absent', async () => {
+      await expect(
+        runTurnAndPersist({ mode: 'resume', sessionId: 'sess-absent', userId: 'user-1' }),
+      ).rejects.toThrow(NOT_FOUND)
+
+      expect(sessionClaims.has('sess-absent')).toBe(false)
+      expect(dbClaimOwnership).not.toHaveBeenCalled()
+      expectNothingRan()
+    })
+  })
+
+  describe.each(ENTRY_POINTS)('the %s entry point', (_name, request, store) => {
     it("is refused for a user who is not the session's owner", async () => {
       sessionClaims.set('sess-o', 'user-a')
       conversationOwners.set('sess-o', 'user-a')
@@ -2789,11 +2845,17 @@ describe('session ownership on the turn path', () => {
 
       await runTurnAndPersist(request('user-1') as never).catch(() => {})
 
-      expect(dbClaimOwnership).toHaveBeenCalledWith('sess-o', 'user-1', expect.any(Number))
+      if (store === 'claim') {
+        expect(dbClaimOwnership).toHaveBeenCalledWith('sess-o', 'user-1', expect.any(Number))
+      } else {
+        expect(dbReadClaimOwner).toHaveBeenCalledWith('sess-o')
+        expect(dbClaimOwnership).not.toHaveBeenCalled()
+      }
     })
 
     it('is refused when the ownership store fails', async () => {
-      dbClaimOwnership.mockRejectedValueOnce(new Error('store down'))
+      const failing = store === 'claim' ? dbClaimOwnership : dbReadClaimOwner
+      failing.mockRejectedValueOnce(new Error('store down'))
       claimSession.mockResolvedValue(STORED)
 
       await expect(runTurnAndPersist(request('user-1') as never)).rejects.toThrow(

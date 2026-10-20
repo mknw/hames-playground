@@ -76,12 +76,20 @@ session gets, so "not yours" and "not there" read alike. `lib/stash/ownership.se
 is the single resolver; `lib/stash/http.server.ts` exposes it to routes as
 `requireSessionOwner` (reads) and `claimSession` (writes).
 
+It is not stash-only. The sandbox shell routes gate on the same two functions,
+since an interactive shell into a session's container is scoped by the same id as
+its documents. So does every chat turn, ahead of anything built from the session
+id: new, continued and triggered turns are record-or-verify (like a stash write),
+and a resumed turn is verify-only, since it continues a conversation that already
+exists and never establishes an owner. A turn on a session that is not the
+caller's is refused with the same "Session not found" wording the routes use.
+
 Ownership comes from two records:
 
-| Record                                                   | Written by                                                                                                                                                                                    | Covers                                                                                      |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`), which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
-| `conversations.user_id`                                  | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording)                                                 | everything after the session is persisted                                                   |
+| Record                                                   | Written by                                                                                                                                                                                                                                    | Covers                                                                                      |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`) and every new, continued or triggered chat turn, which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
+| `conversations.user_id`                                  | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording)                                                                                                 | everything after the session is persisted                                                   |
 
 First toucher wins, in both records: the claim upsert only re-targets a row that
 is already the caller's or has expired, and `saveConversation` never updates

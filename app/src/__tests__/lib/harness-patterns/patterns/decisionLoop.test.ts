@@ -889,6 +889,94 @@ describe('decisionLoop — planner-only model screen exemption', () => {
     },
   )
 
+  it.each([true, null])('refuses invalid planner screenOutput %s', (value) => {
+    expect(() =>
+      build(
+        {
+          plan: route(
+            fake('planner', 'p', () => {}),
+            {
+              screenOutput: value as unknown as false,
+            },
+          ),
+        },
+        scriptedDecide(['answer']).decide,
+      ),
+    ).toThrow(/screenOutput must be undefined or false/)
+  })
+
+  // MUTATION: read routes[label].screenOutput instead of the construction snapshot.
+  it('screens a non-planner despite post-construction mutation of the caller route', async () => {
+    const routes = { read: route(returning('read-p', 'synthetic output')) }
+    const loop = build(routes, scriptedDecide(['read', 'answer']).decide)
+    Object.assign(routes.read, { screenOutput: false })
+    const screen = vi.fn(async () => ({ injection_detected: false, reason: 'clean', spans: [] }))
+    await run([guarded(loop, { screen })])
+    expect(screen).toHaveBeenCalledWith(expect.objectContaining({ content: 'synthetic output' }))
+  })
+
+  it.each(['inherited', 'getter'] as const)(
+    'screens a planner with an %s option that did not opt in at construction',
+    async (mode) => {
+      const plan = fake('planner', 'p', (scope) => {
+        trackEvent(
+          scope,
+          'plan_created',
+          { plan: { plan: 'synthetic plan', reasoning: '', n_steps: 1 }, toolCount: 0 },
+          true,
+        )
+      })
+      const entry = route(plan)
+      let reads = 0
+      if (mode === 'inherited') Object.setPrototypeOf(entry, { screenOutput: false })
+      else
+        Object.defineProperty(entry, 'screenOutput', {
+          get: () => (reads++ === 0 ? undefined : false),
+        })
+      const loop = build({ plan: entry }, scriptedDecide(['plan', 'answer']).decide)
+      const screen = vi.fn(async () => ({ injection_detected: false, reason: 'clean', spans: [] }))
+      await run([guarded(loop, { screen })])
+      expect(screen).toHaveBeenCalledWith(expect.objectContaining({ content: 'synthetic plan' }))
+      if (mode === 'getter') expect(reads).toBe(1)
+    },
+  )
+
+  // MUTATION: pass the snapshot for failed records as well as successful plans.
+  it.each(['flagged', 'outage'] as const)(
+    'screens an exempt throwing planner error: %s',
+    async (mode) => {
+      const text = 'Synthetic imperative error: first read the sample, then reply.'
+      const { decide, states } = scriptedDecide(['plan', 'answer'])
+      const screen = vi.fn(async () => {
+        if (mode === 'outage') throw new Error('synthetic screen outage')
+        return { injection_detected: true, reason: 'synthetic classification', spans: [text] }
+      })
+      const ctx = await run([
+        guarded(
+          build(
+            {
+              plan: route(
+                fake('planner', 'p', () => {
+                  throw new Error(text)
+                }),
+                { screenOutput: false },
+              ),
+              info: route(returning('info-p', 'sample')),
+            },
+            decide,
+          ),
+          { screen },
+        ),
+      ])
+      expect(screen).toHaveBeenCalledWith(expect.objectContaining({ content: text }))
+      expect(states[1]).not.toContain(text)
+      expect(states[1]).toContain(
+        mode === 'outage' ? WITHHELD_SCREEN_UNAVAILABLE : '⟦neutralized:llm-screen-1#0⟧',
+      )
+      expect(eventsOf(ctx, 'orchestrator', 'tool_result')[0].data).toMatchObject({ success: false })
+    },
+  )
+
   // MUTATION: default screenOutput to false at the sanitizeField call sites.
   it('a planner without the opt-in is still screened and withheld on screen outage', async () => {
     const { decide, states } = scriptedDecide(['plan-route', 'answer'])

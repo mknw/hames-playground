@@ -1879,14 +1879,15 @@ ends the turn, as it does in `callTool`.
 **Planner-only screen exemption.** A route may set `screenOutput: false` only
 when its leaf kind is `planner`; construction refuses the option on every other
 kind. Omission preserves model screening for all consumers, including planners.
-The exemption applies only to the model-authored planner text the loop produced
-(and its failed-record text), never to tool output or retrieved text. The loop
-still caps, deterministically sanitizes, fences according to the enclosing guard
-and emits findings before state, handoff or synthesis can read the record.
-Only the model second opinion is skipped: an imperative plan describes work to
-do and can otherwise be classified as an instruction by that model. The guard's
-per-call `sanitize` override `{ screen: false }` implements this local exception;
-it leaves the enclosing guard and all child tool-result screening intact.
+The exemption is per route, planner kind only, successful plan only. The plan is
+model-authored from the user message plus already-screened prior records and may
+quote them; deterministic neutralisation and the fence still apply. The model
+screen at the plan boundary is the one layer removed; tool results and every
+other route are untouched. "planner" means the leaf pattern's `name === 'planner'`,
+so any pattern given that name qualifies (the same trust as `allowReplan`).
+The loop still caps and emits findings before state, handoff or synthesis can
+read the record. The guard's per-call `sanitize` override `{ screen: false }`
+implements this local exception. Failed planner records remain screened.
 A deterministic sanitizer throw still ends the turn. All screened routes retain
 the marker-only failure policy above.
 

@@ -155,7 +155,8 @@ events and is **untrusted**: it is capped, then passed through the enclosing
 guard under the fixed key `decision_loop_output`, so declare that key in the
 guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
 cannot run withholds the output instead of waving it through. A planner route
-may explicitly set `screenOutput: false` to skip only that model second opinion:
+may explicitly set `screenOutput: false` to skip that model second opinion only
+on its successful plan record (failed records remain screened):
 imperative model-authored plans can otherwise be mistaken for instructions.
 The option is refused on non-planner routes and defaults to screened, including
 for planners. It preserves deterministic sanitization, provenance fencing and

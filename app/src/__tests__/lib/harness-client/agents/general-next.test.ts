@@ -1321,6 +1321,8 @@ describe('general-next think route, in isolation', () => {
 
     // Recorded failure shape: the old model screen reduced the entire plan to
     // `⟦neutralized:llm-screen-1#0⟧` (marker() + applyScreenVerdict in injection-guard.ts).
+    // Characterisation only, not a pin on this fix: these assertions stay green
+    // under its mutations. The assertions above discriminate the fix.
     // Reproduce that shape with synthetic text, without relying on a live classifier.
     const previousGuard = createInjectionGuard(
       {

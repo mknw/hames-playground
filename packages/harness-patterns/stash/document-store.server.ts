@@ -56,9 +56,10 @@ export interface StashDocumentMeta {
   size: number
   /** Upload timestamp (epoch ms). */
   uploadedAt: number
-  /** Hidden from LLM context (mirrors tool-result stash semantics). */
+  /** Hidden from LLM context (mirrors tool-result stash semantics). Retrieval
+   *  and indexing honour it: see `searchDocuments` / `ensureSessionIngested`. */
   hidden?: boolean
-  /** Moved to the Archived section (also excluded from LLM context). */
+  /** Moved to the Archived section (also excluded from LLM context and retrieval). */
   archived?: boolean
   /**
    * Content encoding. `'utf8'` (default, omitted) → `content` is literal text.

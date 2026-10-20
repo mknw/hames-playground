@@ -32,6 +32,7 @@ import {
   DEFAULT_TTL_SECONDS,
   deleteDocument,
   getDocument,
+  getDocumentStrict,
   listDocuments,
   listSessionDocumentIds,
   parseKeyList,
@@ -471,6 +472,10 @@ async function markIngestStatus(
  * it — re-ingesting would double the work and contend on the serial gateway),
  * and non-convertible `base64` binaries. A fully-indexed corpus costs
  * just one `listDocuments`.
+ *
+ * Also skips documents the user hid or archived: those are excluded from the
+ * agent's context, so there is nothing to make searchable. They are picked up by
+ * a later run once un-hidden (their status is still absent or `'failed'`).
  */
 export async function ensureSessionIngested(
   sessionId: string,
@@ -479,6 +484,7 @@ export async function ensureSessionIngested(
   const callTool = opts.callTool ?? resolveStashCallTool()
   const metas = await listDocuments(sessionId, callTool)
   for (const m of metas) {
+    if (m.hidden || m.archived) continue
     if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
     // Skip binaries we can't turn into text; convertible ones (with conversion
     // enabled) fall through to ingestStashDocument, which converts them.
@@ -502,11 +508,56 @@ export async function ensureSessionIngested(
 // Search
 // ============================================================================
 
+/** Most chunks one search will ask the index for while looking past hits that are
+ *  filtered out (see {@link searchDocuments}). */
+const MAX_SEARCH_SPAN = 200
+
+/**
+ * Whether a document may reach the agent's context: neither hidden nor archived,
+ * judged by its CURRENT flags. The flags are read from the stored document
+ * rather than from the cached {@link listDocuments} result or from the chunk's
+ * own payload, because both can be older than the user's last hide/archive.
+ *
+ * Fails closed: a document whose flags cannot be read (or a chunk that names no
+ * document) is treated as not visible, and the reason is logged. A document
+ * that is simply absent has no flags to honour, so it is not filtered here.
+ */
+async function isDocumentVisible(
+  sessionId: string,
+  docId: string,
+  callTool: CallTool,
+): Promise<boolean> {
+  if (!docId) {
+    console.warn(
+      `[ingest] dropped a search hit with no document id for session ${sessionId} ` +
+        '— its hidden/archived flags cannot be checked.',
+    )
+    return false
+  }
+  try {
+    const doc = await getDocumentStrict(sessionId, docId, callTool)
+    return !(doc?.hidden || doc?.archived)
+  } catch (err) {
+    console.warn(
+      `[ingest] dropped search hits of document ${docId} for session ${sessionId}: ` +
+        `its hidden/archived flags could not be read (${err instanceof Error ? err.message : String(err)}).`,
+    )
+    return false
+  }
+}
+
 /**
  * Embed `query` with the session's recorded model and KNN-search its index.
  * Returns [] when the session has no ingested corpus yet. The query is always
  * embedded with the *recorded* provider/model, and {@link assertSameSpace}
  * re-checks dimensionality — a search can never compare across embedding spaces.
+ *
+ * Hits of hidden or archived documents are dropped (see {@link isDocumentVisible}):
+ * hiding a document does not remove its chunks from the index, so the flags are
+ * honoured here, at search time, which is also what makes un-hiding instant.
+ * Since filtered hits would otherwise shrink the answer below `k` while visible
+ * matches remain, the index is asked for a wider span (up to a bound) until `k` visible hits
+ * are found or it runs out.
  */
 export async function searchDocuments(
   sessionId: string,
@@ -533,26 +584,44 @@ export async function searchDocuments(
     dim: recorded.dimensions,
     callTool,
   })
-  const hits = await store.search(q.vector, opts.k ?? 5)
 
-  const out: SearchHit[] = []
-  for (const h of hits) {
-    const content = str(h.payload.content)
-    if (content == null) continue
-    out.push({
-      docId: str(h.payload.doc_id) ?? '',
-      ...(h.payload.provenance === 'sandbox-output'
-        ? { provenance: 'sandbox-output' as const }
-        : {}),
-      source: str(h.payload.source) ?? '',
-      chunkIndex: num(h.payload.chunk_index) ?? 0,
-      content,
-      startOffset: num(h.payload.start_offset),
-      endOffset: num(h.payload.end_offset),
-      score: h.score,
-    })
+  const k = opts.k ?? 5
+  // One flag read per document per search, however many spans are tried.
+  const visibility = new Map<string, Promise<boolean>>()
+  const visible = (docId: string) => {
+    let v = visibility.get(docId)
+    if (!v) visibility.set(docId, (v = isDocumentVisible(sessionId, docId, callTool)))
+    return v
   }
-  return out
+
+  let span = k
+  for (;;) {
+    const hits = await store.search(q.vector, span)
+
+    const out: SearchHit[] = []
+    for (const h of hits) {
+      const content = str(h.payload.content)
+      if (content == null) continue
+      const docId = str(h.payload.doc_id) ?? ''
+      if (!(await visible(docId))) continue
+      out.push({
+        docId,
+        ...(h.payload.provenance === 'sandbox-output'
+          ? { provenance: 'sandbox-output' as const }
+          : {}),
+        source: str(h.payload.source) ?? '',
+        chunkIndex: num(h.payload.chunk_index) ?? 0,
+        content,
+        startOffset: num(h.payload.start_offset),
+        endOffset: num(h.payload.end_offset),
+        score: h.score,
+      })
+      if (out.length >= k) break
+    }
+
+    if (out.length >= k || hits.length < span || span >= MAX_SEARCH_SPAN) return out
+    span = Math.min(span * 2, MAX_SEARCH_SPAN)
+  }
 }
 
 function str(v: unknown): string | undefined {

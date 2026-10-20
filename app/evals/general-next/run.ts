@@ -48,7 +48,8 @@ async function main() {
   }
   // Before the proxy child, the fixture server or any wake: nothing below may start on a
   // checkout that cannot load its agents.
-  assertPackageLayout([...new Set(['general', candidate])])
+  const agents = [...new Set(['general', candidate])]
+  assertPackageLayout(agents)
   let fake: Awaited<ReturnType<typeof import('./fixture-inference').fixtureInference>> | undefined
   if (!live && process.env.GENERAL_EVAL_CHILD !== '1') {
     assertProxyNode()
@@ -213,7 +214,7 @@ async function main() {
         )
     }
     const { createDriver } = await import('./driver')
-    driver = await createDriver(fake, live, liveCatalog)
+    driver = await createDriver(fake, live, liveCatalog, agents)
     for (const job of jobs) {
       active = job.key
       started = Date.now()

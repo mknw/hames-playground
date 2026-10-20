@@ -51,6 +51,7 @@ export async function createDriver(
   fake?: Awaited<ReturnType<typeof fixtureInference>>,
   live = false,
   liveCatalog: MCPToolDescription[] = [],
+  preload: readonly string[] = [],
 ): Promise<ConversationDriver> {
   // Runtime imports follow endpoint configuration; none of these run at module load.
   const { harness, continueSession } = await import('@hames-ai/harness-patterns')
@@ -153,19 +154,29 @@ export async function createDriver(
     }),
   }
   const definitions = new Map<string, AgentDefinition>()
+  async function loadAgent(id: string): Promise<AgentDefinition> {
+    if (!/^[a-z][a-z0-9-]*$/.test(id)) throw new Error('Invalid agent id')
+    let agent = definitions.get(id)
+    if (!agent) {
+      const exports = await import(agentModuleUrl(id))
+      agent = Object.values(exports).find(
+        (value) => value && typeof value === 'object' && (value as AgentDefinition).id === id,
+      ) as AgentDefinition | undefined
+      if (!agent) throw new Error(`Agent ${id} is not available; wait for S3 registration`)
+      definitions.set(id, agent)
+    }
+    return agent
+  }
+  // An agent that exists on disk but cannot load fails here, before any wake, not per job.
+  try {
+    for (const id of preload) await loadAgent(id)
+  } catch (err) {
+    dispose()
+    throw err
+  }
   return {
     async run(next, key) {
-      if (!/^[a-z][a-z0-9-]*$/.test(key.agent)) throw new Error('Invalid agent id')
-      let agent = definitions.get(key.agent)
-      if (!agent) {
-        const exports = await import(agentModuleUrl(key.agent))
-        agent = Object.values(exports).find(
-          (value) =>
-            value && typeof value === 'object' && (value as AgentDefinition).id === key.agent,
-        ) as AgentDefinition | undefined
-        if (!agent) throw new Error(`Agent ${key.agent} is not available; wait for S3 registration`)
-        definitions.set(key.agent, agent)
-      }
+      const agent = await loadAgent(key.agent)
       scenario = next
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()

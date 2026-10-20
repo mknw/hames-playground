@@ -22,6 +22,22 @@ import {
 } from '../../stash/document-store.server'
 import type { ToolCallResult } from '../../types'
 
+/** Redis glob (`*` and backslash escapes only) to a regex source, one character at a time. */
+function globToRegexSource(glob: string): string {
+  let out = ''
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]
+    if (c === '*') out += '.*'
+    else if (c === '\\') out += escapeRegexChar(glob[++i] ?? '')
+    else out += escapeRegexChar(c)
+  }
+  return out
+}
+
+function escapeRegexChar(c: string): string {
+  return c.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&')
+}
+
 function makeFakeRedis() {
   const keys = new Map<string, unknown>() // json docs, space records, vector hashes
   const sets = new Map<string, Set<string>>()
@@ -63,17 +79,7 @@ function makeFakeRedis() {
         keys.set(args.name as string, 'hash')
         return { success: true, data: 1 }
       case 'scan_all_keys': {
-        const re = new RegExp(
-          '^' +
-            (args.pattern as string)
-              .replace(/\\(.)/g, (_m, c: string) => `\u0000${c.charCodeAt(0)}\u0000`)
-              .replace(/[.+^${}()|]/g, '\\$&')
-              .replace(/\*/g, '.*')
-              .replace(/\u0000(\d+)\u0000/g, (_m, c: string) =>
-                String.fromCharCode(Number(c)).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
-              ) +
-            '$',
-        )
+        const re = new RegExp(`^${globToRegexSource(args.pattern as string)}$`)
         return { success: true, data: [...keys.keys()].filter((k) => re.test(k)) }
       }
       default:

@@ -37,6 +37,13 @@
  * child's `plan_context`) and the decisions model. The key must be declared in
  * the enclosing guard's `tools`, or `sanitize` is a no-op (that is the opt-in
  * every guard has). A screen that could not run withholds the output (S-d).
+ * The exemption is per route, planner kind only, successful plan only. The
+ * plan is model-authored from the user message plus already-screened prior
+ * records and may quote them; deterministic neutralisation and the fence still
+ * apply. The model screen at the plan boundary is the one layer removed; tool
+ * results and every other route are untouched. 'planner' means the leaf
+ * pattern's name === 'planner', so any pattern given that name qualifies
+ * (the same trust as allowReplan).
  *
  * ## Failure — never a silent fallback
  *
@@ -160,6 +167,10 @@ export interface DecisionLoopRoute<T> {
    *  iteration and once a plan exists this turn. `true` offers it every time;
    *  planner routes only, refused on any other kind of route. */
   readonly allowReplan?: boolean
+  /** Planner routes only: `false` skips the model screen on this route's successful plan
+   *  record. Deterministic sanitization, fencing and
+   *  findings still apply. Defaults to screened; never exempts child tool results. */
+  readonly screenOutput?: false
 }
 
 /** What an overridden `state` builder receives. */
@@ -281,6 +292,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   // out of events nobody reviewed, and a record is what the model decides on.
   const kinds = new Map<string, RouteKind>()
   const leafIds = new Map<string, string>()
+  const screenOutputs = new Map<string, false | undefined>()
   for (const name of names) {
     const leaf = leafPattern(routes[name].pattern)
     const kind = routeKind(routes[name].pattern)
@@ -294,7 +306,19 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         `decisionLoop: route '${name}' sets allowReplan but is not a planner; there is nothing to replan (allowReplan is read only by a planner route)`,
       )
     }
+    const screenOutput = Object.hasOwn(routes[name], 'screenOutput')
+      ? routes[name].screenOutput
+      : undefined
+    if (screenOutput !== undefined && kind !== 'planner') {
+      throw new Error(
+        `decisionLoop: route '${name}' sets screenOutput but is not a planner; only model-authored planner output may skip the model screen`,
+      )
+    }
+    if (screenOutput !== undefined && screenOutput !== false) {
+      throw new Error(`decisionLoop: route '${name}' screenOutput must be undefined or false`)
+    }
     kinds.set(name, kind)
+    screenOutputs.set(name, kinds.get(name) === 'planner' ? screenOutput : undefined)
     leafIds.set(name, leaf.config.patternId ?? leaf.name)
   }
 
@@ -381,12 +405,19 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   /** Cap, then sanitize under the declared key. `unavailable` is the typed
    *  screen-outage flag, never inferred from prose. No guard in the frame, or a
    *  key the guard does not list, passes the text through (the opt-in). */
-  const sanitizeField = async (text: string): Promise<{ text: string; unavailable: boolean }> => {
+  const sanitizeField = async (
+    text: string,
+    screenOutput: false | undefined,
+  ): Promise<{ text: string; unavailable: boolean }> => {
     if (!text) return { text: '', unavailable: false }
     const capped = capText(text, maxChars)
     const guard = currentRunFrame()?.guard
     if (!guard) return { text: capped, unavailable: false }
-    const { data, summary } = await guard.sanitize(DECISION_LOOP_OUTPUT_KEY, capped)
+    const { data, summary } = await guard.sanitize(
+      DECISION_LOOP_OUTPUT_KEY,
+      capped,
+      screenOutput === false ? { screen: false } : undefined,
+    )
     return {
       text: typeof data === 'string' ? data : JSON.stringify(data),
       unavailable: summary?.screenUnavailable === true,
@@ -696,8 +727,15 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             } as const)
           : extract(kind, ownEvents)
 
-      const resultField = await sanitizeField(extracted.ok ? extracted.result : extracted.text)
-      const reasoningField = await sanitizeField(extracted.ok ? extracted.reasoning : '')
+      const screenOutput = extracted.ok && kind === 'planner' ? screenOutputs.get(label) : undefined
+      const resultField = await sanitizeField(
+        extracted.ok ? extracted.result : extracted.text,
+        screenOutput,
+      )
+      const reasoningField = await sanitizeField(
+        extracted.ok ? extracted.reasoning : '',
+        screenOutput,
+      )
 
       let record: RouteOutput
       if (resultField.unavailable || reasoningField.unavailable) {

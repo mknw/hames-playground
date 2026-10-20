@@ -115,7 +115,9 @@ changeset or core SPEC/GUIDE update.
 Every result row carries a `screen` block beside `spend`: the injection screen
 (`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
 screen's share of each. The orchestrator's screen covers every guarded tool result (inherited
-by the nested guards) and both fields of every route output; `screenDespiteFindings` adds
+by the nested guards) and both fields of non-planner route outputs. Only
+`think` opts out of model screening on its successful plan record; failed records remain screened, and deterministic checks and
+fencing remain. `screenDespiteFindings` adds
 only results with deterministic findings, which hermetic fixtures never produce, so switching
 it off would not change these counts. The levers that move cost are the screen's scope and
 whether the reasoning field is screened. On the private tier each call is Verda time.

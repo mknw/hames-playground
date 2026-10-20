@@ -74,7 +74,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { createEvent, generateId } from './context.server'
+import { createEvent, generateId, redactCall } from './context.server'
 import { stripThinkBlocks } from './content-transforms'
 import { currentRunFrame } from './run-frame.server'
 import { setLivePatternEnabled } from './live-event-context.server'
@@ -470,21 +470,10 @@ function logStop(reason: string, extra = ''): void {
   console.warn(`[memory-store] stored nothing: ${reason}${extra ? ` (${extra})` : ''}`)
 }
 
-/** The extractor's call record without what it carried: `variables`,
- *  `promptTemplate`, `rawInput`, `rawOutput` and `parsedOutput` are the
- *  candidates and the window — the memory's text. Cost attribution survives. */
-export function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
-  if (!call) return undefined
-  return {
-    functionName: call.functionName,
-    variables: {},
-    ...(call.usage ? { usage: call.usage } : {}),
-    ...(call.metrics ? { metrics: call.metrics } : {}),
-    ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
-    ...(call.provider ? { provider: call.provider } : {}),
-    ...(call.clientName ? { clientName: call.clientName } : {}),
-  }
-}
+/** The extractor's call record without what it carried (the candidates and
+ *  the window — the memory's text): moved to `context.server.ts` when the
+ *  screen and describe calls needed the same redaction. */
+export { redactCall }
 
 /** Insert the provenance row inside the open transaction; on a primary-key
  *  conflict, read what the existing row points at and roll the candidate back. */

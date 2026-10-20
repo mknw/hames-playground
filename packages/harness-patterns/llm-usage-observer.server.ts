@@ -21,7 +21,10 @@
  * denominator and the share reads high. That is why the chokepoint is one
  * function rather than a line copied beside each call, and why sites that
  * produce no `LLMCallData` event of their own (the describe tier, the
- * injection screen) still open a collector purely to be counted. A new BAML
+ * injection screen) still open a collector purely to be counted. Those two now
+ * also report the call's record through `onCall`, which their callers record as
+ * a `model_call` event: this observer is the process-wide counter, that event
+ * is the run's own copy. A new BAML
  * call site that holds a collector and does not reach `accountBamlCall` is a
  * silent bias, not a missing detail.
  *

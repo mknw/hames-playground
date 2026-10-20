@@ -1,9 +1,8 @@
 /** Real package agent + real harness, with synthetic dependencies on every tool edge. */
-import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
 import type { AgentDefinition, AgentDeps } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
+import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
 import {
   SANDBOX_FILE_TOOLS,
@@ -159,9 +158,7 @@ export async function createDriver(
       if (!/^[a-z][a-z0-9-]*$/.test(key.agent)) throw new Error('Invalid agent id')
       let agent = definitions.get(key.agent)
       if (!agent) {
-        const exports = await import(
-          pathToFileURL(resolve('../packages/agents/agents', `${key.agent}.server.ts`)).href
-        )
+        const exports = await import(agentModuleUrl(key.agent))
         agent = Object.values(exports).find(
           (value) =>
             value && typeof value === 'object' && (value as AgentDefinition).id === key.agent,

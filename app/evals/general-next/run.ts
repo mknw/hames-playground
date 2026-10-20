@@ -23,6 +23,7 @@ import {
   assertLivePreconditions,
   poisonPublicProviders,
 } from '../../src/lib/eval-support/live-preconditions'
+import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
@@ -45,6 +46,9 @@ async function main() {
       )
     return
   }
+  // Before the proxy child, the fixture server or any wake: nothing below may start on a
+  // checkout that cannot load its agents.
+  assertPackageLayout([...new Set(['general', candidate])])
   let fake: Awaited<ReturnType<typeof import('./fixture-inference').fixtureInference>> | undefined
   if (!live && process.env.GENERAL_EVAL_CHILD !== '1') {
     assertProxyNode()

@@ -295,6 +295,9 @@ describe('general-next composition', () => {
       expect(criteria['read-documents']).toContain('uploaded')
       expect(criteria['read-documents']).toContain('cited excerpts')
       expect(criteria['read-documents']).toContain('Running code over a file is office-data')
+      expect(criteria['read-documents']).toContain(
+        'A OneDrive or SharePoint file not yet copied into this conversation is office-data.',
+      )
       expect(criteria['read-documents']).not.toMatch(/\bwhenever\b/)
       expect(criteria['info-retrieval']).toContain('Look things up')
     },
@@ -1649,5 +1652,9 @@ it.each([false, undefined])(
     const criteria = JSON.parse(String(requests.mock.calls[0][1].body)).questions.next_step.criteria
     expect(criteria['office-data']).toContain('Graph file ingestion is unavailable.')
     expect(criteria['office-data']).not.toContain('graph_file_ingest')
+    expect(composition.routes['office-data'].capability).toContain(
+      'Graph file ingestion is unavailable.',
+    )
+    expect(composition.routes['office-data'].capability).not.toContain('graph_file_ingest')
   },
 )

@@ -78,6 +78,8 @@ const walk = (ps: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[
   ps.flatMap((p) => [p, ...walk(p.children ?? [])])
 
 const rendered: string[] = []
+const unavailableRendered: string[] = []
+let ingestAvailable = true
 const examples: string[] = []
 const graphTools = new Map<string, AppToolDefinition>()
 const ENV = {
@@ -116,7 +118,7 @@ beforeAll(async () => {
         system?: { text: string }[]
         messages: { content: string | { text: string }[] }[]
       }
-      rendered.push(JSON.stringify(body))
+      ;(ingestAvailable ? rendered : unavailableRendered).push(JSON.stringify(body))
       const head = body.system ?? body.messages[0].content
       examples.push(typeof head === 'string' ? head : head.map((p) => p.text).join('\n'))
     }
@@ -136,6 +138,15 @@ beforeAll(async () => {
   const patterns = await generalNextAgent.createPatterns('synthetic-session', deps)
   const actor = walk(patterns).find((p) => p.name === 'actorCritic')!
   await withRunFrame({ inference: { tier: 'anthropic' } }, () => harness(actor)('synthetic task'))
+  ingestAvailable = false
+  const unavailablePatterns = await generalNextAgent.createPatterns('no-ingest', {
+    ...deps,
+    graphFileIngest: false,
+  })
+  const unavailableActor = walk(unavailablePatterns).find((p) => p.name === 'actorCritic')!
+  await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+    harness(unavailableActor)('synthetic task'),
+  )
 })
 
 it('W4: the rendered office actor catalogue is exactly the Graph readers and guarded file-ingest tool', async () => {
@@ -221,6 +232,8 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     expect(rendered[wire]).toContain(
       'finish once indexStatus is indexed and say the copy is searchable',
     )
+    expect(rendered[wire]).toContain('Treat pending as not yet searchable')
+    expect(rendered[wire]).not.toContain('Use read-documents')
     expect(rendered[wire]).not.toContain('Graph file ingestion is unavailable')
   })
 
@@ -298,4 +311,10 @@ it.each(['anthropic', 'verda'])('E1: info Return contract is rendered on %s', as
   } finally {
     spy.mockRestore()
   }
+})
+
+it.each([0, 1])('P4: disabled ingest is absent from the rendered actor (wire %i)', (wire) => {
+  expect(unavailableRendered[wire]).toContain('Graph file ingestion is unavailable.')
+  expect(unavailableRendered[wire]).not.toContain('call graph_file_ingest')
+  expect(unavailableRendered[wire]).not.toContain('desc of graph_file_ingest')
 })

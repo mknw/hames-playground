@@ -203,8 +203,11 @@ if [[ -f $STATE/run/failure.private.txt ]]; then
   python3 - "$STATE/run/commands.private.jsonl" <<'PY'
 import json, sys
 entries = [json.loads(line) for line in open(sys.argv[1])]
-for entry in entries[-40:]:  # the failing step's commands, then the rollback's
-    print(entry["exit"], " ".join(entry["argv"])[:300], "|", (entry["stderr"] or entry["stdout"])[-400:].strip())
+# Rollback starts with the firewall reversals; show what ran just before it.
+start = next((i for i, e in enumerate(entries) if e["argv"][:3] in (["iptables", "-w", "-D"], ["nft", "delete", "table"])
+              or e["argv"][:3] == ["ufw", "route", "delete"]), len(entries))
+for entry in entries[max(0, start - 15):start]:
+    print(entry["exit"], " ".join(entry["argv"])[:400], "|", (entry["stderr"] or entry["stdout"])[-600:].strip())
 PY
 fi
 python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["completed_steps"] == ["install","provision","tls","measure","cleanup"] else 1)' \

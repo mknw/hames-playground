@@ -47,6 +47,7 @@ export type {
 export { SANDBOX_TOOL_PREFIX, V0_IN_VM_SERVERS } from './types'
 export { DockerBackend, SandboxBootError } from './docker-backend.server'
 export { withSandbox, type WithSandboxConfig } from './with-sandbox.server'
+export { classifySandboxFailure, type SandboxFailure, type SandboxFailureReason } from './failure'
 export {
   SKILLS_DIR,
   SKILL_FILE_MAX_BYTES,

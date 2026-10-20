@@ -79,6 +79,21 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
     expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(true)
   })
 
+  // #507 flip, review finding 1: every other scenario names its agent; this one names none, so
+  // it is the only evidence the shipped DEFAULT_AGENT_ID reaches a real turn.
+  it('a turn that names no agent runs on general-next', async () => {
+    await app.setTier('anthropic')
+    const sessionId = newSessionId('general-next-default')
+    const { status, frames } = await app.runTurnOverSse({
+      sessionId,
+      message: 'How many Project nodes are in the knowledge graph?',
+    })
+    expect(status).toBe(200)
+    expect(frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+    await settleSummaries(app, sessionId)
+    expect((await app.readRow(sessionId))!.agentId).toBe('general-next')
+  })
+
   it('P5: shows a visible error when the private decisions shim is absent', async () => {
     await app.setTier('verda')
     const previous = process.env.SMALL_LLM_DECISIONS_URL

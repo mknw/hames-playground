@@ -27,6 +27,7 @@ import { sanitizeHarnessSettings } from '../../lib/settings'
 // parser that has to ignore them — and because a non-handler export declared
 // in a route module is stripped from the build (see SSE_KEEPALIVE_MS there).
 import { SSE_KEEPALIVE_FRAME, SSE_KEEPALIVE_MS } from '../../lib/sse-client'
+import { DEFAULT_AGENT_ID } from '../../lib/harness-client/agent-ids'
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -82,7 +83,7 @@ export async function POST(event: APIEvent) {
       { status: 401, headers: { 'Content-Type': 'application/json' } },
     )
   }
-  const resolvedAgentId = agentId ?? 'search'
+  const resolvedAgentId = agentId ?? DEFAULT_AGENT_ID
 
   const encoder = new TextEncoder()
   // `closed` guards every write after `onSettled`: the keep-alive timer and the

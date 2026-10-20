@@ -50,7 +50,7 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   appUrl,
   backend,
 }) => {
-  await open(page, appUrl)
+  await open(page, appUrl, { agent: 'Search Agent' })
 
   // ---- Turn 1: something to lose ----------------------------------------
   await send(page, 'first question')

@@ -65,11 +65,17 @@ export interface AgentConfig extends Omit<AgentDefinition, 'createPatterns'> {
 
 const agentRegistry = new Map<string, AgentConfig>()
 
+/** Registered and resolvable, but absent from the picker (`getAgentMetadata`). */
+const unlistedAgentIds = new Set<string>()
+
 /**
- * Register an agent configuration.
+ * Register an agent configuration. `listed: false` keeps it resolvable by id (stored
+ * conversations still open on it) without offering it in the picker.
  */
-export function registerAgent(config: AgentConfig): void {
+export function registerAgent(config: AgentConfig, opts: { listed?: boolean } = {}): void {
   agentRegistry.set(config.id, config)
+  if (opts.listed === false) unlistedAgentIds.add(config.id)
+  else unlistedAgentIds.delete(config.id)
 }
 
 // The legacy-id map lives in its own dependency-free module so the turn
@@ -106,6 +112,10 @@ export function getAgentMetadata(): Array<{
    *  definition's absent flag means "no sandbox", and the client must not have
    *  to know that convention. */
   usesSandbox: boolean
+  /** False for an agent registered unlisted: the picker offers only listed ones, but every
+   *  agent is here so a conversation stored under an unlisted one still resolves its own name,
+   *  greeting and sandbox flag. */
+  listed: boolean
 }> {
   return getAllAgents().map(
     ({ id, name, description, welcome, icon, accent, servers, usesSandbox }) => ({
@@ -117,6 +127,7 @@ export function getAgentMetadata(): Array<{
       accent,
       servers,
       usesSandbox: usesSandbox === true,
+      listed: !unlistedAgentIds.has(id),
     }),
   )
 }
@@ -257,7 +268,11 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): Agent
 
 // Register all agents — one overlay site per agent, beside the palette.
 registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
-registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'))
+// HELD flip (#507): general-next replaces general in the picker. `general` stays registered but
+// unlisted, so conversations stored under it keep opening on it (no legacy-id mapping forward).
+registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'), {
+  listed: false,
+})
 registerAgent(overlay(generalNextAgent, 'i-material-symbols-route', 'indigo'))
 registerAgent(overlay(sandboxAgent, 'i-material-symbols-castle-outline', 'orange'))
 registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))

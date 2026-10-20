@@ -536,7 +536,8 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         argv = record.read_text().splitlines()
         self.assertEqual(argv[:4], ['install', '-y', '--no-install-recommends', '--no-download'])
-        self.assertEqual(argv[-2:], ['./a.deb', './b.deb'])
+        self.assertEqual([Path(a).name for a in argv[-2:]], ['a.deb', 'b.deb'])
+        self.assertTrue(all(a.startswith('/') for a in argv[-2:]))  # apt refuses relative local paths
         self.assertIn('Dir::Etc::SourceList=/dev/null', argv)  # no repository candidates at all
         self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/no-lists') for a in argv))
         commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
@@ -1085,6 +1086,7 @@ def mutations():
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
         ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
         ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest apt given relative local paths", "--force-confold /opt/vm-image/*.deb", "--force-confold ./*.deb", "test_guest_packages_installed_offline_by_apt"),
         ("guest apt sees repository candidates", "-o Dir::Etc::SourceList=/dev/null ", "", "test_guest_packages_installed_offline_by_apt"),
         ("guest packages may download", "install -y --no-install-recommends --no-download", "install -y --no-install-recommends", "test_guest_packages_installed_offline_by_apt"),
         ("guest packages back to bare dpkg unpack", "apt-get install -y --no-install-recommends --no-download \\\n", "dpkg --unpack ./*.deb; : \\\n", "test_guest_packages_installed_offline_by_apt"),

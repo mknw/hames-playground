@@ -132,6 +132,21 @@ export async function createDriver(
       fn: (scope, view) =>
         amendRunFrame({ transports: [sandboxTransport] }, () => pattern.fn(scope, view)),
     }),
+    // The Decide step's view of the seeded documents (#507). The eval runs on the
+    // private tier only, so this is the names-bearing shape the host's source gives
+    // a `'verda'` run; the host's own tier line and owner check are pinned at layers
+    // 1 and 2, not re-derived in a fixture.
+    createDecisionDocuments: () => async () => ({
+      total: documents.size,
+      names: [...documents].map(([name, content], index) => ({
+        id: `fixture-${name}`,
+        name,
+        mimeType: name.endsWith('.csv') ? 'text/csv' : 'text/markdown',
+        size: content.length,
+        uploadedAt: index,
+        searchable: name.endsWith('.md'),
+      })),
+    }),
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',

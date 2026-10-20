@@ -72,6 +72,7 @@ import type {
   PatternScope,
   PlanResult,
   UnifiedContext,
+  WarningEventData,
 } from '../types'
 import { createEvent, createScope, dropHitl, resolveConfig, trackEvent } from '../context.server'
 import { getErrorHint } from '../error-hints'
@@ -101,6 +102,12 @@ import {
   type RouteKind,
   type RouteOutput,
 } from './decisionLoop-records.server'
+import {
+  isDecisionDocuments,
+  renderDocumentsBlock,
+  type DecisionDocumentsSource,
+  type ResolvedDecisionDocuments,
+} from './decisionLoop-documents.server'
 import type { PlannerData } from './planner.server'
 import { harnessPseudonymisesInputs } from '../pattern-capabilities'
 import { WEB_ROSTER_INPUT, type WebRosterInput } from './withPseudonymisedInputs.server'
@@ -133,6 +140,11 @@ export const DECISION_LOOP_RESULT_CHARS = 2000
  *  could not run (S-d). */
 export const WITHHELD_SCREEN_UNAVAILABLE = 'withheld: screen unavailable'
 
+/** The default read timeout of the documents source, in ms. Set against the stash
+ *  source's own comment (12-21 s for a handful of documents through the gateway),
+ *  not measured here; the host may override it. */
+export const DECISION_DOCUMENTS_TIMEOUT_MS = 30_000
+
 export interface DecisionLoopRoute<T> {
   readonly pattern: ConfiguredPattern<T>
   /** The only text the decisions model sees for this option. */
@@ -158,6 +170,11 @@ export interface DecisionLoopStateInput {
   readonly records: readonly RouteOutput[]
   readonly lastN: number
   readonly iteration: number
+  /** The conversation's documents as the host's `documents` source resolved them
+   *  once for this run: its value, or `'unknown'` when the read failed. Absent
+   *  when the config names no source. Off a run the host trusts with names it
+   *  holds none. An override owns its own quoting, cap and placement. */
+  readonly documents?: ResolvedDecisionDocuments
 }
 
 export interface DecisionLoopConfig extends PatternConfig {
@@ -174,6 +191,16 @@ export interface DecisionLoopConfig extends PatternConfig {
   readonly maxResultChars?: number
   /** Replace the state the decision is asked over. A throw is a non-decision. */
   readonly state?: (input: DecisionLoopStateInput) => string
+  /** The conversation's documents, read ONCE per run before iteration 1 (never per
+   *  iteration, never at construction: patterns are cached for a conversation's
+   *  life and the document set changes with every upload). The host decides what
+   *  a run may reveal (a name list, or the count alone); core renders it into the
+   *  state, deterministically sanitised. A source that throws, times out or
+   *  returns a malformed value gives the state an explicit "unknown" line and one
+   *  `warning` event, and the turn runs as it would without it. */
+  readonly documents?: DecisionDocumentsSource
+  /** Timeout of `documents` in ms (default {@link DECISION_DOCUMENTS_TIMEOUT_MS}). */
+  readonly documentsTimeoutMs?: number
 }
 
 export interface DecisionLoopData extends TypedDecisionData, PlannerData {}
@@ -218,6 +245,8 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     maxIterations: maxIterationsConfig,
     maxResultChars: maxResultCharsConfig,
     state: stateOverride,
+    documents: documentsSource,
+    documentsTimeoutMs: documentsTimeoutConfig,
     ...patternConfig
   } = config
 
@@ -237,6 +266,12 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     throw new Error(`decisionLoop: handoff.lastN must be an integer >= 0, got ${lastN}`)
   }
   const maxChars = maxResultCharsConfig ?? DECISION_LOOP_RESULT_CHARS
+  const documentsTimeout = documentsTimeoutConfig ?? DECISION_DOCUMENTS_TIMEOUT_MS
+  if (!Number.isInteger(documentsTimeout) || documentsTimeout < 1) {
+    throw new Error(
+      `decisionLoop: documentsTimeoutMs must be an integer >= 1, got ${documentsTimeout}`,
+    )
+  }
   if (!decideFn.supportedTypes?.includes('choice') && decideFn.supportedTypes !== undefined) {
     throw new Error("decisionLoop: the decide seam does not support 'choice' questions")
   }
@@ -363,11 +398,15 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const window = readContextWindow(fn)
     const steps = input.records.map(stepLine)
     const latest = input.lastN > 0 ? input.records.slice(-input.lastN).map(resultBlock) : []
+    // A fixed section of the default render: it counts toward the budget (the
+    // closures below re-render the whole state) but is never itself trimmed.
+    const documents = input.documents && renderDocumentsBlock(input.documents)
     const render = (c: readonly string[], s: readonly string[], r: readonly string[]): string =>
       [
         'Conversation (recent turns):',
         c.join('\n\n'),
         '',
+        ...(documents ? [documents, ''] : []),
         'This turn so far:',
         s.length > 0 ? s.join('\n') : '(nothing yet)',
         ...(r.length > 0 ? ['', 'Latest results (most recent last):', ...r] : []),
@@ -400,6 +439,47 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     )
   }
 
+  /** The host's document read, once per run. Fail-open on the routing aid: any
+   *  failure is the explicit unknown (never an empty list) plus one warning. */
+  const resolveDocuments = async (
+    scope: PatternScope<T>,
+  ): Promise<ResolvedDecisionDocuments | undefined> => {
+    if (!documentsSource) return undefined
+    const abort = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const read = documentsSource(abort.signal)
+      read.catch(() => undefined) // a read that loses the race must not become unhandled
+      const value = await Promise.race([
+        read,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            abort.abort()
+            reject(new Error(`the document read timed out after ${documentsTimeout} ms`))
+          }, documentsTimeout)
+        }),
+      ])
+      if (!isDecisionDocuments(value))
+        throw new Error('the document source returned a malformed value')
+      return value
+    } catch (e) {
+      trackEvent(
+        scope,
+        'warning',
+        {
+          task: 'decision_documents',
+          message: 'The conversation’s documents could not be read for the next-step decision.',
+          fallback: 'The decision state says the document list is unknown.',
+          error: e instanceof Error ? e.message : String(e),
+        } satisfies WarningEventData,
+        true,
+      )
+      return 'unknown'
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
     // The opt-in is silent by construction (`sanitize` is a no-op for an
     // undeclared key), which here means raw route output reaching the decision
@@ -425,6 +505,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         withheld.add(id)
       }
     }
+    const documents = await resolveDocuments(scope)
     let latestPlan: { text: string; steps: number } | undefined
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
@@ -452,7 +533,13 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       let stateError: string | undefined
       try {
         state = renderState(
-          { conversation: conversationTurns(view), records, lastN, iteration },
+          {
+            conversation: conversationTurns(view),
+            records,
+            lastN,
+            iteration,
+            ...(documents !== undefined ? { documents } : {}),
+          },
           decideFn,
         )
       } catch (e) {

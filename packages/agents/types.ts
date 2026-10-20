@@ -34,6 +34,7 @@ export interface ElementDefinition {
 import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.server'
 import type {
   ConfiguredPattern,
+  DecisionDocumentsSource,
   MemoryConfig,
   RetrieverBackend,
   RetrieverData,
@@ -106,6 +107,14 @@ export interface AgentDeps {
   enrichNeo4jResult?: OnToolResult
   /** Data Stash backend factory (the app's retriever wiring). */
   createRedisBackend?: (sessionId: string) => RetrieverBackend
+  /**
+   * What the Decide step may be told about the conversation's documents (#507).
+   * The host's source, bound to one conversation and called by `decisionLoop`
+   * once per run. The host owns the tier rule: only it decides whether a run may
+   * reveal names or the count alone, because core never reads a tier. Without it
+   * the state says nothing about documents.
+   */
+  createDecisionDocuments?: (sessionId: string) => DecisionDocumentsSource
   /**
    * The app's sandbox wrapper (the app's `with-sandbox.server.ts`), curried
    * onto the attach config the factories pass. The pattern type is

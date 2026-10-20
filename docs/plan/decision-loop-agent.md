@@ -99,6 +99,7 @@ Latest results (most recent last):
   - A route that hit its own bound (for example the sandbox actor using all its attempts) reads differently from one that finished early, even when both report success.
   - Together with the last N full outputs below, this is the information the decision rests on (review, 2026-10-14).
 - **"Latest results"** shows the **last N** route outputs in full (result + reasoning, below).
+- **"Uploaded documents in this conversation"** (#507, built; design in [`decide-document-context.md`](decide-document-context.md)) is an optional block between the conversation and "This turn so far": a capped list of every visible document's name, type and size on the private tier, a count only on every other, omitted when there are none.
 - **Trimming.** The whole block is trimmed oldest-first to the decide window, as the default state is.
 - **Caching.** The state is **append-only within a turn**: conversation first, then iterations in order. A provider prefix cache could therefore reuse everything but the tail.
   - On the Anthropic tier the decide call goes to the systemone provider, not to an Anthropic model. That transport records no cache reads (`jev-decide.server.ts:180-182`), and the provider documents no prompt cache, so there is nothing to switch on today.

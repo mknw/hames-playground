@@ -1308,6 +1308,8 @@ export type WarningTask =
   | 'skills_mount'
   /** The planner retried without thinking or accepted a plan with no trace (#625). */
   | 'planner'
+  /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
+  | 'decision_documents'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried

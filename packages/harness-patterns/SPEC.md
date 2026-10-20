@@ -190,7 +190,7 @@ type EventType =
   | 'intent_compacted' // compactIntent — rewritten brief (observability)
   | 'plan_created' // planner — upfront plan (observability; the plan itself travels on scope.data)
   | 'content_sanitized' // withInjectionGuard — untrusted content neutralized (observability + audit)
-  | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount) failed; the turn ran on a fallback (#420)
+  | 'warning' // a side task (title, summaries, intent/query rewrite, reference pick, sandbox skills mount, decision documents) failed; the turn ran on a fallback (#420)
   | 'loop_recovery' // simpleLoop / actorCritic fed one failure back to the model and continued on its budget (#437)
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
@@ -1697,6 +1697,22 @@ interface DecisionLoopConfig extends PatternConfig {
   maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
   maxResultChars?: number // cap on a record's result and on its reasoning; default 2000
   state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision
+  documents?: DecisionDocumentsSource // the conversation's documents, read ONCE per run (below)
+  documentsTimeoutMs?: number // default DECISION_DOCUMENTS_TIMEOUT_MS (30 000); positive integer
+}
+
+type DecisionDocumentsSource = (signal: AbortSignal) => Promise<DecisionDocuments>
+interface DecisionDocuments {
+  total: number // every VISIBLE document (hidden and archived ones are not counted)
+  names?: readonly DecisionDocument[] // present only when the host decided this run may reveal names
+}
+interface DecisionDocument {
+  id: string
+  name: string
+  mimeType: string
+  size: number
+  uploadedAt: number
+  searchable: boolean
 }
 ```
 
@@ -1734,6 +1750,64 @@ the retriever reports matches, distinct documents and backends (its excerpts are
 record how many documents it _searched_) — then **Latest results**, the last
 `handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
 window. It never holds memory.
+
+**The documents block (#507).** With `documents` configured, the state gains one
+block between the conversation and **This turn so far**, constant within a turn.
+Core never reads a tier and never reads a stash: the host's source returns the
+visible total always and a name list only when the host decides this run may
+reveal one, and core renders what it is handed. With a list: one line per
+distinct name (the newer wins), newest first, ties by id, at most
+`DECISION_DOCUMENTS_MAX_NAMES` (10) names of at most
+`DECISION_DOCUMENT_NAME_CODE_POINTS` (80) code points, the whole block at most
+`DECISION_DOCUMENTS_MAX_CHARS` (1 000) characters (names are shed from the tail),
+and a last line `- (+K more documents, names not shown)` counting every visible
+document not shown by name. Each line is `- "<name>" (<type>, <size>,
+searchable|not searchable)`: the type comes from a fixed allowlist of the stored
+`mimeType` (Markdown, text, CSV, PDF, Word, Excel, image, `other`), never printed
+raw. Without a list: `Uploaded documents in this conversation: N (names not
+shown)`. With no visible documents the block is omitted, so such a state is
+byte-identical to one built without a source.
+
+A name is **untrusted text** whatever put it there. It is cut to the code point
+cap before any rule runs, normalised to NFKC (a fullwidth form meets the same
+rule as its ASCII twin), every line/paragraph separator and control character is
+replaced, every invisible, default-ignorable and format character (Unicode `Cf`
+and `Default_Ignorable_Code_Point`: soft hyphen, joiners, Hangul fillers, bidi
+controls, variation selectors, tag characters and the like) is removed, and the
+result is checked against the injection rule corpus (and for the state's own
+section headers); a name that trips either is shown as `[name withheld]` with
+type and size kept, never neutralised in place. The rest is JSON-quoted on one
+line. The check is deterministic and is not a confusables filter: a name that
+swaps a Latin letter for a visually identical one from another script is shown. No model call is
+involved (the guard's screen is never run for a name). The source is read **once
+per run, before iteration 1** (never per iteration, never at construction:
+patterns are cached for a conversation's life and the document set changes with
+every upload). **Every turn of a conversation that holds documents waits on that
+read before the first decision**, bounded only by `documentsTimeoutMs`, and the
+host's read is one `smembers` plus one `json_get` per document in sequence: its
+cost is linear in the number of documents on the gateway transport (the default;
+`STASH_DIRECT_REDIS` is the faster mode), with a per-call figure of ~1.6 s in the
+source's own comment. The worst case is therefore the full
+`DECISION_DOCUMENTS_TIMEOUT_MS` (30 000 ms) added to the turn, followed by the
+`unknown` line and a warning, on every turn, once the list is long enough for
+that to bind. The real cost is not measured here; the measurement is a
+precondition of slice 11 and of any default flip. A source that throws, times out (its signal is aborted) or returns
+a malformed value gives the block `... unknown (could not be read)` (never
+"none"), one `warning` event (task `decision_documents`), and the turn runs as it
+would without a source. The block exists only in the decide state string: it is
+not in `data`, a record, the handoff, a child's input, the synthesizer's or
+memory's. A `state` override receives the resolved value as
+`DecisionLoopStateInput.documents` and owns its own quoting, cap, sanitising and
+placement; `renderDocumentsBlock` is exported for it to call.
+
+**The state persists, in two fields.** `decision_made.data` carries `stateChars`,
+never the state text, but the event's `llmCall` holds the state twice: in
+`rawInput` (the whole decide request body) and in `variables.state`. Both are
+saved with the conversation (encrypted at rest, no expiry). On a run whose host
+revealed names, the capped list is therefore stored every turn, beyond the
+document's own TTL, and trimming one of the two fields leaves the names in the
+other. Deleting, hiding or archiving a document does not remove its name from
+the states stored for earlier turns: there is no erasure path for that copy.
 
 **A child** gets its own synthetic context, as `chain()` builds one, and its own
 `viewConfig`: the committed events plus this turn's earlier children's events,
@@ -2341,8 +2415,10 @@ at `SMALL_LLM_EUR_PER_HOUR`; public cost uses reported usage and stays unknown
 when the endpoint supplies no cost.
 
 `decision_made` remains in `ALWAYS_COMMIT_TYPES`. It carries decision metadata,
-the probabilities and `stateChars`, never the state text. The call record
-carries usage and the recorded client. `PatternCapabilities.decisionKeys` and
+the probabilities and `stateChars`, never the state text in `data`. The call
+record carries usage and the recorded client, and its `rawInput` is the request
+body, state included: it is persisted with the conversation, so whatever the
+state holds (a `decisionLoop`'s documents block, route outputs) is stored. `PatternCapabilities.decisionKeys` and
 `harnessDecisionKeys(patterns)` expose declared keys without running the
 harness. Timeline previews show the decision type and verdict.
 
@@ -3186,7 +3262,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `plan_created`       | `PlanCreatedEventData`                                                                                                                            | _(the plan reaches BAML as `plan_context` / `context`)_ | planner only; loops read `scope.data.plan`, not the event                   |
 | `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
 | `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
-| `decision_made`      | `DecisionMadeEventData` (typed verdict, endpoint probabilities, failure metadata, `stateChars`, `shadow?`)                                        | _(metadata only — the state's SIZE, never the text)_    | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `decision_made`      | `DecisionMadeEventData` (typed verdict, endpoint probabilities, failure metadata, `stateChars`, `shadow?`)                                        | _(`data`: state SIZE; `rawInput`: the body)_            | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
 | `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)              | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return
@@ -3524,6 +3600,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
     ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records sanitized under decision_loop_output
     ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, and the state/handoff rendering
+    ├── decisionLoop-documents.server.ts # #507: the documents block of the decide state — deterministic name sanitising, type allowlist, caps
     ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
     ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts
     └── event-view.server.ts    # EventViewImpl (fluent query API, serializeCompact)

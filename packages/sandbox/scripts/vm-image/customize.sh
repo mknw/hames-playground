@@ -10,8 +10,12 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=l
 # apt, not dpkg --unpack + --configure -a: a Pre-Depends upgrade (systemd on
 # its shared library) needs the dependency CONFIGURED first, and only apt orders
-# that. --no-download keeps it offline; it can only use these local files.
+# that. --no-download keeps it offline, and with no sources and empty lists the
+# local files are the only candidates (a same-version repo entry would win).
+mkdir -p /opt/vm-image/no-lists/partial
 apt-get install -y --no-install-recommends --no-download \
+  -o Dir::Etc::SourceList=/dev/null -o Dir::Etc::SourceParts=/opt/vm-image/no-lists \
+  -o Dir::State::Lists=/opt/vm-image/no-lists \
   -o Dpkg::Options::=--force-confold ./*.deb >&2  # stderr reaches failed-stage.log
 python3 - <<'PY'
 import json, subprocess
@@ -129,6 +133,7 @@ PY
 cleanup
 trap - EXIT
 rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json ./enabled-units.txt
+rm -rf ./no-lists
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
 rm -f /etc/ssh/ssh_host_*

@@ -537,6 +537,8 @@ class Pipeline(unittest.TestCase):
         argv = record.read_text().splitlines()
         self.assertEqual(argv[:4], ['install', '-y', '--no-install-recommends', '--no-download'])
         self.assertEqual(argv[-2:], ['./a.deb', './b.deb'])
+        self.assertIn('Dir::Etc::SourceList=/dev/null', argv)  # no repository candidates at all
+        self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/no-lists') for a in argv))
         commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
         self.assertFalse(any(line.startswith('dpkg ') for line in commands))
 
@@ -1083,8 +1085,9 @@ def mutations():
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
         ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
         ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest apt sees repository candidates", "-o Dir::Etc::SourceList=/dev/null ", "", "test_guest_packages_installed_offline_by_apt"),
         ("guest packages may download", "install -y --no-install-recommends --no-download", "install -y --no-install-recommends", "test_guest_packages_installed_offline_by_apt"),
-        ("guest packages back to bare dpkg unpack", "apt-get install -y --no-install-recommends --no-download \\\n  -o Dpkg::Options::=--force-confold ./*.deb", "dpkg --unpack ./*.deb", "test_guest_packages_installed_offline_by_apt"),
+        ("guest packages back to bare dpkg unpack", "apt-get install -y --no-install-recommends --no-download \\\n", "dpkg --unpack ./*.deb; : \\\n", "test_guest_packages_installed_offline_by_apt"),
         ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
         ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),

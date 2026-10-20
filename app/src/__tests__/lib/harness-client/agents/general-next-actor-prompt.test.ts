@@ -233,7 +233,10 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       'finish once indexStatus is indexed and say the copy is searchable',
     )
     expect(rendered[wire]).toContain('Treat pending as not yet searchable')
-    expect(rendered[wire]).not.toContain('Use read-documents')
+    expect(rendered[wire]).not.toMatch(/read-documents/i)
+    expect(rendered[wire]).toContain(
+      'first find it with graph_files_search, graph_files_recent, graph_files_shared or graph_files_list',
+    )
     expect(rendered[wire]).not.toContain('Graph file ingestion is unavailable')
   })
 
@@ -318,3 +321,12 @@ it.each([0, 1])('P4: disabled ingest is absent from the rendered actor (wire %i)
   expect(unavailableRendered[wire]).not.toContain('call graph_file_ingest')
   expect(unavailableRendered[wire]).not.toContain('desc of graph_file_ingest')
 })
+
+// MUTATIONS: omit the computation rule from either ingest variant → red on both wires.
+it.each([0, 1])(
+  'preserves code computation guidance with ingest enabled and disabled (wire %i)',
+  (wire) => {
+    expect(rendered[wire]).toContain('Run code for computations.')
+    expect(unavailableRendered[wire]).toContain('Run code for computations.')
+  },
+)

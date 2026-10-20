@@ -319,6 +319,7 @@ describe('index outcome (#420)', () => {
   // sentence → reds.
   it('tells the model what each status means, and to tell the person for both unsearchable ones', () => {
     const def = appToolDescriptions().find((t) => t.name === 'graph_file_ingest')!
+    expect(def.description).toContain('Copy one Microsoft 365 file the signed-in person can open')
     expect(def.description).toMatch(/indexStatus/)
     expect(def.description).toMatch(/NOT searchable/)
     expect(def.description).toMatch(/For failed and not_indexed, tell the person/)
@@ -456,7 +457,12 @@ describe('P4 executor policy before I/O', () => {
     vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
     const denied = buildGraphHarness()
     expect(await denied.runAppTool('graph_file_ingest', { item_id: 'synthetic-id' })).toMatchObject(
-      { success: false, error: expect.stringContaining('external embedding service') },
+      {
+        success: false,
+        error: expect.stringMatching(
+          /external embedding service.*do not retry it or fetch the file another way/,
+        ),
+      },
     )
     expect(denied.graphFetch).not.toHaveBeenCalled()
     expect(denied.stash.loadStore).not.toHaveBeenCalled()

@@ -125,6 +125,7 @@ async function createPatterns(
               'Report a refusal rather than trying another download path; do not retry it this turn. ' +
               'When the user wants quoted, cited excerpts, finish once indexStatus is indexed and say the copy is searchable; cited excerpts come from a later step, not from your tools. Treat pending as not yet searchable; report failed or not_indexed copies as not searchable. '
             : 'Graph file ingestion is unavailable. ') +
+          'Run code for computations. ' +
           'Use quoted heredocs for multiline Python; append when continuing a large file.',
       }),
       createCriticAdapter(),

@@ -279,6 +279,10 @@ describe('general-next composition', () => {
       expect(criteria['office-data']).toContain('to compute or analyse them')
       expect(criteria['office-data']).toContain('save deliverables')
       expect(criteria['office-data']).toContain('graph_file_ingest')
+      expect(criteria['office-data']).toContain(
+        'find a OneDrive or SharePoint file and copy it into this conversation',
+      )
+      expect(criteria['office-data']).not.toContain('private-only')
       expect(composition.routes['office-data']).toMatchObject({
         capability: expect.stringContaining(
           'copy found OneDrive or SharePoint files into the Data Stash and /work/in',

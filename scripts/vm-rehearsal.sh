@@ -34,7 +34,7 @@ group() { echo "::group::$*"; }
 endgroup() { echo "::endgroup::"; }
 stop_after() { [[ ${REHEARSAL_STOP_AFTER:-} == "$1" ]] && { echo "stopping after $1 as requested"; exit 0; } || true; }
 builder() { # offline libguestfs stage; KVM required, no TCG fallback
-  docker run --rm --network none --device /dev/kvm --cap-drop ALL --security-opt no-new-privileges \
+  docker run -i --rm --network none --device /dev/kvm --cap-drop ALL --security-opt no-new-privileges \
     --memory 6g --memory-swap 6g --pids-limit 4096 \
     -v "$PIPE":/pipe:ro -v "$W":/w -w /w "$BUILDER" "$@"
 }
@@ -121,6 +121,7 @@ lock = {"schema": 1, "architecture": "x86_64", "epoch": 1760000000,
 json.dump(lock, open("/w/lock.json", "w"), indent=2)
 print(len(debs), "packages;", ", ".join(sorted(flavours)))
 PY
+test -s "$W/lock.json"
 endgroup
 
 group "7. verify, then build (offline, KVM)"

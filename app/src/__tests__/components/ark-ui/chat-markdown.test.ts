@@ -13,6 +13,7 @@
  * is the question that matters, not "does this substring appear".
  */
 import { describe, it, expect } from 'vitest'
+import { marked } from 'marked'
 import type { RetrievalReference } from '@hames-ai/harness-patterns/patterns/retriever.server'
 import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
@@ -675,22 +676,37 @@ describe('renderAssistantMarkdown — unterminated link-shaped input stays linea
   // The lexer asks the tokenizer at every `[`, `![` and `(`. An unbounded scan to
   // the end of the paragraph made each of these shapes quadratic: ~1 s for 32 KB
   // of `[`, 20-28 s for ~700 KB of spaced links, on the main thread, on every
-  // reload of the persisted history. The bound is generous (stock marked takes a
-  // few tens of ms here); the unbounded scans took many times longer.
-  const render = (md: string) => {
-    const t0 = performance.now()
-    renderAssistantMarkdown(md, noEntities, [])
-    return performance.now() - t0
+  // reload of the persisted history. Absolute bounds do not survive a coverage
+  // run on a loaded CI runner (the first two versions of this pin failed there),
+  // so the pin is about SCALING: quadrupling the input must cost about 4x with
+  // the scans bounded and about 16x with them not. The bound sits between at 9x,
+  // on the best of three runs after a warm-up.
+  const best = (md: string) => {
+    marked.parse(md, { async: false })
+    return Math.min(
+      ...[0, 1, 2].map(() => {
+        const t0 = performance.now()
+        marked.parse(md, { async: false })
+        return performance.now() - t0
+      }),
+    )
   }
-  const cases: Array<[string, string]> = [
-    ['unclosed labels', '['.repeat(100_000)],
-    ['unclosed image labels', '!['.repeat(64_000)],
-    ['spaced destinations that never close', '[a](https://x.test/a b '.repeat(8_000)],
-    ['spaced destinations broken by line breaks', '[a](https://x.test/a b \n'.repeat(8_000)],
-    ['labels that close only at the end', `${'['.repeat(100_000)}a](https://x.test/a b)`],
+  const shapes: Array<[string, (n: number) => string]> = [
+    ['unclosed labels', (n) => '['.repeat(n)],
+    ['unclosed image labels', (n) => '!['.repeat(n)],
+    ['spaced destinations that never close', (n) => '[a](https://x.test/a b '.repeat(n / 8)],
+    ['spaced destinations broken by line breaks', (n) => '[a](https://x.test/a b \n'.repeat(n / 8)],
+    ['labels that close only at the end', (n) => `${'['.repeat(n)}a](https://x.test/a b)`],
   ]
 
-  it.each(cases)('renders %s in well under a second', (_name, md) => {
-    expect(render(md)).toBeLessThan(1000)
-  })
+  it.each(shapes)(
+    '%s: 4x the input costs well under 16x',
+    (_name, make) => {
+      const small = best(make(8_000))
+      const large = best(make(32_000))
+
+      expect(large / Math.max(small, 1)).toBeLessThan(9)
+    },
+    30_000,
+  )
 })

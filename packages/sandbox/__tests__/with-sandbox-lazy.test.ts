@@ -70,6 +70,7 @@ import { DockerBackend } from '../docker-backend.server'
 import { IN_VM_TOOL_DESCRIPTORS } from '../in-vm-tools'
 import { SKILLS_PENDING_NOTICE, SKILLS_DIR, renderSkillsIndex } from '../skills'
 import type { ComputeBackend, McpTransport, VMHandle } from '../types'
+import type { ContextEvent, ToolCallResult } from '@hames-ai/harness-patterns/types'
 
 /** What a container engine says when its socket is missing — the words that must
  *  never reach the model. Synthetic: no real host, user or path beyond the
@@ -78,6 +79,13 @@ const RAW_ENGINE_ERROR =
   'boot failed for sbx-lazy (kg-sandbox:office): docker run -d --name kg-sbx-lazy --network none ' +
   'kg-sandbox:office exited 125: Cannot connect to the Docker daemon at ' +
   'unix:///var/run/docker.sock. Is the docker daemon running?'
+
+/** A server-side engine failure whose words must reach the operator's log and no
+ *  event: the command line it ran and the socket it dialled. Synthetic. */
+const RAW_POST_ACQUIRE_ERROR =
+  'docker exec -i kg-sbx-1 /opt/mcp/init.sh serve filesystem: dial unix /var/run/docker.sock: ' +
+  'connect: connection refused'
+const ENGINE_WORDS = /docker|\.sock|kg-sbx|\/opt\/mcp|init\.sh|connection refused/i
 
 const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
 
@@ -91,6 +99,13 @@ interface Calls {
 function fakeBackend(opts?: {
   bootError?: string
   bootDelayMs?: number
+  /** Answers (or throws for) a call before the default does. `internal` marks the
+   *  harness's own plumbing — skills, hydrate — as opposed to the actor's calls. */
+  toolImpl?: (
+    name: string,
+    args: Record<string, unknown>,
+    internal: boolean,
+  ) => ToolCallResult | undefined
 }): ComputeBackend & { calls: Calls } {
   const calls: Calls = { boot: 0, connectMcp: 0, closes: 0, toolCalls: [] }
   const handle: VMHandle = {
@@ -105,8 +120,10 @@ function fakeBackend(opts?: {
     toolNames: async () => ['sandbox_bash'],
     listTools: async () => [],
     ownsTool: (name) => name === 'sandbox_bash',
-    callTool: async (name, args) => {
+    callTool: async (name, args, callOpts) => {
       calls.toolCalls.push({ name, args })
+      const custom = opts?.toolImpl?.(name, args, callOpts?.internal === true)
+      if (custom) return custom
       return { success: true, data: 'ran' }
     },
     close: async () => {
@@ -540,8 +557,269 @@ describe('withSandbox({ lazy: true })', () => {
     })
   })
 
+  // After the acquire the engine can still fail — a half-dead VM, a socket that
+  // went away between the boot and the hydrate. Every step that reports it reports
+  // through an event, and the event reaches the panel, the stored blob, the live
+  // stream and (an `error`) the synthesizer: so the lazy rule is the same as for
+  // the boot — the raw words go to the server log and no event carries them.
+  describe('a failure after the sandbox started', () => {
+    const skill = {
+      name: 'quarterly-report',
+      description: 'Builds it',
+      content: '---\n---\nSteps.',
+    }
+    const ENGINE_FAIL: ToolCallResult = {
+      success: false,
+      data: null,
+      error: RAW_POST_ACQUIRE_ERROR,
+    }
+    const STALE_LISTING: ToolCallResult = {
+      success: true,
+      data: { stdout: `${'a'.repeat(64)}  ./old-skill/SKILL.md\n`, exit_code: 0 },
+    }
+
+    interface Path {
+      label: string
+      /** Event text that must SURVIVE the withholding: the failure is still reported. */
+      reported: string
+      /** Whether the event is an `error` (the synthesizer reads it). */
+      error: boolean
+      setup: () => Record<string, unknown>
+    }
+    const paths: Path[] = [
+      {
+        label: 'hydrate rejects',
+        reported: 'hydrate failed',
+        error: true,
+        setup: () => {
+          artifacts.hydrateWorkspace.mockRejectedValueOnce(new Error(RAW_POST_ACQUIRE_ERROR))
+          return {}
+        },
+      },
+      {
+        label: 'hydrate skips a file',
+        reported: 'hydrate failed',
+        error: true,
+        setup: () => {
+          artifacts.hydrateWorkspace.mockResolvedValueOnce({
+            written: 0,
+            skipped: [{ filename: 'plan.docx', error: RAW_POST_ACQUIRE_ERROR }],
+            accounted: [],
+          })
+          return {}
+        },
+      },
+      {
+        label: 'snapshot rejects',
+        reported: 'snapshot failed',
+        error: true,
+        setup: () => {
+          artifacts.snapshotOutputs.mockRejectedValueOnce(new Error(RAW_POST_ACQUIRE_ERROR))
+          return {}
+        },
+      },
+      {
+        label: 'promote rejects',
+        reported: 'promote failed',
+        error: true,
+        setup: () => {
+          artifacts.promoteOutputs.mockRejectedValueOnce(new Error(RAW_POST_ACQUIRE_ERROR))
+          return {}
+        },
+      },
+      {
+        label: 'promote skips a file',
+        reported: 'promote failed',
+        error: true,
+        setup: () => {
+          artifacts.promoteOutputs.mockResolvedValueOnce({
+            promoted: [],
+            skipped: [{ filename: 'report.xlsx', error: RAW_POST_ACQUIRE_ERROR }],
+          })
+          return {}
+        },
+      },
+      {
+        label: 'the skills resolver throws',
+        reported: 'skills_mount',
+        error: false,
+        setup: () => ({
+          skills: async () => {
+            throw new Error(RAW_POST_ACQUIRE_ERROR)
+          },
+        }),
+      },
+      {
+        label: 'the skills mount throws',
+        reported: 'skills_mount',
+        error: false,
+        setup: () => ({ skills: async () => [skill] }),
+      },
+      {
+        label: 'a skill file cannot be written',
+        reported: 'skills_mount',
+        error: false,
+        setup: () => ({ skills: async () => [skill] }),
+      },
+      {
+        label: 'a stale skill cannot be removed',
+        reported: 'skills_mount',
+        error: false,
+        setup: () => ({ skills: async () => [] }),
+      },
+    ]
+    // What the harness's own plumbing sees from the VM, per path. The skills
+    // paths are driven through the transport; the workspace paths through the
+    // (mocked) work-artifacts functions above.
+    const toolImplFor = (label: string): Parameters<typeof fakeBackend>[0] => {
+      const internalCommand = (args: Record<string, unknown>) => String(args.command ?? '')
+      switch (label) {
+        case 'the skills mount throws':
+          return {
+            toolImpl: (_n, _a, internal) => {
+              if (internal) throw new Error(RAW_POST_ACQUIRE_ERROR)
+              return undefined
+            },
+          }
+        case 'a skill file cannot be written':
+          return {
+            toolImpl: (_n, args, internal) =>
+              internal && internalCommand(args).includes('base64 -d') ? ENGINE_FAIL : undefined,
+          }
+        case 'a stale skill cannot be removed':
+          return {
+            toolImpl: (_n, args, internal) => {
+              if (!internal) return undefined
+              const cmd = internalCommand(args)
+              if (cmd.includes('find . -type f')) return STALE_LISTING
+              if (cmd.includes('-delete')) return ENGINE_FAIL
+              return undefined
+            },
+          }
+        default:
+          return {}
+      }
+    }
+
+    let errors: ReturnType<typeof vi.spyOn>
+    beforeEach(() => {
+      errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    })
+
+    /** The whole chain on the real actorCritic and compactExecution: returns every
+     *  place an event can end up — live stream, stored blob, synthesis input. */
+    const runChainWith = async (k: ReturnType<typeof kit>, extra: Record<string, unknown>) => {
+      const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+      const { createActorControllerAdapter, createCriticAdapter } =
+        await import('@hames-ai/harness-baml/baml-adapters.server')
+      mockActorController.mockResolvedValue(
+        mockAction({ tool_name: 'sandbox_bash', tool_args: JSON.stringify({ command: 'ls' }) }),
+      )
+      mockCritic.mockResolvedValue(mockCriticResult({ is_sufficient: true }))
+      const office = wrap(
+        k,
+        extra,
+      )(
+        actorCritic(createActorControllerAdapter([]), createCriticAdapter(), [], {
+          maxRetries: 0,
+          patternId: 'office',
+        }),
+      )
+      const synthesize = vi.fn(async () => ({ value: 'answer' }))
+      const synth = compactExecution({
+        mode: 'thread',
+        patternId: 'response-synth',
+        viewConfig: { fromPatterns: ['office'], fromLastNTurns: 1 },
+        synthesize,
+      })
+      const live: ContextEvent[] = []
+      type AnyPattern = Parameters<typeof harness>[0]
+      const result = await harness(office as unknown as AnyPattern, synth as unknown as AnyPattern)(
+        'count the rows in my spreadsheet',
+        undefined,
+        undefined,
+        (e: ContextEvent) => live.push(e),
+      )
+      return {
+        live: JSON.stringify(live),
+        stored: JSON.stringify(result.context.events),
+        serialized: result.serialized,
+        synthesisInput: JSON.stringify((synthesize.mock.calls[0] as unknown[] | undefined)?.[0]),
+      }
+    }
+
+    it.each(paths)(
+      '$label: the event reports it, and carries none of the engine’s words',
+      async (path) => {
+        const extra = path.setup()
+        const k = kit(fakeBackend(toolImplFor(path.label)))
+        const out = await runChainWith(k, extra)
+
+        for (const channel of [out.live, out.stored, out.serialized, out.synthesisInput]) {
+          expect(channel).not.toMatch(ENGINE_WORDS)
+        }
+        // Not vacuous: the failure is still REPORTED where it was before.
+        expect(out.live).toContain(path.reported)
+        expect(out.stored).toContain(path.reported)
+        // ...and an `error` is what synthesis is handed, so it is handed this.
+        if (path.error) expect(out.synthesisInput).toContain('details withheld')
+        // The operator keeps the raw text.
+        expect(errors.mock.calls.flat().join('\n')).toMatch(ENGINE_WORDS)
+      },
+    )
+
+    it('eager mode is unchanged: the same failure still names its cause', async () => {
+      artifacts.hydrateWorkspace.mockRejectedValueOnce(new Error(RAW_POST_ACQUIRE_ERROR))
+      const k = kit(fakeBackend())
+      const scope = scopeOf({})
+      await runInFrame(() =>
+        withSandbox({
+          ...k,
+          id: 'sess:office',
+          sessionId: 'sess',
+          rootfs: 'office',
+          syncWorkspace: true,
+        })(inner(async (s) => s)).fn(scope, view),
+      )
+      expect(JSON.stringify(scope.events)).toContain('dial unix /var/run/docker.sock')
+    })
+  })
+
+  it('a Graph-only turn that stores a stash document still boots nothing', async () => {
+    const k = kit(fakeBackend())
+    const allocate = vi.spyOn(k.scheduler, 'allocate')
+    let hookResult: ToolCallResult | void = undefined
+    await runInFrame(() =>
+      wrap(k)(
+        inner(async (scope) => {
+          const frame = currentRunFrame()!
+          for (const observe of frame.stashWriteObservers) {
+            observe({ sessionId: 'sess', documentId: 'd1', callId: 'c1' })
+          }
+          hookResult = await frame.afterToolCall[0](
+            { id: 'c1', name: 'graph_file_ingest', args: {} },
+            { success: true, data: null },
+          )
+          return scope
+        }),
+      ).fn(scopeOf({}), view),
+    )
+
+    // Nothing to restore into: no failure result replaces the call's own.
+    expect(hookResult).toBeUndefined()
+    expect(k.backend.calls.boot).toBe(0)
+    expect(allocate).not.toHaveBeenCalled()
+    expect(artifacts.hydrateWorkspace).not.toHaveBeenCalled()
+  })
+
   it('refuses lazy without an id, at wrap time', () => {
     expect(() => withSandbox({ lazy: true })(inner(async (s) => s))).toThrow(/requires an `id`/)
+  })
+
+  it('refuses lazy with an empty id too: the eager path would treat it as no id', () => {
+    expect(() => withSandbox({ lazy: true, id: '' })(inner(async (s) => s))).toThrow(
+      /requires an `id`/,
+    )
   })
 })
 

@@ -372,7 +372,7 @@ function buildResources(config: WithSandboxConfig | undefined): SandboxResources
 export function withSandbox(config?: WithSandboxConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const lazy = config?.lazy === true
-    if (lazy && config?.id === undefined) {
+    if (lazy && !config?.id) {
       throw new Error(
         `withSandbox({ lazy: true }) requires an \`id\` (pattern "${pattern.name}"): only the ` +
           'id-addressable path can defer its boot.',
@@ -521,6 +521,14 @@ export function withSandbox(config?: WithSandboxConfig) {
 // Skills (#415) — resolve, sync into /skills, render the index.
 // ============================================================================
 
+/** Whether a failure report may carry the raw error text. A lazy run withholds it
+ *  from every event (the classified-failure rule); the server log keeps it. */
+interface DetailOpts {
+  withholdDetail?: boolean
+}
+
+const DETAILS_WITHHELD = 'details withheld; see the server log'
+
 /**
  * Report a skills step that did not go to plan, on both channels: a `warning`
  * event (#420's side-failure scheme — the turn ran on a fallback, so no error
@@ -531,12 +539,20 @@ export function withSandbox(config?: WithSandboxConfig) {
 function reportSkillsFailure<T>(
   scope: PatternScope<T>,
   warning: Omit<WarningEventData, 'task'>,
+  opts: DetailOpts = {},
 ): void {
   console.error(`[sandbox] skills: ${warning.error ?? warning.message}`)
   trackEvent(
     scope,
     'warning',
-    { task: 'skills_mount', ...warning } satisfies WarningEventData,
+    {
+      task: 'skills_mount',
+      ...warning,
+      // `error` is the raw words (a resolver's message, an in-VM command's stderr):
+      // withheld from every channel a lazy run's events reach, as the workspace
+      // steps withhold theirs. `message` and `fallback` are fixed sentences.
+      ...(opts.withholdDetail && warning.error !== undefined ? { error: DETAILS_WITHHELD } : {}),
+    } satisfies WarningEventData,
     true,
   )
 }
@@ -556,57 +572,78 @@ async function prepareSkills<T>(
   transport: McpTransport,
   scope: PatternScope<T>,
   resolver: SandboxSkillsResolver | undefined,
+  opts: DetailOpts = {},
 ): Promise<string | undefined> {
   if (!resolver) return undefined
   let skills: readonly SandboxSkill[]
   try {
     skills = await resolver()
   } catch (err) {
-    reportSkillsFailure(scope, {
-      message: 'Your skills could not be loaded for this sandbox.',
-      fallback: 'The agent ran without skills.',
-      error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
-    })
+    reportSkillsFailure(
+      scope,
+      {
+        message: 'Your skills could not be loaded for this sandbox.',
+        fallback: 'The agent ran without skills.',
+        error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      opts,
+    )
     skills = []
   }
   // Every mount command is a `sandbox_bash` call, and the index tells the actor
   // to read a skill with it: a transport without it can do neither.
   if (!transport.ownsTool(SKILLS_INDEX_TOOL)) {
     if (skills.length > 0) {
-      reportSkillsFailure(scope, {
-        message: 'This sandbox cannot mount skills.',
-        fallback: 'The agent ran without skills.',
-        error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message: 'This sandbox cannot mount skills.',
+          fallback: 'The agent ran without skills.',
+          error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
+        },
+        opts,
+      )
     }
     return undefined
   }
   try {
     const { mounted, skipped, removalError } = await syncSkills(transport, skills)
     if (skipped.length > 0) {
-      reportSkillsFailure(scope, {
-        message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
-        fallback: 'The agent ran with the skills that did mount.',
-        error:
-          `${skipped.length} skill(s) not mounted: ` +
-          skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
+          fallback: 'The agent ran with the skills that did mount.',
+          error:
+            `${skipped.length} skill(s) not mounted: ` +
+            skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
+        },
+        opts,
+      )
     }
     if (removalError) {
-      reportSkillsFailure(scope, {
-        message:
-          'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
-        fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
-        error: removalError,
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message:
+            'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
+          fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
+          error: removalError,
+        },
+        opts,
+      )
     }
     return renderSkillsIndex(mounted)
   } catch (err) {
-    reportSkillsFailure(scope, {
-      message: 'Your skills could not be mounted in the sandbox.',
-      fallback: 'The agent ran without skills.',
-      error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
-    })
+    reportSkillsFailure(
+      scope,
+      {
+        message: 'Your skills could not be mounted in the sandbox.',
+        fallback: 'The agent ran without skills.',
+        error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      opts,
+    )
     return undefined
   }
 }
@@ -693,7 +730,7 @@ function reportWorkspaceFailure<T>(
   step: 'hydrate' | 'snapshot' | 'promote',
   sessionId: string,
   err: unknown,
-  opts: { withholdDetail?: boolean } = {},
+  opts: DetailOpts = {},
 ): void {
   const detail = err instanceof Error ? err.message : String(err)
   const message = WORKSPACE_FAILURE_MESSAGE[step]
@@ -708,7 +745,7 @@ function reportWorkspaceFailure<T>(
     'error',
     {
       error: opts.withholdDetail
-        ? `sandbox workspace ${step} failed (details withheld; see the server log)`
+        ? `sandbox workspace ${step} failed (${DETAILS_WITHHELD})`
         : `sandbox workspace ${step} failed: ${detail}`,
       severity: 'recoverable',
       hint: message,
@@ -880,6 +917,7 @@ async function hydrateAndSnapshot<T>(
   att: Attachment,
   scope: PatternScope<T>,
   sessionId: string,
+  opts: DetailOpts = {},
 ): Promise<Map<string, string> | null> {
   // Restore the session's stored documents into /work/in — EVERY turn, not
   // just on a fresh container (#206 §6.1). `hydrateWorkspace` diffs against
@@ -900,12 +938,13 @@ async function hydrateAndSnapshot<T>(
           `${skipped.length} file(s) not restored: ` +
             skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
         ),
+        opts,
       )
     }
   } catch (err) {
     // Non-fatal: the turn still runs, but the agent cannot see prior
     // uploads or earlier deliverables, so say which turn was blind.
-    reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
+    reportWorkspaceFailure(scope, 'hydrate', sessionId, err, opts)
   }
   // The Shell's own first-boot hydrate (#97 Gap 3) would now be redundant
   // for this container — the flag still coordinates the two, it just no
@@ -925,7 +964,7 @@ async function hydrateAndSnapshot<T>(
   try {
     baseline = await snapshotOutputs(att.transport)
   } catch (err) {
-    reportWorkspaceFailure(scope, 'snapshot', sessionId, err)
+    reportWorkspaceFailure(scope, 'snapshot', sessionId, err, opts)
   }
   return baseline
 }
@@ -936,6 +975,7 @@ async function promoteTurn<T>(
   scope: PatternScope<T>,
   sessionId: string,
   baseline: Map<string, string> | null,
+  opts: DetailOpts = {},
 ): Promise<void> {
   if (baseline) {
     try {
@@ -952,13 +992,14 @@ async function promoteTurn<T>(
             `${skipped.length} file(s) not stored: ` +
               skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
           ),
+          opts,
         )
       }
     } catch (err) {
       // The deliverable the agent just told the user about is about to
       // be reaped with the container. This was a bare `.catch(() => {})`
       // and is the one failure in this file that silently loses data.
-      reportWorkspaceFailure(scope, 'promote', sessionId, err)
+      reportWorkspaceFailure(scope, 'promote', sessionId, err, opts)
     }
   }
 }
@@ -966,6 +1007,10 @@ async function promoteTurn<T>(
 // ============================================================================
 // Lazy boot (`lazy: true`) — the sandbox starts on the first sandbox_* call.
 // ============================================================================
+
+/** A lazy run's failure reports: the model and the user get the fixed sentences,
+ *  the raw error goes to the server log only (see {@link classifySandboxFailure}). */
+const LAZY_REPORTING: DetailOpts = { withholdDetail: true }
 
 const IN_VM_TOOL_SET: ReadonlySet<string> = new Set(IN_VM_TOOL_NAMES)
 
@@ -1019,14 +1064,18 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
 
   const doBoot = async (): Promise<LazyBoot> => {
     let slot: { release(): void } | undefined
-    let att: Attachment | undefined
     try {
       const { scheduler, attachments } = run.resolveResources()
       slot = await scheduler.allocate(sessionId)
       if (run.fresh) await attachments.destroyById(run.id).catch(() => {})
-      att = await attachments.acquire(run.id, run.rootfs, run.runtime)
-      const index = await prepareSkills(att.transport, scope, skills)
-      const baseline = run.syncWorkspace ? await hydrateAndSnapshot(att, scope, sessionId) : null
+      // Nothing after the acquire throws (the skills and workspace steps report
+      // and go on), so a failure here is a failure to acquire: nothing to release
+      // but the slot.
+      const att = await attachments.acquire(run.id, run.rootfs, run.runtime)
+      const index = await prepareSkills(att.transport, scope, skills, LAZY_REPORTING)
+      const baseline = run.syncWorkspace
+        ? await hydrateAndSnapshot(att, scope, sessionId, LAZY_REPORTING)
+        : null
       live = { att, slot, baseline, index }
       return { ok: true, live }
     } catch (err) {
@@ -1036,7 +1085,6 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
           (err instanceof Error ? err.message : String(err)),
       )
       failed = true
-      if (att) run.resolveResources().attachments.release(att)
       slot?.release()
       return { ok: false, failure: classifySandboxFailure(err) }
     }
@@ -1085,7 +1133,13 @@ async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope
     await restoring?.close()
     if (booted?.ok) {
       try {
-        await promoteTurn(booted.live.att.transport, scope, sessionId, booted.live.baseline)
+        await promoteTurn(
+          booted.live.att.transport,
+          scope,
+          sessionId,
+          booted.live.baseline,
+          LAZY_REPORTING,
+        )
       } finally {
         run.resolveResources().attachments.release(booted.live.att)
         booted.live.slot.release()

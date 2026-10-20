@@ -13,6 +13,7 @@
  * is the question that matters, not "does this substring appear".
  */
 import { describe, it, expect } from 'vitest'
+import { marked } from 'marked'
 import type { RetrievalReference } from '@hames-ai/harness-patterns/patterns/retriever.server'
 import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
@@ -489,4 +490,217 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
       [...host.querySelectorAll('.graph-entity')].map((s) => s.parentElement!.nodeName),
     ).toEqual(['P'])
   })
+})
+
+describe('renderAssistantMarkdown — link destinations containing spaces', () => {
+  // A filename copied verbatim from a tool result is the usual source. CommonMark
+  // ends a destination at the first space, so these used to render as literal
+  // `[text](url…)` with a stray autolink. Synthetic names throughout.
+  const anchors = (md: string) => [
+    ...mount(renderAssistantMarkdown(md, noEntities, [])).querySelectorAll('a'),
+  ]
+
+  it('links a filename containing spaces, encoding only the spaces', () => {
+    const [a, ...rest] = anchors('[Q3 notes](https://files.example.test/docs/Meeting Notes Q3.pdf)')
+
+    expect(rest).toHaveLength(0)
+    expect(a.getAttribute('href')).toBe('https://files.example.test/docs/Meeting%20Notes%20Q3.pdf')
+    expect(a.textContent).toBe('Q3 notes')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('keeps a "(1)" in the filename inside the destination', () => {
+    const md = 'See [copy](https://files.example.test/docs/Budget draft (1).xlsx) now.'
+    const host = mount(renderAssistantMarkdown(md, noEntities, []))
+    const links = host.querySelectorAll('a')
+
+    expect(links).toHaveLength(1)
+    expect(links[0].getAttribute('href')).toBe(
+      'https://files.example.test/docs/Budget%20draft%20(1).xlsx',
+    )
+    expect(host.textContent?.trim()).toBe('See copy now.')
+  })
+
+  it('never decodes: an existing %20 or %2F stays as written', () => {
+    const [a] = anchors('[x](https://files.example.test/a%2Fb/c%20d e.pdf)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%2Fb/c%20d%20e.pdf')
+  })
+
+  it('leaves a code span containing such a link as code', () => {
+    const host = mount(
+      renderAssistantMarkdown('`[x](https://files.example.test/a b.pdf)`', noEntities, []),
+    )
+
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('code')!.textContent).toBe('[x](https://files.example.test/a b.pdf)')
+  })
+
+  it('keeps a code span in the link text as code', () => {
+    const [a] = anchors('[`Plan]v2.docx`](https://files.example.test/Plan v2.docx)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/Plan%20v2.docx')
+    expect(a.querySelector('code')!.textContent).toBe('Plan]v2.docx')
+  })
+
+  it('keeps javascript: inert end to end, spaces or not', () => {
+    // Without spaces the sanitizer drops the href; with spaces the text stays
+    // literal. Either way no anchor carries the scheme.
+    for (const md of ['[x](javascript:window.stolen=1)', '[x](javascript:window.stolen = 1)']) {
+      const host = mount(renderAssistantMarkdown(md, noEntities, []))
+
+      expect(host.querySelector('a')?.getAttribute('href') ?? '').not.toContain('javascript:')
+      expect(host.querySelector('[href], [src]')?.getAttribute('href') ?? '').not.toContain(
+        'javascript',
+      )
+    }
+  })
+
+  it('does not turn a spaced image into a loadable <img>', () => {
+    // The tokenizer rewrites the image too, so the sanitizer's image policy is
+    // what blocks it: a placeholder with the whole encoded URL, no anchor. With
+    // images unhandled the lexer re-enters at the `[` and renders `!<a>…</a>`.
+    const host = mount(
+      renderAssistantMarkdown('![chart](https://files.example.test/my chart.png)', noEntities, []),
+    )
+
+    expect(host.querySelector('img')).toBeNull()
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('.blocked-image')?.textContent).toBe(
+      'Image blocked: https://files.example.test/my%20chart.png',
+    )
+  })
+
+  it('leaves a plain link, and a link with a title, to the default tokenizer', () => {
+    const [plain] = anchors('[docs](https://example.test/a/b.pdf)')
+    const [titled] = anchors('[docs](https://example.test/a "the docs")')
+
+    expect(plain.getAttribute('href')).toBe('https://example.test/a/b.pdf')
+    expect(titled.getAttribute('href')).toBe('https://example.test/a')
+    expect(titled.getAttribute('title')).toBe('the docs')
+  })
+
+  it('lets the default tokenizer keep a parenthesised title', () => {
+    const [a] = anchors('[docs](https://example.test/a (the docs))')
+
+    expect(a.getAttribute('href')).toBe('https://example.test/a')
+    expect(a.getAttribute('title')).toBe('the docs')
+  })
+
+  it('does not fold a trailing quoted title into a spaced destination', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b.pdf "title")').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toMatch(/%22|"/)
+  })
+
+  it('only rewrites http(s) destinations', () => {
+    const hrefs = anchors('[x](ftp://files.example.test/a b.pdf)').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs).not.toContain('ftp://files.example.test/a%20b.pdf')
+  })
+
+  it('leaves an unterminated destination as text', () => {
+    expect(anchors('[x](https://files.example.test/a b.pdf')).toHaveLength(1) // the autolinked prefix only
+    expect(anchors('[x](https://files.example.test/a b.pdf')[0].textContent).toBe(
+      'https://files.example.test/a',
+    )
+  })
+
+  it('does not count an escaped paren when balancing the destination', () => {
+    const [a] = anchors('[x](https://files.example.test/a\\(b c)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a(b%20c')
+  })
+
+  it('reads nested brackets in the label', () => {
+    const [a] = anchors('[a [b] c](https://files.example.test/a b)')
+
+    expect(a.textContent).toBe('a [b] c')
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%20b')
+  })
+
+  it('reads an escaped bracket in the label', () => {
+    const [a] = anchors('[a\\]b](https://files.example.test/a b)')
+
+    expect(a.textContent).toBe('a]b')
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%20b')
+  })
+
+  it('matches the scheme case-insensitively', () => {
+    const [a] = anchors('[x](HTTPS://files.example.test/a b)')
+
+    expect(a.getAttribute('href')).toBe('HTTPS://files.example.test/a%20b')
+  })
+
+  it('does not fold a quoted title followed by a trailing space into the destination', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b "t" )').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toMatch(/%22|"/)
+  })
+
+  // The two caps, pinned at their exact edges: at the cap the link is read, one
+  // past it the default tokenizer decides (and it ends the destination at the
+  // space). Nothing here depends on timing.
+  const spaced = 'https://files.example.test/a%20b'
+
+  it.each([
+    [999, true],
+    [1000, false],
+  ])('a link label of %i characters is read: %s', (n, linked) => {
+    const hrefs = anchors(`[${'a'.repeat(n)}](https://files.example.test/a b)`).map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.includes(spaced)).toBe(linked)
+  })
+
+  it.each([
+    [2048, true],
+    [2049, false],
+  ])('a link destination of %i characters is read: %s', (n, linked) => {
+    const prefix = 'https://files.example.test/'
+    const dest = `${prefix}${'a'.repeat(n - prefix.length - 2)} b`
+    const hrefs = anchors(`[x](${dest})`).map((a) => a.getAttribute('href'))
+
+    expect(dest).toHaveLength(n)
+    expect(hrefs.some((h) => h?.endsWith('%20b'))).toBe(linked)
+  })
+
+  it('does not read a destination across a line break', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b\nc.pdf)').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toContain('%20b')
+  })
+})
+
+describe('renderAssistantMarkdown — unterminated link-shaped input is bounded', () => {
+  // The lexer asks the tokenizer at every `[`. Unbounded, each ask walked to the
+  // end of the paragraph: quadratic, on the main thread, on every reload of the
+  // persisted history. The caps are pinned exactly above; this is the one coarse
+  // end-to-end check, an ABSOLUTE bound run once. Ratios between two timings
+  // flaked on cold and loaded runs and are not used.
+  //
+  // The input is sparse on purpose (one `[` per 400 characters): the cost with
+  // the cap is one bounded scan per `[`, the cost without it is one scan to the
+  // end per `[`, so a large input with few asks keeps the capped cost tiny and
+  // the uncapped one huge. Measured on this machine, 2 MB / 5 000 asks: ~0.1 s
+  // capped, ~0.3 s capped under the v8 coverage run, ~15 s with the label cap
+  // removed. 1.5 s sits 5x above the slowest capped run and 10x below the
+  // uncapped one.
+  it('renders 2 MB of widely spaced unclosed labels in under 1.5 seconds', () => {
+    const md = `${'a'.repeat(399)}[`.repeat(5_000)
+    const t0 = performance.now()
+    marked.parse(md, { async: false })
+
+    expect(performance.now() - t0).toBeLessThan(1_500)
+  }, 120_000)
 })

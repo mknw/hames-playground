@@ -408,9 +408,13 @@ def memory(spike, cid):
     spike.metrics["nested_memory_kib"] = qemu_pss(spike)
 
 
-def qemu_pss(spike):
+def qemu_pid(spike):
     raw = spike.incus("query", f"/1.0/instances/{spike.name(0)}/state?project={spike.project}")
-    pid = int(json.loads(raw.stdout)["pid"])
+    return int(json.loads(raw.stdout)["pid"])
+
+
+def qemu_pss(spike):
+    pid = qemu_pid(spike)
     pss = re.search(r"^Pss:\s+(\d+)", (PROC / str(pid) / "smaps_rollup").read_text(), re.M)
     require(pss, "QEMU PSS unavailable")
     return int(pss[1])
@@ -695,7 +699,8 @@ def measure(spike):
         for nested in (False, True):
             concurrency(spike, count, nested)
     for prefix, output in (("kernel", spike.guest(0, "uname", "-r").stdout),
-                           ("qemu", command("qemu-system-x86_64", "--version").stdout)):
+                           # The binary Incus actually runs (upstream bundles its own), not PATH's.
+                           ("qemu", command(os.readlink(PROC / str(qemu_pid(spike)) / "exe"), "--version").stdout)):
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
         require(match, "version unreadable")
         for part, value in zip(("major", "minor", "patch"), match.groups()):

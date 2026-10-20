@@ -5,6 +5,7 @@ python3 scripts/sandbox-vm.test.py [--mutations]
 Mutants rerun these SAME tests against a temporary source tree.
 """
 import contextlib
+import hashlib
 import importlib.util
 import io
 import ipaddress
@@ -32,6 +33,11 @@ measure = importlib.util.module_from_spec(measure_spec)
 measure_spec.loader.exec_module(measure)
 
 
+UPSTREAM_VERSION = "1:7.5.1-ubuntu26.04-202610160649"
+MADISON = "".join(" %s | %s | https://pkgs.zabbly.com/incus/stable resolute/main amd64 Packages\n" % (name, UPSTREAM_VERSION)
+                  for name in ("incus", "incus-base", "incus-client"))
+
+
 def result(stdout="", code=0, stderr=""):
     return SimpleNamespace(stdout=stdout, stderr=stderr, returncode=code)
 
@@ -47,9 +53,8 @@ class Safety(unittest.TestCase):
         patch.object(vm, "available_memory", return_value=32 * 1024 ** 3).start()
         self.args = vm.arguments(["spike", "--install", "--provision"])
         self.args.launcher_unit = "sbxs-run-1234.service"
-        self.args.incus_version = "1.2.3"
+        self.args.incus_version = UPSTREAM_VERSION
         self.args.dnsmasq_version = "2.90-1"
-        self.args.qemu_modules_version = "1:8.2.2+ds-0synthetic1"
         self.args.network = [ipaddress.IPv4Interface("192.0.2.1/24"),
                              ipaddress.IPv4Interface("198.51.100.1/24")]
         self.args.app_bridge, self.args.uplink = "app0", "uplink0"
@@ -80,8 +85,10 @@ class Safety(unittest.TestCase):
             return result()
         if args[:2] == ("apt-get", "install"):
             return result()
+        if args[:2] == ("apt-cache", "madison"):
+            return result(MADISON)
         if args[:3] == ("apt-get", "--simulate", "install"):
-            return result("Inst incus (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\nInst qemu-system-modules-spice (1:8.2.2+ds-0synthetic1 synthetic)\nInst qemu-system-modules-opengl (1:8.2.2+ds-0synthetic1 synthetic)\n")
+            return result("Inst incus (1.2.3 synthetic)\nInst incus-base (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\n")
         if args[:2] == ("apt-get", "remove"):
             return result()
         if args[0] in ("iptables-save", "ip6tables-save"):
@@ -124,6 +131,8 @@ class Safety(unittest.TestCase):
                 args = (args[0],) + args[3:]
             if len(args) > 2 and args[2] == "show":
                 return result() if any(name == args[3] for _, name in self.spike.owned) else result(code=1, stderr="Error: not found")
+            if args[1:3] == ("query", "/1.0"):
+                return result(json.dumps({"api_extensions": ["synthetic", *vm.REQUIRED_API_EXTENSIONS]}))
             if args[1:3] == ("config", "get"):
                 if args[-1] == "volatile.eth0.hwaddr":
                     return result("00:16:3e:12:34:56\n")
@@ -145,7 +154,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "success"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1", "--qemu-modules-version", self.args.qemu_modules_version])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", UPSTREAM_VERSION, "--dnsmasq-version", "2.90-1"])
         checks = [i for i, call in enumerate(self.calls) if call[0] == "docker" and "inspect" in call]
         install = next(i for i, call in enumerate(self.calls) if call[:2] == ("apt-get", "install") and "--download-only" not in call)
         self.assertTrue(any(i < install for i in checks) and any(i > install for i in checks))
@@ -158,7 +167,7 @@ class Safety(unittest.TestCase):
         patch.object(vm, "sshd_fingerprint", return_value="unchanged").start()
         with self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
             vm.main(["spike", "--apply", "--install", "--state", str(self.root / "failure"),
-                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", "1.2.3", "--dnsmasq-version", "2.90-1", "--qemu-modules-version", self.args.qemu_modules_version])
+                     "--ssh-probe", "/synthetic/ssh-witness", "--incus-version", UPSTREAM_VERSION, "--dnsmasq-version", "2.90-1"])
         self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls))
         self.assertFalse(any(call[:2] == ("nft", "-f") for call in self.calls))
         self.assertFalse(any(call[0].endswith("tables-restore") and len(call) == 1 for call in self.calls))
@@ -657,27 +666,35 @@ class Safety(unittest.TestCase):
         self.assertTrue(any(call[:2] == ("apt-get", "remove") for call in self.calls), "signal failed to roll back")
         self.assertTrue(all(callable(handlers.get(sig)) for sig in (vm.signal.SIGHUP, vm.signal.SIGINT, vm.signal.SIGTERM)))
 
+    def planned(self, plan, madison=MADISON):
+        return lambda *args, **kw: result(madison) if args[:2] == ("apt-cache", "madison") else result(plan)
+
     def test_package_plan_guard_and_allowlist(self):
         plans = ["Inst incus [1.0] (1.2.3)\nInst incus-client (1.2.3)\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base [2.89-1] (2.90-1 synthetic)\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base [2.91-1] (2.90-1 synthetic)\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nRemv existing\n",
-                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst surprise-service (1.2.3)\n"]
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst surprise-service (1.2.3)\n",
+                 "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst libspice-server1 (0.15)\n"]
         for plan in plans:
-            with self.subTest(plan=plan), patch.object(vm, "command", return_value=result(plan)) as runner:
-                with self.assertRaises(RuntimeError):
+            with self.subTest(plan=plan), patch.object(vm, "command", side_effect=self.planned(plan)) as runner:
+                with self.assertRaisesRegex(RuntimeError, "allow-list|protected packages"):
                     self.spike.install()
-                self.assertEqual(runner.call_count, 1)
+                self.assertEqual(runner.call_count, 2)  # madison and simulation only
+        self.args.allow_package.append("libspice-server1")
+        with patch.object(vm, "command", side_effect=lambda *a, **kw: result(plans[-1]) if "--simulate" in a else self.fake(*a, **kw)):
+            self.spike.install()
+        self.assertEqual(self.spike.residual_packages, ["libspice-server1"])
 
     def test_dnsmasq_service_package_refused_even_when_allowlisted(self):
         self.assertNotIn("dnsmasq", self.args.allow_package)
         self.args.allow_package.append("dnsmasq")
         for action in ("Inst", "Conf"):
             plan = "Inst incus (1.2.3)\nInst incus-client (1.2.3)\n" + action + " dnsmasq (2.90-1)\n"
-            with self.subTest(action=action), patch.object(vm, "command", return_value=result(plan)) as runner:
+            with self.subTest(action=action), patch.object(vm, "command", side_effect=self.planned(plan)) as runner:
                 with self.assertRaisesRegex(RuntimeError, "protected packages"):
                     self.spike.install()
-                self.assertEqual(runner.call_count, 1)
+                self.assertEqual(runner.call_count, 2)
 
     def test_dnsmasq_pinned_in_simulation_download_and_install(self):
         with patch.object(vm, "command", side_effect=self.fake):
@@ -697,7 +714,7 @@ class Safety(unittest.TestCase):
             self.spike.install()
             self.spike.remove_install()
         manifest = json.loads((self.state / "transaction.private.json").read_text())
-        self.assertEqual(manifest["residual_packages"], ["dnsmasq-base", "qemu-system-modules-opengl", "qemu-system-modules-spice"])
+        self.assertEqual(manifest["residual_packages"], ["dnsmasq-base"])
         removal = next(call for call in self.calls if call[:2] == ("apt-get", "remove"))
         self.assertNotIn("dnsmasq-base", removal)
         self.args.allow_package.remove("dnsmasq-base")
@@ -713,59 +730,188 @@ class Safety(unittest.TestCase):
             self.spike.install()
         self.assertEqual(self.spike.residual_packages, [])
 
-    def test_qemu_modules_pinned_in_every_apt_phase(self):
+    def test_upstream_incus_pinned_in_every_apt_phase(self):
         with patch.object(vm, "command", side_effect=self.fake):
             self.spike.install()
         apt = [call for call in self.calls if call[0] == "apt-get"]
         self.assertEqual(len(apt), 3)
         for call in apt:
-            modules = {arg for arg in call if arg.startswith("qemu-system-modules-")}
-            self.assertEqual(modules, {name + "=" + self.args.qemu_modules_version for name in
-                                      ("qemu-system-modules-spice", "qemu-system-modules-opengl")})
-            self.assertIn("--no-install-recommends", call)
+            pins = {arg for arg in call if arg.startswith("incus")}
+            self.assertEqual(pins, {name + "=" + UPSTREAM_VERSION for name in ("incus", "incus-base", "incus-client")})
+            self.assertFalse(any(arg.startswith("qemu-") for arg in call))  # upstream bundles QEMU
+        self.assertEqual([call[0] for call in self.calls].index("apt-cache"), 0)
 
-    def test_qemu_modules_allowlist_residuals_and_existing_versions(self):
-        modules = {"qemu-system-modules-spice", "qemu-system-modules-opengl"}
-        self.assertEqual({p for p in self.args.allow_package if p.startswith("qemu-")}, modules)
-        with patch.object(vm, "command", side_effect=self.fake):
-            self.spike.install()
-            self.spike.remove_install()
-        manifest = json.loads((self.state / "transaction.private.json").read_text())
-        self.assertTrue(modules <= set(manifest["residual_packages"]))
-        removal = next(call for call in self.calls if call[:2] == ("apt-get", "remove"))
-        self.assertTrue(modules.isdisjoint(removal))
-        for package in sorted(modules):
-            with self.subTest(package=package, case="allowlist"):
-                self.args.allow_package.remove(package)
-                with patch.object(vm, "command", side_effect=self.fake), self.assertRaisesRegex(RuntimeError, "allow-list"):
-                    self.spike.install()
-                self.args.allow_package.append(package)
-            for installed in ("1:8.2.1", "1:8.2.3"):
-                plan = "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst " + package + " [" + installed + "] (1:8.2.2)\n"
-                with self.subTest(package=package, installed=installed), patch.object(vm, "command", return_value=result(plan)) as runner:
-                    with self.assertRaisesRegex(RuntimeError, "upgrades"):
-                        self.spike.install()
-                    self.assertEqual(runner.call_count, 1)
-        with patch.object(vm, "command", side_effect=lambda *a, **kw: result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\n") if "--simulate" in a else self.fake(*a, **kw)):
-            self.spike.install()
-        self.assertEqual(self.spike.residual_packages, [])
+    def test_upstream_version_format_and_minimum(self):
+        for version in (UPSTREAM_VERSION, "1:7.3-ubuntu26.04-202603010000", "1:7.3.0-ubuntu26.04-202603010000",
+                        "1:10.0.1-debian13-202701010000"):
+            self.assertTrue(vm.upstream_version(version), version)
+        for version in (None, "", "6.0.5-8", "1:7.2.9-ubuntu26.04-202601010000", "1:6.20-ubuntu26.04-202601010000",
+                        "7.5.1-ubuntu26.04-202610160649", "1:7.5.1", "1:7.5.1-ubuntu26.04-2026101606",
+                        "1:7.5.1-ubuntu26.04-202610160649 extra", "--option"):
+            self.assertFalse(vm.upstream_version(version), version)
+            self.args.incus_version = version
+            with self.subTest(version=version), patch.object(vm, "command") as runner, \
+                 self.assertRaisesRegex(RuntimeError, "upstream Incus 7.3"):
+                self.spike.install()
+            runner.assert_not_called()
 
-    def test_qemu_modules_version_required_before_mutation(self):
+    def test_preflight_requires_upstream_incus_version(self):
         self.preflight_fixture()
-        for version in (None, "", "--option", "1.0 extra", "1.0;command"):
-            self.args.qemu_modules_version = version
-            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, "pin QEMU modules"):
+        vm.preflight(self.args)
+        for version in ("6.0.5-8", "1:7.2.0-ubuntu26.04-202601010000", None):
+            self.args.incus_version = version
+            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, "upstream Incus 7.3"):
                 vm.preflight(self.args)
-        for version in ("1:8.2.2+ds-0synthetic1", "8.2.2-1~test"):
-            self.args.qemu_modules_version = version
-            vm.preflight(self.args)
+        self.assertFalse(any(call.args[:1] in (("apt-get",), ("apt-cache",)) for call in vm.command.call_args_list))
+
+    def test_install_refuses_a_version_not_solely_from_upstream(self):
+        row = " incus-base | " + UPSTREAM_VERSION + " | "
+        listings = {
+            "package missing": MADISON.replace(row, " incus-other | " + UPSTREAM_VERSION + " | "),
+            "other version only": MADISON.replace(UPSTREAM_VERSION, "1:7.5.1-ubuntu26.04-202610142155"),
+            "also offered elsewhere": MADISON + row + "http://archive.example.invalid/ubuntu resolute/universe amd64 Packages\n",
+            "lookalike repository": MADISON.replace("incus/stable resolute", "incus/stable-other resolute"),
+            "plain http mirror": MADISON.replace("https://pkgs.zabbly.com", "http://pkgs.zabbly.com"),
+            "empty": "",
+        }
+        for label, listing in listings.items():
+            with self.subTest(label), patch.object(vm, "command", return_value=result(listing)) as runner:
+                with self.assertRaisesRegex(RuntimeError, "solely by the upstream source"):
+                    self.spike.install()
+                self.assertEqual(runner.call_count, 1)
+                self.assertFalse(self.spike.installed)
+
+    def test_installed_incus_must_offer_the_project_restrictions(self):
+        for label, payload in (("nesting missing", {"api_extensions": ["projects_restricted_storage_pool_access"]}),
+                               ("pool access missing", {"api_extensions": ["projects_restricted_virtual_machines_nesting"]}),
+                               ("not a list", {"api_extensions": "projects_restricted_virtual_machines_nesting projects_restricted_storage_pool_access"}),
+                               ("not an object", [])):
+            def server(*args, **kw):
+                if args[:4] == ("incus", "--force-local", "query", "/1.0"):
+                    return result(json.dumps(payload))
+                return self.fake(*args, **kw)
+            with self.subTest(label), patch.object(vm, "command", side_effect=server), \
+                 self.assertRaisesRegex(RuntimeError, "project restrictions"):
+                self.spike.install()
+            self.assertTrue(self.spike.installed)  # rollback removes what was installed
+
+    def armored(self, *packets):
+        body = vm.base64.b64encode(b"".join(packets)).decode()
+        return ("-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: synthetic\n\n"
+                + "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+                + "\n=AAAA\n-----END PGP PUBLIC KEY BLOCK-----\n")
+
+    def test_primary_key_fingerprints_cover_every_primary_key(self):
+        key, other = b"\x04" + b"synthetic key material" * 4, b"\x04" + b"another key" * 8
+        expected = hashlib.sha1(b"\x99" + len(key).to_bytes(2, "big") + key).hexdigest().upper()
+        old_format = bytes([0x99]) + len(key).to_bytes(2, "big") + key        # tag 6, two-octet length
+        new_format = bytes([0xC6, len(key)]) + key                              # tag 6, one-octet length
+        user_id = bytes([0xCD, 9]) + b"synthetic"                              # tag 13 is not a key
+        subkey = bytes([0xCE, len(other)]) + other                              # tag 14 is not a primary
+        self.assertEqual(vm.primary_key_fingerprints(self.armored(old_format, user_id, subkey)), [expected])
+        self.assertEqual(vm.primary_key_fingerprints(self.armored(new_format)), [expected])
+        self.assertEqual(len(vm.primary_key_fingerprints(self.armored(old_format, bytes([0xC6, len(other)]) + other))), 2)
+        for broken in (self.armored(old_format)[:-40], self.armored(bytes([0xC6, len(key) + 40]) + key),  # length beyond the data
+                       self.armored(bytes([0x9B]) + key), self.armored(bytes([0xC6, len(key)]) + b"\x05" + key[1:]),
+                       self.armored(b"\x01" + key)):
+            with self.assertRaises((RuntimeError, ValueError)):
+                vm.primary_key_fingerprints(broken)
+
+    def source_fixture(self):
+        etc = self.root / "etc"
+        files = {"keyring": etc / "keyrings/k.asc", "sources": etc / "sources.list.d/s.sources",
+                 "preferences": etc / "preferences.d/p"}
+        patch.object(vm, "UPSTREAM_FILES", files).start()
+        for path in files.values():
+            path.parent.mkdir(parents=True)
+        (etc / "os-release").write_text('NAME="Ubuntu"\nVERSION_CODENAME=resolute\n')
+        patch.object(vm, "OS_RELEASE", etc / "os-release").start()
+        patch.object(vm.os, "geteuid", return_value=0).start()
+        patch.object(vm.sys, "platform", "linux").start()
+        key = b"\x04" + b"synthetic upstream key" * 4
+        patch.object(vm, "UPSTREAM_KEY_FINGERPRINT",
+                     hashlib.sha1(b"\x99" + len(key).to_bytes(2, "big") + key).hexdigest().upper()).start()
+        self.pinned_packet = bytes([0xC6, len(key)]) + key
+        self.key_file = self.root / "upstream.asc"
+        self.key_file.write_text(self.armored(self.pinned_packet))
+        self.dpkg = "unknown ok not-installed"
+        def boundary(*args, **kw):
+            self.calls.append(args)
+            if args[0] == "dpkg-query":
+                return result(self.dpkg)
+            if args[:2] == ("apt-get", "update"):
+                return result()
+            self.fail("unexpected source command")
+        patch.object(vm, "command", side_effect=boundary).start()
+        return files
+
+    def test_source_adds_pinned_restricted_repository_and_refreshes_only_it(self):
+        files = self.source_fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertEqual(files["keyring"].read_text(), self.key_file.read_text())
+        self.assertEqual(files["sources"].read_text(), "Types: deb\nURIs: https://pkgs.zabbly.com/incus/stable\n"
+                         "Suites: resolute\nComponents: main\nSigned-By: " + str(files["keyring"]) + "\n")
+        preferences = files["preferences"].read_text().split("\n\n")
+        self.assertEqual(preferences[0], "Package: incus incus-base incus-client\nPin: origin pkgs.zabbly.com\nPin-Priority: 600")
+        self.assertEqual(preferences[1], "Package: *\nPin: origin pkgs.zabbly.com\nPin-Priority: -1\n")
+        for path in files.values():
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        record = json.loads((self.root / "incus-source.private.json").read_text())
+        self.assertEqual(record, {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files.items()})
+        self.assertEqual(self.calls, [("apt-get", "update", "-o", "Dir::Etc::sourcelist=" + str(files["sources"]),
+                                       "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")])
+        with self.assertRaisesRegex(RuntimeError, "already present"), contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+
+    def test_source_refuses_a_foreign_key_before_writing(self):
+        files = self.source_fixture()
+        other = b"\x04" + b"foreign key" * 8
+        foreign = bytes([0xC6, len(other)]) + other
+        for armored in (self.armored(foreign), self.armored(self.pinned_packet, foreign),
+                        self.key_file.read_text() + self.armored(foreign)):
+            self.key_file.write_text(armored)
+            with self.subTest(armored=armored[-80:]), self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
+                vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertFalse(any(path.exists() for path in files.values()))
+        self.assertEqual(self.calls, [])
+
+    def test_source_removal_is_exact_and_waits_for_package_removal(self):
+        files = self.source_fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.dpkg = "install ok installed"
+        with self.assertRaisesRegex(RuntimeError, "before their source"), contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--remove"])
+        self.assertTrue(all(path.exists() for path in files.values()))
+        self.dpkg = "deinstall ok config-files"
+        files["preferences"].write_text("Package: *\nPin: origin pkgs.zabbly.com\nPin-Priority: 1000\n")
+        with self.assertRaisesRegex(RuntimeError, "changed since"), contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--remove"])
+        self.assertTrue(all(path.exists() for path in files.values()))  # nothing deleted before the refusal
+        files["preferences"].write_text("Package: incus incus-base incus-client\nPin: origin pkgs.zabbly.com\nPin-Priority: 600\n\n"
+                                        "Package: *\nPin: origin pkgs.zabbly.com\nPin-Priority: -1\n")
+        files["keyring"].unlink()  # confirmed absence completes that entry
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--remove"])
+        self.assertFalse(any(path.exists() for path in files.values()))
+        self.assertFalse((self.root / "incus-source.private.json").exists())
+
+    def test_source_dry_run_touches_nothing(self):
+        with patch.object(vm, "command") as runner, contextlib.redirect_stdout(io.StringIO()) as out:
+            vm.main(["source", "--key", "/synthetic/never-read.asc"])
+        runner.assert_not_called()
+        plan = json.loads(out.getvalue())
+        self.assertEqual(plan["key_fingerprint"], "4EFC590696CB15B87C73A3AD82CC8797C838DCFD")
+        self.assertEqual(plan["uri"], "https://pkgs.zabbly.com/incus/stable")
 
     def test_download_precedes_bounded_install_and_partial_install_is_journaled(self):
         calls = []
-        self.args.incus_version = "1.2.3"
         self.args.allow_package.append("reviewed-dependency")
         def apt(*args, **kw):
             calls.append((args, kw))
+            if args[:2] == ("apt-cache", "madison"):
+                return result(MADISON)
             if "--simulate" in args:
                 return result("Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base (2.90-1)\nInst reviewed-dependency (1.0)\n")
             if args[:2] == ("apt-get", "install") and "--download-only" not in args:
@@ -774,11 +920,11 @@ class Safety(unittest.TestCase):
             return result()
         with patch.object(vm, "command", side_effect=apt), self.assertRaises(RuntimeError):
             self.spike.install()
-        self.assertEqual(len(calls), 3)
-        self.assertIn("--download-only", calls[1][0])
-        self.assertTrue(all("--no-install-recommends" in call[0] for call in calls))
-        self.assertIsNone(calls[2][1]["timeout"])
-        self.assertEqual(calls[2][1]["env"]["NEEDRESTART_MODE"], "l")
+        self.assertEqual(len(calls), 4)
+        self.assertIn("--download-only", calls[2][0])
+        self.assertTrue(all("--no-install-recommends" in call[0] for call in calls[1:]))
+        self.assertIsNone(calls[3][1]["timeout"])
+        self.assertEqual(calls[3][1]["env"]["NEEDRESTART_MODE"], "l")
         self.assertEqual(self.spike.residual_packages, ["dnsmasq-base", "reviewed-dependency"])
 
     def test_witness_rate_limit_and_memory_reserve(self):
@@ -946,7 +1092,7 @@ class Safety(unittest.TestCase):
         (self.args.survey / "survey-complete").touch()
         self.args.ssh_probe = self.root / "witness"
         self.args.ssh_probe.touch()
-        self.args.kvm_user, self.args.incus_version = "synthetic-kvm-user", "1.2.3"
+        self.args.kvm_user, self.args.incus_version = "synthetic-kvm-user", UPSTREAM_VERSION
         self.args.image_metadata, self.args.image_rootfs = self.root / "meta.tar", self.root / "disk.qcow2"
         with tarfile.open(self.args.image_metadata, "w"):
             pass
@@ -1448,28 +1594,35 @@ class Safety(unittest.TestCase):
         self.assertIn("`ipv4.dhcp=false`", runbook)
         self.assertIn("`ipv6.address=none`", runbook)
 
-    def test_runbook_qemu_pins_dependencies_and_reversal_notes(self):
+    def test_runbook_boot_wait_and_reversal_notes(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
-        for package in ("spice", "opengl"):
-            self.assertIn('qemu-system-modules-' + package + '="$QEMU_MODULES_PACKAGE_VERSION"', runbook)
-        self.assertGreaterEqual(runbook.count('--qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION"'), 2)
         prose = " ".join(runbook.split())
-        for required in ("depends on `qemu-system-modules-opengl` at the exact same QEMU version",
-                         "Audio and UI modules are not needed", "`restricted.virtual-machines.lowlevel=block`",
-                         "New module packages stay in `residual_packages`", "Rollback never removes them",
-                         "`ufw show added`", "`route delete allow", "No reset, disable or reload is used"):
-            self.assertIn(required, prose)
-        for required in ("https://packages.ubuntu.com/resolute/qemu-system-modules-spice",
-                         "`qemu-system-common`", "pin must equal the installed `qemu-system-common`",
-                         "`Inst … [old]`", "SPICE is a Recommends of `qemu-system-x86`",
-                         "`libspice-server1`", "`ubuntu-virt`", "`libgbm1`", "`libepoxy0`", "`libvirglrenderer1`",
+        for required in ("`restricted.virtual-machines.lowlevel=block`",
+                         "`ufw show added`", "`route delete allow", "No reset, disable or reload is used",
                          "`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion wait and static-address setup",
                          "600 seconds", "Any cloud-init WARNING turns the run into `degraded done` with exit 2, and that is refused",
                          "Read the cause from the `recoverable_errors` and `errors` keys of that command's JSON. It lands in `commands.private.jsonl`, because `command()` logs every call even when its exit status is not checked.",
                          "Each VM can now stay silent for about 1,225 seconds (600 s readiness plus 620 s barrier) before it is refused; any operator dead-man interval for run 4 must exceed that."):
             self.assertIn(required, prose)
-        self.assertNotIn("/noble/", runbook)
         self.assertNotIn("includes the seeding reboot as well as static-address setup", prose)
+
+    def test_runbook_upstream_incus_source(self):
+        runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
+        prose = " ".join(runbook.split())
+        self.assertIn("`4EFC 5906 96CB 15B8 7C73 A3AD 82CC 8797 C838 DCFD`", prose)
+        self.assertEqual(prose.count("`4EFC 5906"), 1)
+        self.assertEqual(vm.UPSTREAM_KEY_FINGERPRINT, "4EFC 5906 96CB 15B8 7C73 A3AD 82CC 8797 C838 DCFD".replace(" ", ""))
+        for package in ("incus", "incus-base", "incus-client"):
+            self.assertIn(package + '="$INCUS_PACKAGE_VERSION"', runbook)
+        for required in ("sudo python3 scripts/lib/sandbox_vm.py source --apply --key",
+                         "sudo python3 scripts/lib/sandbox_vm.py source --apply --remove",
+                         "pins everything else it publishes to -1", "**only** from the pinned repository URI",
+                         "`projects_restricted_virtual_machines_nesting` (Incus 7.3)", "`projects_restricted_storage_pool_access`",
+                         "verifies every file against its recorded hash before deleting any",
+                         "a distro QEMU on `PATH` is not the one measured"):
+            self.assertIn(required, prose)
+        self.assertNotIn("QEMU_MODULES_PACKAGE_VERSION", runbook)
+        self.assertNotIn("--qemu-modules-version", runbook)
 
     def test_runbook_dnsmasq_existing_version_and_manual_mark(self):
         runbook = Path(os.environ.get("SANDBOX_VM_RUNBOOK", ROOT / "docs/deployment/sandbox-vm-spike.md")).read_text()
@@ -1540,6 +1693,37 @@ def mutations():
         ("guest route interface omitted", "core", 'str(network.ip),\n                "dev", interface)', 'str(network.ip))', "test_guest_two_nics_match_mac_not_position"),
         ("boot daemon uses Docker 29 default store", "core", '"features": {"containerd-snapshotter": False}}', '}', "test_tls_daemon_boots_the_preloaded_classic_store"),
         ("boot daemon may fall back from overlay2", "core", '"storage-driver": "overlay2", "features"', '"features"', "test_tls_daemon_boots_the_preloaded_classic_store"),
+        ('upstream version minimum removed', 'core', '(int(match[1]), int(match[2])) >= MINIMUM_INCUS', 'True', 'test_upstream_version_format_and_minimum'),
+        ('upstream version format loosened', 'core', 'r"1:([0-9]+)\\.([0-9]+)(?:\\.[0-9]+)?-(?:ubuntu|debian)[0-9.]+-[0-9]{12}"', 'r"(?:1:)?([0-9]+)\\.([0-9]+).*"', 'test_upstream_version_format_and_minimum'),
+        ('install skips upstream version gate', 'core', 'require(upstream_version(self.args.incus_version)', 'require(True', 'test_upstream_version_format_and_minimum'),
+        ('preflight skips upstream version gate', 'core', 'require(upstream_version(args.incus_version)', 'require(True', 'test_preflight_requires_upstream_incus_version'),
+        ('install skips sole-origin check', 'core', 'require(offered_only_upstream(', 'require(True or offered_only_upstream(', 'test_install_refuses_a_version_not_solely_from_upstream'),
+        ('version also offered elsewhere accepted', 'core', 'not all(source.startswith(UPSTREAM_URI + " ") for source in sources)', 'not any(source.startswith(UPSTREAM_URI + " ") for source in sources)', 'test_install_refuses_a_version_not_solely_from_upstream'),
+        ('lookalike repository accepted', 'core', 'source.startswith(UPSTREAM_URI + " ")', 'source.startswith(UPSTREAM_URI)', 'test_install_refuses_a_version_not_solely_from_upstream'),
+        ('package missing from upstream accepted', 'core', 'if not sources or not all(', 'if not all(', 'test_install_refuses_a_version_not_solely_from_upstream'),
+        ('incus-base not pinned', 'core', '*(name + "=" + self.args.incus_version for name in INCUS_PACKAGES)', '"incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version', 'test_upstream_incus_pinned_in_every_apt_phase'),
+        ('API extension check removed', 'core', 'set(REQUIRED_API_EXTENSIONS) <= set(extensions)', 'True', 'test_installed_incus_must_offer_the_project_restrictions'),
+        ('API extension list type unchecked', 'core', 'isinstance(extensions, list) and set(', 'set(', 'test_installed_incus_must_offer_the_project_restrictions'),
+        ('storage pool restriction not required', 'core', 'REQUIRED_API_EXTENSIONS = ("projects_restricted_virtual_machines_nesting",\n                           "projects_restricted_storage_pool_access")', 'REQUIRED_API_EXTENSIONS = ("projects_restricted_virtual_machines_nesting",)', 'test_installed_incus_must_offer_the_project_restrictions'),
+        ('extra primary key accepted', 'core', 'primary_key_fingerprints(key) == [UPSTREAM_KEY_FINGERPRINT]', 'UPSTREAM_KEY_FINGERPRINT in primary_key_fingerprints(key)', 'test_source_refuses_a_foreign_key_before_writing'),
+        ('key fingerprint check removed', 'core', 'require(primary_key_fingerprints(key) == [UPSTREAM_KEY_FINGERPRINT]', 'require(True', 'test_source_refuses_a_foreign_key_before_writing'),
+        ('pinned fingerprint changed', 'core', 'UPSTREAM_KEY_FINGERPRINT = "4EFC590696CB15B87C73A3AD82CC8797C838DCFD"', 'UPSTREAM_KEY_FINGERPRINT = "0000590696CB15B87C73A3AD82CC8797C838DCFD"', 'test_source_dry_run_touches_nothing'),
+        ('primary key tag ignored', 'core', '        if tag == 6:\n', '        if tag == 14:\n', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('old-format length size misread', 'core', '            size = 1 << size\n', '            size = 1\n', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('truncated packet accepted', 'core', 'require(len(packet) == length, "truncated OpenPGP packet")', 'pass', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('other publications not pinned out', 'core', '"Package: *\\nPin: origin pkgs.zabbly.com\\nPin-Priority: -1\\n"', '""', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('source unsigned by pinned keyring', 'core', '"\\nComponents: main\\nSigned-By: " + str(UPSTREAM_FILES["keyring"]) + "\\n"', '"\\nComponents: main\\n"', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('index refresh not restricted', 'core', '"-o", "Dir::Etc::sourceparts=-", ', '', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('other lists cleaned on refresh', 'core', ', "-o", "APT::Get::List-Cleanup=0")', ')', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('keyring unreadable by apt sandbox', 'core', 'os.fchmod(fd, 0o644)', 'os.fchmod(fd, 0o600)', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('existing source overwritten', 'core', 'require(not any(path.exists() or path.is_symlink() for path in UPSTREAM_FILES.values()),', 'require(True,', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('source removed while Incus installed', 'core', 'require(status[2:3] != ["installed"]', 'require(True', 'test_source_removal_is_exact_and_waits_for_package_removal'),
+        ('changed source file deleted', 'core', '                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),', '                    or True),', 'test_source_removal_is_exact_and_waits_for_package_removal'),
+        ('removal deletes before verifying all', 'core', '        for name, path in UPSTREAM_FILES.items():\n            require(path not in present or (not path.is_symlink()\n                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),\n                    "upstream source file changed since it was written; inspect it by hand")\n        for path in present:\n            path.unlink()\n', '        for name, path in UPSTREAM_FILES.items():\n            require(path not in present or (not path.is_symlink()\n                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),\n                    "upstream source file changed since it was written; inspect it by hand")\n            if path in present:\n                path.unlink()\n', 'test_source_removal_is_exact_and_waits_for_package_removal'),
+        ('runbook key fingerprint omitted', 'runbook', '`4EFC 5906 96CB 15B8 7C73  A3AD 82CC 8797 C838 DCFD`', '`the Zabbly key`', 'test_runbook_upstream_incus_source'),
+        ('runbook pin-out of other publications omitted', 'runbook', 'pins everything else it publishes to -1', 'pins nothing else', 'test_runbook_upstream_incus_source'),
+        ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
+        ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
         ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),
@@ -1695,9 +1879,9 @@ def mutations():
         ('dnsmasq dropped from install', 'core', '"--no-upgrade", *packages,\n                        env=install_env)', '"--no-upgrade", *(p for p in packages if not p.startswith("dnsmasq-base=")),\n                        env=install_env)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
         ('dnsmasq dropped from simulate', 'core', '"--simulate", "install", "--no-install-recommends", *packages)', '"--simulate", "install", "--no-install-recommends", *(p for p in packages if not p.startswith("dnsmasq-base=")))', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
         ('dnsmasq dropped from download', 'core', '"--no-upgrade", *packages, timeout=180)', '"--no-upgrade", *(p for p in packages if not p.startswith("dnsmasq-base=")), timeout=180)', 'test_dnsmasq_pinned_in_simulation_download_and_install'),
-        ('dnsmasq dropped from allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'default=["incus", "incus-base", "incus-client", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'test_dnsmasq_allowlist_and_residual_journal'),
-        ('dnsmasq dropped from residual manifest', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted(set(planned) - {"incus", "incus-base", "incus-client", "dnsmasq-base"})', 'test_dnsmasq_allowlist_and_residual_journal'),
-        ('pre-existing dnsmasq misreported as residual', 'core', 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"dnsmasq-base"}) - {"incus", "incus-base", "incus-client"})', 'test_preexisting_dnsmasq_is_not_a_residual'),
+        ('dnsmasq dropped from allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client"]', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('dnsmasq dropped from residual manifest', 'core', 'sorted(set(planned) - set(INCUS_PACKAGES))', 'sorted(set(planned) - {*INCUS_PACKAGES, "dnsmasq-base"})', 'test_dnsmasq_allowlist_and_residual_journal'),
+        ('pre-existing dnsmasq misreported as residual', 'core', 'sorted(set(planned) - set(INCUS_PACKAGES))', 'sorted((set(planned) | {"dnsmasq-base"}) - set(INCUS_PACKAGES))', 'test_preexisting_dnsmasq_is_not_a_residual'),
         ('dnsmasq automatically removed on rollback', 'core', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client", "dnsmasq-base")', 'test_dnsmasq_allowlist_and_residual_journal'),
         ('dnsmasq required pin check removed', 'core', 'args.dnsmasq_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.dnsmasq_version)', 'True', 'test_dnsmasq_version_required_before_package_mutation'),
         ('bridge DNS mode loosened', 'core', '"dns.mode=none"', '"dns.mode=managed"', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
@@ -1705,7 +1889,7 @@ def mutations():
         ('bridge IPv4 DHCP enabled', 'core', '"ipv4.dhcp=false"', '"ipv4.dhcp=true"', 'test_bridge_dns_and_dhcp_disabled_with_static_ipv4'),
         ('runbook dnsmasq pin omitted', 'runbook', '--dnsmasq-version "$DNSMASQ_PACKAGE_VERSION"', '', 'test_runbook_dnsmasq_pin_and_operator_commands'),
         ('Opus dnsmasq upgrade and downgrade admitted', 'core', r'^Inst \S+ \[', r'^Inst incus\S* \[', 'test_package_plan_guard_and_allowlist'),
-        ('Opus dnsmasq service added to default allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"]', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl", "dnsmasq"]', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
+        ('Opus dnsmasq service added to default allow-list', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"]', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "dnsmasq"]', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('dnsmasq service install protection removed', 'core', r'^Inst (openssh|ufw|docker|containerd|runc|dnsmasq )', r'^Inst (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('dnsmasq service configure protection removed', 'core', r'Conf (openssh|ufw|docker|containerd|runc|dnsmasq )', r'Conf (openssh|ufw|docker|containerd|runc)', 'test_dnsmasq_service_package_refused_even_when_allowlisted'),
         ('runbook installed dnsmasq version guidance omitted', 'runbook', 'If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade.', '', 'test_runbook_dnsmasq_existing_version_and_manual_mark'),
@@ -1717,22 +1901,6 @@ def mutations():
         ('runbook dnsmasq absence failure criterion removed', 'runbook', 'It must report no matching files; any matching log fails the daemon-absence check.', '', 'test_runbook_dnsmasq_absence_after_cleanup'),
         ('runbook dnsmasq surviving log evidence omitted', 'runbook', 'Incus opens this log only when starting a bridge dnsmasq daemon, and it survives package removal', 'Inspect the bridge after cleanup', 'test_runbook_dnsmasq_absence_after_cleanup'),
     ]
-    for package in ("qemu-system-modules-spice", "qemu-system-modules-opengl"):
-        for phase, before in (("simulate", '"--simulate", "install", "--no-install-recommends", *packages)'),
-                              ("download", '"--no-upgrade", *packages, timeout=180)'),
-                              ("install", '"--no-upgrade", *packages,\n                        env=install_env)')):
-            changes.append((package + " omitted from " + phase, "core", before,
-                            before.replace("*packages", '*(p for p in packages if not p.startswith("' + package + '="))'),
-                            "test_qemu_modules_pinned_in_every_apt_phase"))
-        changes.extend([
-            (package + " omitted from allow-list", "core", ', "' + package + '"]' if package.endswith("opengl") else ', "' + package + '", "qemu-system-modules-opengl"]',
-             ']' if package.endswith("opengl") else ', "qemu-system-modules-opengl"]', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
-            (package + " omitted from residuals", "core", 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})',
-             'sorted(set(planned) - {"incus", "incus-base", "incus-client", "' + package + '"})', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
-            (package + " automatically removed", "core", 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")',
-             'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client", "' + package + '")', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
-            (package + " runbook apt pin removed", "runbook", package + '="$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ])
     changes.extend([
         ("Opus 1 quoted UFW comment parsed with posix=False", "core", '[shlex.split(line) for line in lines[1:]]', '[shlex.split(line, posix=False) for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
         ("Opus whitespace split", "core", '[shlex.split(line) for line in lines[1:]]', '[line.split() for line in lines[1:]]', "test_ufw_absence_and_exact_live_ownership"),
@@ -1742,31 +1910,19 @@ def mutations():
         ("Opus 3 UFW create locale removed", "core", 'command("ufw", *rule, env=dict(os.environ, LC_ALL="C"))', 'command("ufw", *rule)', "test_ufw_creation_requires_new_rule"),
         ("Opus 4 UFW show locale removed", "core", 'command("ufw", "show", "added", env=dict(os.environ, LC_ALL="C"))', 'command("ufw", "show", "added")', "test_ufw_absence_and_exact_live_ownership"),
         ("Opus 4 UFW delete locale removed", "core", '*rule[1:-2], check=False,\n                                           env=dict(os.environ, LC_ALL="C"))', '*rule[1:-2], check=False)', "test_ufw_absence_and_exact_live_ownership"),
-        ("Opus 5 wrong Ubuntu release", "runbook", '/resolute/', '/noble/', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 5 installed qemu-system-common pin omitted", "runbook", 'pin must equal the installed `qemu-system-common`', 'pin may differ', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 5 changed existing package plan omitted", "runbook", '`Inst … [old]`', 'a package plan', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 5 SPICE Recommends source changed", "runbook", 'SPICE is a Recommends of `qemu-system-x86`', 'SPICE is a Recommends of `incus`', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 5 dependency guidance omitted", "runbook", '`libspice-server1`', 'other dependencies', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', 'Boot metric excludes the reboot', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("review 3 stale boot metric claim restored", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup. It includes the seeding reboot as well as static-address\nsetup', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("review 3 degraded-done refusal omitted", "runbook", 'Any cloud-init WARNING turns the run into\n`degraded done` with exit 2, and that is refused', 'Warnings are tolerated', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("review 3 cloud-init cause location omitted", "runbook", '`recoverable_errors` and `errors` keys', 'output', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("review 3 private log for unchecked exit omitted", "runbook", 'because `command()` logs every call even when\nits exit status is not checked', 'when logged', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("review 3 silent stretch understated", "runbook", 'about 1,225 seconds (600 s readiness plus 620 s\nbarrier)', 'about 600 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus 2 runbook deadline shortened", "runbook", '600 seconds', '180 seconds', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("Opus unpinned QEMU version regex", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'args.qemu_modules_version', "test_qemu_modules_version_required_before_mutation"),
+        ("Opus 2 boot metric reboot guidance omitted", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', 'Boot metric excludes the reboot', "test_runbook_boot_wait_and_reversal_notes"),
+        ("review 3 stale boot metric claim restored", "runbook", '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup', '`env*_vm_agent_boot_ms` includes the seeding reboot, the cloud-init completion\nwait and static-address setup. It includes the seeding reboot as well as static-address\nsetup', "test_runbook_boot_wait_and_reversal_notes"),
+        ("review 3 degraded-done refusal omitted", "runbook", 'Any cloud-init WARNING turns the run into\n`degraded done` with exit 2, and that is refused', 'Warnings are tolerated', "test_runbook_boot_wait_and_reversal_notes"),
+        ("review 3 cloud-init cause location omitted", "runbook", '`recoverable_errors` and `errors` keys', 'output', "test_runbook_boot_wait_and_reversal_notes"),
+        ("review 3 private log for unchecked exit omitted", "runbook", 'because `command()` logs every call even when\nits exit status is not checked', 'when logged', "test_runbook_boot_wait_and_reversal_notes"),
+        ("review 3 silent stretch understated", "runbook", 'about 1,225 seconds (600 s readiness plus 620 s\nbarrier)', 'about 600 seconds', "test_runbook_boot_wait_and_reversal_notes"),
+        ("Opus 2 runbook deadline shortened", "runbook", '600 seconds', '180 seconds', "test_runbook_boot_wait_and_reversal_notes"),
         ("Codex wrong nft address family", "core", 'command("nft", "delete", "table", "inet", entry["table"])', 'command("nft", "delete", "table", "ip", entry["table"])', "test_every_journaled_reversal_obeys_binary_grammar"),
         ("Codex apt purge replaces remove", "core", 'apt_transaction("remove", "-y", "incus", "incus-base", "incus-client")', 'apt_transaction("purge", "-y", "incus", "incus-base", "incus-client")', "test_every_journaled_reversal_obeys_binary_grammar"),
         ("Codex wrong Incus ownership key", "core", '"get", name, "user.spike-token"', '"get", name, "user.wrong-token"', "test_every_journaled_reversal_obeys_binary_grammar"),
         ("Codex FORWARD replaces DOCKER-USER delete", "core", 'command("iptables", "-w", "-D", "DOCKER-USER", *rule)', 'command("iptables", "-w", "-D", "FORWARD", *rule)', "test_every_journaled_reversal_obeys_binary_grammar"),
-        ("Codex wrong exact SPICE version in all apt phases", "core", '"qemu-system-modules-spice=" + self.args.qemu_modules_version', '"qemu-system-modules-spice=0.0.0"', "test_qemu_modules_pinned_in_every_apt_phase"),
         ("Codex wrong UFW deletion destination", "core", '"route", "delete", *rule[1:-2]', '"route", "delete", *rule[1:9], "203.0.113.99", *rule[10:-2]', "test_ufw_absence_and_exact_live_ownership"),
-        ("QEMU pin validation removed", "core", 'args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version)', 'True', "test_qemu_modules_version_required_before_mutation"),
-        ("existing QEMU module misreported as residual", "core", 'sorted(set(planned) - {"incus", "incus-base", "incus-client"})', 'sorted((set(planned) | {"qemu-system-modules-spice"}) - {"incus", "incus-base", "incus-client"})', "test_qemu_modules_allowlist_residuals_and_existing_versions"),
-        ("runbook QEMU argument omitted", "runbook", '--qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION"', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("runbook OpenGL dependency omitted", "runbook", 'depends on `qemu-system-modules-opengl` at the exact same QEMU version', 'may use extra modules', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("runbook lowlevel restriction omitted", "runbook", '`restricted.virtual-machines.lowlevel=block`', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
-        ("runbook module residual guidance omitted", "runbook", 'New module packages stay in `residual_packages`', '', "test_runbook_qemu_pins_dependencies_and_reversal_notes"),
+        ("runbook lowlevel restriction omitted", "runbook", '`restricted.virtual-machines.lowlevel=block`', '', "test_runbook_boot_wait_and_reversal_notes"),
         ("UFW original invalid delete restored", "core", 'command("ufw", "route", "delete", *rule[1:-2]', 'command("ufw", "--force", "delete", *rule', "test_every_journaled_reversal_obeys_binary_grammar"),
         ("UFW creation comment kept on delete", "core", '"route", "delete", *rule[1:-2]', '"route", "delete", *rule[1:]', "test_every_journaled_reversal_obeys_binary_grammar"),
         ("UFW delete route order reversed", "core", '"ufw", "route", "delete", *rule[1:-2]', '"ufw", "delete", "route", *rule[1:-2]', "test_every_journaled_reversal_obeys_binary_grammar"),
@@ -1824,6 +1980,7 @@ def mutations():
         ('export rate sleep removed', 'measure', 'time.sleep(max(0, self.total / EXPORT_RATE - (time.monotonic() - start)))', 'pass', 'test_export_backpressure_and_deadline_budget'),
         ('export deadline below rate budget', 'measure', 'EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60', 'EXPORT_SECONDS = 120', 'test_export_backpressure_and_deadline_budget'),
         ('inspect records full config instead of identity projection', 'measure', '\'{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}\'', "'{{json .}}'", 'test_inspect_projects_only_identity_fields'),
+        ('QEMU version read from PATH, not the running VM', 'measure', 'command(os.readlink(PROC / str(qemu_pid(spike)) / "exe"), "--version")', 'command("qemu-system-x86_64", "--version")', 'test_measure_orchestration_end_to_end'),
         ('export operation omitted from private audit', 'measure', 'if sandbox_vm.PRIVATE_LOG is not None:', 'if False:', 'test_export_audit_records_argv_exit_without_content'),
     ])
     for label, target, before, after, test in changes:

@@ -37,6 +37,7 @@ REAL_POPEN, REAL_SLEEP = subprocess.Popen, time.sleep
 IMAGE = "synthetic@sha256:" + "a" * 64
 APP, OTHER, CANARY = "app-net", "probe-net", ("172.18.0.5", 6379)
 QEMU_PID, CANARY_PORT = 4242, 40000
+INCUS_QEMU = "/opt/incus/bin/qemu-system-x86_64"
 HOST_VERBS = {"inspect", "run", "exec", "wait"}
 
 
@@ -152,6 +153,7 @@ class World:
         (proc / "meminfo").write_text("MemAvailable:    8000000 kB\n")
         (proc / str(QEMU_PID)).mkdir()
         (proc / str(QEMU_PID) / "smaps_rollup").write_text("Pss:   500000 kB\n")
+        (proc / str(QEMU_PID) / "exe").symlink_to(INCUS_QEMU)
 
     def reachable(self, source, address, port):
         key = (source, address, port)
@@ -181,8 +183,10 @@ class World:
             return self.docker(Path(args[2]).parent.name, args[3:])
         if args[0] == "incus":
             return self.incus(args)
+        if args[0] == INCUS_QEMU:
+            return result("QEMU emulator version 10.1.2\n")
         if args[0] == "qemu-system-x86_64":
-            return result("QEMU emulator version 8.2.2\n")
+            return result("QEMU emulator version 8.2.2\n")  # a distro QEMU Incus does not run
         self.test.fail("unexpected system command")
 
     def docker(self, where, argv):
@@ -360,6 +364,7 @@ class Measurement(unittest.TestCase):
         for flag in ("guest_metadata_unreachable", "guest_public_unreachable", "guest_app_data_refused",
                      "ingress_tls_only", "ingress_other_network_refused", "pty_resize", "stream_teardown"):
             self.assertIs(metrics[flag], True)
+        self.assertEqual((metrics["qemu_major"], metrics["qemu_minor"]), (10, 1))  # Incus's QEMU, not PATH's
         vm.report(self.spike.state.parent, ["measure"], metrics)  # The closed schema accepts every key.
         timeline = self.world.timeline
         for index in self.creations():

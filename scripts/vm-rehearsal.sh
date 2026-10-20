@@ -185,8 +185,10 @@ systemd-run --unit="$UNIT" --collect -p KillMode=mixed -p TimeoutStopSec=900 -p 
   --working-directory="$REPO" /bin/bash "$REPO/scripts/sandbox-vm-spike.sh" --apply --launcher-unit="$UNIT" "${ARGS[@]}"
 while systemctl is-active -q "$UNIT"; do
   sleep 60
-  echo "$(date -u +%H:%MZ) $(wc -l < "$STATE/run/commands.private.jsonl" 2>/dev/null || echo 0) commands"
+  echo "$(date -u +%H:%MZ) $(cat "$STATE/run/commands.private.jsonl" 2>/dev/null | wc -l) commands"
 done
+
+journalctl -u "$UNIT" --no-pager -o cat | tail -n 40
 endgroup
 
 group "11. results"

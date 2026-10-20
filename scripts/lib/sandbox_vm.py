@@ -875,6 +875,9 @@ def storage_preflight(args):
             and not image.get("format-specific", {}).get("data", {}).get("data-file"), "unbounded VM image refused")
     virtual = image.get("virtual-size")
     require(type(virtual) is int and 0 < virtual <= size_bytes(args.vm_disk), "VM image expansion exceeds disk cap")
+    # Incus counts the project's image volume toward limits.disk, beside both root disks.
+    require(2 * size_bytes(args.vm_disk) + virtual <= size_bytes(args.disk_cap),
+            "project disk cap must hold both VM disks and the imported image")
     expanded_metadata = 0
     with tarfile.open(args.image_metadata, "r:") as archive:
         for member in archive:

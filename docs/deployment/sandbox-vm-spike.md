@@ -319,7 +319,9 @@ Every apply is a fresh transaction and needs `--install --provision` together.
 `--measure` also needs `--tls`, both distinct Docker networks, the private data-network canary and all image inputs. Resource caps are
 explicit flags: `--vm-cpus`, `--vm-memory`, `--cpu-cap`, `--memory-cap`,
 `--vm-disk`, `--disk-cap`, `--memory-reserve`; defaults are 2 CPUs/2 GiB/8 GiB disk per VM and
-4 CPUs/8 GiB/24 GiB disk per project. Size them for the measured
+4 CPUs/8 GiB/24 GiB disk per project. Incus counts the imported image volume
+toward the project's `limits.disk`, so `--disk-cap` must hold both VM disks
+plus the image's virtual size (preflight refuses otherwise). Size them for the measured
 host headroom before applying. `--tls-port` defaults to 2376 and must be an
 unprivileged port. No host listener or port publication is created for it.
 The two VM addresses are subnet address + 2. Existing route overlap is refused.

@@ -452,7 +452,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_dockerd_uses_runtime_store(self):
         import shlex
         source = (vm.HERE / 'customize.sh').read_text()
-        command = source[source.index('dockerd --config-file'):source.index('daemon_pid=$!')]
+        command = source[source.index('dockerd --debug --config-file'):source.index('daemon_pid=$!')]
         executable, arguments = self.root / 'dockerd', self.root / 'arguments'
         executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > ' + shlex.quote(str(arguments)) + '\n')
         executable.chmod(0o700)
@@ -562,7 +562,7 @@ class Pipeline(unittest.TestCase):
 
     def test_guest_assembly_daemon_pins_classic_overlay2(self):
         guest = self.fake_root()
-        child = self.shell_section('# Same classic overlay2 store', 'dockerd --config-file', guest)
+        child = self.shell_section('# Same classic overlay2 store', '# Diagnostics (stderr', guest)
         self.assertEqual(child.returncode, 0, child.stderr)
         config = json.loads((guest / 'opt/vm-image/assembly-daemon.json').read_text())
         self.assertEqual(config, {'features': {'containerd-snapshotter': False}, 'storage-driver': 'overlay2'})
@@ -594,10 +594,10 @@ class Pipeline(unittest.TestCase):
 
     def test_guest_daemon_config_adoption_refused(self):
         guest = self.fake_root()
-        child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
+        child = self.shell_section('# Refuse site configuration', '# Diagnostics (stderr', guest)
         self.assertEqual(child.returncode, 0, child.stderr)
         (guest / 'etc/docker/daemon.json').write_text('{}')
-        child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
+        child = self.shell_section('# Refuse site configuration', '# Diagnostics (stderr', guest)
         self.assertNotEqual(child.returncode, 0)
 
     def guest_units(self, layout, directory='usr/lib/systemd/system', missing=None, enable_status=0, masked=None):

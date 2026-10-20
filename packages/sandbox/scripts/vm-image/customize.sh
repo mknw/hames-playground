@@ -84,7 +84,20 @@ test ! -e /etc/docker/daemon.json
 # Same classic overlay2 store the provisioners pin at boot. Docker 29 otherwise
 # defaults to the containerd snapshotter, and an absent driver must not fall back.
 printf '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}\n' > /opt/vm-image/assembly-daemon.json
-dockerd --config-file /opt/vm-image/assembly-daemon.json \
+# Diagnostics (stderr reaches failed-stage.log only on failure): moby panics in
+# Shutdown before printing a NewDaemon error, so show the storage preconditions.
+{
+  printf 'appliance kernel: %s\n' "$(uname -r)"
+  grep -w overlay /proc/filesystems || echo 'overlay: not registered'
+  mkdir -p /run/vm-image-probe/l /run/vm-image-probe/u /run/vm-image-probe/w /run/vm-image-probe/m
+  if mount -t overlay overlay -o lowerdir=/run/vm-image-probe/l,upperdir=/run/vm-image-probe/u,workdir=/run/vm-image-probe/w /run/vm-image-probe/m; then
+    echo 'overlay mount: ok'; umount /run/vm-image-probe/m
+  else
+    echo 'overlay mount: failed'
+  fi
+  rm -rf /run/vm-image-probe
+} >&2
+dockerd --debug --config-file /opt/vm-image/assembly-daemon.json \
   --host unix:///run/vm-image-docker.sock --pidfile /run/vm-image-docker.pid \
   --exec-root /run/vm-image-docker --data-root /var/lib/docker \
   --bridge none --iptables=false --ip6tables=false --ip-forward=false --ip-masq=false \

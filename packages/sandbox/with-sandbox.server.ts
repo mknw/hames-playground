@@ -20,7 +20,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { trackEvent } from '@hames-ai/harness-patterns/context.server'
 import { amendRunFrame, type RunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { DEFAULT_SANDBOX_SETTINGS } from './settings'
-import { AttachmentTable } from './attachment-table.server'
+import { AttachmentTable, type Attachment } from './attachment-table.server'
 import { DockerBackend } from './docker-backend.server'
 import { SandboxScheduler } from './scheduler.server'
 import { WarmPool } from './warm-pool.server'
@@ -28,12 +28,16 @@ import { hydrateWorkspace, snapshotOutputs, promoteOutputs } from './work-artifa
 import { syncSkills } from './skills.server'
 import {
   SKILLS_INDEX_TOOL,
+  SKILLS_PENDING_NOTICE,
   renderSkillsIndex,
   type SandboxSkill,
   type SandboxSkillsResolver,
 } from './skills'
 import { V0_IN_VM_SERVERS } from './types'
+import { IN_VM_TOOL_DESCRIPTORS } from './in-vm-tools'
+import { classifySandboxFailure, type SandboxFailure } from './failure'
 import type { ComputeBackend, McpTransport, RootfsId, RuntimeConfig } from './types'
+import type { ToolTransport } from '@hames-ai/harness-patterns/tool-transport.server'
 import type {
   ConfiguredPattern,
   ErrorEventData,
@@ -177,6 +181,27 @@ export interface WithSandboxConfig {
    * line for a file that is not there.
    */
   skills?: SandboxSkillsResolver
+  /**
+   * Start the sandbox on the FIRST `sandbox_*` call instead of at the turn's entry
+   * (id-addressable path only: it needs an `id`). A turn that never calls an
+   * in-VM tool — a Graph-only one — then touches no container engine at all: no
+   * scheduler slot, no boot, no hydrate, no promote, and no singleton construction.
+   * Default off, and off is the behaviour that existed before this option.
+   *
+   * What changes while it is on, all deliberate:
+   *  - The prompt lists {@link IN_VM_TOOL_DESCRIPTORS} (a package-static table)
+   *    rather than what the booted servers reported — there is no VM to ask.
+   *  - With `skills`, the index appears on the prompt only after the first boot has
+   *    mounted them; until then the prompt carries {@link SKILLS_PENDING_NOTICE}, and after
+   *    a failed boot nothing (that list will not come).
+   *  - Concurrent first calls share ONE boot, and a failed boot is remembered for
+   *    the rest of the run (the next turn tries again), so a retrying actor costs
+   *    one failed boot, not one per attempt.
+   *  - A boot that fails answers the call with a CLASSIFIED failure
+   *    (`classifySandboxFailure`): fixed text, never the engine's own words, which go
+   *    to the server log only. Eager mode throws the raw error instead.
+   */
+  lazy?: boolean
 }
 
 /** How often the default attachment table sweeps idle parked VMs (#82). This is
@@ -304,37 +329,62 @@ function resolveTenantId(tenantId: WithSandboxConfig['tenantId']): string | unde
   }
 }
 
+interface SandboxResources {
+  backend: ComputeBackend
+  pool: WarmPool
+  scheduler: SandboxScheduler
+  attachments: AttachmentTable
+}
+
+function buildResources(config: WithSandboxConfig | undefined): SandboxResources {
+  const backend = config?.backend ?? getDefaultBackend()
+  // When the caller injects a custom backend (test scenario), build per-call
+  // pool/scheduler/attachments so test state doesn't bleed through the
+  // singletons. Tests can still inject any of them explicitly to share
+  // state across multiple withSandbox invocations.
+  const usingDefaultBackend = !config?.backend
+  const pool =
+    config?.pool ??
+    (usingDefaultBackend
+      ? getDefaultPool()
+      : new WarmPool(backend, {
+          caps: DEFAULT_SANDBOX_SETTINGS.warmPool,
+          idleEvictMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
+        }))
+  const scheduler =
+    config?.scheduler ??
+    (usingDefaultBackend
+      ? getDefaultScheduler()
+      : new SandboxScheduler({
+          globalCap: DEFAULT_SANDBOX_SETTINGS.globalCap,
+          perSessionCap: DEFAULT_SANDBOX_SETTINGS.perSessionCap,
+        }))
+  const attachments =
+    config?.attachments ??
+    (usingDefaultBackend
+      ? getDefaultAttachments()
+      : new AttachmentTable(backend, pool, {
+          idleMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
+        }))
+  return { backend, pool, scheduler, attachments }
+}
+
 export function withSandbox(config?: WithSandboxConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
-    const backend = config?.backend ?? getDefaultBackend()
-    // When the caller injects a custom backend (test scenario), build per-call
-    // pool/scheduler/attachments so test state doesn't bleed through the
-    // singletons. Tests can still inject any of them explicitly to share
-    // state across multiple withSandbox invocations.
-    const usingDefaultBackend = !config?.backend
-    const pool =
-      config?.pool ??
-      (usingDefaultBackend
-        ? getDefaultPool()
-        : new WarmPool(backend, {
-            caps: DEFAULT_SANDBOX_SETTINGS.warmPool,
-            idleEvictMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
-          }))
-    const scheduler =
-      config?.scheduler ??
-      (usingDefaultBackend
-        ? getDefaultScheduler()
-        : new SandboxScheduler({
-            globalCap: DEFAULT_SANDBOX_SETTINGS.globalCap,
-            perSessionCap: DEFAULT_SANDBOX_SETTINGS.perSessionCap,
-          }))
-    const attachments =
-      config?.attachments ??
-      (usingDefaultBackend
-        ? getDefaultAttachments()
-        : new AttachmentTable(backend, pool, {
-            idleMs: DEFAULT_SANDBOX_SETTINGS.idleEvictMs,
-          }))
+    const lazy = config?.lazy === true
+    if (lazy && !config?.id) {
+      throw new Error(
+        `withSandbox({ lazy: true }) requires an \`id\` (pattern "${pattern.name}"): only the ` +
+          'id-addressable path can defer its boot.',
+      )
+    }
+    // The backend, pool, scheduler and attachment table. Eager mode builds them
+    // HERE, at wrap time, exactly as before (the default singletons' first build
+    // also arms the orphan reaper). Lazy mode builds them on the first boot, so a
+    // turn that never needs a sandbox never constructs a container backend.
+    let resources: SandboxResources | undefined
+    const resolveResources = (): SandboxResources => (resources ??= buildResources(config))
+    if (!lazy) resolveResources()
 
     const rootfs: RootfsId = config?.rootfs ?? 'base'
     const sessionId = config?.sessionId ?? 'default'
@@ -404,6 +454,22 @@ export function withSandbox(config?: WithSandboxConfig) {
         tenantId: resolveTenantId(config?.tenantId) ?? 'default',
       }
 
+      if (lazy) {
+        return await runWithLazyIdAttachment({
+          resolveResources,
+          id: id!,
+          fresh,
+          rootfs,
+          runtime,
+          scope,
+          view,
+          pattern,
+          sessionId,
+          syncWorkspace,
+          skills,
+        })
+      }
+      const { backend, pool, scheduler, attachments } = resolveResources()
       const slot = await scheduler.allocate(sessionId)
       try {
         if (id) {
@@ -455,6 +521,14 @@ export function withSandbox(config?: WithSandboxConfig) {
 // Skills (#415) — resolve, sync into /skills, render the index.
 // ============================================================================
 
+/** Whether a failure report may carry the raw error text. A lazy run withholds it
+ *  from every event (the classified-failure rule); the server log keeps it. */
+interface DetailOpts {
+  withholdDetail?: boolean
+}
+
+const DETAILS_WITHHELD = 'details withheld; see the server log'
+
 /**
  * Report a skills step that did not go to plan, on both channels: a `warning`
  * event (#420's side-failure scheme — the turn ran on a fallback, so no error
@@ -465,12 +539,20 @@ export function withSandbox(config?: WithSandboxConfig) {
 function reportSkillsFailure<T>(
   scope: PatternScope<T>,
   warning: Omit<WarningEventData, 'task'>,
+  opts: DetailOpts = {},
 ): void {
   console.error(`[sandbox] skills: ${warning.error ?? warning.message}`)
   trackEvent(
     scope,
     'warning',
-    { task: 'skills_mount', ...warning } satisfies WarningEventData,
+    {
+      task: 'skills_mount',
+      ...warning,
+      // `error` is the raw words (a resolver's message, an in-VM command's stderr):
+      // withheld from every channel a lazy run's events reach, as the workspace
+      // steps withhold theirs. `message` and `fallback` are fixed sentences.
+      ...(opts.withholdDetail && warning.error !== undefined ? { error: DETAILS_WITHHELD } : {}),
+    } satisfies WarningEventData,
     true,
   )
 }
@@ -490,57 +572,78 @@ async function prepareSkills<T>(
   transport: McpTransport,
   scope: PatternScope<T>,
   resolver: SandboxSkillsResolver | undefined,
+  opts: DetailOpts = {},
 ): Promise<string | undefined> {
   if (!resolver) return undefined
   let skills: readonly SandboxSkill[]
   try {
     skills = await resolver()
   } catch (err) {
-    reportSkillsFailure(scope, {
-      message: 'Your skills could not be loaded for this sandbox.',
-      fallback: 'The agent ran without skills.',
-      error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
-    })
+    reportSkillsFailure(
+      scope,
+      {
+        message: 'Your skills could not be loaded for this sandbox.',
+        fallback: 'The agent ran without skills.',
+        error: `could not resolve this run's skills: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      opts,
+    )
     skills = []
   }
   // Every mount command is a `sandbox_bash` call, and the index tells the actor
   // to read a skill with it: a transport without it can do neither.
   if (!transport.ownsTool(SKILLS_INDEX_TOOL)) {
     if (skills.length > 0) {
-      reportSkillsFailure(scope, {
-        message: 'This sandbox cannot mount skills.',
-        fallback: 'The agent ran without skills.',
-        error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message: 'This sandbox cannot mount skills.',
+          fallback: 'The agent ran without skills.',
+          error: `this sandbox has no ${SKILLS_INDEX_TOOL} tool, so ${skills.length} skill(s) were not mounted`,
+        },
+        opts,
+      )
     }
     return undefined
   }
   try {
     const { mounted, skipped, removalError } = await syncSkills(transport, skills)
     if (skipped.length > 0) {
-      reportSkillsFailure(scope, {
-        message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
-        fallback: 'The agent ran with the skills that did mount.',
-        error:
-          `${skipped.length} skill(s) not mounted: ` +
-          skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message: `${skipped.length} skill(s) could not be mounted in the sandbox.`,
+          fallback: 'The agent ran with the skills that did mount.',
+          error:
+            `${skipped.length} skill(s) not mounted: ` +
+            skipped.map((s) => `${s.name || '(unnamed)'} (${s.error})`).join(', '),
+        },
+        opts,
+      )
     }
     if (removalError) {
-      reportSkillsFailure(scope, {
-        message:
-          'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
-        fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
-        error: removalError,
-      })
+      reportSkillsFailure(
+        scope,
+        {
+          message:
+            'A skill removed or hidden since the last turn could not be cleared from the sandbox.',
+          fallback: 'It may still be readable in this sandbox; the agent is not told about it.',
+          error: removalError,
+        },
+        opts,
+      )
     }
     return renderSkillsIndex(mounted)
   } catch (err) {
-    reportSkillsFailure(scope, {
-      message: 'Your skills could not be mounted in the sandbox.',
-      fallback: 'The agent ran without skills.',
-      error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
-    })
+    reportSkillsFailure(
+      scope,
+      {
+        message: 'Your skills could not be mounted in the sandbox.',
+        fallback: 'The agent ran without skills.',
+        error: `mounting failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+      opts,
+    )
     return undefined
   }
 }
@@ -627,7 +730,7 @@ function reportWorkspaceFailure<T>(
   step: 'hydrate' | 'snapshot' | 'promote',
   sessionId: string,
   err: unknown,
-  opts: { withholdDetail?: boolean } = {},
+  opts: DetailOpts = {},
 ): void {
   const detail = err instanceof Error ? err.message : String(err)
   const message = WORKSPACE_FAILURE_MESSAGE[step]
@@ -642,7 +745,7 @@ function reportWorkspaceFailure<T>(
     'error',
     {
       error: opts.withholdDetail
-        ? `sandbox workspace ${step} failed (details withheld; see the server log)`
+        ? `sandbox workspace ${step} failed (${DETAILS_WITHHELD})`
         : `sandbox workspace ${step} failed: ${detail}`,
       severity: 'recoverable',
       hint: message,
@@ -698,7 +801,10 @@ interface RestoreScope {
 }
 
 function restoreAfterStashWrite<T>(
-  transport: McpTransport,
+  /** The VM to restore into, or `undefined` when there is none (yet): a lazy
+   *  sandbox that has not started has no `/work/in` to be stale, and its boot
+   *  hydrates every stored document anyway. */
+  resolveTransport: () => Promise<McpTransport | undefined>,
   scope: PatternScope<T>,
   sessionId: string,
 ): RestoreScope {
@@ -708,6 +814,8 @@ function restoreAfterStashWrite<T>(
   const restore = async (ids: Set<string>): Promise<ToolCallResult | void> => {
     if (closed) return
     try {
+      const transport = await resolveTransport()
+      if (!transport) return
       const { skipped, accounted } = await hydrateWorkspace(transport, sessionId)
       const seen = new Set(accounted)
       const unaccounted = [...ids].filter((id) => !seen.has(id))
@@ -783,86 +891,259 @@ async function runWithIdAttachment<T>(
       return await run(() => pattern.fn(scope, view))
     }
     return await run(async () => {
-      // Restore the session's stored documents into /work/in — EVERY turn, not
-      // just on a fresh container (#206 §6.1). `hydrateWorkspace` diffs against
-      // what /work/in already holds (the mirror of the snapshot/promote pair
-      // below), so a steady-state turn costs one document list plus one in-VM
-      // `find` and writes nothing. Gating this on `att.isFirstBoot` made turn 1
-      // work only by accident of ordering — a document ingested during turn 2,
-      // or before the container booted for a Shell the user opened first, never
-      // reached the actor.
-      try {
-        const { skipped } = await hydrateWorkspace(att.transport, sessionId)
-        if (skipped.length > 0) {
-          reportWorkspaceFailure(
-            scope,
-            'hydrate',
-            sessionId,
-            new Error(
-              `${skipped.length} file(s) not restored: ` +
-                skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
-            ),
-          )
-        }
-      } catch (err) {
-        // Non-fatal: the turn still runs, but the agent cannot see prior
-        // uploads or earlier deliverables, so say which turn was blind.
-        reportWorkspaceFailure(scope, 'hydrate', sessionId, err)
-      }
-      // The Shell's own first-boot hydrate (#97 Gap 3) would now be redundant
-      // for this container — the flag still coordinates the two, it just no
-      // longer gates the agent side.
-      att.isFirstBoot = false
-      // Promote only what THIS turn produces: snapshot /work/out before the
-      // turn, diff after. In `finally` so deliverables are saved even if the
-      // pattern throws.
-      //
-      // A FAILED snapshot is not an empty one. `diffWorkFiles` compares against
-      // the baseline, so substituting an empty Map would mark every pre-existing
-      // file as produced-this-turn and re-store the whole directory as duplicate
-      // stash documents. `null` means "no baseline" and skips promotion for this
-      // turn instead — the files stay in the container and the next turn (which
-      // snapshots successfully) promotes whatever changed.
-      let baseline: Map<string, string> | null = null
-      try {
-        baseline = await snapshotOutputs(att.transport)
-      } catch (err) {
-        reportWorkspaceFailure(scope, 'snapshot', sessionId, err)
-      }
-      const restoring = restoreAfterStashWrite(att.transport, scope, sessionId)
+      const baseline = await hydrateAndSnapshot(att, scope, sessionId)
+      const restoring = restoreAfterStashWrite(async () => att.transport, scope, sessionId)
       try {
         return await amendRunFrame(restoring.frame, () => pattern.fn(scope, view))
       } finally {
         // Before promotion and before the attachment is released: nothing
         // inherited from the pattern may restore into it from here on (F4).
         await restoring.close()
-        if (baseline) {
-          try {
-            const { skipped } = await promoteOutputs(att.transport, sessionId, baseline)
-            if (skipped.length > 0) {
-              // Per-file failures: the turn survived, individual deliverables
-              // did not. Name them, since the agent has already reported
-              // writing them (sf-L8).
-              reportWorkspaceFailure(
-                scope,
-                'promote',
-                sessionId,
-                new Error(
-                  `${skipped.length} file(s) not stored: ` +
-                    skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
-                ),
-              )
-            }
-          } catch (err) {
-            // The deliverable the agent just told the user about is about to
-            // be reaped with the container. This was a bare `.catch(() => {})`
-            // and is the one failure in this file that silently loses data.
-            reportWorkspaceFailure(scope, 'promote', sessionId, err)
-          }
-        }
+        await promoteTurn(att.transport, scope, sessionId, baseline)
       }
     })
   } finally {
     attachments.release(att)
+  }
+}
+
+/**
+ * The entry half of the durable-workspace sync: restore stored documents into
+ * `/work/in` and take the pre-turn `/work/out` baseline. Returns `null` when the
+ * snapshot failed — "no baseline", which skips promotion. Never throws: every step
+ * reports a `warning`-class failure and the turn goes on.
+ */
+async function hydrateAndSnapshot<T>(
+  att: Attachment,
+  scope: PatternScope<T>,
+  sessionId: string,
+  opts: DetailOpts = {},
+): Promise<Map<string, string> | null> {
+  // Restore the session's stored documents into /work/in — EVERY turn, not
+  // just on a fresh container (#206 §6.1). `hydrateWorkspace` diffs against
+  // what /work/in already holds (the mirror of the snapshot/promote pair
+  // below), so a steady-state turn costs one document list plus one in-VM
+  // `find` and writes nothing. Gating this on `att.isFirstBoot` made turn 1
+  // work only by accident of ordering — a document ingested during turn 2,
+  // or before the container booted for a Shell the user opened first, never
+  // reached the actor.
+  try {
+    const { skipped } = await hydrateWorkspace(att.transport, sessionId)
+    if (skipped.length > 0) {
+      reportWorkspaceFailure(
+        scope,
+        'hydrate',
+        sessionId,
+        new Error(
+          `${skipped.length} file(s) not restored: ` +
+            skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+        ),
+        opts,
+      )
+    }
+  } catch (err) {
+    // Non-fatal: the turn still runs, but the agent cannot see prior
+    // uploads or earlier deliverables, so say which turn was blind.
+    reportWorkspaceFailure(scope, 'hydrate', sessionId, err, opts)
+  }
+  // The Shell's own first-boot hydrate (#97 Gap 3) would now be redundant
+  // for this container — the flag still coordinates the two, it just no
+  // longer gates the agent side.
+  att.isFirstBoot = false
+  // Promote only what THIS turn produces: snapshot /work/out before the
+  // turn, diff after. In `finally` so deliverables are saved even if the
+  // pattern throws.
+  //
+  // A FAILED snapshot is not an empty one. `diffWorkFiles` compares against
+  // the baseline, so substituting an empty Map would mark every pre-existing
+  // file as produced-this-turn and re-store the whole directory as duplicate
+  // stash documents. `null` means "no baseline" and skips promotion for this
+  // turn instead — the files stay in the container and the next turn (which
+  // snapshots successfully) promotes whatever changed.
+  let baseline: Map<string, string> | null = null
+  try {
+    baseline = await snapshotOutputs(att.transport)
+  } catch (err) {
+    reportWorkspaceFailure(scope, 'snapshot', sessionId, err, opts)
+  }
+  return baseline
+}
+
+/** The exit half: promote what the turn produced since `baseline`. Never throws. */
+async function promoteTurn<T>(
+  transport: McpTransport,
+  scope: PatternScope<T>,
+  sessionId: string,
+  baseline: Map<string, string> | null,
+  opts: DetailOpts = {},
+): Promise<void> {
+  if (baseline) {
+    try {
+      const { skipped } = await promoteOutputs(transport, sessionId, baseline)
+      if (skipped.length > 0) {
+        // Per-file failures: the turn survived, individual deliverables
+        // did not. Name them, since the agent has already reported
+        // writing them (sf-L8).
+        reportWorkspaceFailure(
+          scope,
+          'promote',
+          sessionId,
+          new Error(
+            `${skipped.length} file(s) not stored: ` +
+              skipped.map((f) => `${f.filename} (${f.error})`).join(', '),
+          ),
+          opts,
+        )
+      }
+    } catch (err) {
+      // The deliverable the agent just told the user about is about to
+      // be reaped with the container. This was a bare `.catch(() => {})`
+      // and is the one failure in this file that silently loses data.
+      reportWorkspaceFailure(scope, 'promote', sessionId, err, opts)
+    }
+  }
+}
+
+// ============================================================================
+// Lazy boot (`lazy: true`) — the sandbox starts on the first sandbox_* call.
+// ============================================================================
+
+/** A lazy run's failure reports: the model and the user get the fixed sentences,
+ *  the raw error goes to the server log only (see {@link classifySandboxFailure}). */
+const LAZY_REPORTING: DetailOpts = { withholdDetail: true }
+
+const IN_VM_TOOL_SET: ReadonlySet<string> = new Set(IN_VM_TOOL_NAMES)
+
+interface LazyLive {
+  att: Attachment
+  slot: { release(): void }
+  baseline: Map<string, string> | null
+  /** The skills index the boot produced, rendered into the prompt from then on. */
+  index: string | undefined
+}
+
+type LazyBoot = { ok: true; live: LazyLive } | { ok: false; failure: SandboxFailure }
+
+interface LazyRun<T> {
+  resolveResources: () => SandboxResources
+  id: string
+  fresh: boolean
+  rootfs: RootfsId
+  runtime: RuntimeConfig
+  scope: PatternScope<T>
+  view: EventView
+  pattern: ConfiguredPattern<T>
+  sessionId: string
+  syncWorkspace: boolean
+  skills?: SandboxSkillsResolver
+}
+
+/**
+ * Run `pattern` with an in-VM transport that boots its VM on first use.
+ *
+ * The transport is registered on the run frame at ENTRY, so the allowlist and the
+ * prompt see the `sandbox_*` tools; what is deferred is everything that needs a
+ * container engine — scheduler slot, acquire, skills, hydrate, snapshot. That whole
+ * sequence is {@link LazyRun}'s `boot`, run at most once per run (concurrent first
+ * calls await the same promise) and remembered whether it succeeded or not.
+ *
+ * A boot that fails never throws into the pattern: the call returns a tool failure
+ * whose text is the CLASSIFIED sentence ({@link classifySandboxFailure}); the raw
+ * error is logged and goes no further. Whatever had been acquired before the failure
+ * is released, so a failed boot holds no slot and no attachment.
+ *
+ * Exit mirrors eager: promote only if a boot happened and succeeded, then release the
+ * attachment and the slot. A run that never booted has nothing to release.
+ */
+async function runWithLazyIdAttachment<T>(run: LazyRun<T>): Promise<PatternScope<T>> {
+  const { scope, view, pattern, sessionId, skills } = run
+  let boot: Promise<LazyBoot> | undefined
+  let live: LazyLive | undefined
+  // Set by a failed boot: the pending notice promises a list that will now never come.
+  let failed = false
+
+  const doBoot = async (): Promise<LazyBoot> => {
+    let slot: { release(): void } | undefined
+    try {
+      const { scheduler, attachments } = run.resolveResources()
+      slot = await scheduler.allocate(sessionId)
+      if (run.fresh) await attachments.destroyById(run.id).catch(() => {})
+      // Nothing after the acquire throws (the skills and workspace steps report
+      // and go on), so a failure here is a failure to acquire: nothing to release
+      // but the slot.
+      const att = await attachments.acquire(run.id, run.rootfs, run.runtime)
+      const index = await prepareSkills(att.transport, scope, skills, LAZY_REPORTING)
+      const baseline = run.syncWorkspace
+        ? await hydrateAndSnapshot(att, scope, sessionId, LAZY_REPORTING)
+        : null
+      live = { att, slot, baseline, index }
+      return { ok: true, live }
+    } catch (err) {
+      // Raw detail to the server log only; the model gets the fixed sentence.
+      console.error(
+        `[sandbox] lazy boot failed for session ${sessionId}: ` +
+          (err instanceof Error ? err.message : String(err)),
+      )
+      failed = true
+      slot?.release()
+      return { ok: false, failure: classifySandboxFailure(err) }
+    }
+  }
+  const startBoot = (): Promise<LazyBoot> => (boot ??= doBoot())
+
+  const transport: ToolTransport = {
+    id: `sandbox:${run.id}`,
+    ownsTool: (name) => IN_VM_TOOL_SET.has(name),
+    // Always the static table, so the prompt's tool catalog is byte-stable
+    // across the boot (a changing catalog would also churn the prompt cache).
+    listTools: async () => IN_VM_TOOL_DESCRIPTORS.map((t) => ({ ...t })),
+    async callTool(name, args) {
+      const booted = await startBoot()
+      if (!booted.ok) return { success: false, data: null, error: booted.failure.message }
+      return booted.live.att.transport.callTool(name, args)
+    },
+    // Read per prompt: the pending notice until the boot lands, then the index —
+    // and nothing after a failed boot, which has no skills to promise.
+    get promptContext() {
+      if (live) return live.index
+      return skills && !failed ? SKILLS_PENDING_NOTICE : undefined
+    },
+  }
+
+  const restoring = run.syncWorkspace
+    ? restoreAfterStashWrite(
+        async () => {
+          const booted = await boot
+          return booted?.ok ? booted.live.att.transport : undefined
+        },
+        scope,
+        sessionId,
+      )
+    : undefined
+
+  try {
+    return await amendRunFrame(
+      { transports: [transport], ...(restoring ? restoring.frame : {}) },
+      () => pattern.fn(scope, view),
+    )
+  } finally {
+    // A boot still in flight (the pattern threw mid-call) is awaited, so the
+    // release below is of what it actually acquired.
+    const booted = boot ? await boot : undefined
+    await restoring?.close()
+    if (booted?.ok) {
+      try {
+        await promoteTurn(
+          booted.live.att.transport,
+          scope,
+          sessionId,
+          booted.live.baseline,
+          LAZY_REPORTING,
+        )
+      } finally {
+        run.resolveResources().attachments.release(booted.live.att)
+        booted.live.slot.release()
+      }
+    }
   }
 }

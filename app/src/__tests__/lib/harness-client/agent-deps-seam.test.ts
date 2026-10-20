@@ -62,7 +62,9 @@ const createRedisBackend = vi.fn(() => ({
 }))
 // The config parameter is declared so `mock.calls[0][0]` is typed: the tenant
 // assertion below reads the bag the adapter built, not just that it was called.
-const withSandbox = vi.fn((_config: { tenantId?: unknown; skills?: unknown }) => (p: unknown) => p)
+const withSandbox = vi.fn(
+  (_config: { tenantId?: unknown; skills?: unknown; lazy?: unknown }) => (p: unknown) => p,
+)
 const enrichNeo4jResult = vi.fn()
 // The skills resolver (#415) is observed at its seam: what matters here is
 // WHO it is asked for, not what the database holds.
@@ -152,6 +154,17 @@ describe('the bag the composition root supplies is the bag the moved factories r
     expect(typeof bag.withSandbox).toBe('function')
     bag.withSandbox!({ id: 'x' })(undefined as never)
     expect(withSandbox).toHaveBeenCalledWith(expect.objectContaining({ id: 'x' }))
+  })
+
+  // An agent that asks for a lazy sandbox must get one: the adapter used to narrow
+  // the attach config field by field, and a dropped `lazy` would boot every
+  // sandbox agent's container at turn entry again, silently.
+  it('forwards the attach config’s lazy flag, and leaves it unset when absent', () => {
+    const bag = agentDeps()
+    bag.withSandbox!({ id: 'x', lazy: true })(undefined as never)
+    expect(withSandbox.mock.calls.at(-1)![0]).toMatchObject({ lazy: true })
+    bag.withSandbox!({ id: 'x' })(undefined as never)
+    expect(withSandbox.mock.calls.at(-1)![0].lazy).toBeUndefined()
   })
 
   // The agent-path tenant source (docs/plan/sandbox.md → "Tenant identity

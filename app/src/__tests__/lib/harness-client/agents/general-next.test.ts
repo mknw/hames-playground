@@ -455,6 +455,9 @@ describe('general-next composition', () => {
       rootfs: 'office',
       egress: 'mcp-only',
       syncWorkspace: true,
+      // Graph-only work must not need a container engine: the office route
+      // starts its sandbox on the first sandbox_* call.
+      lazy: true,
     })
   })
 

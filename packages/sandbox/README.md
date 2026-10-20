@@ -400,6 +400,18 @@ them:
   into the stash) is copied into `/work/in` right after that call returns, so
   the agent can open it in the same run. If that copy fails, the call is
   reported as failed rather than as a success that the agent cannot act on.
+- **Starting the sandbox only when it is used** — `withSandbox({ id, lazy: true })`
+  starts the container on the agent's first `sandbox_*` call instead of at the start
+  of the turn, so a turn that never runs code never needs a container engine. Until
+  then the agent is shown a fixed list of the sandbox tools (kept in step with the
+  real servers by a test), and, when you pass `skills`, a note that skills load when
+  the workspace starts. If the container cannot start, the call fails with a short
+  fixed sentence ("The code workspace is unavailable on this server") instead of the
+  engine's own error, which is written to the server log only; the failure is
+  remembered for the rest of that run. The same holds for a step that fails after
+  the container has started (restoring or saving files, mounting skills): the
+  events say it failed and the engine's words stay in the server log. `lazy` needs
+  an `id` and is off by default.
 - **Whose container it is** — `WithSandboxConfig.tenantId`, the id of the user who
   owns the conversation, as a string or as a function called per run (useful when
   you build your patterns once but the signed-in user changes per request).

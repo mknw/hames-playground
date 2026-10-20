@@ -118,6 +118,7 @@ export function agentDeps(): AgentDeps {
         rootfs: attach.rootfs as WithSandboxConfig['rootfs'],
         egress: attach.egress as WithSandboxConfig['egress'],
         syncWorkspace: attach.syncWorkspace,
+        lazy: attach.lazy,
         tenantId: () => getRequestUserId() ?? undefined,
         skills: () =>
           resolveSandboxSkills(getRequestUserId(), { includeGlobal: isAttendedRequest() }),

@@ -70,7 +70,7 @@ export interface AgentData extends HarnessData, RouterData, SimpleLoopData, Retr
 /**
  * The structural shape of the app-side sandbox wrapper, as the factories pass
  * it. The package carries no sandbox module (the containment posture stays
- * app-side, SD-19) — the composition root's adapter narrows these five plain
+ * app-side, SD-19) — the composition root's adapter narrows these six plain
  * fields onto its own `WithSandboxConfig`.
  */
 export interface SandboxAttach {
@@ -79,6 +79,8 @@ export interface SandboxAttach {
   rootfs?: string
   egress?: string
   syncWorkspace?: boolean
+  /** Start the sandbox on the first `sandbox_*` call rather than at the turn's entry. */
+  lazy?: boolean
 }
 
 /**

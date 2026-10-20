@@ -30,7 +30,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { createEvent } from '../context.server'
+import { createEvent, createModelCallEvent } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import {
@@ -188,6 +188,29 @@ export function createInjectionGuard(
             tool,
             namespace,
             content: typeof screenInput === 'string' ? screenInput : JSON.stringify(screenInput),
+            // The screen's own model call, recorded as it finishes — a failed
+            // one too, since it was billed. Emitted on the live scope beside
+            // the `content_sanitized` it may lead to, so the call shows in the
+            // run's observability with the client it actually ran on. Best
+            // effort: this closure is the guard's own, so whatever `emit` throws
+            // is contained here rather than left to a screen that may not catch
+            // it — a recording failure must never become a screen outage.
+            onCall: (call) => {
+              try {
+                emit(
+                  createModelCallEvent(
+                    patternId,
+                    { role: 'screen', source: `${namespace}/${tool}` },
+                    call,
+                  ),
+                )
+              } catch (recordErr) {
+                console.error(
+                  '[withInjectionGuard] recording the screen call failed; the verdict is unaffected:',
+                  recordErr,
+                )
+              }
+            },
           })
           if (verdict.injection_detected) {
             const screened = applyScreenVerdict(screenInput, verdict, { tool, namespace }, report)

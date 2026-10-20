@@ -37,14 +37,29 @@ export function parallel<T extends Record<string, unknown>>(
     name: 'parallel',
     fn: async (scope, view) => {
       try {
-        // Each branch gets an isolated scope with empty events
+        // Each branch gets an isolated scope with empty events. Its own start
+        // and end are read here, because its boundary events are created below,
+        // after EVERY branch has settled: stamped there, each `pattern_enter`
+        // would read as the moment the slowest sibling finished, and sort after
+        // the branch's own events in the panel (which orders by `ts`).
+        const spans = patterns.map(() => ({ start: 0, end: 0 }))
         const results = await Promise.allSettled(
-          patterns.map((p) =>
-            p.fn(
-              { ...scope, id: p.config.patternId ?? p.name, events: [], startTime: Date.now() },
-              view,
-            ),
-          ),
+          patterns.map((p, i) => {
+            spans[i].start = Date.now()
+            return p
+              .fn(
+                {
+                  ...scope,
+                  id: p.config.patternId ?? p.name,
+                  events: [],
+                  startTime: spans[i].start,
+                },
+                view,
+              )
+              .finally(() => {
+                spans[i].end = Date.now()
+              })
+          }),
         )
 
         // Did anything survive? `parallel: 'recoverable'` is right while at
@@ -62,14 +77,20 @@ export function parallel<T extends Record<string, unknown>>(
           if (r.status === 'fulfilled') {
             const branchId = patterns[i].config.patternId ?? patterns[i].name
             const branchMaxTurns = (patterns[i].config as { maxTurns?: number }).maxTurns
-            const enterEvt = createEvent('pattern_enter', branchId, {
-              pattern: patterns[i].name,
-              ...(branchMaxTurns !== undefined ? { maxTurns: branchMaxTurns } : {}),
-            })
+            const enterEvt = {
+              ...createEvent('pattern_enter', branchId, {
+                pattern: patterns[i].name,
+                ...(branchMaxTurns !== undefined ? { maxTurns: branchMaxTurns } : {}),
+              }),
+              ts: spans[i].start,
+            }
             scope.events.push(enterEvt)
             emitLive(enterEvt)
             scope.events.push(...r.value.events)
-            const exitEvt = createEvent('pattern_exit', branchId, { status: 'completed' })
+            const exitEvt = {
+              ...createEvent('pattern_exit', branchId, { status: 'completed' }),
+              ts: spans[i].end,
+            }
             scope.events.push(exitEvt)
             emitLive(exitEvt)
             scope.data = { ...scope.data, ...r.value.data }

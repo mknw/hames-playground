@@ -23,6 +23,7 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   DecisionMadeEventData,
+  ModelCallEventData,
   MemoryRecalledEventData,
   MemoryWrittenEventData,
   PlanCreatedEventData,
@@ -633,6 +634,13 @@ function formatEventData(event: ContextEvent): string {
       // dump below, which every LLM-facing serialization runs.
       const data = event.data as MemoryWrittenEventData
       return `memory ${data.action}: ${data.kind}`
+    }
+    case 'model_call': {
+      // METADATA ONLY — the role and a label for what the call read. The call's
+      // own record (`llmCall`) is never rendered into an LLM-facing view, and a
+      // screen call read the untrusted content itself (SD-3).
+      const data = event.data as ModelCallEventData
+      return `${data.role} call${data.source ? `: ${data.source}` : ''}`
     }
     case 'approval_request':
     case 'approval_response':

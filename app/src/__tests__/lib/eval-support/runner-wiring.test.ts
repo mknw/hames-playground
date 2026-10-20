@@ -198,3 +198,28 @@ it('writes the screen subtotal beside every scenario row', () => {
 it('marks hermetic reports with the vacuous-pass caveat', () => {
   expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)
 })
+it('captures decisions and controller outputs only behind the env flag, beside the gitignored report', () => {
+  const s = run()
+  // Off by default: the log exists only when the flag says so, and the report names the file only then.
+  expect(s).toMatch(
+    /const capture = captureEnabled\(process\.env\) \? new CaptureLog\(\) : undefined/,
+  )
+  expect(s).toContain('captureFile: capture ? captureFile : undefined')
+  // The capture file sits next to the report, inside evals/reports, which is gitignored.
+  expect(s).toContain("const captureFile = file.replace(/\\.json$/, '-capture.json')")
+  expect(read('.gitignore')).toMatch(/^evals\/reports\/\*$/m)
+  // Written with every checkpoint of the report, so an interrupted run keeps what it saw.
+  const write = /const write = \(\) => \{[\s\S]*?\n {2}\}\n {2}const tick/.exec(s)?.[0]
+  expect(write).toContain(
+    "if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\\n')",
+  )
+  // Fed from the graded trace, with the verdict that widens controller capture to every call.
+  expect(s).toMatch(
+    /const status = checks\.length > 0 && checks\.every\(\(c\) => c\.pass\) \? 'pass' : 'fail'\s*capture\?\.add\(active, trace, status === 'fail'\)\s*results\.push\(/,
+  )
+  expect(s.indexOf('grade(job.scenario')).toBeLessThan(s.indexOf('capture?.add('))
+  // A scenario that throws before grading still leaves a row, so a gap is never read as "no decisions".
+  expect(s).toMatch(
+    /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
+  )
+})

@@ -26,6 +26,7 @@ import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
+import { captureTrace } from '../../../../lib/eval-support/capture'
 import type {
   ConversationScenario,
   ConversationTrace,
@@ -287,46 +288,157 @@ describe('general-next composition', () => {
     },
   )
 
-  // E4/#507 live pass 3, scenario 13: Decide chose info-retrieval, the info
-  // child could not find the notes (it can only search the graph and web), and
-  // the SECOND Decide chose answer: read-documents was never selected. The
-  // question names the file but never says "uploaded", which is the only word of
-  // the old read-documents criterion it could match. Replays the recorded
-  // route sequence with a synthetic info Return (no trace was captured) and pins
-  // what the second Decide request carries; it cannot say what the model then
-  // chooses. MUTATION: revert the info-retrieval or the
-  // read-documents description in general-next.server.ts: this goes red.
-  it.each(['anthropic', 'verda'])(
-    'E4: the second Decide of the two-source question sees a criterion for the named file (%s)',
-    async (tier) => {
-      // Scenario 13's question, read from the eval file so a reworded scenario cannot drift.
-      const question = /messages: \[\s*'([^']+)'/.exec(
-        readFileSync('evals/general-next/scenarios/13-two-sources.ts', 'utf8'),
-      )![1]
+  // E4/#507 scenario 13 (live pass 3 and run 2): Decide chose info-retrieval, the
+  // info child could not get the notes (it only searches the graph and web), and
+  // the SECOND Decide chose answer: read-documents was never selected. Replays
+  // the recorded route sequence offline, with the info Return in both shapes the
+  // two live passes produced (no trace was captured, so each is synthetic and
+  // reconstructed from the final answers). The criteria are byte-identical to
+  // scenario 12's, which routes to read-documents: only the STATE differs, and in
+  // 13 nothing in it says "uploaded", the one word 12's request gave the criterion
+  // to match. So the criterion itself has to carry the bridge from "an earlier lookup
+  // did not find the named file" to read-documents. This pins the delivery of
+  // that text and the premise; the decider is remote, so no offline pin can show
+  // which route it then picks. MUTATION: drop the "did not find" clause (or the
+  // others) in the read-documents description in general-next.server.ts: red.
+  const SCENARIO_13_INFO_RETURNS = {
+    'pass 3: notes unavailable':
+      'The graph holds 42 Project nodes. The target count in lantern-notes.md is unavailable: a web search returned only a placeholder URL and the graph has no node for the notes.',
+    'run 2: decoy web hit, target not found':
+      'The knowledge graph holds 42 Project nodes. Target count in lantern-notes.md: not found. The only source located for lantern-notes.md (https://example.invalid/lantern) says: Lantern version 2 adds CSV export. It does not state a target count.',
+  }
+  const scenarioQuestion = (file: string) =>
+    // Read from the eval file so a reworded scenario cannot drift from the pin.
+    /messages: \[\s*'([^']+)'/.exec(
+      readFileSync(`evals/general-next/scenarios/${file}`, 'utf8'),
+    )![1]
+  const decideRequests = () =>
+    requests.mock.calls.map(
+      (call) =>
+        JSON.parse(String(call[1].body)) as {
+          state: string
+          questions: { next_step: { criteria: Record<string, string> } }
+        },
+    )
+
+  it.each(
+    ['anthropic', 'verda'].flatMap((tier) =>
+      Object.entries(SCENARIO_13_INFO_RETURNS).map(([shape, ret]) => [tier, shape, ret]),
+    ),
+  )(
+    'E4: the second Decide of the two-source question sees a criterion for a named file an earlier lookup did not find (%s, %s)',
+    async (tier, _shape, ret) => {
+      const question = scenarioQuestion('13-two-sources.ts')
       choices = ['info-retrieval', 'answer']
       mocks.controller.mockResolvedValueOnce({
-        action: {
-          reasoning: 'done',
-          tool_name: 'Return',
-          tool_args:
-            'The graph holds 42 Project nodes. The target count in lantern-notes.md is unavailable: a web search returned only a placeholder URL and the graph has no node for the notes.',
-          is_final: true,
-        },
+        action: { reasoning: 'done', tool_name: 'Return', tool_args: ret, is_final: true },
       })
       const patterns = await agent.createPatterns('synthetic-session', deps)
       await withRunFrame({ inference: { tier } }, () => harness(...patterns)(question))
       expect(requests).toHaveBeenCalledTimes(2)
-      const second = JSON.parse(String(requests.mock.calls[1][1].body))
+      const second = decideRequests()[1]
       expect(second.state).toContain(question)
-      expect(second.state).toContain('is unavailable')
-      const criteria = second.questions.next_step.criteria as Record<string, string>
+      expect(second.state).toContain(ret)
+      // The premise: nothing in this state says the file was uploaded.
+      expect(second.state).not.toMatch(/\buploaded\b/i)
+      const criteria = second.questions.next_step.criteria
       expect(criteria['read-documents']).toContain(
-        'an uploaded file the user names without saying "uploaded" (for example report.pdf)',
+        'an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it;',
       )
       expect(criteria['read-documents']).toContain('the answer needs text quoted from such a file')
+      // The clause is scoped to uploaded files: a file at a web address stays with info-retrieval.
+      expect(criteria['read-documents']).toContain(
+        'also when an earlier knowledge-graph or web lookup did not find it',
+      )
+      expect(criteria['read-documents']).toContain(
+        'A file the user gives a web address for is info-retrieval',
+      )
       expect(criteria['info-retrieval']).toContain(
         'it cannot open files uploaded to this conversation (that is read-documents)',
       )
+    },
+  )
+
+  it.each(['anthropic', 'verda'])(
+    'E4: scenarios 12 and 13 reach Decide with identical criteria; only the state differs (%s)',
+    async (tier) => {
+      const run13 = async () => {
+        choices = ['info-retrieval', 'answer']
+        mocks.controller.mockResolvedValueOnce({
+          action: {
+            reasoning: 'done',
+            tool_name: 'Return',
+            tool_args: SCENARIO_13_INFO_RETURNS['pass 3: notes unavailable'],
+            is_final: true,
+          },
+        })
+        const patterns = await agent.createPatterns('synthetic-session', deps)
+        await withRunFrame({ inference: { tier } }, () =>
+          harness(...patterns)(scenarioQuestion('13-two-sources.ts')),
+        )
+      }
+      choices = ['read-documents', 'answer']
+      const patterns = await agent.createPatterns('synthetic-session', deps)
+      await withRunFrame({ inference: { tier } }, () =>
+        harness(...patterns)(scenarioQuestion('12-retrieve-citation.ts')),
+      )
+      const twelve = decideRequests()
+      requests.mockClear()
+      await run13()
+      const thirteen = decideRequests()
+      for (const request of [...twelve, ...thirteen]) {
+        expect(request.questions).toEqual(twelve[0].questions)
+      }
+      // 12's first request carries "uploaded" and "document", the words the criterion matches;
+      // 13's two carry neither. This is the difference that matters, and it is a property of
+      // the question, so only the criterion text can close it.
+      expect(twelve[0].state).toMatch(/\buploaded\b/)
+      for (const request of thirteen)
+        expect(request.state).not.toMatch(/\buploaded\b|\bdocument\b/i)
+    },
+  )
+
+  // #507 scripted capture: the eval driver's trace is this run's events, so the capture of a fake
+  // run of scenario 13 must hold each Decide request as SENT (criteria + state with the info
+  // Return) and the choice made on it. MUTATION: make `captureTrace` drop its decisions, or read
+  // the criteria from somewhere other than the sent request: red.
+  it.each(['anthropic', 'verda'])(
+    'capture: a fake run of the two-source question records both Decide requests and their choices (%s)',
+    async (tier) => {
+      const question = scenarioQuestion('13-two-sources.ts')
+      const ret = SCENARIO_13_INFO_RETURNS['run 2: decoy web hit, target not found']
+      choices = ['info-retrieval', 'answer']
+      mocks.controller.mockResolvedValueOnce({
+        action: { reasoning: 'done', tool_name: 'Return', tool_args: ret, is_final: true },
+      })
+      const patterns = await agent.createPatterns('synthetic-session', deps)
+      const result = await withRunFrame({ inference: { tier } }, () =>
+        harness(...patterns)(question),
+      )
+      const events = result.context.events
+      const trace: ConversationTrace = {
+        turns: [{ response: result.response, status: result.status, events }],
+        tools: [],
+        artifacts: [],
+        indexed: [],
+        retrievals: [],
+      }
+      const { decisions } = captureTrace(trace, true)
+      expect(decisions.map((d) => d.choice)).toEqual(['info-retrieval', 'answer'])
+      const sent = decideRequests()
+      decisions.forEach((d, i) => {
+        // What was captured is what went on the wire, field for field.
+        expect(d.state).toBe(sent[i].state)
+        expect(d.criteria).toEqual(sent[i].questions.next_step.criteria)
+        expect(d.instructions).toBe('Which step should run next?')
+        expect(d.rawOutput).toContain('"choice"')
+      })
+      expect(decisions[0].state).toContain(question)
+      expect(decisions[1].state).toContain(ret)
+      expect(decisions[1].criteria['read-documents']).toContain(
+        'also when an earlier knowledge-graph or web lookup did not find it',
+      )
+      expect(decisions[1].probs).toMatchObject({ answer: 1, 'read-documents': 0 })
     },
   )
 

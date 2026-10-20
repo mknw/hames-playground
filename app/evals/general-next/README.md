@@ -25,6 +25,7 @@ EVAL_GENERAL_GO='S3 merged: go' corepack pnpm eval:general-next --live
 | `EVAL_ONLY`            | all            | Comma-separated scenario IDs; unknown IDs fail before setup. A filtered run cannot establish the flip gate.                                                                                   |
 | `EVAL_GENERAL_CAP_USD` | `20`           | Positive USD cap; anything above `25` is refused. The conservative stop threshold is **80%** of this amount (`16` by default), shared across baseline and candidate scenarios.                |
 | `EVAL_GENERAL_GO`      | unset          | Acknowledges the coordinator's go message; required in addition to `--live`. It is an operator attestation, never permission inferred from S3 appearing in the tree.                          |
+| `EVAL_GENERAL_CAPTURE` | unset (off)    | Exactly `1` writes a trace capture beside the report (below). Anything else, including `0`, leaves it off.                                                                                    |
 
 The runner writes one JSON report under `evals/reports`, including each scenario's
 status, checks, agent, tier, observer cost, infrastructure floor and call count.
@@ -44,6 +45,32 @@ the same static `EUR_PER_USD` used by the observer, refused outside 0.75–0.95.
 counted, deliberately overcounting overlap. Infrastructure remains a floor because
 provider rounding and unobserved infrastructure are not measured; configured scale-down tails are reserved once per run and after idle gaps longer than each box’s window;
 this is not an invoice ceiling. Both cap and stop threshold appear in every report.
+
+## Trace capture (`EVAL_GENERAL_CAPTURE=1`)
+
+The report grades a conversation by its decision sequence and tool checks; it cannot say why the
+decider chose `answer`, or what a controller wrote before an attempt failed. With the flag set the
+runner also writes `<report>-capture.json` next to the report (inside `evals/reports`, gitignored),
+checkpointed with it, and the report names the file under `captureFile`. Off by default; the live
+lane turns it on. It reads the graded trace, so it works in hermetic and live mode and adds no
+call. Per scenario row:
+
+- `decisions`: for every Decide, the `instructions` and `criteria` as sent, the `state` it was asked
+  over (conversation, steps so far, latest results), the `choice`, the endpoint's `probs`, `top`,
+  `margin`, `abstained`, and the raw response body.
+- `controllerCalls`: the raw completion of `LoopController` / `ActorController` calls, capped at
+  8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
+  `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
+  call.
+- `error`: present, with empty `decisions` and `controllerCalls`, on a scenario that threw before
+  it could be graded (a timeout, an escaped `BamlTimeoutError`), so a missing row is never read as
+  "no decisions".
+
+The state can quote tool results verbatim (the event's data records only the state's size; the
+text is on its call record, SD-3), so the file is for the eval's synthetic fixtures; do not point
+the flag at a run that feeds the agent anything else. Captured `state`, `error` and raw outputs
+are verbatim: scrub them before quoting them on the public tracker. `capture.test.ts` and the `capture:` pin in `general-next.test.ts` hold the
+shape, `runner-wiring.test.ts` the flag, the path and the checkpoint.
 
 ## Execution boundaries and pending evidence
 

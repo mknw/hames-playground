@@ -223,7 +223,7 @@ async function createPatterns(
         'read-documents': {
           pattern: retrieve,
           description:
-            'Search uploaded and indexed documents in this conversation and return cited excerpts, including an uploaded file the user names without saying "uploaded" (for example report.pdf); use it when the answer needs text quoted from such a file. Running code over a file is office-data',
+            'Search uploaded and indexed documents in this conversation and return cited excerpts, including an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it; use it when the answer needs text quoted from such a file. A file the user gives a web address for is info-retrieval. Running code over a file is office-data',
           capability: 'Search this conversation’s Data Stash and return cited excerpts.',
         },
         think: {

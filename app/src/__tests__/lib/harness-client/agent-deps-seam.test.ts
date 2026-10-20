@@ -77,7 +77,7 @@ vi.mock('../../../lib/harness-client/neo4j-enricher.server', () => ({ enrichNeo4
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation: vi.fn(),
   saveConversation: vi.fn(),
-  deleteConversation: vi.fn(),
+  deleteConversations: vi.fn(),
   deriveTitle: vi.fn(),
   updateConversationTitle: vi.fn(),
 }))

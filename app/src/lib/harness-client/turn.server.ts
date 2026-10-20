@@ -12,6 +12,7 @@
  *
  * | step                         | interactive | triggered | resume |
  * | ---------------------------- | ----------- | --------- | ------ |
+ * | verifies session ownership   | yes         | yes       | yes    |
  * | claims the conversation      | yes         | its seed  | yes    |
  * | loads the stored context     | yes         | no        | required |
  * | continues it (vs. fresh run) | same agent  | never     | resumes |
@@ -99,6 +100,7 @@ import { DEFAULT_SETTINGS } from '../settings'
 import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
+import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
 import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { ensurePrivateTierAwake } from '../inference/wake.server'
@@ -453,12 +455,47 @@ interface SavedTurn {
   eventCount: number
 }
 
+/** The one refusal for a session that is absent or not the caller's. */
+const SESSION_NOT_FOUND = 'Session not found'
+
+/**
+ * The turn's first gate, ahead of every mode and everything a turn builds from
+ * the session id (patterns, retriever, document list, sandbox). Interactive and
+ * triggered turns are record-or-verify through the same resolver the stash
+ * routes use, so a turn and the stash agree on who a session belongs to. A
+ * resume is VERIFY-ONLY: it continues a conversation that already exists, so it
+ * has no business establishing an owner for an id nothing has claimed. A
+ * session that is not the caller's is refused with the stash routes' own
+ * not-found wording — no difference between "not yours" and "absent", on every
+ * mode — and nothing is persisted. An ownership store that cannot answer
+ * refuses the turn too: no fallthrough.
+ */
+async function assertSessionOwned(
+  sessionId: string,
+  userId: string,
+  mode: TurnRequest['mode'],
+): Promise<void> {
+  let owned: boolean
+  try {
+    owned =
+      mode === 'resume'
+        ? await userOwnsSession(sessionId, userId)
+        : await claimSessionOwnership(sessionId, userId)
+  } catch (err) {
+    console.error('[turn] could not verify the owner of %s:', sessionId, err)
+    throw new Error('Could not verify session ownership; the turn was not run.')
+  }
+  if (!owned) throw new Error(SESSION_NOT_FOUND)
+}
+
 /**
  * Take the conversation for this turn, or refuse. Throws
  * `ConversationBusyError` (from the repository) while another turn holds it.
  */
 async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTurn> {
   const { sessionId, userId } = req
+  // Every mode, the triggered one included, before anything else.
+  await assertSessionOwned(sessionId, userId, req.mode)
   // A triggered run never loads (see the module docstring), and its claim was
   // taken by the seed it is about to replace.
   if (req.mode === 'triggered') return { loaded: null, version: req.claimVersion, released: false }
@@ -469,8 +506,9 @@ async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTur
   // existing row by construction, so an unknown id here is not this user's
   // session (re-pin of the deleted approval tests: refuse a session the user
   // does not own, flipping nothing). The claim was not taken — `claimSession`
-  // returns null only when the row does not exist under this user.
-  if (req.mode === 'resume') throw new Error('No active session')
+  // returns null only when the row does not exist under this user. Worded as
+  // the ownership refusal is, so an absent id and another user's id read alike.
+  if (req.mode === 'resume') throw new Error(SESSION_NOT_FOUND)
 
   // Brand-new conversation: persist the row BEFORE the run so it exists in the
   // sidebar for its whole first turn (#105) — previously the row only appeared
@@ -920,7 +958,7 @@ async function runResumeAndSave(
   // `claimTurn` refuses a resume that loads no session, so this is never null
   // here; the assertion keeps the type honest without a cast.
   const loaded = held.loaded
-  if (!loaded) throw new Error('No active session')
+  if (!loaded) throw new Error(SESSION_NOT_FOUND)
   let wakeFailed = false
   try {
     const plan = await planResume(loaded, tier, sessionId, userId)

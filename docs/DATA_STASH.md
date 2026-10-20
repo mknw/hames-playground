@@ -43,16 +43,16 @@ db-coupled.
 
 ## API routes (`app/src/routes/api/stash/`)
 
-| Method · Path                                     | Purpose                                                                          |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST /api/stash/upload`                          | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`)    |
-| `GET /api/stash/upload?sessionId=`                | List a session's documents (metadata)                                            |
-| `GET /api/stash/document/:id?sessionId=`          | Fetch a document (content + metadata)                                            |
-| `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89) |
-| `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                              |
-| `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                 |
-| `POST /api/stash/ingest`                          | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`)    |
-| `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks                                    |
+| Method · Path                                     | Purpose                                                                            |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `POST /api/stash/upload`                          | Store a document (multipart `file`, or JSON `{sessionId, filename, content}`)      |
+| `GET /api/stash/upload?sessionId=`                | List a session's documents (metadata)                                              |
+| `GET /api/stash/document/:id?sessionId=`          | Fetch a document (content + metadata)                                              |
+| `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89)   |
+| `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                                |
+| `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                   |
+| `POST /api/stash/ingest`                          | Chunk → embed → index a stored doc (`{sessionId, docId, chunk?, embedding?}`)      |
+| `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks (hidden/archived documents excluded) |
 
 The **client** never calls these directly: `app/src/lib/api-client.ts` owns the
 URLs, request/response types and error contract (#226 B4), and
@@ -76,24 +76,39 @@ session gets, so "not yours" and "not there" read alike. `lib/stash/ownership.se
 is the single resolver; `lib/stash/http.server.ts` exposes it to routes as
 `requireSessionOwner` (reads) and `claimSession` (writes).
 
+It is not stash-only. The sandbox shell routes gate on the same two functions,
+since an interactive shell into a session's container is scoped by the same id as
+its documents. So does every chat turn, ahead of anything built from the session
+id: new, continued and triggered turns are record-or-verify (like a stash write),
+and a resumed turn is verify-only, since it continues a conversation that already
+exists and never establishes an owner. A turn on a session that is not the
+caller's is refused with the same "Session not found" wording the routes use.
+
 Ownership comes from two records:
 
-| Record                                                   | Written by                                                                                                                                                                                    | Covers                                                                                      |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`), which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
-| `conversations.user_id`                                  | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording)                                                 | everything after the session is persisted                                                   |
+| Record                                                   | Written by                                                                                                                                                                                                                                    | Covers                                                                                      |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `session_claims` (Postgres, TTL = `DEFAULT_TTL_SECONDS`) | every stash write for a session (`POST /api/stash/upload`, `POST /api/stash/ingest`, `PATCH /api/stash/document/:id`) and every new, continued or triggered chat turn, which records the first writer and refreshes the window for the holder | an upload that precedes the conversation row — a file dropped before the first chat message |
+| `conversations.user_id`                                  | `actions.server.ts` (row seeded before the first turn runs, #105) and `seedActionRow` (agent trigger, same request that stores the recording)                                                                                                 | everything after the session is persisted                                                   |
 
 First toucher wins, in both records: the claim upsert only re-targets a row that
 is already the caller's or has expired, and `saveConversation` never updates
-`user_id`. A live claim outranks the conversation row, since it is the earlier of
-the two touches whenever both exist; once it expires, the conversation row is the
-remaining record. A session with neither record has no documents (writes claim
-before they store), so `GET /api/stash/upload?sessionId=` lists it as empty
-rather than as an error — that is the state a brand-new chat opens in.
+`user_id`. Reads are claim-first — a live claim answers before the conversation
+row is consulted, being the earlier of the two touches whenever both exist. Writes
+are row-first: the conversation row decides whether a claim may be taken, so a
+claim is never taken, refreshed or taken over (even once the previous one has
+expired) for a user other than the owner of a conversation row for that session
+id, and a live claim only answers that refusal by naming its holder. A store that
+cannot answer refuses rather than guesses. A session with neither record has no
+documents (writes claim before they store), so `GET /api/stash/upload?sessionId=`
+lists it as empty rather than as an error — that is the state a brand-new chat
+opens in.
 
 The agent-trigger recording (`docs/AGENT_TRIGGER.md`) needs no claim: the run's
 conversation row is written for the token's user inside the same request that
 stores the recording, so playback resolves through it.
+
+**Deleting a conversation releases its session.** The delete removes the conversation rows; once that commits, and without holding up the request, the session's stash is cleared through `deleteSessionStash` (`stash/document-ingest.server.ts`): each indexed document, any document key the index no longer lists, every chunk record and the recorded embedding space. Only after the clear fully succeeds is the owner's `session_claims` row dropped; a clear that fails or is partial keeps the claim and is logged (`[stash] could not clear the stash of deleted session …`), and never undoes or hides the delete. Both the single and the bulk delete take this route (`deleteSessions`, `lib/harness-client/session.server.ts`), and a source-scan pin keeps it the only one that removes conversation rows. The delete is user-scoped, so the sessions released are the ones the deleter owned the conversation row of; their stash is cleared whoever holds a claim on the id, and only the deleter's own claim is dropped. A claim another user holds is left in place. The empty RediSearch index definition is not dropped, since the gateway has no tool for it.
 
 ## Harness-aware ingest (the `retriever` pattern)
 
@@ -105,7 +120,9 @@ The Data Stash adapts to the agent's harness composition:
 
 **The gate.** `POST /api/stash/upload`, after storing, resolves the session's agent (`loadSession` → `getOrBuildPatterns`) and checks `harnessHasRedisRetriever(patterns)` — static introspection in `packages/harness-patterns/pattern-capabilities.ts` that walks `ConfiguredPattern.children` (the combinators — `routes`, `chain`, `withReferences`, `withSandbox` — all expose them). On a match it marks the doc `ingestStatus: 'pending'` and ingests **in the background** (the response returns immediately — embedding a large doc takes seconds). Base64 binaries are skipped (`failed`) — unless [document conversion](#document-conversion) is on and the type is convertible, in which case they're converted to markdown first. Best-effort: any failure leaves the `201` untouched.
 
-**Safety net.** Docs uploaded _before_ the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval.
+**Safety net.** Docs uploaded _before_ the agent was known (session not yet persisted) miss the gate. The redis backend runs `ensureSessionIngested` on its first search per session (idempotent via `ingestStatus`), so they still become searchable on first retrieval. It skips hidden and archived documents, and re-runs on a later search while it has skipped any, so a document un-hidden afterwards is indexed then.
+
+**Hidden and archived documents are not retrievable.** The flags mean "excluded from the agent's context", and hiding or archiving only rewrites the document's JSON — its chunks stay in the vector index. So `searchDocuments` (and therefore the `redis` backend and `GET /api/stash/search`) drops every hit whose document is hidden or archived, reading the document's **current** flags on each search (never the cached list or a copy taken at ingest). A document whose flags cannot be read, or whose record is absent, is dropped too, and the reason is logged. When that filter leaves fewer than `k` hits, the index is asked for a wider window, up to 200 chunks, so flagged chunks do not crowd visible matches out; visible matches ranked beyond the 200th chunk are not returned. Because the chunks are kept, un-hiding makes a document retrievable again at once, with no re-ingest.
 
 **The pattern** (`packages/harness-patterns/patterns/retriever.server.ts`) is framework-pure: it forms ONE query, fans it out to injected `RetrieverBackend`s concurrently (per-backend error isolation), merges hits closest-first capped at `k`, sets `scope.data.matches`, and emits a `tool_result` the compactExecution consumes. It's a low-latency alternative to a tool-calling `simpleLoop` — one embed + KNN instead of a >30s LLM loop. Typical wiring (see `packages/agents/agents/retriever-agent.server.ts`):
 
@@ -123,7 +140,7 @@ compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 
 **Backends** (`packages/harness-patterns/retriever/`) implement `RetrieverBackend { name, type, search() }`:
 
-- **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN), embedding the query locally with the corpus's recorded model. **Live.**
+- **`redis`** (`createRedisBackend`, `type: 'vector'`) — wraps `searchDocuments` (local Data Stash KNN, hidden/archived documents excluded), embedding the query locally with the corpus's recorded model. **Live.**
 - **`supabase`** (`createSupabaseBackend`, `type: 'vector'`) — the company pgvector corpus via the **Supabase MCP** server; **text-in** (Supabase embeds server-side via Automatic Embeddings / Edge Functions, so no client-side embedding and no OpenAI provider here). **Deferred stub** pending IT access: when `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` land, add the Supabase MCP to `configs/custom-catalog.yaml` and implement `search()` against its match RPC. Until then `search()` throws and the retriever's per-backend guard turns it into an empty result + error event — a misconfigured backend never sinks a run.
 
 The `type` field distinguishes vector backends from future non-vector ones (web keyword, neo4j graph, raw SQL) — only `vector` backends embed.

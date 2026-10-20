@@ -35,9 +35,12 @@ type Loaded = { serializedContext: string; agentId: string; kind: string; status
 const loadSession = vi.fn<(id: string, userId: string) => Promise<Loaded>>(async () => null)
 const deleteSession = vi.fn(async () => {})
 const evictPatterns = vi.fn()
+// The real `deleteSessions` is pinned in session.test.ts; here it stands for "the db delete".
+const deleteSessions = vi.fn(async (ids: string[]) => dbDeleteConversations(ids))
 vi.mock('../../../lib/harness-client/session.server', () => ({
   loadSession,
   deleteSession,
+  deleteSessions,
   evictPatterns,
   // The composition root's deps bag — the title generator takes it now.
   agentDeps: () => ({}),

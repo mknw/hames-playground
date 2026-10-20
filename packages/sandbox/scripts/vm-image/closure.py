@@ -2,10 +2,10 @@
 """Download the offline guest .deb closure for build.py's lock. Network: the archive only.
 
 Runs inside a disposable container of the SAME distribution release as the base
-image (never on a live host's apt state). The base image's published package
-manifest (verified by the caller against the signed SHA256SUMS) becomes a
-synthetic dpkg status, so apt downloads only what the base lacks, plus the six
-packages the lock requires by name (`--reinstall`), from the signed release,
+image (never on a live host's apt state). apt resolves against the base image's
+OWN dpkg status (read from the sha256-pinned disk), so it downloads exactly what
+installing the six lock packages (`--reinstall`) needs on that base, co-upgrades
+included, and nothing the guest's apt would then refuse to fetch, from the signed release,
 -updates and -security pockets. Writes the debs and `packages.json` (name,
 version, sha256 of each), the lock's `packages` fragment; that record, not the
 archive's state on the day, is the pin.
@@ -29,21 +29,13 @@ def require(ok, message):
         raise RuntimeError(message)
 
 
-def synthetic_status(manifest):
-    """dpkg status stanzas for every `name[:arch]<TAB>version` line of a cloud image manifest."""
-    stanzas = []
-    for line in manifest.splitlines():
-        if not line.strip():
-            continue
-        fields = line.split("\t")
-        require(len(fields) == 2, "malformed manifest line")
-        name, _, arch = fields[0].partition(":")
-        require(re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) and re.fullmatch(r"[A-Za-z0-9.+:~_-]+", fields[1]),
-                "malformed manifest entry")
-        stanzas.append(f"Package: {name}\nStatus: install ok installed\nArchitecture: {arch or 'all'}\n"
-                       f"Version: {fields[1]}\n")
-    require(stanzas, "empty manifest")
-    return "\n".join(stanzas)
+def checked_status(text):
+    """A dpkg status file: stanzas each naming a Package and a Status."""
+    stanzas = [stanza for stanza in text.split("\n\n") if stanza.strip()]
+    require(stanzas and all(re.search(r"^Package: [a-z0-9][a-z0-9+.-]*$", stanza, re.M)
+                            and re.search(r"^Status: ", stanza, re.M) for stanza in stanzas),
+            "dpkg status file required")
+    return text
 
 
 def sources(codename):
@@ -65,12 +57,12 @@ def digest(path):
     return value.hexdigest()
 
 
-def download(manifest, out, codename):
+def download(status, out, codename):
     require(out.is_dir() and not any(out.iterdir()), "fresh empty output directory required")
     state = Path("/tmp/closure-apt")
     (state / "lists/partial").mkdir(parents=True)
     (state / "archives/partial").mkdir(parents=True)
-    (state / "status").write_text(synthetic_status(manifest.read_text()))
+    (state / "status").write_text(checked_status(status.read_text()))
     (state / "archive.sources").write_text(sources(codename))
     options = ["-o", "Dir::State::status=" + str(state / "status"),
                "-o", "Dir::State::Lists=" + str(state / "lists"),
@@ -94,7 +86,7 @@ def download(manifest, out, codename):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--status", type=Path, required=True)  # the base image's /var/lib/dpkg/status
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--codename", required=True)
     parser.add_argument("--apply", action="store_true")
@@ -103,7 +95,7 @@ def main(argv=None):
     if not args.apply:
         print(json.dumps({"mode": "dry-run", "required": REQUIRED, "archive": "signed release, -updates, -security"}))
         return
-    print(json.dumps(download(args.manifest, args.out, args.codename)))
+    print(json.dumps(download(args.status, args.out, args.codename)))
 
 
 if __name__ == "__main__":

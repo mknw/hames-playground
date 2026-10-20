@@ -75,15 +75,12 @@ class Helpers(unittest.TestCase):
             with self.subTest(value), self.assertRaises(RuntimeError):
                 grow.size_bytes(value)
 
-    def test_synthetic_status_marks_every_manifest_package_installed(self):
-        status = closure.synthetic_status("adduser\t3.153ubuntu1\nlibc6:amd64\t2.42-2ubuntu1\n\n")
-        stanzas = status.split("\n\n")
-        self.assertEqual(len(stanzas), 2)
-        self.assertIn("Package: adduser\nStatus: install ok installed\nArchitecture: all\nVersion: 3.153ubuntu1", stanzas[0])
-        self.assertIn("Package: libc6\nStatus: install ok installed\nArchitecture: amd64\nVersion: 2.42-2ubuntu1", stanzas[1])
-        for broken in ("", "adduser 3.153\n", "adduser\t3.1\textra\n", "Bad_Name\t1.0\n", "adduser\t1.0;rm\n"):
+    def test_status_must_be_a_dpkg_status_file(self):
+        good = "Package: adduser\nStatus: install ok installed\nVersion: 3\n\nPackage: libc6\nStatus: install ok installed\n"
+        self.assertEqual(closure.checked_status(good), good)
+        for broken in ("", "adduser\t3.153\n", "Package: adduser\nVersion: 3\n", good + "\nStatus: install ok installed\n"):
             with self.subTest(broken=broken), self.assertRaises(RuntimeError):
-                closure.synthetic_status(broken)
+                closure.checked_status(broken)
 
     def test_archive_source_is_signed_and_codename_bound(self):
         source = closure.sources("resolute")
@@ -111,9 +108,8 @@ def mutations():
         ("grow_base", "filesystem growth unchecked", 'after["root_bytes"] > before["root_bytes"]', "True", "test_compare_admits_only_root_growth"),
         ("grow_base", "file list unchecked", 'after["files"] == before["files"] and ', "", "test_compare_admits_only_root_growth"),
         ("grow_base", "fractional size admitted", 'r"([1-9][0-9]*)G"', 'r"([0-9.]+)G"', "test_size_is_whole_gib"),
-        ("closure", "manifest package left uninstalled", "Status: install ok installed", "Status: deinstall ok config-files", "test_synthetic_status_marks_every_manifest_package_installed"),
-        ("closure", "manifest arch suffix kept in name", 'name, _, arch = fields[0].partition(":")', 'name, arch = fields[0], ""', "test_synthetic_status_marks_every_manifest_package_installed"),
-        ("closure", "malformed manifest admitted", 'require(len(fields) == 2, "malformed manifest line")', "fields = (fields + [''])[:2]", "test_synthetic_status_marks_every_manifest_package_installed"),
+        ("closure", "status file unchecked", 'require(stanzas and all(', 'require(True or all(', "test_status_must_be_a_dpkg_status_file"),
+        ("closure", "stanza without Status admitted", ' and re.search(r"^Status: ", stanza, re.M)', '', "test_status_must_be_a_dpkg_status_file"),
         ("closure", "codename unchecked", 'require(re.fullmatch(r"[a-z]+", codename), "codename required")', "pass", "test_archive_source_is_signed_and_codename_bound"),
         ("closure", "unsigned archive source", "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\\n", "Trusted: yes\\n", "test_archive_source_is_signed_and_codename_bound"),
         ("closure", "security pocket dropped", " {codename}-security", "", "test_archive_source_is_signed_and_codename_bound"),

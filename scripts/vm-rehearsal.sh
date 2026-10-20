@@ -71,10 +71,11 @@ python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["derived_sh
 endgroup
 stop_after grow
 
-group "4. guest .deb closure"
+group "4. guest .deb closure, resolved against the base image's own dpkg status"
 mkdir -p "$W/debs"
-docker run --rm -v "$PIPE":/pipe:ro -v "$W/inputs/$BASE.manifest":/manifest:ro -v "$W/debs":/out "$BUILDER" \
-  python3 /pipe/closure.py --manifest /manifest --out /out --codename resolute --apply
+builder guestfish --ro --format=qcow2 -a "/w/inputs/$BASE.img" -i download /var/lib/dpkg/status /w/inputs/dpkg.status
+docker run --rm -v "$PIPE":/pipe:ro -v "$W/inputs/dpkg.status":/status:ro -v "$W/debs":/out "$BUILDER" \
+  python3 /pipe/closure.py --status /status --out /out --codename resolute --apply
 endgroup
 
 group "5. flavours, then save"

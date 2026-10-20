@@ -1,0 +1,50 @@
+name: VM rehearsal
+
+# The VM track's off-host rehearsal (#648): the image pipeline end to end, then
+# Incus from the pinned upstream source and the spike, on a disposable runner
+# with KVM. Never part of the default CI: it takes an hour or more and installs
+# a VM manager. Run it by hand, or push a branch named vm-rehearsal/<anything>.
+on:
+  workflow_dispatch:
+    inputs:
+      stop_after:
+        description: 'Stop early: "grow" or "build" (empty runs everything)'
+        required: false
+        default: ''
+  push:
+    branches: ['vm-rehearsal/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-rehearsal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: pipeline · upstream Incus · spike
+    runs-on: ubuntu-26.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub-hosted Linux runners expose KVM; give the kvm group access, as
+      # the spike's preflight requires a non-root kvm member (not world access).
+      - name: Enable KVM for the kvm group
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-sbxs-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / /mnt
+
+      - name: Rehearse
+        env:
+          REHEARSAL_STOP_AFTER: ${{ inputs.stop_after }}
+        run: bash scripts/vm-rehearsal.sh

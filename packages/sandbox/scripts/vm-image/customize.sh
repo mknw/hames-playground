@@ -96,7 +96,15 @@ printf '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"
     echo 'overlay mount: failed'
   fi
   rm -rf /run/vm-image-probe
+  printf 'cgroup: %s\n' "$(stat -f -c %T /sys/fs/cgroup 2>/dev/null || echo absent)"
 } >&2
+# dockerd requires a cgroup hierarchy; the appliance does not mount one.
+cgroup_mounted=
+if [ "$(stat -f -c %T /sys/fs/cgroup 2>/dev/null)" != cgroup2fs ]; then
+  mkdir -p /sys/fs/cgroup
+  mount -t cgroup2 none /sys/fs/cgroup
+  cgroup_mounted=1
+fi
 dockerd --debug --config-file /opt/vm-image/assembly-daemon.json \
   --host unix:///run/vm-image-docker.sock --pidfile /run/vm-image-docker.pid \
   --exec-root /run/vm-image-docker --data-root /var/lib/docker \
@@ -106,6 +114,7 @@ daemon_pid=$!
 cleanup() {
   kill "$daemon_pid" 2>/dev/null || true
   wait "$daemon_pid" 2>/dev/null || true
+  if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup || true; fi
   rm -f /usr/sbin/policy-rc.d
 }
 trap cleanup EXIT

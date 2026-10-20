@@ -21,7 +21,8 @@
  * two touches whenever both exist, and first toucher wins. Claims expire with
  * the documents they scope, after which the conversation row — which never
  * changes hands, `saveConversation` only ever updates content columns — is the
- * remaining record.
+ * remaining record, and `claimSession` itself refuses to re-target an expired
+ * claim onto a user other than the row's.
  *
  * Writes go through {@link claimSessionOwnership} (record-or-verify); reads go
  * through {@link userOwnsSession} (verify only).

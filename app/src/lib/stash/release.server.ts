@@ -6,10 +6,13 @@
  * conversation delete has committed and off the request path (`deleteSessions`
  * does not await it).
  *
- * Per session the stash is cleared FIRST and the claim dropped only if that
- * fully succeeded. A failed or partial clear keeps the claim, so whatever is
- * left stays attributed to the user who deleted the conversation, and the
- * failure is logged.
+ * The sessions passed in are the ones the deleter's own delete returned, so the
+ * deleter owned each conversation row: the row is the authority, and the stash
+ * is cleared whoever holds a claim on the id. Per session the stash is cleared
+ * FIRST and the deleter's own claim dropped only if that fully succeeded; a
+ * claim another user holds is never touched. A failed or partial clear keeps
+ * the claim, so whatever is left stays attributed to the user who deleted the
+ * conversation, and the failure is logged.
  *
  * Best-effort by contract: the conversation is already gone, so nothing here
  * is ever thrown.
@@ -17,7 +20,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { deleteSessionStash } from '@hames-ai/harness-patterns/stash/document-ingest.server'
-import { getSessionClaimOwner, releaseSessionClaim } from '../db/session-claims.server'
+import { releaseSessionClaim } from '../db/session-claims.server'
 
 assertServerOnImport()
 
@@ -30,11 +33,9 @@ const message = (err: unknown) => (err instanceof Error ? err.message : String(e
 
 async function releaseOne(sessionId: string, userId: string): Promise<void> {
   try {
-    // A session another user holds a claim on is theirs to clear.
-    const owner = await getSessionClaimOwner(sessionId)
-    if (owner && owner !== userId) return
     await deleteSessionStash(sessionId)
-    // Only reached when the clear fully succeeded.
+    // Only reached when the clear fully succeeded. Scoped to `userId`: a claim
+    // held by someone else stays.
     await releaseSessionClaim(sessionId, userId)
   } catch (err) {
     console.error(
@@ -45,7 +46,8 @@ async function releaseOne(sessionId: string, userId: string): Promise<void> {
 }
 
 /**
- * Release each session whose conversation `userId` just deleted. Never throws.
+ * Release each session whose conversation `userId` just deleted (pass only the
+ * ids that delete returned). Never throws.
  */
 export async function releaseDeletedSessions(
   sessionIds: readonly string[],

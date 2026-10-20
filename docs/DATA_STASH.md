@@ -95,15 +95,17 @@ First toucher wins, in both records: the claim upsert only re-targets a row that
 is already the caller's or has expired, and `saveConversation` never updates
 `user_id`. A live claim outranks the conversation row, since it is the earlier of
 the two touches whenever both exist; once it expires, the conversation row is the
-remaining record. A session with neither record has no documents (writes claim
-before they store), so `GET /api/stash/upload?sessionId=` lists it as empty
+remaining record, and it stays the authority: an expired claim is not taken over
+when a conversation row for that session id belongs to another user, and a store
+that cannot answer refuses rather than guesses. A session with neither record
+has no documents (writes claim before they store), so `GET /api/stash/upload?sessionId=` lists it as empty
 rather than as an error — that is the state a brand-new chat opens in.
 
 The agent-trigger recording (`docs/AGENT_TRIGGER.md`) needs no claim: the run's
 conversation row is written for the token's user inside the same request that
 stores the recording, so playback resolves through it.
 
-**Deleting a conversation releases its session.** The delete removes the conversation rows; once that commits, and without holding up the request, the session's stash is cleared through `deleteSessionStash` (`stash/document-ingest.server.ts`): each indexed document, any document key the index no longer lists, every chunk record and the recorded embedding space. Only after the clear fully succeeds is the owner's `session_claims` row dropped; a clear that fails or is partial keeps the claim and is logged (`[stash] could not clear the stash of deleted session …`), and never undoes or hides the delete. Both the single and the bulk delete take this route (`deleteSessions`, `lib/harness-client/session.server.ts`), and a source-scan pin keeps it the only one that removes conversation rows. Only the deleting owner's rows go: the delete is user-scoped, and a session another user holds a claim on is left alone. The empty RediSearch index definition is not dropped, since the gateway has no tool for it.
+**Deleting a conversation releases its session.** The delete removes the conversation rows; once that commits, and without holding up the request, the session's stash is cleared through `deleteSessionStash` (`stash/document-ingest.server.ts`): each indexed document, any document key the index no longer lists, every chunk record and the recorded embedding space. Only after the clear fully succeeds is the owner's `session_claims` row dropped; a clear that fails or is partial keeps the claim and is logged (`[stash] could not clear the stash of deleted session …`), and never undoes or hides the delete. Both the single and the bulk delete take this route (`deleteSessions`, `lib/harness-client/session.server.ts`), and a source-scan pin keeps it the only one that removes conversation rows. The delete is user-scoped, so the sessions released are the ones the deleter owned the conversation row of; their stash is cleared whoever holds a claim on the id, and only the deleter's own claim is dropped. A claim another user holds is left in place. The empty RediSearch index definition is not dropped, since the gateway has no tool for it.
 
 ## Harness-aware ingest (the `retriever` pattern)
 

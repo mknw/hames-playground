@@ -105,13 +105,24 @@ describe('releaseDeletedSessions', () => {
     expect(String(errorSpy.mock.calls[0][1])).toContain('db down')
   })
 
-  it("leaves a session alone while another user's claim is on it", async () => {
+  it("clears the stash even while another user's claim is on the session, and keeps that claim", async () => {
     claimOwners.set('s-held', 'bob')
     claimOwners.set('s-own', 'alice')
     await releaseDeletedSessions(['s-held', 's-own'], 'alice')
-    // MUTATION: drop the `getSessionClaimOwner` check → red.
-    expect(deleteSessionStash.mock.calls).toEqual([['s-own']])
-    expect(releaseSessionClaim.mock.calls).toEqual([['s-own', 'alice']])
+    // MUTATION: skip a session another user holds a claim on → red.
+    expect(deleteSessionStash.mock.calls.map(([id]) => id).sort()).toEqual(['s-held', 's-own'])
+    // Only the deleter's own claim is ever asked to go (the repository scopes the
+    // DELETE to that user; `release-claims.test.ts` shows it on a real database).
+    // MUTATION: release under any user other than the deleter → red.
+    expect(releaseSessionClaim.mock.calls.every(([, user]) => user === 'alice')).toBe(true)
+  })
+
+  it("keeps the deleter's claim when the clear of a held session fails", async () => {
+    claimOwners.set('s-held', 'bob')
+    deleteSessionStash.mockRejectedValueOnce(new Error('redis down'))
+    await releaseDeletedSessions(['s-held'], 'alice')
+    // MUTATION: drop the claim regardless of the clear's outcome → red.
+    expect(releaseSessionClaim).not.toHaveBeenCalled()
   })
 
   it('does nothing for an empty list', async () => {

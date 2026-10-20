@@ -28,10 +28,11 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
 3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.
 4. **Packages.**
-   - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION" qemu-system-modules-spice="$QEMU_MODULES_PACKAGE_VERSION" qemu-system-modules-opengl="$QEMU_MODULES_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
+   - The upstream Incus source is in place (`sandbox_vm.py source`, below), and `apt-cache madison incus incus-base incus-client` lists `INCUS_PACKAGE_VERSION` only from it.
+   - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-base="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
    - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
-   - Host QEMU, OVMF and `qemu-img` are already present. If the operator installs them, that is a separate, recorded change outside the harness journal (runbook `:68-69`).
+   - Host `qemu-img` is already present (preflight reads the image with it). The upstream package bundles the QEMU, OVMF and virtiofsd that Incus runs; a distro QEMU on `PATH` is not the one measured.
 5. **Launch.** Use only the runbook's `systemd-run` block (`:122`). Never run it in the foreground or inside a tool call. Do not stop the unit while the install step is running (R2).
 6. **SSH access.**
    - Test the witness by hand: a fresh key-authenticated login over the public path, not loopback.
@@ -134,9 +135,8 @@ their values in an issue, commit, shell transcript or public result.
 | `--survey`                                                                                      | The reviewed, completed survey directory                                                                                                |
 | `--ssh-probe` / `SSH_WITNESS`                                                                   | An absolute executable path to a trusted fresh-login witness                                                                            |
 | `--kvm-user` / `KVM_TEST_USER`                                                                  | Existing non-root member of the host's `kvm` group                                                                                      |
-| `--incus-version` / `INCUS_PACKAGE_VERSION`                                                     | Exact version of native `incus` and `incus-client` apt packages                                                                         |
+| `--incus-version` / `INCUS_PACKAGE_VERSION`                                                     | Exact upstream version (`1:7.3` or later, e.g. `1:7.5.1-ubuntu26.04-<build>`) of `incus`, `incus-base` and `incus-client`               |
 | `--dnsmasq-version` / `DNSMASQ_PACKAGE_VERSION`                                                 | Required exact version of `dnsmasq-base`, which supplies the executable Incus checks for managed bridges                                |
-| `--qemu-modules-version` / `QEMU_MODULES_PACKAGE_VERSION`                                       | Required exact QEMU version shared by the SPICE module and its OpenGL module dependency; match the installed host QEMU                  |
 | `--image-metadata` / `VM_METADATA`, `--image-rootfs` / `VM_ROOTFS`                              | Reviewed local Incus VM metadata and disk image; verify their checksums privately                                                       |
 | `--network` / `ENV_A_BRIDGE_CIDR`, `ENV_B_BRIDGE_CIDR`                                          | Two unused, distinct private IPv4 subnets, each gateway at network address + 1                                                          |
 | `--app-bridge` / `APP_BRIDGE`                                                                   | Actual Linux bridge interface for the app's Docker network                                                                              |
@@ -155,44 +155,59 @@ The VM image must have working Incus guest-agent support, Docker (`dockerd`),
 systemd, Python 3 and `ip`. It must contain the three sandbox image digests.
 Build/import the VM image privately ahead of the run; this harness imports
 local image files and uses `--pull=never` for every Docker run. It does not run
-image builds or install Kata/Firecracker. Install host QEMU support before the
-window if the native Incus package does not provide it. An apt simulation that
+image builds or install Kata/Firecracker. An apt simulation that
 would upgrade existing software, remove packages, or install/configure
-OpenSSH, UFW, Docker, containerd, runc or the `dnsmasq` service package is refused, even if allow-listed. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client`, `dnsmasq-base`, `qemu-system-modules-spice`, `qemu-system-modules-opengl` by default); supply repeated `--allow-package` only for reviewed additional dependencies. Simulation, download and installation explicitly request the same exact Incus, dnsmasq-base and QEMU module versions. `dnsmasq-base` is required even with DHCP/DNS disabled: Incus checks its executable version during bridge setup. Use `dnsmasq-base`, not the `dnsmasq` service package. If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert. If newly installed, it stays in `residual_packages` in the private transaction manifest for reviewed console cleanup; rollback removes only the Incus packages and never automatically removes dnsmasq-base or other dependencies. A newly installed `dnsmasq-base` also creates the `dnsmasq` system account (nologin, not journaled); console cleanup is `apt-get purge dnsmasq-base`, because `remove` leaves the account behind. A pre-existing dnsmasq-base is not recorded as a new residual. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. No apt index refresh runs.
+OpenSSH, UFW, Docker, containerd, runc or the `dnsmasq` service package is refused, even if allow-listed. Every simulated `Inst` package must also appear in the positive allow-list (`incus`, `incus-base`, `incus-client`, `dnsmasq-base` by default); supply repeated `--allow-package` only for reviewed additional dependencies. Simulation, download and installation explicitly request the same exact Incus and dnsmasq-base versions. `dnsmasq-base` is required even with DHCP/DNS disabled: Incus checks its executable version during bridge setup. Use `dnsmasq-base`, not the `dnsmasq` service package. If `dnsmasq-base` is already installed, set `DNSMASQ_PACKAGE_VERSION` to the installed version (`dpkg-query -W dnsmasq-base`); any other value is refused as an upgrade or downgrade. Naming it marks a previously auto-installed copy as manually installed, which rollback does not revert. If newly installed, it stays in `residual_packages` in the private transaction manifest for reviewed console cleanup; rollback removes only the Incus packages and never automatically removes dnsmasq-base or other dependencies. A newly installed `dnsmasq-base` also creates the `dnsmasq` system account (nologin, not journaled); console cleanup is `apt-get purge dnsmasq-base`, because `remove` leaves the account behind. A pre-existing dnsmasq-base is not recorded as a new residual. The download-only phase has its own 180s timeout, before mutation. Installation disables recommends, defers disconnect/termination signals until apt returns, has no subprocess kill timeout during dpkg mutation, and records dependencies left for console cleanup in the private manifest. No automatic autoremove runs. The harness itself runs no apt index refresh; `source` refreshes only the upstream source's index.
 Incus installs with `NEEDRESTART_MODE=l` to prevent needrestart restarting
 unrelated services.
 
-**QEMU modules (Incus 6.0.x).** Incus 6.0.5 unconditionally adds `-spice` even
-with `-nographic` ([upstream startup argv](https://github.com/lxc/incus/blob/v6.0.5/internal/server/instance/drivers/driver_qemu.go#L1638-L1652)).
-On Ubuntu 26.04 (resolute), [SPICE](https://packages.ubuntu.com/resolute/qemu-system-modules-spice)
-depends on `qemu-system-modules-opengl` at the exact same QEMU version. Those
-are the minimal module set here: OpenGL is a package dependency, not a request
-for GPU passthrough. Audio and UI modules are not needed for these headless
-VMs. Before choosing `QEMU_MODULES_PACKAGE_VERSION`, review the target's
-read-only `apt-cache depends incus qemu-system-modules-spice qemu-system-modules-opengl`
-and `apt-cache policy qemu-system-x86 qemu-system-modules-spice qemu-system-modules-opengl`.
-The pin must equal the installed `qemu-system-common`, and any already-installed
-module; another value plans `Inst … [old]`, which is refused before anything changes.
-SPICE is a Recommends of `qemu-system-x86`, not of `incus` 6.0.5-8, which has no
-Recommends. SPICE also depends on `qemu-system-common`, `libspice-server1` and
-`ubuntu-virt`; OpenGL brings `libgbm1`, `libepoxy0` and `libvirglrenderer1`.
-Expect additional reviewed `--allow-package` entries in the target's plan.
-Both module packages are explicitly
-pinned in simulation, download and install despite `--no-install-recommends`.
-New module packages stay in `residual_packages` for reviewed console cleanup;
-pre-existing modules do not. Rollback never removes them. Naming an existing
-module can mark it manually installed, which rollback does not undo.
+**Upstream Incus packages (7.3+).** The environment VMs' restricted project
+needs `projects_restricted_virtual_machines_nesting` (Incus 7.3) and
+`projects_restricted_storage_pool_access`; the distribution's Incus 6.0.x has
+neither. Install from the Incus maintainers' signed apt repository instead:
+the [Zabbly packages](https://github.com/zabbly/incus), signing key fingerprint
+`4EFC 5906 96CB 15B8 7C73  A3AD 82CC 8797 C838 DCFD` (pinned in the harness).
+Download the key, render the plan, then apply from a root shell:
 
-There is no high-level SPICE-off switch in the 6.0.5 startup path.
-`raw.qemu` appends arguments and `raw.qemu.conf` overrides the generated
-`-readconfig` file; neither removes that unconditional argv entry. A raw
-override is also incompatible with the package environment's
-`restricted.virtual-machines.lowlevel=block`
-([project restrictions](https://github.com/lxc/incus/blob/v6.0.5/doc/reference/projects.md)).
-Install the modules; never loosen the project restriction for this workaround.
+```bash
+curl -fsSLo "$PWD/.sandbox-vm-spike/upstream-key.asc" https://pkgs.zabbly.com/key.asc
+python3 scripts/lib/sandbox_vm.py source --key "$PWD/.sandbox-vm-spike/upstream-key.asc"
+sudo python3 scripts/lib/sandbox_vm.py source --apply --key "$PWD/.sandbox-vm-spike/upstream-key.asc"
+```
+
+`source --apply` refuses any key file whose primary keys are not exactly the
+pinned one, and refuses to overwrite an existing source. It writes three files
+(0644): the keyring under `/etc/apt/keyrings/`, a deb822 source for this host's
+codename with `Signed-By` set to that keyring, and an apt preferences file that
+admits only `incus`, `incus-base` and `incus-client` from that origin
+(priority 600) and pins everything else it publishes to -1, so the repository
+can never replace or add another package. It records each file's SHA-256 in
+the private `.sandbox-vm-spike/incus-source.private.json`, then runs
+`apt-get update` for that one source only (`Dir::Etc::sourceparts=-`,
+`APT::Get::List-Cleanup=0`). The undo is
+`sudo python3 scripts/lib/sandbox_vm.py source --apply --remove`: it refuses
+while any Incus package is installed, verifies every file against its recorded
+hash before deleting any, and treats a missing file as already removed. It is
+a host change outside the spike transaction: journal it, and its undo, with the
+operator's other recorded changes.
+
+At install, the harness requires `INCUS_PACKAGE_VERSION` to be an exact
+upstream version at 7.3 or later, and every one of the three packages to list
+that version in `apt-cache madison` **only** from the pinned repository URI;
+a version also offered elsewhere is refused before simulation. After
+`incus admin waitready`, `GET /1.0` must list both API extensions above, or the
+step fails and rollback removes the packages. Apt verifies each downloaded
+`.deb` against the signed index, so the key pin plus the exact version pin the
+bytes. The repository keeps only recent builds: an expired pin fails closed at
+the madison check; choose a fresh one with `apt-cache madison incus` after
+`source`. The upstream `incus` package bundles QEMU, OVMF and virtiofsd under
+`/opt/incus`, so the distro QEMU module pins that 6.0.x needed are gone; its
+plan still pulls Ubuntu libraries such as `libspice-server1` and `libgbm1`,
+each a reviewed `--allow-package`. Never loosen
+`restricted.virtual-machines.lowlevel=block` to work around a QEMU argument.
 
 The guest-agent readiness deadline is 600 seconds. On first boot, incus-agent
-6.0.5 applies the seeded image metadata and reboots before opening its exec
+(observed on 6.0.5; still to confirm on 7.x) applies the seeded image metadata and reboots before opening its exec
 listener ([agent startup](https://github.com/lxc/incus/blob/v6.0.5/cmd/incus-agent/main_agent.go#L91-L107)).
 The agent answers before cloud-init has finished, so the harness then waits for
 cloud-init: guest `timeout --kill-after=5 600 cloud-init status --wait --format json`,
@@ -269,7 +284,6 @@ bash scripts/sandbox-vm-spike.sh \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
   --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
-  --qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \
@@ -291,7 +305,6 @@ sudo systemd-run --unit="$LAUNCH_UNIT" --collect \
   --ssh-probe "$SSH_WITNESS" --kvm-user "$KVM_TEST_USER" \
   --incus-version "$INCUS_PACKAGE_VERSION" \
   --dnsmasq-version "$DNSMASQ_PACKAGE_VERSION" \
-  --qemu-modules-version "$QEMU_MODULES_PACKAGE_VERSION" \
   --image-metadata "$VM_METADATA" --image-rootfs "$VM_ROOTFS" \
   --network "$ENV_A_BRIDGE_CIDR" --network "$ENV_B_BRIDGE_CIDR" \
   --app-bridge "$APP_BRIDGE" --app-network "$APP_NETWORK" \

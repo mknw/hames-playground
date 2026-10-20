@@ -217,16 +217,26 @@ python3 packages/sandbox/scripts/vm-image/build.py build \
 # After review, append --apply on the disposable native Linux runner only.
 ```
 
-The build converts the copied base to a standalone qcow2 and customizes only
-that disk through `virt-customize --no-network`. Package service starts are
+The build converts the copied base to a standalone qcow2, uploads the inputs
+with `virt-customize --no-network`, then runs `customize.sh` in one networkless
+`guestfish --rw` appliance that first loads the `overlay` kernel module. The
+module must come from the **appliance** kernel: customize.sh runs in the guest
+chroot, which only carries modules for the guest's own kernel, so it cannot
+load one itself (a stock appliance has overlay unloaded, and the daemon then
+dies at startup). Package service starts are
 suppressed during offline installation. A temporary guest dockerd uses a Unix
 socket, no bridge, no forwarding/NAT/iptables and the normal `/var/lib/docker`
 data root. It loads and checks the three archives and tags, then shuts down;
 the **image store is populated during assembly**, not deferred to first boot.
-The same pinned guest Docker version uses its default image/storage backend
-at assembly and boot. No custom storage driver is baked into daemon.json.
-The actual appliance must support that Docker storage backend; failure is
-fatal rather than falling back to another driver. Package/image inputs and
+That daemon's config pins `features.containerd-snapshotter=false` and
+`storage-driver=overlay2`, and assembly refuses any other recorded driver:
+Docker 29 otherwise defaults to the containerd snapshotter, and a classic
+daemon without overlay would fall back to `vfs`, a store the boot daemon would
+not see. Both provisioners (#654's cloud-init and the spike's TLS step) write
+the same two keys into the guest's `/etc/docker/daemon.json`, so assembly and
+boot use one store. Nothing is baked into the image's own daemon.json.
+A failed stage's stderr is appended to `failed-stage.log` (0600) in the private
+work directory; the error message itself stays fixed. Package/image inputs and
 temporary logs are removed from the guest after loading. Cloud-init state
 and machine identity are cleaned for cloning. SSH host keys and Docker engine
 identity files are removed after daemon shutdown. The guest inventory records

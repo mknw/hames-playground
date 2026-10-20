@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -78,14 +79,22 @@ class Pipeline(unittest.TestCase):
             return b""
         if name == "virt-customize":
             self.assertIn("--no-network", argv)
-            self.assertEqual(argv[argv.index("--run-command") + 1], "sh /opt/vm-image/customize.sh")
+            self.assertNotIn("--run-command", argv)  # customize.sh runs only after the appliance modprobe
             for index, arg in enumerate(argv):
                 if arg == "--upload":
                     source, target = argv[index + 1].split(":", 1)
                     self.assertTrue(Path(source).is_relative_to(work.root))
                     self.assertTrue(target.startswith("/opt/vm-image/"))
             return b""
+        if name == "guestfish" and "--rw" in argv:
+            self.assertNotIn("--network", argv)
+            commands = argv[argv.index("-i") + 1:]
+            self.assertEqual(commands, ["modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"])
+            self.customized = True
+            return b""
         if name == "guestfish":
+            self.assertIn("--ro", argv)
+            self.assertTrue(getattr(self, "customized", False), "inventory read before customization")
             Path(argv[-1]).write_text(json.dumps({"images": {f: self.pin for f in vm.FLAVOURS},
                 "packages": {p["name"]: p["version"] for p in self.lock["packages"]},
                 "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
@@ -324,7 +333,7 @@ class Pipeline(unittest.TestCase):
         original = self.fake
         def boundary(argv, work):
             result = original(argv, work)
-            if Path(argv[0]).name == 'guestfish' and argv[1:] != ['--version']:
+            if Path(argv[0]).name == 'guestfish' and '--ro' in argv:
                 path = Path(argv[-1])
                 value = json.loads(path.read_text())
                 change(value)
@@ -505,6 +514,22 @@ class Pipeline(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'containerd snapshotter'):
             self.guest_calls('overlayfs')
 
+    def test_guest_driver_fallback_refused(self):
+        # A classic store on vfs is invisible to the overlay2 boot daemon.
+        for driver in ('vfs', 'devicemapper', ''):
+            try:
+                with self.subTest(driver=driver), self.assertRaisesRegex(SystemExit, 'overlay2'):
+                    self.guest_calls(driver)
+            finally:
+                shutil.rmtree(self.work, ignore_errors=True)
+
+    def test_guest_assembly_daemon_pins_classic_overlay2(self):
+        guest = self.fake_root()
+        child = self.shell_section('# Same classic overlay2 store', 'dockerd --config-file', guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        config = json.loads((guest / 'opt/vm-image/assembly-daemon.json').read_text())
+        self.assertEqual(config, {'features': {'containerd-snapshotter': False}, 'storage-driver': 'overlay2'})
+
     def fake_root(self):
         guest = self.root / 'guest'
         for directory in ('bin', 'usr/sbin', 'etc/docker', 'etc/ssh', 'etc/cloud/cloud.cfg.d', 'opt/vm-image', 'var/lib/docker'):
@@ -621,7 +646,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_cleanup_and_clone_inventory(self):
         guest = self.fake_root()
         work = guest / 'opt/vm-image'
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'assembly-daemon.json', 'enabled-units.txt'):
             (work / name).write_text('private input')
         (work / 'inventory.json').write_text('{}')
         (guest / 'etc/machine-id').write_text('a' * 32)
@@ -640,7 +665,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'cloud-call').is_file())
         self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs --machine-id')
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'assembly-daemon.json', 'enabled-units.txt'):
             self.assertFalse((work / name).exists(), name)
         self.assertEqual(list((guest / 'etc/ssh').glob('ssh_host_*')), [])
         self.assertFalse((guest / 'var/lib/docker/engine-id').exists())
@@ -835,8 +860,21 @@ class Pipeline(unittest.TestCase):
                 self.assertEqual(options["env"][name], str(self.work))
             self.assertEqual(options["env"]["LIBGUESTFS_BACKEND"], "direct")
             child.return_value.returncode = 1
+            child.return_value.stderr = b"synthetic stage diagnosis"
             with self.assertRaises(RuntimeError):
-                vm.run(["synthetic"], work)
+                vm.run(["/private/tools/synthetic", "--flag"], work)
+
+    def test_failed_stage_stderr_kept_privately(self):
+        work = vm.Work(self.work)
+        with patch.object(subprocess, "run") as child:
+            child.return_value.returncode = 1
+            child.return_value.stderr = b"overlay: unknown filesystem type"
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, "stage command failed"):
+                    vm.run([self.root / "guestfish", "--rw"], work)
+        log = self.work / "failed-stage.log"
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(log.read_bytes(), b"guestfish\noverlay: unknown filesystem type\n" * 2)
 
     def test_save_uses_only_explicit_endpoint_inspect_and_save(self):
         with patch.object(vm, "run", side_effect=self.save_boundary):
@@ -874,8 +912,8 @@ class Pipeline(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         exec(compile(scripts[0], "guest-script", "exec"), {})
                 with patch.object(subprocess, "check_output", side_effect=lambda argv, **kw:
-                                  "wrong" if argv[0] == "docker" else output(argv, **kw)):
-                    with self.assertRaises(SystemExit):
+                                  "wrong" if argv[3:5] == ["image", "inspect"] else output(argv, **kw)):
+                    with self.assertRaisesRegex(SystemExit, "guest image ID mismatch"):
                         exec(compile(scripts[1], "guest-script", "exec"), {})
                 Path("base.tar").write_bytes(b"tampered")
                 child.reset_mock()
@@ -964,6 +1002,10 @@ def mutations():
         ("manifest missing disk hash", '"outputs": hashes', '"outputs": {k: v for k, v in hashes.items() if k != "disk.qcow2"}', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("stage writes outside work directory", 'path.resolve().is_relative_to(self.root) and not path.is_symlink()', 'True', "test_write_cannot_escape_or_follow_symlinks"),
         ("customization gets network", '"--no-network", "--format"', '"--network", "--format"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("appliance overlay module not loaded", '"modprobe", "overlay", ":", "sh"', '"sh"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("customize script never run", '"modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"]', '"modprobe", "overlay"]', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("failed stage stderr discarded", 'stream.write(Path(str(argv[0])).name.encode()', 'stream.write(b"" and Path(str(argv[0])).name.encode()', "test_failed_stage_stderr_kept_privately"),
+        ("failed stage log world readable", 'os.O_NOFOLLOW, 0o600)', 'os.O_NOFOLLOW, 0o644)', "test_failed_stage_stderr_kept_privately"),
         ("disk backing chain admitted", 'not value.get("backing-filename")', 'True', "test_backing_chain_encryption_external_file_and_size_refused"),
         ("tool version not verified", 'version == record["version"]', 'True', "test_tool_version_mismatch_refuses_manifest"),
         ("required Incus agent package omitted", 'REQUIRED <= set(names)', 'True', "test_required_packages_and_full_ids"),
@@ -998,7 +1040,7 @@ def mutations():
     guest = (vm.HERE / "customize.sh").read_text()
     guest_changes = [
         ('guest masked vendor unit admitted', 'test -f "/usr/lib/systemd/system/$1" || test -f "/lib/systemd/system/$1"', 'test -e "/usr/lib/systemd/system/$1" || test -e "/lib/systemd/system/$1"', 'test_guest_masked_vendor_unit_refused'),
-        ('guest enabled unit temporary file retained', './empty-daemon.json ./enabled-units.txt', './empty-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
+        ('guest enabled unit temporary file retained', './assembly-daemon.json ./enabled-units.txt', './assembly-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
         ('guest legacy unit directory ignored', ' || test -f "/lib/systemd/system/$1"', '', 'test_guest_legacy_cloud_init_units'),
         ('guest modern unit directory ignored', 'test -f "/usr/lib/systemd/system/$1" || ', '', 'test_guest_new_cloud_init_units'),
         ('guest undiscovered units selected', 'if has_unit "$unit"; then', 'if true; then', 'test_guest_legacy_cloud_init_units'),
@@ -1015,11 +1057,14 @@ def mutations():
         ("guest archive load changed to pull", "'load', '--input', path", "'pull', path", "test_all_images_loaded_from_archives_without_pull"),
         ("guest runtime tag namespace changed", "'kg-sandbox:' + flavour", "'wrong-sandbox:' + flavour", "test_runtime_tags_restored_after_all_loads"),
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
-        ("guest containerd snapshotter admitted", "not driver or driver == 'overlayfs' or 'containerd' in driver.lower()", 'False', "test_guest_containerd_snapshotter_refused"),
+        ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
+        ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),
+        ("guest assembly daemon may fall back from overlay2", ',"storage-driver":"overlay2"}', '}', "test_guest_assembly_daemon_pins_classic_overlay2"),
         ("guest driver inventory absent", ", 'docker_driver': driver", '', "test_all_images_loaded_from_archives_without_pull"),
         ("guest package services not suppressed", "printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d", ':', "test_guest_policy_rc_blocks_package_services"),
         ("guest daemon config adopted", 'test ! -e /etc/docker/daemon.json', ':', "test_guest_daemon_config_adoption_refused"),
-        ("guest input cleanup omitted", 'rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json', ':', "test_guest_cleanup_and_clone_inventory"),
+        ("guest input cleanup omitted", 'rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest clone cleanup omitted", 'cloud-init clean --logs --machine-id', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH host keys retained", 'rm -f /etc/ssh/ssh_host_*', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker identity retained", 'rm -f /var/lib/docker/engine-id /var/lib/docker/key.json', ':', "test_guest_cleanup_and_clone_inventory"),

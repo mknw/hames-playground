@@ -57,8 +57,10 @@ printf '%s\n' "$@" > enabled-units.txt
 # Provisioning owns daemon.json and docker.service.d, including socket activation.
 # Refuse site configuration rather than adopting it.
 test ! -e /etc/docker/daemon.json
-printf '{}\n' > /opt/vm-image/empty-daemon.json
-dockerd --config-file /opt/vm-image/empty-daemon.json \
+# Same classic overlay2 store the provisioners pin at boot. Docker 29 otherwise
+# defaults to the containerd snapshotter, and an absent driver must not fall back.
+printf '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}\n' > /opt/vm-image/assembly-daemon.json
+dockerd --config-file /opt/vm-image/assembly-daemon.json \
   --host unix:///run/vm-image-docker.sock --pidfile /run/vm-image-docker.pid \
   --exec-root /run/vm-image-docker --data-root /var/lib/docker \
   --bridge none --iptables=false --ip6tables=false --ip-forward=false --ip-masq=false \
@@ -88,8 +90,8 @@ with open('guest-lock.json') as stream:
     lock = json.load(stream)
 docker = ['docker', '--host', 'unix:///run/vm-image-docker.sock']
 driver = subprocess.check_output([*docker, 'info', '--format', '{{.Driver}}'], text=True).strip()
-if not driver or driver == 'overlayfs' or 'containerd' in driver.lower():
-    raise SystemExit('containerd snapshotter unsupported; classic Docker image store required')
+if driver != 'overlay2':
+    raise SystemExit('containerd snapshotter unsupported; classic overlay2 Docker image store required')
 images = {}
 for flavour, record in lock['flavours'].items():
     path = flavour + '.tar'
@@ -117,7 +119,7 @@ with open('inventory.json', 'w') as stream:
 PY
 cleanup
 trap - EXIT
-rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json ./enabled-units.txt
+rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json ./enabled-units.txt
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
 rm -f /etc/ssh/ssh_host_*

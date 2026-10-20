@@ -764,6 +764,16 @@ class Safety(unittest.TestCase):
         self.args.disk_cap = "18GiB"
         vm.preflight(self.args)
 
+    def test_measure_shares_the_running_module(self):
+        # Otherwise measure's commands bypass PRIVATE_LOG: no private evidence at all.
+        code = ("import os, runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = ['sandbox_vm.py', 'survey', '--dry-run'];"
+                "runpy.run_path(os.environ['SRC'], run_name='__main__');"
+                "import sandbox_vm_measure as m;"
+                "print(m.sandbox_vm.__name__ == '__main__', m.command.__globals__['__name__'] == '__main__')")
+        child = subprocess.run([sys.executable, "-c", code, str(ROOT / "scripts/lib")], capture_output=True, text=True,
+                               env={**os.environ, "SRC": str(SOURCE)}, cwd=self.root)
+        self.assertEqual(child.stdout.split()[-2:], ["True", "True"], child.stderr[-2000:])
+
     def test_spike_certificates_are_backdated_for_guest_clock_lag(self):
         calls = []
         with patch.object(vm, "command", side_effect=lambda *a, **kw: calls.append(a) or result()), \
@@ -1767,6 +1777,7 @@ def mutations():
         ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
         ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
         ("image volume left out of the project disk cap", "core", '2 * size_bytes(args.vm_disk) + virtual <= size_bytes(args.disk_cap)', '2 * size_bytes(args.vm_disk) <= size_bytes(args.disk_cap)', "test_project_disk_cap_holds_both_disks_and_the_image"),
+        ("measure imports a second harness copy", "core", 'sys.modules.setdefault("sandbox_vm", sys.modules[__name__])', 'pass', "test_measure_shares_the_running_module"),
         ("spike certificates valid only from now", "core", 'time.gmtime(time.time() - 3600)', 'time.gmtime(time.time())', "test_spike_certificates_are_backdated_for_guest_clock_lag"),
         ("server and client leaves not backdated", "core", '"x509", "-req", "-not_before", start, "-days"', '"x509", "-req", "-days"', "test_spike_certificates_are_backdated_for_guest_clock_lag"),
         ("missing host command stays anonymous", "core", '        raise Refusal("required host command not installed") from None', '        raise', "test_missing_host_command_is_a_named_refusal"),

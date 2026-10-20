@@ -104,7 +104,7 @@ while [ "$attempt" -lt 60 ]; do
     ready=1
     break
   fi
-  kill -0 "$daemon_pid"
+  kill -0 "$daemon_pid" 2>/dev/null || { tail -c 20000 /opt/vm-image/dockerd.log >&2; exit 1; }
   sleep 1
 done
 test "$ready" = 1

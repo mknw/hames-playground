@@ -275,7 +275,25 @@ const dbLoadConversation = vi.fn<
   (id: string, userId: string) => Promise<{ serializedContext: string; version: string } | null>
 >(async () => null)
 const TURN_CLAIM_RENEW_MS = 30_000
+/** Ownership records, mocked at the repository level so the REAL resolver
+ *  (`stash/ownership.server.ts`) is what the turn consults — the same
+ *  arrangement as `stash-ownership.test.ts`. */
+const conversationOwners = new Map<string, string>()
+const sessionClaims = new Map<string, string>()
+/** First toucher wins, matching the upsert in `session-claims.server.ts`. */
+const dbClaimOwnership = vi.fn(async (sessionId: string, userId: string, _ttl: number) => {
+  const held = sessionClaims.get(sessionId)
+  if (held) return held
+  sessionClaims.set(sessionId, userId)
+  return userId
+})
+vi.mock('../../../lib/db/session-claims.server', () => ({
+  getSessionClaimOwner: async (sessionId: string) => sessionClaims.get(sessionId) ?? null,
+  claimSession: (sessionId: string, userId: string, ttl: number) =>
+    dbClaimOwnership(sessionId, userId, ttl),
+}))
 vi.mock('../../../lib/db/conversations.server', () => ({
+  getConversationOwner: async (id: string) => conversationOwners.get(id) ?? null,
   createConversation: dbCreateConversation,
   releaseConversationClaim: dbReleaseConversationClaim,
   renewConversationClaim: dbRenewConversationClaim,
@@ -371,6 +389,8 @@ beforeEach(() => {
   awaitMemoryWake.mockResolvedValue('awake')
   seenScopes.length = 0
   seenAttended.length = 0
+  conversationOwners.clear()
+  sessionClaims.clear()
   openedFrames.length = 0
   amendedFrames.length = 0
   // The real `runWithInferenceTier` is used (only the recording is a wrapper),
@@ -2648,5 +2668,139 @@ describe('memory host turns (G9)', () => {
     await flush()
     expect(settleMemory).toHaveBeenCalledTimes(1)
     expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
+  })
+})
+
+describe('session ownership on the turn path', () => {
+  const NOT_FOUND = 'Session not found'
+
+  /** Every entry point, as the request it sends for a session id it names. */
+  const ENTRY_POINTS: Array<[string, (userId: string) => Record<string, unknown>]> = [
+    ['new', (userId) => interactive({ sessionId: 'sess-o', userId })],
+    ['continue', (userId) => interactive({ sessionId: 'sess-o', userId, message: 'follow up' })],
+    ['resume', (userId) => resume({ sessionId: 'sess-o', userId })],
+    [
+      'triggered',
+      (userId) => ({
+        mode: 'triggered' as const,
+        sessionId: 'sess-o',
+        userId,
+        agentId: 'search',
+        message: 'do the thing',
+        data: { trigger: TRIGGER },
+        claimVersion: 'v-trig',
+      }),
+    ],
+  ]
+
+  /** Nothing a turn builds from the session id, and nothing it persists. */
+  function expectNothingRan() {
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(runFresh).not.toHaveBeenCalled()
+    expect(continueSession).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  }
+
+  it('refuses a session whose claim is held by another user, with no conversation row', async () => {
+    sessionClaims.set('sess-o', 'user-a')
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toThrow(NOT_FOUND)
+
+    expectNothingRan()
+    expect(claimSession).not.toHaveBeenCalled()
+    expect(sessionClaims.get('sess-o')).toBe('user-a')
+  })
+
+  it('refuses another user after the conversation was deleted but its claim is still live', async () => {
+    // The row is gone; the claim outlives it for the TTL window.
+    sessionClaims.set('sess-o', 'user-a')
+    expect(conversationOwners.has('sess-o')).toBe(false)
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toThrow(NOT_FOUND)
+
+    expectNothingRan()
+  })
+
+  it("refuses a session that is another user's conversation, in the stash routes' own wording", async () => {
+    conversationOwners.set('sess-o', 'user-a')
+    sessionClaims.set('sess-o', 'user-a')
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toMatchObject({ message: NOT_FOUND })
+
+    expectNothingRan()
+  })
+
+  it("lets the owner's first turn on a fresh id run, and records the claim", async () => {
+    const result = await runTurnAndPersist(interactive({ sessionId: 'sess-fresh' }))
+
+    expect(result.response).toBe('fresh:hello world, this is long')
+    expect(sessionClaims.get('sess-fresh')).toBe('user-1')
+    expect(dbCreateConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it("lets the owner's later turns run", async () => {
+    await runTurnAndPersist(interactive({ sessionId: 'sess-later' }))
+    conversationOwners.set('sess-later', 'user-1')
+    claimSession.mockResolvedValue(STORED)
+
+    const result = await runTurnAndPersist(
+      interactive({ sessionId: 'sess-later', message: 'follow up' }),
+    )
+
+    expect(result.response).toBe('continued:follow up')
+    expect(sessionClaims.get('sess-later')).toBe('user-1')
+  })
+
+  it('refuses the turn when the ownership store cannot answer', async () => {
+    dbClaimOwnership.mockRejectedValueOnce(new Error('connection refused'))
+
+    const run = runTurnAndPersist(interactive({ sessionId: 'sess-down' }))
+
+    await expect(run).rejects.toThrow('Could not verify session ownership')
+    // The store's own error text is logged, not handed to the user.
+    await expect(run).rejects.not.toThrow('connection refused')
+    expectNothingRan()
+    expect(sessionClaims.has('sess-down')).toBe(false)
+  })
+
+  describe.each(ENTRY_POINTS)('the %s entry point', (_name, request) => {
+    it("is refused for a user who is not the session's owner", async () => {
+      sessionClaims.set('sess-o', 'user-a')
+      conversationOwners.set('sess-o', 'user-a')
+      claimSession.mockResolvedValue(STORED)
+
+      await expect(runTurnAndPersist(request('user-b') as never)).rejects.toThrow(NOT_FOUND)
+
+      expectNothingRan()
+    })
+
+    it('consults the ownership store before claiming the conversation', async () => {
+      claimSession.mockResolvedValue(STORED)
+
+      await runTurnAndPersist(request('user-1') as never).catch(() => {})
+
+      expect(dbClaimOwnership).toHaveBeenCalledWith('sess-o', 'user-1', expect.any(Number))
+    })
+
+    it('is refused when the ownership store fails', async () => {
+      dbClaimOwnership.mockRejectedValueOnce(new Error('store down'))
+      claimSession.mockResolvedValue(STORED)
+
+      await expect(runTurnAndPersist(request('user-1') as never)).rejects.toThrow(
+        'Could not verify session ownership',
+      )
+
+      expectNothingRan()
+    })
   })
 })

@@ -28,7 +28,9 @@
  *
  * Not stash-only: the sandbox PTY routes gate on the same two functions (via
  * `http.server.ts`), since an interactive shell into a session's container is
- * scoped by the same sessionId as the session's documents.
+ * scoped by the same sessionId as the session's documents. So does every turn
+ * (`harness-client/turn.server.ts`, all modes), before it builds anything from
+ * the session id.
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'

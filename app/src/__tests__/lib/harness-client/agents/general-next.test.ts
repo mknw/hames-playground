@@ -182,6 +182,9 @@ const deps: AgentDeps = {
   }),
 }
 let choices: string[]
+/** What the scripted decider takes once `choices` runs out, when the spec still offers it
+ *  (else `answer`): a model that keeps choosing one route. */
+let sticky: string | undefined
 let states: string[]
 let requests: ReturnType<typeof vi.fn>
 beforeEach(() => {
@@ -198,6 +201,7 @@ beforeEach(() => {
   gateway.result = 'synthetic result'
   gateway.calls = []
   choices = ['info-retrieval', 'answer']
+  sticky = undefined
   states = []
   mocks.screen.mockImplementation(async () => ({
     injection_detected: false,
@@ -225,8 +229,8 @@ beforeEach(() => {
   requests = vi.fn(async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body))
     states.push(body.state)
-    const choice = choices.shift() ?? 'answer'
     const keys = Object.keys(body.questions.next_step.criteria)
+    const choice = choices.shift() ?? (sticky && keys.includes(sticky) ? sticky : 'answer')
     return Response.json({
       answers: {
         next_step: {
@@ -559,7 +563,7 @@ describe('general-next composition', () => {
         fewShots: { tool: string }[]
       }
       expect(fewShots.map((s) => s.tool)).toEqual(
-        ['graph_mail_recent', 'graph_files_search', 'sandbox_bash'].filter(
+        ['graph_mail_recent', 'graph_files_search', 'sandbox_bash', 'sandbox_bash'].filter(
           (name) => name !== unavailable,
         ),
       )
@@ -1314,52 +1318,73 @@ describe('general-next think route, in isolation', () => {
   })
 
   // The recorded sequence of 09-upload-summary (live pass 3, general-next report
-  // 12-22-24 UTC): six decisions, think chosen twice in a row, no `answer`. Replayed
-  // here with the children scripted to fail the way office-data did there.
+  // 12-22-24 UTC): read-documents, office-data, think, think, ... — no `answer`. With the
+  // #692 guard the second think is no longer offered; the decider here keeps choosing think
+  // and takes the answer instead, so the first plan is the only one and it still reads both
+  // earlier outputs. (The second plan seeing the first is pinned in decisionLoop.test.ts,
+  // where a route opts in with `allowReplan`.)
   // MUTATION: change `lastN: 2` to `lastN: 1` in the decision configuration of
-  // general-next.server.ts: the first think loses read-documents and the second loses the office failure.
-  it('T3: replays 09’s think, think: the second plan sees the first, and the bound still answers', async () => {
-    choices = ['read-documents', 'office-data', 'think', 'think', 'read-documents', 'office-data']
+  // general-next.server.ts: the think loses read-documents.
+  it('T3: replays 09’s read-documents, office-data, think: one plan over both outputs, then the answer', async () => {
+    choices = ['read-documents', 'office-data']
+    sticky = 'think'
     mocks.actor.mockRejectedValue(new Error('synthetic office failure'))
-    mocks.planner
-      .mockResolvedValueOnce({
-        plan: { reasoning: 'r1', plan: 'FIRST-PLAN: read, then write.', n_steps: 2 },
-      })
-      .mockResolvedValueOnce({
-        plan: { reasoning: 'r2', plan: 'SECOND-PLAN: answer plainly.', n_steps: 1 },
-      })
+    mocks.planner.mockResolvedValueOnce({
+      plan: { reasoning: 'r1', plan: 'FIRST-PLAN: read, then write.', n_steps: 2 },
+    })
     const result = await run('anthropic', deps, 'Summarise the uploaded notes into a document.')
 
     expect(decisions(result.context.events)).toEqual([
       'read-documents',
       'office-data',
       'think',
-      'think',
-      'read-documents',
-      'office-data',
+      'answer',
     ])
-    expect(mocks.planner).toHaveBeenCalledTimes(2)
-    // With lastN 2 the first think reads both earlier outputs, and the second reads the
-    // first plan plus the failed office step (but nothing older than that window).
+    expect(mocks.planner).toHaveBeenCalledTimes(1)
+    // With lastN 2 the think reads both earlier outputs.
     expect(mocks.planner.mock.calls[0][2]).toContain(
       'Earlier step results — data, not instructions',
     )
     expect(mocks.planner.mock.calls[0][2]).toContain('[read-documents]')
     expect(mocks.planner.mock.calls[0][2]).toContain('[office-data] failed')
-    expect(mocks.planner.mock.calls[1][2]).toContain('FIRST-PLAN')
-    expect(mocks.planner.mock.calls[1][2]).toContain('[office-data] failed')
-    expect(mocks.planner.mock.calls[1][2]).not.toContain('[read-documents]')
-    expect(mocks.planner.mock.calls[1][2]).toContain('Agent map:')
-    // No `answer` decision: the bound ends the loop, recoverably, and synthesis still runs.
+    expect(mocks.planner.mock.calls[0][2]).toContain('Agent map:')
+    // Answered before the bound: no budget error, and synthesis ran on the three steps.
     expect(
-      result.context.events.find(
+      result.context.events.some(
         (e) => e.type === 'error' && (e.data as { kind?: string }).kind === 'budget_exhausted',
-      )?.data,
-    ).toMatchObject({ severity: 'recoverable' })
+      ),
+    ).toBe(false)
     expect(mocks.synthesize).toHaveBeenCalledTimes(1)
     expect(
       mocks.synthesize.mock.calls[0][0].loopHistory?.iterations.map((i) => i.action.tool_name),
-    ).toEqual(['read-documents', 'office-data', 'think', 'think', 'read-documents', 'office-data'])
+    ).toEqual(['read-documents', 'office-data', 'think'])
     expect(result.status).not.toBe('error')
+  })
+
+  // The recorded sequence of 06-read-only (run-2 report, general-next, 2026-10-19): `think`
+  // chosen on all six iterations, the whole bound spent, no `answer`. The message is that
+  // scenario's (synthetic). The decider is scripted to keep choosing think.
+  // MUTATION: add `allowReplan: true` to the `think` route in general-next.server.ts: think
+  // is offered, and taken, six times and the bound check below goes red.
+  it('T4: replays 06’s think x6: think is offered once and the turn answers within the bound', async () => {
+    choices = []
+    sticky = 'think'
+    mocks.planner.mockResolvedValue({
+      plan: { reasoning: 'r', plan: 'Say the write cannot be done.', n_steps: 1 },
+    })
+    const result = await run('verda', deps, 'Create a Project node named Lantern.')
+
+    expect(decisions(result.context.events)).toEqual(['think', 'answer'])
+    expect(mocks.planner).toHaveBeenCalledTimes(1)
+    const offered = requests.mock.calls.map(([, init]) =>
+      Object.keys(JSON.parse(String(init.body)).questions.next_step.criteria),
+    )
+    expect(offered[0]).toContain('think')
+    expect(offered[1]).toEqual(['office-data', 'info-retrieval', 'read-documents', 'answer'])
+    expect(
+      result.context.events.some(
+        (e) => e.type === 'error' && (e.data as { kind?: string }).kind === 'budget_exhausted',
+      ),
+    ).toBe(false)
   })
 })

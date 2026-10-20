@@ -72,6 +72,20 @@ const summary = {
   artifacts: ['lantern-summary.docx'],
 } as unknown as ConversationScenario
 
+const analysis = {
+  messages: [
+    'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
+  ],
+  expectedArgs: {
+    sandbox_bash: sandboxArgs([
+      'lantern-notes.md',
+      'lantern-sales.csv',
+      'lantern-launch-analysis.md',
+    ]),
+  },
+  artifacts: ['lantern-launch-analysis.md'],
+} as unknown as ConversationScenario
+
 const SALES = '/work/in/lantern-sales.csv'
 const TOTALS = '/work/out/lantern-totals.csv'
 const TOTALS_PY = `import csv\nrows = list(csv.DictReader(open('${SALES}')))\nwriter = csv.writer(open('${TOTALS}', 'w'))`
@@ -151,7 +165,7 @@ beforeAll(async () => {
     const shown = JSON.stringify(args)
     critic.push(shown)
     return {
-      is_sufficient: /Total,66|Saved \/work\/out\/lantern-summary/.test(shown),
+      is_sufficient: /Total,66|Saved \/work\/out\/lantern-(?:summary|launch-analysis)/.test(shown),
       explanation: 'judged',
     }
   }) as never)
@@ -256,6 +270,60 @@ describe('scenario 09 (office actor, synthetic sandbox)', () => {
   })
 })
 
+// RECORDED in live run 2 (the console log keeps the actor's prompts, the report keeps the
+// first sandbox_bash of a failed grade). The sandbox does not run Python, so a script's own
+// stdout stays unmodelled; what a shell prints for read-only inspection is modelled.
+const RECORDED_INSPECTION = `ls -la /work/in && head -20 ${SALES}`
+const RECORDED_PRINT_ONLY =
+  "python3 - <<'PY'\nimport csv\nrows = list(csv.DictReader(open('/work/in/lantern-sales.csv')))\ntotal = sum(int(r['revenue']) for r in rows)\nby_region = {r['region']: int(r['revenue']) for r in rows}\nnotes = open('/work/in/lantern-notes.md').read().strip()\nprint('total', total, by_region)\nprint(notes)\nPY"
+const ANALYSIS_PY =
+  "python3 - <<'PY'\nimport csv\nrows = list(csv.DictReader(open('/work/in/lantern-sales.csv')))\nnotes = open('/work/in/lantern-notes.md').read().strip()\nopen('/work/out/lantern-launch-analysis.md', 'w').write(f'# Launch analysis\\n\\n{notes}\\n{len(rows)} regions\\n')\nprint('/work/out/lantern-launch-analysis.md')\nPY"
+
+describe('scenario 10, attempt 1 as recorded: an exploratory compound read', () => {
+  // MUTATION: make `inspect` return undefined for a command containing `&&` (the old rule).
+  it('prints the listing and the head of the input, as a shell does, and records nothing', async () => {
+    const r = await replay(csv, [
+      act('sandbox_bash', { command: RECORDED_INSPECTION }),
+      writeThenRun('/work/totals.py', TOTALS_PY, 'python3 /work/totals.py'),
+    ])
+    const shown = JSON.stringify(r.seen[1].at(-1))
+    expect(shown).toContain('lantern-sales.csv')
+    expect(shown).toContain('region,revenue')
+    expect(shown).toMatch(/exit_code\\*":0/)
+    expect(r.trace.tools[0]).toMatchObject({ name: 'sandbox_bash', success: true, valid: false })
+    expect(r.trace.artifacts).toEqual(['lantern-totals.csv'])
+  })
+})
+
+describe('scenario 17 as recorded: a computation that prints and saves nothing', () => {
+  // MUTATIONS: sandboxArgs accepts a command naming SOME of its files (`every` -> `some`);
+  // the transport records an artifact for a command that never names the output.
+  it('is not a deliverable: no file is written, so none would be promoted in production', async () => {
+    expect(RECORDED_PRINT_ONLY).not.toContain('/work/out')
+    expect(RECORDED_PRINT_ONLY).not.toContain('lantern-launch-analysis.md')
+    const r = await replay(analysis, [
+      act('sandbox_bash', { command: RECORDED_PRINT_ONLY }),
+      act('sandbox_bash', { command: ANALYSIS_PY }, { is_final: true }),
+    ])
+    expect(flags(r.trace)).toEqual([
+      ['sandbox_bash', true, false],
+      ['sandbox_bash', true, true],
+    ])
+    expect(r.trace.artifacts).toEqual(['lantern-launch-analysis.md'])
+    expect(r.trace.indexed).toEqual(['lantern-launch-analysis.md'])
+    expect(r.critic.at(-1)).toContain('Saved /work/out/lantern-launch-analysis.md')
+    expect(exhausted(r.events)).toBe(false)
+  })
+
+  it('leaves the artifact unrecorded when the print-only run is the last request', async () => {
+    const r = await replay(analysis, [
+      act('sandbox_bash', { command: RECORDED_PRINT_ONLY }, { is_final: true }),
+    ])
+    expect(r.trace.artifacts).toEqual([])
+    expect(r.trace.indexed).toEqual([])
+  })
+})
+
 describe('the synthetic sandbox as a transport', () => {
   const make = (scenario = csv) => {
     const trace: ConversationTrace = {
@@ -331,6 +399,101 @@ describe('the synthetic sandbox as a transport', () => {
     }
   })
 
+  it('runs read-only commands joined by && or ; as a shell would', async () => {
+    const { call, trace } = make()
+    const out = async (command: string) => (await call('sandbox_bash', { command })).data as never
+    const both = (await out(`ls /work/in && head -n 1 ${SALES}`)) as { stdout: string }
+    expect(both.stdout.split('\n').sort()).toEqual(
+      ['lantern-notes.md', 'lantern-sales.csv', 'region,revenue'].sort(),
+    )
+    expect(both.stdout.endsWith('region,revenue')).toBe(true)
+    expect(((await out(`head -1 ${SALES}`)) as { stdout: string }).stdout).toBe('region,revenue')
+    expect(((await out(`head -n2 ${SALES}`)) as { stdout: string }).stdout).toBe(
+      'region,revenue\nNorth,47',
+    )
+    // `&&` stops at the first failure; `;` carries on.
+    const stopped = (await out('cat /work/nope && ls /work/in')) as {
+      stdout: string
+      stderr: string
+      exit_code: number
+    }
+    expect(stopped.stdout).toBe('')
+    expect(stopped.stderr).toContain('No such file or directory')
+    expect(stopped.exit_code).toBe(1)
+    const carried = (await out('cat /work/nope ; ls /work/in')) as {
+      stdout: string
+      exit_code: number
+    }
+    expect(carried.stdout).toContain('lantern-sales.csv')
+    expect(carried.exit_code).toBe(0)
+    // Nothing read-only is recorded as a deliverable, and pipes are not inspection.
+    expect(trace.artifacts).toEqual([])
+    expect(await out(`cat ${SALES} | wc -l`)).toMatchObject({
+      stdout: '',
+      stderr: '',
+      exit_code: 0,
+    })
+    expect(((await out(`ls /work/in && python3 -c "print(1)"`)) as { stdout: string }).stdout).toBe(
+      '',
+    )
+  })
+
+  // F1: the reviewed compound split swallowed the executor as `head` operands,
+  // changing scenario 10's grade. MUTATION: remove |\n from inspect's split.
+  it.each([`ls /work/in && head -3 ${SALES}`, `head -3 ${SALES}`])(
+    'grades the executor after a newline following %s as a request',
+    async (inspection) => {
+      const { call, trace } = make()
+      await call('sandbox_write', { path: '/work/totals.py', content: TOTALS_PY })
+      const command = `${inspection}\npython3 /work/totals.py`
+      expect((await call('sandbox_bash', { command })).success).toBe(true)
+      expect(trace.tools.at(-1)).toMatchObject({
+        name: 'sandbox_bash',
+        args: { command },
+        valid: true,
+      })
+      expect(trace.artifacts).toEqual(['lantern-totals.csv'])
+    },
+  )
+
+  // MUTATIONS: remove |\n from the split; restore the unconditional empty-part refusal.
+  it.each(['\n', ';'])('runs inspections separated or terminated by %j', async (separator) => {
+    const { call, trace } = make()
+    const listed = ['lantern-sales.csv', 'lantern-notes.md']
+    const both = await call('sandbox_bash', {
+      command: `ls /work/in${separator}head -n 1 ${SALES}`,
+    })
+    expect(both.data).toMatchObject({
+      stdout: [...listed, 'region,revenue'].join('\n'),
+      exit_code: 0,
+    })
+    expect((await call('sandbox_bash', { command: `ls /work/in${separator}` })).data).toMatchObject(
+      {
+        stdout: listed.join('\n'),
+        exit_code: 0,
+      },
+    )
+    // A newline, like `;`, continues after a failure and returns the last exit code.
+    expect(
+      (await call('sandbox_bash', { command: `cat /work/nope${separator}ls /work/in` })).data,
+    ).toMatchObject({ stdout: listed.join('\n'), exit_code: 0 })
+    expect(trace.artifacts).toEqual([])
+  })
+
+  // MUTATION: allow every empty part, including an initial part or a missing && operand.
+  it.each(['; ls /work/in', 'ls /work/in &&', 'ls /work/in && ; ls /work/in'])(
+    'leaves an incomplete inspection to the request path: %s',
+    async (command) => {
+      const { call, trace } = make()
+      expect((await call('sandbox_bash', { command })).data).toMatchObject({
+        stdout: '',
+        stderr: '',
+        exit_code: 0,
+      })
+      expect(trace.artifacts).toEqual([])
+    },
+  )
+
   it('edits and searches what was written', async () => {
     const { call } = make()
     await call('sandbox_write', { path: '/work/a.py', content: 'x = 1\ny = 2' })
@@ -384,6 +547,16 @@ it('exposes exactly the tools the production sandbox does', () => {
   expect(declared.sort()).toEqual(production)
   expect([...SANDBOX_FILE_TOOLS.map((t) => t.name), 'sandbox_bash'].sort()).toEqual(production)
   expect(driver).toContain('createSyntheticSandbox({')
+})
+
+it('replays the requests and predicates of scenarios 14 and 17 as they are written', () => {
+  const read = (f: string) => readFileSync(resolve(`evals/general-next/scenarios/${f}`), 'utf8')
+  const seventeen = read('17-mail-analysis-follow-up.ts')
+  expect(seventeen).toContain(analysis.messages[0])
+  expect(seventeen.replace(/\s+/g, ' ')).toContain(
+    "sandboxArgs([ 'lantern-notes.md', 'lantern-sales.csv', 'lantern-launch-analysis.md', ])",
+  )
+  expect(seventeen).toContain("artifacts: ['lantern-launch-analysis.md']")
 })
 
 it('replays the requests and predicates of scenarios 09 and 10 as they are written', () => {

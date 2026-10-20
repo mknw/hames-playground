@@ -138,6 +138,8 @@ describe('compactBulkData', () => {
       JSON.stringify({ q: 'test' }),
       'Need to search',
       'Found 5 results',
+      // The call-record sink the summary's `model_call` event is built from.
+      expect.any(Function),
     )
 
     // Should have enriched the event

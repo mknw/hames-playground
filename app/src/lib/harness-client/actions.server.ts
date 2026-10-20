@@ -12,13 +12,18 @@
 'use server'
 
 import type { HarnessResultScoped } from '@hames-ai/harness-patterns'
-import { loadSession, deleteSession, evictPatterns, type SessionData } from './session.server'
+import {
+  loadSession,
+  deleteSession,
+  deleteSessions,
+  evictPatterns,
+  type SessionData,
+} from './session.server'
 import { runTurnAndPersist } from './turn.server'
 import { getAgent, getAgentMetadata } from './registry.server'
 import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
-  deleteConversations as dbDeleteConversations,
   getConversationInferenceTier as dbGetConversationInferenceTier,
   setConversationPinned as dbSetConversationPinned,
   CONVERSATION_PIN_LIMIT,
@@ -120,7 +125,7 @@ export async function deleteConversationsBulk(ids: string[]): Promise<{ deleted:
   // Dedupe and cap at the sidebar's list size — nothing legitimate selects
   // more rows than the list can show.
   const unique = [...new Set(ids)].slice(0, 200)
-  const deleted = await dbDeleteConversations(unique, user.id)
+  const deleted = await deleteSessions(unique, user.id)
   for (const id of deleted) evictPatterns(id)
   return { deleted }
 }

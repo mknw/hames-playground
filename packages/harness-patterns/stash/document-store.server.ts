@@ -56,9 +56,10 @@ export interface StashDocumentMeta {
   size: number
   /** Upload timestamp (epoch ms). */
   uploadedAt: number
-  /** Hidden from LLM context (mirrors tool-result stash semantics). */
+  /** Hidden from LLM context (mirrors tool-result stash semantics). Retrieval
+   *  and indexing honour it: see `searchDocuments` / `ensureSessionIngested`. */
   hidden?: boolean
-  /** Moved to the Archived section (also excluded from LLM context). */
+  /** Moved to the Archived section (also excluded from LLM context and retrieval). */
   archived?: boolean
   /**
    * Content encoding. `'utf8'` (default, omitted) → `content` is literal text.
@@ -416,8 +417,22 @@ export async function getDocumentStrict(
     throw new Error(`stash read failed for a document: ${res.error ?? 'unknown error'}`)
   }
   if (res.data == null) return null
-  const value = unwrapJsonGet(res.data)
-  if (value == null || typeof value !== 'object') return null
+  // Absent is `null`, `'null'` or an empty result. A body that is present but is
+  // not a document (unparseable text such as a command-level error reported as
+  // `success: true`, or a scalar) is an unreadable read, not an absent document.
+  let value: unknown = res.data
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      throw new Error('stash read returned an unreadable document')
+    }
+  }
+  if (Array.isArray(value)) value = value.length > 0 ? value[0] : null
+  if (value == null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('stash read returned an unreadable document')
+  }
   return value as StashDocument
 }
 
@@ -604,6 +619,35 @@ export async function deleteDocument(
         failures.map(([what, err]) => `${what}: ${err}`).join('; '),
     )
   }
+}
+
+/**
+ * Every id in a session's index, including entries whose document key has
+ * already expired. Throws when the index cannot be read, so a caller clearing
+ * a session never mistakes an outage for an empty stash.
+ */
+export async function listSessionDocumentIds(
+  sessionId: string,
+  callTool: CallTool = resolveStashCallTool(),
+): Promise<string[]> {
+  const members = await callTool('smembers', { name: indexKey(sessionId) })
+  if (!members.success) {
+    throw new Error(`stash index read failed: ${members.error ?? 'unknown error'}`)
+  }
+  return parseSetMembers(members.data)
+}
+
+/** Key prefix shared by every document of a session: `stash:doc:{sessionId}:`.
+ *  A longer remainder after it can belong to a session whose id merely starts
+ *  with this one, so callers must also check the remainder's shape. */
+export function sessionDocKeyPrefix(sessionId: string): string {
+  return `${DOC_KEY_PREFIX}:${sessionId}:`
+}
+
+/** Tolerant parse of a key listing (a `scan_all_keys` result), which comes back
+ *  in the same shapes as an `smembers` one. */
+export function parseKeyList(data: unknown): string[] {
+  return parseSetMembers(data)
 }
 
 // ============================================================================

@@ -97,7 +97,7 @@ it('connects the observer stop to synchronous exit, and checks wall-clock spend 
 it('uses live production metadata, records refusing writes, and never returns a precalculated total', () => {
   const driver = read('evals/general-next/driver.ts')
   expect(run()).toContain('productionCatalog(')
-  expect(run()).toContain('createDriver(fake, live, liveCatalog)')
+  expect(run()).toContain('createDriver(fake, live, liveCatalog, agents)')
   expect(driver).toMatch(
     /const descriptions = live\s*\?\s*liveDescriptions\(\s*Object.keys\(NAMESPACES\)/,
   )

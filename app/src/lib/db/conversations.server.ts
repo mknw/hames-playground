@@ -1148,7 +1148,10 @@ export async function listConversationEvents(userId: string): Promise<Conversati
 }
 
 /**
- * Delete a conversation. No-op when the id doesn't belong to the user.
+ * Delete a conversation. No-op when the id doesn't belong to the user. Removes
+ * the conversation rows only: the session's stash and claim are released by
+ * `deleteSessions` (`harness-client/session.server.ts`), which callers go
+ * through.
  */
 export async function deleteConversation(id: string, userId: string): Promise<void> {
   await deleteConversations([id], userId)

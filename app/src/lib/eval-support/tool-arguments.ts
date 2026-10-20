@@ -54,6 +54,15 @@ export const sandboxArgs =
     return runs && files.every((file) => `${command}\n${scripts}`.includes(file))
   }
 
+/** A `writtenArtifacts` predicate: the written text names every phrase, ignoring case
+ * and whitespace runs, so a reformatted checklist passes and a paraphrase does not. */
+export const writtenContains =
+  (...phrases: string[]) =>
+  (content: string): boolean => {
+    const text = content.replace(/\s+/g, ' ').toLowerCase()
+    return phrases.every((p) => text.includes(p.replace(/\s+/g, ' ').toLowerCase()))
+  }
+
 export const mailArgs = (args: Record<string, unknown>): boolean =>
   Object.keys(args).every((key) => ['limit', 'unread_only'].includes(key)) &&
   (args.unread_only === undefined || typeof args.unread_only === 'boolean') &&

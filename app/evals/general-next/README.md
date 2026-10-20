@@ -10,7 +10,8 @@ baseline cases beside the selected candidate. The default agent is unchanged.
 No live run or default-flip evidence was produced in this PR.
 
 ```bash
-# All scripts run from app/. --list imports no agent and reads no credentials.
+# All scripts run from app/ (`.env` and `evals/reports/` are cwd-relative; package paths are not,
+# they resolve from the eval files). --list imports no agent and reads no credentials.
 corepack pnpm eval:general-next --list
 # Free: scripted inference and synthetic tools against the real agent. No .env is loaded.
 corepack pnpm eval:general-next

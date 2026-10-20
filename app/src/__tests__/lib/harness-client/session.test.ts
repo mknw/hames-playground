@@ -39,12 +39,18 @@ const claimConversation = vi.fn<
 const saveConversation = vi.fn<(row: Record<string, unknown>) => Promise<string>>(
   async () => 'v-saved',
 )
-const deleteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
+const deleteConversations = vi.fn<(ids: string[], userId: string) => Promise<string[]>>(
+  async (ids) => ids,
+)
+const releaseDeletedSessions = vi.fn<(ids: readonly string[], userId: string) => Promise<void>>(
+  async () => {},
+)
+vi.mock('../../../lib/stash/release.server', () => ({ releaseDeletedSessions }))
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation,
   claimConversation,
   saveConversation,
-  deleteConversation,
+  deleteConversations,
   restoreConversationPaused,
   deriveTitle: (s: string) => (s ? s.slice(0, 12) : null),
 }))
@@ -65,6 +71,7 @@ const {
   claimSession,
   saveSession,
   deleteSession,
+  deleteSessions,
   hasPendingApproval,
 } = await import('../../../lib/harness-client/session.server')
 
@@ -357,9 +364,42 @@ describe('deleteSession', () => {
     const built = await getOrBuildPatterns('del-1', 'known')
     await deleteSession('del-1', 'u1')
 
-    expect(deleteConversation).toHaveBeenCalledWith('del-1', 'u1')
+    expect(deleteConversations).toHaveBeenCalledWith(['del-1'], 'u1')
     const rebuilt = await getOrBuildPatterns('del-1', 'known')
     expect(rebuilt).not.toBe(built)
+  })
+
+  it('releases exactly the ids the database confirmed deleted, for the deleting user', async () => {
+    deleteConversations.mockResolvedValueOnce(['a'])
+    expect(await deleteSessions(['a', 'b'], 'u1')).toEqual(['a'])
+    expect(deleteConversations).toHaveBeenCalledWith(['a', 'b'], 'u1')
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
+  })
+
+  it('releases the stash after the delete has returned, not before', async () => {
+    const order: string[] = []
+    deleteConversations.mockImplementationOnce(async (ids) => {
+      order.push('delete')
+      return ids
+    })
+    releaseDeletedSessions.mockImplementationOnce(async () => {
+      order.push('release')
+    })
+    await deleteSession('del-3', 'u1')
+    expect(order).toEqual(['delete', 'release'])
+  })
+
+  it('resolves while the release is still pending', async () => {
+    releaseDeletedSessions.mockImplementationOnce(() => new Promise<void>(() => {}))
+    // MUTATION: `await` the release in `deleteSessions` → the delete never resolves (timeout).
+    await expect(deleteSessions(['a'], 'u1')).resolves.toEqual(['a'])
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
+  })
+
+  it('does not release anything when the delete itself fails', async () => {
+    deleteConversations.mockRejectedValueOnce(new Error('rolled back'))
+    await expect(deleteSession('del-4', 'u1')).rejects.toThrow('rolled back')
+    expect(releaseDeletedSessions).not.toHaveBeenCalled()
   })
 
   it('clears a pending uncacheable flag for the deleted session', async () => {

@@ -232,7 +232,10 @@ describe('document-ingest', () => {
 
     it('embeds the query with the recorded model and returns parsed hits', async () => {
       const { embedFn, embedOneFn } = makeEmbedder('fake-model', 3)
-      await ingestDocument(makeDoc(), {
+      // Search reads the document record for its flags, so the record must exist.
+      const doc = makeDoc()
+      fake.json.set('stash:doc:s1:doc1', doc)
+      await ingestDocument(doc, {
         chunk: { strategy: 'paragraph', maxChars: 30, overlap: 0 },
         callTool: fake.callTool,
         embedFn,

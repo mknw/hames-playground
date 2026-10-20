@@ -22,24 +22,38 @@ marked.setOptions({
  * balancing `)`, gets its spaces written as `%20`. Nothing is ever decoded; any
  * existing `%xx` stays as the source wrote it. Everything else — the default
  * tokenizer already accepting the link, a non-http(s) scheme (so `javascript:`
- * is untouched), a trailing quoted title, a destination the default
- * tokenizer will not read once encoded (a line break), no closing paren — returns false and the default tokenizer runs exactly as before.
+ * is untouched), a trailing quoted title, a destination the default tokenizer
+ * will not read once encoded (a line break), no closing paren — returns false
+ * and the default tokenizer runs exactly as before.
+ *
+ * Both scans are bounded, because the lexer calls this at every `[` and `(` of
+ * untrusted text and the default tokenizer it falls back to is a bounded regex:
+ * an unbounded walk to the end of the paragraph made `[` × 32 000 quadratic.
+ * The label stops at CommonMark's own 999-character limit and the destination
+ * at `MAX_SPACED_DESTINATION` characters. Past either bound the default
+ * tokenizer decides, as it always did.
+ *
  * Images (`![`) take the same path; the sanitizer still decides what an `<img>`
  * may load. The href reaches the DOM through the sanitizer, which owns
  * `target="_blank"` and `rel="noopener noreferrer"`.
  */
+const MAX_LINK_LABEL = 999
+const MAX_SPACED_DESTINATION = 2048
+
 function linkWithSpaces(this: Tokenizer, src: string) {
   if (Tokenizer.prototype.link.call(this, src)) return false
   const open = src.startsWith('![') ? 2 : src.startsWith('[') ? 1 : -1
   if (open < 0) return false
+  // Everything the label scan may read, so no step can run past the bound.
+  const head = src.slice(0, open + MAX_LINK_LABEL + 1)
   let i = open
   for (let depth = 1; depth > 0; i++) {
-    const ch = src[i]
+    const ch = head[i]
     if (ch === undefined) return false
     if (ch === '`') {
       // A code span in the label may hold a `]`: skip to its matching run.
-      const run = /^`+/.exec(src.slice(i))![0]
-      const close = src.indexOf(run, i + run.length)
+      const run = /^`+/.exec(head.slice(i))![0]
+      const close = head.indexOf(run, i + run.length)
       if (close < 0) return false
       i = close + run.length - 1
       continue
@@ -50,8 +64,9 @@ function linkWithSpaces(this: Tokenizer, src: string) {
   }
   if (src[i] !== '(' || !/^https?:\/\//i.test(src.slice(i + 1, i + 9))) return false
   const start = i + 1
+  const limit = Math.min(src.length, start + MAX_SPACED_DESTINATION)
   let end = -1
-  for (let j = start, depth = 1; j < src.length; j++) {
+  for (let j = start, depth = 1; j < limit; j++) {
     const ch = src[j]
     if (ch === '\\') j++
     else if (ch === '(') depth++
@@ -62,14 +77,15 @@ function linkWithSpaces(this: Tokenizer, src: string) {
   }
   if (end < 0) return false
   const dest = src.slice(start, end)
-  if (!dest.includes(' ') || /\s+(?:"[^"]*"|'[^']*')$/.test(dest)) return false
+  if (!dest.includes(' ') || /\s+(?:"[^"]*"|'[^']*')$/.test(dest.trimEnd())) return false
   const raw = src.slice(0, end + 1)
   const token = Tokenizer.prototype.link.call(
     this,
     raw.slice(0, start) + dest.replaceAll(' ', '%20') + ')',
   )
   // The default must have read the whole rewritten link, and `raw` is what the
-  // lexer advances by, so it stays the ORIGINAL length.
+  // lexer advances by, so it stays the ORIGINAL length. This and the `end < 0`
+  // check back each other up: removing either alone changes no known output.
   if (!token || token.raw.length !== raw.length + (dest.split(' ').length - 1) * 2) return false
   return { ...token, raw }
 }

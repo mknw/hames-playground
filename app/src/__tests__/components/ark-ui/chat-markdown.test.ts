@@ -543,7 +543,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
     expect(a.querySelector('code')!.textContent).toBe('Plan]v2.docx')
   })
 
-  it('keeps a javascript: link inert, spaces or not', () => {
+  it('keeps javascript: inert end to end, spaces or not', () => {
     // Without spaces the sanitizer drops the href; with spaces the text stays
     // literal. Either way no anchor carries the scheme.
     for (const md of ['[x](javascript:window.stolen=1)', '[x](javascript:window.stolen = 1)']) {
@@ -557,12 +557,18 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
   })
 
   it('does not turn a spaced image into a loadable <img>', () => {
+    // The tokenizer rewrites the image too, so the sanitizer's image policy is
+    // what blocks it: a placeholder with the whole encoded URL, no anchor. With
+    // images unhandled the lexer re-enters at the `[` and renders `!<a>…</a>`.
     const host = mount(
       renderAssistantMarkdown('![chart](https://files.example.test/my chart.png)', noEntities, []),
     )
 
     expect(host.querySelector('img')).toBeNull()
-    expect(host.textContent).not.toContain('](')
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('.blocked-image')?.textContent).toBe(
+      'Image blocked: https://files.example.test/my%20chart.png',
+    )
   })
 
   it('leaves a plain link, and a link with a title, to the default tokenizer', () => {
@@ -602,5 +608,89 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
     expect(anchors('[x](https://files.example.test/a b.pdf')[0].textContent).toBe(
       'https://files.example.test/a',
     )
+  })
+
+  it('does not count an escaped paren when balancing the destination', () => {
+    const [a] = anchors('[x](https://files.example.test/a\\(b c)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a(b%20c')
+  })
+
+  it('reads nested brackets in the label', () => {
+    const [a] = anchors('[a [b] c](https://files.example.test/a b)')
+
+    expect(a.textContent).toBe('a [b] c')
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%20b')
+  })
+
+  it('reads an escaped bracket in the label', () => {
+    const [a] = anchors('[a\\]b](https://files.example.test/a b)')
+
+    expect(a.textContent).toBe('a]b')
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%20b')
+  })
+
+  it('matches the scheme case-insensitively', () => {
+    const [a] = anchors('[x](HTTPS://files.example.test/a b)')
+
+    expect(a.getAttribute('href')).toBe('HTTPS://files.example.test/a%20b')
+  })
+
+  it('does not fold a quoted title followed by a trailing space into the destination', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b "t" )').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toMatch(/%22|"/)
+  })
+
+  it('stops reading a label at 999 characters, as CommonMark does', () => {
+    const label = (n: number) => `[${'a'.repeat(n)}](https://files.example.test/a b)`
+
+    expect(anchors(label(999))[0].getAttribute('href')).toBe('https://files.example.test/a%20b')
+    expect(anchors(label(1000))[0].getAttribute('href')).not.toContain('a%20b')
+  })
+
+  it('stops reading a destination at 2048 characters', () => {
+    const link = (n: number) => `[x](https://files.example.test/${'a'.repeat(n)} b)`
+
+    expect(anchors(link(1500))[0].getAttribute('href')).toContain('%20b')
+    expect(
+      anchors(link(2100))
+        .map((a) => a.getAttribute('href'))
+        .join(),
+    ).not.toContain('%20b')
+  })
+
+  it('does not read a destination across a line break', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b\nc.pdf)').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toContain('%20b')
+  })
+})
+
+describe('renderAssistantMarkdown — unterminated link-shaped input stays linear', () => {
+  // The lexer asks the tokenizer at every `[`, `![` and `(`. An unbounded scan to
+  // the end of the paragraph made each of these shapes quadratic: ~1 s for 32 KB
+  // of `[`, 20-28 s for ~700 KB of spaced links, on the main thread, on every
+  // reload of the persisted history. The bound is generous (stock marked takes a
+  // few tens of ms here); the unbounded scans took many times longer.
+  const render = (md: string) => {
+    const t0 = performance.now()
+    renderAssistantMarkdown(md, noEntities, [])
+    return performance.now() - t0
+  }
+  const cases: Array<[string, string]> = [
+    ['unclosed labels', '['.repeat(100_000)],
+    ['unclosed image labels', '!['.repeat(64_000)],
+    ['spaced destinations that never close', '[a](https://x.test/a b '.repeat(8_000)],
+    ['spaced destinations broken by line breaks', '[a](https://x.test/a b \n'.repeat(8_000)],
+    ['labels that close only at the end', `${'['.repeat(100_000)}a](https://x.test/a b)`],
+  ]
+
+  it.each(cases)('renders %s in well under a second', (_name, md) => {
+    expect(render(md)).toBeLessThan(1000)
   })
 })

@@ -129,7 +129,7 @@ def grow(stock, output, size):
         require(end > root["end"] // 512, "nothing to grow")
         g.part_resize(DEVICE, root["num"], end)
         device = DEVICE + str(root["num"])
-        g.e2fsck(device, correct=True, forceall=True)
+        g.e2fsck(device, forceall=True)  # libguestfs allows one of correct/forceall; forceall is -y
         g.resize2fs(device)
         g.shutdown()
     finally:

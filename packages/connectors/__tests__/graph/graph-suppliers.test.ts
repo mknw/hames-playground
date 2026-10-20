@@ -28,13 +28,20 @@ const stash = {
   ingest: vi.fn(async () => ({ status: 'indexed' as const })),
 }
 
-const goodDeps = { registerAppTool, graphFetch, content, stash }
+const goodDeps = { registerAppTool, graphFetch, content, stash, fileIngestAllowed: () => true }
 
 beforeEach(() => {
   vi.clearAllMocks()
 })
 
 describe('registerGraphConnectorTools refuses a non-function supplier at factory call (F1)', () => {
+  it.each([undefined, 42])('fileIngestAllowed: %s refuses at composition', (value) => {
+    expect(() =>
+      registerGraphConnectorTools({ ...goodDeps, fileIngestAllowed: value } as never),
+    ).toThrow(/fileIngestAllowed/)
+    expect(registerAppTool).not.toHaveBeenCalled()
+  })
+
   it('graphFetch: 42 throws at the factory, naming the field', () => {
     expect(() => registerGraphConnectorTools({ ...goodDeps, graphFetch: 42 } as never)).toThrow(
       /graphFetch/,

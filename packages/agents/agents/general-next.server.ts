@@ -88,9 +88,12 @@ async function createPatterns(
   const schema = await getGraphSchema('general-next', sessionId, deps)
   const baml = bamlPatterns()
 
-  // S-f/P4: the Graph file-to-stash path stays off until its own wiring lands.
+  // P4: ingest is local to this office route; the shared Microsoft 365 list
+  // stays metadata-only. The tool executor enforces the private-only policy.
   const available = new Set(tools.graph ?? [])
-  const officeTools: string[] = MICROSOFT_365_TOOLS.filter((name) => available.has(name))
+  const officeTools: string[] = [...MICROSOFT_365_TOOLS, 'graph_file_ingest'].filter((name) =>
+    available.has(name),
+  )
   const memoryAvailable = new Set(tools.memory ?? [])
   const memoryReads = MEMORY_READ_TOOLS.filter((name) => memoryAvailable.has(name))
   const docTools = tools.context7 ?? []
@@ -115,7 +118,10 @@ async function createPatterns(
           'Inspect uploaded inputs in /work/in; save deliverables in /work/out so they are kept. ' +
           'A requested file exists only once it has been saved under /work/out (by a command or with sandbox_write): ' +
           'never paste or print its content in place of saving it, and set is_final only after a tool result confirmed the saved path. ' +
-          'Graph file ingestion is unavailable. Run code for computations. ' +
+          'To read a OneDrive or SharePoint file, find it with graph_files_search, then call graph_file_ingest with its item_id and drive_id. ' +
+          'The original file is copied to /work/in; inspect it there with sandbox tools. ' +
+          'Ingestion requires a private-tier run on a private-only deployment; report a refusal rather than trying another download path. ' +
+          'Use read-documents for cited excerpts once indexStatus is indexed; report failed or not_indexed copies as not searchable. Run code for computations. ' +
           'Use quoted heredocs for multiline Python; append when continuing a large file.',
       }),
       createCriticAdapter(),
@@ -210,9 +216,9 @@ async function createPatterns(
         'office-data': {
           pattern: doc,
           description:
-            'Read Microsoft 365 mail and file metadata; run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
+            'Read Microsoft 365 mail and file metadata; copy a found OneDrive or SharePoint file into /work/in with graph_file_ingest on private-only deployments; run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
           capability:
-            'Read Microsoft 365 mail and file metadata; compute and create files in the office sandbox. Graph file ingestion is unavailable.',
+            'Read Microsoft 365 mail and file metadata; copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest on private-only deployments; compute and create files in the office sandbox.',
         },
         'info-retrieval': {
           pattern: info,

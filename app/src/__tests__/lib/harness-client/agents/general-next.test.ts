@@ -26,12 +26,15 @@ import {
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { buildGraphHarness } from '../../../../../../packages/connectors/__tests__/graph/harness'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
 import { captureTrace } from '../../../../lib/eval-support/capture'
 import type {
   ConversationScenario,
   ConversationTrace,
 } from '../../../../lib/eval-support/conversation'
+
+vi.mock('../../../../lib/org-graph/roster-source.server', () => ({ loadDirectoryRoster: vi.fn() }))
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -273,6 +276,12 @@ describe('general-next composition', () => {
       expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
       expect(criteria['office-data']).toContain('to compute or analyse them')
       expect(criteria['office-data']).toContain('save deliverables')
+      expect(criteria['office-data']).toContain('graph_file_ingest on private-only deployments')
+      expect(composition.routes['office-data']).toMatchObject({
+        capability: expect.stringContaining(
+          'copy found OneDrive or SharePoint files into the Data Stash and /work/in',
+        ),
+      })
       expect(
         Object.keys(criteria).filter((route) =>
           /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
@@ -462,16 +471,14 @@ describe('general-next composition', () => {
     })
   })
 
-  it('P1/S-f: pins effective allowlist NAMES, with no gated ingest or turn-results capability', async () => {
+  it('P4: pins effective allowlist NAMES including guarded ingest, without turn-results capability', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     const all = walk(patterns)
     const actor = all.find((p) => p.name === 'actorCritic')!
     expect(V0_IN_VM_SERVERS.flatMap((s) => Object.values(s.tools)).sort()).toEqual(
       [...SANDBOX].sort(),
     )
-    expect([...actor.capabilities!.tools!].sort()).toEqual(
-      GRAPH.filter((n) => n !== 'graph_file_ingest').sort(),
-    )
+    expect([...actor.capabilities!.tools!].sort()).toEqual([...GRAPH].sort())
     const loop = all.find((p) => p.name === 'simpleLoop')!
     expect([...loop.capabilities!.tools!].sort()).toEqual([...INFO].sort())
     expect(
@@ -498,9 +505,7 @@ describe('general-next composition', () => {
     expect([...graphSource.matchAll(/name: '(graph_[a-z_]+)'/g)].map((m) => m[1]).sort()).toEqual(
       [...GRAPH].sort(),
     )
-    expect(collectToolNames(patterns[0]).sort()).toEqual(
-      [...GRAPH.filter((n) => n !== 'graph_file_ingest'), ...INFO, ...SANDBOX].sort(),
-    )
+    expect(collectToolNames(patterns[0]).sort()).toEqual([...GRAPH, ...INFO, ...SANDBOX].sort())
     // Pin every capability key, so a future materialisation declaration cannot
     // hide behind an unknown field or a renamed option.
     expect([...new Set(all.flatMap((p) => Object.keys(p.capabilities ?? {})))].sort()).toEqual([
@@ -545,13 +550,13 @@ describe('general-next composition', () => {
     expect(collectToolNames(patterns[0])).not.toContain('resolve-library-id')
   })
 
-  it('W4: the office actor is GIVEN the Graph read tools by exact name, never ingest or a write', async () => {
+  it('P4: the office actor is GIVEN Graph readers and guarded ingest by exact name', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     // The adapter renders the pattern's own allowlist (#613), so the names are
     // declared once, on the pattern, and the factory carries none.
     expect(mocks.actorOptions).toHaveBeenCalledTimes(1)
     expect(mocks.actorOptions.mock.calls[0][0]).not.toHaveProperty('toolNames')
-    const expected = GRAPH.filter((n) => n !== 'graph_file_ingest').sort()
+    const expected = [...GRAPH].sort()
     const actor = walk(patterns).find((p) => p.name === 'actorCritic')!
     expect([...actor.capabilities!.tools!].sort()).toEqual(expected)
   })
@@ -961,6 +966,107 @@ describe('general-next composition', () => {
     const next = seen[2]
     expect(next).not.toContain(NAME)
     expect(next).not.toContain(EMAIL)
+  })
+
+  // P4 web-exit pin: assert the outgoing literal denial, independent of any
+  // input rewrite. Mutations: drop the host outgoing-literal check;
+  // remove general-next's wrapper; omit graph_file_ingest from officeTools.
+  it('P4: an ingested file keeps its bytes and its directory member cannot leave through web search', async () => {
+    const { createWebPseudonymiser } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const { loadDirectoryRoster } = await import('../../../../lib/org-graph/roster-source.server')
+    const member = { displayName: 'Mira Cedar', mail: 'mira.cedar@example.test' }
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([member])
+    const body = 'The synthetic review was prepared by Mira Cedar.'
+    const files = buildGraphHarness()
+    files.restoreDefaults()
+    files.graphFetch.mockImplementation(async (_id, path) =>
+      path.endsWith('/content')
+        ? Buffer.from(body).toString('base64')
+        : { name: 'sample-review.txt', file: { mimeType: 'text/plain' }, size: body.length },
+    )
+    choices = ['office-data', 'info-retrieval', 'answer']
+    mocks.actor
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'copy the found file',
+          tool_name: 'graph_file_ingest',
+          tool_args: '{"item_id":"synthetic-file"}',
+          is_final: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'read its original bytes',
+          tool_name: 'sandbox_read',
+          tool_args: '{"path":"/work/in/sample-review.txt"}',
+          is_final: true,
+        },
+      })
+    mocks.controller
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'public lookup',
+          tool_name: 'search',
+          tool_args: '{"query":"synthetic public reference"}',
+          is_final: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'attempt the literal from the file',
+          tool_name: 'search',
+          tool_args: JSON.stringify({ query: member.displayName }),
+          is_final: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'done',
+          tool_name: 'Return',
+          tool_args: 'done',
+          is_final: true,
+        },
+      })
+    const patterns = await agent.createPatterns('synthetic-session', {
+      ...deps,
+      pseudonymiseForWeb: createWebPseudonymiser(),
+    })
+    const result = await withRunFrame(
+      {
+        inference: { tier: 'verda' },
+        transports: [
+          {
+            id: 'synthetic-file-io',
+            listTools: async () => [],
+            ownsTool: (name) => name === 'graph_file_ingest' || name === 'sandbox_read',
+            callTool: async (name, args) =>
+              name === 'graph_file_ingest'
+                ? files.runAppTool(name, args)
+                : {
+                    tool: name,
+                    success: true,
+                    data: files.stash.storeDocument.mock.calls[0][0].content,
+                  },
+          },
+        ],
+      },
+      () => harness(...patterns)('Read the found review and look up public context.'),
+    )
+    expect(files.stash.storeDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ content: body }),
+    )
+    const results = result.context.events.filter((e) => e.type === 'tool_result').map((e) => e.data)
+    expect(results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tool: 'graph_file_ingest', success: true }),
+        expect.objectContaining({ tool: 'sandbox_read', success: true }),
+        expect.objectContaining({ tool: 'search', success: true }),
+        expect.objectContaining({ tool: 'search', success: false }),
+      ]),
+    )
+    expect(gateway.calls.filter((name) => name === 'search')).toHaveLength(1)
+    expect(loadDirectoryRoster).toHaveBeenCalled()
   })
 
   it('G14: the real host rewrites an external sender after the composed Graph guards', async () => {

@@ -35,6 +35,8 @@ import {
 import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import { getRequestUserId, getRequestSessionId } from '../harness-client/request-user.server'
 import { graphFetch } from '../auth/graph-token.server'
+import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { privateInferenceOnly } from '../inference/tier-config.server'
 import {
   conversionEnabled,
   isConvertible,
@@ -71,6 +73,9 @@ const appToolRegistry = createAppToolRegistry({
 registerGraphConnectorTools({
   registerAppTool: appToolRegistry.registerAppTool,
   graphFetch,
+  // P4 slice 1: no default-tier coercion. The deployment restriction stays
+  // until the tier-flip tag, sandbox isolation and release screen land.
+  fileIngestAllowed: () => currentRunFrame()?.inference?.tier === 'verda' && privateInferenceOnly(),
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {

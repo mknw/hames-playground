@@ -164,6 +164,10 @@ export interface GraphConnectorDeps {
   /** The Data Stash bridge for the file-ingest path. REQUIRED — throws if
    *  missing, including any missing member. */
   stash: GraphStashBridge
+  /** Host policy, evaluated PER CALL before Graph or stash I/O. Must positively
+   * identify a private run. Until tier-flip release ships, the host must also
+   * require a private-only deployment. No deployment-default tier fallback. */
+  fileIngestAllowed: () => boolean
 }
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
@@ -1304,6 +1308,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     'registerAppTool',
   )
   const graphFetch = requireGraphSupplier<GraphFetchFn>(deps, 'graphFetch')
+  const fileIngestAllowed = requireGraphSupplier<() => boolean>(deps, 'fileIngestAllowed')
   const content = requireGraphBag<GraphContentClassifier>(deps, 'content')
   requireGraphSupplier(content, 'conversionEnabled')
   requireGraphSupplier(content, 'isConvertible')
@@ -1421,6 +1426,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       'indexing), failed (stored but NOT searchable; indexError says why) or ' +
       'not_indexed (a format with no text to index: stored as-is, NOT searchable). ' +
       'For failed and not_indexed, tell the person the copy cannot be searched. ' +
+      'Requires a private-tier run on a private-only deployment and no OpenRouter embedder. ' +
       'Acts as the current signed-in person.',
     inputSchema: {
       type: 'object',
@@ -1442,6 +1448,19 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       additionalProperties: false,
     },
     execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+      // P4: fail closed for EVERY caller, before metadata, bytes or stash I/O.
+      // Policy belongs to the host; connectors do not interpret inference tiers.
+      if (fileIngestAllowed() !== true) {
+        throw new Error(
+          'copying a file into the conversation runs only on the private tier. ' +
+            'This deployment must also allow private inference only.',
+        )
+      }
+      if (process.env.EMBEDDINGS_PROVIDER === 'openrouter') {
+        throw new Error(
+          'copying a file into the conversation is refused with an OpenRouter embedder',
+        )
+      }
       // Fail closed: the Data Stash is keyed by conversation, so without one in
       // scope there is no correct place to put the file — and guessing would mean
       // writing one person's file into another conversation's stash.

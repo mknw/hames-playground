@@ -20,15 +20,19 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   ServerOnlyError: class ServerOnlyError extends Error {},
 }))
 
+const graphFetch = vi.hoisted(() =>
+  vi.fn(async (_userId: string, path: string) =>
+    path.endsWith('/content')
+      ? Buffer.from('quarterly notes').toString('base64')
+      : { name: 'notes.md', file: { mimeType: 'text/markdown' }, size: 15, webUrl: null },
+  ),
+)
+
 vi.mock('../../../lib/auth/graph-token.server', () => ({
   GraphAuthRequiredError: class GraphAuthRequiredError extends Error {},
   GRAPH_BASE: 'https://graph.microsoft.com/v1.0',
   DEFAULT_GRAPH_SCOPES: ['User.Read'],
-  // Metadata first, then the bytes — the order the tool asks in.
-  graphFetch: async (_userId: string, path: string) =>
-    path.endsWith('/content')
-      ? Buffer.from('quarterly notes').toString('base64')
-      : { name: 'notes.md', file: { mimeType: 'text/markdown' }, size: 15, webUrl: null },
+  graphFetch,
 }))
 
 const ingestStashDocument = vi.fn<(sessionId: string, docId: string) => Promise<unknown>>()
@@ -45,13 +49,19 @@ vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
 
 import { runWithRequestContext } from '../../../lib/harness-client/request-user.server'
 import { runAppTool } from '../../../lib/app-tools/index.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
-const ingest = () =>
+const ingestWithoutFrame = () =>
   runWithRequestContext({ userId: 'oid-1', sessionId: 'sess-1' }, () =>
     runAppTool('graph_file_ingest', { item_id: '01ABC' }),
   )
 
+const ingest = () => withRunFrame({ inference: { tier: 'verda' } }, ingestWithoutFrame)
+
 beforeEach(() => {
+  vi.stubEnv('INFERENCE_TIERS', 'private')
+  vi.stubEnv('EMBEDDINGS_PROVIDER', 'local')
+  graphFetch.mockClear()
   ingestStashDocument.mockReset()
   getDocument.mockReset()
 })
@@ -116,5 +126,56 @@ describe('graph_file_ingest through the app bridge (#420)', () => {
       indexStatus: 'failed',
       indexError: 'the document is no longer in the Data Stash',
     })
+  })
+})
+
+// P4 decision 3: these exercise the REAL host predicate via the registered tool.
+// Mutations: raw tier !== 'anthropic'; activeInferenceTier() fallback; drop the
+// privateInferenceOnly conjunction; drop the executor policy/embedding checks.
+describe('P4 fail-closed ingestion policy', () => {
+  it.each([undefined, {}, { tier: 'unknown-tier' }, { tier: 'anthropic' }])(
+    'refuses raw inference slot %j, even with a private deployment default',
+    async (inference) => {
+      vi.stubEnv('USE_VERDA_INFERENCE', '1')
+      const result =
+        inference === undefined
+          ? await ingestWithoutFrame()
+          : await withRunFrame({ inference }, ingestWithoutFrame)
+      expect(result).toMatchObject({
+        success: false,
+        error: expect.stringContaining(
+          'copying a file into the conversation runs only on the private tier',
+        ),
+      })
+      expect(graphFetch).not.toHaveBeenCalled()
+      expect(ingestStashDocument).not.toHaveBeenCalled()
+    },
+  )
+
+  it('allows exactly the private raw tier on a private-only deployment', async () => {
+    ingestStashDocument.mockResolvedValue({ docId: 'doc-1', chunks: 1 })
+    expect(await ingest()).toMatchObject({ success: true, data: { indexStatus: 'indexed' } })
+    expect(graphFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses ingestion on a deployment that allows Anthropic, even on a private run', async () => {
+    vi.stubEnv('INFERENCE_TIERS', '')
+    vi.stubEnv('USE_VERDA_INFERENCE', '1')
+    expect(await ingest()).toMatchObject({
+      success: false,
+      error: expect.stringContaining('private inference only'),
+    })
+    expect(graphFetch).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
+  })
+
+  it('refuses an OpenRouter embedder before Graph or stash I/O', async () => {
+    vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
+    expect(await ingest()).toMatchObject({
+      success: false,
+      error: expect.stringContaining('OpenRouter embedder'),
+    })
+    expect(graphFetch).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 })

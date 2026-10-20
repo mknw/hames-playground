@@ -22,11 +22,11 @@ const OFFICE = [
   'graph_files_list',
   'graph_files_recent',
   'graph_files_shared',
+  'graph_file_ingest',
 ]
-// Every other name the gateway offers: the withheld ingest, the info route's
+// Every other name the gateway offers: the info route's
 // tools, and the writes no route may hold.
 const ELSEWHERE = [
-  'graph_file_ingest',
   'get_neo4j_schema',
   'read_neo4j_cypher',
   'write_neo4j_cypher',
@@ -90,6 +90,7 @@ beforeAll(async () => {
     throw new Error('schema-only test must not execute Graph or stash operations')
   }
   registerGraphConnectorTools({
+    fileIngestAllowed: () => false,
     registerAppTool: (tool) => graphTools.set(tool.name, tool),
     graphFetch: unexpectedCall,
     content: {
@@ -136,7 +137,7 @@ beforeAll(async () => {
   await withRunFrame({ inference: { tier: 'anthropic' } }, () => harness(actor)('synthetic task'))
 })
 
-it('W4: the rendered office actor catalogue is exactly the eight Graph read tools', async () => {
+it('W4: the rendered office actor catalogue is exactly the Graph readers and guarded file-ingest tool', async () => {
   expect(rendered.length).toBeGreaterThan(0)
   for (const body of rendered) {
     const catalogue = [...body.matchAll(/\\n- ([A-Za-z0-9_-]+): desc of /g)].map((m) => m[1])
@@ -201,6 +202,17 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     )
     expect(body).toContain('never paste or print its content in place of saving it')
     expect(body).toContain('set is_final only after a tool result confirmed the saved path')
+  })
+
+  // MUTATION: remove the ingestion instructions from the office contextPrefix.
+  it('P4: tells the actor how a found Graph file reaches /work/in and cited retrieval', () => {
+    expect(rendered[wire]).toContain('then call graph_file_ingest with its item_id and drive_id')
+    expect(rendered[wire]).toContain('The original file is copied to /work/in')
+    expect(rendered[wire]).toContain('private-tier run on a private-only deployment')
+    expect(rendered[wire]).toContain(
+      'Use read-documents for cited excerpts once indexStatus is indexed',
+    )
+    expect(rendered[wire]).not.toContain('Graph file ingestion is unavailable')
   })
 
   // MUTATIONS: rename unread_only / file_type in the registered Graph

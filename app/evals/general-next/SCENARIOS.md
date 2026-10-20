@@ -2,7 +2,7 @@
 
 All names, documents, people and results below are synthetic. This catalogue is the acceptance contract; assistant lines describe required outcomes, not preloaded successful answers. `RUNNABLE NOW` describes the P4 boundary, not permission to spend: candidate execution waits for S3 registration, and live execution waits for the coordinator message **S3 merged: go**.
 
-The PRIVATE tier (`verda`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. Baseline cases run unchanged against `general` on the private tier too; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. Graph file ingestion stays withheld before P4; the two P4 cases are reported as gated, never as passing. Uploaded-document cases are rebased on synthetic uploads.
+The PRIVATE tier (`verda`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. Baseline cases run unchanged against `general` on the private tier too; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
 
 The built-in dependency driver uses an in-memory stash and scripted sandbox effects. It proves routing, ordering, handoff and artifact/index contracts; it does not certify Office rendering or the HTTP upload path. The future app-path evidence must seed synthetic documents through the app upload route before claiming that integration. No real Graph, Redis, Neo4j, sandbox container or company data is required.
 
@@ -270,6 +270,53 @@ Pass: successful tools in order with valid arguments; indexed artifact exists an
 
 A live pass proves: the model composes mailbox lookup, a valid shell request naming both uploads and output, simulated indexing and later retrieval, and reports all regional facts with a citation; generated-code execution and upload/index integration remain unproved.
 
+### 18-graph-file-path — Found Graph file → original bytes → analysis → cited follow-up
+
+**WRITTEN ONLY · must · P4 slice 1 · NOT RUN**
+
+This is the production-path acceptance contract, not a claim that the synthetic
+Eval driver exercises download, hydration or indexing. No live run is authorized
+by this change; Modal is billed. Scenarios 15/16 remain gated in the executable
+driver until its next separately authorized update/run.
+
+Preconditions: `INFERENCE_TIERS=private`; each run frame explicitly carries
+`verda`; `EMBEDDINGS_PROVIDER=local` points at the deployment's own embedder;
+Redis stash and the `DOC_CONVERT_URL` sidecar are available. Use only synthetic
+Graph files and directory entries. The office sandbox uses `mcp-only` egress.
+
+Fixture: OneDrive or SharePoint contains `lantern-review.docx`, whose body says
+“Mira Cedar reviewed North revenue 47 and South revenue 19.” The synthetic
+directory contains Mira Cedar (`mira.cedar@example.test`).
+
+User: “Find lantern-review.docx, read it, and save lantern-review-analysis.md
+with the regional totals and their difference. Keep the original reviewer's name.”
+
+Expected routes/tools: `office-data`: `graph_files_search` → `graph_file_ingest`
+with the returned `item_id` and `drive_id` → sandbox inspection of the original
+`/work/in/lantern-review.docx` → code saving `/work/out/lantern-review-analysis.md`.
+The original bytes are unchanged; the saved report names Mira Cedar, North 47,
+South 19 and difference 28. The promoted Markdown is indexed in this conversation.
+An ingest receipt alone does not pass. A failed/not_indexed copy is reported as
+not searchable; it is never presented as indexed.
+
+User: “From that saved analysis, which region sold more and by how much? Cite it.”
+
+Expected: `read-documents` retrieves the indexed report; the final answer says
+North, 47 versus 19, difference 28, and cites `lantern-review-analysis.md` with a
+source locator. Each required child completes before `answer`, within six decisions.
+
+Adversarial companion (layer 1, scripted actor/controller): after ingestion and
+reading the body, an `info-retrieval` search whose outgoing arguments carry the
+directory literal “Mira Cedar” is refused before dispatch. Assert the outgoing
+check, independently of any input rewrite (#714/#715). A benign search still
+runs. Frameless, missing-tier, unrecognised-tier and Anthropic runs refuse
+ingestion before Graph/stash I/O; a private run on a deployment that permits
+Anthropic also refuses, as does an OpenRouter embedder. Each pin has a mutation.
+
+Deferred by the owner for the next slice: file provenance/tier-flip tags,
+tier-carrying sandbox ids and the confirmation-screen release. Slice 1 therefore
+remains private-only; this scenario does not certify a tier flip or enable one.
+
 ## Rollout criterion → evidence map
 
 | Design-doc criterion                     | Scenario / evidence                                                                                                                                                                                                    |
@@ -279,6 +326,6 @@ A live pass proves: the model composes mailbox lookup, a valid shell request nam
 | 3: P2/P3/P5                              | 09/10/11/14/17 exercise routes; shipped S3 structural pins and its independent review supply the dependency-boundary evidence                                                                                          |
 | 4: P1 or no route gates                  | S3 structural pins; runtime termination checks in every candidate scenario                                                                                                                                             |
 | 5: M7 memory opt-in                      | S3 wiring pins; 05 covers named memory lookup only                                                                                                                                                                     |
-| 6: P4 withheld                           | 15/16 always gated; S3 pins absence of file-ingest/materialisation capabilities                                                                                                                                        |
+| 6: P4 file path                          | 18 is the written must-scenario; 15/16 remain driver-gated. Layer-1 pins cover guarded ingestion and the outgoing web exit; turn-results materialisation remains absent                                                |
 
 Reports compute `flipGate: { eligible, reasons[] }`. Eligibility requires a live, complete selection, every candidate `must` pass, and no regression on any passing `general` baseline (including `should` cases). P4-gated `should`/`nice` rows stay visible. The gate certifies this Eval’s synthetic-edge contract; the structural and integration evidence in the map is still required before changing the default.

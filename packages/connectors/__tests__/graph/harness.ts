@@ -92,6 +92,7 @@ export function buildGraphHarness(): GraphHarness {
   })
 
   registerGraphConnectorTools({
+    fileIngestAllowed: () => true,
     registerAppTool: registry.registerAppTool,
     graphFetch: (...args) => Promise.resolve(graphFetch(...args)) as never,
     content: content as never,

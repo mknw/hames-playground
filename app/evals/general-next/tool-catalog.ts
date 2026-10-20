@@ -24,6 +24,7 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
     throw new Error('Metadata-only Graph supplier cannot execute')
   }
   registerGraphConnectorTools({
+    fileIngestAllowed: refuse,
     registerAppTool: (def) =>
       tools.push({ name: def.name, description: def.description, inputSchema: def.inputSchema }),
     graphFetch: refuse,

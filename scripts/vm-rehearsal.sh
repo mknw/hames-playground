@@ -162,6 +162,7 @@ printf '#!/bin/sh\n# Rehearsal only: a runner has no independent SSH path to wit
 chmod 0755 /usr/local/sbin/sbxs-witness
 docker network create -o com.docker.network.bridge.name=sbxsapp0 sbxs-app >/dev/null
 docker network create sbxs-probe >/dev/null
+docker pull -q "$NODE" >/dev/null
 docker run -d --name sbxs-canary --network sbxs-app --pull=never "$NODE" \
   node -e "require('net').createServer(s => s.end('ok')).listen(5432)" >/dev/null
 CANARY=$(docker inspect -f '{{(index .NetworkSettings.Networks "sbxs-app").IPAddress}}' sbxs-canary):5432

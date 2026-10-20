@@ -180,7 +180,7 @@ ARGS=(--install --provision --tls --measure --cleanup
   --network 10.231.0.1/24 --network 10.232.0.1/24
   --app-bridge sbxsapp0 --app-network sbxs-app --probe-network sbxs-probe --data-canary "$CANARY"
   --base-image "$BASE_IMAGE" --data-image "$DATA_IMAGE" --office-image "$OFFICE_IMAGE" --app-image "$APP_IMAGE"
-  --vm-disk 10GiB --disk-cap 20GiB)
+  --vm-disk 10GiB --disk-cap 30GiB)
 bash "$REPO/scripts/sandbox-vm-spike.sh" "${ARGS[@]}"
 systemd-run --unit="$UNIT" --collect -p KillMode=mixed -p TimeoutStopSec=900 -p RuntimeMaxSec=infinity \
   --working-directory="$REPO" /bin/bash "$REPO/scripts/sandbox-vm-spike.sh" --apply --launcher-unit="$UNIT" "${ARGS[@]}"

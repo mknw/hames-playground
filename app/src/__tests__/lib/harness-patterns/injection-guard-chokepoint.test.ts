@@ -15,6 +15,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative, resolve } from 'node:path'
+import ts from 'typescript'
 import type { ActiveInjectionGuard } from '@hames-ai/harness-patterns/injection-guard'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -715,4 +718,84 @@ describe('nested guards union the sanitizer options', () => {
     })
     await closeMcpClient()
   })
+})
+
+// MUTATION: add { screen: false } to the mcp-client result sanitize call.
+describe('planner screen exemption source boundary', () => {
+  const root = resolve('..')
+  const files = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      if (['node_modules', '__tests__', 'baml_client'].includes(entry.name)) return []
+      const path = join(dir, entry.name)
+      return entry.isDirectory()
+        ? files(path)
+        : /\.tsx?$/.test(entry.name) && !/\.(test|spec)\./.test(entry.name)
+          ? [path]
+          : []
+    })
+  const parse = (path: string) =>
+    ts.createSourceFile(path, readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true)
+  const walk = (node: ts.Node, visit: (node: ts.Node) => void) => {
+    visit(node)
+    ts.forEachChild(node, (child) => walk(child, visit))
+  }
+  it('only decisionLoop sets screen to false in non-test source', () => {
+    const callers: string[] = []
+    for (const path of [...files(join(root, 'packages')), ...files(join(root, 'app/src'))]) {
+      walk(parse(path), (node) => {
+        if (
+          ts.isPropertyAssignment(node) &&
+          node.name.getText().replace(/['"]/g, '') === 'screen' &&
+          node.initializer.kind === ts.SyntaxKind.FalseKeyword
+        ) {
+          callers.push(relative(root, path))
+        }
+      })
+    }
+    expect(callers).toEqual(['packages/harness-patterns/patterns/decisionLoop.server.ts'])
+  })
+  it.each(['mcp-client.server.ts', 'patterns/retriever.server.ts'])(
+    '%s sanitize calls pass no screen override',
+    (file) => {
+      let calls = 0
+      walk(parse(join(root, 'packages/harness-patterns', file)), (node) => {
+        if (
+          !ts.isCallExpression(node) ||
+          !ts.isPropertyAccessExpression(node.expression) ||
+          node.expression.name.text !== 'sanitize'
+        )
+          return
+        calls++
+        const override = node.arguments[2]
+        if (!override) return
+        // Refuse opaque overrides too: a variable or spread could hide screen.
+        expect(ts.isObjectLiteralExpression(override)).toBe(true)
+        if (ts.isObjectLiteralExpression(override)) {
+          expect(
+            override.properties.every(
+              (property) =>
+                ts.isPropertyAssignment(property) &&
+                property.name.getText().replace(/['"]/g, '') === 'spotlight',
+            ),
+          ).toBe(true)
+        }
+      })
+      expect(calls).toBe(2)
+    },
+  )
+})
+
+// Characterise the per-call spotlight merge: an absent/undefined value inherits,
+// while the retriever's explicit off override still suppresses the fence.
+it('per-call spotlight defaults to the enclosing guard and accepts an explicit off', async () => {
+  const { createInjectionGuard } = await load()
+  const guard = createInjectionGuard(
+    { tools: ['synthetic'], spotlight: 'always' },
+    () => {},
+    'synthetic-merge',
+  )
+  expect((await guard.sanitize('synthetic', 'clean', { spotlight: undefined })).data).toContain(
+    '⟦UNTRUSTED CONTENT',
+  )
+  expect((await guard.sanitize('synthetic', 'clean', { spotlight: 'off' })).data).toBe('clean')
 })

@@ -337,8 +337,11 @@ export interface ActiveInjectionGuard {
     data: unknown,
     /** Per-call overrides. `spotlight: 'off'` is for fields where a multi-line
      *  fence would corrupt a structural value the UI depends on — the
-     *  retriever's `source` filename is the one real case. */
-    overrides?: { spotlight?: SpotlightMode },
+     *  retriever's `source` filename is the one real case. `screen: false`
+     *  is for the decision loop's successful planner record only and skips
+     *  only the model second opinion;
+     *  deterministic sanitization, fencing and findings still apply. */
+    overrides?: { spotlight?: SpotlightMode; screen?: false },
   ): Promise<{ data: unknown; summary?: SanitizeSummary }>
 }
 

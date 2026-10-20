@@ -1687,6 +1687,7 @@ interface DecisionLoopRoute<T> {
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
   allowReplan?: boolean // planner routes only, refused elsewhere: offer it every iteration (default: see "What is offered")
+  screenOutput?: false // planner routes only: skip the model screen on route output, keeping deterministic sanitization and fencing
 }
 
 interface DecisionLoopConfig extends PatternConfig {
@@ -1875,6 +1876,20 @@ carry it. That is this loop's policy; `withInjectionGuard` itself stays fail-ope
 on a screen outage. S-d's reach: on an outage the record is withheld AND that iteration's child events (their ids persist on the marker record) are removed from every child context this loop builds, in this turn and in later turns, so previews, `expandPreviousResult` and `siblingResults` cannot reach what the screen did not clear; a reader outside the loop's own contexts is not covered. A throw from the deterministic sanitizer is not caught: it
 ends the turn, as it does in `callTool`.
 
+**Planner-only screen exemption.** A route may set `screenOutput: false` only
+when its leaf kind is `planner`; construction refuses the option on every other
+kind. Omission preserves model screening for all consumers, including planners.
+The exemption applies only to the model-authored planner text the loop produced
+(and its failed-record text), never to tool output or retrieved text. The loop
+still caps, deterministically sanitizes, fences according to the enclosing guard
+and emits findings before state, handoff or synthesis can read the record.
+Only the model second opinion is skipped: an imperative plan describes work to
+do and can otherwise be classified as an instruction by that model. The guard's
+per-call `sanitize` override `{ screen: false }` implements this local exception;
+it leaves the enclosing guard and all child tool-result screening intact.
+A deterministic sanitizer throw still ends the turn. All screened routes retain
+the marker-only failure policy above.
+
 **Failure — never a silent fallback.**
 
 | Situation                                                                                                                        | Behaviour                                                                                                                                                                                                                                                            |
@@ -1901,7 +1916,9 @@ Redis retriever, pattern id `retriever`) and `think` (the planner). The web
 route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
 from references and expansions, and disables independent prior-turn results. The orchestrator declares `decision_loop_output`, `spotlight: 'always'`
-and a role-resolved screen with `screenDespiteFindings: true`: deterministic
+and a role-resolved screen with `screenDespiteFindings: true`. Only `think` sets
+`screenOutput: false`; its model-authored plan retains deterministic sanitization
+and fencing without a model-screen call. For other outputs, deterministic
 findings remain neutralized while the screen reviews the sanitized projection.
 Union semantics carry that screen and unconditional
 fencing into every route's tool results, costing a screen call per result. A

@@ -154,7 +154,12 @@ Three things to know. A route's result is built by code from its committed
 events and is **untrusted**: it is capped, then passed through the enclosing
 guard under the fixed key `decision_loop_output`, so declare that key in the
 guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
-cannot run withholds the output instead of waving it through. A child sees only
+cannot run withholds the output instead of waving it through. A planner route
+may explicitly set `screenOutput: false` to skip only that model second opinion:
+imperative model-authored plans can otherwise be mistaken for instructions.
+The option is refused on non-planner routes and defaults to screened, including
+for planners. It preserves deterministic sanitization, provenance fencing and
+findings on the plan; child tool results and retrieved text stay screened. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
@@ -213,7 +218,9 @@ It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
 lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
 configuration withholds earlier content and refuses web calls. The outer
-injection guard always fences route outputs and enables the screen. Memory
+injection guard always fences route outputs and enables the screen. Only its
+`think` planner sets `screenOutput: false`, keeping deterministic checks and
+fencing while avoiding a model-screen call on its own plan. Memory
 is optional and reaches synthesis alone. `graph_file_ingest` and turn-results
 materialisation remain disabled until P4. The rollout still requires live
 acceptance evidence; registration does not change the default agent.

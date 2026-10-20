@@ -228,6 +228,8 @@ async function createPatterns(
         },
         think: {
           pattern: think,
+          // Model-authored plan only: keep deterministic sanitization and fencing.
+          screenOutput: false,
           description: 'Decide the steps before acting',
           capability: 'Write a plan using the agent map and earlier step results.',
         },

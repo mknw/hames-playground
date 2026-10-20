@@ -12,7 +12,7 @@
  * Every pin names, in its comment, the mutation that turns it red.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { withRunFrame, currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -867,6 +867,98 @@ describe('decisionLoop — route output is untrusted (decision_loop_output)', ()
     const result = (eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData)
       .result as string
     expect(result).toBe('y'.repeat(100) + '…[truncated, 4900 more characters]')
+  })
+})
+
+describe('decisionLoop — planner-only model screen exemption', () => {
+  // MUTATION: delete the screenOutput construction check in decisionLoop.server.ts.
+  it.each(['simpleLoop', 'actorCritic', 'retriever'])(
+    'refuses screenOutput on a non-planner %s route',
+    (kind) => {
+      expect(() =>
+        build(
+          {
+            read: route(
+              fake(kind, 'read-p', () => {}),
+              { screenOutput: false },
+            ),
+          },
+          scriptedDecide(['answer']).decide,
+        ),
+      ).toThrow(/route 'read' sets screenOutput but is not a planner/)
+    },
+  )
+
+  // MUTATION: default screenOutput to false at the sanitizeField call sites.
+  it('a planner without the opt-in is still screened and withheld on screen outage', async () => {
+    const { decide, states } = scriptedDecide(['plan-route', 'answer'])
+    const screen = vi.fn(async () => {
+      throw new Error('synthetic screen outage')
+    })
+    const plan = planner<Data>(
+      async () => ({
+        plan: {
+          reasoning: 'synthetic reasoning',
+          plan: 'Read the sample, then reply.',
+          n_steps: 2,
+        },
+      }),
+      [],
+      { patternId: 'plan-p' },
+    )
+    const ctx = await run([
+      guarded(
+        build({ 'plan-route': route(plan), info: route(returning('info-p', 'sample')) }, decide),
+        { screen },
+      ),
+    ])
+    expect(screen).toHaveBeenCalledTimes(1)
+    expect(states[1]).toContain(WITHHELD_SCREEN_UNAVAILABLE)
+    expect(states[1]).not.toContain('Read the sample, then reply.')
+    expect(eventsOf(ctx, 'orchestrator', 'tool_result')[0].data).toMatchObject({ success: false })
+  })
+
+  // MUTATION: suppress the enclosing guard's screen while running an exempt planner child.
+  it('the planner output exemption never exempts a child tool result', async () => {
+    const screen = vi.fn(async () => ({ injection_detected: false, reason: 'clean', spans: [] }))
+    const plan = fake('planner', 'plan-p', async (scope) => {
+      await currentRunFrame()!.guard!.sanitize('synthetic_tool', 'synthetic tool output')
+      trackEvent(
+        scope,
+        'plan_created',
+        {
+          plan: {
+            reasoning: 'synthetic reasoning',
+            plan: 'Read the sample, then reply.',
+            n_steps: 2,
+          },
+          toolCount: 0,
+        },
+        true,
+      )
+    })
+    const ctx = await run([
+      guarded(
+        build(
+          {
+            'plan-route': route(plan, { screenOutput: false }),
+          },
+          scriptedDecide(['plan-route', 'answer']).decide,
+        ),
+        {
+          tools: [DECISION_LOOP_OUTPUT_KEY, 'synthetic_tool'],
+          screen,
+        },
+      ),
+    ])
+    expect(screen).toHaveBeenCalledTimes(1)
+    expect(screen).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: 'synthetic_tool', content: 'synthetic tool output' }),
+    )
+    expect(eventsOf(ctx, 'orchestrator', 'tool_result')[0].data).toMatchObject({
+      success: true,
+      result: expect.stringContaining('Read the sample, then reply.'),
+    })
   })
 })
 

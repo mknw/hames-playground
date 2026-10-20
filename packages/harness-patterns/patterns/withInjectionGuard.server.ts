@@ -177,7 +177,11 @@ export function createInjectionGuard(
       // also screen the sanitized projection after findings; never resubmit or
       // restore the original spans. Screen outages are recorded and fail open
       // here; decisionLoop applies its fail-closed output-boundary policy.
-      if (options.screen && (report.findings.length === 0 || options.screenDespiteFindings)) {
+      if (
+        overrides?.screen !== false &&
+        options.screen &&
+        (report.findings.length === 0 || options.screenDespiteFindings)
+      ) {
         const screenInput = report.findings.length > 0 ? out : data
         try {
           const verdict = await options.screen({

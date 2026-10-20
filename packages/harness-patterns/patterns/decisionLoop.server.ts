@@ -37,6 +37,9 @@
  * child's `plan_context`) and the decisions model. The key must be declared in
  * the enclosing guard's `tools`, or `sanitize` is a no-op (that is the opt-in
  * every guard has). A screen that could not run withholds the output (S-d).
+ * A planner-only `screenOutput: false` skips just the model screen on its
+ * record; deterministic sanitization and fencing still run. Child tool
+ * results retain the enclosing guard and its screen.
  *
  * ## Failure — never a silent fallback
  *
@@ -160,6 +163,10 @@ export interface DecisionLoopRoute<T> {
    *  iteration and once a plan exists this turn. `true` offers it every time;
    *  planner routes only, refused on any other kind of route. */
   readonly allowReplan?: boolean
+  /** Planner routes only: `false` skips the model screen on this route's output
+   *  (including a failed record). Deterministic sanitization, fencing and
+   *  findings still apply. Defaults to screened; never exempts child tool results. */
+  readonly screenOutput?: false
 }
 
 /** What an overridden `state` builder receives. */
@@ -294,6 +301,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         `decisionLoop: route '${name}' sets allowReplan but is not a planner; there is nothing to replan (allowReplan is read only by a planner route)`,
       )
     }
+    if (routes[name].screenOutput !== undefined && kind !== 'planner') {
+      throw new Error(
+        `decisionLoop: route '${name}' sets screenOutput but is not a planner; only model-authored planner output may skip the model screen`,
+      )
+    }
     kinds.set(name, kind)
     leafIds.set(name, leaf.config.patternId ?? leaf.name)
   }
@@ -381,12 +393,19 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   /** Cap, then sanitize under the declared key. `unavailable` is the typed
    *  screen-outage flag, never inferred from prose. No guard in the frame, or a
    *  key the guard does not list, passes the text through (the opt-in). */
-  const sanitizeField = async (text: string): Promise<{ text: string; unavailable: boolean }> => {
+  const sanitizeField = async (
+    text: string,
+    screenOutput: false | undefined,
+  ): Promise<{ text: string; unavailable: boolean }> => {
     if (!text) return { text: '', unavailable: false }
     const capped = capText(text, maxChars)
     const guard = currentRunFrame()?.guard
     if (!guard) return { text: capped, unavailable: false }
-    const { data, summary } = await guard.sanitize(DECISION_LOOP_OUTPUT_KEY, capped)
+    const { data, summary } = await guard.sanitize(
+      DECISION_LOOP_OUTPUT_KEY,
+      capped,
+      screenOutput === false ? { screen: false } : undefined,
+    )
     return {
       text: typeof data === 'string' ? data : JSON.stringify(data),
       unavailable: summary?.screenUnavailable === true,
@@ -696,8 +715,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             } as const)
           : extract(kind, ownEvents)
 
-      const resultField = await sanitizeField(extracted.ok ? extracted.result : extracted.text)
-      const reasoningField = await sanitizeField(extracted.ok ? extracted.reasoning : '')
+      const resultField = await sanitizeField(
+        extracted.ok ? extracted.result : extracted.text,
+        routes[label].screenOutput,
+      )
+      const reasoningField = await sanitizeField(
+        extracted.ok ? extracted.reasoning : '',
+        routes[label].screenOutput,
+      )
 
       let record: RouteOutput
       if (resultField.unavailable || reasoningField.unavailable) {

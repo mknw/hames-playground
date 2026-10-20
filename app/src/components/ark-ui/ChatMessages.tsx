@@ -64,7 +64,8 @@ function linkWithSpaces(this: Tokenizer, src: string) {
   }
   if (src[i] !== '(' || !/^https?:\/\//i.test(src.slice(i + 1, i + 9))) return false
   const start = i + 1
-  const limit = Math.min(src.length, start + MAX_SPACED_DESTINATION)
+  // One past the cap, so the closing `)` may sit right after a destination of exactly MAX characters.
+  const limit = Math.min(src.length, start + MAX_SPACED_DESTINATION + 1)
   let end = -1
   for (let j = start, depth = 1; j < limit; j++) {
     const ch = src[j]

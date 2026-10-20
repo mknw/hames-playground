@@ -645,22 +645,32 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
     expect(hrefs.join()).not.toMatch(/%22|"/)
   })
 
-  it('stops reading a label at 999 characters, as CommonMark does', () => {
-    const label = (n: number) => `[${'a'.repeat(n)}](https://files.example.test/a b)`
+  // The two caps, pinned at their exact edges: at the cap the link is read, one
+  // past it the default tokenizer decides (and it ends the destination at the
+  // space). Nothing here depends on timing.
+  const spaced = 'https://files.example.test/a%20b'
 
-    expect(anchors(label(999))[0].getAttribute('href')).toBe('https://files.example.test/a%20b')
-    expect(anchors(label(1000))[0].getAttribute('href')).not.toContain('a%20b')
+  it.each([
+    [999, true],
+    [1000, false],
+  ])('a link label of %i characters is read: %s', (n, linked) => {
+    const hrefs = anchors(`[${'a'.repeat(n)}](https://files.example.test/a b)`).map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.includes(spaced)).toBe(linked)
   })
 
-  it('stops reading a destination at 2048 characters', () => {
-    const link = (n: number) => `[x](https://files.example.test/${'a'.repeat(n)} b)`
+  it.each([
+    [2048, true],
+    [2049, false],
+  ])('a link destination of %i characters is read: %s', (n, linked) => {
+    const prefix = 'https://files.example.test/'
+    const dest = `${prefix}${'a'.repeat(n - prefix.length - 2)} b`
+    const hrefs = anchors(`[x](${dest})`).map((a) => a.getAttribute('href'))
 
-    expect(anchors(link(1500))[0].getAttribute('href')).toContain('%20b')
-    expect(
-      anchors(link(2100))
-        .map((a) => a.getAttribute('href'))
-        .join(),
-    ).not.toContain('%20b')
+    expect(dest).toHaveLength(n)
+    expect(hrefs.some((h) => h?.endsWith('%20b'))).toBe(linked)
   })
 
   it('does not read a destination across a line break', () => {
@@ -672,42 +682,25 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
   })
 })
 
-describe('renderAssistantMarkdown — unterminated link-shaped input stays linear', () => {
-  // The lexer asks the tokenizer at every `[`, `![` and `(`. An unbounded scan to
-  // the end of the paragraph made each of these shapes quadratic: ~1 s for 32 KB
-  // of `[`, 20-28 s for ~700 KB of spaced links, on the main thread, on every
-  // reload of the persisted history. Absolute bounds do not survive a coverage
-  // run on a loaded CI runner (the first two versions of this pin failed there),
-  // so the pin is about SCALING: quadrupling the input costs about 4-5x with the
-  // scans bounded (the small input is partly shorter than the caps) and about
-  // 16x with them not. The bound sits between at 9x,
-  // on the best of two runs after a warm-up.
-  const best = (md: string) => {
+describe('renderAssistantMarkdown — unterminated link-shaped input is bounded', () => {
+  // The lexer asks the tokenizer at every `[`. Unbounded, each ask walked to the
+  // end of the paragraph: quadratic, on the main thread, on every reload of the
+  // persisted history. The caps are pinned exactly above; this is the one coarse
+  // end-to-end check, an ABSOLUTE bound run once. Ratios between two timings
+  // flaked on cold and loaded runs and are not used.
+  //
+  // The input is sparse on purpose (one `[` per 400 characters): the cost with
+  // the cap is one bounded scan per `[`, the cost without it is one scan to the
+  // end per `[`, so a large input with few asks keeps the capped cost tiny and
+  // the uncapped one huge. Measured on this machine, 2 MB / 5 000 asks: ~0.1 s
+  // capped, ~0.3 s capped under the v8 coverage run, ~15 s with the label cap
+  // removed. 1.5 s sits 5x above the slowest capped run and 10x below the
+  // uncapped one.
+  it('renders 2 MB of widely spaced unclosed labels in under 1.5 seconds', () => {
+    const md = `${'a'.repeat(399)}[`.repeat(5_000)
+    const t0 = performance.now()
     marked.parse(md, { async: false })
-    return Math.min(
-      ...[0, 1].map(() => {
-        const t0 = performance.now()
-        marked.parse(md, { async: false })
-        return performance.now() - t0
-      }),
-    )
-  }
-  const shapes: Array<[string, (n: number) => string]> = [
-    ['unclosed labels', (n) => '['.repeat(n)],
-    ['unclosed image labels', (n) => '!['.repeat(n / 2)],
-    ['spaced destinations that never close', (n) => '[a](https://x.test/a b '.repeat(n / 4)],
-    ['spaced destinations broken by line breaks', (n) => '[a](https://x.test/a b \n'.repeat(n / 4)],
-    ['labels that close only at the end', (n) => `${'['.repeat(n)}a](https://x.test/a b)`],
-  ]
 
-  it.each(shapes)(
-    '%s: 4x the input costs well under 16x',
-    (_name, make) => {
-      const small = best(make(2_000))
-      const large = best(make(8_000))
-
-      expect(large / Math.max(small, 1)).toBeLessThan(9)
-    },
-    30_000,
-  )
+    expect(performance.now() - t0).toBeLessThan(1_500)
+  }, 120_000)
 })

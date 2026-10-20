@@ -556,6 +556,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_assembly_daemon_gets_a_cgroup_hierarchy(self):
         # The libguestfs appliance mounts no cgroup fs; dockerd then fails inside NewDaemon.
         source = (vm.HERE / 'customize.sh').read_text()
+        self.assertIn('mount -t cgroup2 none /sys/fs/cgroup', source)
         mount = source.index('mount -t cgroup2 none /sys/fs/cgroup')
         self.assertLess(mount, source.index('dockerd --debug --config-file'))
         self.assertIn('!= cgroup2fs ]', source[source.rindex('if ', 0, mount):mount])

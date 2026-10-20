@@ -21,7 +21,7 @@
  * interleaving, and the two do not need to be slow twice.
  *
  * ONE withheld response, not two, and that number is the point since wake-then-
- * run landed. Both turns call `ensureVerdaAwake()` and SHARE one in-flight ping
+ * run landed. Both turns call `ensureSelfDeployedAwake()` and SHARE one in-flight ping
  * (`inference/wake.server.ts`), so two concurrent turns into a sleeping box pay
  * ONE cold start between them. This scenario used to arm `times: 2` because each
  * turn absorbed its own delay on its own first call — which was the measured
@@ -33,7 +33,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/mode'
+import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL } from '../lib/mode'
 
 /** Long enough that the two turns genuinely overlap, short enough that the
  *  file stays under a few seconds. */
@@ -59,7 +59,7 @@ beforeEach(async () => {
 
 describe('two conversations in flight together', () => {
   it('both complete on a cold endpoint, and neither disrupts the other', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     // ONE — see the header. The shared wake ping absorbs it for both turns, so a
     // second armed delay would land on a turn's first REAL call and make this
     // scenario measure the wake serializing with the harness rather than the
@@ -132,7 +132,7 @@ describe('two conversations in flight together', () => {
 
       // Give the first turn time to enter its scope and block on the cold call.
       await new Promise((r) => setTimeout(r, 250))
-      await app.setTier('verda')
+      await app.setTier('self_deployed')
       const fast = app.runTurn(newSessionId('tier-fast'), 'List the relationship types.')
 
       await Promise.all([slow, fast])
@@ -141,13 +141,13 @@ describe('two conversations in flight together', () => {
       expect(controllers.length).toBeGreaterThanOrEqual(2)
       // The run that started under `anthropic` must have kept it for its whole
       // turn even though the preference changed underneath it, and the run that
-      // started under `verda` must have taken the self-hosted route. If the
+      // started under `self_deployed` must have taken the self-hosted route. If the
       // scope leaked, every controller call would carry the same model.
       const models = new Set(controllers.map((c) => c.model))
       expect(
         models,
         `expected both tiers among the controller calls, saw ${[...models].join(', ')}`,
-      ).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL]))
+      ).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL]))
     },
   )
 })

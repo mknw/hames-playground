@@ -25,7 +25,7 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'
-import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL, IS_HERMETIC, TIERS } from '../lib/mode'
+import { FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL, IS_HERMETIC, TIERS } from '../lib/mode'
 
 let app: AppHandles
 
@@ -91,13 +91,13 @@ describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
       const controller = byFn('LoopController')
       expect(controller.length, 'the loop controller never ran').toBeGreaterThan(0)
 
-      const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+      const expected = tier === 'self_deployed' ? SELF_DEPLOYED_MODEL : FAKE_ANTHROPIC_TIER_MODEL
       for (const call of controller) expect(call.model).toBe(expected)
 
-      // The router is in `VERDA_CLIENT_BY_ROLE` as of 2026-08-26 — it is handed
+      // The router is in `SELF_DEPLOYED_CLIENT_BY_ROLE` as of 2026-08-26 — it is handed
       // the user's raw message, so the private tier keeps it — and therefore
       // takes the same tier as the controller. This is the app-level
-      // counterpart of `clients-verda.test.ts`: that file pins the map, this
+      // counterpart of `clients-self-deployed.test.ts`: that file pins the map, this
       // pins that a real turn honours it.
       const router = byFn('Router')
       expect(router.length, 'the router never ran').toBeGreaterThan(0)

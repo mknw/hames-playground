@@ -14,7 +14,7 @@
  * request bound for the self-hosted model to vLLM's own rule and answers an
  * illegal one with the deployment's real message.
  *
- * That makes the check implicit in every verda-tier scenario — an illegal
+ * That makes the check implicit in every self_deployed-tier scenario — an illegal
  * ordering would fail them all. This test makes it EXPLICIT, because "scenario
  * 2 went red" is a much worse diagnosis than "the wire carried a late system
  * block". It runs a multi-turn conversation, which is where the runtime data
@@ -39,7 +39,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, VERDA_MODEL } from '../lib/mode'
+import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, SELF_DEPLOYED_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -57,7 +57,7 @@ beforeEach(() => {
 
 describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is legal', () => {
   it('puts no late system block on the wire across a multi-turn conversation', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const sessionId = newSessionId('wire-shape')
 
     await app.runTurn(sessionId, 'How many nodes are in the graph?')
@@ -73,15 +73,15 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
 
     // Guard against the check going vacuous: it only means something if calls
     // reached the self-hosted model at all.
-    const verdaCalls = app.fakeLlm.calls.filter((c) => c.model === VERDA_MODEL)
-    expect(verdaCalls.length, 'no call took the self-hosted route').toBeGreaterThan(0)
+    const selfDeployedCalls = app.fakeLlm.calls.filter((c) => c.model === SELF_DEPLOYED_MODEL)
+    expect(selfDeployedCalls.length, 'no call took the self-hosted route').toBeGreaterThan(0)
 
     // …and it means much more since the 2026-08-26 widening, because the
     // ordering rule is now enforced over templates that had never met a vLLM
     // server. `prompt-role-order.test.ts` audits all thirteen offline; this is
     // the running-turn half, and `Router` is named explicitly so the widening
     // cannot silently stop being covered here.
-    expect(verdaCalls.map((c) => c.fn)).toContain('Router')
+    expect(selfDeployedCalls.map((c) => c.fn)).toContain('Router')
   })
 })
 
@@ -105,12 +105,12 @@ describe.each(TIERS)('the general agent on the %s tier', (tier) => {
 
     const planner = app.fakeLlm.calls.filter((c) => c.fn === 'Planner')
     expect(planner.length, 'the planner never ran').toBeGreaterThan(0)
-    // `planner` joined VERDA_CLIENT_BY_ROLE on 2026-08-26. It is the role with
+    // `planner` joined SELF_DEPLOYED_CLIENT_BY_ROLE on 2026-08-26. It is the role with
     // the harshest failure policy in the repo — one call per chain, over the
     // largest tool catalog, and a structured-output failure throws rather than
     // degrading — which is why it was held back, and why this leg is worth
     // running against the real endpoint rather than only against the fake.
-    const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+    const expected = tier === 'self_deployed' ? SELF_DEPLOYED_MODEL : FAKE_ANTHROPIC_TIER_MODEL
     for (const call of planner) expect(call.model).toBe(expected)
   })
 })

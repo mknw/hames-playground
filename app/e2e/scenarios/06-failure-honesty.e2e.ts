@@ -83,7 +83,7 @@ beforeEach(async () => {
   await app.fakeLlm.comeBack()
   app.fakeLlm.reset()
   app.fakeGateway.reset()
-  await app.setTier('verda')
+  await app.setTier('self_deployed')
 })
 
 /**

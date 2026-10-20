@@ -91,8 +91,8 @@ const JEV_BODY = {
 
 // The private tier is refused without its endpoints; nothing listens there —
 // the lock must refuse before any connection is attempted.
-process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-process.env.VERDA_INFERENCE_API_KEY = 'unused'
+process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+process.env.LARGE_LLM_API_KEY = 'unused'
 
 // The BAML channel: a counting listener standing in for the private tier's 4B
 // (`SMALL_LLM_BASE_URL`). A Jev failure must send NOTHING there either — the
@@ -147,8 +147,8 @@ afterEach(async () => {
 
 async function onPrivateTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('@hames-ai/harness-baml/clients.server')
-  clients.assertInferenceTier('verda')
-  return withRunFrame({ inference: { tier: 'verda' } }, fn)
+  clients.assertInferenceTier('self_deployed')
+  return withRunFrame({ inference: { tier: 'self_deployed' } }, fn)
 }
 
 async function transport() {
@@ -425,7 +425,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     expect(requests).toHaveLength(0)
   })
 
-  it.each(['verda', 'unknown', 'future'])(
+  it.each(['self_deployed', 'unknown', 'future'])(
     'refuses tier %s before reading the key',
     async (tier) => {
       const { decideAll } = await transport()
@@ -477,8 +477,8 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     expect(requests).toHaveLength(0)
   })
 
-  it('the deployment-default private tier (USE_VERDA_INFERENCE=1, no run frame) is refused at both layers', async () => {
-    process.env.USE_VERDA_INFERENCE = '1'
+  it('the deployment-default private tier (USE_SELF_DEPLOYED_INFERENCE=1, no run frame) is refused at both layers', async () => {
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     try {
       const { decideAll } = await transport()
       await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/inference tier/)
@@ -489,7 +489,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
       await expect((await adapter())({ spec: SPEC, state: 's' })).rejects.toThrow(/inference tier/)
       expect(requests).toHaveLength(0)
     } finally {
-      delete process.env.USE_VERDA_INFERENCE
+      delete process.env.USE_SELF_DEPLOYED_INFERENCE
     }
   })
 })
@@ -918,7 +918,7 @@ describe('jev-tier-lock score/noul', () => {
         },
       }
       try {
-        for (const tier of ['verda', 'unknown', 'future']) {
+        for (const tier of ['self_deployed', 'unknown', 'future']) {
           const err = await withRunFrame({ inference: { tier } }, () =>
             t.decide({ spec, state: 'synthetic' }),
           ).catch((e) => e)
@@ -1017,7 +1017,7 @@ describe('G11 private systemone routing', () => {
   it.each([undefined, 'future', ''])(
     'routes to the private URL under the private deployment default when the frame tier is %j',
     async (tier) => {
-      vi.stubEnv('USE_VERDA_INFERENCE', '1')
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       try {
         const { decideAll } = await transport()
         const run = () => decideAll({ spec: SET, state: 'Synthetic.' })
@@ -1052,7 +1052,7 @@ describe('G11 private systemone routing', () => {
     try {
       const fn = await adapter()
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
@@ -1067,7 +1067,7 @@ describe('G11 private systemone routing', () => {
     const fn = await adapter()
     await expect(
       withRunFrame(
-        { inference: { tier: 'verda', clientOverride: () => ({ client: 'JevDecide' }) } },
+        { inference: { tier: 'self_deployed', clientOverride: () => ({ client: 'JevDecide' }) } },
         () => fn({ spec: SPEC, state: 'Synthetic.' }),
       ),
     ).rejects.toThrow('Refusing')
@@ -1089,7 +1089,7 @@ describe('G11 private systemone routing', () => {
       expect(entered).toBe(false)
       // The transport must refuse independently of the host's configuration gate.
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow(/public systemone provider/)
@@ -1101,7 +1101,12 @@ describe('G11 private systemone routing', () => {
     const fn = await adapter()
     await expect(
       withRunFrame(
-        { inference: { tier: 'verda', clientOverride: () => ({ client: 'SomeConsumerDecide' }) } },
+        {
+          inference: {
+            tier: 'self_deployed',
+            clientOverride: () => ({ client: 'SomeConsumerDecide' }),
+          },
+        },
         () => fn({ spec: SPEC, state: 'Synthetic.' }),
       ),
     ).rejects.toThrow('Refusing')
@@ -1126,7 +1131,7 @@ describe('G11 private systemone routing', () => {
       )
       // Host refusal cannot hide a transport-level fallback to the public key.
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow('SMALL_LLM_API_KEY')
@@ -1161,7 +1166,9 @@ describe('G11 private systemone routing', () => {
     expect(() => assertPrivateTierConfigured()).toThrow('SMALL_LLM_DECISIONS_URL')
     const fn = await adapter()
     await expect(
-      withRunFrame({ inference: { tier: 'verda' } }, () => fn({ spec: SPEC, state: 'Synthetic.' })),
+      withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
+        fn({ spec: SPEC, state: 'Synthetic.' }),
+      ),
     ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
     expect(requests).toHaveLength(0)
   })

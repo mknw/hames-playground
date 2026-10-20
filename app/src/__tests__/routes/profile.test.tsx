@@ -37,7 +37,7 @@ const profile = (over: Partial<ProfileView> = {}): ProfileView => ({
   displayName: 'Someone Example',
   firstLogin: Date.UTC(2026, 0, 2, 3, 4, 5),
   lastLogin: Date.UTC(2026, 7, 26, 9, 0, 0),
-  tier: 'verda',
+  tier: 'self_deployed',
   ...over,
 })
 
@@ -53,7 +53,7 @@ describe('Profile route', () => {
     expect(text).toContain('someone@example.test')
     // The tier label comes from `preview-header-format`, shared with the header
     // switch — two spellings of the same value would read as two settings.
-    expect(text).toContain('Private (Verda)')
+    expect(text).toContain('Private')
     expect(text).toContain(new Date(Date.UTC(2026, 0, 2, 3, 4, 5)).toLocaleString())
   })
 

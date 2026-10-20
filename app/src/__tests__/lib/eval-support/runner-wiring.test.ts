@@ -18,10 +18,10 @@ it.each([
     const preflight = /if \(live\) \{([\s\S]*?)\n {2}\} else \{/.exec(run())?.[1]
     expect(preflight).toBeDefined()
     const deployed = [
-      'VERDA_INFERENCE_ENDPOINT=https://verda.example.invalid/v1',
+      'LARGE_LLM_BASE_URL=https://self_deployed.example.invalid/v1',
       'SMALL_LLM_BASE_URL=https://small.example.invalid/v1',
       'SMALL_LLM_DECISIONS_URL=https://small.example.invalid/v1/systemone',
-      'VERDA_INFERENCE_API_KEY=synthetic',
+      'LARGE_LLM_API_KEY=synthetic',
       'SMALL_LLM_API_KEY=synthetic',
     ].join('\n')
     expect(() =>
@@ -182,10 +182,14 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
   const s = run()
   expect(s).toContain('flipGate: flipGate(')
   expect(s).toContain('budget.beginInfrastructure(active, started, [')
-  expect(s).toContain('seconds: verdaScaledownSeconds()')
+  expect(s).toContain('seconds: selfDeployedScaledownSeconds()')
   expect(s).toContain('seconds: smallScaledownSeconds()')
-  expect(s).toContain('budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)')
-  expect(s).toContain('floorHourlyRate(rates.verdaEurPerHour(), DEFAULT_VERDA_EUR_PER_HOUR)')
+  expect(s).toContain(
+    'budget.infrastructure(active, Date.now() - started, selfDeployedRate + smallRate)',
+  )
+  expect(s).toMatch(
+    /floorHourlyRate\(\s*rates\.selfDeployedEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
+  )
   expect(s).toContain('floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)')
   expect(read('scripts/release-check.ts')).toContain('eval:general-next --live')
   expect(read('../docs/plan/decision-loop-agent.md')).toContain(

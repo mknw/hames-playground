@@ -131,7 +131,7 @@ function firstDecision(
 
 describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
   it('private tier: the request lists the visible documents, and the saved event carries exactly that', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     await app.goToSleep()
     const sessionId = await sessionWithDocuments('decide-docs-private')
     const { status, frames } = await app.runTurnOverSse({
@@ -191,7 +191,7 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
   // `llmCall`) back into the decide window. The saved blob keeps the names the
   // private turn sent; nothing may carry them onto the other tier.
   it('a private turn, then an Anthropic turn on the same session: the second turn sends no name', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     await app.goToSleep()
     const sessionId = await sessionWithDocuments('decide-docs-flip')
     const first = await app.runTurnOverSse({
@@ -237,7 +237,9 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     const intruder = createDecisionDocuments(sessionId)
     const seen = await runWithUserId('someone-else', () =>
-      withRunFrame({ inference: { tier: 'verda' } }, () => intruder(new AbortController().signal)),
+      withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
+        intruder(new AbortController().signal),
+      ),
     )
     expect(seen).toEqual({ total: 0 })
   })

@@ -99,7 +99,7 @@ client<llm> SynthesizerAnthropic {
 // chain HERE — the separation lives in the TypeScript mirror, not in BAML. So
 // re-pointing THIS BLOCK moves the injection screen onto whatever summarization
 // lands on: the one edit to avoid. Still true after 2026-08-26, when the private
-// tier moved the screen deliberately (its own line in VERDA_CLIENT_BY_ROLE, its
+// tier moved the screen deliberately (its own line in SELF_DEPLOYED_CLIENT_BY_ROLE, its
 // own eval scenario): a deliberate move is not the accident this warns about,
 // and this block is what the Anthropic tier still runs. To move the describe
 // tier, rewrite its EIGHT `client DescribeAnthropic` lines individually, or

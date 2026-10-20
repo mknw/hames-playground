@@ -165,13 +165,13 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // a REST adapter has no `--ctx-size` to read, so the number is the docs'.
   // `limitsFor('decide')` reads it and the decision state trimmer trims to it.
   JevDecide: 32_000,
-  // Self-hosted (verda-client.baml) — vLLM was started with
+  // Self-hosted (self-deployed-client.baml) — vLLM was started with
   // `--max-model-len 131072`, so this is the server's hard ceiling on
   // prompt + completion, not a model-family marketing number. An earlier plan
   // for this client said 250k; the deployment says 131072 and the deployment
-  // wins. Reached through resolveClientForRole() while USE_VERDA_INFERENCE=1.
-  VerdaQwen: 131_072,
-  VerdaQwenThink: 131_072, // Same parser-equipped private 27B box (#625).
+  // wins. Reached through resolveClientForRole() while USE_SELF_DEPLOYED_INFERENCE=1.
+  SelfDeployedQwen: 131_072,
+  SelfDeployedQwenThink: 131_072, // Same parser-equipped private 27B box (#625).
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -219,17 +219,17 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
   LocalQwenSmall: 2_048,
-  // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
-  // without this entry the truncation retry is blind on every Verda-routed
+  // Self-hosted (self-deployed-client.baml). Mirrors the `max_tokens` declared there;
+  // without this entry the truncation retry is blind on every self-deployed
   // controller turn, which is the failure this map exists for. 4 096 rather
   // than the 16 384 the Anthropic mid-tier carries, and the reason is a
   // COUPLING rather than a property of the model: this cap and that client's
   // `request_timeout_ms` are one decision — a full-cap generation has to finish
   // inside the timeout, or the retry this map enables can never fire on the
-  // outputs that need it. The arithmetic is in verda-client.baml; the
-  // inequality is pinned by clients-verda.test.ts.
-  VerdaQwen: 4_096,
-  VerdaQwenThink: 4_096, // Provisional / unmeasured; G19 Q5 eval sets the final pair.
+  // outputs that need it. The arithmetic is in self-deployed-client.baml; the
+  // inequality is pinned by clients-self-deployed.test.ts.
+  SelfDeployedQwen: 4_096,
+  SelfDeployedQwenThink: 4_096, // Provisional / unmeasured; G19 Q5 eval sets the final pair.
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -255,7 +255,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 // Which model a call takes is decided by the client BAML actually SELECTED
 // (`call.clientName`), never by the tier the run intended — the same attribution
 // rule the preview counters use (`metrics/usage-recorder.server.ts`). A call
-// that fell back to Anthropic is priced as Anthropic even on a verda-tier turn.
+// that fell back to Anthropic is priced as Anthropic even on a self_deployed-tier turn.
 
 /**
  * $ per MTok per BAML client. A client with no entry — and not in
@@ -326,12 +326,12 @@ export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
 
 /**
  * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda
- * (DataCrunch) instance, 2026-08-26. Overridable at `VERDA_EUR_PER_HOUR`.
+ * (DataCrunch) instance, 2026-08-26. Overridable at `LARGE_LLM_EUR_PER_HOUR`.
  *
  * The deployment scales to zero, so an idle box costs nothing and this rate is
  * only ever multiplied by time something was actually running.
  */
-export const DEFAULT_VERDA_EUR_PER_HOUR = 1.819
+export const DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
 
 /** Metered small summarizer GPU rate; overridable at SMALL_LLM_EUR_PER_HOUR. */
 export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
@@ -340,8 +340,8 @@ export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
  * vocabulary; server-side overrides are read per call in cost-rates.server.ts.
  * Keys are written as literals because this file is client-safe. */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
-  VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
-  VerdaQwenThink: DEFAULT_VERDA_EUR_PER_HOUR,
+  SelfDeployedQwen: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+  SelfDeployedQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }

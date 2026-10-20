@@ -46,7 +46,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, type AppHandles, type SseFrame } from '../lib/app'
-import { COLD_START_MS, IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { COLD_START_MS, IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -69,16 +69,16 @@ beforeEach(async () => {
 
 /** Withhold the first self-hosted response for the configured cold start. */
 function goCold(app: AppHandles): void {
-  app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_START_MS, model: VERDA_MODEL, times: 1 })
+  app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_START_MS, model: SELF_DEPLOYED_MODEL, times: 1 })
 }
 
 /** The first frame carrying evidence that the self-hosted model itself
  *  answered — the accounting BAML stamps on the call, naming the client it
  *  actually selected. The router's own frames precede it and are not it. */
-function firstVerdaAnswer(frames: SseFrame[]): number {
+function firstSelfDeployedAnswer(frames: SseFrame[]): number {
   return frames.findIndex((f) => {
     const call = (f.data as { llmCall?: { clientName?: string } }).llmCall
-    return call?.clientName === 'VerdaQwen'
+    return call?.clientName === 'SelfDeployedQwen'
   })
 }
 
@@ -112,8 +112,8 @@ async function withWakeEnv<T>(vars: Record<string, string>, body: () => Promise<
 
 describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
   it('reaches the user during the wait, not alongside the answer', async () => {
-    await app.setTier('verda')
-    const sessionId = newSessionId('coldux-verda')
+    await app.setTier('self_deployed')
+    const sessionId = newSessionId('coldux-self_deployed')
     goCold(app)
 
     const started = Date.now()
@@ -161,9 +161,9 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     ).toBeGreaterThanOrEqual(COLD_START_MS)
 
     // And the ordering: nothing from the self-hosted model precedes the notice.
-    const answerIdx = firstVerdaAnswer(frames)
+    const answerIdx = firstSelfDeployedAnswer(frames)
     const warmingIdx = frames.indexOf(warming[0])
-    expect(answerIdx, 'no frame carried a VerdaQwen call').toBeGreaterThan(-1)
+    expect(answerIdx, 'no frame carried a SelfDeployedQwen call').toBeGreaterThan(-1)
     expect(warmingIdx).toBeLessThan(answerIdx)
     // Something follows it, which is what the client clears the spinner on —
     // there is no dedicated clear frame by design.
@@ -230,9 +230,14 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // that out would turn a one-line misconfiguration into a ten-minute spinner,
     // so it ends the poll on the first attempt — which is what makes this test
     // finish in milliseconds rather than in ten minutes.
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const sessionId = newSessionId('coldux-wake-refused')
-    app.fakeLlm.arm({ kind: 'status', status: 400, message: 'unknown model', model: VERDA_MODEL })
+    app.fakeLlm.arm({
+      kind: 'status',
+      status: 400,
+      message: 'unknown model',
+      model: SELF_DEPLOYED_MODEL,
+    })
 
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
@@ -254,17 +259,22 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     //
     // Driven at 1/300th of the shipped budget, because the property under test is
     // "it gives up, loudly, at the budget" and the budget's VALUE is an arithmetic
-    // decision pinned in `verda-wake.test.ts`. A 503 is a transient status, so
+    // decision pinned in `self-deployed-wake.test.ts`. A 503 is a transient status, so
     // every attempt is retried.
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const sessionId = newSessionId('coldux-wake-never')
-    app.fakeLlm.arm({ kind: 'status', status: 503, message: 'no capacity', model: VERDA_MODEL })
+    app.fakeLlm.arm({
+      kind: 'status',
+      status: 503,
+      message: 'no capacity',
+      model: SELF_DEPLOYED_MODEL,
+    })
 
     const { status, frames } = await withWakeEnv(
       {
-        VERDA_WAKE_TIMEOUT_MS: '2000',
-        VERDA_WAKE_ATTEMPT_TIMEOUT_MS: '500',
-        VERDA_WAKE_POLL_INTERVAL_MS: '100',
+        LARGE_LLM_WAKE_TIMEOUT_MS: '2000',
+        LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: '500',
+        LARGE_LLM_WAKE_POLL_INTERVAL_MS: '100',
       },
       () =>
         app.runTurnOverSse({
@@ -290,13 +300,13 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // now spent) meets a box that answers. The decisive assertion is the LAST
     // one — a wake ping the fake did not delay could only have been a second
     // attempt.
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const sessionId = newSessionId('coldux-wake-polls')
     const attemptMs = 1000
     app.fakeLlm.arm({
       kind: 'cold-start',
       ms: attemptMs * 3,
-      model: VERDA_MODEL,
+      model: SELF_DEPLOYED_MODEL,
       wake: true,
       times: 1,
     })
@@ -304,8 +314,8 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     const started = Date.now()
     const { status, frames } = await withWakeEnv(
       {
-        VERDA_WAKE_ATTEMPT_TIMEOUT_MS: String(attemptMs),
-        VERDA_WAKE_POLL_INTERVAL_MS: '100',
+        LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: String(attemptMs),
+        LARGE_LLM_WAKE_POLL_INTERVAL_MS: '100',
       },
       () =>
         app.runTurnOverSse({
@@ -351,7 +361,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
   it('is not sent on the anthropic tier, which has no box to start', async () => {
     await app.setTier('anthropic')
     const sessionId = newSessionId('coldux-anthropic')
-    // Armed and filtered to the Verda model, so it cannot fire here — if the
+    // Armed and filtered to the large model, so it cannot fire here — if the
     // notice appeared anyway it would be reading the tier, not the box.
     goCold(app)
 

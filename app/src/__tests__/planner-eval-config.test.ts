@@ -10,11 +10,11 @@ describe('#636 eval-only thinking configuration', () => {
     const scenario = read('../../evals/scenarios/planner.ts')
     expect(scenario).toMatch(/THINKING_EVAL_MAX_TOKENS = 8192\b/)
     expect(scenario).toMatch(/THINKING_EVAL_TIMEOUT_MS = 340_000\b/)
-    const corpus = read('../../../packages/harness-baml/baml_src/verda-client.baml')
-    const twin = corpus.slice(corpus.indexOf('client<llm> VerdaQwenThink'))
+    const corpus = read('../../../packages/harness-baml/baml_src/self-deployed-client.baml')
+    const twin = corpus.slice(corpus.indexOf('client<llm> SelfDeployedQwenThink'))
     expect(twin).toMatch(/max_tokens 4096\b/)
     expect(twin).toMatch(/request_timeout_ms 180000\b/)
-    expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwenThink).toBe(4096)
+    expect(CLIENT_MAX_OUTPUT_TOKENS.SelfDeployedQwenThink).toBe(4096)
   })
 
   it('validates planner-only selection before preflight and skips the unrelated Critic call', () => {

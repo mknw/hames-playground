@@ -9,7 +9,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 /** The turn's tier, under the test's control — the wake reads it at poll start
  *  through `activeInferenceTier()`, the SAME seam the run frame fills. */
-const tier = vi.hoisted(() => ({ current: 'verda' as 'verda' | 'anthropic' }))
+const tier = vi.hoisted(() => ({ current: 'self_deployed' as 'self_deployed' | 'anthropic' }))
 vi.mock('@hames-ai/harness-baml/clients.server', () => ({
   activeInferenceTier: () => tier.current,
 }))
@@ -78,7 +78,7 @@ const WAKE_VARS = [
 
 beforeEach(() => {
   resetMemoryWake()
-  tier.current = 'verda'
+  tier.current = 'self_deployed'
   process.env.SMALL_LLM_BASE_URL = SMALL_BASE
   process.env.EMBEDDINGS_LOCAL_URL = EMBED_BASE
   process.env.SMALL_LLM_API_KEY = 'small-key'
@@ -493,7 +493,7 @@ describe('the bounded wait both consumers attach through', () => {
 
 describe('the env knobs are documented where a deployment reads them', () => {
   it('every env var the module reads appears in .env.example, inside the memory block (F2 + F5)', () => {
-    // The VERDA_WAKE_* block is the established precedent: a wake's tunable
+    // The SELF_DEPLOYED_WAKE_* block is the established precedent: a wake's tunable
     // bounds are deployment knobs, documented with their defaults and their
     // reasoning, not discoverable only by reading the module. Source-scan, the
     // uno-fonts pattern: every name this module reads must have a row there —
@@ -571,7 +571,7 @@ describe('fail-open: a failed wake is not the turn’s failure', () => {
     resetMemoryWake()
 
     // 2. budget expiry (ten dropped attempts)
-    tier.current = 'verda'
+    tier.current = 'self_deployed'
     byUrl(stalls(), stalls())
     const stalled = quiet(ensureMemoryAwake(true))
     await vi.advanceTimersByTimeAsync(100_000)

@@ -3,7 +3,7 @@
  *
  * Bridges `harness-patterns`' LLM-usage observer to the three things the
  * preview header shows: the global counters (`preview-counters.server.ts`), the
- * self-hosted box's warm clock (`inference/verda-activity.server.ts`), and the
+ * self-hosted box's warm clock (`inference/self-deployed-activity.server.ts`), and the
  * rolling per-tier call latency (`call-latency.server.ts`) — plus a fourth
  * consumer that is not on the header at all: the chat's cold-start notice
  * (`inference/cold-start.server.ts`), which closes the loop on the wait it
@@ -33,15 +33,15 @@
  * The set of names that count is `PRIVATE_TIER_CLIENTS`: the tier map plus
  * dormant thinking leaves (#625), not a
  * single literal, and that changed on 2026-08-26 when the private tier became
- * two models: the heavy roles on `VerdaQwen` and `describe` on `LocalQwenSmall`.
- * A hardcoded `=== VERDA_CLIENT_NAME` would have counted every private-tier
+ * two models: the heavy roles on `SelfDeployedQwen` and `describe` on `LocalQwenSmall`.
+ * A hardcoded `=== SELF_DEPLOYED_CLIENT_NAME` would have counted every private-tier
  * describe call as an ANTHROPIC call — six of the twelve functions, and the
  * highest-frequency ones — silently understating the private share on exactly
  * the tier the number exists to report. Deriving it means a third model added to
  * that map is counted with no edit here.
  *
  * The WARM CLOCK does not follow the same set, and the difference is the point:
- * each box has its own clock. Only a call naming `VerdaQwen` or its thinking twin stamps the 27B
+ * each box has its own clock. Only a call naming `SelfDeployedQwen` or its thinking twin stamps the 27B
  * clock; a 4B describe sample with metrics stamps the small clock instead. A
  * cold ingress can answer 503 without reaching the model, so a small sample
  * without metrics is not evidence of warmth.
@@ -51,7 +51,10 @@ import {
   observeLlmUsage,
   type LlmUsageSample,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
-import { noteVerdaCallCompleted, VERDA_CLIENT_NAME } from '../inference/verda-activity.server'
+import {
+  noteSelfDeployedCallCompleted,
+  SELF_DEPLOYED_CLIENT_NAME,
+} from '../inference/self-deployed-activity.server'
 import { noteSmallCallCompleted, settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
@@ -89,7 +92,7 @@ function bucket(tier: InferenceTier): UsageDelta {
 export function tierOfSample(sample: LlmUsageSample): InferenceTier {
   // A sample with no client name is a call that never named one — Anthropic by
   // elimination, and the same answer the `===` comparison this replaced gave.
-  return PRIVATE_TIER_CLIENTS.has(sample.clientName ?? '') ? 'verda' : 'anthropic'
+  return PRIVATE_TIER_CLIENTS.has(sample.clientName ?? '') ? 'self_deployed' : 'anthropic'
 }
 
 /** Fold one finished call into the pending deltas. Exported for the tests —
@@ -99,8 +102,11 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
   // claims about the 27B specifically — it is awake, and this is how long its
   // cold start took. A 4B describe call is evidence of neither; it has its own
   // clock below. Tier attribution alone cannot prove either box is warm.
-  if (sample.clientName === VERDA_CLIENT_NAME || THINKING_CLIENTS.has(sample.clientName ?? '')) {
-    noteVerdaCallCompleted(at)
+  if (
+    sample.clientName === SELF_DEPLOYED_CLIENT_NAME ||
+    THINKING_CLIENTS.has(sample.clientName ?? '')
+  ) {
+    noteSelfDeployedCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and
     // BAML's own timing for it is the next estimate's raw material. No-op on
     // every other sample, and on a turn that announced nothing — so the
@@ -126,7 +132,7 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
   // (the injection screen joined the tier, SD-4) that is ZERO functions, so
   // this predicate currently admits everything and the two sets coincide.
   // Kept rather than deleted because it is DERIVED: pull a role back out of
-  // `VERDA_CLIENT_BY_ROLE` and the filter starts excluding again with no edit
+  // `SELF_DEPLOYED_CLIENT_BY_ROLE` and the filter starts excluding again with no edit
   // here. The filter is here rather than in the store so the store's job stays
   // "median of what it was given" and the eligibility rule sits next to the
   // map it comes from.
@@ -136,7 +142,7 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
 
   const m = sample.metrics
   // No accounting means the call never reached a model (a pre-flight throw).
-  // It did not spend anything and, for Verda, did not wake anything either —
+  // It did not spend anything and, for the self-deployed tier, did not wake anything either —
   // but the clock above is stamped only on a named client, so nothing to undo.
   if (!m) return
 

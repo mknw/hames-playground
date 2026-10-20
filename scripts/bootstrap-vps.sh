@@ -216,8 +216,20 @@ reserved_name() {
 
 # env_get KEY [FILE] — the last KEY= line's value, one layer of quotes removed.
 env_get() {
-  local line
+  local line legacy=''
   line=$(grep -E "^$1=" "${2:-$ENV_FILE}" 2>/dev/null | tail -n1) || true
+  # One-release aliases; an explicit canonical value (including empty) wins.
+  if [[ -z $line ]]; then
+    case $1 in
+      LARGE_LLM_BASE_URL) legacy=VERDA_INFERENCE_ENDPOINT ;;
+      LARGE_LLM_API_KEY) legacy=VERDA_INFERENCE_API_KEY ;;
+      LARGE_LLM_EUR_PER_HOUR) legacy=VERDA_EUR_PER_HOUR ;;
+      LARGE_LLM_SCALEDOWN_SECONDS) legacy=VERDA_SCALEDOWN_SECONDS ;;
+      LARGE_LLM_WAKE_*) legacy=VERDA_WAKE_${1#LARGE_LLM_WAKE_} ;;
+      USE_SELF_DEPLOYED_INFERENCE) legacy=USE_VERDA_INFERENCE ;;
+    esac
+    [[ -z $legacy ]] || line=$(grep -E "^$legacy=" "${2:-$ENV_FILE}" 2>/dev/null | tail -n1) || true
+  fi
   line=${line#*=}
   if [[ $line == \'*\' || $line == \"*\" ]]; then line=${line:1:${#line}-2}; fi
   printf '%s' "$line"
@@ -323,14 +335,14 @@ readonly OWNER_REQUIRED=(
   "VITE_ALLOWED_EMAILS|this deployment's allow-list: comma-separated, *@domain wildcards|0"
 )
 # The private tier: all five or none (CLAUDE.md, docs/PREVIEW.md §6).
-readonly PRIVATE_TIER_REQUIRED=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
+readonly PRIVATE_TIER_REQUIRED=(LARGE_LLM_BASE_URL LARGE_LLM_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
 
 # owner_missing — print each owner-required key that is empty or a placeholder.
 owner_missing() {
   local entry key v file=${1:-$ENV_FILE}
   for entry in "${OWNER_REQUIRED[@]}"; do
     key=${entry%%|*}
-    [[ $key == ANTHROPIC_API_KEY && "$(env_get INFERENCE_TIERS "$file")" == private ]] && continue
+    [[ $key == ANTHROPIC_API_KEY && "$(env_get INFERENCE_TIERS "$file")" =~ ^(private|self_deployed)$ ]] && continue
     v=$(env_get "$key" "$file")
     # The template's allow-list is the contoso placeholder, not a real list.
     if [[ -z $v || ($key == VITE_ALLOWED_EMAILS && $v == '*@contoso.com') ]]; then
@@ -387,18 +399,19 @@ if not valid:
 env_problems() {
   local k n=0 v tiers
   tiers=$(env_get INFERENCE_TIERS)
+  [[ $tiers == private ]] && tiers=self_deployed
   grep -q 'example\.com' "$ENV_FILE" && printf '%s\n' ".env still carries an example.com placeholder (§6: grep -n 'example\\.com' .env)"
   for k in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY ANTHROPIC_API_KEY \
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
-    [[ $k == ANTHROPIC_API_KEY && $tiers == private ]] && continue
+    [[ $k == ANTHROPIC_API_KEY && $tiers == self_deployed ]] && continue
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
   case $tiers in
-    private|'') ;;
-    *) printf '%s\n' "INFERENCE_TIERS must be unset or private" ;;
+    self_deployed|'') ;;
+    *) printf '%s\n' "INFERENCE_TIERS must be unset or self_deployed (legacy: private)" ;;
   esac
   for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
-  [[ $tiers == private && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "INFERENCE_TIERS=private requires all of ${PRIVATE_TIER_REQUIRED[*]}"
+  [[ $tiers == self_deployed && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "INFERENCE_TIERS=self_deployed requires all of ${PRIVATE_TIER_REQUIRED[*]}"
   if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
     printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi
@@ -410,7 +423,7 @@ env_problems() {
       printf '%s\n' "POSTGRES_PASSWORD must be URL-safe (no & \\ / @ : # ? % or space): it is spliced into the app's DATABASE_URL"
       ;;
   esac
-  for k in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
+  for k in LARGE_LLM_BASE_URL SMALL_LLM_BASE_URL; do
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
   done
@@ -418,7 +431,7 @@ env_problems() {
   if [[ -n $v ]]; then
     printf '%s' "$v" | decisions_url_problem || printf '%s\n' 'SMALL_LLM_DECISIONS_URL validation unavailable'
   fi
-  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${PRIVATE_TIER_REQUIRED[*]}"
+  [[ "$(env_get USE_SELF_DEPLOYED_INFERENCE)" == 1 && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "USE_SELF_DEPLOYED_INFERENCE=1 without all of ${PRIVATE_TIER_REQUIRED[*]}"
   [[ "$(env_get STASH_DIRECT_REDIS)" == 1 ]] || printf '%s\n' "STASH_DIRECT_REDIS must be '1' (the preview gateway has no redis server; §3a)"
   grep -qE '^VITE_DEV_BYPASS_AUTH=' "$ENV_FILE" && printf '%s\n' "VITE_DEV_BYPASS_AUTH is set in .env — it must stay unset"
   compose_files >/dev/null || printf '%s\n' "COMPOSE_FILE or clone inputs are invalid (docs/PREVIEW.md §12)"
@@ -1445,9 +1458,9 @@ stage_env() {
         [[ -n $v ]] && env_set "$key" "$v" && chg "set $key (value not shown)"
       done
       note "With all five values configured, a user who never chose starts on Private; the first turn may pay a cold start."
-      printf '  Also default non-conversation runs to Private (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
+      printf '  Also default non-conversation runs to Private (USE_SELF_DEPLOYED_INFERENCE=1)? [y/N] ' >/dev/tty
       IFS= read -r v </dev/tty
-      [[ $v =~ ^[Yy] ]] && env_set USE_VERDA_INFERENCE 1 && chg "set USE_VERDA_INFERENCE=1"
+      [[ $v =~ ^[Yy] ]] && env_set USE_SELF_DEPLOYED_INFERENCE 1 && chg "set USE_SELF_DEPLOYED_INFERENCE=1"
     fi
     unset v
   fi

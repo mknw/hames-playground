@@ -192,7 +192,7 @@ const LIVE_STEPS_STILL_OWED = [
     why: 'grades the workflows against a real provider; the only thing that reads model quality at all',
   },
   {
-    what: '`USE_VERDA_INFERENCE=1 pnpm eval:harness` on the **self-hosted** tier',
+    what: '`USE_SELF_DEPLOYED_INFERENCE=1 pnpm eval:harness` on the **self-hosted** tier',
     why:
       'the tier the deployment defaults to. Two scenarios are owed specifically: ' +
       '`planner-plan-shape` (the planner runs with thinking OFF and a halved output ceiling on ' +
@@ -203,15 +203,15 @@ const LIVE_STEPS_STILL_OWED = [
   },
   {
     what:
-      '`USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
-      'src/lib/harness-patterns/scripts/smoke-verda.ts`',
+      '`USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
+      'src/lib/harness-patterns/scripts/smoke-self-deployed.ts`',
     why:
       'the runbook smoke check: six calls back-to-back against the live box, each asserting the ' +
       'client that ACTUALLY served it. Covers the cold start, the wake ping and the real ' +
       'endpoint, none of which a fake can be wrong about.',
   },
   {
-    what: 'the warm-burst check (`smoke-verda-load.ts`) if concurrency behaviour matters to the release',
+    what: 'the warm-burst check (`smoke-self-deployed-load.ts`) if concurrency behaviour matters to the release',
     why: 'one replica, so concurrency is queueing rather than scaling; the only measurement of what a burst costs a user',
   },
 ] as const

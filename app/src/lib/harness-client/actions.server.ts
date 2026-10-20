@@ -40,7 +40,7 @@ import {
   chooseConversationTier,
   privateInferenceOnly,
   resolveTier,
-  verdaConfigured,
+  selfDeployedConfigured,
 } from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
@@ -303,7 +303,7 @@ export interface ConversationTierState {
   /** False when the self-hosted endpoints are unconfigured — the switch renders
    *  its private position disabled rather than offering a choice the server
    *  refuses (and that `assertInferenceTier` would throw on). */
-  verdaAvailable: boolean
+  selfDeployedAvailable: boolean
   /** Omitted on ordinary deployments to preserve the existing RPC response. */
   anthropicAvailable?: boolean
 }
@@ -324,7 +324,7 @@ export async function getConversationTier(sessionId: string): Promise<Conversati
   ])
   return {
     tier: resolveTier(stored, seed),
-    verdaAvailable: verdaConfigured(),
+    selfDeployedAvailable: selfDeployedConfigured(),
     ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
   }
 }
@@ -348,7 +348,7 @@ export async function setConversationTier(
   const chosen = await chooseConversationTier(sessionId, user.id, tier)
   return {
     tier: chosen,
-    verdaAvailable: verdaConfigured(),
+    selfDeployedAvailable: selfDeployedConfigured(),
     ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
   }
 }

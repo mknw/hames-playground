@@ -30,8 +30,8 @@ import type {
 
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
 }
 
 let b: typeof import('@hames-ai/harness-baml/baml_client').b
@@ -183,10 +183,10 @@ const CLIENTS: Record<string, string[]> = {
     'ControllerAnthropic',
     'AnthropicSonnet5NoThink',
     'AnthropicSonnet46NoThink',
-    'VerdaQwen',
+    'SelfDeployedQwen',
   ],
-  ActorController: ['ActorAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'VerdaQwen'],
-  Planner: ['PlannerAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'VerdaQwen'],
+  ActorController: ['ActorAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'SelfDeployedQwen'],
+  Planner: ['PlannerAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'SelfDeployedQwen'],
 }
 
 const GOLDENS = JSON.parse(
@@ -240,7 +240,7 @@ describe('#625 shared bodies can omit content-side reasoning', () => {
     RENDERS.filter(
       ({ scenario, client }) =>
         ['parallel', 'sequential', 'context'].includes(scenario) &&
-        ['AnthropicSonnet5NoThink', 'AnthropicSonnet5', 'VerdaQwen'].includes(client),
+        ['AnthropicSonnet5NoThink', 'AnthropicSonnet5', 'SelfDeployedQwen'].includes(client),
     ),
   )(
     '$name omits only reasoning demonstrations and guidance',

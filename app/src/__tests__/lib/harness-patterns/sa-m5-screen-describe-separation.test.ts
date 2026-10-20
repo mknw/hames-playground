@@ -111,7 +111,7 @@ describe('SA-M5: screen and describe stay separately injected', () => {
         const source = stripComments(await readFile(file, 'utf8'))
         for (const { name, body } of exportedTypeDeclarations(source)) {
           // A pure string-literal union (the `BamlRole` union names both roles —
-          // that is the ROUTING map, and clients-verda.test.ts pins it as
+          // that is the ROUTING map, and clients-self-deployed.test.ts pins it as
           // REQUIRED to carry both, separately) is not a collapse. A collapse
           // is a type that HANDS OUT both behaviours — it must carry a
           // callable: an arrow, a method signature, or a call signature.

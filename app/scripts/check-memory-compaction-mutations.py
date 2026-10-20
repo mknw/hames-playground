@@ -76,7 +76,7 @@ CASES = [
  ('R17-F8-later-reinforcement', STORE, "        full = true\n        logStop('full')\n        continue", "        return stop('full', undefined, { written, duplicates, failed, route, rejected, compactionDue: true })", ''),
  ('R18-F9-routing-docs', 'types.ts', 'company-run only on the private', 'company-run on every', ''),
  ('R19-F10-timeout-docs', 'SPEC.md', 'have no abort signal', 'have an abort signal', ''),
- ('F7-bare-host-guard', 'GUIDE.md', "const assertTier = (tier: string) => {\n  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')\n  assertInferenceTier(tier)\n}", 'const assertTier = assertInferenceTier', ''),
+ ('F7-bare-host-guard', 'GUIDE.md', "const assertTier = (tier: string) => {\n  if (tier !== 'anthropic' && tier !== 'self_deployed') throw new TypeError('unknown memory tier')\n  assertInferenceTier(tier)\n}", 'const assertTier = assertInferenceTier', ''),
  ('F9-deletion-audit-docs', 'SPEC.md', 'are deliberately not context events in M3', 'are recorded as context events in M3', ''),
  ('F9-changeset-full', '../../.changeset/memory-core-compaction.md', '`settleMemory` now refuses insertion at `hardLimit` (default 400)', 'Settle has no capacity change', ''),
  ('G1-tie-order', CORE, KEEP_LABEL + MERGE_LABEL, MERGE_LABEL + KEEP_LABEL, 'G1:'),

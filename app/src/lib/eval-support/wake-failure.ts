@@ -1,6 +1,6 @@
 import { WakeFailure } from '../inference/wake-failure'
 /** Diagnosable wake-failure text for the report: URLs shrink to host names, credentials never appear. */
-const SECRET_ENV = ['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY']
+const SECRET_ENV = ['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY']
 
 export function describeWakeFailure(err: unknown): string {
   let raw = err instanceof Error ? err.message : String(err)
@@ -25,7 +25,7 @@ export function describeWakeFailure(err: unknown): string {
 }
 
 export type WakeFailureReason =
-  'VERDA_WAKE_FAILED' | 'SMALL_LLM_WAKE_FAILED' | 'PRIVATE_TIER_WAKE_FAILED'
+  'SELF_DEPLOYED_WAKE_FAILED' | 'SMALL_LLM_WAKE_FAILED' | 'PRIVATE_TIER_WAKE_FAILED'
 
 /**
  * Stop reason naming the box that failed, read from the typed error the wake throws and never
@@ -34,5 +34,5 @@ export type WakeFailureReason =
  */
 export function wakeFailureReason(err: unknown): WakeFailureReason {
   if (!(err instanceof WakeFailure)) return 'PRIVATE_TIER_WAKE_FAILED'
-  return err.box === 'small' ? 'SMALL_LLM_WAKE_FAILED' : 'VERDA_WAKE_FAILED'
+  return err.box === 'small' ? 'SMALL_LLM_WAKE_FAILED' : 'SELF_DEPLOYED_WAKE_FAILED'
 }

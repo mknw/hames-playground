@@ -1,31 +1,31 @@
 /**
- * Live smoke test for the self-hosted Verda deployment (`VerdaQwen`).
+ * Live smoke test for the self-hosted self-deployed deployment (`SelfDeployedQwen`).
  *
  * CI cannot run this — the endpoint is company-internal and reachable only
- * from a machine holding `VERDA_INFERENCE_API_KEY`. The hermetic half of the
+ * from a machine holding `LARGE_LLM_API_KEY`. The hermetic half of the
  * proof lives in two files: which roles move (and what happens when the flag is
- * off or the env is wrong) in `clients-verda.test.ts`, and what the request body
- * carries in `verda-body-shape.test.ts`, both under
+ * off or the env is wrong) in `clients-self-deployed.test.ts`, and what the request body
+ * carries in `self-deployed-body-shape.test.ts`, both under
  * `src/__tests__/lib/harness-patterns/`. This script is the other half: that the
  * box actually answers, and that what it answers PARSES into the structured
  * types the patterns depend on.
  *
- * Its sibling `smoke-verda-load.ts` measures the same route under load.
+ * Its sibling `smoke-self-deployed-load.ts` measures the same route under load.
  *
  * Run from `app/`:
  *
- *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/inference/scripts/smoke-verda.ts
+ *   USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env \
+ *     src/lib/inference/scripts/smoke-self-deployed.ts
  *
- * `--env-file=.env` supplies `VERDA_INFERENCE_ENDPOINT` (which must END IN
- * `/v1` — see `assertVerdaConfigured`) and `VERDA_INFERENCE_API_KEY`. The flag
+ * `--env-file=.env` supplies `LARGE_LLM_BASE_URL` (which must END IN
+ * `/v1` — see `assertSelfDeployedConfigured`) and `LARGE_LLM_API_KEY`. The flag
  * goes on the command line because the whole point is to exercise the override
  * path; without it this script routes to Anthropic and proves nothing, which
  * is why it refuses to run in that state.
  *
  * SCALE-TO-ZERO: the deployment sleeps when idle and bills only while awake,
  * so the FIRST call here pays a cold start (container pull + weight load) and
- * can take minutes. That is why `verda-client.baml` sets a long
+ * can take minutes. That is why `self-deployed-client.baml` sets a long
  * `request_timeout_ms`, and why this script makes both of its calls
  * back-to-back rather than being run repeatedly — each separate session risks
  * paying another cold start.
@@ -54,7 +54,7 @@
  *   5. `describeToolResultsBatchOp` and `describeToolResultOp` — the DESCRIBE
  *      role, which joined on the same day and is handed tool results VERBATIM.
  *      It runs on `LocalQwenSmall`, the private tier's 4B summarizer; the
- *      expected client is read from `VERDA_CLIENT_BY_ROLE.describe`.
+ *      expected client is read from `SELF_DEPLOYED_CLIENT_BY_ROLE.describe`.
  *      Neither takes a collector: they own one internally for accounting, so
  *      the client they were served by is read off the usage observer — the same
  *      path the preview header's on-prem share is computed from, which makes
@@ -101,12 +101,15 @@ import {
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
-import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
-import { clientOverrideFor, VERDA_CLIENT_BY_ROLE } from '@hames-ai/harness-baml/clients.server'
+import { assertSelfDeployedConfigured, selfDeployedInferenceEnabled } from '../config.server'
+import {
+  clientOverrideFor,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
+} from '@hames-ai/harness-baml/clients.server'
 import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
 
-const EXPECTED_CLIENT = 'VerdaQwen'
+const EXPECTED_CLIENT = 'SelfDeployedQwen'
 
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
@@ -178,11 +181,11 @@ export async function servedModelIds(
   timeoutMs: number = MODELS_TIMEOUT_MS,
   retryOnTimeout: boolean = true,
 ): Promise<string[]> {
-  const base = process.env.VERDA_INFERENCE_ENDPOINT ?? ''
+  const base = process.env.LARGE_LLM_BASE_URL ?? ''
   let res: Response
   try {
     res = await fetch(`${base}/models`, {
-      headers: { Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}` },
+      headers: { Authorization: `Bearer ${process.env.LARGE_LLM_API_KEY ?? ''}` },
       signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
@@ -202,7 +205,7 @@ export async function servedModelIds(
     throw new Error(
       `GET ${base}/models did not answer within ${timeoutMs / 1000}s ` +
         `(${err instanceof Error ? err.message : String(err)}). The deployment is unreachable ` +
-        'from here, or VERDA_INFERENCE_ENDPOINT is wrong — check the host and that the value ' +
+        'from here, or LARGE_LLM_BASE_URL is wrong — check the host and that the value ' +
         'ends in `/v1`. This budget is long enough to cover a cold start, so waiting longer ' +
         'is not the answer.',
       { cause: err },
@@ -214,31 +217,31 @@ export async function servedModelIds(
 }
 
 async function preflight(): Promise<void> {
-  if (!verdaInferenceEnabled()) {
+  if (!selfDeployedInferenceEnabled()) {
     throw new Error(
-      'USE_VERDA_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
+      'USE_SELF_DEPLOYED_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
         'nothing. Re-run as:\n' +
-        '  USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
-        'src/lib/inference/scripts/smoke-verda.ts',
+        '  USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
+        'src/lib/inference/scripts/smoke-self-deployed.ts',
     )
   }
   // Same check the module performs at load; called explicitly so the failure
   // reads as a preflight rather than an import-time stack trace.
-  assertVerdaConfigured()
+  assertSelfDeployedConfigured()
   // The model id is pinned in the client (read live from `GET /v1/models` on
   // 2026-08-25). Re-checked here rather than trusted, because the deployment —
   // not this repo — decides what it serves: a redeploy under a different id, or
   // a `--served-model-name`, turns every call into a 400 that reads like a
   // client bug. Cheap, and it runs before anything is billed.
   const client = readFileSync(
-    path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+    path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
     'utf8',
   )
   const pinned = /model "([^"]+)"/.exec(client)?.[1]
   const served = await servedModelIds()
   if (!pinned || !served.includes(pinned)) {
     throw new Error(
-      `baml_src/verda-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
+      `baml_src/self-deployed-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
         `serves ${served.map((m) => JSON.stringify(m)).join(', ') || '(nothing)'}. ` +
         'Put the served id in the client, regenerate from packages/harness-baml, and re-run this.',
     )
@@ -257,7 +260,7 @@ function servedBy(collector: Collector): string | undefined {
   return (calls.find((c) => c.selected) ?? calls[0])?.clientName
 }
 
-function assertServedByVerda(label: string, collector: Collector): void {
+function assertServedBySelfDeployed(label: string, collector: Collector): void {
   const client = servedBy(collector)
   if (client !== EXPECTED_CLIENT) {
     throw new Error(
@@ -268,7 +271,7 @@ function assertServedByVerda(label: string, collector: Collector): void {
 
 async function critic(): Promise<void> {
   console.log('\n▶ 1/7 Critic — smallest structured round trip')
-  const collector = new Collector('smoke-verda-critic')
+  const collector = new Collector('smoke-self-deployed-critic')
   const t0 = Date.now()
   const { result } = await createCriticAdapter()(
     'count the words in "the quick brown fox"',
@@ -282,7 +285,7 @@ async function critic(): Promise<void> {
     collector,
   )
   console.log(`   ${Date.now() - t0}ms · served by ${servedBy(collector)}`)
-  assertServedByVerda('Critic', collector)
+  assertServedBySelfDeployed('Critic', collector)
   console.log(
     `   verdict: is_sufficient=${result.is_sufficient} explanation=${JSON.stringify(result.explanation)}`,
   )
@@ -294,7 +297,7 @@ async function critic(): Promise<void> {
 async function controller(): Promise<void> {
   console.log('\n▶ 2/7 LoopController — the action envelope')
   const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
-  const collector = new Collector('smoke-verda-controller')
+  const collector = new Collector('smoke-self-deployed-controller')
   const opts = { collector, ...clientOverrideFor('controller') }
   const t0 = Date.now()
   const action = await b.LoopController(
@@ -319,7 +322,7 @@ async function controller(): Promise<void> {
   )
   if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
   console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
-  assertServedByVerda('LoopController', collector)
+  assertServedBySelfDeployed('LoopController', collector)
   console.log(
     `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
   )
@@ -354,7 +357,7 @@ async function controller(): Promise<void> {
 async function actorRetry(): Promise<void> {
   console.log('\n▶ 3/7 ActorController — retry shape (attempt log + context)')
   const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
-  const collector = new Collector('smoke-verda-actor-retry')
+  const collector = new Collector('smoke-self-deployed-actor-retry')
   // 'controller' — the one role covers BOTH loop patterns' controllers, which
   // is exactly why the actor's 400 rode in on the same map entry that the
   // healthy LoopController scenarios had already been passing on.
@@ -389,7 +392,7 @@ async function actorRetry(): Promise<void> {
   const llmCall = extractLLMCallData(collector, 'ActorController', {}, t0, action)
   if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
   console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
-  assertServedByVerda('ActorController', collector)
+  assertServedBySelfDeployed('ActorController', collector)
   console.log(
     `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
   )
@@ -400,7 +403,7 @@ async function actorRetry(): Promise<void> {
 
 async function router(): Promise<void> {
   console.log('\n▶ 4/7 Router — the turn’s first call, on the user’s raw message')
-  const collector = new Collector('smoke-verda-router')
+  const collector = new Collector('smoke-self-deployed-router')
   const t0 = Date.now()
   const result = await routeMessageOp(
     'What node labels exist in the graph?',
@@ -413,7 +416,7 @@ async function router(): Promise<void> {
     collector,
   )
   console.log(`   ${Date.now() - t0}ms · served by ${servedBy(collector)}`)
-  assertServedByVerda('Router', collector)
+  assertServedBySelfDeployed('Router', collector)
   console.log(
     `   route=${result.tool_name} needs_tool=${result.tool_call_needed} ` +
       `intent=${JSON.stringify(result.intent).slice(0, 120)}`,
@@ -437,7 +440,7 @@ async function router(): Promise<void> {
  * on-prem share is measuring the same thing the routing did.
  */
 export async function smokeDescribe(): Promise<void> {
-  const expectedClient = VERDA_CLIENT_BY_ROLE.describe
+  const expectedClient = SELF_DEPLOYED_CLIENT_BY_ROLE.describe
   console.log(`\n▶ 5/7 describe — tool results, verbatim, on ${expectedClient}`)
   const seen = new Map<string, string | undefined>()
   const stop = observeLlmUsage((sample) => seen.set(sample.functionName, sample.clientName))
@@ -473,7 +476,7 @@ export async function smokeDescribe(): Promise<void> {
     console.log(`   summary: ${JSON.stringify(single).slice(0, 200)}`)
 
     // Both call sites, separately. They live in one file, so the source scan in
-    // `clients-verda.test.ts` cannot tell them apart; here they can be.
+    // `clients-self-deployed.test.ts` cannot tell them apart; here they can be.
     for (const fn of ['ResultDescribeBatch', 'ResultDescribe']) {
       if (!seen.has(fn)) {
         throw new Error(
@@ -579,7 +582,7 @@ async function screen(): Promise<void> {
   }
 }
 
-/** Actual serving-client evidence, not the USE_VERDA_INFERENCE flag. */
+/** Actual serving-client evidence, not the USE_SELF_DEPLOYED_INFERENCE flag. */
 export async function smokeDecide(): Promise<void> {
   console.log('\n▶ 7/7 decide — private-tier systemone decision')
   const result = await createDecideAdapter()({
@@ -593,7 +596,7 @@ export async function smokeDecide(): Promise<void> {
     },
     state: 'The number is 4.',
   })
-  const expected = VERDA_CLIENT_BY_ROLE.decide
+  const expected = SELF_DEPLOYED_CLIENT_BY_ROLE.decide
   if (result.llmCall?.clientName !== expected || result.method !== 'jev') {
     throw new Error(
       `Decide: served by ${result.llmCall?.clientName ?? 'an unreported client'}, expected ${expected}`,
@@ -611,9 +614,9 @@ export async function smokeDecide(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log('🔒 Verda (self-hosted) smoke — confidential-compute route')
+  console.log('🔒 self-deployed (self-hosted) smoke — confidential-compute route')
   await preflight()
-  console.log('   flag on, env configured, controller role → VerdaQwen')
+  console.log('   flag on, env configured, controller role → SelfDeployedQwen')
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()
   await controller()

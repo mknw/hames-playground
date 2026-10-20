@@ -6,10 +6,10 @@ import {
 
 const env = {
   EVAL_GENERAL_GO: 'S3 merged: go',
-  VERDA_INFERENCE_ENDPOINT: 'https://verda.example.invalid/v1',
+  LARGE_LLM_BASE_URL: 'https://self_deployed.example.invalid/v1',
   SMALL_LLM_BASE_URL: 'https://small.example.invalid/v1',
   SMALL_LLM_DECISIONS_URL: 'https://small.example.invalid/v1/systemone',
-  VERDA_INFERENCE_API_KEY: 'synthetic',
+  LARGE_LLM_API_KEY: 'synthetic',
   SMALL_LLM_API_KEY: 'synthetic',
 }
 
@@ -25,7 +25,7 @@ describe('private eval live preconditions', () => {
       'disabled',
     )
   })
-  it.each(['VERDA_INFERENCE_ENDPOINT', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL'])(
+  it.each(['LARGE_LLM_BASE_URL', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL'])(
     'requires %s from the env file',
     (name) => {
       expect(() => assertLivePreconditions({ ...env, [name]: undefined })).toThrow(name)
@@ -54,12 +54,9 @@ describe('private eval live preconditions', () => {
       }),
     ).toThrow('wrong path')
   })
-  it.each(['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY'])(
-    'requires %s without echoing it',
-    (name) => {
-      expect(() => assertLivePreconditions({ ...env, [name]: '' })).toThrow(name)
-    },
-  )
+  it.each(['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY'])('requires %s without echoing it', (name) => {
+    expect(() => assertLivePreconditions({ ...env, [name]: '' })).toThrow(name)
+  })
   it('refuses another embedding endpoint', () => {
     expect(() =>
       assertLivePreconditions({ ...env, EMBEDDINGS_LOCAL_URL: 'https://embed.example.invalid' }),
@@ -90,4 +87,19 @@ describe('public paths cannot use loaded or inherited credentials', () => {
   it('accepts the explicit local provider', () => {
     expect(() => assertLivePreconditions({ ...env, EMBEDDINGS_PROVIDER: 'local' })).not.toThrow()
   })
+})
+
+it('accepts old endpoint/key names in a live env-file snapshot without mutating it', () => {
+  const legacy = {
+    ...env,
+    LARGE_LLM_BASE_URL: undefined,
+    LARGE_LLM_API_KEY: undefined,
+    VERDA_INFERENCE_ENDPOINT: env.LARGE_LLM_BASE_URL,
+    VERDA_INFERENCE_API_KEY: env.LARGE_LLM_API_KEY,
+  }
+  expect(() => assertLivePreconditions(legacy)).not.toThrow()
+  expect(legacy.LARGE_LLM_BASE_URL).toBeUndefined()
+  expect(() => assertLivePreconditions({ ...legacy, LARGE_LLM_BASE_URL: '' })).toThrow(
+    'LARGE_LLM_BASE_URL',
+  )
 })

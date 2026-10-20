@@ -104,7 +104,7 @@ Each layer's own README stays the authority on its coverage: [`app/e2e/README.md
 Authoritative source-level docs (closer to the code):
 
 - [`app/evals/README.md`](../app/evals/README.md) — **harness/client compatibility evals** (`pnpm eval:harness`): the scenario set, the `EVAL_CLIENT` seam and why it is not a new routing switch, the roles that are never re-pointed, and how the suite is kept structurally out of CI. Run it whenever a BAML client changes
-- [`app/e2e/README.md`](../app/e2e/README.md) — **app-path e2e** (`pnpm test:e2e`): whole conversations through the real server actions, the real SSE route and a real Postgres, with only the inference endpoint and the MCP gateway substituted; the scenario table, the `E2E_LIVE=verda` live mode and its burst discipline. Run it whenever anything under the chat path changes
+- [`app/e2e/README.md`](../app/e2e/README.md) — **app-path e2e** (`pnpm test:e2e`): whole conversations through the real server actions, the real SSE route and a real Postgres, with only the inference endpoint and the MCP gateway substituted; the scenario table, the `E2E_LIVE=self_deployed` live mode and its burst discipline. Run it whenever anything under the chat path changes
 - [`app/e2e-browser/README.md`](../app/e2e-browser/README.md) — **browser e2e** (`pnpm test:e2e:browser`): Playwright driving a headless Chromium against a real `vinxi dev`, for the failure shape the layers below cannot see — fine on the wire, wrong on the screen. Run it whenever anything a user can see changes
 - [`packages/harness-patterns/SPEC.md`](../packages/harness-patterns/SPEC.md) — full framework API and design spec
 - [`packages/harness-patterns/README.md`](../packages/harness-patterns/README.md) — the `hames` library front page
@@ -300,3 +300,5 @@ hames-playground/
 
 - [`testing/neo4j-egress.md`](testing/neo4j-egress.md) — Neo4j relay isolation, digest provenance and opt-in Docker green/red evidence (#241 G13).
 - [`deployment/egress-design.md`](deployment/egress-design.md) — Row 11 egress design: offline-by-default dual-stack metadata rules, service-path preservation, mutation evidence, proposed reboot ordering, and the open staging sandbox/socket decision (#432 G20).
+
+- [Self-deployed inference migration](deployment/self-deployed-migration.md) — complete rename table, one-release aliases, stored-row compatibility and server-lane migration ownership.

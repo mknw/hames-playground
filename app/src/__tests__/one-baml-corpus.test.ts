@@ -49,7 +49,7 @@ const SELF = 'one-baml-corpus.test.ts'
 /**
  * Source with comments removed.
  *
- * Load-bearing, not tidiness, and the same idiom `clients-verda.test.ts` uses
+ * Load-bearing, not tidiness, and the same idiom `clients-self-deployed.test.ts` uses
  * for the same reason: `middleware.ts` DOCUMENTS the relative specifier it used
  * to carry — quoted, because naming it is the point of the paragraph — and a
  * scan that reads prose cannot tell a stale import from an explanation of why

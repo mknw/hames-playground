@@ -7,7 +7,7 @@
  * two bounded fetches, both caches, every degraded result — and the last
  * describe block pins the property the whole module exists to keep: probing is
  * a STATUS read, never a wake, so nothing here may touch
- * `VERDA_INFERENCE_ENDPOINT`. Pinned twice (source scan + runtime observation)
+ * `LARGE_LLM_BASE_URL`. Pinned twice (source scan + runtime observation)
  * because the two failure modes are different: a future edit could rename a
  * var into the file, or route a fetch around the recorder.
  *
@@ -42,8 +42,8 @@ const ENV_KEYS = [
   'VERDA_CLIENT_ID',
   'VERDA_CLIENT_SECRET',
   'VERDA_DEPLOYMENT_ID',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -381,14 +381,14 @@ describe('probing never wakes the box', () => {
     // the inference endpoint in order to say it does not use it — what must
     // never appear is code that reads it.
     const source = readFileSync(MODULE_PATH, 'utf8')
-    expect(source).not.toContain('process.env.VERDA_INFERENCE')
+    expect(source).not.toContain('process.env.SELF_DEPLOYED_INFERENCE')
   })
 
   it('sends every fetch to the control plane, never to the inference endpoint', async () => {
     // The runtime half: with the inference endpoint configured and observable,
     // a probe must still touch only api.verda.com.
-    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://inference.example.invalid/v1')
-    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'inference-key')
+    vi.stubEnv('LARGE_LLM_BASE_URL', 'https://inference.example.invalid/v1')
+    vi.stubEnv('LARGE_LLM_API_KEY', 'inference-key')
     configureControlPlane()
 
     await probeVerdaReplicas()

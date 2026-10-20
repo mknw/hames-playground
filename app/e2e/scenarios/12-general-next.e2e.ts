@@ -80,7 +80,7 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
   })
 
   it('P5: shows a visible error when the private decisions shim is absent', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const previous = process.env.SMALL_LLM_DECISIONS_URL
     delete process.env.SMALL_LLM_DECISIONS_URL
     try {

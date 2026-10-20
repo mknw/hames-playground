@@ -25,7 +25,11 @@ export function createSpendObserver({
         onStop()
         return
       }
-      if (!['VerdaQwen', 'LocalQwenSmall', 'PrivateSystemOne'].includes(sample.clientName ?? '')) {
+      if (
+        !['SelfDeployedQwen', 'LocalQwenSmall', 'PrivateSystemOne'].includes(
+          sample.clientName ?? '',
+        )
+      ) {
         budget.reason = 'Unexpected serving client on the private tier'
         onStop()
         return

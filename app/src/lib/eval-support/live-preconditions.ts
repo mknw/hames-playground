@@ -2,11 +2,14 @@
 export function assertLivePreconditions(env: Record<string, string | undefined>): void {
   if (env.EVAL_GENERAL_GO !== 'S3 merged: go')
     throw new Error('Live eval is disabled: coordinator S3 merged: go is required')
-  for (const name of [
-    'VERDA_INFERENCE_ENDPOINT',
-    'SMALL_LLM_BASE_URL',
-    'SMALL_LLM_DECISIONS_URL',
-  ]) {
+  // Validate an env-file snapshot before it is installed into the process.
+  // The process boot warns about these one-release aliases after validation.
+  env = {
+    ...env,
+    LARGE_LLM_BASE_URL: env.LARGE_LLM_BASE_URL ?? env.VERDA_INFERENCE_ENDPOINT,
+    LARGE_LLM_API_KEY: env.LARGE_LLM_API_KEY ?? env.VERDA_INFERENCE_API_KEY,
+  }
+  for (const name of ['LARGE_LLM_BASE_URL', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL']) {
     const raw = env[name]
     let url: URL
     try {
@@ -29,7 +32,7 @@ export function assertLivePreconditions(env: Record<string, string | undefined>)
       throw new Error(`Live precondition: ${name} has the wrong path`)
     }
   }
-  for (const name of ['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY']) {
+  for (const name of ['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY']) {
     if (!env[name]?.trim())
       throw new Error(`Live precondition: ${name} is missing in app/.env; escalate`)
   }

@@ -127,7 +127,7 @@ afterAll(async () => {
 
 describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
   it('runs both tiers', () => {
-    expect([...TIERS].sort()).toEqual(['anthropic', 'verda'])
+    expect([...TIERS].sort()).toEqual(['anthropic', 'self_deployed'])
   })
   it('the browser wipe also removes memories before their conversation sources', async () => {
     const { wipeUserRows } = await import('../../e2e-browser/lib/db')
@@ -228,7 +228,8 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
       expect(extracts).toHaveLength(2)
       expect(
         extracts.every(
-          (call) => call.model === (tier === 'verda' ? SMALL_MODEL : FAKE_ANTHROPIC_TIER_MODEL),
+          (call) =>
+            call.model === (tier === 'self_deployed' ? SMALL_MODEL : FAKE_ANTHROPIC_TIER_MODEL),
         ),
       ).toBe(true)
       // Decisions are told apart by the endpoint that served them, never the
@@ -236,9 +237,9 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
       const decided = app.fakeLlm.calls.filter((call) => call.endpoint)
       expect(decided.length).toBeGreaterThan(0)
       expect([...new Set(decided.map((call) => call.endpoint))]).toEqual([
-        tier === 'verda' ? 'private' : 'jev',
+        tier === 'self_deployed' ? 'private' : 'jev',
       ])
-      if (tier === 'verda') {
+      if (tier === 'self_deployed') {
         expect(
           app.fakeLlm.calls.filter((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL),
         ).toEqual([])
@@ -639,7 +640,7 @@ describe.runIf(IS_HERMETIC)(
       // The fake gate answers `personal_memory`; the org outcome is pinned at
       // layer 1 (`m6-org-never-proposes`). Here: no proposal row exists for a
       // turn whose gate said `skip` — a routine memory is written straight through.
-      await app.setTier('verda')
+      await app.setTier('self_deployed')
       await enabled(true)
       app.fakeLlm.memoryConfirm('skip')
       const id = newSessionId('confirm-skip')

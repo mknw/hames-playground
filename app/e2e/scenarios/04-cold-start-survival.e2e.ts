@@ -7,9 +7,9 @@
  * into a poll with its own 600s budget (30s per attempt, hermetically raised
  * above this scenario's delay — see `lib/mode.ts`), and the BAML client's budget
  * became a WARM-call one (180s, derived from its own output cap — see
- * `baml_src/verda-client.baml`). Two separate budgets, and this scenario used to
+ * `baml_src/self-deployed-client.baml`). Two separate budgets, and this scenario used to
  * cover neither cleanly: armed `times: 1`, its delay landed on the wake ping,
- * which meant it exercised `VERDA_WAKE_TIMEOUT_MS` and passed — while nothing at
+ * which meant it exercised `LARGE_LLM_WAKE_TIMEOUT_MS` and passed — while nothing at
  * any layer exercised the 180s the client's own calls live under (#279 review,
  * F4). Passing for the wrong reason is the failure mode this suite exists to
  * avoid, so the delay is now aimed PAST the ping (`wake: false`): the box comes
@@ -21,7 +21,7 @@
  * was perfectly happy to keep waiting for. That is what a green result here
  * says: every layer above the client tolerates a slow model call.
  *
- * The delay is filtered to the Verda model, so the roles that stay on the
+ * The delay is filtered to the large model, so the roles that stay on the
  * Anthropic chain answer immediately — otherwise "the app survived a slow call"
  * would be indistinguishable from "everything was slow", and the failing layer
  * would be unattributable.
@@ -29,7 +29,7 @@
  * THE OTHER DIRECTION — a call that EXCEEDS 180s failing cleanly — is not here,
  * and the reason is wall-clock: it costs three minutes per assertion by
  * construction, since the number under test is the client's own. What covers it
- * instead is an arithmetic pin rather than an execution: `clients-verda.test.ts`
+ * instead is an arithmetic pin rather than an execution: `clients-self-deployed.test.ts`
  * asserts the timeout against the client's declared `max_tokens`, which is where
  * the number comes from. Named rather than left as a gap.
  *
@@ -49,7 +49,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { COLD_START_MS, IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { COLD_START_MS, IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -64,7 +64,7 @@ afterAll(async () => {
 beforeEach(async () => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
-  await app.setTier('verda')
+  await app.setTier('self_deployed')
   // A ping has to be SENT for the `wake: false` filter to have anything to skip
   // past, and one process shares one warm clock — see `goToSleep`.
   await app.goToSleep()
@@ -85,7 +85,7 @@ function goSlow(app: AppHandles): void {
   app.fakeLlm.arm({
     kind: 'cold-start',
     ms: COLD_START_MS,
-    model: VERDA_MODEL,
+    model: SELF_DEPLOYED_MODEL,
     times: 1,
     wake: false,
   })
@@ -126,10 +126,10 @@ describe(`a ${Math.round(COLD_START_MS / 1000)}s self-hosted call the app must w
       ).toBeGreaterThanOrEqual(COLD_START_MS)
       const slow = app.fakeLlm.calls.filter((c) => c.delayedMs > 0)
       expect(slow.length, 'no call was actually delayed').toBe(1)
-      expect(slow[0].model).toBe(VERDA_MODEL)
+      expect(slow[0].model).toBe(SELF_DEPLOYED_MODEL)
       // AND IT WAS A BAML CALL, not the wake ping — the assertion that keeps
       // this file measuring `request_timeout_ms` rather than
-      // `VERDA_WAKE_TIMEOUT_MS`. `fn` is null for the ping and the function name
+      // `LARGE_LLM_WAKE_TIMEOUT_MS`. `fn` is null for the ping and the function name
       // for everything else, so this is the difference stated structurally.
       expect(
         slow[0].outcome,

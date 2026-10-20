@@ -372,7 +372,7 @@ function config(over: Partial<MemoryStoreConfig> & { db?: ReturnType<typeof fake
     extract: extract.fn,
     embed: e.embed,
     owner: () => 'user-1',
-    tier: () => 'verda',
+    tier: () => 'self_deployed',
     ...over,
     // D11: the switch is REQUIRED for a write; every test but the one that
     // pins its absence runs with the user's switch on.
@@ -773,7 +773,7 @@ describe('acceptance-rules: dedupe and merge', () => {
   const seed = (over: Partial<Row> = {}): Row => ({
     id: 'old-1',
     kind: 'preference',
-    tier: 'verda',
+    tier: 'self_deployed',
     content: 'The user prefers imperial units.',
     evidence: 'I like imperial units',
     embedding: [1, 0],
@@ -924,7 +924,7 @@ describe('acceptance-rules: dedupe and merge', () => {
   it('looks only at the turn’s own tier', async () => {
     const { db } = await run({ sim: 0.99, seed: { tier: 'anthropic' } })
     expect(db.rows()).toHaveLength(2)
-    expect(db.stats.nearestTiers).toEqual(['verda'])
+    expect(db.stats.nearestTiers).toEqual(['self_deployed'])
   })
 
   it('reports compactionDue once the owner’s count reaches softLimit', async () => {
@@ -943,7 +943,7 @@ describe('erasure-semantics', () => {
   const OLD: Row = {
     id: 'old-1',
     kind: 'preference',
-    tier: 'verda',
+    tier: 'self_deployed',
     content: 'The user prefers imperial units.',
     evidence: 'I like imperial units',
     evidenceEventId: 'evt-old',
@@ -1087,7 +1087,7 @@ describe('evidence-event-id', () => {
         {
           id: 'old-1',
           kind: 'preference',
-          tier: 'verda',
+          tier: 'self_deployed',
           content: 'The user prefers imperial units.',
           evidence: 'I like imperial units',
           evidenceEventId: 'evt-old',
@@ -1144,7 +1144,7 @@ describe('evidence-event-id', () => {
     const row: MemoryInsertRow = {
       id: 'mem-x',
       kind: 'preference',
-      tier: 'verda',
+      tier: 'self_deployed',
       content: CONTENT,
       evidence: EVIDENCE,
       embedding: [1, 0],
@@ -1165,7 +1165,7 @@ describe('merge-fails-to-keep-both', () => {
   const seed = (): Row => ({
     id: 'old-1',
     kind: 'preference',
-    tier: 'verda',
+    tier: 'self_deployed',
     content: 'The user prefers imperial units.',
     evidence: 'I like imperial units',
     embedding: [1, 0],
@@ -1299,14 +1299,14 @@ describe('fail-closed paths', () => {
 
   it('L2: a tier override that disagrees with the run frame stores nothing', async () => {
     const { cfg, db } = config({ tier: () => 'anthropic' })
-    const report = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const report = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       settleMemory(turn(), cfg),
     )
     expect(report.skipped).toBe('no-tier')
     expect(db.rows()).toEqual([])
     // Agreeing is fine.
-    const ok = config({ tier: () => 'verda' })
-    await withRunFrame({ inference: { tier: 'verda' } }, () => settleMemory(turn(), ok.cfg))
+    const ok = config({ tier: () => 'self_deployed' })
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, () => settleMemory(turn(), ok.cfg))
     expect(ok.db.rows()).toHaveLength(1)
   })
 
@@ -1630,7 +1630,7 @@ describe('memory-written-persisted', () => {
     expect(ev).toEqual({
       memoryId,
       kind: 'preference',
-      tier: 'verda',
+      tier: 'self_deployed',
       eventId: userEvent.id,
       ordinal: 0,
       action: 'reinforced',
@@ -1898,7 +1898,7 @@ function confirmSeam(over: { fail?: boolean; expiresInMs?: number } = {}) {
 const seedRow = (over: Partial<Row> = {}): Row => ({
   id: 'mem-old',
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   content: 'The user prefers imperial units.',
   evidence: 'I prefer imperial',
   embedding: [1, 0],
@@ -1937,7 +1937,7 @@ describe('m6-propose-not-write', () => {
     expect(held[0].expiresAt).toBe(r.expiresAt === undefined ? NaN : held[0].expiresAt)
     expect(held[0].payload).toMatchObject({
       v: 1,
-      tier: 'verda',
+      tier: 'self_deployed',
       embedSpace: SPACE,
       eventId: userEvent.id,
       conversationId: ctx.sessionId,
@@ -2249,7 +2249,7 @@ function payload(
 ): MemoryProposalPayload {
   return {
     v: 1,
-    tier: 'verda',
+    tier: 'self_deployed',
     embedSpace: SPACE,
     eventId: 'ev-user',
     conversationId: 'conv-1',
@@ -2295,8 +2295,8 @@ describe('m6-apply-selected', () => {
     expect(db.sources().map(([k]) => k)).toEqual(['ev-user#0', 'ev-user#2'])
     expect(db.sourceRows().map((r) => r[2])).toEqual(['conv-1', 'conv-1'])
     expect(written(ctx as UnifiedContext).map((w) => [w.ordinal, w.action, w.tier])).toEqual([
-      [0, 'inserted', 'verda'],
-      [2, 'inserted', 'verda'],
+      [0, 'inserted', 'self_deployed'],
+      [2, 'inserted', 'self_deployed'],
     ])
   })
 
@@ -2315,17 +2315,17 @@ describe('m6-apply-selected', () => {
     expect(db.stats.transactions).toBe(0)
   })
 
-  // MUTATION: stamp `tier` from the run frame / the apply config → a verda-tier
+  // MUTATION: stamp `tier` from the run frame / the apply config → a self_deployed-tier
   // memory proposed on one tier is stored under another (D8) → red.
   it('stamps the tier the proposal recorded, whatever frame the approval runs in', async () => {
     const db = fakeDb()
     await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
       applyMemoryProposal(events(), applyCfg(db), {
-        payload: payload([{}], { tier: 'verda' }),
+        payload: payload([{}], { tier: 'self_deployed' }),
         selected: ['i0'],
       }),
     )
-    expect(db.rows()[0].tier).toBe('verda')
+    expect(db.rows()[0].tier).toBe('self_deployed')
   })
 
   // MUTATION: reinforce → insert → a duplicate row beside the neighbour → red.

@@ -36,12 +36,12 @@ usage observer checkpoints an interrupted scenario and prevents retries or a fin
 synthesis after the stop condition; throwing from an observer would be swallowed
 by the shared notifier. A timer also stops private wall-clock spend during long
 requests. Missing or unknown observed cost stops the run, as does any serving
-client outside `VerdaQwen`, `LocalQwenSmall` and `PrivateSystemOne`.
+client outside `SelfDeployedQwen`, `LocalQwenSmall` and `PrivateSystemOne`.
 
 The observer prices completed calls, so the final in-flight call can overshoot the
 80% threshold and even the configured cap. The report adds a separate conservative
 private-infrastructure line: elapsed scenario seconds (including setup and endpoint
-wake waits) × (`VERDA_EUR_PER_HOUR` + `SMALL_LLM_EUR_PER_HOUR`), converted to USD at
+wake waits) × (`LARGE_LLM_EUR_PER_HOUR` + `SMALL_LLM_EUR_PER_HOUR`), converted to USD at
 the same static `EUR_PER_USD` used by the observer, refused outside 0.75–0.95. Each hourly rate is floored at its committed default. Observer call-time cost is also
 counted, deliberately overcounting overlap. Infrastructure remains a floor because
 provider rounding and unobserved infrastructure are not measured; configured scale-down tails are reserved once per run and after idle gaps longer than each box’s window;
@@ -82,7 +82,7 @@ HTTP proxy for non-loopback requests. It re-execs a child with `NODE_USE_ENV_PRO
 `/v1/systemone` paths, then installs the same private role map used in production.
 It refuses a missing/stale small-model URL or key before inference; refresh a stale
 worktree copy from the main checkout's `app/.env` without printing key values,
-and escalate if the required values are absent. The runner does not copy or print credentials. After loading `.env`, it poisons all public-provider keys and the public decision URL in both modes, and live mode refuses a non-local embedding provider. Each live job awaits `ensurePrivateTierAwake()` after its elapsed-time clock starts. Wake failure records `VERDA_WAKE_FAILED` or `SMALL_LLM_WAKE_FAILED` (the box that failed; `PRIVATE_TIER_WAKE_FAILED` if unattributable) and stops without fallback. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
+and escalate if the required values are absent. The runner does not copy or print credentials. After loading `.env`, it poisons all public-provider keys and the public decision URL in both modes, and live mode refuses a non-local embedding provider. Each live job awaits `ensurePrivateTierAwake()` after its elapsed-time clock starts. Wake failure records `SELF_DEPLOYED_WAKE_FAILED` or `SMALL_LLM_WAKE_FAILED` (the box that failed; `PRIVATE_TIER_WAKE_FAILED` if unattributable) and stops without fallback. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
 otherwise escalate. Never start another embedder.
 
 Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver
@@ -98,7 +98,7 @@ route is not refused. The production G14 filter is present and passes identity-f
 payloads; no substitution is exercised (no fixture carries an identity, and the directory
 leg is off: `directory: 'none'`). Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
-Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled.
+Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
 
 The acceptance gate after S3 is: all `must` scenarios and the unchanged `general`
 baseline pass on the **private tier**, with all expected scenarios present and live
@@ -119,7 +119,7 @@ by the nested guards) and both fields of non-planner route outputs. Only
 fencing remain. `screenDespiteFindings` adds
 only results with deterministic findings, which hermetic fixtures never produce, so switching
 it off would not change these counts. The levers that move cost are the screen's scope and
-whether the reasoning field is screened. On the private tier each call is Verda time.
+whether the reasoning field is screened. On the private tier each call is large-model time.
 Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
 the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).
 

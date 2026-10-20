@@ -55,7 +55,7 @@ DECISION_REQUEST = {
 }
 
 
-# The 27B, in `VerdaQwen`'s request shape: thinking off, its temperature and output cap.
+# The 27B, in `SelfDeployedQwen`'s request shape: thinking off, its temperature and output cap.
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 CONTROLLER_REQUEST = {
     "model": QWEN27B_MODEL,

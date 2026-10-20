@@ -1,7 +1,7 @@
 /** Layer 2: stored public choices cannot escape a private-only deployment. */
 import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { bootApp, newSessionId, settleSummaries, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, VERDA_MODEL, SMALL_MODEL } from '../lib/mode'
+import { IS_HERMETIC, SELF_DEPLOYED_MODEL, SMALL_MODEL } from '../lib/mode'
 
 let app: AppHandles
 beforeAll(async () => {
@@ -24,8 +24,8 @@ describe('private-only deployment', () => {
       // Write the historical fact directly, as an earlier deployment could have.
       await app.setTier('anthropic', session)
       expect(await actions.getConversationTier(session)).toEqual({
-        tier: 'verda',
-        verdaAvailable: true,
+        tier: 'self_deployed',
+        selfDeployedAvailable: true,
         anthropicAvailable: false,
       })
       await expect(actions.setConversationTier(session, 'anthropic')).rejects.toThrow(
@@ -40,7 +40,7 @@ describe('private-only deployment', () => {
       await settleSummaries(app, session)
       // Force an actual legacy conversation column after the first persisted turn.
       await app.setTier('anthropic', session)
-      expect((await actions.getConversationTier(session)).tier).toBe('verda')
+      expect((await actions.getConversationTier(session)).tier).toBe('self_deployed')
       await app.runTurn(session, 'Summarise the answer')
       await settleSummaries(app, session)
       await actions.regenerateConversationTitle(session)
@@ -52,7 +52,7 @@ describe('private-only deployment', () => {
         ).toBe(true)
       }
       expect(calls.some((call) => call.fn?.startsWith('ResultDescribe'))).toBe(true)
-      for (const call of calls) expect([VERDA_MODEL, SMALL_MODEL]).toContain(call.model)
+      for (const call of calls) expect([SELF_DEPLOYED_MODEL, SMALL_MODEL]).toContain(call.model)
       expect((await app.readRow(session))?.status).toBe('done')
     },
   )

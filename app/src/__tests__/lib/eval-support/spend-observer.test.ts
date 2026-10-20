@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SpendBudget, type SpendKey } from '../../../lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../../lib/eval-support/spend-observer'
-const key: SpendKey = { agent: 'general-next', scenario: 'test', tier: 'verda' }
+const key: SpendKey = { agent: 'general-next', scenario: 'test', tier: 'self_deployed' }
 const setup = (live = true) => {
   const budget = new SpendBudget(20, 0.8)
   const onStop = vi.fn()
@@ -22,7 +22,7 @@ describe('runner synchronous spend stop', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
     observer.activate(undefined)
-    observer.observe({ clientName: 'VerdaQwen', metrics: { costEur: 0 } })
+    observer.observe({ clientName: 'SelfDeployedQwen', metrics: { costEur: 0 } })
     expect(budget.reason).toBe('Usage outside a scenario')
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.rows).toHaveLength(0)
@@ -30,7 +30,7 @@ describe('runner synchronous spend stop', () => {
   it('calls onStop synchronously at the 80% boundary', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
-    observer.observe({ clientName: 'VerdaQwen', metrics: { costEur: 12.8 } })
+    observer.observe({ clientName: 'SelfDeployedQwen', metrics: { costEur: 12.8 } })
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.totalUsd).toBe(16)
   })
@@ -50,12 +50,12 @@ describe('runner synchronous spend stop', () => {
     observer.activate(key)
     observer.observe({
       functionName: 'ScreenUntrustedContent',
-      clientName: 'VerdaQwen',
+      clientName: 'SelfDeployedQwen',
       metrics: { costEur: 0.2 },
     })
     observer.observe({
       functionName: 'Synthesize',
-      clientName: 'VerdaQwen',
+      clientName: 'SelfDeployedQwen',
       metrics: { costEur: 0.4 },
     })
     expect(budget.row(key).functions.ScreenUntrustedContent.calls).toBe(1)

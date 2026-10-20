@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { bootApp, eventsOfType, newSessionId, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'
-import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
 
 const AGENT = 'e2e-resume-wake'
 let app: AppHandles
@@ -62,7 +62,7 @@ afterAll(async () => {
 describe.runIf(IS_HERMETIC)('a resume whose wake fails', () => {
   it('reloads the warning and retries the same answer to completion', async () => {
     app.fakeLlm.reset()
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const sessionId = newSessionId('resume-wake')
     const first = await app.runTurnOverSse({ sessionId, agentId: AGENT, message: 'Synthetic task' })
     expect(first.status).toBe(200)
@@ -76,14 +76,24 @@ describe.runIf(IS_HERMETIC)('a resume whose wake fails', () => {
 
     await app.goToSleep()
     app.fakeLlm.reset()
-    app.fakeLlm.arm({ kind: 'status', status: 400, wake: true, model: VERDA_MODEL, times: 1 })
+    app.fakeLlm.arm({
+      kind: 'status',
+      status: 400,
+      wake: true,
+      model: SELF_DEPLOYED_MODEL,
+      times: 1,
+    })
     const failed = await app.runTurnOverSse({ sessionId, mode: 'resume' })
     expect(failed.status).toBe(200)
     const failure = failed.frames.find((f) => f.event === 'error')?.data.error
     expect(failure).toEqual(expect.stringContaining('the private inference box did not wake'))
     expect(failed.frames.some((f) => f.event === 'done')).toBe(false)
     expect(app.fakeLlm.calls).toHaveLength(1)
-    expect(app.fakeLlm.calls[0]).toMatchObject({ fn: null, outcome: 'status', model: VERDA_MODEL })
+    expect(app.fakeLlm.calls[0]).toMatchObject({
+      fn: null,
+      outcome: 'status',
+      model: SELF_DEPLOYED_MODEL,
+    })
 
     // The actual action the sidebar/reload uses, with no in-memory transcript.
     const restored = await actions.loadConversation(sessionId)

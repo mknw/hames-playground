@@ -17,8 +17,8 @@ import { defaultInferenceTier } from '../../lib/db/user-prefs.server'
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 const read = (file: string) => readFileSync(path.join(REPO, file), 'utf8')
 const REQUIRED = {
-  VERDA_INFERENCE_ENDPOINT: 'https://chat.example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'synthetic-chat-key',
+  LARGE_LLM_BASE_URL: 'https://chat.example.invalid/v1',
+  LARGE_LLM_API_KEY: 'synthetic-chat-key',
   SMALL_LLM_BASE_URL: 'https://small.example.invalid/v1',
   SMALL_LLM_DECISIONS_URL: 'https://small.example.invalid/v1/systemone',
   SMALL_LLM_API_KEY: 'synthetic-small-key',
@@ -81,7 +81,7 @@ afterEach(() => {
 })
 
 describe('private-tier preflight', () => {
-  it.each([{}, REQUIRED, { ...REQUIRED, USE_VERDA_INFERENCE: '1' }])(
+  it.each([{}, REQUIRED, { ...REQUIRED, USE_SELF_DEPLOYED_INFERENCE: '1' }])(
     'accepts none or a complete tier: %j',
     (values) => expect(problems(values)).toBe(''),
   )
@@ -98,11 +98,13 @@ describe('private-tier preflight', () => {
   })
 
   it('refuses the flag without a tier', () => {
-    expect(problems({ USE_VERDA_INFERENCE: '1' })).toContain('USE_VERDA_INFERENCE=1 without all of')
+    expect(problems({ USE_SELF_DEPLOYED_INFERENCE: '1' })).toContain(
+      'USE_SELF_DEPLOYED_INFERENCE=1 without all of',
+    )
   })
 
   it.each([
-    ['VERDA_INFERENCE_ENDPOINT', 'https://chat.example.invalid'],
+    ['LARGE_LLM_BASE_URL', 'https://chat.example.invalid'],
     ['SMALL_LLM_BASE_URL', 'https://small.example.invalid'],
     ['SMALL_LLM_DECISIONS_URL', 'https://small.example.invalid/v1'],
     ['SMALL_LLM_DECISIONS_URL', 'https://small.example.invalid/v1/systemone/extra'],
@@ -200,7 +202,7 @@ describe('decisions URL parity with runtime', () => {
     (_label, url, valid) => {
       const values = { ...REQUIRED, SMALL_LLM_DECISIONS_URL: url }
       for (const [key, value] of Object.entries(values)) vi.stubEnv(key, value)
-      vi.stubEnv('USE_VERDA_INFERENCE', '')
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '')
       vi.stubGlobal(
         'fetch',
         vi.fn(() => {
@@ -209,7 +211,7 @@ describe('decisions URL parity with runtime', () => {
       )
       if (valid) expect(() => assertPrivateTierConfigured()).not.toThrow()
       else expect(() => assertPrivateTierConfigured()).toThrow()
-      expect(defaultInferenceTier()).toBe(valid ? 'verda' : 'anthropic')
+      expect(defaultInferenceTier()).toBe(valid ? 'self_deployed' : 'anthropic')
       expect(fetch).not.toHaveBeenCalled()
       const bootstrap = problems(values)
       const documented = documentedPreflight(values)
@@ -321,26 +323,28 @@ async function prompt(values: Record<string, string>, configure = true) {
 }
 
 describe('private-tier interactive setup', () => {
-  it.each([{}, { VERDA_INFERENCE_ENDPOINT: REQUIRED.VERDA_INFERENCE_ENDPOINT }] as Record<
-    string,
-    string
-  >[])('asks for every missing value and keeps existing values: %j', async (values) => {
-    const { output, env } = await prompt(values)
-    for (const [key, value] of Object.entries(REQUIRED)) {
-      expect(env.match(new RegExp(`^${key}=`, 'gm'))).toHaveLength(1)
-      expect(env).toContain(`${key}='${value}'`)
-      expect(output).not.toContain(value)
-      if (!values[key as keyof typeof values]) expect(output).toContain(`${key} (`)
-    }
-    for (const key of ['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY']) {
-      expect(output).toContain(`${key} (bearer key, hidden)`)
-    }
-    expect(output).toContain('SMALL_LLM_DECISIONS_URL (full systemone URL, ends in /v1/systemone)')
-    expect(output.match(/HIDDEN_READ/g)).toHaveLength(2)
-    expect(output).toContain('5 of 5 required values set')
-    expect(output).toContain('a user who never chose starts on Private')
-    expect(env).not.toContain('USE_VERDA_INFERENCE=')
-  })
+  it.each([{}, { LARGE_LLM_BASE_URL: REQUIRED.LARGE_LLM_BASE_URL }] as Record<string, string>[])(
+    'asks for every missing value and keeps existing values: %j',
+    async (values) => {
+      const { output, env } = await prompt(values)
+      for (const [key, value] of Object.entries(REQUIRED)) {
+        expect(env.match(new RegExp(`^${key}=`, 'gm'))).toHaveLength(1)
+        expect(env).toContain(`${key}='${value}'`)
+        expect(output).not.toContain(value)
+        if (!values[key as keyof typeof values]) expect(output).toContain(`${key} (`)
+      }
+      for (const key of ['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY']) {
+        expect(output).toContain(`${key} (bearer key, hidden)`)
+      }
+      expect(output).toContain(
+        'SMALL_LLM_DECISIONS_URL (full systemone URL, ends in /v1/systemone)',
+      )
+      expect(output.match(/HIDDEN_READ/g)).toHaveLength(2)
+      expect(output).toContain('5 of 5 required values set')
+      expect(output).toContain('a user who never chose starts on Private')
+      expect(env).not.toContain('USE_SELF_DEPLOYED_INFERENCE=')
+    },
+  )
 
   it('allows an Anthropic-only host to decline the tier', async () => {
     const { output, env } = await prompt({}, false)
@@ -360,7 +364,9 @@ describe('operator docs agree with the private-tier contract', () => {
     expect(preview).toContain('Must print 5 for staging')
     const tier = template.split('# --- Self-hosted inference:')[1]?.split('# Data Stash')[0] ?? ''
     const declarations = [...tier.matchAll(/^# ([A-Z_]+)=/gm)].map((m) => m[1])
-    expect(declarations.sort()).toEqual([...Object.keys(REQUIRED), 'USE_VERDA_INFERENCE'].sort())
+    expect(declarations.sort()).toEqual(
+      [...Object.keys(REQUIRED), 'USE_SELF_DEPLOYED_INFERENCE'].sort(),
+    )
     expect(tier).toContain('Staging configures all five')
     expect(tier).not.toMatch(/LEAVE ALL SIX UNSET|routing is unchanged|header switch/)
   })
@@ -434,24 +440,27 @@ describe('operator docs agree with the private-tier contract', () => {
 })
 
 describe('private-only bootstrap (#653)', () => {
-  it('accepts an empty Anthropic key only with the restriction and all five values', () => {
-    expect(problems({ ...REQUIRED, INFERENCE_TIERS: 'private', ANTHROPIC_API_KEY: '' })).toBe('')
-    expect(problems({ ...REQUIRED, ANTHROPIC_API_KEY: '' })).toBe('ANTHROPIC_API_KEY is empty\n')
-    expect(problems({ ...REQUIRED, USE_VERDA_INFERENCE: '1', ANTHROPIC_API_KEY: '' })).toContain(
-      'ANTHROPIC_API_KEY is empty',
-    )
-  })
+  it.each(['self_deployed', 'private'])(
+    'accepts an empty Anthropic key only with restriction %s and all five values',
+    (setting) => {
+      expect(problems({ ...REQUIRED, INFERENCE_TIERS: setting, ANTHROPIC_API_KEY: '' })).toBe('')
+      expect(problems({ ...REQUIRED, ANTHROPIC_API_KEY: '' })).toBe('ANTHROPIC_API_KEY is empty\n')
+      expect(
+        problems({ ...REQUIRED, USE_SELF_DEPLOYED_INFERENCE: '1', ANTHROPIC_API_KEY: '' }),
+      ).toContain('ANTHROPIC_API_KEY is empty')
+    },
+  )
   it.each(Object.keys(REQUIRED))('requires %s in private-only mode', (key) => {
     expect(problems({ ...REQUIRED, INFERENCE_TIERS: 'private', [key]: '' })).toContain(
-      'INFERENCE_TIERS=private requires all',
+      'INFERENCE_TIERS=self_deployed requires all',
     )
   })
   it('refuses an entirely absent private tier and invalid settings', () => {
     expect(problems({ INFERENCE_TIERS: 'private' })).toContain(
-      'INFERENCE_TIERS=private requires all',
+      'INFERENCE_TIERS=self_deployed requires all',
     )
     expect(problems({ INFERENCE_TIERS: 'typo' })).toContain(
-      'INFERENCE_TIERS must be unset or private',
+      'INFERENCE_TIERS must be unset or self_deployed',
     )
   })
   it('does not ask the operator for an Anthropic key on a private-only host', () => {
@@ -462,5 +471,30 @@ describe('private-only bootstrap (#653)', () => {
       { env: shellEnv(dir) as unknown as NodeJS.ProcessEnv, encoding: 'utf8' },
     )
     expect(out).toBe('')
+  })
+})
+
+describe('one-release bootstrap compatibility', () => {
+  it('accepts the legacy large-model family with the canonical restriction', () => {
+    const { LARGE_LLM_BASE_URL, LARGE_LLM_API_KEY, ...small } = REQUIRED
+    expect(
+      problems({
+        ...small,
+        VERDA_INFERENCE_ENDPOINT: LARGE_LLM_BASE_URL,
+        VERDA_INFERENCE_API_KEY: LARGE_LLM_API_KEY,
+        INFERENCE_TIERS: 'self_deployed',
+        ANTHROPIC_API_KEY: '',
+      }),
+    ).toBe('')
+  })
+  it('an explicit empty canonical endpoint refuses even with the legacy name set', () => {
+    expect(
+      problems({
+        ...REQUIRED,
+        LARGE_LLM_BASE_URL: '',
+        VERDA_INFERENCE_ENDPOINT: REQUIRED.LARGE_LLM_BASE_URL,
+        INFERENCE_TIERS: 'self_deployed',
+      }),
+    ).toContain('INFERENCE_TIERS=self_deployed requires all')
   })
 })

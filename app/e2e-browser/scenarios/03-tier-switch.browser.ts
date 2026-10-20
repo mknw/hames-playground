@@ -24,7 +24,7 @@
  * browser, and nothing below this layer sends that click.
  */
 import { test, expect } from '../lib/fixtures'
-import { FAKE_ANTHROPIC_TIER_MODEL, VERDA_MODEL } from '../lib/env'
+import { FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL } from '../lib/env'
 import {
   chooseTier,
   newChat,
@@ -37,7 +37,7 @@ import {
 } from '../lib/chat'
 import type { FakeCall } from '../lib/control'
 
-const PRIVATE = TIER_LABEL.verda
+const PRIVATE = TIER_LABEL.self_deployed
 const ANTHROPIC = TIER_LABEL.anthropic
 
 /** The two calls this scenario asserts on. `LoopController` is this chain's
@@ -84,16 +84,16 @@ test('the switch moves the next turn to the other endpoint, and shows the positi
 
   // ---- Self-hosted position ----------------------------------------------
   await backend.reset()
-  await chooseTier(page, 'verda')
+  await chooseTier(page, 'self_deployed')
   await expect(page.getByRole('radio', { name: ANTHROPIC })).not.toBeChecked()
 
   await send(page, 'second question')
   await waitForReplies(page, 2)
 
-  const onVerda = SWITCHED(await backend.calls())
-  expect(onVerda.length, 'no switched-role call was served at all').toBeGreaterThan(0)
-  for (const call of onVerda) {
-    expect(call.model, `${call.fn} did not take the self-hosted route`).toBe(VERDA_MODEL)
+  const onSelfDeployed = SWITCHED(await backend.calls())
+  expect(onSelfDeployed.length, 'no switched-role call was served at all').toBeGreaterThan(0)
+  for (const call of onSelfDeployed) {
+    expect(call.model, `${call.fn} did not take the self-hosted route`).toBe(SELF_DEPLOYED_MODEL)
   }
 
   // The switch is a setting, not a fork: both turns are in ONE conversation, so
@@ -115,7 +115,7 @@ test('flips one conversation without moving its neighbour, and says so on every 
   // a private one is waiting on a cold box.
   await open(page, appUrl)
 
-  await chooseTier(page, 'verda')
+  await chooseTier(page, 'self_deployed')
   await send(page, 'the private one')
   await waitForReplies(page, 1)
   // WINDOWED PER TURN, and this is why the window has to be closed here rather
@@ -143,7 +143,7 @@ test('flips one conversation without moving its neighbour, and says so on every 
 
   // The sidebar says which is which without hovering anything — the glyph is
   // always visible, unlike the delete and retitle actions above it.
-  expect(await rowTier(older)).toBe('verda')
+  expect(await rowTier(older)).toBe('self_deployed')
   expect(await rowTier(newer)).toBe('anthropic')
 
   // Back to the first thread: it kept its own tier, even though the LAST thing
@@ -153,7 +153,7 @@ test('flips one conversation without moving its neighbour, and says so on every 
   await expect(page.getByRole('radio', { name: PRIVATE })).toBeChecked()
 
   // Not a claim about the widget alone: the second conversation's turn really
-  // was served by the other endpoint while the first one's row said verda. Each
+  // was served by the other endpoint while the first one's row said self_deployed. Each
   // window is checked whole — every switched call in it, not a set over both —
   // so a single call landing on the wrong endpoint is a red result and names the
   // chat it belonged to.
@@ -162,7 +162,7 @@ test('flips one conversation without moving its neighbour, and says so on every 
   )
   for (const call of onPrivate) {
     expect(call.model, `${call.fn} in the private chat did not take the self-hosted route`).toBe(
-      VERDA_MODEL,
+      SELF_DEPLOYED_MODEL,
     )
   }
 

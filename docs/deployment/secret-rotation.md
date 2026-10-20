@@ -154,16 +154,16 @@ private conversation to a public provider. Before revocation, rollback restores
 the old value and recreates; afterwards, issue a new credential. No live check
 is authorized by this document. Source: packages/harness-baml/baml_src/clients.baml:15.
 
-## VERDA_INFERENCE_API_KEY
+## LARGE_LLM_API_KEY
 
-The variable name `VERDA_INFERENCE_API_KEY` survives a provider change; rotate
+The variable name `LARGE_LLM_API_KEY` survives a provider change; rotate
 it at the operator's current private chat endpoint, then update all affected app
 runtime files and recreate them. If overlapping keys are supported, verify the
 replacement before revocation; otherwise keep ingress closed throughout cutover.
 Check a synthetic private-tier turn in an authorized live window, with no public
 fallback. Rollback coordinates endpoint and consumers together. **Verda is
 paused: never wake or probe it.** Deferred verification means the rotation is
-unverified, not passed. Source: packages/harness-baml/baml_src/verda-client.baml:178.
+unverified, not passed. Source: packages/harness-baml/baml_src/self-deployed-client.baml:178.
 
 ## SMALL_LLM_API_KEY
 

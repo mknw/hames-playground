@@ -27,7 +27,7 @@
  * ## The warm state's two sources
  *
  * `ready` is completion evidence ONLY — a real call the deployment answered
- * within the scale-down window (`verdaWarmth`'s clock). It never flips on a
+ * within the scale-down window (`selfDeployedWarmth`'s clock). It never flips on a
  * timer or on the control plane. Everything else consults the control plane:
  * no replicas is `cold` (observed scaled-down, which is what retires the old
  * pre-message `unknown` — a process that had never seen a call used to be able
@@ -70,7 +70,7 @@
  * put the number on screen where a reviewer could watch it:
  *
  *  1. **The render site asked the wrong question.** It gated the number on
- *     `warmthKey() === 'warm'`, but `verdaWarmth()` also computes one for
+ *     `warmthKey() === 'warm'`, but `selfDeployedWarmth()` also computes one for
  *     `running` — the state whose whole documented promise is that it implies
  *     warm, and the state a user is in for as long as their own turn is on the
  *     box. On a route whose first call costs minutes, that is nearly all of the
@@ -93,8 +93,8 @@
  *
  * A cold indicator is also a BUTTON, and the only one in the app that acts on
  * the deployment rather than on a conversation: hovering it offers
- * {@link IGNITE_LABEL} and clicking calls `igniteVerdaBox`, which is the same
- * `ensureVerdaAwake` a turn uses — so a click during an in-flight wake joins it
+ * {@link IGNITE_LABEL} and clicking calls `igniteSelfDeployedBox`, which is the same
+ * `ensureSelfDeployedAwake` a turn uses — so a click during an in-flight wake joins it
  * and a click on a warm box costs nothing. The reasoning for reusing that entry
  * point rather than issuing a second wake is on the action itself.
  *
@@ -142,7 +142,7 @@ import {
 } from 'solid-js'
 import {
   getPreviewHeaderState,
-  igniteVerdaBox,
+  igniteSelfDeployedBox,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
 import { COLD_START_HEADLINE, coldStartBasisHint } from '~/lib/cold-start-format'
@@ -418,7 +418,7 @@ export const PreviewHeaderStrip = () => {
       // It is cleared by the box being UP, whoever brought it up: at that point
       // the report is false rather than merely old, and "the start failed" is
       // the one thing the strip must not keep saying about a running box.
-      // `answering` counts because it is `ready` plus a turn (`verdaWarmth`).
+      // `answering` counts because it is `ready` plus a turn (`selfDeployedWarmth`).
       if (next.warmth.state === 'ready' || next.warmth.state === 'answering') setIgniteError(null)
     } catch {
       // A poll that cannot reach the server leaves the last known values on
@@ -525,7 +525,7 @@ export const PreviewHeaderStrip = () => {
    *  policy: before the control plane, `unknown` meant "this process has never
    *  seen a call" and the button was withheld there. Now `unknown` means the
    *  CONTROL PLANE could not be asked — a probe failure, not an unknown box —
-   *  and `igniteVerdaBox` is independent of the probe, so withholding the one
+   *  and `igniteSelfDeployedBox` is independent of the probe, so withholding the one
    *  control that could fix the situation would punish the user for a status
    *  API's downtime. `starting` and `ready`/`answering` hide it: a replica is
    *  already engaged, and a second wake would only queue behind the first. */
@@ -558,7 +558,7 @@ export const PreviewHeaderStrip = () => {
    *
    * Deliberately thin: everything that makes this safe — one shared ping per
    * idle period, a click on an already-warm box costing nothing, a failure
-   * naming the box rather than the click — belongs to `ensureVerdaAwake` and is
+   * naming the box rather than the click — belongs to `ensureSelfDeployedAwake` and is
    * enforced there for every caller, not re-implemented per button. What is
    * this component's own is the pending state, because the wake can legitimately
    * take minutes and a control that looks idle for two minutes reads as broken.
@@ -569,7 +569,7 @@ export const PreviewHeaderStrip = () => {
     setError(null)
     setIgniteError(null)
     try {
-      setState(await igniteVerdaBox())
+      setState(await igniteSelfDeployedBox())
       setReceivedAt(Date.now())
     } catch (err) {
       // Surfaced, never swallowed, and on its OWN channel: a wake that failed is
@@ -650,7 +650,7 @@ export const PreviewHeaderStrip = () => {
             transition="opacity"
           >
             {/* ---- Warm state -------------------------------------------- */}
-            <Show when={s().verdaAvailable}>
+            <Show when={s().selfDeployedAvailable}>
               {/* Two elements, one `data-testid` and one body. A cold box is the
                   one state a click can act on, so THERE it is a real `<button>`
                   — not a `<div onClick>` — which is what buys the role, the
@@ -674,7 +674,7 @@ export const PreviewHeaderStrip = () => {
                     gap="1"
                     transition="all"
                     title={indicatorHint()}
-                    data-testid="verda-warmth"
+                    data-testid="self_deployed-warmth"
                     onMouseEnter={() => setHovering(true)}
                     onMouseLeave={() => setHovering(false)}
                   >
@@ -706,7 +706,7 @@ export const PreviewHeaderStrip = () => {
                       ? 'Starting the self-hosted endpoint. The first call after it has scaled to zero takes minutes.'
                       : 'Start the self-hosted endpoint now, so your next message does not pay the cold start.'
                   }
-                  data-testid="verda-warmth"
+                  data-testid="self_deployed-warmth"
                 >
                   {indicatorBody()}
                 </button>
@@ -793,10 +793,10 @@ export const PreviewHeaderStrip = () => {
                   aria-hidden="true"
                 />
               </Metric>
-              <Show when={s().verdaAvailable}>
+              <Show when={s().selfDeployedAvailable}>
                 <Metric
                   label="on-prem"
-                  value={formatShare(s().usage.verdaCallShare)}
+                  value={formatShare(s().usage.selfDeployedCallShare)}
                   hint="Share of today's model calls that ran on the company-hosted deployment. Measured from the client each call actually used, not from the setting, and over every model call the app makes — including the safety screen on fetched content, which follows the setting like everything else. A day on which every chat used the company-hosted setting reads 100%."
                 >
                   <span
@@ -831,7 +831,7 @@ export const PreviewHeaderStrip = () => {
                 role="alert"
                 text="xs ui-danger"
                 title={igniteError() ?? undefined}
-                data-testid="verda-ignite-failed"
+                data-testid="self_deployed-ignite-failed"
               >
                 {IGNITE_FAILED_LABEL}
               </span>

@@ -2,11 +2,11 @@
 
 All names, documents, people and results below are synthetic. This catalogue is the acceptance contract; assistant lines describe required outcomes, not preloaded successful answers. `RUNNABLE NOW` describes the P4 boundary, not permission to spend: candidate execution waits for S3 registration, and live execution waits for the coordinator message **S3 merged: go**.
 
-The PRIVATE tier (`verda`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. Baseline cases run unchanged against `general` on the private tier too; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
+The PRIVATE tier (`self_deployed`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. Baseline cases run unchanged against `general` on the private tier too; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
 
 The built-in dependency driver uses an in-memory stash and scripted sandbox effects. It proves routing, ordering, handoff and artifact/index contracts; it does not certify Office rendering or the HTTP upload path. The future app-path evidence must seed synthetic documents through the app upload route before claiming that integration. No real Graph, Redis, Neo4j, sandbox container or company data is required.
 
-Live preconditions: this worktree’s `app/.env` must contain remote `SMALL_LLM_BASE_URL` and `SMALL_LLM_DECISIONS_URL` (full `/v1/systemone` URL), the shared key and the configured Verda endpoint/key. Refresh a stale worktree copy without printing secrets; if values are missing, remain hermetic and escalate. The owner local embedder on `127.0.0.1:8090` must already be running; never start a second one. The whole shared budget is private GPU time: USD 20 by default, values above 25 refused, synchronous stop at 80% (USD 16 by default), with observer costs and a separate wall-clock floor for both boxes reported per scenario. A final in-flight call and unobserved infrastructure can overshoot that threshold; the report states the limit.
+Live preconditions: this worktree’s `app/.env` must contain remote `SMALL_LLM_BASE_URL` and `SMALL_LLM_DECISIONS_URL` (full `/v1/systemone` URL), the shared key and the configured large-model endpoint/key. Refresh a stale worktree copy without printing secrets; if values are missing, remain hermetic and escalate. The owner local embedder on `127.0.0.1:8090` must already be running; never start a second one. The whole shared budget is private GPU time: USD 20 by default, values above 25 refused, synchronous stop at 80% (USD 16 by default), with observer costs and a separate wall-clock floor for both boxes reported per scenario. A final in-flight call and unobserved infrastructure can overshoot that threshold; the report states the limit.
 
 The eventual flip requires no regression on the unchanged `general` baseline plus all `must` cases green on the private tier. Scripted wiring evidence alone cannot satisfy it. The final S7 injected-field/factory wiring is assigned to S3; the candidate has not run on this base.
 
@@ -279,8 +279,8 @@ Eval driver exercises download, hydration or indexing. No live run is authorized
 by this change; Modal is billed. Scenarios 15/16 remain gated in the executable
 driver until its next separately authorized update/run.
 
-Preconditions: `INFERENCE_TIERS=private`; each run frame explicitly carries
-`verda`; `EMBEDDINGS_PROVIDER=local` points at the deployment's own embedder;
+Preconditions: `INFERENCE_TIERS=self_deployed`; each run frame explicitly carries
+`self_deployed`; `EMBEDDINGS_PROVIDER=local` points at the deployment's own embedder;
 Redis stash and the `DOC_CONVERT_URL` sidecar are available. Use only synthetic
 Graph files and directory entries. The office sandbox uses `mcp-only` egress.
 

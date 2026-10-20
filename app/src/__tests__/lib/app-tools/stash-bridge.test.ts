@@ -58,7 +58,7 @@ const ingestWithoutFrame = () =>
     runAppTool('graph_file_ingest', { item_id: '01ABC' }),
   )
 
-const ingest = () => withRunFrame({ inference: { tier: 'verda' } }, ingestWithoutFrame)
+const ingest = () => withRunFrame({ inference: { tier: 'self_deployed' } }, ingestWithoutFrame)
 
 beforeEach(() => {
   vi.stubEnv('INFERENCE_TIERS', 'private')
@@ -141,7 +141,7 @@ describe('P4 fail-closed ingestion policy', () => {
   it.each([undefined, {}, { tier: 'unknown-tier' }, { tier: 'anthropic' }])(
     'refuses raw inference slot %j, even with a private deployment default',
     async (inference) => {
-      vi.stubEnv('USE_VERDA_INFERENCE', '1')
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       const result =
         inference === undefined
           ? await ingestWithoutFrame()
@@ -163,7 +163,7 @@ describe('P4 fail-closed ingestion policy', () => {
 
   it('refuses ingestion on a deployment that allows Anthropic, even on a private run', async () => {
     vi.stubEnv('INFERENCE_TIERS', '')
-    vi.stubEnv('USE_VERDA_INFERENCE', '1')
+    vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
     expect(await ingest()).toMatchObject({
       success: false,
       error: expect.stringContaining('private inference on a private-only deployment'),
@@ -183,7 +183,7 @@ describe('P4 fail-closed ingestion policy', () => {
   })
 })
 
-it.each(['PRIVATE', 'private,anthropic', 'verda', 'anthropic'])(
+it.each(['PRIVATE', 'private,anthropic', 'typo', 'anthropic'])(
   'classifies invalid deployment policy %s',
   async (setting) => {
     vi.stubEnv('INFERENCE_TIERS', setting)

@@ -292,7 +292,7 @@ export const SERVER_FUNCTION_ROUTER = 'server-fns'
  * its no-JavaScript path — and runs the function with those arguments. The ids
  * are readable in the public client bundle, so every exported server function
  * was a `GET` any site could link to: `deleteConversationsBulk`,
- * `shareConversation`, `igniteVerdaBox`, the graph and skill edits. Each one's
+ * `shareConversation`, `igniteSelfDeployedBox`, the graph and skill edits. Each one's
  * `requireUser()` gate passed, because the cookie rode along. The app's own
  * client always `POST`s (`server-runtime.js`), and nothing here uses the
  * `.GET` form, so the only thing this refuses is the attack.

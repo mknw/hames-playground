@@ -333,7 +333,7 @@ jobs:
     # test-database-guard.test.ts pins that this job sets it.
     env:
       TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55439/hames_test
-      TEST_DATABASE_REQUIRED: '1'
+      TEST_DATABASE_REQUIRED: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -602,7 +602,7 @@ jobs:
       # guard these answer 302 or 500 (the function ran) or 404 (an unknown id).
       - name: Assert no server function runs from a GET
         run: |
-          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          fn='src_lib_harness-client_preview-header_server_ts--igniteSelfDeployedBox_1'
           for p in /_server /_server/ /_serverx /_server.js /%5Fserver /_server%2F /_server%2Fx; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Referer: http://localhost:3444/' \
               "localhost:3444${p}?id=${fn}&name=x")
@@ -621,7 +621,7 @@ jobs:
       - name: Assert a cross-origin write is refused
         run: |
           own=http://localhost:3444
-          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          fn='src_lib_harness-client_preview-header_server_ts--igniteSelfDeployedBox_1'
           form=(-H 'Content-Type: application/x-www-form-urlencoded' --data 'a=b')
           answer() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
           refuse() {

@@ -28,7 +28,7 @@ Where the markers live today:
 - Only the Anthropic clients in
   [`clients.baml`](../../packages/harness-baml/baml_src/clients.baml) forward the
   markers (`allowed_role_metadata ["cache_control"]`). The self-hosted client in
-  [`verda-client.baml`](../../packages/harness-baml/baml_src/verda-client.baml)
+  [`self-deployed-client.baml`](../../packages/harness-baml/baml_src/self-deployed-client.baml)
   declares none, so on that tier the markers are dropped and nothing asks for a
   prompt to be retained.
 

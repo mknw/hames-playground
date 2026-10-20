@@ -55,7 +55,7 @@ function record(over: Partial<LLMCallRecord> & { metrics?: EventMetrics } = {}):
     },
     durationMs: 3600,
     provider: 'openai-generic',
-    clientName: 'VerdaQwen',
+    clientName: 'SelfDeployedQwen',
     metrics: {
       inputUncachedTokens: 1000,
       inputCacheReadTokens: 0,
@@ -105,7 +105,7 @@ describe('the guard records the screen call', () => {
     expect(modelCalls(events)).toHaveLength(1)
     expect(call.data).toEqual({ role: 'screen', source: 'fetch/fetch_content' })
     expect(call.patternId).toBe('guard')
-    expect(call.llmCall?.clientName).toBe('VerdaQwen')
+    expect(call.llmCall?.clientName).toBe('SelfDeployedQwen')
     expect(call.llmCall?.functionName).toBe('ScreenUntrustedContent')
     // Lifted onto the event, which is what every cost fold reads.
     expect(call.metrics).toMatchObject({ costEur: 0.0018, basis: 'time' })
@@ -328,7 +328,7 @@ describe('model_call event', () => {
       metrics: record().metrics,
       durationMs: 3600,
       provider: 'openai-generic',
-      clientName: 'VerdaQwen',
+      clientName: 'SelfDeployedQwen',
     })
     expect(JSON.stringify(event)).not.toContain(PAGE_TEXT)
   })
@@ -362,7 +362,7 @@ describe('model_call event', () => {
     const text = createEventView(ctx).fromAll().serialize()
     expect(text).toContain('screen call: web/x')
     expect(text).not.toContain(PAGE_TEXT)
-    expect(text).not.toContain('VerdaQwen')
+    expect(text).not.toContain('SelfDeployedQwen')
   })
 
   // Mutation: remove 'model_call' from ALWAYS_COMMIT_TYPES → under 'on-success'

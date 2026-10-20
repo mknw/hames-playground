@@ -101,7 +101,10 @@ import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
-import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
+import {
+  beginSelfDeployedTurn,
+  endSelfDeployedTurn,
+} from '../inference/self-deployed-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
@@ -143,7 +146,7 @@ export interface TurnHooks {
   /**
    * This turn has started waiting on a self-hosted box that is not up, and the
    * next thing the user sees will be minutes away. Fires at most once per turn,
-   * only on the verda tier, and only when nothing says the box is warm — see
+   * only on the self_deployed tier, and only when nothing says the box is warm — see
    * `inference/cold-start.server.ts`. Absent means "do not compute it": no
    * hook, no watch.
    */
@@ -229,7 +232,7 @@ export async function runTurnAndPersist(
   // class of edit moves whole ROLES at once and would move the injection screen
   // along with summarization, because the two declare the same chain in BAML and
   // are separate only in `CLIENT_BY_ROLE`. The switch moves exactly the roles
-  // `VERDA_CLIENT_BY_ROLE` lists, which since 2026-08-26 is every one of them —
+  // `SELF_DEPLOYED_CLIENT_BY_ROLE` lists, which since 2026-08-26 is every one of them —
   // the screen included, on the owner's rule that no call made under the private
   // tier may be sent to any public AI provider. Two decisions, two lines, and
   // that is the whole point of the seam: on the same day `describe` was moved to
@@ -259,7 +262,7 @@ export async function runTurnAndPersist(
   // Refuse a tier this deployment cannot take, BEFORE anything runs and before
   // the row below records it. This is the check `runWithInferenceTier` used to
   // make on the way into its scope; the scope is now core's generic run frame,
-  // which cannot know what 'verda' means, so the fail-closed gate stayed in
+  // which cannot know what 'self_deployed' means, so the fail-closed gate stayed in
   // `@hames-ai/harness-baml` and the host calls it (issue #374, D1).
   assertInferenceTier(tier)
 
@@ -333,12 +336,12 @@ export async function runTurnAndPersist(
         // this turn here — one place, so no entry point can forget. `finally`
         // is load-bearing: a turn that throws must not leave the in-flight
         // gauge pinned, which would show "running" forever.
-        if (tier === 'verda') beginVerdaTurn()
+        if (tier === 'self_deployed') beginSelfDeployedTurn()
         recordTurn(tier)
         try {
           // The cold-start watch is armed HERE rather than at the first
-          // verda-bound call, because the thing that detects one is several
-          // layers down and takes no parameters. Only for a verda-tier turn whose
+          // self_deployed-bound call, because the thing that detects one is several
+          // layers down and takes no parameters. Only for a self_deployed-tier turn whose
           // caller wants the notice — the SSE route is the only one that does,
           // since it is the only entry point with a live wire to a person
           // waiting. A turn with no watch still wakes; the ping is not a UI
@@ -349,10 +352,10 @@ export async function runTurnAndPersist(
           // conversation row — see {@link runAndSave}, which is where it moved
           // and why.
           const run = (): Promise<HarnessResultScoped<SessionData>> => runOneTurn(req, tier)
-          const watched = tier === 'verda' && req.onWarming
+          const watched = tier === 'self_deployed' && req.onWarming
           return watched ? await runWithColdStartWatch(watched, run) : await run()
         } finally {
-          if (tier === 'verda') endVerdaTurn()
+          if (tier === 'self_deployed') endSelfDeployedTurn()
         }
       },
     ),
@@ -635,7 +638,7 @@ async function runAndSave(
     // THROWS, which is what ends the turn as a visible error rather than handing
     // the harness a box that is not there — see the SSE route's `catch`, and the
     // `catch` below for the row.
-    if (tier === 'verda') await ensurePrivateTierAwake()
+    if (tier === 'self_deployed') await ensurePrivateTierAwake()
     // THE LISTENER'S SCOPE IS THIS RUN, not the turn — see the frame opened in
     // `runTurnAndPersist`. Amending it here rather than filling the turn frame's
     // slot is what keeps the title agent and the detached compaction, both
@@ -1000,7 +1003,7 @@ async function runResumeAndSave(
     // WAKE THEN RUN — the same rule as `runAndSave`, minus the stop-only
     // case (A5): a resume whose answers all stop the run makes no model
     // call, so it must not pay a cold start either.
-    if (tier === 'verda' && !plan.stopOnly) {
+    if (tier === 'self_deployed' && !plan.stopOnly) {
       await ensurePrivateTierAwake().catch((err: unknown) => {
         wakeFailed = true
         throw err

@@ -31,7 +31,7 @@
  * Deliberately weak by design:
  *
  * - **`clientName` is the ground truth, not the flag.** It is the client BAML
- *   selected, after chains and fallbacks. A sample saying `VerdaQwen` means
+ *   selected, after chains and fallbacks. A sample saying `SelfDeployedQwen` means
  *   that call reached the self-hosted box; a routing intention that silently
  *   did not take effect cannot fake one.
  * - **A throwing listener never breaks a turn.** Bookkeeping is not worth an
@@ -50,7 +50,7 @@ assertServerOnImport()
 export interface LlmUsageSample {
   /** BAML function name, e.g. `LoopController`. */
   functionName: string
-  /** The client BAML SELECTED — `VerdaQwen`, `AnthropicSonnet5`, … Absent when
+  /** The client BAML SELECTED — `SelfDeployedQwen`, `AnthropicSonnet5`, … Absent when
    *  the collector never got far enough to name one. */
   clientName?: string
   /** Step accounting across every attempt of this call; absent when the call

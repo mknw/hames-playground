@@ -36,7 +36,7 @@
  *
  * The 27B (`hames_private_27b.py`, its own Modal app, `Caddyfile.27b`) gets the
  * same five, plus the one thing that makes it a drop-in for the app's
- * `VerdaQwen` client: the name it serves and the window it allows equal what that
+ * `SelfDeployedQwen` client: the name it serves and the window it allows equal what that
  * client sends and assumes. What both apps share (the vLLM pin, Caddy, the
  * image env, the restore check) lives in `vllm_box.py`, and neither app file
  * imports the other, so a change to one never discards the other's snapshots.
@@ -52,9 +52,11 @@ const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
 const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
-const verdaClient = read('../../../../packages/harness-baml/baml_src/verda-client.baml')
+const selfDeployedClient = read(
+  '../../../../packages/harness-baml/baml_src/self-deployed-client.baml',
+)
 const settings = read('../../lib/settings.ts')
-const verdaActivity = read('../../lib/inference/verda-activity.server.ts')
+const selfDeployedActivity = read('../../lib/inference/self-deployed-activity.server.ts')
 const coldStart = read('../../lib/inference/cold-start.server.ts')
 const smoke27b = read('../../../../deploy/modal/smoke_27b.py')
 const app = read('../../../../deploy/modal/hames_small_models.py')
@@ -314,12 +316,12 @@ const bigDownload =
   bigApp.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
 
 describe('deploy/modal: the 27B box (Qwen27B)', () => {
-  it('serves the exact model name and window the VerdaQwen client sends and assumes', () => {
+  it('serves the exact model name and window the SelfDeployedQwen client sends and assumes', () => {
     expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
-    const clientModel = verdaClient.match(/^\s*model "([^"]+)"$/m)?.[1]
+    const clientModel = selfDeployedClient.match(/^\s*model "([^"]+)"$/m)?.[1]
     expect(clientModel).toBeTruthy()
     expect(bigApp).toContain(`QWEN27B_MODEL = "${clientModel}"`)
-    const window = settings.match(/^\s*VerdaQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
+    const window = settings.match(/^\s*SelfDeployedQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
     expect(bigApp).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
     expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')
     expect(bigArgv).toContain('"--max-model-len", str(QWEN27B_MAX_MODEL_LEN)')
@@ -327,15 +329,17 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
   })
 
   it("idles as long as the app assumes, and the smoke sends the client's own body", () => {
-    // The app's cold-start countdown reads VERDA_SCALEDOWN_SECONDS; its default
+    // The app's cold-start countdown reads LARGE_LLM_SCALEDOWN_SECONDS; its default
     // and this box's must agree, or the countdown is wrong on a default deploy.
-    const appDefault = verdaActivity.match(/DEFAULT_VERDA_SCALEDOWN_SECONDS = (\d+)/)?.[1]
+    const appDefault = selfDeployedActivity.match(
+      /DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = (\d+)/,
+    )?.[1]
     expect(appDefault).toBeTruthy()
     expect(bigApp).toContain(`_env("HAMES_MODAL_27B_SCALEDOWN_S", "${appDefault}")`)
-    const clientMax = verdaClient.match(/^\s*max_tokens (\d+)$/m)?.[1]
-    const clientTemperature = verdaClient.match(/^\s*temperature ([\d.]+)$/m)?.[1]
+    const clientMax = selfDeployedClient.match(/^\s*max_tokens (\d+)$/m)?.[1]
+    const clientTemperature = selfDeployedClient.match(/^\s*temperature ([\d.]+)$/m)?.[1]
     expect(clientMax && clientTemperature).toBeTruthy()
-    const body = smoke27b.match(/^VERDA_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
+    const body = smoke27b.match(/^SELF_DEPLOYED_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
     expect(body).toContain(`"max_tokens": ${clientMax},`)
     expect(body).toContain(`"temperature": ${clientTemperature},`)
     expect(body).toContain('"chat_template_kwargs": {"enable_thinking": False}')

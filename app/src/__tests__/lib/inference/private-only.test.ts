@@ -14,7 +14,7 @@ import {
   configureConsumerClients,
   resolveClientForRole,
   SWITCHED_FUNCTIONS_BY_ROLE,
-  VERDA_CLIENT_BY_ROLE,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
   type BamlRole,
 } from '@hames-ai/harness-baml/clients.server'
 import { privateInferenceOnly } from '../../../lib/inference/config.server'
@@ -24,10 +24,10 @@ import { b } from '@hames-ai/harness-baml/guarded-client.server'
 
 beforeEach(() => {
   vi.stubEnv('INFERENCE_TIERS', 'private')
-  vi.stubEnv('USE_VERDA_INFERENCE', '')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '')
   vi.stubEnv('ANTHROPIC_API_KEY', '')
-  vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://chat.example.invalid/v1')
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-chat-key')
+  vi.stubEnv('LARGE_LLM_BASE_URL', 'https://chat.example.invalid/v1')
+  vi.stubEnv('LARGE_LLM_API_KEY', 'synthetic-chat-key')
   vi.stubEnv('SMALL_LLM_BASE_URL', 'https://small.example.invalid/v1')
   vi.stubEnv('SMALL_LLM_DECISIONS_URL', 'https://small.example.invalid/v1/systemone')
   vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic-small-key')
@@ -38,13 +38,13 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const roles = Object.keys(VERDA_CLIENT_BY_ROLE) as BamlRole[]
+const roles = Object.keys(SELF_DEPLOYED_CLIENT_BY_ROLE) as BamlRole[]
 
 describe('private-only call guards', () => {
   it.each(roles)('routes %s outside any conversation or frame', (role) => {
-    expect(activeInferenceTier()).toBe('verda')
-    expect(clientOverrideFor(role)).toEqual({ client: VERDA_CLIENT_BY_ROLE[role] })
-    expect(resolveClientForRole(role)).toBe(VERDA_CLIENT_BY_ROLE[role])
+    expect(activeInferenceTier()).toBe('self_deployed')
+    expect(clientOverrideFor(role)).toEqual({ client: SELF_DEPLOYED_CLIENT_BY_ROLE[role] })
+    expect(resolveClientForRole(role)).toBe(SELF_DEPLOYED_CLIENT_BY_ROLE[role])
   })
   it('refuses an explicit public frame before a call', async () => {
     expect(() => assertInferenceTier('anthropic')).toThrow(/Private-only/)
@@ -58,7 +58,12 @@ describe('private-only call guards', () => {
     expect(() => resolveClientForRole(role)).toThrow(/before any request/)
     configureConsumerClients(undefined)
     await withRunFrame(
-      { inference: { tier: 'verda', clientOverride: () => ({ client: 'DescribeAnthropic' }) } },
+      {
+        inference: {
+          tier: 'self_deployed',
+          clientOverride: () => ({ client: 'DescribeAnthropic' }),
+        },
+      },
       async () => {
         expect(() => clientOverrideFor(role)).toThrow(/before any request/)
       },
@@ -82,7 +87,7 @@ describe('private-only call guards', () => {
           /before any request/,
         )
         expect(() =>
-          assertBamlCallAllowed(name, { client: VERDA_CLIENT_BY_ROLE[role as BamlRole] }),
+          assertBamlCallAllowed(name, { client: SELF_DEPLOYED_CLIENT_BY_ROLE[role as BamlRole] }),
         ).not.toThrow()
       }
     }
@@ -126,23 +131,23 @@ describe('private-only call guards', () => {
         expect(clientOverrideFor('describe')).toEqual({ client: 'PerRun' })
       },
     )
-    vi.stubEnv('USE_VERDA_INFERENCE', '1')
-    expect(activeInferenceTier()).toBe('verda')
+    vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
+    expect(activeInferenceTier()).toBe('self_deployed')
   })
   it('validates a restricted server at boot without changing unset boot behavior', () => {
     vi.stubEnv('SMALL_LLM_BASE_URL', '')
     expect(() => assertInferenceDeploymentConfigured()).toThrow(/SMALL_LLM_BASE_URL/)
     vi.stubEnv('INFERENCE_TIERS', '')
-    vi.stubEnv('USE_VERDA_INFERENCE', '1')
+    vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
     expect(() => assertInferenceDeploymentConfigured()).not.toThrow()
   })
   it('refuses unknown restriction values', () => {
     vi.stubEnv('INFERENCE_TIERS', 'typo')
-    expect(() => privateInferenceOnly()).toThrow(/must be unset or private/)
+    expect(() => privateInferenceOnly()).toThrow(/must be unset or self_deployed/)
   })
   it.each([
-    'VERDA_INFERENCE_ENDPOINT',
-    'VERDA_INFERENCE_API_KEY',
+    'LARGE_LLM_BASE_URL',
+    'LARGE_LLM_API_KEY',
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
     'SMALL_LLM_API_KEY',
@@ -274,8 +279,8 @@ describe('normal boot inference gate', () => {
     expect(bootGate()).not.toThrow()
   })
   it.each([
-    'VERDA_INFERENCE_ENDPOINT',
-    'VERDA_INFERENCE_API_KEY',
+    'LARGE_LLM_BASE_URL',
+    'LARGE_LLM_API_KEY',
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
     'SMALL_LLM_API_KEY',

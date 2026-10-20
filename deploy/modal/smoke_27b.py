@@ -6,11 +6,11 @@ Every check prints PASS or FAIL; the exit status is 0 only when all pass. A cold
 box is started the way the app's wake starts it and is left to scale down on its
 own. Synthetic inputs only.
 
-What a PASS means for the app: `VerdaQwen`'s exact body (model name, thinking
+What a PASS means for the app: `SelfDeployedQwen`'s exact body (model name, thinking
 off, its output cap and temperature) is answered with a clean `content` and no
 reasoning, and the wake ping's body is answered. That is the signal the app can
-be pointed at the box (VERDA_INFERENCE_ENDPOINT = <URL>/v1); the app-side check
-after that is `smoke-verda.ts`. Thinking ON is checked too, because the box
+be pointed at the box (LARGE_LLM_BASE_URL = <URL>/v1); the app-side check
+after that is `smoke-self-deployed.ts`. Thinking ON is checked too, because the box
 serves it for a later application layer: the reasoning must arrive in its own
 field, never inside `content`.
 """
@@ -26,8 +26,8 @@ from smoke_probes import PROBE_URL
 
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 
-# The body `VerdaQwen` sends (packages/harness-baml/baml_src/verda-client.baml).
-VERDA_BODY = {
+# The body `SelfDeployedQwen` sends (packages/harness-baml/baml_src/self-deployed-client.baml).
+SELF_DEPLOYED_BODY = {
     "model": QWEN27B_MODEL,
     "messages": [
         {"role": "system", "content": "Reply with one JSON object and nothing else."},
@@ -92,23 +92,23 @@ def main() -> int:
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", WAKE_BODY, timeout=60)
     check("wake ping: 200", status == 200, f"{seconds:.2f}s")
 
-    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", VERDA_BODY, timeout=180)
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", SELF_DEPLOYED_BODY, timeout=180)
     choice = (body.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     text = (message.get("content") or "").strip()
-    check("VerdaQwen body: 200", status == 200, f"{seconds:.2f}s")
-    check("VerdaQwen body: finished, not cut off", choice.get("finish_reason") == "stop", f"{choice.get('finish_reason')}")
+    check("SelfDeployedQwen body: 200", status == 200, f"{seconds:.2f}s")
+    check("SelfDeployedQwen body: finished, not cut off", choice.get("finish_reason") == "stop", f"{choice.get('finish_reason')}")
     # A 200 is not enough: a parser that files a tag-less answer under the
     # reasoning field returns an empty content, which the app reads as an empty
     # completion on every call.
-    check("VerdaQwen body: content is non-empty", bool(text))
-    check("VerdaQwen body: no thinking tags in content", "<think" not in text and "</think>" not in text)
-    check("VerdaQwen body: reasoning field empty or null", not reasoning_of(message), f"{reasoning_fields(message)}")
+    check("SelfDeployedQwen body: content is non-empty", bool(text))
+    check("SelfDeployedQwen body: no thinking tags in content", "<think" not in text and "</think>" not in text)
+    check("SelfDeployedQwen body: reasoning field empty or null", not reasoning_of(message), f"{reasoning_fields(message)}")
     try:
         parsed = json.loads(text[text.index("{") : text.rindex("}") + 1])
     except ValueError:
         parsed = None
-    check("VerdaQwen body: answers the JSON correctly", parsed == {"usable": 409}, json.dumps(text))
+    check("SelfDeployedQwen body: answers the JSON correctly", parsed == {"usable": 409}, json.dumps(text))
 
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", THINKING_BODY, timeout=180)
     choice = (body.get("choices") or [{}])[0]
@@ -134,7 +134,7 @@ def main() -> int:
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
     image = {
-        **VERDA_BODY,
+        **SELF_DEPLOYED_BODY,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": "Describe this."},
             {"type": "image_url", "image_url": {"url": PROBE_URL}},

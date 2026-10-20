@@ -228,8 +228,8 @@ beforeEach(() => {
     SMALL_LLM_DECISIONS_URL: 'http://127.0.0.1:59997/v1/systemone',
     SMALL_LLM_API_KEY: 'synthetic',
     SMALL_LLM_BASE_URL: 'http://127.0.0.1:59997/v1',
-    VERDA_INFERENCE_ENDPOINT: 'http://127.0.0.1:59996/v1',
-    USE_VERDA_INFERENCE: '0',
+    LARGE_LLM_BASE_URL: 'http://127.0.0.1:59996/v1',
+    USE_SELF_DEPLOYED_INFERENCE: '0',
   }))
     vi.stubEnv(key, value)
   requests = vi.fn(async (_url: string, init: RequestInit) => {
@@ -265,7 +265,7 @@ async function run(tier = 'anthropic', supplied = deps, message = 'synthetic tas
 }
 
 describe('general-next composition', () => {
-  it.each(['anthropic', 'verda'])(
+  it.each(['anthropic', 'self_deployed'])(
     'E2: sends uploaded-file computation only to the office-data Decide criterion (%s)',
     async (tier) => {
       // Script answer only to stop execution: this pins wording delivery, not model choices.
@@ -341,7 +341,7 @@ describe('general-next composition', () => {
     )
 
   it.each(
-    ['anthropic', 'verda'].flatMap((tier) =>
+    ['anthropic', 'self_deployed'].flatMap((tier) =>
       Object.entries(SCENARIO_13_INFO_RETURNS).map(([shape, ret]) => [tier, shape, ret]),
     ),
   )(
@@ -378,7 +378,7 @@ describe('general-next composition', () => {
     },
   )
 
-  it.each(['anthropic', 'verda'])(
+  it.each(['anthropic', 'self_deployed'])(
     'E4: scenarios 12 and 13 reach Decide with identical criteria; only the state differs (%s)',
     async (tier) => {
       const run13 = async () => {
@@ -421,7 +421,7 @@ describe('general-next composition', () => {
   // run of scenario 13 must hold each Decide request as SENT (criteria + state with the info
   // Return) and the choice made on it. MUTATION: make `captureTrace` drop its decisions, or read
   // the criteria from somewhere other than the sent request: red.
-  it.each(['anthropic', 'verda'])(
+  it.each(['anthropic', 'self_deployed'])(
     'capture: a fake run of the two-source question records both Decide requests and their choices (%s)',
     async (tier) => {
       const question = scenarioQuestion('13-two-sources.ts')
@@ -651,7 +651,7 @@ describe('general-next composition', () => {
   // E1: fake synthesis copies ONLY the production route record, never
   // answerIncludes or raw child calls (the eval fixture's shortcut).
   // MUTATION: drop the URL from the positive Return below: the eval goes red.
-  it.each(['anthropic', 'verda'])(
+  it.each(['anthropic', 'self_deployed'])(
     'E1: URL-free Return fails the unchanged eval check on %s',
     async (tier) => {
       const url = 'https://example.invalid/lantern'
@@ -799,7 +799,7 @@ describe('general-next composition', () => {
     })
     const routes = patterns[0].children![0].children!
     expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
-    await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       harness(...patterns)('synthetic task'),
     )
     expect(pseudonymiseForWeb).toHaveBeenCalledTimes(1)
@@ -814,7 +814,7 @@ describe('general-next composition', () => {
         is_final: false,
       },
     })
-    const result = await run('verda', { ...deps, pseudonymiseForWeb: undefined })
+    const result = await run('self_deployed', { ...deps, pseudonymiseForWeb: undefined })
     const web = result.context.events.find(
       (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
     )
@@ -845,7 +845,7 @@ describe('general-next composition', () => {
     mocks.controller
       .mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
       .mockResolvedValueOnce(call('search_nodes', 'PRIVATE-NAME'))
-    const result = await run('verda', { ...deps, pseudonymiseForWeb })
+    const result = await run('self_deployed', { ...deps, pseudonymiseForWeb })
     const byTool = (tool: string) =>
       result.context.events.find(
         (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
@@ -961,7 +961,7 @@ describe('general-next composition', () => {
         }
       )
     })
-    const result = await run('verda', {
+    const result = await run('self_deployed', {
       ...deps,
       pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
     })
@@ -1043,7 +1043,7 @@ describe('general-next composition', () => {
     })
     const result = await withRunFrame(
       {
-        inference: { tier: 'verda' },
+        inference: { tier: 'self_deployed' },
         transports: [
           {
             id: 'synthetic-file-io',
@@ -1103,7 +1103,7 @@ describe('general-next composition', () => {
         is_final: true,
       },
     })
-    await run('verda', {
+    await run('self_deployed', {
       ...deps,
       pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
     })
@@ -1147,7 +1147,7 @@ describe('general-next composition', () => {
           is_final: true,
         },
       })
-      const result = await run('verda', {
+      const result = await run('self_deployed', {
         ...deps,
         pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
       })
@@ -1238,7 +1238,7 @@ describe('general-next composition', () => {
 
   it('P5: an unconfigured private decisions shim ends visibly before any route or synthesis', async () => {
     vi.stubEnv('SMALL_LLM_DECISIONS_URL', '')
-    const result = await run('verda')
+    const result = await run('self_deployed')
     expect(result.status).toBe('error')
     expect(result.context.error).toContain('SMALL_LLM_DECISIONS_URL')
     expect(requests).not.toHaveBeenCalled()
@@ -1622,7 +1622,7 @@ describe('general-next think route, in isolation', () => {
     mocks.planner.mockResolvedValue({
       plan: { reasoning: 'r', plan: 'Say the write cannot be done.', n_steps: 1 },
     })
-    const result = await run('verda', deps, 'Create a Project node named Lantern.')
+    const result = await run('self_deployed', deps, 'Create a Project node named Lantern.')
 
     expect(decisions(result.context.events)).toEqual(['think', 'answer'])
     expect(mocks.planner).toHaveBeenCalledTimes(1)

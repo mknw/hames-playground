@@ -35,7 +35,7 @@ vi.mock('../../../lib/db/memories.server', () => ({
   createMemoryDbStore: dbStore,
 }))
 const { reconcileMemoryReferences } = await import('../../../lib/memory/reconcile.server')
-const source = { eventId: 'ev-user', ordinal: 0, memoryId: 'mem-test', tier: 'verda' }
+const source = { eventId: 'ev-user', ordinal: 0, memoryId: 'mem-test', tier: 'self_deployed' }
 beforeEach(() => {
   vi.clearAllMocks()
   available.mockReturnValue(true)
@@ -55,7 +55,7 @@ describe('one-directional reconciliation', () => {
     expect(events[0].data).toEqual({
       memoryId: 'mem-test',
       kind: 'preference',
-      tier: 'verda',
+      tier: 'self_deployed',
       eventId: 'ev-user',
       ordinal: 0,
       action: 'reinforced',

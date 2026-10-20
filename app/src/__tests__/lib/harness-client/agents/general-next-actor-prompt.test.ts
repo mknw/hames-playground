@@ -84,8 +84,8 @@ const examples: string[] = []
 const graphTools = new Map<string, AppToolDefinition>()
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
 }
 beforeAll(async () => {
   // Register the real schemas without executing a tool or contacting Graph.
@@ -105,12 +105,12 @@ beforeAll(async () => {
     stash: { loadStore: unexpectedCall, ingest: unexpectedCall },
   })
   vi.stubEnv('ANTHROPIC_API_KEY', 'offline-render-test')
-  vi.stubEnv('USE_VERDA_INFERENCE', '0')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '0')
   const { b } = await import('@hames-ai/harness-baml/baml_client')
   // Render what the adapter would send (its first nine arguments; the tenth is
   // the options bag), then answer with a final action so the loop ends.
   vi.spyOn(b, 'ActorController').mockImplementation((async (...args: unknown[]) => {
-    for (const client of ['AnthropicSonnet5', 'VerdaQwen']) {
+    for (const client of ['AnthropicSonnet5', 'SelfDeployedQwen']) {
       const renderArgs = args.slice(0, 9) as Parameters<typeof b.request.ActorController>
       renderArgs[9] = { client, env: ENV }
       const request = await b.request.ActorController(...renderArgs)
@@ -283,38 +283,41 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
 })
 
 // MUTATION: remove the info controller's source-URL contextPrefix instruction.
-it.each(['anthropic', 'verda'])('E1: info Return contract is rendered on %s', async (tier) => {
-  vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://example.invalid/v1')
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic')
-  vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
-  vi.stubEnv('SMALL_LLM_DECISIONS_URL', 'https://example.invalid/v1/systemone')
-  vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic')
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
-  const prompts: string[] = []
-  const spy = vi.spyOn(b, 'LoopController').mockImplementation((async (...args: unknown[]) => {
-    const requestArgs = args.slice(0, 10) as Parameters<typeof b.request.LoopController>
-    requestArgs[10] = { client: (args[10] as { client?: string }).client }
-    const request = await b.request.LoopController(...requestArgs)
-    prompts.push(JSON.stringify(request.body.json()))
-    return { reasoning: 'done', tool_name: 'Return', tool_args: 'synthetic', is_final: true }
-  }) as never)
-  try {
-    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
-    const patterns = await generalNextAgent.createPatterns('synthetic-session', deps)
-    const info = walk(patterns).find((p) => p.name === 'simpleLoop')!
-    await withRunFrame({ inference: { tier } }, () => harness(info)('synthetic task'))
-    expect(prompts).toHaveLength(1)
-    expect(prompts[0]).toContain(
-      'When you Return, include the URLs of the sources you used as Markdown links',
-    )
-    expect(prompts[0]).toContain('Copy each source URL verbatim')
-    expect(prompts[0]).toContain('never invent or construct a URL')
-    expect(prompts[0]).toContain('include no link')
-    expect(JSON.parse(prompts[0]).model).toMatch(tier === 'verda' ? /Qwen/ : /^claude-/)
-  } finally {
-    spy.mockRestore()
-  }
-})
+it.each(['anthropic', 'self_deployed'])(
+  'E1: info Return contract is rendered on %s',
+  async (tier) => {
+    vi.stubEnv('LARGE_LLM_BASE_URL', 'https://example.invalid/v1')
+    vi.stubEnv('LARGE_LLM_API_KEY', 'synthetic')
+    vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
+    vi.stubEnv('SMALL_LLM_DECISIONS_URL', 'https://example.invalid/v1/systemone')
+    vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic')
+    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const prompts: string[] = []
+    const spy = vi.spyOn(b, 'LoopController').mockImplementation((async (...args: unknown[]) => {
+      const requestArgs = args.slice(0, 10) as Parameters<typeof b.request.LoopController>
+      requestArgs[10] = { client: (args[10] as { client?: string }).client }
+      const request = await b.request.LoopController(...requestArgs)
+      prompts.push(JSON.stringify(request.body.json()))
+      return { reasoning: 'done', tool_name: 'Return', tool_args: 'synthetic', is_final: true }
+    }) as never)
+    try {
+      const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
+      const patterns = await generalNextAgent.createPatterns('synthetic-session', deps)
+      const info = walk(patterns).find((p) => p.name === 'simpleLoop')!
+      await withRunFrame({ inference: { tier } }, () => harness(info)('synthetic task'))
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]).toContain(
+        'When you Return, include the URLs of the sources you used as Markdown links',
+      )
+      expect(prompts[0]).toContain('Copy each source URL verbatim')
+      expect(prompts[0]).toContain('never invent or construct a URL')
+      expect(prompts[0]).toContain('include no link')
+      expect(JSON.parse(prompts[0]).model).toMatch(tier === 'self_deployed' ? /Qwen/ : /^claude-/)
+    } finally {
+      spy.mockRestore()
+    }
+  },
+)
 
 it.each([0, 1])('P4: disabled ingest is absent from the rendered actor (wire %i)', (wire) => {
   expect(unavailableRendered[wire]).toContain('Graph file ingestion is unavailable.')

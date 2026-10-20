@@ -1,23 +1,23 @@
 /**
  * The per-user inference-tier switch, at the seam it actually acts on.
  *
- * `clients-verda.test.ts` pins the process-wide flag. This pins what the header
+ * `clients-self-deployed.test.ts` pins the process-wide flag. This pins what the header
  * control adds on top: a PER-RUN scope, and the guarantee that both of its
  * positions reach the right client override.
  *
  * The failures worth pinning, in the order they would ship:
  *   - a scope that widens OR narrows the role set. The switch must move exactly
- *     the roles `USE_VERDA_INFERENCE` moves, which after the two 2026-08-26
+ *     the roles `USE_SELF_DEPLOYED_INFERENCE` moves, which after the two 2026-08-26
  *     owner decisions is all of them, `screen` included. That was the inverse
  *     until the second decision, and the reason the pin is per-role either way:
  *     a user-facing control is the easiest place for a security control's client
  *     to end up somewhere nobody decided (SA-M5). The two halves are now "the
  *     scope moves the screen too" and "the anthropic position moves it back".
  *   - the `'anthropic'` position failing to *undo* the deployment default. A
- *     user who opts out while `USE_VERDA_INFERENCE=1` must actually leave.
+ *     user who opts out while `USE_SELF_DEPLOYED_INFERENCE=1` must actually leave.
  *   - a scope leaking past its own callback, which would make one user's choice
  *     the next request's routing.
- *   - `'verda'` accepted while the endpoint is unset. The fall-through to
+ *   - `'self_deployed'` accepted while the endpoint is unset. The fall-through to
  *     Anthropic that would follow is the one failure this whole route exists to
  *     prevent, and it is no less dangerous for coming from a preference row.
  */
@@ -30,12 +30,12 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 
 const ENV_KEYS = [
-  'USE_VERDA_INFERENCE',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'USE_SELF_DEPLOYED_INFERENCE',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   // The private tier is TWO models since 2026-08-26 — `describe` runs on the 4B
   // `LocalQwenSmall`, reached through this — so it is part of the tier's
-  // configuration and a scope naming `verda` without it is refused. The KEY is
+  // configuration and a scope naming `self_deployed` without it is refused. The KEY is
   // saved/restored too: systemone requires it, and one test deletes it to pin
   // refusal before tier entry and boot.
   'SMALL_LLM_BASE_URL',
@@ -65,31 +65,31 @@ let saved: Record<string, string | undefined>
 /** BOTH endpoints present and shaped correctly, flag NOT set — the preview's
  *  normal deployment posture once the per-user switch exists. */
 function configureEndpointOnly(): void {
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
 }
 
-/** What each routed role's client is under a `verda` scope. NOT one value any
+/** What each routed role's client is under a `self_deployed` scope. NOT one value any
  *  more: the tier is the 27B for the heavy roles and the 4B for summarization,
  *  and a test that asserted one client for all of them would pass with the
  *  describe flip reverted. */
 const PRIVATE_CLIENT: Record<string, string> = {
-  controller: 'VerdaQwen',
-  critic: 'VerdaQwen',
-  compactExecution: 'VerdaQwen',
-  router: 'VerdaQwen',
-  planner: 'VerdaQwen',
+  controller: 'SelfDeployedQwen',
+  critic: 'SelfDeployedQwen',
+  compactExecution: 'SelfDeployedQwen',
+  router: 'SelfDeployedQwen',
+  planner: 'SelfDeployedQwen',
   describe: 'LocalQwenSmall',
-  screen: 'VerdaQwen',
+  screen: 'SelfDeployedQwen',
 }
 
 async function load() {
   vi.resetModules()
   // The composition root registers the seam (tier policy, model tables, cost
-  // rates) and its defaultTier reads USE_VERDA_INFERENCE — the wiring every
+  // rates) and its defaultTier reads USE_SELF_DEPLOYED_INFERENCE — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -98,11 +98,11 @@ async function load() {
   // The tier is a SLOT of the run frame since #374, and the fail-closed
   // reachability check that used to guard the way into the scope is now
   // `assertInferenceTier` — called by the HOST before it puts a tier in a
-  // frame, because core's frame is generic and cannot know what 'verda' means.
+  // frame, because core's frame is generic and cannot know what 'self_deployed' means.
   // Bound together here so every assertion below reads as the one act a user's
   // stored preference still performs, and stays byte-identical.
   const runWithInferenceTier = async <T>(
-    tier: 'verda' | 'anthropic',
+    tier: 'self_deployed' | 'anthropic',
     fn: () => Promise<T>,
   ): Promise<T> => {
     clients.assertInferenceTier(tier)
@@ -116,7 +116,7 @@ async function load() {
   return { ...clients, runWithInferenceTier }
 }
 
-/** `verdaConfigured` moved to its own leaf (#225 Lane A2); this module is its
+/** `selfDeployedConfigured` moved to its own leaf (#225 Lane A2); this module is its
  *  home now, and the tests below pin the same four deployment postures
  *  against it. */
 async function loadTierConfig() {
@@ -139,10 +139,10 @@ afterEach(() => {
 describe('runWithInferenceTier — both positions reach the right override', () => {
   beforeEach(configureEndpointOnly)
 
-  it('the verda position routes exactly the mapped roles', async () => {
+  it('the self_deployed position routes exactly the mapped roles', async () => {
     const { runWithInferenceTier, clientOverrideFor, resolveClientForRole } = await load()
 
-    await runWithInferenceTier('verda', async () => {
+    await runWithInferenceTier('self_deployed', async () => {
       for (const role of ROUTED) {
         expect(clientOverrideFor(role)).toEqual({ client: PRIVATE_CLIENT[role] })
         expect(resolveClientForRole(role)).toBe(PRIVATE_CLIENT[role])
@@ -154,10 +154,10 @@ describe('runWithInferenceTier — both positions reach the right override', () 
     })
   })
 
-  it('the verda position moves the injection screen too, and holds nothing back', async () => {
+  it('the self_deployed position moves the injection screen too, and holds nothing back', async () => {
     const { runWithInferenceTier, clientOverrideFor, resolveClientForRole } = await load()
 
-    await runWithInferenceTier('verda', async () => {
+    await runWithInferenceTier('self_deployed', async () => {
       for (const [role, chain] of UNROUTED) {
         expect(clientOverrideFor(role)).toBeUndefined()
         expect(resolveClientForRole(role)).toBe(chain)
@@ -167,14 +167,14 @@ describe('runWithInferenceTier — both positions reach the right override', () 
       // asserted as `DescribeAnthropic` here; the owner moved it on 2026-08-26
       // and a user-facing control is exactly where that has to be visible, in
       // both directions, rather than inferred from the map.
-      expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
-      expect(resolveClientForRole('screen')).toBe('VerdaQwen')
+      expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
+      expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
       // AND ITS NEIGHBOUR ON THE SAME BAML CHAIN GOES SOMEWHERE ELSE. `describe`
       // and `screen` both declare `DescribeAnthropic` in `baml_src/`, so a chain
       // edit could only ever move them together; the tier map moves them apart,
       // which is the whole reason `screen` is a role of its own (SA-M5 / SD-4).
       // Asserted as an inequality as well as two values, because "the screen
-      // stayed off the 4B" is the property, not "the screen is on VerdaQwen".
+      // stayed off the 4B" is the property, not "the screen is on SelfDeployedQwen".
       expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
       expect(resolveClientForRole('screen')).not.toBe(resolveClientForRole('describe'))
     })
@@ -193,11 +193,11 @@ describe('runWithInferenceTier — both positions reach the right override', () 
   it('the anthropic position UNDOES the deployment default', async () => {
     // A user opting out while the process default is Verda is the whole point
     // of the control. A scope that could only widen would silently ignore them.
-    process.env.USE_VERDA_INFERENCE = '1'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     const { runWithInferenceTier, clientOverrideFor, activeInferenceTier } = await load()
 
-    expect(activeInferenceTier()).toBe('verda')
-    expect(clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
+    expect(activeInferenceTier()).toBe('self_deployed')
+    expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
 
     await runWithInferenceTier('anthropic', async () => {
       expect(activeInferenceTier()).toBe('anthropic')
@@ -205,11 +205,11 @@ describe('runWithInferenceTier — both positions reach the right override', () 
     })
   })
 
-  it('trims a scoped Verda run against the 131K server window', async () => {
+  it('trims a scoped self-deployed run against the 131K server window', async () => {
     const { runWithInferenceTier, resolveClientForRole } = await load()
     const { getContextWindow } = await import('@hames-ai/harness-baml/clients.server')
 
-    await runWithInferenceTier('verda', async () => {
+    await runWithInferenceTier('self_deployed', async () => {
       expect(getContextWindow(resolveClientForRole('controller'))).toBe(131_072)
       // …but NOT the describe role, which is the point of the flip: it runs on
       // the 4B, whose server was started with `--ctx-size 32768`. Budgeting
@@ -234,8 +234,8 @@ describe('scope isolation — one user’s choice is not another’s routing', (
   it('does not leak past its own callback', async () => {
     const { runWithInferenceTier, clientOverrideFor } = await load()
 
-    await runWithInferenceTier('verda', async () => {
-      expect(clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
+    await runWithInferenceTier('self_deployed', async () => {
+      expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
     })
     expect(clientOverrideFor('controller')).toBeUndefined()
   })
@@ -248,9 +248,9 @@ describe('scope isolation — one user’s choice is not another’s routing', (
     const seen: Record<string, unknown> = {}
 
     await Promise.all([
-      runWithInferenceTier('verda', async () => {
+      runWithInferenceTier('self_deployed', async () => {
         await new Promise((r) => setTimeout(r, 5))
-        seen.verda = clientOverrideFor('controller')
+        seen.self_deployed = clientOverrideFor('controller')
       }),
       runWithInferenceTier('anthropic', async () => {
         await new Promise((r) => setTimeout(r, 1))
@@ -258,29 +258,29 @@ describe('scope isolation — one user’s choice is not another’s routing', (
       }),
     ])
 
-    expect(seen.verda).toEqual({ client: 'VerdaQwen' })
+    expect(seen.self_deployed).toEqual({ client: 'SelfDeployedQwen' })
     expect(seen.anthropic).toBeUndefined()
   })
 
   it('restores the outer tier after a nested scope', async () => {
     const { runWithInferenceTier, activeInferenceTier } = await load()
 
-    await runWithInferenceTier('verda', async () => {
+    await runWithInferenceTier('self_deployed', async () => {
       await runWithInferenceTier('anthropic', async () => {
         expect(activeInferenceTier()).toBe('anthropic')
       })
-      expect(activeInferenceTier()).toBe('verda')
+      expect(activeInferenceTier()).toBe('self_deployed')
     })
   })
 })
 
-describe('the verda position fails closed when the endpoint is unset', () => {
+describe('the self_deployed position fails closed when the endpoint is unset', () => {
   it('throws instead of opening a scope that would fall through to Anthropic', async () => {
     const { runWithInferenceTier } = await load()
     const ran = vi.fn()
 
-    await expect(runWithInferenceTier('verda', async () => ran())).rejects.toThrow(
-      /VERDA_INFERENCE_ENDPOINT and VERDA_INFERENCE_API_KEY/,
+    await expect(runWithInferenceTier('self_deployed', async () => ran())).rejects.toThrow(
+      /LARGE_LLM_BASE_URL and LARGE_LLM_API_KEY/,
     )
     // The callback must not have run at all: the check is before any prompt is
     // built, not after the first call 404s.
@@ -288,11 +288,11 @@ describe('the verda position fails closed when the endpoint is unset', () => {
   })
 
   it('rejects a root URL the same way the flag does', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
     const { runWithInferenceTier } = await load()
 
-    await expect(runWithInferenceTier('verda', async () => 1)).rejects.toThrow(
+    await expect(runWithInferenceTier('self_deployed', async () => 1)).rejects.toThrow(
       /must be the OpenAI-compatible base URL/,
     )
   })
@@ -310,12 +310,12 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     //   - refuse the tier. Owner decision 2026-08-26, and this is the pin.
     // Asserted through the SCOPE rather than through the assert function
     // directly, because the scope is what a user's stored preference opens.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
     const { runWithInferenceTier } = await load()
     const ran = vi.fn()
 
-    await expect(runWithInferenceTier('verda', async () => ran())).rejects.toThrow(
+    await expect(runWithInferenceTier('self_deployed', async () => ran())).rejects.toThrow(
       /SMALL_LLM_BASE_URL is not set/,
     )
     expect(ran).not.toHaveBeenCalled()
@@ -330,7 +330,7 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small'
     const { runWithInferenceTier } = await load()
 
-    await expect(runWithInferenceTier('verda', async () => 1)).rejects.toThrow(
+    await expect(runWithInferenceTier('self_deployed', async () => 1)).rejects.toThrow(
       /SMALL_LLM_BASE_URL must be the OpenAI-compatible base URL/,
     )
   })
@@ -340,11 +340,11 @@ describe('the verda position fails closed when the endpoint is unset', () => {
     delete process.env.SMALL_LLM_API_KEY
     const { runWithInferenceTier } = await load()
     const ran = vi.fn()
-    await expect(runWithInferenceTier('verda', async () => ran())).rejects.toThrow(
+    await expect(runWithInferenceTier('self_deployed', async () => ran())).rejects.toThrow(
       'SMALL_LLM_API_KEY',
     )
     expect(ran).not.toHaveBeenCalled()
-    process.env.USE_VERDA_INFERENCE = '1'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     await expect(load()).rejects.toThrow('SMALL_LLM_API_KEY')
   })
 
@@ -357,35 +357,35 @@ describe('the verda position fails closed when the endpoint is unset', () => {
   })
 })
 
-describe('verdaConfigured — the non-throwing sibling', () => {
+describe('selfDeployedConfigured — the non-throwing sibling', () => {
   it('is false with nothing set, and does not throw', async () => {
-    const { verdaConfigured } = await loadTierConfig()
-    expect(verdaConfigured()).toBe(false)
+    const { selfDeployedConfigured } = await loadTierConfig()
+    expect(selfDeployedConfigured()).toBe(false)
   })
 
   it('is true once BOTH endpoints are present and shaped as /v1 bases', async () => {
     configureEndpointOnly()
-    const { verdaConfigured } = await loadTierConfig()
-    expect(verdaConfigured()).toBe(true)
+    const { selfDeployedConfigured } = await loadTierConfig()
+    expect(selfDeployedConfigured()).toBe(true)
   })
 
   it('is false with the 27B configured and the 4B missing', async () => {
-    // What this controls is user-visible: `verdaConfigured()` is what disables
+    // What this controls is user-visible: `selfDeployedConfigured()` is what disables
     // the switch's private position and what `defaultInferenceTier()`
     // reads. A half-configured deployment must not OFFER a tier whose first
     // tool-result summary would fail — offering it and failing per turn is
     // strictly worse than showing one disabled control.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
-    const { verdaConfigured } = await loadTierConfig()
-    expect(verdaConfigured()).toBe(false)
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
+    const { selfDeployedConfigured } = await loadTierConfig()
+    expect(selfDeployedConfigured()).toBe(false)
   })
 
   it('is false for a root URL — offering a tier that throws is worse than hiding it', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
-    const { verdaConfigured } = await loadTierConfig()
-    expect(verdaConfigured()).toBe(false)
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
+    const { selfDeployedConfigured } = await loadTierConfig()
+    expect(selfDeployedConfigured()).toBe(false)
   })
 })
 
@@ -398,11 +398,11 @@ describe('activeInferenceTier — what runs outside any scope', () => {
     expect(activeInferenceTier()).toBe('anthropic')
   })
 
-  it('follows USE_VERDA_INFERENCE when it is set', async () => {
+  it('follows USE_SELF_DEPLOYED_INFERENCE when it is set', async () => {
     configureEndpointOnly()
-    process.env.USE_VERDA_INFERENCE = '1'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     const { activeInferenceTier } = await load()
-    expect(activeInferenceTier()).toBe('verda')
+    expect(activeInferenceTier()).toBe('self_deployed')
   })
 })
 
@@ -429,23 +429,23 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // The module global — the decoy this reader must not prefer.
     expect(clients.activeInferenceTier()).toBe('anthropic')
 
-    const inside = await withRunFrame({ inference: { tier: 'verda' } }, async () =>
+    const inside = await withRunFrame({ inference: { tier: 'self_deployed' } }, async () =>
       clients.activeInferenceTier(),
     )
-    expect(inside).toBe('verda')
+    expect(inside).toBe('self_deployed')
     // And the frame closed behind itself.
     expect(clients.activeInferenceTier()).toBe('anthropic')
   })
 
   it('an unrecognised tier string falls back to the default rather than routing blind', async () => {
-    // Core carries the tier as an OPAQUE STRING — it cannot know what 'verda'
+    // Core carries the tier as an OPAQUE STRING — it cannot know what 'self_deployed'
     // means — so the narrowing happens here, and a host that writes a typo into
     // the slot gets the safe tier rather than an unrouted one.
     configureEndpointOnly()
     const clients = await load()
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
-    const seen = await withRunFrame({ inference: { tier: 'verdaa' } }, async () => ({
+    const seen = await withRunFrame({ inference: { tier: 'selfDeployeda' } }, async () => ({
       tier: clients.activeInferenceTier(),
       override: clients.clientOverrideFor('controller'),
     }))
@@ -472,7 +472,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
       role === 'describe' ? { client: 'SomeCheapModel' } : undefined
 
     const seen = await withRunFrame(
-      { inference: { tier: 'verda', clientOverride: describeOnly } },
+      { inference: { tier: 'self_deployed', clientOverride: describeOnly } },
       async () => ({
         describe: clients.clientOverrideFor('describe'),
         screen: clients.clientOverrideFor('screen'),
@@ -481,7 +481,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
 
     expect(seen.describe).toEqual({ client: 'SomeCheapModel' })
     // The screen stayed on the tier's own client — it did not follow.
-    expect(seen.screen).toEqual({ client: 'VerdaQwen' })
+    expect(seen.screen).toEqual({ client: 'SelfDeployedQwen' })
   })
 
   it("a per-run clientOverride in the generic slot pre-empts this package's tier map", async () => {
@@ -493,16 +493,16 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     const picked = await withRunFrame(
-      { inference: { tier: 'verda', clientOverride: () => ({ client: 'ConsumerModel' }) } },
+      { inference: { tier: 'self_deployed', clientOverride: () => ({ client: 'ConsumerModel' }) } },
       async () => clients.clientOverrideFor('controller'),
     )
     expect(picked).toEqual({ client: 'ConsumerModel' })
 
     // Without the override the same frame takes the tier map — so the assertion
     // above is about precedence, not about an empty map.
-    const mapped = await withRunFrame({ inference: { tier: 'verda' } }, async () =>
+    const mapped = await withRunFrame({ inference: { tier: 'self_deployed' } }, async () =>
       clients.clientOverrideFor('controller'),
     )
-    expect(mapped).toEqual({ client: 'VerdaQwen' })
+    expect(mapped).toEqual({ client: 'SelfDeployedQwen' })
   })
 })

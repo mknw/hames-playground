@@ -162,7 +162,7 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const names = Object.keys(spec.fields) as Array<keyof S & string>
     const variables: Record<string, unknown> = { state, key: spec.key }
     const clientName = resolveClientForRole('decide')
-    const privateTier = activeInferenceTier() === 'verda'
+    const privateTier = activeInferenceTier() === 'self_deployed'
     const privateClient = clientName === PRIVATE_SYSTEMONE_CLIENT_NAME
     let requested = false
     function jevFailure(

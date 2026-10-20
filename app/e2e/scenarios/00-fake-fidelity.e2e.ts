@@ -33,7 +33,7 @@
  *     from — which also makes a stale COMMITTED client red here, and that
  *     client is committed precisely so nothing regenerates it on the way in.
  *
- * The renders go through `VerdaQwen` because it is the repo's only
+ * The renders go through `SelfDeployedQwen` because it is the repo's only
  * `openai-generic` client, and the openai-generic body is what the fake sees.
  * The Anthropic providers lift the leading system block into a top-level
  * `system` field instead of leaving it in `messages`, so rendering through them
@@ -52,7 +52,7 @@ import {
 } from '../lib/baml-functions'
 import { takeEgressAttempts } from '../lib/egress-backstop'
 import { checkAfterAll, checkAfterEach } from '../lib/setup-checks'
-import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
 import { packagePath } from '../../src/lib/eval-support/package-layout'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
@@ -80,7 +80,7 @@ function bamlSourceFunctionNames(): string[] {
 }
 
 beforeAll(async () => {
-  // Boots only for its env side effects — `VerdaQwen` refuses to resolve
+  // Boots only for its env side effects — `SelfDeployedQwen` refuses to resolve
   // without a `/v1` endpoint, and `bootApp` is the one place that is set.
   await bootApp()
   // ONE corpus: this is the client the package's adapters, defaults, routing
@@ -97,7 +97,7 @@ beforeAll(async () => {
     (fn: string) =>
     (...args: unknown[]) =>
       req[fn](...args)
-  const via = { client: 'VerdaQwen' }
+  const via = { client: 'SelfDeployedQwen' }
   const tools = [{ name: 'search', description: 'Search', args_schema: '{}' }]
   const attempt = {
     n: 1,
@@ -228,7 +228,9 @@ describe('the fake recognises every BAML function', () => {
       // Anthropic render lifts the leading system block into a top-level
       // `system` field, so `messages` would not contain the marker at all and
       // the classifier would be checked against a shape the fake never sees.
-      expect(body.model, `${name} did not render through VerdaQwen`).toBe(VERDA_MODEL)
+      expect(body.model, `${name} did not render through SelfDeployedQwen`).toBe(
+        SELF_DEPLOYED_MODEL,
+      )
       const text = promptText(body.messages ?? [])
       expect(text.length, `${name} rendered an empty prompt`).toBeGreaterThan(0)
       expect(classifyPrompt(text)).toBe(name)
@@ -273,7 +275,7 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
     fakeLlm.reset()
     const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
-    const r = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const r = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       createJevTransport().decideAll({ spec: SET, state: 's' }),
     )
     expect(r.fields.route.llmCall?.clientName).toBe('PrivateSystemOne')
@@ -417,7 +419,7 @@ describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
   })
   it.each([
     ['LocalQwenSmall', 'SMALL_LLM_BASE_URL'],
-    ['VerdaQwen', 'VERDA_INFERENCE_ENDPOINT'],
+    ['SelfDeployedQwen', 'LARGE_LLM_BASE_URL'],
   ])('refuses %s when its process endpoint differs from the fake', async (client, variable) => {
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     const original = process.env[variable]

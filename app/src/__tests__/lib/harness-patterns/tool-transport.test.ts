@@ -141,7 +141,7 @@ describe('registerTransport — the process registry', () => {
  * pass to express a priority. That is a property of the signatures, and a
  * runtime test asserting it would only prove the test compiles — so it is
  * pinned the way this repo pins its other structural absences
- * (`encryption-coverage.test.ts`, `clients-verda.test.ts`): by reading the
+ * (`encryption-coverage.test.ts`, `clients-self-deployed.test.ts`): by reading the
  * source.
  */
 describe('no registrant can express a priority', () => {

@@ -21,9 +21,9 @@
 import type { InferenceTier } from './inference/config.server'
 
 /** Tier labels, in the words a preview user can act on. "Private" is the
- *  property they care about; the deployment name is the parenthetical. */
+ *  property they care about; provider details stay in deployment configuration. */
 export const TIER_LABELS: Record<InferenceTier, string> = {
-  verda: 'Private (Verda)',
+  self_deployed: 'Private',
   anthropic: 'Anthropic',
 }
 
@@ -38,19 +38,19 @@ export const TIER_LABELS: Record<InferenceTier, string> = {
  * fail `color-not-only`.
  */
 export const TIER_ICONS: Record<InferenceTier, string> = {
-  verda: 'i-material-symbols-shield-lock-outline',
+  self_deployed: 'i-material-symbols-shield-lock-outline',
   anthropic: 'i-material-symbols-cloud-outline',
 }
 
 /** What each position means, for a `title` tooltip on the switch. */
 export const TIER_HINTS: Record<InferenceTier, string> = {
-  verda:
+  self_deployed:
     'Run this conversation on the company-hosted deployment — prompts stay on infrastructure ' +
     'we control.',
   anthropic: "Run this conversation on Anthropic's hosted models.",
 }
 
-/** Shown in place of {@link TIER_HINTS}.verda when the deployment has no
+/** Shown in place of {@link TIER_HINTS}.self_deployed when the deployment has no
  *  self-hosted endpoint configured, which is when that position is disabled. */
 export const TIER_UNAVAILABLE_HINT =
   'The self-hosted endpoint is not configured on this deployment.'

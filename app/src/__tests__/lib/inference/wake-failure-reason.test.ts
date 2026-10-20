@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import {
   ensurePrivateTierAwake,
   resetSmallWake,
-  resetVerdaWake,
+  resetSelfDeployedWake,
 } from '../../../lib/inference/wake.server'
 import { wakeFailureReason } from '../../../lib/eval-support/wake-failure'
 
@@ -13,17 +13,17 @@ const bodyOf = (text: string, status: number) => new Response(text, { status })
 
 beforeEach(() => {
   resetSmallWake()
-  resetVerdaWake()
+  resetSelfDeployedWake()
   vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
   vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic-key')
-  vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://example.invalid/large/v1')
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-large-key')
+  vi.stubEnv('LARGE_LLM_BASE_URL', 'https://example.invalid/large/v1')
+  vi.stubEnv('LARGE_LLM_API_KEY', 'synthetic-large-key')
 })
 afterEach(() => {
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   resetSmallWake()
-  resetVerdaWake()
+  resetSelfDeployedWake()
 })
 
 const stalled = (init: RequestInit) =>
@@ -65,7 +65,7 @@ it('names the 27B when its refusal body mentions the small box', async () => {
     await reasonWhen(async (url, init) =>
       url === SMALL ? stalled(init) : bodyOf('upstream: small model box unreachable', 401),
     ),
-  ).toBe('VERDA_WAKE_FAILED')
+  ).toBe('SELF_DEPLOYED_WAKE_FAILED')
 })
 
 it('names the small box when its poll budget runs out', async () => {

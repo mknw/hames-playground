@@ -1,10 +1,10 @@
 /**
- * `USE_VERDA_INFERENCE=1` — the role → client override for the self-hosted
+ * `USE_SELF_DEPLOYED_INFERENCE=1` — the role → client override for the self-hosted
  * (Verda / DataCrunch) vLLM deployment.
  *
  * CI has no access to that endpoint, so everything here is hermetic: it pins
  * the *routing decision*, not the model. The live proof is manual —
- * `src/lib/inference/scripts/smoke-verda.ts`.
+ * `src/lib/inference/scripts/smoke-self-deployed.ts`.
  *
  * What is pinned, and why each one is the failure that matters:
  *   - flag unset ⇒ NOTHING changes. Every role still resolves to its Anthropic
@@ -19,7 +19,7 @@
  *     through a source scan proving its call site really does spread an
  *     override. An entry with no spread routes nothing; a spread with no entry
  *     is dead. Both halves are required and each one is separately red.
- *   - the flag is `'1'`, not truthiness. `USE_VERDA_INFERENCE=0` used to be the
+ *   - the flag is `'1'`, not truthiness. `USE_SELF_DEPLOYED_INFERENCE=0` used to be the
  *     classic way to switch a feature ON by accident.
  *   - the trim window follows the override. A routed role that keeps sizing its
  *     prompt against Anthropic's 200K window would overflow a 131K server on
@@ -47,9 +47,9 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
 
 const ENV_KEYS = [
-  'USE_VERDA_INFERENCE',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'USE_SELF_DEPLOYED_INFERENCE',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   // Part of the tier's configuration since 2026-08-26: `describe` runs on the
   // 4B `LocalQwenSmall`, which is reached through this variable, and a private
   // tier without it is refused rather than descaled (see the fail-closed block).
@@ -78,11 +78,11 @@ const ALL_ROLES: BamlRole[] = [
  *  keep passing with the flip reverted — and `two clients, not one` below pins
  *  that the column really does hold two values. */
 const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
-  controller: { from: 'ControllerAnthropic', to: 'VerdaQwen' },
-  critic: { from: 'CriticAnthropic', to: 'VerdaQwen' },
-  compactExecution: { from: 'SynthesizerAnthropic', to: 'VerdaQwen' },
-  router: { from: 'RouterAnthropic', to: 'VerdaQwen' },
-  planner: { from: 'PlannerAnthropic', to: 'VerdaQwen' },
+  controller: { from: 'ControllerAnthropic', to: 'SelfDeployedQwen' },
+  critic: { from: 'CriticAnthropic', to: 'SelfDeployedQwen' },
+  compactExecution: { from: 'SynthesizerAnthropic', to: 'SelfDeployedQwen' },
+  router: { from: 'RouterAnthropic', to: 'SelfDeployedQwen' },
+  planner: { from: 'PlannerAnthropic', to: 'SelfDeployedQwen' },
   // THE FLIP. Summarization is the tier's highest-frequency role and the one
   // handed tool results verbatim (SD-10); it moved off the scale-to-zero 27B
   // onto the 4B the role was designed around, on infrastructure the company
@@ -93,7 +93,7 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   // than with the widening. It is in this map now, and listed LAST so the diff
   // that added it is readable as what it is. Note what it did NOT do: it shares
   // `describe`'s BAML chain and did not follow it onto the 4B.
-  screen: { from: 'DescribeAnthropic', to: 'VerdaQwen' },
+  screen: { from: 'DescribeAnthropic', to: 'SelfDeployedQwen' },
   // The public and private systemone clients.
   decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
 }
@@ -110,9 +110,9 @@ let saved: Record<string, string | undefined>
 /** A configured-and-enabled environment. The values are fakes: nothing here
  *  opens a socket, and the endpoint only has to satisfy the shape check. */
 function enable(): void {
-  process.env.USE_VERDA_INFERENCE = '1'
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   // BOTH endpoints. The tier is two models, so a fixture with one describes a
   // deployment this build refuses — which is its own test, below.
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
@@ -148,12 +148,12 @@ afterEach(() => {
   }
 })
 
-describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () => {
+describe('USE_SELF_DEPLOYED_INFERENCE unset — the default posture is untouched', () => {
   it('every role resolves to its Anthropic chain and no call gets a client override', async () => {
     const { resolveClientForRole, clientOverrideFor } = await load()
-    const { verdaInferenceEnabled } = await loadPolicy()
+    const { selfDeployedInferenceEnabled } = await loadPolicy()
 
-    expect(verdaInferenceEnabled()).toBe(false)
+    expect(selfDeployedInferenceEnabled()).toBe(false)
     for (const [role, move] of roles({ ...ROUTED, ...UNROUTED })) {
       expect(resolveClientForRole(role)).toBe(move.from)
       expect(clientOverrideFor(role)).toBeUndefined()
@@ -167,14 +167,14 @@ describe('USE_VERDA_INFERENCE unset — the default posture is untouched', () =>
   })
 })
 
-describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
+describe('USE_SELF_DEPLOYED_INFERENCE=1 — exactly the mapped roles move', () => {
   beforeEach(enable)
 
   it('routes every role to its private-tier client', async () => {
     const { resolveClientForRole, clientOverrideFor } = await load()
-    const { verdaInferenceEnabled } = await loadPolicy()
+    const { selfDeployedInferenceEnabled } = await loadPolicy()
 
-    expect(verdaInferenceEnabled()).toBe(true)
+    expect(selfDeployedInferenceEnabled()).toBe(true)
     for (const [role, move] of roles(ROUTED)) {
       expect(clientOverrideFor(role), role).toEqual({ client: move.to })
       expect(resolveClientForRole(role), role).toBe(move.to)
@@ -188,11 +188,11 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // reverted. This is the line that cannot.
     const { resolveClientForRole } = await load()
     const clients = new Set(roles(ROUTED).map(([role]) => resolveClientForRole(role)))
-    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'PrivateSystemOne', 'VerdaQwen'])
+    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'PrivateSystemOne', 'SelfDeployedQwen'])
     // And which side each of the two BAML-chain siblings landed on. Neither
     // value is interesting alone; the pair is the SA-M5 / SD-4 property.
     expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
-    expect(resolveClientForRole('screen')).toBe('VerdaQwen')
+    expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
   })
 
   it('moves the injection screen too, and leaves nothing behind', async () => {
@@ -203,8 +203,8 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     // decision — "no call made under the private tier may be sent to any
     // public AI provider" — not on a widening, so it is pinned as its own
     // claim rather than folded into the loop above.
-    expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
-    expect(resolveClientForRole('screen')).toBe('VerdaQwen')
+    expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
 
     // Nothing is held back. Asserted over ALL_ROLES rather than over ROUTED,
     // so a role added to `BamlRole` and forgotten in the map is red here
@@ -220,7 +220,7 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
     expect(resolveClientForRole('screen')).not.toBe(resolveClientForRole('describe'))
   })
 
-  it('trims Verda-routed prompts against the 131K server window, not 200K', async () => {
+  it('trims self-deployed prompts against the 131K server window, not 200K', async () => {
     const { resolveClientForRole } = await load()
     const { getContextWindow } = await import('@hames-ai/harness-baml/clients.server')
 
@@ -249,69 +249,69 @@ describe('USE_VERDA_INFERENCE=1 — exactly the mapped roles move', () => {
 
 describe('the flag is `1`, not truthiness', () => {
   it.each(['0', 'false', 'true', 'yes', ''])('%o does not enable it', async (value) => {
-    process.env.USE_VERDA_INFERENCE = value
+    process.env.USE_SELF_DEPLOYED_INFERENCE = value
     const { clientOverrideFor } = await load()
-    const { verdaInferenceEnabled } = await loadPolicy()
+    const { selfDeployedInferenceEnabled } = await loadPolicy()
 
-    expect(verdaInferenceEnabled()).toBe(false)
+    expect(selfDeployedInferenceEnabled()).toBe(false)
     expect(clientOverrideFor('controller')).toBeUndefined()
   })
 })
 
 describe('misconfiguration fails closed', () => {
   it('throws at module load when the flag is on and the env is missing', async () => {
-    process.env.USE_VERDA_INFERENCE = '1'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     // No endpoint, no key: the dangerous outcome is a shrug and a fall-through
     // to Anthropic, which is precisely what the flag was set to prevent.
-    await expect(load()).rejects.toThrow(/VERDA_INFERENCE_ENDPOINT and VERDA_INFERENCE_API_KEY/)
+    await expect(load()).rejects.toThrow(/LARGE_LLM_BASE_URL and LARGE_LLM_API_KEY/)
   })
 
   it('names only the variable that is actually missing', async () => {
     enable()
-    delete process.env.VERDA_INFERENCE_API_KEY
-    await expect(load()).rejects.toThrow(/VERDA_INFERENCE_API_KEY is not set/)
+    delete process.env.LARGE_LLM_API_KEY
+    await expect(load()).rejects.toThrow(/LARGE_LLM_API_KEY is not set/)
   })
 
   it('rejects an endpoint that is not the OpenAI-compatible base', async () => {
     enable()
     // The value the deployment hands you is the root; BAML appends
     // `/chat/completions` to base_url verbatim, so a root URL 404s every call.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/'
     await expect(load()).rejects.toThrow(/must be the OpenAI-compatible base URL/)
   })
 
   it('accepts /v1 with or without a trailing slash', async () => {
     enable()
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1/'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1/'
     await expect(load()).resolves.toBeDefined()
   })
 
-  it('assertVerdaConfigured is callable directly, for script preflights', async () => {
+  it('assertSelfDeployedConfigured is callable directly, for script preflights', async () => {
     enable()
-    const { assertVerdaConfigured } = await loadPolicy()
-    expect(() => assertVerdaConfigured()).not.toThrow()
-    delete process.env.VERDA_INFERENCE_ENDPOINT
-    expect(() => assertVerdaConfigured()).toThrow(/VERDA_INFERENCE_ENDPOINT is not set/)
+    const { assertSelfDeployedConfigured } = await loadPolicy()
+    expect(() => assertSelfDeployedConfigured()).not.toThrow()
+    delete process.env.LARGE_LLM_BASE_URL
+    expect(() => assertSelfDeployedConfigured()).toThrow(/LARGE_LLM_BASE_URL is not set/)
   })
 })
 
-describe('settings and baml_src agree about VerdaQwen', () => {
+describe('settings and baml_src agree about SelfDeployedQwen', () => {
   it('the client is declared, capped at 4096, and asks for no caching', async () => {
     // Comments stripped the way client-output-caps.test.ts does it: the file
     // DISCUSSES caching at length, and a test that reads prose cannot tell a
     // declaration from an explanation of why there isn't one.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
       'utf8',
     )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
-    expect(declared).toMatch(/client<llm>\s+VerdaQwen/)
+    expect(declared).toMatch(/client<llm>\s+SelfDeployedQwen/)
     expect(declared).toMatch(/provider\s+openai-generic/)
     expect(declared).toMatch(/max_tokens\s+4096/)
-    expect(declared).toMatch(/base_url\s+env\.VERDA_INFERENCE_ENDPOINT/)
-    expect(declared).toMatch(/api_key\s+env\.VERDA_INFERENCE_API_KEY/)
+    expect(declared).toMatch(/base_url\s+env\.LARGE_LLM_BASE_URL/)
+    expect(declared).toMatch(/api_key\s+env\.LARGE_LLM_API_KEY/)
     // The confidential-compute posture: this client must not opt into prompt
     // caching, and `allowed_role_metadata` is what would forward the
     // controller templates' `cache_control` breakpoints to the server (#122).
@@ -335,8 +335,8 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     //     harness would again be the thing waiting out a cold start.
     const timeout = Number(declared.match(/request_timeout_ms\s+(\d+)/)?.[1])
     expect(timeout).toBeGreaterThan(60_000)
-    const { DEFAULT_VERDA_WAKE_TIMEOUT_MS } = await import('../../../lib/inference/wake.server')
-    expect(timeout).toBeLessThan(DEFAULT_VERDA_WAKE_TIMEOUT_MS)
+    const { DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS } = await import('../../../lib/inference/wake.server')
+    expect(timeout).toBeLessThan(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
   })
 
   it('the timeout covers a FULL-CAP generation at the measured decode rate', async () => {
@@ -357,10 +357,10 @@ describe('settings and baml_src agree about VerdaQwen', () => {
     //
     // The rate is the load test's own worst reading, not a fresh assumption:
     // 208 tok/s aggregate with 8 requests in flight on one replica (2026-08-25,
-    // `smoke-verda-load.ts`) is 26 tok/s per stream. Single-stream measured
+    // `smoke-self-deployed-load.ts`) is 26 tok/s per stream. Single-stream measured
     // 64 tok/s; the slower figure is the one a bound has to survive.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
       'utf8',
     )
       .split('\n')
@@ -381,11 +381,11 @@ describe('settings and baml_src agree about VerdaQwen', () => {
   it('settings mirrors the cap and the --max-model-len window', async () => {
     const { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, CLIENT_PRICING } =
       await import('../../../lib/settings')
-    expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen).toBe(4_096)
-    expect(MODEL_CONTEXT_WINDOWS.VerdaQwen).toBe(131_072)
+    expect(CLIENT_MAX_OUTPUT_TOKENS.SelfDeployedQwen).toBe(4_096)
+    expect(MODEL_CONTEXT_WINDOWS.SelfDeployedQwen).toBe(131_072)
     // Billed per GPU-second, not per token — an invented rate here would
     // render as a confident dollar figure. "Unknown" is the honest reading.
-    expect(CLIENT_PRICING.VerdaQwen).toBeUndefined()
+    expect(CLIENT_PRICING.SelfDeployedQwen).toBeUndefined()
   })
 })
 
@@ -393,7 +393,7 @@ describe('the switched-function set follows the routed roles', () => {
   it('lists BAML functions for exactly the roles the map routes', async () => {
     // The header's latency median counts only these functions, so that both
     // switch positions hold the same role mix and the two figures compare
-    // (`metrics/call-latency.server.ts`). A role added to VERDA_CLIENT_BY_ROLE
+    // (`metrics/call-latency.server.ts`). A role added to SELF_DEPLOYED_CLIENT_BY_ROLE
     // without its functions here would silently drop OUT of that comparison
     // rather than joining it — invisible in a diff, and this is the pin.
     const { SWITCHED_FUNCTIONS_BY_ROLE, TIER_SWITCHED_FUNCTIONS } = await load()
@@ -655,7 +655,7 @@ describe('every routed role has a wired call site', () => {
     // Half one: the map. Not folded into the ROUTED loop above — that loop
     // would keep passing if `screen` were quietly dropped from BOTH the map and
     // that fixture, which is precisely the two-line edit this guards.
-    expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
+    expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
     // …and specifically NOT the 4B its BAML chain-mate moved to.
     expect(clientOverrideFor('screen')).not.toEqual({ client: 'LocalQwenSmall' })
 

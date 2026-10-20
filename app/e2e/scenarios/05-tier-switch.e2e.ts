@@ -26,11 +26,11 @@
  * the OPPOSITE for those two, and the reason it is still worth a scenario is
  * unchanged: a map cannot prove that a real turn honours it. It is also the
  * only thing that would catch a MISSING spread at one of the six describe call
- * sites — `clients-verda.test.ts` scans for the literal once per role, so five
+ * sites — `clients-self-deployed.test.ts` scans for the literal once per role, so five
  * of the six could lose it and stay green.
  *
  * AND THE PRIVATE TIER IS NOT ONE MODEL. The describe flip later the same day
- * put summarization on a 4B, so "the private tier" is `VERDA_MODEL` for the
+ * put summarization on a 4B, so "the private tier" is `SELF_DEPLOYED_MODEL` for the
  * heavy roles and `SMALL_MODEL` for the six describe ones. This is the only
  * layer that can catch the two being swapped: the unit tests pin the map, and
  * the map is a statement about intent, while the fake records what each request
@@ -44,7 +44,7 @@
  * It is still NOT asserted here, and for the unchanged reason: no agent in this
  * repo enables the opt-in LLM screen, so no turn this suite can run makes a
  * `ScreenUntrustedContent` call and an assertion over zero of them would be
- * theatre. What changed is which pin covers it. `clients-verda.test.ts` used to
+ * theatre. What changed is which pin covers it. `clients-self-deployed.test.ts` used to
  * fail if `clientOverrideFor('screen')` appeared anywhere in `src/lib`; it now
  * fails unless the map entry AND the spread on the screen's own call expression
  * are both present, extracted by balanced parens rather than grepped. The
@@ -58,7 +58,7 @@ import {
   IS_HERMETIC,
   FAKE_ANTHROPIC_TIER_MODEL,
   SMALL_MODEL,
-  VERDA_MODEL,
+  SELF_DEPLOYED_MODEL,
   type Tier,
 } from '../lib/mode'
 
@@ -108,7 +108,7 @@ describe('switching tier between turns', () => {
     const turns: Array<{ tier: Tier; from: number; to: number }> = []
     for (const [tier, message] of [
       ['anthropic', 'How many nodes are in the graph?'],
-      ['verda', 'And how many relationships?'],
+      ['self_deployed', 'And how many relationships?'],
       ['anthropic', 'Summarise both answers.'],
     ] as const) {
       await app.setTier(tier, sessionId)
@@ -129,14 +129,14 @@ describe('switching tier between turns', () => {
 
     // Both of the search agent's switched roles, not just the loud one.
     // `controller` is `LoopController`; `compactExecution` is `Synthesize`, and
-    // it is in `VERDA_CLIENT_BY_ROLE` too — a call site that forgot to spread
+    // it is in `SELF_DEPLOYED_CLIENT_BY_ROLE` too — a call site that forgot to spread
     // `clientOverrideFor('compactExecution')` would leave the answer-writing
     // call on Anthropic through a turn the user asked to keep self-hosted, and
     // the controller assertion alone would stay green.
     for (const fn of ['LoopController', 'Synthesize'] as const) {
       turns.forEach(({ tier, from, to }, i) => {
         const models = modelsBetween(app, from, to, fn)
-        const expected = tier === 'verda' ? VERDA_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+        const expected = tier === 'self_deployed' ? SELF_DEPLOYED_MODEL : FAKE_ANTHROPIC_TIER_MODEL
         expect(models.length, `turn ${i + 1} made no ${fn} call`).toBeGreaterThan(0)
         expect(new Set(models), `${fn} on turn ${i + 1} (${tier})`).toEqual(new Set([expected]))
       })
@@ -151,7 +151,7 @@ describe('switching tier between turns', () => {
   it.runIf(IS_HERMETIC)('splits the private tier across its TWO models', async () => {
     const sessionId = newSessionId('side-roles')
 
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     await app.runTurn(sessionId, 'How many nodes are in the graph?')
 
     // `Router` runs before the loop and the title is awaited inside the turn,
@@ -173,7 +173,7 @@ describe('switching tier between turns', () => {
     // function that does NOT carry a tool result, so getting it wrong would look
     // harmless and would still be a role split down the middle.
     const expected: Record<string, string> = {
-      Router: VERDA_MODEL,
+      Router: SELF_DEPLOYED_MODEL,
       GenerateConversationTitle: SMALL_MODEL,
       [describe]: SMALL_MODEL,
     }
@@ -192,9 +192,9 @@ describe('switching tier between turns', () => {
 
   it.runIf(IS_HERMETIC)('leaves those same roles on Anthropic in the other position', async () => {
     // The counterpart, and the reason the test above is not just "everything is
-    // VerdaQwen": these roles have to be steerable in BOTH directions. A call
+    // SelfDeployedQwen": these roles have to be steerable in BOTH directions. A call
     // site that hardcoded the override rather than spreading
-    // `clientOverrideFor` would pass the verda leg and fail here.
+    // `clientOverrideFor` would pass the self_deployed leg and fail here.
     const sessionId = newSessionId('side-roles-anthropic')
 
     await app.setTier('anthropic')
@@ -204,7 +204,7 @@ describe('switching tier between turns', () => {
 
     for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
       const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
-      // Same vacuity guard as the verda leg above, which this test was missing:
+      // Same vacuity guard as the self_deployed leg above, which this test was missing:
       // `describeFnUsed` only covers the describe leg (it throws), so `Router`
       // and the title could both go silently uncalled and this loop would
       // iterate nothing and pass.

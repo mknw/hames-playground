@@ -77,7 +77,7 @@ registerGraphConnectorTools({
   // until the tier-flip tag, sandbox isolation and release screen land.
   fileIngestAllowed: () => {
     try {
-      return currentRunFrame()?.inference?.tier === 'verda' && privateInferenceOnly()
+      return currentRunFrame()?.inference?.tier === 'self_deployed' && privateInferenceOnly()
     } catch {
       return false
     }

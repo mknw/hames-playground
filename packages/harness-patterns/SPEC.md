@@ -1948,7 +1948,7 @@ boundary it follows the marker-only policy above. Its thread synthesizer reads t
 opt-in until the default-agent flip. Only the candidate's synthesis receives
 recalled memory, while decisions and children receive none. The
 private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
-no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation
+no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation
 live in the host; it consumes the separately pinned core
 `screenDespiteFindings` opt-in.
 
@@ -2483,7 +2483,7 @@ through five REQUIRED seams:
 | `decide: DecideFn`            | The systemone decision seam; the step uses the endpoint verdict through `evaluateDecision`.                                                                                                                                                                                                                                                                                     |
 | `embed: MemoryQueryEmbedder`  | `query(text)`, plus an optional `spaceId`. A row from another space is refused (`skipped: 'error'`), never ranked on.                                                                                                                                                                                                                                                           |
 | `owner: () => string \| null` | From the host's request context, never an argument. `null` → `skipped: 'no-user'`.                                                                                                                                                                                                                                                                                              |
-| `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `verda` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                                 |
+| `visibleTiers(turnTier)`      | Which stored tiers a turn of this tier may read. The rule lives where the tier vocabulary does (the app: `anthropic` sees `anthropic`; `self_deployed` sees both). **Fail closed** for an unknown tier.                                                                                                                                                                         |
 
 Optional: `awaitWake` (below), `tier` (default: the run frame's `inference.tier`),
 `limits` (the responder's window, for the 5% ceiling) and `settings`.
@@ -2934,7 +2934,7 @@ and off stops further clusters. After a merge verdict, the switch is re-read
 again before the summarizer call. The host's required `assertTier` runs before any
 inference, inside the partition's own run-frame tier; unavailable partitions
 are kept. The app wiring slice MUST positively allow only `anthropic` and
-`verda` before delegating to `assertInferenceTier`; passing that function bare
+`self_deployed` before delegating to `assertInferenceTier`; passing that function bare
 is insufficient because it does not reject unknown strings. Core treats tiers
 as opaque and relies on this injected host contract. A nested call amends the frame; a sweep outside a turn opens one.
 This seam is exclusively personal memory: organisational-graph targets never
@@ -3645,7 +3645,7 @@ packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) 
 ├── baml-patterns.server.ts # bamlPatterns() — the one factory for the eight REQUIRED injected fns (planner, router, compactIntent, retrieveQuery, describe, describeBatch, synthesize, selector) + adapters
 ├── defaults.server.ts      # defaultSynthesize (→ bamlPatterns().synthesize) + defaultSelector (→ bamlPatterns().selector) — the composition-root implementations, not pattern defaults
 ├── baml-adapters.server.ts # Adapter factories: createLoopControllerAdapter (tool list rides ControllerInput.tools — L14), createActorControllerAdapter, createCriticAdapter, createPlannerAdapter, describeToolResultOp, describeToolResultsBatchOp, createInjectionScreen
-├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / VERDA_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
+├── clients.server.ts       # The role → client maps (CLIENT_BY_ROLE / SELF_DEPLOYED_CLIENT_BY_ROLE), clientOverrideFor, limitsFor, the tier (the run frame's `inference` slot) — moved byte-for-byte from core (Lane A6/A-i)
 ├── data-fence.ts           # #419 M5a: escapeDataFence() — neutralise known DATA marker spellings before rendering
 ├── routing.server.ts       # routeMessageOp — the router seam's composition-root implementation (`bamlPatterns().router`) (with limits())
 ├── baml-version-check.server.ts # Boot-time staleness warning for baml_client (#154)
@@ -3656,7 +3656,7 @@ packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) 
 
 Both trees are abridged to the files this spec refers to; `patterns/` is a
 directory of the CORE package, not of the BAML companion. The live self-hosted
-endpoint checks (`smoke-verda.ts`, `smoke-verda-load.ts`) are the HOST's, not
+endpoint checks (`smoke-self-deployed.ts`, `smoke-self-deployed-load.ts`) are the HOST's, not
 either package's — they live in `app/src/lib/inference/scripts/`.
 
 ## Design Principles

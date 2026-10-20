@@ -1,3 +1,4 @@
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /**
  * Wake-then-run — Server Only
  *
@@ -17,11 +18,11 @@
  *     on a route whose warm p95 at 8-way concurrency is 9.9s means a genuinely
  *     hung request is indistinguishable from a working one for ten minutes. With
  *     the wait moved out in front, the BAML client's timeout can be sized for a
- *     warm call (`baml_src/verda-client.baml`, and the number's justification is
+ *     warm call (`baml_src/self-deployed-client.baml`, and the number's justification is
  *     there rather than here).
  *  2. **A burst multiplied its own wait.** Three chats into a sleeping box are
  *     one replica's queue, not three parallel cold starts (measured 2026-08-26),
- *     so the third user waited three cold starts. {@link ensureVerdaAwake}
+ *     so the third user waited three cold starts. {@link ensureSelfDeployedAwake}
  *     dedupes: concurrent turns share one in-flight wake and all resume when it
  *     lands.
  *  3. **The wait was attributed to a call that was mostly not waiting.** The
@@ -54,7 +55,7 @@
  * The per-attempt timeout is therefore not a guess about how long a cold start
  * takes; it is how long the poll is willing to bet on the queue-and-answer
  * reading before spending 1 more token on a fresh attempt. See
- * {@link DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS}.
+ * {@link DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS}.
  *
  * ## What an attempt is, precisely
  *
@@ -138,7 +139,7 @@
  * ## Two things it deliberately does and does not account for
  *
  * **It stamps the warm clock** on the attempt that answers. The clock's standard
- * is an answered completion on the deployment naming `VERDA_MODEL_ID`, and that
+ * is an answered completion on the deployment naming `SELF_DEPLOYED_MODEL_ID`, and that
  * is exactly what this is — so without the stamp a turn arriving just after a
  * poll landed, but before the first BAML sample, paid a second poll and was shown
  * a multi-minute countdown that cleared in about a second.  Stamped from here
@@ -148,7 +149,7 @@
  * **Its GPU seconds are NOT priced, and that is a decision rather than an
  * oversight.** The attempts are hand-rolled `fetch`es, so they emit no usage
  * sample and a multi-minute cold start (a 360s one is ≈€0.18 at
- * `VERDA_EUR_PER_HOUR`) is outside the time-priced figure — where before this
+ * `LARGE_LLM_EUR_PER_HOUR`) is outside the time-priced figure — where before this
  * module existed it sat inside the first call's `timing.durationMs`. Three
  * reasons it stays outside:
  *
@@ -173,14 +174,17 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
-  verdaProvenWarm,
+  selfDeployedProvenWarm,
   smallProvenWarm,
   noteSmallCallCompleted,
   settleBoxColdStart,
   noteBoxCallStarting,
   type WakeBox,
 } from './cold-start.server'
-import { VERDA_MODEL_ID, noteVerdaCallCompleted } from './verda-activity.server'
+import {
+  SELF_DEPLOYED_MODEL_ID,
+  noteSelfDeployedCallCompleted,
+} from './self-deployed-activity.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -204,11 +208,11 @@ assertServerOnImport()
  * (`COLD_START_FALLBACK_MS`) is a separate claim, and a budget far above it just
  * lengthens the worst case for a deployment that is genuinely broken.
  *
- * Overridable per host with `VERDA_WAKE_TIMEOUT_MS`, because the one thing this
+ * Overridable per host with `LARGE_LLM_WAKE_TIMEOUT_MS`, because the one thing this
  * number describes is a platform's behaviour and a different deployment size
  * (or a different GPU) is a different number.
  */
-export const DEFAULT_VERDA_WAKE_TIMEOUT_MS = 600_000
+export const DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS = 600_000
 
 /**
  * How long ONE attempt is given before it is abandoned and a fresh one sent.
@@ -227,7 +231,7 @@ export const DEFAULT_VERDA_WAKE_TIMEOUT_MS = 600_000
  * Capped by whatever is left of the overall budget, so the last attempt cannot
  * overshoot it.
  */
-export const DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS = 30_000
+export const DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = 30_000
 
 /**
  * How long the poll waits between a failed attempt and the next one.
@@ -240,7 +244,7 @@ export const DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS = 30_000
  * against a 30s attempt means the poll's granularity on "when did the box come
  * up" is ~35s, which is small against the 360s it is measuring.
  */
-export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
+export const DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS = 5_000
 
 /**
  * A positive-millisecond env override, or the default.
@@ -248,7 +252,7 @@ export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
  * Read per call rather than at module load, the same rule the rest of this route
  * follows: a script that sets the var before importing a pattern has to be seen.
  * A zero, a negative or a garbage value is REFUSED with a warning rather than
- * honoured — `VERDA_WAKE_ATTEMPT_TIMEOUT_MS=0` would abort every attempt before
+ * honoured — `LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS=0` would abort every attempt before
  * it left the process and turn the wake into a silent, instant failure loop,
  * which is the one outcome worse than a wrong number.
  *
@@ -260,7 +264,7 @@ export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
 /**
  * A positive-millisecond env override, or the default — SHARED by both wakes.
  *
- * Exported since #419 D20 so the Verda wake and the memory wake read their
+ * Exported since #419 D20 so the self-deployed wake and the memory wake read their
  * bounds through ONE parser and cannot drift into two validation policies (the
  * memory wake's `MEMORY_WAKE_*` vars are read through this too). The var name
  * is in the message, so the prefix stays generic.
@@ -278,7 +282,7 @@ export const DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS = 5_000
  * above says is refused — silently, since the warning had already been skipped.
  */
 export function wakeEnvMs(name: string, fallback: number): number {
-  const raw = process.env[name]
+  const raw = inferenceEnv(name)
   if (raw === undefined) return fallback
   const parsed = Number(raw)
   const ms = Math.floor(parsed)
@@ -292,21 +296,21 @@ export function wakeEnvMs(name: string, fallback: number): number {
   return ms
 }
 
-/** `VERDA_WAKE_TIMEOUT_MS`, or {@link DEFAULT_VERDA_WAKE_TIMEOUT_MS}. */
-export function verdaWakeTimeoutMs(): number {
-  return wakeEnvMs('VERDA_WAKE_TIMEOUT_MS', DEFAULT_VERDA_WAKE_TIMEOUT_MS)
+/** `LARGE_LLM_WAKE_TIMEOUT_MS`, or {@link DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS}. */
+export function selfDeployedWakeTimeoutMs(): number {
+  return wakeEnvMs('LARGE_LLM_WAKE_TIMEOUT_MS', DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
 }
 
-/** `VERDA_WAKE_ATTEMPT_TIMEOUT_MS`, or
- *  {@link DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS}. */
-export function verdaWakeAttemptTimeoutMs(): number {
-  return wakeEnvMs('VERDA_WAKE_ATTEMPT_TIMEOUT_MS', DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
+/** `LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS`, or
+ *  {@link DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS}. */
+export function selfDeployedWakeAttemptTimeoutMs(): number {
+  return wakeEnvMs('LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS', DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
 }
 
-/** `VERDA_WAKE_POLL_INTERVAL_MS`, or
- *  {@link DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS}. */
-export function verdaWakePollIntervalMs(): number {
-  return wakeEnvMs('VERDA_WAKE_POLL_INTERVAL_MS', DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS)
+/** `LARGE_LLM_WAKE_POLL_INTERVAL_MS`, or
+ *  {@link DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS}. */
+export function selfDeployedWakePollIntervalMs(): number {
+  return wakeEnvMs('LARGE_LLM_WAKE_POLL_INTERVAL_MS', DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS)
 }
 
 /**
@@ -318,22 +322,22 @@ export function verdaWakePollIntervalMs(): number {
  * validation error and reads like an app bug), so the fake has to recognise this
  * one. Importing the constant is what stops the two drifting.
  */
-export const VERDA_WAKE_PROMPT = 'wake'
+export const SELF_DEPLOYED_WAKE_PROMPT = 'wake'
 
 /** Message the user sees when the box never answered. Exported so a test can
  *  assert the visible string rather than a substring it chose itself. */
-export const VERDA_WAKE_FAILED = 'the private inference box did not wake'
+export const SELF_DEPLOYED_WAKE_FAILED = 'the private inference box did not wake'
 
 /** The promise every wake failure ends with — nothing was sent elsewhere
  *  (SD-12). The reassurance is the point on a confidential-compute route: the
  *  failure a user would fear is a silent fall-back, and the message says it did
  *  not happen. Exported since #419 D20 so BOTH wakes make the promise in ONE
- *  wording and cannot drift apart; the Verda wake's own sentence prefixes it
+ *  wording and cannot drift apart; the self-deployed wake's own sentence prefixes it
  *  with the clause that is true there and false for memory (the memory turn
  *  DOES start — it just runs without memory). */
 export const NOTHING_SENT_ELSEWHERE = 'nothing was sent to any other provider.'
 
-/** The sentence every Verda wake failure ends with: the turn did not start, and
+/** The sentence every self-deployed wake failure ends with: the turn did not start, and
  *  nothing was sent to any other provider. Exported so a test can assert the
  *  visible string rather than a substring it chose itself. */
 export const NO_FALLBACK = `The turn was not started; ${NOTHING_SENT_ELSEWHERE}`
@@ -433,28 +437,28 @@ function createWake(target: WakeTarget) {
   }
 }
 
-const verdaWake = createWake({
-  box: 'verda',
-  failed: `${VERDA_WAKE_FAILED} (the 27B, VERDA_INFERENCE_ENDPOINT)`,
-  timeout: verdaWakeTimeoutMs,
-  attemptTimeout: verdaWakeAttemptTimeoutMs,
-  interval: verdaWakePollIntervalMs,
-  provenWarm: verdaProvenWarm,
-  completed: noteVerdaCallCompleted,
+const selfDeployedWake = createWake({
+  box: 'self_deployed',
+  failed: `${SELF_DEPLOYED_WAKE_FAILED} (the 27B, LARGE_LLM_BASE_URL)`,
+  timeout: selfDeployedWakeTimeoutMs,
+  attemptTimeout: selfDeployedWakeAttemptTimeoutMs,
+  interval: selfDeployedWakePollIntervalMs,
+  provenWarm: selfDeployedProvenWarm,
+  completed: noteSelfDeployedCallCompleted,
   // Endpoint and key were checked at private-tier entry. Read them per call,
   // not at module load, so a script setting env before importing a pattern is
   // seen here too; a wake must use the same host configuration as the real call.
   request: () => ({
-    url: `${(process.env.VERDA_INFERENCE_ENDPOINT ?? '').replace(/\/$/, '')}/chat/completions`,
+    url: `${(inferenceEnv('LARGE_LLM_BASE_URL') ?? '').replace(/\/$/, '')}/chat/completions`,
     init: {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.VERDA_INFERENCE_API_KEY ?? ''}`,
+        Authorization: `Bearer ${inferenceEnv('LARGE_LLM_API_KEY') ?? ''}`,
       },
       body: JSON.stringify({
-        model: VERDA_MODEL_ID,
-        messages: [{ role: 'user', content: VERDA_WAKE_PROMPT }],
+        model: SELF_DEPLOYED_MODEL_ID,
+        messages: [{ role: 'user', content: SELF_DEPLOYED_WAKE_PROMPT }],
         // The cheapest completion that still forces the weights to load. Not
         // zero: some servers reject `max_tokens: 0` before generation, which
         // proves nothing about readiness.
@@ -486,8 +490,8 @@ const smallWake = createWake({
   }),
 })
 
-export const ensureVerdaAwake = verdaWake.ensure
-export const resetVerdaWake = verdaWake.reset
+export const ensureSelfDeployedAwake = selfDeployedWake.ensure
+export const resetSelfDeployedWake = selfDeployedWake.reset
 export const ensureSmallAwake = smallWake.ensure
 export const resetSmallWake = smallWake.reset
 
@@ -495,7 +499,7 @@ export const resetSmallWake = smallWake.reset
 export async function ensurePrivateTierAwake(): Promise<void> {
   const group = new AbortController()
   const wakes = [
-    ensureVerdaAwake(Date.now(), group.signal),
+    ensureSelfDeployedAwake(Date.now(), group.signal),
     ensureSmallAwake(Date.now(), group.signal),
   ]
   try {
@@ -552,18 +556,18 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
     signal.throwIfAborted()
     attempts += 1
     // Capped by what is left, so the final attempt cannot overshoot the budget
-    // the user was promised — and so a `VERDA_WAKE_TIMEOUT_MS` set BELOW the
+    // the user was promised — and so a `LARGE_LLM_WAKE_TIMEOUT_MS` set BELOW the
     // per-attempt timeout still means what it says rather than being silently
     // rounded up to one full attempt.
     const failure = await attempt(target, Math.min(attemptMs, remaining()), signal)
     if (failure === null) {
       // THE BOX IS UP, and this is the evidence the warm clock asks for: a
-      // completion the deployment answered, on `VERDA_MODEL_ID`. Stamped only on
+      // completion the deployment answered, on `SELF_DEPLOYED_MODEL_ID`. Stamped only on
       // the SUCCESS path, which is where this diverges from the usage observer's
       // rule ("success or failure — a failed call woke the box exactly as much").
       // That rule is safe for a sample: a BAML call that failed still got far
       // enough to be attributed. Here it would be self-defeating — the clock is
-      // what makes `verdaProvenWarm()` skip the wake, so stamping it on a 400 for
+      // what makes `selfDeployedProvenWarm()` skip the wake, so stamping it on a 400 for
       // an unknown model id, or on the platform's own 504, would suppress the
       // next wake on the strength of a box that answered an error.
       target.completed()
@@ -581,7 +585,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
     target.box,
     `${target.failed}: ${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s, ` +
       `and the last one ${lastReason}. The deployment scales to zero and its first call is ` +
-      (target.box === 'verda'
+      (target.box === 'self_deployed'
         ? 'slow — the longest start measured on it is about 6 minutes (2026-08-27) — but this is '
         : 'slow — a first boot after redeploy was measured at 577s — but this is ') +
       `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,
@@ -605,7 +609,7 @@ async function attempt(
   // failure this module would otherwise introduce: it would hang the turn
   // forever instead of ending it inside the budget. It is also what makes the
   // poll a poll — without a per-attempt bound there is nothing to retry FROM.
-  // The same lesson `smoke-verda.ts`'s preflight learned the hard way: an
+  // The same lesson `smoke-self-deployed.ts`'s preflight learned the hard way: an
   // unbounded probe hung a diagnostic for four minutes and then said
   // `fetch failed`.
   const controller = new AbortController()

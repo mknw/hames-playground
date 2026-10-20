@@ -1,3 +1,4 @@
+import { normalizeStoredInferenceTier } from './tier-value'
 /**
  * Which inference tier a CONVERSATION runs on — Server Only.
  *
@@ -47,7 +48,7 @@ import {
   isInferenceTier,
   setStoredInferenceTier,
 } from '../db/user-prefs.server'
-import { privateInferenceOnly, verdaConfigured, type InferenceTier } from './config.server'
+import { privateInferenceOnly, selfDeployedConfigured, type InferenceTier } from './config.server'
 
 assertServerOnImport()
 
@@ -65,8 +66,9 @@ export function resolveTier(
   seed: InferenceTier | null,
 ): InferenceTier {
   // Old rows remain historical facts; their next turn is clamped to private.
-  if (privateInferenceOnly()) return 'verda'
-  if (isInferenceTier(conversationTier)) return conversationTier
+  if (privateInferenceOnly()) return 'self_deployed'
+  const stored = normalizeStoredInferenceTier(conversationTier)
+  if (stored) return stored
   return seed ?? defaultInferenceTier()
 }
 
@@ -88,7 +90,7 @@ export function resolveTier(
  * discarded both. A conversation the user had PINNED to the private tier then
  * resolved through the caller's fail-open, which is `activeInferenceTier()`, the
  * env flag: on the deployment shape `docs/PREVIEW.md` explicitly allows
- * (endpoints configured, `USE_VERDA_INFERENCE` unset) that is Anthropic, so a
+ * (endpoints configured, `USE_SELF_DEPLOYED_INFERENCE` unset) that is Anthropic, so a
  * seed lookup failing sent a private thread to the public provider while its
  * sidebar glyph still said otherwise.
  *
@@ -149,7 +151,7 @@ export async function resolveConversationTier(
  * conversation that has not been persisted yet is therefore a seed write and
  * nothing more, and the pre-seed of its first turn copies it onto the row.
  *
- * **`'verda'` is refused when the endpoint is unconfigured**, exactly as the
+ * **`'self_deployed'` is refused when the endpoint is unconfigured**, exactly as the
  * header switch it replaces refused it: storing it would leave a row that
  * `assertInferenceTier` throws on, turning one click into a chat that cannot
  * take another message — and the one thing that must never happen instead, a
@@ -168,10 +170,10 @@ export async function chooseConversationTier(
   if (privateInferenceOnly() && tier === 'anthropic') {
     throw new Error('Anthropic is disabled: this deployment allows private inference only.')
   }
-  if (tier === 'verda' && !verdaConfigured()) {
+  if (tier === 'self_deployed' && !selfDeployedConfigured()) {
     throw new Error(
       'The self-hosted inference endpoint is not configured on this deployment, so it cannot ' +
-        'be selected. Set VERDA_INFERENCE_ENDPOINT, VERDA_INFERENCE_API_KEY and ' +
+        'be selected. Set LARGE_LLM_BASE_URL, LARGE_LLM_API_KEY and ' +
         'SMALL_LLM_BASE_URL (see app/.env.example).',
     )
   }
@@ -194,4 +196,4 @@ export async function chooseConversationTier(
 /** Whether the private tier may be OFFERED on this deployment — the switch's
  *  disabled state. Re-exported here so the one server action behind the switch
  *  has a single import for everything it answers. */
-export { privateInferenceOnly, verdaConfigured }
+export { privateInferenceOnly, selfDeployedConfigured }

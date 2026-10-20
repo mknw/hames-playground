@@ -115,7 +115,7 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('screen call record', () => {
   it('names the client BAML selected and carries the step metrics', async () => {
-    readings = collectorOn('VerdaQwen', { durationMs: 4_000 })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: 4_000 })
     const { createInjectionScreen } = await ops()
     const verdict = await createInjectionScreen()({
       tool: 'fetch_content',
@@ -129,15 +129,15 @@ describe('screen call record', () => {
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({
       functionName: 'ScreenUntrustedContent',
-      clientName: 'VerdaQwen',
+      clientName: 'SelfDeployedQwen',
     })
     expect(records[0].metrics).toMatchObject({ inputUncachedTokens: 1000, outputTokens: 100 })
   })
 
-  it('on a verda-tier turn is priced on wall-clock, never as Anthropic tokens', async () => {
+  it('on a self_deployed-tier turn is priced on wall-clock, never as Anthropic tokens', async () => {
     // One hour of measured duration makes the time bill the rate itself, and
     // the same tokens priced as Anthropic would be a different (token) figure.
-    readings = collectorOn('VerdaQwen', { durationMs: HOUR_MS })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: HOUR_MS })
     const { createInjectionScreen } = await ops()
     await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink })
 
@@ -162,7 +162,7 @@ describe('screen call record', () => {
   })
 
   it('records a call that THREW after reaching the model — it was billed', async () => {
-    readings = collectorOn('VerdaQwen', { durationMs: 2_000 })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: 2_000 })
     failWith = new Error('screen unavailable')
     const { createInjectionScreen } = await ops()
 
@@ -171,7 +171,7 @@ describe('screen call record', () => {
     ).rejects.toThrow('screen unavailable')
 
     expect(records).toHaveLength(1)
-    expect(records[0].clientName).toBe('VerdaQwen')
+    expect(records[0].clientName).toBe('SelfDeployedQwen')
     expect(records[0].metrics?.costEur).toBeGreaterThan(0)
   })
 
@@ -190,8 +190,8 @@ describe('screen call record', () => {
   // Mutation: swap the two lines in `withUsageAccounting`'s `finally` (account
   // first) → the refusal throws before the sink is handed the record.
   it('records a call that the thinking-leaf policy then refuses', async () => {
-    // `VerdaQwenThink` is designated for `PlannerThinking` only; the screen is not.
-    readings = collectorOn('VerdaQwenThink', { durationMs: 1_000 })
+    // `SelfDeployedQwenThink` is designated for `PlannerThinking` only; the screen is not.
+    readings = collectorOn('SelfDeployedQwenThink', { durationMs: 1_000 })
     const { createInjectionScreen } = await ops()
 
     await expect(
@@ -199,18 +199,18 @@ describe('screen call record', () => {
     ).rejects.toThrow(/thinking leaf/)
 
     expect(records).toHaveLength(1)
-    expect(records[0].clientName).toBe('VerdaQwenThink')
+    expect(records[0].clientName).toBe('SelfDeployedQwenThink')
   })
 
   it('runs without a sink exactly as before', async () => {
-    readings = collectorOn('VerdaQwen', { durationMs: 1_000 })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: 1_000 })
     const { createInjectionScreen } = await ops()
     const verdict = await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c' })
     expect(verdict.injection_detected).toBe(false)
   })
 
   it('a sink that throws is logged and does not replace the verdict', async () => {
-    readings = collectorOn('VerdaQwen', { durationMs: 1_000 })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: 1_000 })
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { createInjectionScreen } = await ops()
 
@@ -235,7 +235,7 @@ describe('screen call record', () => {
   // try/catch stays green here — the adapter contains it first; the guard's half
   // is pinned with a screen that does not catch, in `model-call-event.test.ts`.)
   it('a recorder that throws in the guard leaves the BAML screen verdict intact', async () => {
-    readings = collectorOn('VerdaQwen', { durationMs: 1_000 })
+    readings = collectorOn('SelfDeployedQwen', { durationMs: 1_000 })
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { createInjectionScreen } = await ops()
     const events: { type: string }[] = []

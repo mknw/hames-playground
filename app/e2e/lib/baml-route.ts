@@ -2,15 +2,15 @@
  * How a hermetic run reaches the fake — and why the two tiers get there
  * differently.
  *
- * ## The verda tier: the shipped seam, unmodified
+ * ## The self_deployed tier: the shipped seam, unmodified
  *
- * `VerdaQwen` declares `base_url env.VERDA_INFERENCE_ENDPOINT`, and BAML
+ * `SelfDeployedQwen` declares `base_url env.LARGE_LLM_BASE_URL`, and BAML
  * resolves `env.*` references from `process.env` at CALL time (see the generated
  * `async_client.ts`: `{ ...process.env, ...options.env }`). Setting that
  * variable to the fake's base is therefore not a trick — it is what a developer
  * does when they run the deployment locally. Nothing in `src/` changes, the
  * `chat_template_kwargs` and `max_tokens` the client declares still go on the
- * wire, and `assertVerdaConfigured()` still runs its `/v1` check.
+ * wire, and `assertSelfDeployedConfigured()` still runs its `/v1` check.
  *
  * ## The anthropic tier: a test-only client registry, and no new env switch
  *
@@ -34,12 +34,12 @@
  *
  *   - no override (the anthropic tier, and every role the switch never moves)
  *     → the registry's primary → the fake, reporting `FAKE_ANTHROPIC_TIER_MODEL`
- *   - `clientOverrideFor('controller')` → `setPrimary('VerdaQwen')` → the
- *     declaration in `baml_src/` → the fake, reporting `VERDA_MODEL`
+ *   - `clientOverrideFor('controller')` → `setPrimary('SelfDeployedQwen')` → the
+ *     declaration in `baml_src/` → the fake, reporting `SELF_DEPLOYED_MODEL`
  *
  * The registry is rebuilt PER CALL, through a getter, because `setPrimary` is a
- * mutation: one shared instance would keep `VerdaQwen` as primary after the
- * first verda-routed call, and every later anthropic-tier call would silently
+ * mutation: one shared instance would keep `SelfDeployedQwen` as primary after the
+ * first self_deployed-routed call, and every later anthropic-tier call would silently
  * be attributed to the wrong tier. That would not fail — it would produce a
  * green tier-switch scenario that proves nothing.
  *
@@ -99,8 +99,8 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
       // transport backstop catches those calls and per-call env overrides.
       if (!registered.has(client)) {
         const endpoint =
-          client === 'VerdaQwen'
-            ? process.env.VERDA_INFERENCE_ENDPOINT
+          client === 'SelfDeployedQwen'
+            ? process.env.LARGE_LLM_BASE_URL
             : client === 'LocalQwenSmall'
               ? process.env.SMALL_LLM_BASE_URL
               : undefined

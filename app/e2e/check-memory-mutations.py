@@ -42,7 +42,7 @@ CONTROLS = [
     }
     const sources = await listMemorySourcesForConversation(conversationId, userId)""")], '10-memory', 'erases the whole shared memory'),
     ('private-describe', 'packages/harness-baml/clients.server.ts', [("describe: 'LocalQwenSmall',", "describe: 'DescribeAnthropic',")], '10-memory', 'answers over SSE'),
-    ('private-egress', 'app/src/lib/memory/embedder.server.ts', [('documents: async (texts) => (await embed(texts, config)).vectors', "documents: async (texts) => (await fetch('https://hermetic-backstop.invalid/').catch(() => undefined), (await embed(texts, config)).vectors)")], '10-memory', 'on verda.*answers over SSE'),
+    ('private-egress', 'app/src/lib/memory/embedder.server.ts', [('documents: async (texts) => (await embed(texts, config)).vectors', "documents: async (texts) => (await fetch('https://hermetic-backstop.invalid/').catch(() => undefined), (await embed(texts, config)).vectors)")], '10-memory', 'on self_deployed.*answers over SSE'),
     ('nonopted-wake', 'app/src/lib/memory/config.server.ts', [('if (!memory || !harnessUsesMemory(patterns)) return undefined', 'if (!memory) return undefined')], '10-memory', 'an agent without memory'),
     ('app-wipe', 'app/e2e/lib/app.ts', [(".query('DELETE FROM memories WHERE user_id = $1', [userId])", ".query('SELECT 1', [])")], '10-memory', 'the following scenario can wipe'),
     ('browser-wipe', 'app/e2e-browser/lib/db.ts', [("['memories', 'conversations', 'user_prefs']", "['conversations', 'user_prefs']")], '10-memory', 'the browser wipe'),

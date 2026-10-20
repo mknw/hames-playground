@@ -8,7 +8,7 @@ repo already ships still work on it.
 # from app/
 pnpm eval:harness                          # baseline: the declared Anthropic chains
 EVAL_CLIENT=tier      pnpm eval:harness    # the shipped private tier (27B + 4B)
-EVAL_CLIENT=VerdaQwen pnpm eval:harness    # every role on the 27B (exploratory)
+EVAL_CLIENT=SelfDeployedQwen pnpm eval:harness    # every role on the 27B (exploratory)
 ```
 
 A report lands in [`reports/`](reports/) and the exit code is non-zero if any
@@ -18,17 +18,17 @@ scenario failed.
 
 **Live spend remains gated on the owner's separate authorization.** Do not run
 this command to test the wiring, probe an endpoint, or wake a paused box.
-After that authorization, with `VERDA_INFERENCE_ENDPOINT` naming the approved
+After that authorization, with `LARGE_LLM_BASE_URL` naming the approved
 parser-equipped box (G19 Q7; never the parserless deployment):
 
 ```bash
-EVAL_CLIENT=VerdaQwenThink EVAL_ROLES=planner EVAL_ONLY=planner-plan-shape pnpm eval:harness
+EVAL_CLIENT=SelfDeployedQwenThink EVAL_ROLES=planner EVAL_ONLY=planner-plan-shape pnpm eval:harness
 ```
 
 This mode calls `PlannerThinking` with an **eval-only 8192-token / 340-second**
 registry override. Model and sampling come from the committed twin's rendered
 request. The shipped **4096 / 180 seconds** pair stays provisional and unchanged.
-It also calls thinking-off `Planner` on `VerdaQwen`, requiring identical endpoint,
+It also calls thinking-off `Planner` on `SelfDeployedQwen`, requiring identical endpoint,
 credentials and model before either call. The unrelated Critic preflight is
 skipped; a wider twin selection is refused before preflight.
 
@@ -91,20 +91,20 @@ it), so they cannot rot into unbuildable code unnoticed.
 
 ## Knobs
 
-| Env var              | Default                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVAL_CLIENT`        | unset                    | The BAML client to route through, e.g. `VerdaQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`. The special value **`tier`** resolves each role through the production map instead of naming one client — which is the only way to measure the shipped private tier since it became TWO models on 2026-08-26 (the 27B for the heavy roles, `LocalQwenSmall` for `describe`). A single-name run is still a fair question, just a different one: it measures summarization on a model production does not use for it. |
-| `EVAL_ROLES`         | the production Verda map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,planner,describe,screen` — the same set a verda tier decision moves in production (widened twice on 2026-08-26, the second time to include the injection screen), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting. The thinking twin requires `EVAL_ROLES=planner`; other clients retain the exploratory role selection.                                                                                                          |
-| `EVAL_RELIABILITY_N` | `20`                     | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `EVAL_ONLY`          | unset                    | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Env var              | Default                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVAL_CLIENT`        | unset                            | The BAML client to route through, e.g. `SelfDeployedQwen`. Unset (or `default`) is the **baseline**: no override anywhere, so every function runs the Anthropic chain it declares in `baml_src/`. The special value **`tier`** resolves each role through the production map instead of naming one client — which is the only way to measure the shipped private tier since it became TWO models on 2026-08-26 (the 27B for the heavy roles, `LocalQwenSmall` for `describe`). A single-name run is still a fair question, just a different one: it measures summarization on a model production does not use for it. |
+| `EVAL_ROLES`         | the production self-deployed map | Comma-separated roles `EVAL_CLIENT` applies to. Default is `controller,actor,critic,compactExecution,router,planner,describe,screen` — the same set a self_deployed tier decision moves in production (widened twice on 2026-08-26, the second time to include the injection screen), so a plain run measures the shipped route rather than a hypothetical one. Set it to NARROW a run while bisecting. The thinking twin requires `EVAL_ROLES=planner`; other clients retain the exploratory role selection.                                                                                                         |
+| `EVAL_RELIABILITY_N` | `20`                             | Calls in the structured-output reliability sample. `0` skips them, for a quick structural-only pass.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `EVAL_ONLY`          | unset                            | Comma-separated scenario ids, to re-run one thing. Unknown ids throw.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 The script sets `BAML_LOG=warn` so the console stays readable; override it
 (`BAML_LOG=info pnpm eval:harness`) to see the rendered prompts and raw replies
 while debugging a scenario.
 
 Credentials come from `app/.env` via `--env-file` — `ANTHROPIC_API_KEY` always,
-plus `VERDA_INFERENCE_ENDPOINT` (which must end in `/v1`) and
-`VERDA_INFERENCE_API_KEY` for a Verda run. See `app/.env.example`.
+plus `LARGE_LLM_BASE_URL` (which must end in `/v1`) and
+`LARGE_LLM_API_KEY` for a self-deployed run. See `app/.env.example`.
 
 ### How the client override works, and why it is not a new switch
 
@@ -113,7 +113,7 @@ plus `VERDA_INFERENCE_ENDPOINT` (which must end in `/v1`) and
 provider posture is a compliance property rather than a performance one
 (ADR-0001, and `SD-12` in the sensitive-domain brief): there is no configuration
 that sends a _production_ prompt to a different provider, and the one opt-in
-that moves traffic, `USE_VERDA_INFERENCE`, is all-or-nothing and documented. An
+that moves traffic, `USE_SELF_DEPLOYED_INFERENCE`, is all-or-nothing and documented. An
 eval runner that added a general "point any role at any client" env var into
 `src/` would re-introduce precisely the switch that was deleted on 2026-08-24.
 
@@ -153,7 +153,7 @@ screen _implicitly_. It is its own entry in `DEFAULT_ROUTED_ROLES`, so narrowing
 a run to `describe` does not drag it, and `EVAL_ROLES=screen` measures it alone.
 
 To measure the screen end to end on the box, set **both** `EVAL_CLIENT` and
-`USE_VERDA_INFERENCE=1`: the graded calls follow `EVAL_CLIENT`, but the one
+`USE_SELF_DEPLOYED_INFERENCE=1`: the graded calls follow `EVAL_CLIENT`, but the one
 production-adapter call in that scenario resolves its client through
 `clientOverrideFor('screen')` like production does, and the report shows them
 separately rather than pretending they agree.
@@ -172,7 +172,7 @@ as an _observation_ instead, which lands in the report but never fails the run.
 | ------------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `controller-truncation-detection-wired`    | controller       | `CLIENT_MAX_OUTPUT_TOKENS` has an entry for this client. Without one, `llmCallHitOutputCap()` returns false for every call and the corrective retry is silently dead (`SA-C2`). No model call.                                                                                                                                          |
 | `screen-on-the-tier`                       | screen           | The two properties `withInjectionGuard` depends on, on the routed client: an injection is reported, and every span is an exact substring — including on a page that tells the screen to stay quiet.                                                                                                                                     |
-| `planner-plan-shape`                       | planner          | Non-empty plan, `n_steps` in the region of the steps written, only catalog tools named (a decoy in the request is not), and output tokens under the cap with headroom. Closes the gap the `planner:` entry in `VERDA_CLIENT_BY_ROLE` names.                                                                                             |
+| `planner-plan-shape`                       | planner          | Non-empty plan, `n_steps` in the region of the steps written, only catalog tools named (a decoy in the request is not), and output tokens under the cap with headroom. Closes the gap the `planner:` entry in `SELF_DEPLOYED_CLIENT_BY_ROLE` names.                                                                                     |
 | `router-intent-classification`             | router           | 5 canonical utterances: the tool/no-tool branch, the route name is one of the offered ones, and a back-reference resolves into a self-contained `intent`.                                                                                                                                                                               |
 | `controller-tool-call-turn`                | controller       | Turn 0, empty history: picks an offered tool, emits `tool_args` the loop can `JSON.parse`.                                                                                                                                                                                                                                              |
 | `controller-final-answer-turn`             | controller       | The answer is already in the turn log: terminates with `Return` + `is_final` and carries the facts through, rather than re-querying.                                                                                                                                                                                                    |
@@ -217,7 +217,7 @@ The header also carries a **Prompt caching** line, because whether repeated
 prefixes get cheaper is what makes the same numbers mean different things on
 different routes. It is keyed by client in `CACHING_NOTES` (`report.ts`) and
 says _unrecorded_ rather than nothing for a client nobody has recorded yet.
-`VerdaQwen` has none today, on both counts: the client declares no
+`SelfDeployedQwen` has none today, on both counts: the client declares no
 `allowed_role_metadata`, so the templates' `cache_control` breakpoints are
 dropped, and the deployment runs vLLM without `--enable-prefix-caching` — so a
 repeated long prompt pays full prefill on that route.

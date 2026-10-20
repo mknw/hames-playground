@@ -6,7 +6,7 @@
  * decision rather than a mechanism.
  *
  * The default deserves the attention: the owner's call is "every preview user
- * starts on the self-hosted tier", but `runWithInferenceTier('verda')` throws
+ * starts on the self-hosted tier", but `runWithInferenceTier('self_deployed')` throws
  * when the endpoint is unset, so defaulting an unconfigured deployment there
  * would make every turn throw. Both halves of that are asserted, because a
  * later reading of just one of them would look like a bug.
@@ -30,10 +30,10 @@ import {
 } from '../../../lib/db/user-prefs.server'
 
 const ENV_KEYS = [
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   // The private tier needs the 4B summarizer too (2026-08-26); the preview
-  // default reads `verdaConfigured()`, which asks about both endpoints.
+  // default reads `selfDeployedConfigured()`, which asks about both endpoints.
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
@@ -43,9 +43,9 @@ let saved: Record<string, string | undefined>
 /** BOTH endpoints the private tier needs — the 27B and the 4B summarizer. A
  *  fixture that sets only the first describes a deployment the switch refuses
  *  to offer, which is the case the "is anthropic when it is not" tests cover. */
-function configureVerda(): void {
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+function configureSelfDeployed(): void {
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -74,35 +74,35 @@ function lastRealQuery(): { sql: string; params: unknown[] } {
 
 describe('isInferenceTier', () => {
   it('admits exactly the two tiers', () => {
-    expect(isInferenceTier('verda')).toBe(true)
+    expect(isInferenceTier('self_deployed')).toBe(true)
     expect(isInferenceTier('anthropic')).toBe(true)
   })
 
   it('rejects everything else, including near-misses and nullish', () => {
-    for (const bad of ['VERDA', 'Anthropic', '', 'openai', null, undefined, 1, {}]) {
+    for (const bad of ['SELF_DEPLOYED', 'Anthropic', '', 'openai', null, undefined, 1, {}]) {
       expect(isInferenceTier(bad)).toBe(false)
     }
   })
 })
 
 describe('defaultInferenceTier — the owner’s preview decision', () => {
-  it('is verda once the self-hosted endpoint is configured', () => {
-    configureVerda()
-    expect(defaultInferenceTier()).toBe('verda')
+  it('is self_deployed once the self-hosted endpoint is configured', () => {
+    configureSelfDeployed()
+    expect(defaultInferenceTier()).toBe('self_deployed')
   })
 
-  it('is anthropic when it is not, because the verda position would throw', () => {
-    // Not a second policy: the fall-through to Anthropic that a `verda` default
+  it('is anthropic when it is not, because the self_deployed position would throw', () => {
+    // Not a second policy: the fall-through to Anthropic that a `self_deployed` default
     // would need is refused by design upstream, so refusing to *default* there
     // is the only option left.
     expect(defaultInferenceTier()).toBe('anthropic')
   })
 
   it('is anthropic for a misshapen endpoint too', () => {
-    configureVerda()
+    configureSelfDeployed()
     // Only the /v1 suffix is wrong. Everything else is present, so a pass here
     // is about the shape check rather than about a missing variable.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/'
     expect(defaultInferenceTier()).toBe('anthropic')
   })
 
@@ -112,7 +112,7 @@ describe('defaultInferenceTier — the owner’s preview decision', () => {
     // configured cannot serve a private turn's first tool-result summary, and
     // must not silently descale it back onto the 27B — so it is not offered at
     // all. This is the half a one-endpoint fixture used to hide.
-    configureVerda()
+    configureSelfDeployed()
     delete process.env.SMALL_LLM_DECISIONS_URL
     delete process.env.SMALL_LLM_BASE_URL
     expect(defaultInferenceTier()).toBe('anthropic')
@@ -120,10 +120,20 @@ describe('defaultInferenceTier — the owner’s preview decision', () => {
 })
 
 describe('getStoredInferenceTier', () => {
-  it('reads the row scoped to the user id it was given', async () => {
+  it('reads a legacy private seed canonically without rewriting it', async () => {
     query.mockResolvedValue({ rows: [{ inference_tier: 'verda' }] })
+    expect(await getStoredInferenceTier('user-1')).toBe('self_deployed')
+    expect(
+      query.mock.calls.some(([sql]) =>
+        /UPDATE user_prefs|INSERT INTO user_prefs/.test(String(sql)),
+      ),
+    ).toBe(false)
+  })
 
-    expect(await getStoredInferenceTier('user-1')).toBe('verda')
+  it('reads the row scoped to the user id it was given', async () => {
+    query.mockResolvedValue({ rows: [{ inference_tier: 'self_deployed' }] })
+
+    expect(await getStoredInferenceTier('user-1')).toBe('self_deployed')
     const { sql, params } = lastRealQuery()
     expect(sql).toContain('FROM user_prefs WHERE user_id = $1')
     expect(params).toEqual(['user-1'])
@@ -157,13 +167,13 @@ describe('getStoredInferenceTier', () => {
 
 describe('setStoredInferenceTier', () => {
   it('upserts one row per user and bumps updated_at', async () => {
-    await setStoredInferenceTier('user-1', 'verda')
+    await setStoredInferenceTier('user-1', 'self_deployed')
 
     const { sql, params } = lastRealQuery()
     expect(sql).toContain('INSERT INTO user_prefs')
     expect(sql).toContain('ON CONFLICT (user_id) DO UPDATE')
     expect(sql).toContain('updated_at     = NOW()')
-    expect(params).toEqual(['user-1', 'verda'])
+    expect(params).toEqual(['user-1', 'self_deployed'])
   })
 
   it('binds the tier as a parameter rather than interpolating it', async () => {

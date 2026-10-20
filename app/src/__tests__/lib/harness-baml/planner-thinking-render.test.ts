@@ -6,7 +6,7 @@ import { b } from '@hames-ai/harness-baml/baml_client'
 import {
   PRIVATE_TIER_CLIENTS,
   THINKING_CLIENTS,
-  VERDA_CLIENT_BY_ROLE,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
 } from '@hames-ai/harness-baml/clients.server'
 import {
   CLIENT_MAX_OUTPUT_TOKENS,
@@ -16,10 +16,10 @@ import {
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 const env = {
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'synthetic-key',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+  LARGE_LLM_API_KEY: 'synthetic-key',
 }
-const opts = { client: 'VerdaQwenThink', env }
+const opts = { client: 'SelfDeployedQwenThink', env }
 const tools = [
   { name: 'search', description: 'Synthetic search', args_schema: '{"query":"string"}' },
 ]
@@ -84,22 +84,22 @@ describe('dormant Planner thinking twin', () => {
 
   it('pins its provisional cap/timeout coupling separately and never changes the tier map', () => {
     const source = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
       'utf8',
     )
-    const block = source.split('client<llm> VerdaQwenThink {')[1]
+    const block = source.split('client<llm> SelfDeployedQwenThink {')[1]
     expect(block).toBeDefined()
     const cap = Number(block.match(/max_tokens\s+(\d+)/)?.[1])
     const timeout = Number(block.match(/request_timeout_ms\s+(\d+)/)?.[1])
     expect([cap, timeout]).toEqual([4096, 180_000])
     expect(timeout - (cap / 26) * 1000).toBeGreaterThanOrEqual(10_000)
     expect(source).toContain('PROVISIONAL / UNMEASURED')
-    expect(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwenThink).toBe(cap)
-    expect(MODEL_CONTEXT_WINDOWS.VerdaQwenThink).toBe(MODEL_CONTEXT_WINDOWS.VerdaQwen)
-    expect(TIME_PRICED_CLIENTS.VerdaQwenThink).toBe(TIME_PRICED_CLIENTS.VerdaQwen)
-    expect(PRIVATE_TIER_CLIENTS.has('VerdaQwenThink')).toBe(true)
-    expect([...THINKING_CLIENTS]).toEqual(['VerdaQwenThink'])
-    expect(Object.values(VERDA_CLIENT_BY_ROLE)).not.toContain('VerdaQwenThink')
-    expect(VERDA_CLIENT_BY_ROLE.planner).toBe('VerdaQwen')
+    expect(CLIENT_MAX_OUTPUT_TOKENS.SelfDeployedQwenThink).toBe(cap)
+    expect(MODEL_CONTEXT_WINDOWS.SelfDeployedQwenThink).toBe(MODEL_CONTEXT_WINDOWS.SelfDeployedQwen)
+    expect(TIME_PRICED_CLIENTS.SelfDeployedQwenThink).toBe(TIME_PRICED_CLIENTS.SelfDeployedQwen)
+    expect(PRIVATE_TIER_CLIENTS.has('SelfDeployedQwenThink')).toBe(true)
+    expect([...THINKING_CLIENTS]).toEqual(['SelfDeployedQwenThink'])
+    expect(Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE)).not.toContain('SelfDeployedQwenThink')
+    expect(SELF_DEPLOYED_CLIENT_BY_ROLE.planner).toBe('SelfDeployedQwen')
   })
 })

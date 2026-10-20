@@ -17,8 +17,8 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 afterEach(() => vi.restoreAllMocks())
 
 function collector(
-  selected = 'VerdaQwenThink',
-  last = 'VerdaQwen',
+  selected = 'SelfDeployedQwenThink',
+  last = 'SelfDeployedQwen',
   selectedThinking?: unknown,
   lastThinking?: unknown,
 ): Collector {
@@ -51,7 +51,7 @@ describe('thinking leaf function policy', () => {
   const originals = functions.filter((name) => name !== 'PlannerThinking')
 
   it('designates only the measured-scope planner counterpart for the thinking leaf', () => {
-    expect(THINKING_FUNCTIONS_BY_CLIENT).toEqual({ VerdaQwenThink: ['PlannerThinking'] })
+    expect(THINKING_FUNCTIONS_BY_CLIENT).toEqual({ SelfDeployedQwenThink: ['PlannerThinking'] })
     expect(functions.filter((name) => name.endsWith('Thinking'))).toEqual(['PlannerThinking'])
   })
 
@@ -66,9 +66,9 @@ describe('thinking leaf function policy', () => {
   })
 
   it('uses the selected leaf rather than another attempted leaf', () => {
-    expect(() => accountBamlCall(collector('VerdaQwen'), 'LoopController')).not.toThrow()
+    expect(() => accountBamlCall(collector('SelfDeployedQwen'), 'LoopController')).not.toThrow()
     expect(() =>
-      accountBamlCall(collector('VerdaQwen', 'VerdaQwenThink'), 'LoopController'),
+      accountBamlCall(collector('SelfDeployedQwen', 'SelfDeployedQwenThink'), 'LoopController'),
     ).not.toThrow()
     expect(() => accountBamlCall(collector(), 'PlannerThinking')).not.toThrow()
   })
@@ -84,7 +84,7 @@ describe('thinking leaf function policy', () => {
       /selected a thinking leaf/,
     )
     expect(() =>
-      accountBamlCall(collector('VerdaQwenThink', 'Other', true), 'PlannerThinking'),
+      accountBamlCall(collector('SelfDeployedQwenThink', 'Other', true), 'PlannerThinking'),
     ).not.toThrow()
   })
 

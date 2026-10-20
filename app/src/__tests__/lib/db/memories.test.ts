@@ -36,7 +36,7 @@ import {
   isMemoryAvailable,
   listMemoriesForUser,
 } from '../../../lib/db/memories.server'
-import { closePool, query } from '../../../lib/db/client.server'
+import { closePool, query, withTransaction, SCHEMA_LOCK_KEY } from '../../../lib/db/client.server'
 import { createConversation, deleteConversations } from '../../../lib/db/conversations.server'
 import { ENCRYPTED_TABLES } from '../../../lib/db/migrate-encryption.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
@@ -181,7 +181,7 @@ describe('encryption at rest', () => {
       id,
       userId: ALICE,
       kind: 'preference',
-      tier: 'verda',
+      tier: 'self_deployed',
       content: 'I prefer dark mode and short answers',
       evidence: 'I prefer dark mode and short answers',
       embedding: vec(3),
@@ -200,7 +200,7 @@ describe('encryption at rest', () => {
     // What SQL needs stays readable.
     expect(raw.user_id).toBe(ALICE)
     expect(raw.kind).toBe('preference')
-    expect(raw.tier).toBe('verda')
+    expect(raw.tier).toBe('self_deployed')
 
     // The read path hands the plaintext back, and only through the module.
     const [read] = await listMemoriesForUser(ALICE)
@@ -248,7 +248,7 @@ describe('owner scoping', () => {
       id: aId,
       userId: CAROL,
       kind: 'episodic',
-      tier: 'verda',
+      tier: 'self_deployed',
       content: 'carol memory',
       evidence: 'carol memory',
       embedding: vec(1),
@@ -258,7 +258,7 @@ describe('owner scoping', () => {
       id: bId,
       userId: DAVE,
       kind: 'episodic',
-      tier: 'verda',
+      tier: 'self_deployed',
       content: 'dave memory',
       evidence: 'dave memory',
       embedding: vec(2),
@@ -294,7 +294,7 @@ describe('cascade delete', () => {
       id,
       userId: ALICE,
       kind: 'episodic',
-      tier: 'verda',
+      tier: 'self_deployed',
       content: 'memory with a source',
       evidence: 'memory with a source',
       embedding: vec(5),
@@ -321,5 +321,42 @@ describe('cascade delete', () => {
     )
     expect(after.rows[0]?.n).toBe(0)
     await deleteConversations([conversationId], ALICE)
+  })
+})
+
+describe('self-deployed tier schema migration', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it('widens an old CHECK before new writes and retains the old-valued row', async () => {
+    const source = await readFile(resolve('src/lib/db/memories.server.ts'), 'utf8')
+    const ddl = /const MEMORY_DDL = `([\s\S]*?)\n`/.exec(source)![1]
+    const schema = `tier_migration_${tag}`
+    await withTransaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [SCHEMA_LOCK_KEY])
+      await tx.query('CREATE EXTENSION IF NOT EXISTS vector')
+      await tx.query(`CREATE SCHEMA ${schema}`)
+      await tx.query(`SET LOCAL search_path = ${schema}, public`)
+      await tx.query('CREATE TABLE conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL)')
+      // Apply the prior binary's check to isolated tables. No shared table is altered.
+      await tx.query(ddl.replaceAll("'verda','self_deployed','anthropic'", "'verda','anthropic'"))
+      const insert = `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space) VALUES ($1, 'synthetic-owner', 'trait', $2, 'synthetic content', 'synthetic evidence', $3::vector, 'synthetic-space')`
+      const vector = `[${new Array(1024).fill(0).join(',')}]`
+      await tx.query(insert, ['legacy', 'verda', vector])
+      await tx.query('SAVEPOINT old_check')
+      await expect(tx.query(insert, ['canonical', 'self_deployed', vector])).rejects.toMatchObject({
+        code: '23514',
+      })
+      await tx.query('ROLLBACK TO SAVEPOINT old_check')
+      // The exact DDL ensureMemoriesSchema applies on a version/hash change.
+      await tx.query(ddl)
+      await tx.query(ddl)
+      await expect(tx.query(insert, ['canonical', 'self_deployed', vector])).resolves.toMatchObject(
+        { rowCount: 1 },
+      )
+      expect(
+        (await tx.query('SELECT tier FROM memories WHERE id = $1', ['legacy'])).rows[0].tier,
+      ).toBe('verda')
+      await tx.query(`DROP SCHEMA ${schema} CASCADE`)
+    })
   })
 })

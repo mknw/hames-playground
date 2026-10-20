@@ -77,8 +77,8 @@ beforeEach(() => {
 
 describe('createDecisionDocuments — the tier line', () => {
   // Mutation: render the count only.
-  it("a run whose raw tier slot is 'verda' gets every visible name, type facts and the total", async () => {
-    const r = await resolve('verda')
+  it("a run whose raw tier slot is 'self_deployed' gets every visible name, type facts and the total", async () => {
+    const r = await resolve('self_deployed')
     expect(r.total).toBe(2)
     expect(r.names?.map((n) => n.name)).toEqual(NAMES)
     expect(r.names?.[0]).toMatchObject({ searchable: true, mimeType: 'text/markdown', size: 2048 })
@@ -100,11 +100,11 @@ describe('createDecisionDocuments — the tier line', () => {
   })
 
   // Mutation: read `activeInferenceTier()` instead of the raw frame slot.
-  it('a frame with no tier slot gets the count, even on a deployment whose default tier is verda', async () => {
-    // The deployment default is the host's policy (`USE_VERDA_INFERENCE`), read
+  it('a frame with no tier slot gets the count, even on a deployment whose default tier is self_deployed', async () => {
+    // The deployment default is the host's policy (`USE_SELF_DEPLOYED_INFERENCE`), read
     // by `activeInferenceTier()`. The source must not ask it.
     const { configureInferencePolicy } = await import('@hames-ai/harness-baml/clients.server')
-    configureInferencePolicy({ defaultTier: () => 'verda' })
+    configureInferencePolicy({ defaultTier: () => 'self_deployed' })
     try {
       expect(await resolve(undefined)).toEqual({ total: 2 })
       // and a frame that carries other slots but no tier
@@ -133,7 +133,7 @@ describe('createDecisionDocuments — the tier line', () => {
       (await withRunFrame({ inference: { tier: 'anthropic' } }, () => source(signal))).names,
     ).toBeUndefined()
     expect(
-      (await withRunFrame({ inference: { tier: 'verda' } }, () => source(signal))).names,
+      (await withRunFrame({ inference: { tier: 'self_deployed' } }, () => source(signal))).names,
     ).toHaveLength(2)
     // A frame amended below the run still carries the run's tier.
     const amended = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
@@ -151,7 +151,7 @@ describe('createDecisionDocuments — which documents', () => {
       summary('hidden-secret.md', { excluded: true }),
       summary('archived-secret.md', { excluded: true }),
     ]
-    for (const tier of ['verda', 'anthropic', undefined]) {
+    for (const tier of ['self_deployed', 'anthropic', undefined]) {
       const r = await resolve(tier, docs)
       expect(r.total).toBe(2)
       expect(JSON.stringify(r)).not.toContain('secret')
@@ -162,7 +162,7 @@ describe('createDecisionDocuments — which documents', () => {
     const docs = (['indexed', 'pending', 'failed', 'not_indexed', undefined] as const).map((s, i) =>
       summary(`d${i}.md`, { ingestStatus: s, uploadedAt: i }),
     )
-    const r = await resolve('verda', docs)
+    const r = await resolve('self_deployed', docs)
     expect(r.names?.map((n) => n.searchable)).toEqual([true, false, false, false, false])
   })
 })
@@ -173,7 +173,7 @@ describe('createDecisionDocuments — whose session', () => {
     const list = vi.fn(async () => ALL)
     const owns = vi.fn(async (_s: string, u: string) => u === 'owner')
     const source = createDecisionDocuments('sess-1', { list, owns, userId: () => 'intruder' })
-    const r = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const r = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       source(new AbortController().signal),
     )
     expect(r).toEqual({ total: 0 })
@@ -183,14 +183,16 @@ describe('createDecisionDocuments — whose session', () => {
 
   // Mutation: fall back to some user, or to listing without one.
   it('with no user in scope it refuses (the loop then says unknown)', async () => {
-    await expect(resolve('verda', ALL, { userId: null })).rejects.toThrow(/ownership/)
+    await expect(resolve('self_deployed', ALL, { userId: null })).rejects.toThrow(/ownership/)
   })
 
   it('takes the owner from the request scope when none is injected', async () => {
     vi.mocked(userOwnsSession).mockResolvedValue(true)
     const source = createDecisionDocuments('sess-9', { list: async () => ALL })
     const r = await runWithUserId('scoped-user', () =>
-      withRunFrame({ inference: { tier: 'verda' } }, () => source(new AbortController().signal)),
+      withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
+        source(new AbortController().signal),
+      ),
     )
     expect(userOwnsSession).toHaveBeenCalledWith('sess-9', 'scoped-user')
     expect(r.total).toBe(2)
@@ -255,8 +257,8 @@ describe('what the decide request carries', () => {
     }
   })
 
-  it("on 'verda' the state lists the names the user did not type", async () => {
-    const { state } = await sent('verda', source())
+  it("on 'self_deployed' the state lists the names the user did not type", async () => {
+    const { state } = await sent('self_deployed', source())
     expect(state).toContain('- "lantern-notes.md" (Markdown, 2.0 KB, searchable)')
     expect(state).toContain('- "lantern-sales.csv" (CSV, 2.0 KB, searchable)')
   })
@@ -283,7 +285,7 @@ describe('what the decide request carries', () => {
         owns: async () => true,
         userId: () => 'user-1',
       })
-      const { state, ctx } = await sent('verda', src)
+      const { state, ctx } = await sent('self_deployed', src)
       expect(state).toContain(
         'Uploaded documents in this conversation: unknown (could not be read)',
       )
@@ -315,7 +317,7 @@ describe('what the decide request carries', () => {
       owns: async () => true,
       userId: () => 'user-1',
     })
-    const r = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const r = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       src(new AbortController().signal),
     )
     expect(r.total).toBe(1)

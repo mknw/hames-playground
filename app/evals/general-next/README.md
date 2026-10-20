@@ -1,6 +1,6 @@
 # general-next conversation Eval (#507 W4)
 
-[SCENARIOS.md](SCENARIOS.md) records the 17 acceptance scenarios. This extends the
+[SCENARIOS.md](SCENARIOS.md) records the 18 acceptance scenarios. This extends the
 existing role-level compatibility evals with whole conversations: run the shipped
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.
@@ -98,8 +98,7 @@ route is not refused. The production G14 filter is present and passes identity-f
 payloads; no substitution is exercised (no fixture carries an identity, and the directory
 leg is off: `directory: 'none'`). Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
-P4 scenarios are always reported as gated while the file path is withheld; no env
-switch enables `graph_file_ingest` or materialisation.
+Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled.
 
 The acceptance gate after S3 is: all `must` scenarios and the unchanged `general`
 baseline pass on the **private tier**, with all expected scenarios present and live

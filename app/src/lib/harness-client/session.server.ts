@@ -11,6 +11,7 @@
  * but every function now takes a `userId` and is async.
  */
 
+import { graphFileIngestEnabled } from '../inference/tier-config.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { deserializeContext } from '@hames-ai/harness-patterns'
@@ -73,6 +74,7 @@ export type SessionData = AgentData
  */
 export function agentDeps(): AgentDeps {
   return {
+    graphFileIngest: graphFileIngestEnabled(),
     memory: createHostMemoryConfig(),
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }),
     toolNamespaces: mcpNamespace,

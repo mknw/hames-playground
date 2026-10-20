@@ -248,3 +248,19 @@ describe('the bag the composition root supplies is the bag the moved factories r
     expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: true })
   })
 })
+
+// Advertisement follows the real composition-root policy, not a test-only flag.
+it.each([
+  ['private', 'local', true],
+  ['', 'local', false],
+  ['private', 'openrouter', false],
+  ['PRIVATE', 'local', false],
+])('P4 host capability: policy %s, embedder %s => %s', (policy, embedder, expected) => {
+  vi.stubEnv('INFERENCE_TIERS', policy)
+  vi.stubEnv('EMBEDDINGS_PROVIDER', embedder)
+  try {
+    expect(agentDeps().graphFileIngest).toBe(expected)
+  } finally {
+    vi.unstubAllEnvs()
+  }
+})

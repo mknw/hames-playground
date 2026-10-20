@@ -26,6 +26,7 @@ import {
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+// Package harness is deliberately used to exercise real ingest bytes independently of the host policy (pinned in stash-bridge).
 import { buildGraphHarness } from '../../../../../../packages/connectors/__tests__/graph/harness'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
 import { captureTrace } from '../../../../lib/eval-support/capture'
@@ -174,6 +175,7 @@ const attach = vi.fn<NonNullable<AgentDeps['withSandbox']>>((config) => (pattern
   },
 }))
 const deps: AgentDeps = {
+  graphFileIngest: true,
   toolNamespaces: mcpNamespace,
   withSandbox: attach,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
@@ -276,7 +278,7 @@ describe('general-next composition', () => {
       expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
       expect(criteria['office-data']).toContain('to compute or analyse them')
       expect(criteria['office-data']).toContain('save deliverables')
-      expect(criteria['office-data']).toContain('graph_file_ingest on private-only deployments')
+      expect(criteria['office-data']).toContain('graph_file_ingest')
       expect(composition.routes['office-data']).toMatchObject({
         capability: expect.stringContaining(
           'copy found OneDrive or SharePoint files into the Data Stash and /work/in',
@@ -970,7 +972,7 @@ describe('general-next composition', () => {
 
   // P4 web-exit pin: assert the outgoing literal denial, independent of any
   // input rewrite. Mutations: drop the host outgoing-literal check;
-  // remove general-next's wrapper; omit graph_file_ingest from officeTools.
+  // remove general-next's wrapper.
   it('P4: an ingested file keeps its bytes and its directory member cannot leave through web search', async () => {
     const { createWebPseudonymiser } =
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
@@ -1016,7 +1018,7 @@ describe('general-next composition', () => {
         action: {
           reasoning: 'attempt the literal from the file',
           tool_name: 'search',
-          tool_args: JSON.stringify({ query: member.displayName }),
+          tool_args: JSON.stringify({ query: body.match(/Mira Cedar/)![0] }),
           is_final: false,
         },
       })
@@ -1060,7 +1062,11 @@ describe('general-next composition', () => {
     expect(results).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ tool: 'graph_file_ingest', success: true }),
-        expect.objectContaining({ tool: 'sandbox_read', success: true }),
+        expect.objectContaining({
+          tool: 'sandbox_read',
+          success: true,
+          result: expect.stringContaining('Mira Cedar'),
+        }),
         expect.objectContaining({ tool: 'search', success: true }),
         expect.objectContaining({ tool: 'search', success: false }),
       ]),
@@ -1625,3 +1631,23 @@ describe('general-next think route, in isolation', () => {
     ).toBe(false)
   })
 })
+
+it.each([false, undefined])(
+  'P4: unavailable ingest (%s) is absent from the actor and route',
+  async (graphFileIngest) => {
+    choices = ['office-data', 'answer']
+    mocks.actor.mockResolvedValue({
+      action: { reasoning: 'done', tool_name: 'graph_me', tool_args: '{}', is_final: true },
+    })
+    const patterns = await agent.createPatterns('no-ingest', { ...deps, graphFileIngest })
+    const office = walk(patterns).find((p) => p.name === 'actorCritic')!
+    expect(collectToolNames(office)).not.toContain('graph_file_ingest')
+    const prefix = mocks.actorOptions.mock.calls.at(-1)![0].contextPrefix
+    expect(prefix).toContain('Graph file ingestion is unavailable.')
+    expect(prefix).not.toContain('call graph_file_ingest')
+    await harness(...patterns)('Read a file')
+    const criteria = JSON.parse(String(requests.mock.calls[0][1].body)).questions.next_step.criteria
+    expect(criteria['office-data']).toContain('Graph file ingestion is unavailable.')
+    expect(criteria['office-data']).not.toContain('graph_file_ingest')
+  },
+)

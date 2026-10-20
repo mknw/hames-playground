@@ -88,3 +88,13 @@ describe('registerGraphConnectorTools refuses a non-function supplier at factory
     expect(registerAppTool).toHaveBeenCalledTimes(9)
   })
 })
+
+it('pins final refusal instructions in the advertised ingest tool', () => {
+  registerGraphConnectorTools(goodDeps)
+  const tool = registerAppTool.mock.calls
+    .map(([definition]) => definition)
+    .find((t) => t.name === 'graph_file_ingest')
+  expect(tool.description).toContain(
+    'final for this turn: do not retry or fetch the file another way',
+  )
+})

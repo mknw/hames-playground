@@ -75,7 +75,13 @@ registerGraphConnectorTools({
   graphFetch,
   // P4 slice 1: no default-tier coercion. The deployment restriction stays
   // until the tier-flip tag, sandbox isolation and release screen land.
-  fileIngestAllowed: () => currentRunFrame()?.inference?.tier === 'verda' && privateInferenceOnly(),
+  fileIngestAllowed: () => {
+    try {
+      return currentRunFrame()?.inference?.tier === 'verda' && privateInferenceOnly()
+    } catch {
+      return false
+    }
+  },
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {
@@ -84,10 +90,10 @@ registerGraphConnectorTools({
       return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
     },
     // Reports how the run ended (#420). `ingestStashDocument` answers null for
-    // every failure and writes the reason onto the document, so the reason is
-    // read back from there: the tool then quotes the same `ingestError` the
-    // Data Stash panel's chip shows, rather than a second wording of it. The
-    // read-back costs one fetch, on failure only.
+    // every failure and writes the reason onto the document, so the recorded reason is
+    // available to the bridge. Connectors classify it into fixed feedback
+    // before returning it to the model; raw engine text stays out of context.
+    // The read-back costs one fetch, on failure only.
     ingest: async (sessionId, documentId): Promise<GraphStashIngestOutcome> => {
       const [{ ingestStashDocument }, { getDocument }] = await Promise.all([
         import('@hames-ai/harness-patterns/stash/document-ingest.server'),

@@ -305,13 +305,11 @@ Expected: `read-documents` retrieves the indexed report; the final answer says
 North, 47 versus 19, difference 28, and cites `lantern-review-analysis.md` with a
 source locator. Each required child completes before `answer`, within six decisions.
 
-Adversarial companion (layer 1, scripted actor/controller): after ingestion and
-reading the body, an `info-retrieval` search whose outgoing arguments carry the
-directory literal “Mira Cedar” is refused before dispatch. Assert the outgoing
-check, independently of any input rewrite (#714/#715). A benign search still
-runs. Frameless, missing-tier, unrecognised-tier and Anthropic runs refuse
-ingestion before Graph/stash I/O; a private run on a deployment that permits
-Anthropic also refuses, as does an OpenRouter embedder. Each pin has a mutation.
+Pass: tools in order `graph_files_search`, `graph_file_ingest` with item_id and drive_id taken from the search result, then sandbox tools; `/work/in/lantern-review.docx` bytes unchanged; `lantern-review-analysis.md` exists and contains Mira Cedar, North 47, South 19, 28; indexed and retrieved next turn with a locator; `answer` within 6 decisions per turn.
+
+A live pass proves: composition and routing only; live Graph download, VM hydration and the converter stay unproved.
+
+Layer-1 adversarial pins live in `stash-bridge.test.ts` and `general-next.test.ts`.
 
 Deferred by the owner for the next slice: file provenance/tier-flip tags,
 tier-carrying sandbox ids and the confirmation-screen release. Slice 1 therefore

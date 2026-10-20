@@ -59,7 +59,7 @@ export interface GraphHarness {
   restoreDefaults(): void
 }
 
-export function buildGraphHarness(): GraphHarness {
+export function buildGraphHarness(fileIngestAllowed: () => boolean = () => true): GraphHarness {
   const scope: { userId: string | null; sessionId: string | null } = {
     userId: 'oid-1',
     sessionId: 'sess-1',
@@ -92,7 +92,7 @@ export function buildGraphHarness(): GraphHarness {
   })
 
   registerGraphConnectorTools({
-    fileIngestAllowed: () => true,
+    fileIngestAllowed,
     registerAppTool: registry.registerAppTool,
     graphFetch: (...args) => Promise.resolve(graphFetch(...args)) as never,
     content: content as never,

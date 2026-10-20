@@ -62,6 +62,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 }))
 
 const deps: AgentDeps = {
+  graphFileIngest: true,
   toolNamespaces: mcpNamespace,
   withSandbox: () => (pattern) => pattern,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
@@ -206,11 +207,19 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
 
   // MUTATION: remove the ingestion instructions from the office contextPrefix.
   it('P4: tells the actor how a found Graph file reaches /work/in and cited retrieval', () => {
-    expect(rendered[wire]).toContain('then call graph_file_ingest with its item_id and drive_id')
-    expect(rendered[wire]).toContain('The original file is copied to /work/in')
-    expect(rendered[wire]).toContain('private-tier run on a private-only deployment')
     expect(rendered[wire]).toContain(
-      'Use read-documents for cited excerpts once indexStatus is indexed',
+      'call graph_file_ingest with the item_id and drive_id copied exactly from that result',
+    )
+    expect(rendered[wire]).toContain('The original file is copied into /work/in')
+    expect(rendered[wire]).toContain(
+      'Report a refusal rather than trying another download path; do not retry it this turn.',
+    )
+    expect(rendered[wire]).toContain(
+      'Never guess an id, and never batch the find and the ingest in one action.',
+    )
+    expect(rendered[wire]).toContain('never build the path yourself')
+    expect(rendered[wire]).toContain(
+      'finish once indexStatus is indexed and say the copy is searchable',
     )
     expect(rendered[wire]).not.toContain('Graph file ingestion is unavailable')
   })

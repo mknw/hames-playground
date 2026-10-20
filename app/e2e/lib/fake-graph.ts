@@ -577,6 +577,8 @@ export async function composeGraphTools(
   registerGraphConnectorTools({
     registerAppTool: registry.registerAppTool,
     graphFetch: graph.graphFetch,
+    // Synthetic edge fixture only; production policy is pinned in the app suite.
+    fileIngestAllowed: () => true,
     content: opts.content ?? (await appContentClassifier()),
     stash: opts.stash ?? NO_STASH,
   })

@@ -93,6 +93,8 @@ export interface SandboxAttach {
  * members are omitted when a deployment does not compose that capability.
  */
 export interface AgentDeps {
+  /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
+  graphFileIngest?: boolean
   /** G14 web-route input/egress filter. Optional for Anthropic-only hosts;
    *  absence fails closed in withPseudonymisedInputs on every other tier. */
   pseudonymiseForWeb?: PseudonymiseForWeb

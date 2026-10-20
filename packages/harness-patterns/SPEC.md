@@ -1948,9 +1948,7 @@ boundary it follows the marker-only policy above. Its thread synthesizer reads t
 opt-in until the default-agent flip. Only the candidate's synthesis receives
 recalled memory, while decisions and children receive none. The
 private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
-no provider fallback. Until P4, the office allowlist withholds
-`graph_file_ingest` by exact name and declares no turn-results materialisation
-capability. Layer-1 composition pins and the layer-2 graph-count conversation
+no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation
 live in the host; it consumes the separately pinned core
 `screenDespiteFindings` opt-in.
 

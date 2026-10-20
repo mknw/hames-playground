@@ -411,10 +411,12 @@ message once.
 
 ## Files → the Data Stash
 
+`graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled.
+
 `graph_file_ingest` is the one tool that doesn't hand its result to the model. Its
 `item_id` / `drive_id` arguments are exactly what [file discovery](#finding-a-file)
 returns, so the two halves compose without the model inventing an identifier. It
-copies a file the person already owns into **this conversation's** Data Stash, so
+copies a file the person can open into **this conversation's** Data Stash, so
 the machinery that already exists for uploads — retriever search, the sandbox
 `/work` sync, the file viewer, chat citations — works on Microsoft 365 content
 with no second pipeline. See [DATA_STASH.md](DATA_STASH.md) for that side.

@@ -526,20 +526,30 @@ class Pipeline(unittest.TestCase):
     def test_guest_packages_installed_offline_by_apt(self):
         import shlex
         guest = self.fake_root()
-        record = self.root / 'apt-argv'
-        fake = guest / 'bin/apt-get'
-        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > ' + shlex.quote(str(record)) + '\n')
-        fake.chmod(0o700)
+        record = self.root / 'apt-calls'
+        shims = {'apt-get': 'printf "%s\\n" "$@" >> ' + shlex.quote(str(record)) + '; echo --- >> ' + shlex.quote(str(record)),
+                 'dpkg-deb': 'printf "Package: %s\\nVersion: 1\\n" "$(basename "$2" .deb)"',
+                 'sha256sum': 'printf "%064d  %s\\n" 7 "$1"'}
+        for name, body in shims.items():
+            (guest / 'bin' / name).write_text('#!/bin/sh\n' + body + '\n')
+            (guest / 'bin' / name).chmod(0o700)
         for name in ('a.deb', 'b.deb'):
-            (guest / 'opt/vm-image' / name).write_text('')
+            (guest / 'opt/vm-image' / name).write_text('12345')
+        (guest / 'opt/vm-image/guest-lock.json').write_text(json.dumps({'packages': [
+            {'name': 'a', 'version': '1:2.0-1'}, {'name': 'b', 'version': '3'}]}))
         child = self.shell_section('export NEEDRESTART_MODE=l', "python3 - <<'PY'", guest)
         self.assertEqual(child.returncode, 0, child.stderr)
-        argv = record.read_text().splitlines()
-        self.assertEqual(argv[:4], ['install', '-y', '--no-install-recommends', '--no-download'])
-        self.assertEqual([Path(a).name for a in argv[-2:]], ['a.deb', 'b.deb'])
-        self.assertTrue(all(a.startswith('/') for a in argv[-2:]))  # apt refuses relative local paths
-        self.assertIn('Dir::Etc::SourceList=/dev/null', argv)  # no repository candidates at all
-        self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/no-lists') for a in argv))
+        calls = [c.splitlines() for c in record.read_text().split('---\n') if c]
+        self.assertEqual([[v for v in ('update', 'install', 'clean') if v in c] for c in calls], [['update'], ['install'], ['clean']])
+        for call in calls:  # every apt call sees ONLY the local repository
+            self.assertTrue(any(a.startswith('Dir::Etc::SourceList=') and a.endswith('/opt/vm-image/local.list') for a in call))
+            self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/repo-lists') for a in call))
+        self.assertEqual(calls[1][-2:], ['a=1:2.0-1', 'b=3'])  # the lock's exact versions
+        source = (guest / 'opt/vm-image/local.list').read_text()
+        self.assertTrue(source.startswith('deb [trusted=yes] file:') and source.endswith('/opt/vm-image ./\n'))
+        index = (guest / 'opt/vm-image/Packages').read_text()
+        self.assertIn('Package: a\nVersion: 1\nFilename: a.deb\nSize: 5\nSHA256: ' + '0' * 63 + '7\n\n', index)
+        self.assertIn('Filename: b.deb\n', index)
         commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
         self.assertFalse(any(line.startswith('dpkg ') for line in commands))
 
@@ -1086,10 +1096,11 @@ def mutations():
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
         ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
         ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
-        ("guest apt given relative local paths", "--force-confold /opt/vm-image/*.deb", "--force-confold ./*.deb", "test_guest_packages_installed_offline_by_apt"),
-        ("guest apt sees repository candidates", "-o Dir::Etc::SourceList=/dev/null ", "", "test_guest_packages_installed_offline_by_apt"),
-        ("guest packages may download", "install -y --no-install-recommends --no-download", "install -y --no-install-recommends", "test_guest_packages_installed_offline_by_apt"),
-        ("guest packages back to bare dpkg unpack", "apt-get install -y --no-install-recommends --no-download \\\n", "dpkg --unpack ./*.deb; : \\\n", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt uses the image's own sources", "set -- -o Dir::Etc::SourceList=/opt/vm-image/local.list ", "set -- ", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt keeps the image's lists", "  -o Dir::State::Lists=/opt/vm-image/repo-lists\n", "  -o Dir::Etc::Dummy=1\n", "test_guest_packages_installed_offline_by_apt"),
+        ("guest install ignores lock versions", 'p["name"] + "=" + p["version"]', 'p["name"]', "test_guest_packages_installed_offline_by_apt"),
+        ("local index without checksums", "SHA256: %s\\n\\n", "\\n", "test_guest_packages_installed_offline_by_apt"),
+        ("guest packages back to bare dpkg unpack", "apt-get \"$@\" update >&2", "dpkg --unpack /opt/vm-image/*.deb", "test_guest_packages_installed_offline_by_apt"),
         ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
         ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),

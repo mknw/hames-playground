@@ -10,13 +10,24 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=l
 # apt, not dpkg --unpack + --configure -a: a Pre-Depends upgrade (systemd on
 # its shared library) needs the dependency CONFIGURED first, and only apt orders
-# that. --no-download keeps it offline, and with no sources and empty lists the
-# local files are the only candidates (a same-version repo entry would win).
-mkdir -p /opt/vm-image/no-lists/partial
-apt-get install -y --no-install-recommends --no-download \
-  -o Dir::Etc::SourceList=/dev/null -o Dir::Etc::SourceParts=/opt/vm-image/no-lists \
-  -o Dir::State::Lists=/opt/vm-image/no-lists \
-  -o Dpkg::Options::=--force-confold /opt/vm-image/*.deb >&2  # stderr reaches failed-stage.log
+# that. Its ONLY source is a flat file: repository over these hash-verified
+# debs (the appliance has no network either); the lock's exact versions install.
+mkdir -p /opt/vm-image/repo-lists/partial
+for deb in /opt/vm-image/*.deb; do
+  dpkg-deb -f "$deb"
+  printf 'Filename: %s\nSize: %s\nSHA256: %s\n\n' "${deb##*/}" "$(wc -c < "$deb" | tr -d ' ')" \
+    "$(sha256sum "$deb" | cut -d ' ' -f 1)"
+done > /opt/vm-image/Packages
+printf 'deb [trusted=yes] file:/opt/vm-image ./\n' > /opt/vm-image/local.list
+set -- -o Dir::Etc::SourceList=/opt/vm-image/local.list -o Dir::Etc::SourceParts=/opt/vm-image/repo-lists \
+  -o Dir::State::Lists=/opt/vm-image/repo-lists
+apt-get "$@" update >&2
+# shellcheck disable=SC2046 # one name=version word per lock package
+apt-get "$@" install -y --no-install-recommends -o Dpkg::Options::=--force-confold \
+  $(python3 -c 'import json; print(" ".join(p["name"] + "=" + p["version"] for p in json.load(open("guest-lock.json"))["packages"]))') \
+  >&2  # stderr reaches failed-stage.log
+apt-get "$@" clean
+set --
 python3 - <<'PY'
 import json, subprocess
 with open('guest-lock.json') as stream:
@@ -133,7 +144,7 @@ PY
 cleanup
 trap - EXIT
 rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json ./enabled-units.txt
-rm -rf ./no-lists
+rm -rf ./repo-lists ./Packages ./local.list
 # Remove clone identity and cached cloud-init instance data, never site values.
 cloud-init clean --logs --machine-id
 rm -f /etc/ssh/ssh_host_*

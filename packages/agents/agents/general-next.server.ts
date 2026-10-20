@@ -101,6 +101,8 @@ async function createPatterns(
     rootfs: 'office',
     egress: 'mcp-only',
     syncWorkspace: true,
+    // Graph-only work (mail, file metadata) must not need a container engine.
+    lazy: true,
   })(
     actorCritic<AgentData>(
       createActorControllerAdapter({

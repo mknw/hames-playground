@@ -1,0 +1,464 @@
+/**
+ * `withSandbox({ lazy: true })` — the sandbox starts on the first `sandbox_*` call.
+ *
+ * Backend, pool and scheduler are injected fakes: nothing here spawns a container.
+ * The pins, each with the edit that turns it red:
+ *   - a turn that never calls an in-VM tool boots nothing (red: boot eagerly);
+ *   - the first call boots once, later calls and a parallel pair share it
+ *     (red: boot per call);
+ *   - an unavailable engine is a CLASSIFIED tool failure, and the synthesis input
+ *     carries that sentence and not the engine's words (red: pass the raw error);
+ *   - eager mode (`lazy` absent / false) is untouched.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { harness } from '@hames-ai/harness-patterns/harness.server'
+import { compactExecution } from '@hames-ai/harness-patterns/patterns/compactExecution.server'
+import {
+  activeTransports,
+  activeTransportContext,
+} from '@hames-ai/harness-patterns/tool-transport.server'
+import type { ConfiguredPattern, PatternScope, EventView } from '@hames-ai/harness-patterns/types'
+import { mockAction, mockCriticResult } from './fixtures/baml'
+
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
+
+const artifacts = vi.hoisted(() => ({
+  hydrateWorkspace: vi.fn(async () => ({
+    written: 0,
+    skipped: [] as Array<{ filename: string; error: string }>,
+    accounted: [] as string[],
+  })),
+  snapshotOutputs: vi.fn(async () => new Map<string, string>()),
+  promoteOutputs: vi.fn(async () => ({
+    promoted: [] as string[],
+    skipped: [] as Array<{ filename: string; error: string }>,
+  })),
+}))
+vi.mock('../work-artifacts.server', () => artifacts)
+
+const mockActorController = vi.fn()
+const mockCritic = vi.fn()
+vi.mock('@hames-ai/harness-baml/baml_client', () => ({
+  b: {
+    ActorController: mockActorController,
+    Critic: mockCritic,
+    LoopController: vi.fn(),
+    Router: vi.fn(),
+    Synthesize: vi.fn(),
+    ResultDescribe: vi.fn(),
+  },
+}))
+vi.mock('@hames-ai/harness-baml/baml_client/inlinedbaml', () => ({ getBamlFiles: () => ({}) }))
+vi.mock('@hames-ai/harness-patterns/mcp-client.server', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@hames-ai/harness-patterns/mcp-client.server')>()
+  return { ...actual, listTools: vi.fn().mockResolvedValue([]) }
+})
+
+import { withSandbox, __resetSandboxDefaultsForTests } from '../with-sandbox.server'
+import { WarmPool } from '../warm-pool.server'
+import { SandboxScheduler } from '../scheduler.server'
+import { AttachmentTable } from '../attachment-table.server'
+import { DockerBackend } from '../docker-backend.server'
+import { IN_VM_TOOL_DESCRIPTORS } from '../in-vm-tools'
+import { SKILLS_PENDING_NOTICE } from '../skills'
+import type { ComputeBackend, McpTransport, VMHandle } from '../types'
+
+/** What a container engine says when its socket is missing — the words that must
+ *  never reach the model. Synthetic: no real host, user or path beyond the
+ *  engine's documented default. */
+const RAW_ENGINE_ERROR =
+  'boot failed for sbx-lazy (kg-sandbox:office): docker run -d --name kg-sbx-lazy --network none ' +
+  'kg-sandbox:office exited 125: Cannot connect to the Docker daemon at ' +
+  'unix:///var/run/docker.sock. Is the docker daemon running?'
+
+const runInFrame = <T>(fn: () => Promise<T>): Promise<T> => withRunFrame({}, fn)
+
+interface Calls {
+  boot: number
+  connectMcp: number
+  closes: number
+  toolCalls: Array<{ name: string; args: unknown }>
+}
+
+function fakeBackend(opts?: {
+  bootError?: string
+  bootDelayMs?: number
+}): ComputeBackend & { calls: Calls } {
+  const calls: Calls = { boot: 0, connectMcp: 0, closes: 0, toolCalls: [] }
+  const handle: VMHandle = {
+    id: 'sbx-lazy',
+    backend: 'docker',
+    rootfs: 'office',
+    bootedAt: Date.now(),
+    native: { containerId: 'cid-lazy', runtime: {} },
+  }
+  const transport: McpTransport = {
+    vmId: handle.id,
+    toolNames: async () => ['sandbox_bash'],
+    listTools: async () => [],
+    ownsTool: (name) => name === 'sandbox_bash',
+    callTool: async (name, args) => {
+      calls.toolCalls.push({ name, args })
+      return { success: true, data: 'ran' }
+    },
+    close: async () => {
+      calls.closes += 1
+    },
+  }
+  return {
+    kind: 'docker',
+    calls,
+    async boot() {
+      calls.boot += 1
+      if (opts?.bootDelayMs) await new Promise((r) => setTimeout(r, opts.bootDelayMs))
+      if (opts?.bootError) throw new Error(opts.bootError)
+      return handle
+    },
+    async destroy() {},
+    async reset() {},
+    async connectMcp() {
+      calls.connectMcp += 1
+      return transport
+    },
+    async health() {
+      return { state: 'healthy' as const }
+    },
+    async reapOrphans() {
+      return 0
+    },
+  }
+}
+
+function kit<B extends ComputeBackend>(backend: B) {
+  const pool = new WarmPool(backend, { caps: { base: 1, office: 1 }, idleEvictMs: 60_000 })
+  const scheduler = new SandboxScheduler({ globalCap: 4, perSessionCap: 4 })
+  const attachments = new AttachmentTable(backend, pool, { idleMs: 60_000 })
+  return { backend, pool, scheduler, attachments }
+}
+
+const scopeOf = <T>(data: T): PatternScope<T> => ({
+  id: 'inner',
+  events: [],
+  data,
+  startTime: Date.now(),
+})
+const view = {} as unknown as EventView
+const inner = (
+  fn: (
+    scope: PatternScope<Record<string, unknown>>,
+  ) => Promise<PatternScope<Record<string, unknown>>>,
+): ConfiguredPattern<Record<string, unknown>> => ({
+  name: 'inner',
+  fn,
+  config: { patternId: 'inner', trackHistory: true, errorSeverity: 'irrecoverable' },
+  estimateTurns: () => 1,
+})
+
+/** Dispatch a tool the way the loop patterns do: the innermost transport that owns it. */
+const callSandbox = (name: string, args: Record<string, unknown> = { command: 'ls' }) => {
+  const owner = activeTransports().find((t) => t.ownsTool(name))
+  if (!owner) throw new Error(`no transport owns ${name}`)
+  return owner.callTool(name, args)
+}
+
+beforeEach(() => {
+  artifacts.hydrateWorkspace.mockClear()
+  artifacts.snapshotOutputs.mockClear()
+  artifacts.promoteOutputs.mockClear()
+  mockActorController.mockReset()
+  mockCritic.mockReset()
+})
+afterEach(() => {
+  vi.restoreAllMocks()
+  __resetSandboxDefaultsForTests()
+})
+
+describe('withSandbox({ lazy: true })', () => {
+  const wrap = (k: ReturnType<typeof kit>, extra: Record<string, unknown> = {}) =>
+    withSandbox({
+      ...k,
+      id: 'sess:office',
+      sessionId: 'sess',
+      rootfs: 'office',
+      syncWorkspace: true,
+      lazy: true,
+      ...extra,
+    })
+
+  it('a turn that never calls an in-VM tool boots nothing: no VM, no slot, no sync', async () => {
+    const k = kit(fakeBackend())
+    const allocate = vi.spyOn(k.scheduler, 'allocate')
+    const result = await runInFrame(() =>
+      wrap(k)(inner(async (scope) => ({ ...scope, data: { done: true } }))).fn(scopeOf({}), view),
+    )
+
+    expect(result.data).toEqual({ done: true })
+    expect(k.backend.calls.boot).toBe(0)
+    expect(k.backend.calls.connectMcp).toBe(0)
+    expect(allocate).not.toHaveBeenCalled()
+    expect(artifacts.hydrateWorkspace).not.toHaveBeenCalled()
+    expect(artifacts.snapshotOutputs).not.toHaveBeenCalled()
+    expect(artifacts.promoteOutputs).not.toHaveBeenCalled()
+  })
+
+  it('constructs no container backend at all for such a turn (default singletons)', async () => {
+    __resetSandboxDefaultsForTests()
+    const reap = vi.spyOn(DockerBackend.prototype, 'reapOrphans').mockResolvedValue(0)
+    const wrapped = withSandbox({ id: 'sess:office', sessionId: 'sess', lazy: true })(
+      inner(async (scope) => scope),
+    )
+    await runInFrame(() => wrapped.fn(scopeOf({}), view))
+    expect(reap).not.toHaveBeenCalled()
+  })
+
+  it('advertises the in-VM tools before any VM exists, from the static table', async () => {
+    const k = kit(fakeBackend())
+    let owned: string[] = []
+    let listed: unknown
+    await runInFrame(() =>
+      wrap(k)(
+        inner(async (scope) => {
+          const t = activeTransports()[0]
+          owned = IN_VM_TOOL_DESCRIPTORS.map((d) => d.name).filter((n) => t.ownsTool(n))
+          listed = await t.listTools()
+          return scope
+        }),
+      ).fn(scopeOf({}), view),
+    )
+    expect(owned).toEqual(IN_VM_TOOL_DESCRIPTORS.map((d) => d.name))
+    expect(listed).toEqual(IN_VM_TOOL_DESCRIPTORS)
+    expect(k.backend.calls.boot).toBe(0)
+  })
+
+  it('boots on the first sandbox call, once, and later calls reuse that VM', async () => {
+    const k = kit(fakeBackend())
+    await runInFrame(() =>
+      wrap(k)(
+        inner(async (scope) => {
+          expect(k.backend.calls.boot).toBe(0)
+          await callSandbox('sandbox_bash')
+          await callSandbox('sandbox_bash', { command: 'pwd' })
+          await callSandbox('sandbox_bash', { command: 'date' })
+          return scope
+        }),
+      ).fn(scopeOf({}), view),
+    )
+
+    expect(k.backend.calls.boot).toBe(1)
+    expect(k.backend.calls.connectMcp).toBe(1)
+    expect(k.backend.calls.toolCalls.map((c) => c.args)).toEqual([
+      { command: 'ls' },
+      { command: 'pwd' },
+      { command: 'date' },
+    ])
+    // The sync brackets the booted VM exactly once, and the slot is back.
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
+    expect(artifacts.snapshotOutputs).toHaveBeenCalledTimes(1)
+    expect(artifacts.promoteOutputs).toHaveBeenCalledTimes(1)
+    expect(k.scheduler.inflightCount()).toBe(0)
+  })
+
+  it('two parallel first calls share ONE boot', async () => {
+    const k = kit(fakeBackend({ bootDelayMs: 20 }))
+    await runInFrame(() =>
+      wrap(k)(
+        inner(async (scope) => {
+          const [a, b] = await Promise.all([
+            callSandbox('sandbox_bash'),
+            callSandbox('sandbox_bash'),
+          ])
+          expect(a.success && b.success).toBe(true)
+          return scope
+        }),
+      ).fn(scopeOf({}), view),
+    )
+    expect(k.backend.calls.boot).toBe(1)
+    expect(k.backend.calls.connectMcp).toBe(1)
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(1)
+    expect(k.backend.calls.toolCalls).toHaveLength(2)
+  })
+
+  it('a later turn that needs the sandbox again reuses the parked VM', async () => {
+    const k = kit(fakeBackend())
+    const w = wrap(k)(
+      inner(async (scope) => {
+        await callSandbox('sandbox_bash')
+        return scope
+      }),
+    )
+    await runInFrame(() => w.fn(scopeOf({}), view))
+    await runInFrame(() => w.fn(scopeOf({}), view))
+    expect(k.backend.calls.boot).toBe(1)
+    expect(artifacts.hydrateWorkspace).toHaveBeenCalledTimes(2)
+  })
+
+  describe('an unavailable engine', () => {
+    let errors: ReturnType<typeof vi.spyOn>
+    beforeEach(() => {
+      errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    })
+
+    it('answers the call with a classified failure, never the engine’s words', async () => {
+      const k = kit(fakeBackend({ bootError: RAW_ENGINE_ERROR }))
+      const results: Array<{ success: boolean; error?: string }> = []
+      await runInFrame(() =>
+        wrap(k)(
+          inner(async (scope) => {
+            results.push(await callSandbox('sandbox_bash'))
+            results.push(await callSandbox('sandbox_bash'))
+            return scope
+          }),
+        ).fn(scopeOf({}), view),
+      )
+
+      for (const r of results) {
+        expect(r.success).toBe(false)
+        expect(r.error).toContain('The code workspace is unavailable on this server.')
+        expect(r.error).not.toMatch(/docker|socket|unix:|exited 125|kg-sandbox/i)
+      }
+      // The raw error is for the operator, in the server log.
+      expect(errors.mock.calls.flat().join('\n')).toContain('docker.sock')
+      // Remembered for the run: two calls, one failed boot.
+      expect(k.backend.calls.boot).toBe(1)
+      // A failed boot holds nothing.
+      expect(k.scheduler.inflightCount()).toBe(0)
+      expect(artifacts.promoteOutputs).not.toHaveBeenCalled()
+    })
+
+    it('the next turn tries the engine again', async () => {
+      const k = kit(fakeBackend({ bootError: RAW_ENGINE_ERROR }))
+      const w = wrap(k)(
+        inner(async (scope) => {
+          await callSandbox('sandbox_bash')
+          return scope
+        }),
+      )
+      await runInFrame(() => w.fn(scopeOf({}), view))
+      await runInFrame(() => w.fn(scopeOf({}), view))
+      expect(k.backend.calls.boot).toBe(2)
+    })
+
+    it('an unrecognised boot failure gets its own fixed sentence, still without the detail', async () => {
+      const k = kit(
+        fakeBackend({ bootError: 'rootfs layer 7 failed checksum for /var/lib/example' }),
+      )
+      let r: { success: boolean; error?: string } | undefined
+      await runInFrame(() =>
+        wrap(k)(
+          inner(async (scope) => {
+            r = await callSandbox('sandbox_bash')
+            return scope
+          }),
+        ).fn(scopeOf({}), view),
+      )
+      expect(r?.error).toContain('The code workspace could not be started.')
+      expect(r?.error).not.toContain('checksum')
+    })
+
+    // The whole chain, on the real actorCritic and the real synthesis input
+    // builder: what the synthesizer is handed after the office step failed.
+    it('hands synthesis the classified text and NOT the raw error', async () => {
+      const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+      const { createActorControllerAdapter, createCriticAdapter } =
+        await import('@hames-ai/harness-baml/baml-adapters.server')
+      mockActorController.mockResolvedValue(
+        mockAction({ tool_name: 'sandbox_bash', tool_args: JSON.stringify({ command: 'ls' }) }),
+      )
+      mockCritic.mockResolvedValue(mockCriticResult({ is_sufficient: false }))
+
+      const k = kit(fakeBackend({ bootError: RAW_ENGINE_ERROR }))
+      const office = wrap(k)(
+        actorCritic(createActorControllerAdapter([]), createCriticAdapter(), [], {
+          maxRetries: 2,
+          patternId: 'office',
+        }),
+      )
+      const synthesize = vi.fn(async () => ({ value: 'answer' }))
+      const synth = compactExecution({
+        mode: 'thread',
+        patternId: 'response-synth',
+        viewConfig: { fromPatterns: ['office'], fromLastNTurns: 1 },
+        synthesize,
+      })
+
+      type AnyPattern = Parameters<typeof harness>[0]
+      await harness(
+        office as unknown as AnyPattern,
+        synth as unknown as AnyPattern,
+      )('count the rows in my spreadsheet')
+
+      expect(synthesize).toHaveBeenCalledTimes(1)
+      const input = JSON.stringify((synthesize.mock.calls[0] as unknown[])[0])
+      expect(input).toContain('The code workspace is unavailable on this server.')
+      expect(input).not.toMatch(/docker|socket|unix:|exited 125|kg-sandbox/i)
+    })
+  })
+
+  describe('skills', () => {
+    it('says so while the workspace has not started, then carries the index', async () => {
+      const k = kit(fakeBackend())
+      const seen: Array<string | undefined> = []
+      await runInFrame(() =>
+        wrap(k, { skills: async () => [] })(
+          inner(async (scope) => {
+            seen.push(activeTransportContext())
+            await callSandbox('sandbox_bash')
+            seen.push(activeTransportContext())
+            return scope
+          }),
+        ).fn(scopeOf({}), view),
+      )
+      expect(seen[0]).toBe(SKILLS_PENDING_NOTICE)
+      expect(seen[0]).toContain('Skills load when the workspace starts')
+      // No skills resolved: after the boot there is no index and no stale notice.
+      expect(seen[1]).toBeUndefined()
+    })
+
+    it('carries no skills text at all when no resolver is configured', async () => {
+      const k = kit(fakeBackend())
+      let ctx: string | undefined = 'unset'
+      await runInFrame(() =>
+        wrap(k)(
+          inner(async (scope) => {
+            ctx = activeTransportContext()
+            return scope
+          }),
+        ).fn(scopeOf({}), view),
+      )
+      expect(ctx).toBeUndefined()
+    })
+  })
+
+  it('refuses lazy without an id, at wrap time', () => {
+    expect(() => withSandbox({ lazy: true })(inner(async (s) => s))).toThrow(/requires an `id`/)
+  })
+})
+
+describe('withSandbox eager mode is unchanged', () => {
+  it.each([{}, { lazy: false }])('%j boots at entry, before any tool call', async (extra) => {
+    const k = kit(fakeBackend())
+    let bootsAtEntry = -1
+    await runInFrame(() =>
+      withSandbox({ ...k, id: 'sess:office', sessionId: 'sess', rootfs: 'office', ...extra })(
+        inner(async (scope) => {
+          bootsAtEntry = k.backend.calls.boot
+          return scope
+        }),
+      ).fn(scopeOf({}), view),
+    )
+    expect(bootsAtEntry).toBe(1)
+  })
+
+  it('still throws the raw boot error into the pattern (the classified path is lazy-only)', async () => {
+    const k = kit(fakeBackend({ bootError: RAW_ENGINE_ERROR }))
+    await expect(
+      runInFrame(() =>
+        withSandbox({ ...k, id: 'sess:office', sessionId: 'sess', rootfs: 'office' })(
+          inner(async (s) => s),
+        ).fn(scopeOf({}), view),
+      ),
+    ).rejects.toThrow(/docker\.sock/)
+  })
+})

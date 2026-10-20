@@ -139,6 +139,17 @@ function oneLine(text: string): string {
 }
 
 /**
+ * What a LAZY sandbox's prompt says in place of the skills index until its
+ * workspace has started (`withSandbox({ lazy: true, skills })`): the skills are
+ * mounted by the first boot, so before it the index does not exist yet — and an
+ * actor told nothing would read that as "there are no skills". Plain text, no
+ * names: nothing here is a statement about which skills will mount.
+ */
+export const SKILLS_PENDING_NOTICE =
+  `<skills>Skills load when the workspace starts: the list of installed skills appears here ` +
+  `after your first ${SKILLS_INDEX_TOOL} call. Until then, do not assume there are none.</skills>`
+
+/**
  * The index for the skills that were actually mounted, or `undefined` when
  * there are none (so a run without skills renders no index at all).
  *

@@ -5,8 +5,10 @@ Runs inside a disposable container of the SAME distribution release as the base
 image (never on a live host's apt state). The base image's published package
 manifest (verified by the caller against the signed SHA256SUMS) becomes a
 synthetic dpkg status, so apt downloads only what the base lacks, plus the six
-packages the lock requires by name (`--reinstall`), from one dated archive
-snapshot. Writes the debs and `packages.json`, the lock's `packages` fragment.
+packages the lock requires by name (`--reinstall`), from the signed release,
+-updates and -security pockets. Writes the debs and `packages.json` (name,
+version, sha256 of each), the lock's `packages` fragment; that record, not the
+archive's state on the day, is the pin.
 
 Pure dry-run without --apply.
 """
@@ -44,10 +46,9 @@ def synthetic_status(manifest):
     return "\n".join(stanzas)
 
 
-def sources(codename, snapshot):
-    require(re.fullmatch(r"[a-z]+", codename) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", snapshot),
-            "codename and snapshot timestamp required")
-    return (f"Types: deb\nURIs: https://snapshot.ubuntu.com/ubuntu/{snapshot}\n"
+def sources(codename):
+    require(re.fullmatch(r"[a-z]+", codename), "codename required")
+    return ("Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\n"
             f"Suites: {codename} {codename}-updates {codename}-security\nComponents: main universe\n"
             "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n")
 
@@ -64,17 +65,17 @@ def digest(path):
     return value.hexdigest()
 
 
-def download(manifest, out, codename, snapshot):
+def download(manifest, out, codename):
     require(out.is_dir() and not any(out.iterdir()), "fresh empty output directory required")
     state = Path("/tmp/closure-apt")
     (state / "lists/partial").mkdir(parents=True)
     (state / "archives/partial").mkdir(parents=True)
     (state / "status").write_text(synthetic_status(manifest.read_text()))
-    (state / "snapshot.sources").write_text(sources(codename, snapshot))
+    (state / "archive.sources").write_text(sources(codename))
     options = ["-o", "Dir::State::status=" + str(state / "status"),
                "-o", "Dir::State::Lists=" + str(state / "lists"),
                "-o", "Dir::Cache::archives=" + str(state / "archives"),
-               "-o", "Dir::Etc::sourcelist=" + str(state / "snapshot.sources"),
+               "-o", "Dir::Etc::sourcelist=" + str(state / "archive.sources"),
                "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0"]
     subprocess.run(["apt-get", *options, "update"], check=True)
     subprocess.run(["apt-get", *options, "install", "--download-only", "--reinstall", "-y",
@@ -87,7 +88,7 @@ def download(manifest, out, codename, snapshot):
                         "path": target.name, "sha256": digest(target)})
     names = [record["name"] for record in records]
     require(set(REQUIRED) <= set(names) and len(names) == len(set(names)), "closure incomplete or duplicated")
-    (out / "packages.json").write_text(json.dumps({"packages": records, "snapshot": snapshot}, indent=2) + "\n")
+    (out / "packages.json").write_text(json.dumps({"packages": records}, indent=2) + "\n")
     return {"packages": len(records), "bytes": sum((out / r["path"]).stat().st_size for r in records)}
 
 
@@ -96,14 +97,13 @@ def main(argv=None):
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--codename", required=True)
-    parser.add_argument("--snapshot", required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
-    sources(args.codename, args.snapshot)
+    sources(args.codename)
     if not args.apply:
-        print(json.dumps({"mode": "dry-run", "required": REQUIRED, "archive": "snapshot " + args.snapshot}))
+        print(json.dumps({"mode": "dry-run", "required": REQUIRED, "archive": "signed release, -updates, -security"}))
         return
-    print(json.dumps(download(args.manifest, args.out, args.codename, args.snapshot)))
+    print(json.dumps(download(args.manifest, args.out, args.codename)))
 
 
 if __name__ == "__main__":

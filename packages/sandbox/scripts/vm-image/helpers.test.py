@@ -85,14 +85,13 @@ class Helpers(unittest.TestCase):
             with self.subTest(broken=broken), self.assertRaises(RuntimeError):
                 closure.synthetic_status(broken)
 
-    def test_snapshot_source_is_dated_signed_and_codename_bound(self):
-        source = closure.sources("resolute", "20261018T120000Z")
-        self.assertIn("URIs: https://snapshot.ubuntu.com/ubuntu/20261018T120000Z\n", source)
+    def test_archive_source_is_signed_and_codename_bound(self):
+        source = closure.sources("resolute")
         self.assertIn("Suites: resolute resolute-updates resolute-security\n", source)
         self.assertIn("Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n", source)
-        for codename, snapshot in (("resolute", "latest"), ("resolute", "2026-10-18"), ("../x", "20261018T120000Z"), ("", "20261018T120000Z")):
-            with self.subTest(codename=codename, snapshot=snapshot), self.assertRaises(RuntimeError):
-                closure.sources(codename, snapshot)
+        for codename in ("../x", "", "resolute main"):
+            with self.subTest(codename=codename), self.assertRaises(RuntimeError):
+                closure.sources(codename)
 
     def test_closure_requires_the_lock_packages(self):
         self.assertEqual(set(closure.REQUIRED), set(load("build").REQUIRED))
@@ -115,9 +114,9 @@ def mutations():
         ("closure", "manifest package left uninstalled", "Status: install ok installed", "Status: deinstall ok config-files", "test_synthetic_status_marks_every_manifest_package_installed"),
         ("closure", "manifest arch suffix kept in name", 'name, _, arch = fields[0].partition(":")', 'name, arch = fields[0], ""', "test_synthetic_status_marks_every_manifest_package_installed"),
         ("closure", "malformed manifest admitted", 'require(len(fields) == 2, "malformed manifest line")', "fields = (fields + [''])[:2]", "test_synthetic_status_marks_every_manifest_package_installed"),
-        ("closure", "undated archive admitted", 're.fullmatch(r"[0-9]{8}T[0-9]{6}Z", snapshot)', "snapshot", "test_snapshot_source_is_dated_signed_and_codename_bound"),
-        ("closure", "unsigned snapshot source", "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\\n", "Trusted: yes\\n", "test_snapshot_source_is_dated_signed_and_codename_bound"),
-        ("closure", "security pocket dropped", " {codename}-security", "", "test_snapshot_source_is_dated_signed_and_codename_bound"),
+        ("closure", "codename unchecked", 'require(re.fullmatch(r"[a-z]+", codename), "codename required")', "pass", "test_archive_source_is_signed_and_codename_bound"),
+        ("closure", "unsigned archive source", "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\\n", "Trusted: yes\\n", "test_archive_source_is_signed_and_codename_bound"),
+        ("closure", "security pocket dropped", " {codename}-security", "", "test_archive_source_is_signed_and_codename_bound"),
         ("closure", "required package dropped", '"incus-agent", "docker.io"', '"docker.io"', "test_closure_requires_the_lock_packages"),
     ]
     for module, label, before, after, case in changes:

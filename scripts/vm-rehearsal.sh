@@ -20,12 +20,11 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 PIPE=$REPO/packages/sandbox/scripts/vm-image
 W=/mnt/rehearsal
 STATE=$REPO/.sandbox-vm-spike
-# Public pins: the same base serial and archive snapshot as run 4's inputs.
+# Public pins: the same base serial as run 4's inputs.
 SERIAL=20260927
 IMAGES=https://cloud-images.ubuntu.com/releases/resolute/release-$SERIAL
 BASE=ubuntu-26.04-server-cloudimg-amd64
 BASE_SHA=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
-SNAPSHOT=20261018T120000Z
 GROW=10G
 NODE=node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 DOCKER_CLI=docker:29.9.1-cli@sha256:6fae2214c3121a28d5aa639d09032f61310b7c9c75ffbad1025f261a1b621800
@@ -61,7 +60,7 @@ grep -F "$BASE_SHA *$BASE.img" "$W/inputs/SHA256SUMS"
 endgroup
 
 group "2. builder image"
-docker build --progress=plain -t "$BUILDER" --build-arg SNAPSHOT=$SNAPSHOT -f "$PIPE/builder.Dockerfile" "$PIPE"
+docker build --progress=plain -t "$BUILDER" -f "$PIPE/builder.Dockerfile" "$PIPE"
 endgroup
 
 group "3. grow the base disk (R0)"
@@ -72,10 +71,10 @@ python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["derived_sh
 endgroup
 stop_after grow
 
-group "4. guest .deb closure (dated snapshot)"
+group "4. guest .deb closure"
 mkdir -p "$W/debs"
 docker run --rm -v "$PIPE":/pipe:ro -v "$W/inputs/$BASE.manifest":/manifest:ro -v "$W/debs":/out "$BUILDER" \
-  python3 /pipe/closure.py --manifest /manifest --out /out --codename resolute --snapshot $SNAPSHOT --apply
+  python3 /pipe/closure.py --manifest /manifest --out /out --codename resolute --apply
 endgroup
 
 group "5. flavours, then save"

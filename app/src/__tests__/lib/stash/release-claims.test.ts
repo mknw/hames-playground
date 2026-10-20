@@ -42,6 +42,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!dbAvailable) return
   await query('DELETE FROM session_claims WHERE session_id LIKE $1', [`test-release-%-${SUFFIX}`])
+  await query('DELETE FROM conversations WHERE id LIKE $1', [`test-release-%-${SUFFIX}`])
   await closePool()
 })
 
@@ -82,5 +83,21 @@ describe('releaseDeletedSessions against real claims', () => {
 
     // MUTATION: drop the claim before or regardless of the purge → red.
     expect(await getSessionClaimOwner(sid('failed'))).toBe('alice')
+  })
+
+  it('purges nothing and keeps every claim when a conversation row exists for the id', async () => {
+    await claimSession(sid('back'), 'alice', TTL)
+    await query(
+      `INSERT INTO conversations (id, user_id, agent_id, context) VALUES ($1, 'bob', 'general', '{}')`,
+      [sid('back')],
+    )
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await releaseDeletedSessions([sid('back')], 'alice')
+    errorSpy.mockRestore()
+
+    // MUTATION: drop the row re-check before the purge → red.
+    expect(deleteSessionStash).not.toHaveBeenCalled()
+    expect(await getSessionClaimOwner(sid('back'))).toBe('alice')
   })
 })

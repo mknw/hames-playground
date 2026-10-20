@@ -16,14 +16,18 @@ const deleteSessionStash = vi.fn<(sessionId: string) => Promise<void>>(async (id
 })
 vi.mock('@hames-ai/harness-patterns/stash/document-ingest.server', () => ({ deleteSessionStash }))
 
-const claimOwners = new Map<string, string>()
+const conversationRows = new Map<string, string>()
+const getConversationOwner = vi.fn<(id: string) => Promise<string | null>>(
+  async (id) => conversationRows.get(id) ?? null,
+)
+vi.mock('../../../lib/db/conversations.server', () => ({ getConversationOwner }))
+
 const releaseSessionClaim = vi.fn<(sessionId: string, userId: string) => Promise<void>>(
   async (id) => {
     order.push(`claim:${id}`)
   },
 )
 vi.mock('../../../lib/db/session-claims.server', () => ({
-  getSessionClaimOwner: async (id: string) => claimOwners.get(id) ?? null,
   releaseSessionClaim,
 }))
 
@@ -41,7 +45,9 @@ beforeEach(() => {
   releaseSessionClaim.mockImplementation(async (id) => {
     order.push(`claim:${id}`)
   })
-  claimOwners.clear()
+  conversationRows.clear()
+  getConversationOwner.mockReset()
+  getConversationOwner.mockImplementation(async (id) => conversationRows.get(id) ?? null)
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 })
 afterEach(() => {
@@ -105,24 +111,47 @@ describe('releaseDeletedSessions', () => {
     expect(String(errorSpy.mock.calls[0][1])).toContain('db down')
   })
 
-  it("clears the stash even while another user's claim is on the session, and keeps that claim", async () => {
-    claimOwners.set('s-held', 'bob')
-    claimOwners.set('s-own', 'alice')
+  it("clears the stash and releases only the deleter's claim, whoever else holds one", async () => {
+    // The claim repository scopes the DELETE to the deleter (`release-claims.test.ts`
+    // shows a foreign claim surviving on a real database); here the caller must
+    // ask under the deleter's id for every session, held or not.
     await releaseDeletedSessions(['s-held', 's-own'], 'alice')
     // MUTATION: skip a session another user holds a claim on → red.
     expect(deleteSessionStash.mock.calls.map(([id]) => id).sort()).toEqual(['s-held', 's-own'])
-    // Only the deleter's own claim is ever asked to go (the repository scopes the
-    // DELETE to that user; `release-claims.test.ts` shows it on a real database).
-    // MUTATION: release under any user other than the deleter → red.
-    expect(releaseSessionClaim.mock.calls.every(([, user]) => user === 'alice')).toBe(true)
+    // MUTATION: release under any user other than the deleter → red; skip the release → red.
+    expect(releaseSessionClaim.mock.calls.sort()).toEqual([
+      ['s-held', 'alice'],
+      ['s-own', 'alice'],
+    ])
   })
 
   it("keeps the deleter's claim when the clear of a held session fails", async () => {
-    claimOwners.set('s-held', 'bob')
     deleteSessionStash.mockRejectedValueOnce(new Error('redis down'))
     await releaseDeletedSessions(['s-held'], 'alice')
     // MUTATION: drop the claim regardless of the clear's outcome → red.
     expect(releaseSessionClaim).not.toHaveBeenCalled()
+  })
+
+  it('clears nothing and keeps the claim when a conversation row exists for the id', async () => {
+    conversationRows.set('s-back', 'bob')
+    await releaseDeletedSessions(['s-back', 's-gone'], 'alice')
+    // MUTATION: drop the row re-check before the purge → red.
+    expect(deleteSessionStash.mock.calls.map(([id]) => id)).toEqual(['s-gone'])
+    expect(releaseSessionClaim.mock.calls).toEqual([['s-gone', 'alice']])
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(String(errorSpy.mock.calls[0][0])).toContain('s-back')
+  })
+
+  it('clears nothing, keeps the claim and logs the message when the row check fails', async () => {
+    getConversationOwner.mockRejectedValueOnce(new Error('db down'))
+    await expect(releaseDeletedSessions(['s-1'], 'alice')).resolves.toBeUndefined()
+    // MUTATION: treat a failed row check as "no row" (swallow it and go on) → red.
+    expect(deleteSessionStash).not.toHaveBeenCalled()
+    expect(releaseSessionClaim).not.toHaveBeenCalled()
+    // MUTATION: swallow the read error without logging it → red.
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(String(errorSpy.mock.calls[0][0])).toContain('s-1')
+    expect(String(errorSpy.mock.calls[0][1])).toContain('db down')
   })
 
   it('does nothing for an empty list', async () => {

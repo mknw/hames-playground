@@ -17,12 +17,15 @@
  *      which inserts the row inside the same request that stores the
  *      recording, so a triggered run's documents are owned from the start).
  *
- * A live claim wins over the conversation row: the claim is the earlier of the
- * two touches whenever both exist, and first toucher wins. Claims expire with
- * the documents they scope, after which the conversation row — which never
- * changes hands, `saveConversation` only ever updates content columns — is the
- * remaining record, and `claimSession` itself refuses to re-target an expired
- * claim onto a user other than the row's.
+ * Reads are claim-first: `resolveSessionOwner` answers with a live claim before
+ * it looks at the row, the claim being the earlier of the two touches whenever
+ * both exist. Writes are row-first: the conversation row — which never changes
+ * hands, `saveConversation` only ever updates content columns — decides whether
+ * a claim may be taken at all, and `claimSession` refuses one for a user other
+ * than the row's owner, whether or not a claim has expired. A live claim only
+ * answers such a refusal, by naming its holder. Claims expire with the
+ * documents they scope, after which the conversation row is the remaining
+ * record.
  *
  * Writes go through {@link claimSessionOwnership} (record-or-verify); reads go
  * through {@link userOwnsSession} (verify only).
@@ -65,16 +68,11 @@ export async function userOwnsSession(sessionId: string, userId: string): Promis
  * ownership; a later write by a different user is refused.
  *
  * An existing conversation row is authoritative for its own user — the claim is
- * (re)written so the claim records the row's owner. Deleting the conversation
- * clears the session's stash and then releases the claim (`release.server.ts`).
+ * (re)written so the claim records the row's owner — and `claimSession` is where
+ * that is decided, so this is one call: a foreign row is refused there, and the
+ * answer is the live holder or the row's owner. Deleting the conversation clears
+ * the session's stash and then releases the claim (`release.server.ts`).
  */
 export async function claimSessionOwnership(sessionId: string, userId: string): Promise<boolean> {
-  const conversationOwner = await getConversationOwner(sessionId)
-  if (conversationOwner && conversationOwner !== userId) {
-    // Someone else's conversation — but a live claim still outranks the row,
-    // so only refuse when the claim agrees (or is absent).
-    const claimed = await getSessionClaimOwner(sessionId)
-    return claimed === userId
-  }
   return (await claimSession(sessionId, userId, DEFAULT_TTL_SECONDS)) === userId
 }

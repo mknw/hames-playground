@@ -93,13 +93,16 @@ Ownership comes from two records:
 
 First toucher wins, in both records: the claim upsert only re-targets a row that
 is already the caller's or has expired, and `saveConversation` never updates
-`user_id`. A live claim outranks the conversation row, since it is the earlier of
-the two touches whenever both exist; once it expires, the conversation row is the
-remaining record, and it stays the authority: an expired claim is not taken over
-when a conversation row for that session id belongs to another user, and a store
-that cannot answer refuses rather than guesses. A session with neither record
-has no documents (writes claim before they store), so `GET /api/stash/upload?sessionId=` lists it as empty
-rather than as an error — that is the state a brand-new chat opens in.
+`user_id`. Reads are claim-first — a live claim answers before the conversation
+row is consulted, being the earlier of the two touches whenever both exist. Writes
+are row-first: the conversation row decides whether a claim may be taken, so a
+claim is never taken, refreshed or taken over (even once the previous one has
+expired) for a user other than the owner of a conversation row for that session
+id, and a live claim only answers that refusal by naming its holder. A store that
+cannot answer refuses rather than guesses. A session with neither record has no
+documents (writes claim before they store), so `GET /api/stash/upload?sessionId=`
+lists it as empty rather than as an error — that is the state a brand-new chat
+opens in.
 
 The agent-trigger recording (`docs/AGENT_TRIGGER.md`) needs no claim: the run's
 conversation row is written for the token's user inside the same request that

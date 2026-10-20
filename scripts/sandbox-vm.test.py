@@ -755,6 +755,24 @@ class Safety(unittest.TestCase):
                 self.spike.install()
             runner.assert_not_called()
 
+    def test_refusals_name_the_guard_but_never_a_value(self):
+        import ast
+        for source in (SOURCE, SOURCE.with_name("sandbox_vm_measure.py")):
+            for node in ast.walk(ast.parse(source.read_text())):
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "require":
+                    self.assertTrue(len(node.args) == 2 and isinstance(node.args[1], ast.Constant)
+                                    and isinstance(node.args[1].value, str), ast.unparse(node)[:80])
+        for raised, shown in ((vm.Refusal("pin an upstream Incus 7.3+ package version"), "Spike refused: pin an upstream Incus 7.3+ package version"),
+                              (RuntimeError("/private/site/value"), "Spike refused or failed; inspect private state"),
+                              (ValueError("10.0.0.7"), "Spike refused or failed; inspect private state")):
+            stderr = io.StringIO()
+            with self.subTest(raised=type(raised).__name__), patch.object(vm, "main", side_effect=raised), \
+                 contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                vm.cli([])
+            self.assertIn(shown, stderr.getvalue())
+            self.assertNotIn("/private/site/value", stderr.getvalue())
+            self.assertNotIn("10.0.0.7", stderr.getvalue())
+
     def test_preflight_requires_upstream_incus_version(self):
         self.preflight_fixture()
         vm.preflight(self.args)
@@ -1708,6 +1726,8 @@ def mutations():
         ('runbook pin-out of other publications omitted', 'runbook', 'pins everything else it publishes to -1', 'pins nothing else', 'test_runbook_upstream_incus_source'),
         ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
         ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
+        ("every exception text printed", "core", '    except Refusal as refusal:', '    except Exception as refusal:', "test_refusals_name_the_guard_but_never_a_value"),
+        ("refusal text hidden again", "core", 'print("Spike refused: " + str(refusal), file=sys.stderr)', 'print("Spike refused or failed; inspect private state", file=sys.stderr)', "test_refusals_name_the_guard_but_never_a_value"),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
         ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),

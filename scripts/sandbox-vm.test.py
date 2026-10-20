@@ -755,6 +755,15 @@ class Safety(unittest.TestCase):
                 self.spike.install()
             runner.assert_not_called()
 
+    def test_project_disk_cap_holds_both_disks_and_the_image(self):
+        self.preflight_fixture()  # 2 GiB virtual image, defaults 8 GiB disks, 24 GiB cap
+        vm.preflight(self.args)
+        self.args.disk_cap = "17GiB"  # holds 2 x 8 GiB disks but not the 2 GiB image volume
+        with self.assertRaisesRegex(RuntimeError, "both VM disks and the imported image"):
+            vm.preflight(self.args)
+        self.args.disk_cap = "18GiB"
+        vm.preflight(self.args)
+
     def test_missing_host_command_is_a_named_refusal(self):
         with patch.object(vm.subprocess, "run", side_effect=FileNotFoundError(2, "No such file", "/private/qemu-img")), \
              self.assertRaisesRegex(vm.Refusal, "^required host command not installed$"):
@@ -1731,6 +1740,7 @@ def mutations():
         ('runbook pin-out of other publications omitted', 'runbook', 'pins everything else it publishes to -1', 'pins nothing else', 'test_runbook_upstream_incus_source'),
         ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
         ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
+        ("image volume left out of the project disk cap", "core", '2 * size_bytes(args.vm_disk) + virtual <= size_bytes(args.disk_cap)', '2 * size_bytes(args.vm_disk) <= size_bytes(args.disk_cap)', "test_project_disk_cap_holds_both_disks_and_the_image"),
         ("missing host command stays anonymous", "core", '        raise Refusal("required host command not installed") from None', '        raise', "test_missing_host_command_is_a_named_refusal"),
         ("every exception text printed", "core", '    except Refusal as refusal:', '    except Exception as refusal:', "test_refusals_name_the_guard_but_never_a_value"),
         ("refusal text hidden again", "core", 'print("Spike refused: " + str(refusal), file=sys.stderr)', 'print("Spike refused or failed; inspect private state", file=sys.stderr)', "test_refusals_name_the_guard_but_never_a_value"),

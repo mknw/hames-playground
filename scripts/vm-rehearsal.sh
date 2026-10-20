@@ -61,7 +61,7 @@ grep -F "$BASE_SHA *$BASE.img" "$W/inputs/SHA256SUMS"
 endgroup
 
 group "2. builder image"
-docker build -q -t "$BUILDER" --build-arg SNAPSHOT=$SNAPSHOT -f "$PIPE/builder.Dockerfile" "$PIPE"
+docker build --progress=plain -t "$BUILDER" --build-arg SNAPSHOT=$SNAPSHOT -f "$PIPE/builder.Dockerfile" "$PIPE"
 endgroup
 
 group "3. grow the base disk (R0)"

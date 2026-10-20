@@ -176,7 +176,9 @@ import glob, json
 from pathlib import Path
 with open('inventory.json') as stream:
     inventory = json.load(stream)
-inventory['machine_id_state'] = Path('/etc/machine-id').read_text().strip()
+# Newer cloud-init deletes the file; systemd regenerates an absent one at first boot.
+machine_id = Path('/etc/machine-id')
+inventory['machine_id_state'] = machine_id.read_text().strip() if machine_id.exists() else ''
 inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))
 with open('inventory.json', 'w') as stream:
     json.dump(inventory, stream, sort_keys=True)

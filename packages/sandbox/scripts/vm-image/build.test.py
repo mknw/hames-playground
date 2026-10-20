@@ -553,6 +553,15 @@ class Pipeline(unittest.TestCase):
         commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
         self.assertFalse(any(line.startswith('dpkg ') for line in commands))
 
+    def test_guest_assembly_daemon_gets_a_cgroup_hierarchy(self):
+        # The libguestfs appliance mounts no cgroup fs; dockerd then fails inside NewDaemon.
+        source = (vm.HERE / 'customize.sh').read_text()
+        mount = source.index('mount -t cgroup2 none /sys/fs/cgroup')
+        self.assertLess(mount, source.index('dockerd --debug --config-file'))
+        self.assertIn('!= cgroup2fs ]', source[source.rindex('if ', 0, mount):mount])
+        cleanup = source[source.index('cleanup() {'):source.index('}', source.index('cleanup() {'))]
+        self.assertIn('if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup', cleanup)
+
     def test_guest_runs_the_host_supplied_agent(self):
         guest = self.fake_root()
         child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
@@ -721,6 +730,12 @@ class Pipeline(unittest.TestCase):
             (guest / 'etc/machine-id').write_text('')
             exec(compile(script, 'clone-inventory', 'exec'), {})
             self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
+            (guest / 'etc/machine-id').unlink()  # cloud-init 26 removes it outright
+            exec(compile(script, 'clone-inventory', 'exec'), {})
+            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
+            (guest / 'etc/machine-id').write_text('a' * 32)
+            exec(compile(script, 'clone-inventory', 'exec'), {})
+            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], 'a' * 32)
         finally:
             os.chdir(old)
 
@@ -1088,7 +1103,8 @@ def mutations():
         ('guest unit enable failure ignored', 'systemctl enable "$@"', 'systemctl enable "$@" || true', 'test_guest_unit_enable_failure_refused'),
         ('guest selected unit list omitted', 'printf \'%s\\n\' "$@" > enabled-units.txt', ':', 'test_guest_new_cloud_init_units'),
         ('guest enabled unit inventory omitted', "'enabled_units': units.read().splitlines()", "'enabled_units': []", 'test_all_images_loaded_from_archives_without_pull'),
-        ("guest machine state inventory omitted", "inventory['machine_id_state'] = Path('/etc/machine-id').read_text().strip()", "pass", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine state inventory omitted", "inventory['machine_id_state'] = machine_id.read_text().strip() if machine_id.exists() else ''", "pass", "test_guest_cleanup_and_clone_inventory"),
+        ("guest uncleaned machine-id read as absent", "machine_id.read_text().strip() if machine_id.exists() else ''", "''", "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH key inventory omitted", "inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))", "pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker data root changed", '--data-root /var/lib/docker', '--data-root /tmp/wrong-store', "test_guest_dockerd_uses_runtime_store"),
         ("guest archive load changed to pull", "'load', '--input', path", "'pull', path", "test_all_images_loaded_from_archives_without_pull"),
@@ -1101,6 +1117,8 @@ def mutations():
         ("guest install ignores lock versions", 'p["name"] + "=" + p["version"]', 'p["name"]', "test_guest_packages_installed_offline_by_apt"),
         ("local index without checksums", "SHA256: %s\\n\\n", "\\n", "test_guest_packages_installed_offline_by_apt"),
         ("guest packages back to bare dpkg unpack", "apt-get \"$@\" update >&2", "dpkg --unpack /opt/vm-image/*.deb", "test_guest_packages_installed_offline_by_apt"),
+        ("guest assembly daemon without cgroups", "  mount -t cgroup2 none /sys/fs/cgroup\n", "  :\n", "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
+        ("guest cgroup mount left behind", '  if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup || true; fi\n', '', "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
         ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
         ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),

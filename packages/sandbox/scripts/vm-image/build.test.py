@@ -523,6 +523,23 @@ class Pipeline(unittest.TestCase):
             finally:
                 shutil.rmtree(self.work, ignore_errors=True)
 
+    def test_guest_packages_installed_offline_by_apt(self):
+        import shlex
+        guest = self.fake_root()
+        record = self.root / 'apt-argv'
+        fake = guest / 'bin/apt-get'
+        fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > ' + shlex.quote(str(record)) + '\n')
+        fake.chmod(0o700)
+        for name in ('a.deb', 'b.deb'):
+            (guest / 'opt/vm-image' / name).write_text('')
+        child = self.shell_section('export NEEDRESTART_MODE=l', "python3 - <<'PY'", guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        argv = record.read_text().splitlines()
+        self.assertEqual(argv[:4], ['install', '-y', '--no-install-recommends', '--no-download'])
+        self.assertEqual(argv[-2:], ['./a.deb', './b.deb'])
+        commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
+        self.assertFalse(any(line.startswith('dpkg ') for line in commands))
+
     def test_guest_runs_the_host_supplied_agent(self):
         guest = self.fake_root()
         child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
@@ -1066,6 +1083,8 @@ def mutations():
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
         ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
         ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest packages may download", "install -y --no-install-recommends --no-download", "install -y --no-install-recommends", "test_guest_packages_installed_offline_by_apt"),
+        ("guest packages back to bare dpkg unpack", "apt-get install -y --no-install-recommends --no-download \\\n  -o Dpkg::Options::=--force-confold ./*.deb", "dpkg --unpack ./*.deb", "test_guest_packages_installed_offline_by_apt"),
         ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
         ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),

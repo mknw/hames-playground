@@ -240,6 +240,7 @@ async function createPatterns(
         maxIterations: 6,
         patternId: 'orchestrator',
         liveEvents: true,
+        documents: deps.createDecisionDocuments?.(sessionId),
       },
     ),
   )

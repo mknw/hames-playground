@@ -162,6 +162,13 @@ route is offered at most once per run of the loop: not straight after itself, an
 not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
+A host can also tell the decisions model which documents the conversation holds,
+through `documents` on the loop's config: a per-run source that returns the
+visible total and, only when the host decides that run may reveal them, a list
+of names. Core renders it into the state (capped, each name sanitised
+deterministically, an unreadable list shown as unknown, never as none) but never
+reads a tier itself. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
 A planner caps the reasoning handed to downstream executors with
 `maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
 plan text. Its `plan_created` event and LLM call record retain the full trace.

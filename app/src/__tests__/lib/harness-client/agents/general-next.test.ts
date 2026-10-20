@@ -1098,6 +1098,21 @@ describe('general-next composition', () => {
     expect(refs.some((r) => r.tool === 'graph_mail_recent')).toBe(false)
   })
 
+  // #507. Mutation: stop passing `documents` to the loop in general-next.server.ts.
+  it('#507: the loop is handed the host document source for ITS session, and Decide is told', async () => {
+    const source = vi.fn(async () => ({ total: 1 }))
+    const createDecisionDocuments = vi.fn((_sessionId: string) => source)
+    await run('anthropic', { ...deps, createDecisionDocuments })
+    expect(createDecisionDocuments).toHaveBeenCalledWith('synthetic-session')
+    expect(source).toHaveBeenCalledTimes(1)
+    expect(states[0]).toContain('Uploaded documents in this conversation: 1 (names not shown)')
+  })
+
+  it('#507: without the host source the state says nothing about documents', async () => {
+    await run('anthropic')
+    expect(states[0]).not.toContain('Uploaded documents')
+  })
+
   it('P5: an unconfigured private decisions shim ends visibly before any route or synthesis', async () => {
     vi.stubEnv('SMALL_LLM_DECISIONS_URL', '')
     const result = await run('verda')

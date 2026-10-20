@@ -526,6 +526,109 @@ export async function listDocumentsStrict(
   return out
 }
 
+/**
+ * What a caller that only needs to describe a conversation's documents reads
+ * about each: no content, no derived text, no flags beyond "is it out of LLM
+ * context".
+ */
+export interface StashDocumentSummary {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  uploadedAt: number
+  /** `hidden` or `archived`: either keeps a document out of LLM context. */
+  excluded: boolean
+  ingestStatus?: IngestStatus
+}
+
+/** The member names read per document, in the ORDER the reply carries them:
+ *  RedisJSON answers a bracket union in selector order and skips an absent
+ *  member, so the four required members come first and the optional ones are
+ *  told apart by type (a string is `ingestStatus`, a boolean is a flag). */
+const SUMMARY_PATH =
+  "$['filename','mimeType','size','uploadedAt','ingestStatus','hidden','archived']"
+const INGEST_STATUSES: readonly string[] = ['pending', 'indexed', 'failed', 'not_indexed']
+
+/** Parse one {@link SUMMARY_PATH} reply. `null` is an absent document; anything
+ *  that is not a well-formed summary THROWS, so a reply in an order or shape this
+ *  does not expect degrades to "unreadable" and never to a wrong name. */
+function parseSummary(id: string, data: unknown): StashDocumentSummary | null {
+  if (data == null) return null
+  let value: unknown = data
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      throw new Error('stash read returned an unreadable document')
+    }
+  }
+  if (value == null) return null
+  if (!Array.isArray(value)) throw new Error('stash read returned an unreadable document')
+  const [filename, mimeType, size, uploadedAt, ...rest] = value
+  if (
+    typeof filename !== 'string' ||
+    typeof mimeType !== 'string' ||
+    typeof size !== 'number' ||
+    typeof uploadedAt !== 'number'
+  ) {
+    throw new Error('stash read returned an unreadable document')
+  }
+  const status = typeof rest[0] === 'string' ? (rest.shift() as string) : undefined
+  if (status !== undefined && !INGEST_STATUSES.includes(status)) {
+    throw new Error('stash read returned an unreadable document')
+  }
+  if (rest.length > 2 || !rest.every((f) => typeof f === 'boolean')) {
+    throw new Error('stash read returned an unreadable document')
+  }
+  return {
+    id,
+    filename,
+    mimeType,
+    size,
+    uploadedAt,
+    excluded: rest.some((f) => f === true),
+    ...(status ? { ingestStatus: status as IngestStatus } : {}),
+  }
+}
+
+/**
+ * {@link listDocumentsStrict} without the content: ONE `json_get` per document
+ * of just the members a description needs, where the strict list returns each
+ * document's whole body (up to {@link MAX_CONTENT_BYTES}) only to discard it.
+ * Same failure contract: a failed or unreadable read THROWS, and an index entry
+ * is pruned only for a document whose read SUCCEEDED and found nothing. Uncached.
+ * `signal` stops the walk between reads (a timeout), before the next call and
+ * before any prune. Newest first, like the other lists.
+ */
+export async function listDocumentSummariesStrict(
+  sessionId: string,
+  callTool: CallTool = resolveStashCallTool(),
+  signal?: AbortSignal,
+): Promise<StashDocumentSummary[]> {
+  signal?.throwIfAborted()
+  const members = await callTool('smembers', { name: indexKey(sessionId) })
+  if (!members.success) {
+    throw new Error(`stash index read failed: ${members.error ?? 'unknown error'}`)
+  }
+  const out: StashDocumentSummary[] = []
+  for (const id of parseSetMembers(members.data)) {
+    signal?.throwIfAborted()
+    const res = await callTool('json_get', { name: docKey(sessionId, id), path: SUMMARY_PATH })
+    if (!res.success) {
+      throw new Error(`stash read failed for a document: ${res.error ?? 'unknown error'}`)
+    }
+    const summary = parseSummary(id, res.data)
+    if (summary) out.push(summary)
+    else {
+      signal?.throwIfAborted()
+      await callTool('srem', { name: indexKey(sessionId), value: id })
+    }
+  }
+  out.sort((a, b) => b.uploadedAt - a.uploadedAt)
+  return out
+}
+
 // ============================================================================
 // Mutate flags (hide / unhide / archive / unarchive)
 // ============================================================================

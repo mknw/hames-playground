@@ -6,10 +6,16 @@
  * conversation delete has committed and off the request path (`deleteSessions`
  * does not await it).
  *
- * Per session the stash is cleared FIRST and the claim dropped only if that
- * fully succeeded. A failed or partial clear keeps the claim, so whatever is
- * left stays attributed to the user who deleted the conversation, and the
- * failure is logged.
+ * The sessions passed in are the ones the deleter's own delete returned, so the
+ * deleter owned each conversation row: the row is the authority, and the stash
+ * is cleared whoever holds a claim on the id. Each id is still re-checked
+ * against `conversations` first: a row that exists again (or a lookup that
+ * cannot answer) means the id is not provably dead, so nothing is cleared, the
+ * claim stays and the skip is logged. Per session the stash is cleared
+ * FIRST and the deleter's own claim dropped only if that fully succeeded; a
+ * claim another user holds is never touched. A failed or partial clear keeps
+ * the claim, so whatever is left stays attributed to the user who deleted the
+ * conversation, and the failure is logged.
  *
  * Best-effort by contract: the conversation is already gone, so nothing here
  * is ever thrown.
@@ -17,7 +23,8 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { deleteSessionStash } from '@hames-ai/harness-patterns/stash/document-ingest.server'
-import { getSessionClaimOwner, releaseSessionClaim } from '../db/session-claims.server'
+import { getConversationOwner } from '../db/conversations.server'
+import { releaseSessionClaim } from '../db/session-claims.server'
 
 assertServerOnImport()
 
@@ -28,13 +35,29 @@ export const RELEASE_DEADLINE_MS = 60_000
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
-async function releaseOne(sessionId: string, userId: string): Promise<void> {
+/** Whether the id is provably free of a conversation row; a failed read is not. */
+async function noConversationRow(sessionId: string): Promise<boolean> {
   try {
-    // A session another user holds a claim on is theirs to clear.
-    const owner = await getSessionClaimOwner(sessionId)
-    if (owner && owner !== userId) return
+    const owner = await getConversationOwner(sessionId)
+    if (!owner) return true
+    console.error(
+      `[stash] session ${sessionId} has a conversation row again; its stash and claim are kept`,
+    )
+  } catch (err) {
+    console.error(
+      `[stash] could not check for a conversation row on session ${sessionId}; its stash and claim are kept:`,
+      message(err),
+    )
+  }
+  return false
+}
+
+async function releaseOne(sessionId: string, userId: string): Promise<void> {
+  if (!(await noConversationRow(sessionId))) return
+  try {
     await deleteSessionStash(sessionId)
-    // Only reached when the clear fully succeeded.
+    // Only reached when the clear fully succeeded. Scoped to `userId`: a claim
+    // held by someone else stays.
     await releaseSessionClaim(sessionId, userId)
   } catch (err) {
     console.error(
@@ -45,7 +68,8 @@ async function releaseOne(sessionId: string, userId: string): Promise<void> {
 }
 
 /**
- * Release each session whose conversation `userId` just deleted. Never throws.
+ * Release each session whose conversation `userId` just deleted (pass only the
+ * ids that delete returned). Never throws.
  */
 export async function releaseDeletedSessions(
   sessionIds: readonly string[],

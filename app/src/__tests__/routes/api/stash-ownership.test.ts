@@ -41,11 +41,17 @@ vi.mock('../../../lib/db/conversations.server', () => ({
   getConversationOwner: async (id: string) => conversationOwners.get(id) ?? null,
 }))
 
-/** First toucher wins, matching the SQL upsert in `session-claims.server.ts`. */
+/**
+ * First toucher wins, matching the SQL upsert in `session-claims.server.ts`, and
+ * the conversation row is consulted first: a foreign row is refused with the
+ * live holder (or the row's owner) as the answer.
+ */
 const claims = new Map<string, string>()
 const claimSession = vi.fn(async (sessionId: string, userId: string, _ttlSeconds: number) => {
   void _ttlSeconds
   const held = claims.get(sessionId)
+  const rowOwner = conversationOwners.get(sessionId)
+  if (rowOwner && rowOwner !== userId) return held ?? rowOwner
   if (held) return held
   claims.set(sessionId, userId)
   return userId

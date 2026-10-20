@@ -30,8 +30,12 @@ import { assertServerOnImport } from '../assert.server'
 import { resolveStashCallTool } from '../stash-transport.server'
 import {
   DEFAULT_TTL_SECONDS,
+  deleteDocument,
   getDocument,
   listDocuments,
+  listSessionDocumentIds,
+  parseKeyList,
+  redisWriteError,
   setDocumentFlags,
   type CallTool,
   type IngestStatus,
@@ -246,6 +250,73 @@ export async function ingestDocument(
     space,
     indexName,
     prefix,
+  }
+}
+
+// ============================================================================
+// Clear a session's stash
+// ============================================================================
+
+/** Escape Redis glob metacharacters so a session id matches only itself. */
+function escapeGlob(s: string): string {
+  return s.replace(/[\\*?[\]]/g, '\\$&')
+}
+
+/** Chunk keys are `stashvec:{session}:{space}:{docId}:{n}`; after the session
+ *  prefix exactly three `:`-free parts remain. A longer remainder belongs to a
+ *  session whose id merely starts with this one, and is never ours to delete. */
+const CHUNK_REMAINDER = /^[^:]+:[^:]+:\d+$/
+
+/**
+ * Remove everything a session holds in the stash: each indexed document (via
+ * {@link deleteDocument}, which also drops its index entry), every chunk
+ * record, and the recorded embedding space. Idempotent, and attempts every
+ * step before reporting: a failure partway still deletes whatever it can.
+ *
+ * @throws one error naming each step that failed (after all were attempted).
+ */
+export async function deleteSessionStash(
+  sessionId: string,
+  callTool: CallTool = resolveStashCallTool(),
+): Promise<void> {
+  const failures: string[] = []
+  const attempt = async (what: string, run: () => Promise<void>) => {
+    try {
+      await run()
+    } catch (err) {
+      failures.push(`${what}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  const dropKey = async (key: string) => {
+    const err = redisWriteError(await callTool('delete', { key }))
+    if (err) throw new Error(err)
+  }
+
+  await attempt('documents', async () => {
+    for (const id of await listSessionDocumentIds(sessionId, callTool)) {
+      await attempt(`document ${id}`, () => deleteDocument(sessionId, id, callTool))
+    }
+  })
+
+  const chunkPrefix = `stashvec:${sessionId}:`
+  await attempt('chunks', async () => {
+    const scan = await callTool('scan_all_keys', {
+      pattern: `stashvec:${escapeGlob(sessionId)}:*`,
+      batch_size: 500,
+    })
+    if (!scan.success) throw new Error(scan.error ?? 'scan failed')
+    for (const key of parseKeyList(scan.data)) {
+      if (!key.startsWith(chunkPrefix) || !CHUNK_REMAINDER.test(key.slice(chunkPrefix.length))) {
+        continue
+      }
+      await attempt(`chunk ${key}`, () => dropKey(key))
+    }
+  })
+
+  await attempt('embedding space', () => dropKey(spaceKey(sessionId)))
+
+  if (failures.length > 0) {
+    throw new Error(`Failed to clear the stash of session ${sessionId}: ${failures.join('; ')}`)
   }
 }
 

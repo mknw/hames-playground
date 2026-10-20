@@ -162,6 +162,24 @@ export function makeDirectCallTool(injected?: Redis): CallTool {
           return ok(await redis.del(s(args.key)))
         case 'expire':
           return ok(await redis.expire(s(args.name), Number(args.expire_seconds)))
+        case 'scan_all_keys': {
+          // {pattern, batch_size} → every matching key (cursor loop), like the
+          // gateway tool of the same name.
+          const keys: string[] = []
+          let cursor = '0'
+          do {
+            const [next, batch] = await redis.scan(
+              cursor,
+              'MATCH',
+              s(args.pattern ?? '*'),
+              'COUNT',
+              Number(args.batch_size) || 100,
+            )
+            cursor = next
+            keys.push(...batch)
+          } while (cursor !== '0')
+          return ok([...new Set(keys)])
+        }
 
         // ── Vector store (RediSearch HNSW) ──────────────────────────────────
         case 'create_vector_index_hash': {

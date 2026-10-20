@@ -22,7 +22,7 @@
  */
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import { query } from './client.server'
+import { query, type TxQuery } from './client.server'
 
 assertServerOnImport()
 
@@ -62,4 +62,22 @@ export async function claimSession(
   if (rows.length > 0) return rows[0].user_id
   // The conflicting row belongs to someone else and is still live.
   return (await getSessionClaimOwner(sessionId)) ?? userId
+}
+
+/**
+ * Delete the claims `userId` holds on these sessions. Runs on the caller's
+ * transaction (the conversation delete's), so the claim leaves exactly when the
+ * conversation row does. Scoped to the holder: a claim another user holds is
+ * left untouched.
+ */
+export async function releaseSessionClaims(
+  sessionIds: readonly string[],
+  userId: string,
+  tx: TxQuery,
+): Promise<void> {
+  if (sessionIds.length === 0) return
+  await tx.query('DELETE FROM session_claims WHERE session_id = ANY($1) AND user_id = $2', [
+    [...sessionIds],
+    userId,
+  ])
 }

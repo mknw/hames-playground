@@ -22,6 +22,7 @@ import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
+import { releaseDeletedSessions } from '../stash/release.server'
 import { createHostMemoryConfig } from '../memory/config.server'
 import { createWebPseudonymiser } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
@@ -30,7 +31,7 @@ import {
   claimConversation,
   loadConversation,
   saveConversation,
-  deleteConversation,
+  deleteConversations,
   deriveTitle,
   restoreConversationPaused,
   updateConversationTitle,
@@ -382,7 +383,18 @@ export async function deleteSession(sessionId: string, userId: string): Promise<
   // The session is gone — nothing will ever consume a pending flag for it, so
   // leaving one would leak an entry for the life of the process.
   uncacheable.delete(sessionId)
-  await deleteConversation(sessionId, userId)
+  await deleteSessions([sessionId], userId)
+}
+
+/**
+ * Delete a batch of conversations and release what their sessions hold: the
+ * claim inside the delete's transaction, the stash documents after it. The one
+ * route both the single and the bulk delete take. Returns the ids deleted.
+ */
+export async function deleteSessions(ids: string[], userId: string): Promise<string[]> {
+  const deleted = await deleteConversations(ids, userId)
+  await releaseDeletedSessions(deleted)
+  return deleted
 }
 
 /** True when the persisted context is in `paused` status (awaiting approval). */

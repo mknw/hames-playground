@@ -13,7 +13,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 const calls: string[] = []
 const tx = {
-  query: vi.fn(async (sql: string) => {
+  query: vi.fn(async (sql: string, _params?: unknown[]) => {
     calls.push(`tx:${sql.trim().split(/\s+/).slice(0, 3).join(' ')}`)
     return { rows: [{ id: 'conv-a' }] }
   }),
@@ -75,6 +75,11 @@ describe('conversation delete → memory erase (#531)', () => {
         'tx:DELETE FROM hitl_requests',
         'erase(inTx=true,sameTx=true)',
         'tx:DELETE FROM conversations',
+        // The session's claim leaves in the same transaction, after the row
+        // delete that says which ids were really the caller's. MUTATION: drop
+        // the `releaseSessionClaims` call → red; run it on `query()` instead
+        // of the transaction → red.
+        'tx:DELETE FROM session_claims',
         'COMMIT',
       ])
       // The row delete never ran outside the transaction.
@@ -87,6 +92,29 @@ describe('conversation delete → memory erase (#531)', () => {
     tx.query.mockRejectedValueOnce(new Error('delete failed'))
     await expect(deleteConversations(['conv-a'], 'user-a')).rejects.toThrow('delete failed')
     expect(calls).toEqual(['BEGIN', 'erase(inTx=true,sameTx=true)', 'ROLLBACK'])
+  })
+
+  it('releases claims only for the ids the owner-scoped row delete returned', async () => {
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the proposal rows
+    tx.query.mockResolvedValueOnce({ rows: [{ id: 'conv-a' }] }) // the row delete: only conv-a was theirs
+    await deleteConversations(['conv-a', 'conv-b'], 'user-a')
+    const release = tx.query.mock.calls.find(([sql]) => String(sql).includes('session_claims'))!
+    expect(release[1]).toEqual([['conv-a'], 'user-a'])
+  })
+
+  it('a row delete that removes nothing releases nothing', async () => {
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the proposal rows
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the row delete: not theirs
+    await deleteConversations(['conv-x'], 'user-b')
+    expect(calls.some((c) => c.includes('session_claims'))).toBe(false)
+  })
+
+  it('a failing claim release rolls the delete back', async () => {
+    tx.query.mockResolvedValueOnce({ rows: [] })
+    tx.query.mockResolvedValueOnce({ rows: [{ id: 'conv-a' }] })
+    tx.query.mockRejectedValueOnce(new Error('release failed'))
+    await expect(deleteConversations(['conv-a'], 'user-a')).rejects.toThrow('release failed')
+    expect(calls.at(-1)).toBe('ROLLBACK')
   })
 
   it('an empty batch opens no transaction and erases nothing', async () => {

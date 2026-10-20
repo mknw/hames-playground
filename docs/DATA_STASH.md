@@ -103,6 +103,8 @@ The agent-trigger recording (`docs/AGENT_TRIGGER.md`) needs no claim: the run's
 conversation row is written for the token's user inside the same request that
 stores the recording, so playback resolves through it.
 
+**Deleting a conversation releases its session.** The delete removes the conversation rows; once that commits, and without holding up the request, the session's stash is cleared through `deleteSessionStash` (`stash/document-ingest.server.ts`): each indexed document, any document key the index no longer lists, every chunk record and the recorded embedding space. Only after the clear fully succeeds is the owner's `session_claims` row dropped; a clear that fails or is partial keeps the claim and is logged (`[stash] could not clear the stash of deleted session …`), and never undoes or hides the delete. Both the single and the bulk delete take this route (`deleteSessions`, `lib/harness-client/session.server.ts`), and a source-scan pin keeps it the only one that removes conversation rows. Only the deleting owner's rows go: the delete is user-scoped, and a session another user holds a claim on is left alone. The empty RediSearch index definition is not dropped, since the gateway has no tool for it.
+
 ## Harness-aware ingest (the `retriever` pattern)
 
 The Data Stash adapts to the agent's harness composition:

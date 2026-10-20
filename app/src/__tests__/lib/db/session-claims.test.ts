@@ -16,7 +16,11 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   ServerOnlyError: class ServerOnlyError extends Error {},
 }))
 
-import { claimSession, getSessionClaimOwner } from '../../../lib/db/session-claims.server'
+import {
+  claimSession,
+  getSessionClaimOwner,
+  releaseSessionClaim,
+} from '../../../lib/db/session-claims.server'
 import { closePool, query } from '../../../lib/db/client.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
@@ -85,3 +89,28 @@ async function expiryOf(sessionId: string): Promise<Date | null> {
   )
   return rows.length > 0 ? rows[0].expires_at : null
 }
+
+describe('releasing a session claim', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  it("removes the holder's claim row", async () => {
+    await claimSession(sid('rel-1'), 'alice', TTL)
+    await releaseSessionClaim(sid('rel-1'), 'alice')
+    expect(await getSessionClaimOwner(sid('rel-1'))).toBeNull()
+  })
+
+  it("leaves another user's claim on the session untouched", async () => {
+    await claimSession(sid('rel-2'), 'alice', TTL)
+    await releaseSessionClaim(sid('rel-2'), 'bob')
+    // MUTATION: drop the `user_id` predicate from the DELETE → red.
+    expect(await getSessionClaimOwner(sid('rel-2'))).toBe('alice')
+  })
+
+  it('is idempotent and touches no other session', async () => {
+    await claimSession(sid('rel-3'), 'alice', TTL)
+    await claimSession(sid('rel-keep'), 'alice', TTL)
+    await releaseSessionClaim(sid('rel-3'), 'alice')
+    await expect(releaseSessionClaim(sid('rel-3'), 'alice')).resolves.toBeUndefined()
+    expect(await getSessionClaimOwner(sid('rel-keep'))).toBe('alice')
+  })
+})

@@ -64,8 +64,8 @@ export async function userOwnsSession(sessionId: string, userId: string): Promis
  * ownership; a later write by a different user is refused.
  *
  * An existing conversation row is authoritative for its own user — the claim is
- * (re)written so ownership stays pinned for the TTL window even if the row is
- * later removed.
+ * (re)written so the claim records the row's owner. Deleting the conversation
+ * clears the session's stash and then releases the claim (`release.server.ts`).
  */
 export async function claimSessionOwnership(sessionId: string, userId: string): Promise<boolean> {
   const conversationOwner = await getConversationOwner(sessionId)

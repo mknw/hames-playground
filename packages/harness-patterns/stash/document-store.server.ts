@@ -606,6 +606,35 @@ export async function deleteDocument(
   }
 }
 
+/**
+ * Every id in a session's index, including entries whose document key has
+ * already expired. Throws when the index cannot be read, so a caller clearing
+ * a session never mistakes an outage for an empty stash.
+ */
+export async function listSessionDocumentIds(
+  sessionId: string,
+  callTool: CallTool = resolveStashCallTool(),
+): Promise<string[]> {
+  const members = await callTool('smembers', { name: indexKey(sessionId) })
+  if (!members.success) {
+    throw new Error(`stash index read failed: ${members.error ?? 'unknown error'}`)
+  }
+  return parseSetMembers(members.data)
+}
+
+/** Key prefix shared by every document of a session: `stash:doc:{sessionId}:`.
+ *  A longer remainder after it can belong to a session whose id merely starts
+ *  with this one, so callers must also check the remainder's shape. */
+export function sessionDocKeyPrefix(sessionId: string): string {
+  return `${DOC_KEY_PREFIX}:${sessionId}:`
+}
+
+/** Tolerant parse of a key listing (a `scan_all_keys` result), which comes back
+ *  in the same shapes as an `smembers` one. */
+export function parseKeyList(data: unknown): string[] {
+  return parseSetMembers(data)
+}
+
 // ============================================================================
 // Agent-facing adapter — surface a document as a PriorResult / ref
 // ============================================================================

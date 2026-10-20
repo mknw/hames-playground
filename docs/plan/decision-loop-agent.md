@@ -104,7 +104,7 @@ Latest results (most recent last):
   - On the Anthropic tier the decide call goes to the systemone provider, not to an Anthropic model. That transport records no cache reads (`jev-decide.server.ts:180-182`), and the provider documents no prompt cache, so there is nothing to switch on today.
   - The prompts that grow and do run on Anthropic models are the children's. Their handoff rides `plan_context`, which renders in the run-static tier 2 behind the #122 `cache_control` breakpoints. So within one child run the handoff is cached after its first call, and across iterations the system block and tier 1 stay byte-identical.
   - Nothing new is needed for v1. Measure the cache-read share on a multi-iteration turn before designing more.
-- **What is left out.** The route descriptions are not in the state: they are the question's options. Memory is not in the state either (see [Memory](#where-memory-guards-and-the-sandbox-sit)).
+- **What is left out.** The route descriptions are not in the state: they are the question's options. Memory is not in the state either (see [Memory](#where-memory-guards-and-the-sandbox-sit)). **Neither are the conversation's uploaded documents**, and Eval run 3 shows the cost: a question naming an uploaded file by its bare name was routed to the web. The owner has decided how to tell the decisions model (the private tier sees a capped name list, every other tier a count), designed but not built in [`decide-document-context.md`](decide-document-context.md).
 
 Route outputs are untrusted: they carry what the agents read on the web or in mail. They enter the state only as **sanitized** text (see [When a route fails and other boundaries](#untrusted-content-on-the-way-up)), fenced by the guard's spotlight.
 
@@ -1002,4 +1002,5 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 
 - #507: the diagnosis, both round-1 reviews, and this round's calls and their rulings (G12).
 - #418 G11 (the decisions client) · #419 (memory) · #241 (Neo4j) · #446 (the reaper) · ADR-0005 · ADR-0009
+- [`decide-document-context.md`](decide-document-context.md) (what the decide step is told about the conversation's documents; decided design, not built)
 - [`sandbox.md`](sandbox.md) · [`graph-pseudonymisation.md`](graph-pseudonymisation.md) · [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md)

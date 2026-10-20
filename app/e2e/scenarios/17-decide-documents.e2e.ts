@@ -187,6 +187,45 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
     expect(JSON.stringify(JSON.parse(row.serializedContext).events)).not.toContain(SALES)
   })
 
+  // Mutation: a view change that reads an earlier `decision_made` (or its
+  // `llmCall`) back into the decide window. The saved blob keeps the names the
+  // private turn sent; nothing may carry them onto the other tier.
+  it('a private turn, then an Anthropic turn on the same session: the second turn sends no name', async () => {
+    await app.setTier('verda')
+    await app.goToSleep()
+    const sessionId = await sessionWithDocuments('decide-docs-flip')
+    const first = await app.runTurnOverSse({
+      sessionId,
+      agentId: 'general-next',
+      message: 'How many Project nodes are in the knowledge graph?',
+    })
+    expect(first.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+    // The blob holds the names the private turn sent (the premise of the pin).
+    const afterFirst = (await app.readRow(sessionId))!
+    expect(afterFirst.serializedContext).toContain(SALES)
+
+    await app.setTier('anthropic', sessionId)
+    app.fakeLlm.reset()
+    app.fakeGateway.reset()
+    const second = await app.runTurnOverSse({
+      sessionId,
+      agentId: 'general-next',
+      message: 'And how many Person nodes?',
+    })
+    expect(second.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+    const sent = decisions(app.fakeLlm.calls)
+    expect(sent.length).toBeGreaterThan(0)
+    for (const c of sent) {
+      expect(c.endpoint).toBe('jev')
+      for (const name of [NOTES, SALES, HIDDEN, ARCHIVED, 'lantern']) {
+        expect(c.prompt).not.toContain(name)
+      }
+    }
+    expect(JSON.parse(sent[0].prompt).state).toContain(
+      'Uploaded documents in this conversation: 2 (names not shown)',
+    )
+  })
+
   it("another user's turn on the first user's session id lists nothing", async () => {
     await app.setTier('anthropic')
     const sessionId = await sessionWithDocuments('decide-docs-foreign')

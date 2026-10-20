@@ -1769,15 +1769,29 @@ shown)`. With no visible documents the block is omitted, so such a state is
 byte-identical to one built without a source.
 
 A name is **untrusted text** whatever put it there. It is cut to the code point
-cap before any rule runs, every line/paragraph separator and control character is
-replaced, invisible and bidi characters are removed, and the result is checked
-against the injection rule corpus (and for the state's own section headers); a
-name that trips either is shown as `[name withheld]` with type and size kept,
-never neutralised in place. The rest is JSON-quoted on one line. No model call is
+cap before any rule runs, normalised to NFKC (a fullwidth form meets the same
+rule as its ASCII twin), every line/paragraph separator and control character is
+replaced, every invisible, default-ignorable and format character (Unicode `Cf`
+and `Default_Ignorable_Code_Point`: soft hyphen, joiners, Hangul fillers, bidi
+controls, variation selectors, tag characters and the like) is removed, and the
+result is checked against the injection rule corpus (and for the state's own
+section headers); a name that trips either is shown as `[name withheld]` with
+type and size kept, never neutralised in place. The rest is JSON-quoted on one
+line. The check is deterministic and is not a confusables filter: a name that
+swaps a Latin letter for a visually identical one from another script is shown. No model call is
 involved (the guard's screen is never run for a name). The source is read **once
 per run, before iteration 1** (never per iteration, never at construction:
 patterns are cached for a conversation's life and the document set changes with
-every upload). A source that throws, times out (its signal is aborted) or returns
+every upload). **Every turn of a conversation that holds documents waits on that
+read before the first decision**, bounded only by `documentsTimeoutMs`, and the
+host's read is one `smembers` plus one `json_get` per document in sequence: its
+cost is linear in the number of documents on the gateway transport (the default;
+`STASH_DIRECT_REDIS` is the faster mode), with a per-call figure of ~1.6 s in the
+source's own comment. The worst case is therefore the full
+`DECISION_DOCUMENTS_TIMEOUT_MS` (30 000 ms) added to the turn, followed by the
+`unknown` line and a warning, on every turn, once the list is long enough for
+that to bind. The real cost is not measured here; the measurement is a
+precondition of slice 11 and of any default flip. A source that throws, times out (its signal is aborted) or returns
 a malformed value gives the block `... unknown (could not be read)` (never
 "none"), one `warning` event (task `decision_documents`), and the turn runs as it
 would without a source. The block exists only in the decide state string: it is
@@ -1786,11 +1800,14 @@ memory's. A `state` override receives the resolved value as
 `DecisionLoopStateInput.documents` and owns its own quoting, cap, sanitising and
 placement; `renderDocumentsBlock` is exported for it to call.
 
-**The state persists.** `decision_made.data` carries `stateChars`, never the state
-text, but the event's `llmCall.rawInput` is the whole decide request body, state
-included, and it is saved with the conversation (encrypted at rest, no expiry).
-On a run whose host revealed names, the capped list is therefore stored every
-turn, beyond the document's own TTL.
+**The state persists, in two fields.** `decision_made.data` carries `stateChars`,
+never the state text, but the event's `llmCall` holds the state twice: in
+`rawInput` (the whole decide request body) and in `variables.state`. Both are
+saved with the conversation (encrypted at rest, no expiry). On a run whose host
+revealed names, the capped list is therefore stored every turn, beyond the
+document's own TTL, and trimming one of the two fields leaves the names in the
+other. Deleting, hiding or archiving a document does not remove its name from
+the states stored for earlier turns: there is no erasure path for that copy.
 
 **A child** gets its own synthetic context, as `chain()` builds one, and its own
 `viewConfig`: the committed events plus this turn's earlier children's events,

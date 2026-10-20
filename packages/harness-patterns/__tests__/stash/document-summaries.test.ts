@@ -156,4 +156,19 @@ describe('listDocumentSummariesStrict', () => {
     expect(ops.filter(([n]) => n === 'json_get')).toHaveLength(1)
     expect(ops.map(([n]) => n)).not.toContain('srem')
   })
+
+  // Mutation: remove the abort check before the prune. The existing pin above
+  // is stopped by the check at the top of the loop; this one has nothing left to
+  // read, so only the check before `srem` can stop it.
+  it('an abort during a read that found nothing prunes nothing', async () => {
+    const { callTool, ops } = fake({}) // the index names one entry: 'gone', expired
+    const ac = new AbortController()
+    const wrapped: CallTool = async (name, args) => {
+      const r = await callTool(name, args)
+      if (name === 'json_get') ac.abort()
+      return r
+    }
+    await expect(listDocumentSummariesStrict('s', wrapped, ac.signal)).rejects.toThrow()
+    expect(ops.map(([n]) => n)).not.toContain('srem')
+  })
 })

@@ -145,7 +145,7 @@ compactExecution({ mode: 'thread', synthesize: baml.synthesize }),
 
 The `type` field distinguishes vector backends from future non-vector ones (web keyword, neo4j graph, raw SQL) — only `vector` backends embed.
 
-`listDocumentSummariesStrict` (#507) is the strict list without the content: one union-path `json_get` per document of just the members a description needs (`filename`, `mimeType`, `size`, `uploadedAt`, `ingestStatus`, `hidden`, `archived`), where `listDocumentsStrict` returns each document's whole body. A failed or unreadable read throws and never prunes; an index entry is pruned only after a successful read that found nothing. The Decide step's document list is built from it.
+`listDocumentSummariesStrict` (#507) is the strict list without the content: one union-path `json_get` per document of just the members a description needs (`filename`, `mimeType`, `size`, `uploadedAt`, `ingestStatus`, `hidden`, `archived`), where `listDocumentsStrict` returns each document's whole body. A failed or unreadable read throws and never prunes; an index entry is pruned only after a successful read that found nothing. The Decide step's document list is built from it. **Cost:** on the default gateway transport the read is serial (one `smembers`, then one `json_get` per document, roughly 1.6 s each per the call's own measurement), so every turn of a conversation that holds documents waits on a time linear in their number before the first decision, up to the decision loop's `DECISION_DOCUMENTS_TIMEOUT_MS` (30 s) and then the `unknown` line; `STASH_DIRECT_REDIS` is the faster mode. Unmeasured end to end; see the note's slice 11.
 
 ## Storage model (Redis)
 

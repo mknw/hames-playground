@@ -12,7 +12,7 @@
  * Error is the REAL package class (the package owns it — `instanceof` is not a
  * mock artifact any more).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { buildGraphHarness, MAX_CONTENT_BYTES } from './harness'
 import { GraphAuthRequiredError } from '../../graph/graph-auth'
 import {
@@ -227,7 +227,8 @@ describe('index outcome (#420)', () => {
       documentId: 'doc-1',
       ingesting: true,
       indexStatus: 'failed',
-      indexError: 'Embedding request to local failed: fetch failed',
+      indexError:
+        'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
     })
   })
 
@@ -238,7 +239,11 @@ describe('index outcome (#420)', () => {
     ingestStashDocument.mockRejectedValue(new Error('redis went away'))
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
     expect(res.success).toBe(true)
-    expect(res.data).toMatchObject({ indexStatus: 'failed', indexError: 'redis went away' })
+    expect(res.data).toMatchObject({
+      indexStatus: 'failed',
+      indexError:
+        'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
+    })
   })
 
   // Mutation: call `stash.ingest(...)` directly instead of through
@@ -250,7 +255,11 @@ describe('index outcome (#420)', () => {
     })
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
     expect(res.success).toBe(true)
-    expect(res.data).toMatchObject({ indexStatus: 'failed', indexError: 'bridge not ready' })
+    expect(res.data).toMatchObject({
+      indexStatus: 'failed',
+      indexError:
+        'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
+    })
   })
 
   // Mutation: a failed outcome with no `error` reported as `failed` with no
@@ -260,7 +269,7 @@ describe('index outcome (#420)', () => {
     ingestStashDocument.mockResolvedValue({ status: 'failed' })
     expect(await data()).toMatchObject({
       indexStatus: 'failed',
-      indexError: expect.stringMatching(/no reason/),
+      indexError: expect.stringContaining('Document indexing failed'),
     })
   })
 
@@ -310,6 +319,7 @@ describe('index outcome (#420)', () => {
   // sentence → reds.
   it('tells the model what each status means, and to tell the person for both unsearchable ones', () => {
     const def = appToolDescriptions().find((t) => t.name === 'graph_file_ingest')!
+    expect(def.description).toContain('Copy one Microsoft 365 file the signed-in person can open')
     expect(def.description).toMatch(/indexStatus/)
     expect(def.description).toMatch(/NOT searchable/)
     expect(def.description).toMatch(/For failed and not_indexed, tell the person/)
@@ -372,7 +382,7 @@ describe('refusals', () => {
 
   it('surfaces a sign-in-needed failure as a failed result, not a throw', async () => {
     graphFetch.mockReset()
-    graphFetch.mockRejectedValue(new Error('sign in to connect Microsoft 365'))
+    graphFetch.mockRejectedValue(new GraphAuthRequiredError('synthetic auth detail', 'oid-1', 401))
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/sign in/i)
@@ -406,7 +416,7 @@ describe('refusals', () => {
     )
     const res = await runAppTool('graph_file_ingest', { item_id: '01ABC' })
     expect(res.success).toBe(false)
-    expect(res.error).toMatch(/may lack consent/)
+    expect(res.error).toMatch(/sign in again/)
     expect(res.error).not.toMatch(/#137/)
   })
 
@@ -419,5 +429,52 @@ describe('refusals', () => {
     expect(res.success).toBe(false)
     expect(res.error).toMatch(/no content/i)
     expect(storeDocument).not.toHaveBeenCalled()
+  })
+})
+
+describe('P4 executor policy before I/O', () => {
+  afterEach(() => vi.unstubAllEnvs())
+  it.each([
+    () => false,
+    async () => false,
+    async () => true,
+    () => 1,
+    () => 'verda',
+    () => undefined,
+  ])('refuses any predicate that is not literal true: %s', async (predicate) => {
+    const denied = buildGraphHarness(predicate as () => boolean)
+    const result = await denied.runAppTool('graph_file_ingest', { item_id: 'synthetic-id' })
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('private inference on a private-only deployment'),
+    })
+    expect(result.error).toContain('do not retry it or fetch the file another way')
+    expect(denied.graphFetch).not.toHaveBeenCalled()
+    expect(denied.stash.loadStore).not.toHaveBeenCalled()
+    expect(denied.stash.ingest).not.toHaveBeenCalled()
+  })
+  it('refuses external embeddings before any I/O', async () => {
+    vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
+    const denied = buildGraphHarness()
+    expect(await denied.runAppTool('graph_file_ingest', { item_id: 'synthetic-id' })).toMatchObject(
+      {
+        success: false,
+        error: expect.stringMatching(
+          /external embedding service.*do not retry it or fetch the file another way/,
+        ),
+      },
+    )
+    expect(denied.graphFetch).not.toHaveBeenCalled()
+    expect(denied.stash.loadStore).not.toHaveBeenCalled()
+    expect(denied.stash.ingest).not.toHaveBeenCalled()
+  })
+  it('classifies arbitrary Graph transport text', async () => {
+    graphFetch.mockRejectedValue(new Error('synthetic secret transport detail'))
+    const result = await runAppTool('graph_file_ingest', { item_id: 'synthetic-id' })
+    expect(result).toMatchObject({
+      success: false,
+      error:
+        'Microsoft 365 file retrieval failed. Tell the user the file could not be copied; do not retry this turn.',
+    })
   })
 })

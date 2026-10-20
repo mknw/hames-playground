@@ -68,6 +68,8 @@
  * is available for agents that want the fence unconditionally.
  */
 
+import type { CallRecordSink } from './types'
+
 // ============================================================================
 // Sentinels
 // ============================================================================
@@ -235,6 +237,10 @@ export type InjectionScreen = (input: {
   tool: string
   namespace: string
   content: string
+  /** Receives the record of the model call the screen made, success or
+   *  failure, so the guard can record it as a `model_call` event. Optional: a
+   *  screen that never calls it stays correct and its call goes unrecorded. */
+  onCall?: CallRecordSink
 }) => Promise<ScreenVerdict>
 
 /** When to apply the spotlight fence. */

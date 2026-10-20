@@ -755,6 +755,11 @@ class Safety(unittest.TestCase):
                 self.spike.install()
             runner.assert_not_called()
 
+    def test_missing_host_command_is_a_named_refusal(self):
+        with patch.object(vm.subprocess, "run", side_effect=FileNotFoundError(2, "No such file", "/private/qemu-img")), \
+             self.assertRaisesRegex(vm.Refusal, "^required host command not installed$"):
+            vm.command("qemu-img", "info")
+
     def test_refusals_name_the_guard_but_never_a_value(self):
         import ast
         for source in (SOURCE, SOURCE.with_name("sandbox_vm_measure.py")):
@@ -1742,6 +1747,7 @@ def mutations():
         ('runbook pin-out of other publications omitted', 'runbook', 'pins everything else it publishes to -1', 'pins nothing else', 'test_runbook_upstream_incus_source'),
         ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
         ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
+        ("missing host command stays anonymous", "core", '        raise Refusal("required host command not installed") from None', '        raise', "test_missing_host_command_is_a_named_refusal"),
         ("every exception text printed", "core", '    except Refusal as refusal:', '    except Exception as refusal:', "test_refusals_name_the_guard_but_never_a_value"),
         ("refusal text hidden again", "core", 'print("Spike refused: " + str(refusal), file=sys.stderr)', 'print("Spike refused or failed; inspect private state", file=sys.stderr)', "test_refusals_name_the_guard_but_never_a_value"),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),

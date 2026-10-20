@@ -120,8 +120,11 @@ def command(*args, input=None, timeout=60, check=True, env=None, host_scope=None
         else:
             require(args[1:2] == ("--config",), "unscoped host Docker command refused")
         env = docker_env() if env is None else {k: v for k, v in env.items() if not k.startswith("DOCKER_")}
-    result = subprocess.run(args, input=input, text=True, capture_output=True,
-                            timeout=timeout, env=env)
+    try:
+        result = subprocess.run(args, input=input, text=True, capture_output=True,
+                                timeout=timeout, env=env)
+    except FileNotFoundError:
+        raise Refusal("required host command not installed") from None
     if PRIVATE_LOG is not None:
         with PRIVATE_LOG.open("a") as stream:
             stream.write(json.dumps({"argv": args, "exit": result.returncode,

@@ -490,3 +490,117 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
     ).toEqual(['P'])
   })
 })
+
+describe('renderAssistantMarkdown — link destinations containing spaces', () => {
+  // A filename copied verbatim from a tool result is the usual source. CommonMark
+  // ends a destination at the first space, so these used to render as literal
+  // `[text](url…)` with a stray autolink. Synthetic names throughout.
+  const anchors = (md: string) => [
+    ...mount(renderAssistantMarkdown(md, noEntities, [])).querySelectorAll('a'),
+  ]
+
+  it('links a filename containing spaces, encoding only the spaces', () => {
+    const [a, ...rest] = anchors('[Q3 notes](https://files.example.test/docs/Meeting Notes Q3.pdf)')
+
+    expect(rest).toHaveLength(0)
+    expect(a.getAttribute('href')).toBe('https://files.example.test/docs/Meeting%20Notes%20Q3.pdf')
+    expect(a.textContent).toBe('Q3 notes')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('keeps a "(1)" in the filename inside the destination', () => {
+    const md = 'See [copy](https://files.example.test/docs/Budget draft (1).xlsx) now.'
+    const host = mount(renderAssistantMarkdown(md, noEntities, []))
+    const links = host.querySelectorAll('a')
+
+    expect(links).toHaveLength(1)
+    expect(links[0].getAttribute('href')).toBe(
+      'https://files.example.test/docs/Budget%20draft%20(1).xlsx',
+    )
+    expect(host.textContent?.trim()).toBe('See copy now.')
+  })
+
+  it('never decodes: an existing %20 or %2F stays as written', () => {
+    const [a] = anchors('[x](https://files.example.test/a%2Fb/c%20d e.pdf)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/a%2Fb/c%20d%20e.pdf')
+  })
+
+  it('leaves a code span containing such a link as code', () => {
+    const host = mount(
+      renderAssistantMarkdown('`[x](https://files.example.test/a b.pdf)`', noEntities, []),
+    )
+
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('code')!.textContent).toBe('[x](https://files.example.test/a b.pdf)')
+  })
+
+  it('keeps a code span in the link text as code', () => {
+    const [a] = anchors('[`Plan]v2.docx`](https://files.example.test/Plan v2.docx)')
+
+    expect(a.getAttribute('href')).toBe('https://files.example.test/Plan%20v2.docx')
+    expect(a.querySelector('code')!.textContent).toBe('Plan]v2.docx')
+  })
+
+  it('keeps a javascript: link inert, spaces or not', () => {
+    // Without spaces the sanitizer drops the href; with spaces the text stays
+    // literal. Either way no anchor carries the scheme.
+    for (const md of ['[x](javascript:window.stolen=1)', '[x](javascript:window.stolen = 1)']) {
+      const host = mount(renderAssistantMarkdown(md, noEntities, []))
+
+      expect(host.querySelector('a')?.getAttribute('href') ?? '').not.toContain('javascript:')
+      expect(host.querySelector('[href], [src]')?.getAttribute('href') ?? '').not.toContain(
+        'javascript',
+      )
+    }
+  })
+
+  it('does not turn a spaced image into a loadable <img>', () => {
+    const host = mount(
+      renderAssistantMarkdown('![chart](https://files.example.test/my chart.png)', noEntities, []),
+    )
+
+    expect(host.querySelector('img')).toBeNull()
+    expect(host.textContent).not.toContain('](')
+  })
+
+  it('leaves a plain link, and a link with a title, to the default tokenizer', () => {
+    const [plain] = anchors('[docs](https://example.test/a/b.pdf)')
+    const [titled] = anchors('[docs](https://example.test/a "the docs")')
+
+    expect(plain.getAttribute('href')).toBe('https://example.test/a/b.pdf')
+    expect(titled.getAttribute('href')).toBe('https://example.test/a')
+    expect(titled.getAttribute('title')).toBe('the docs')
+  })
+
+  it('lets the default tokenizer keep a parenthesised title', () => {
+    const [a] = anchors('[docs](https://example.test/a (the docs))')
+
+    expect(a.getAttribute('href')).toBe('https://example.test/a')
+    expect(a.getAttribute('title')).toBe('the docs')
+  })
+
+  it('does not fold a trailing quoted title into a spaced destination', () => {
+    const hrefs = anchors('[x](https://files.example.test/a b.pdf "title")').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs.join()).not.toMatch(/%22|"/)
+  })
+
+  it('only rewrites http(s) destinations', () => {
+    const hrefs = anchors('[x](ftp://files.example.test/a b.pdf)').map((a) =>
+      a.getAttribute('href'),
+    )
+
+    expect(hrefs).not.toContain('ftp://files.example.test/a%20b.pdf')
+  })
+
+  it('leaves an unterminated destination as text', () => {
+    expect(anchors('[x](https://files.example.test/a b.pdf')).toHaveLength(1) // the autolinked prefix only
+    expect(anchors('[x](https://files.example.test/a b.pdf')[0].textContent).toBe(
+      'https://files.example.test/a',
+    )
+  })
+})

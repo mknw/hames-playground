@@ -545,6 +545,8 @@ appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
 with the summarizer, even if a local llama-server accepts unauthenticated
 summarization. `CLAUDE.md`'s private-tier section is the routing contract.
 
+P4 file ingestion (#717) is enabled only when INFERENCE_TIERS=private. Do not unset it on a deployment whose conversations hold ingested files: history is not screened on a tier flip until the release slice in #693 lands.
+
 **Private-only server (#653):** set `INFERENCE_TIERS=private` in the runtime `.env`.
 The bootstrap and server boot then require all five private-tier values and accept
 an empty `ANTHROPIC_API_KEY`. Existing Anthropic conversation rows and last-used

@@ -130,7 +130,7 @@ it('uses live production metadata, records refusing writes, and never returns a 
     expect(catalog).toMatch(new RegExp(`${key}: \\{`))
   }
 })
-it('keeps 17 scenarios, realistic messages, a runnable must multi-route case, and an explicit proof per scenario', () => {
+it('keeps 17 executable scenarios, 18 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),
   )
@@ -173,7 +173,7 @@ it('keeps 17 scenarios, realistic messages, a runnable must multi-route case, an
     for (const fact of facts) expect(answer).toContain(`'${fact}'`)
   }
   const catalogue = read('evals/general-next/SCENARIOS.md')
-  expect(catalogue.match(/A live pass proves:/g)).toHaveLength(17)
+  expect(catalogue.match(/A live pass proves:/g)).toHaveLength(18)
   expect(catalogue).toContain('Rollout criterion → evidence map')
   expect(catalogue).toContain('candidate only:')
   expect(read('evals/general-next/README.md')).not.toContain('/Users/')

@@ -37,6 +37,7 @@ const registry = createAppToolRegistry({
 // any bleed between concurrent calls shows up as a mismatch — the same shape
 // the host-side suite uses.
 registerGraphConnectorTools({
+  fileIngestAllowed: () => true,
   registerAppTool: registry.registerAppTool,
   graphFetch: async (userId: string) => {
     await sleep(userId === 'user-A' ? 30 : 5) // A is slow, B/C overtake it

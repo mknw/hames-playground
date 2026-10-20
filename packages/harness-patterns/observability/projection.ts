@@ -18,6 +18,7 @@ import type {
   PlanCreatedEventData,
   ContentSanitizedEventData,
   DecisionMadeEventData,
+  ModelCallEventData,
   WarningEventData,
   LoopRecoveryEventData,
   HitlRequestEventData,
@@ -115,6 +116,13 @@ export function getEventPreview(type: EventType, data: unknown): string {
           : d.type === 'noul'
             ? `${d.key}: ${d.label} (p=${d.pTrue?.toFixed(2) ?? 'unknown'})`
             : `${d.key}: ${d.label}`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
+    }
+    case 'model_call': {
+      // The role and what it read; the client and cost are on the row's LLM
+      // chip and in the detail, where every other model call shows them.
+      const d = data as ModelCallEventData
+      const head = `${d.role}${d.source ? ` ${d.source}` : d.items ? ` ×${d.items}` : ''}`
       return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'pattern_enter':

@@ -1652,9 +1652,11 @@ it.each([false, undefined])(
     const criteria = JSON.parse(String(requests.mock.calls[0][1].body)).questions.next_step.criteria
     expect(criteria['office-data']).toContain('Graph file ingestion is unavailable.')
     expect(criteria['office-data']).not.toContain('graph_file_ingest')
-    expect(composition.routes['office-data'].capability).toContain(
-      'Graph file ingestion is unavailable.',
-    )
-    expect(composition.routes['office-data'].capability).not.toContain('graph_file_ingest')
+    expect(composition.routes['office-data']).toMatchObject({
+      capability: expect.stringContaining('Graph file ingestion is unavailable.'),
+    })
+    expect(composition.routes['office-data']).not.toMatchObject({
+      capability: expect.stringContaining('graph_file_ingest'),
+    })
   },
 )

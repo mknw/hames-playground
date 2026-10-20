@@ -69,7 +69,7 @@ describe('createRedisBackend', () => {
   })
 
   it('runs the ingest safety net once per session, not per query', async () => {
-    const ensureFn = vi.fn(async () => {})
+    const ensureFn = vi.fn(async () => ({ skippedFlagged: 0 }))
     const searchFn = vi.fn(async () => [])
     const b = createRedisBackend('s1', { searchFn, ensureFn })
     await b.search({ text: 'a' }, { k: 5 })
@@ -81,7 +81,7 @@ describe('createRedisBackend', () => {
   })
 
   it('skips the safety net entirely when ensureIngested is false', async () => {
-    const ensureFn = vi.fn(async () => {})
+    const ensureFn = vi.fn(async () => ({ skippedFlagged: 0 }))
     const b = createRedisBackend('s1', {
       searchFn: vi.fn(async () => []),
       ensureFn,
@@ -93,7 +93,7 @@ describe('createRedisBackend', () => {
 
   it('still searches when the safety net throws, and RE-ARMS it (sf-H2)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const ensureFn = vi.fn(async () => {
+    const ensureFn = vi.fn(async (): Promise<{ skippedFlagged: number }> => {
       throw new Error('embedder offline')
     })
     const searchFn = vi.fn(async () => SAMPLE)
@@ -112,7 +112,7 @@ describe('createRedisBackend', () => {
   })
 
   it('does not re-arm the net when it succeeded', async () => {
-    const ensureFn = vi.fn(async () => {})
+    const ensureFn = vi.fn(async () => ({ skippedFlagged: 0 }))
     const searchFn = vi.fn(async () => SAMPLE)
     const b = createRedisBackend('s1', { searchFn, ensureFn })
     await b.search({ text: 'q' }, { k: 5 })

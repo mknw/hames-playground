@@ -25,7 +25,12 @@ import {
   searchDocuments,
 } from '../../stash/document-ingest.server'
 import { createRedisBackend } from '../../retriever/redis-backend.server'
-import { storeDocument, setDocumentFlags, getDocument } from '../../stash/document-store.server'
+import {
+  storeDocument,
+  setDocumentFlags,
+  getDocument,
+  getDocumentStrict,
+} from '../../stash/document-store.server'
 import type { CallTool } from '../../stash/document-store.server'
 import type { ToolCallResult } from '../../types'
 import type { EmbeddingConfig, EmbeddingResult } from '../../stash/embeddings.server'
@@ -207,6 +212,49 @@ describe('searchDocuments — hidden and archived documents', () => {
     )
   })
 
+  // Mutation: remove the `!doc` line in `isDocumentVisible` → the chunk of a
+  // document whose record is gone is returned (chunks outlive the record).
+  it('drops the hits of a document whose record is absent, and logs it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fake.json.delete('stash:doc:s1:a')
+
+    expect(docIds(await search(fake))).toEqual(['b'])
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/document a .*record is absent/))
+  })
+
+  // Mutation: revert the throw in `getDocumentStrict` for an unreadable body →
+  // the document reads as absent-or-visible and its chunk is returned.
+  it('drops the hits of a document whose read "succeeds" with an unreadable body, and logs it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const wrongType = (async (name: string, args: Record<string, unknown>) =>
+      name === 'json_get' && String(args.name) === 'stash:doc:s1:a'
+        ? {
+            success: true,
+            data: 'WRONGTYPE Operation against a key holding the wrong kind of value',
+          }
+        : fake.callTool(name, args)) as CallTool
+
+    expect(docIds(await search(fake, wrongType))).toEqual(['b'])
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/document a .*unreadable document/))
+  })
+
+  // Mutation: let a scalar or non-document array body through as null/object →
+  // the read stops throwing.
+  it('getDocumentStrict: only a null, "null" or empty body is absent', async () => {
+    const reading = (data: unknown) =>
+      getDocumentStrict('s1', 'a', (async () => ({ success: true, data })) as CallTool)
+
+    await expect(reading(null)).resolves.toBeNull()
+    await expect(reading('null')).resolves.toBeNull()
+    await expect(reading([])).resolves.toBeNull()
+    await expect(reading('[]')).resolves.toBeNull()
+    await expect(reading('not json')).rejects.toThrow(/unreadable document/)
+    await expect(reading(42)).rejects.toThrow(/unreadable document/)
+    await expect(reading('"text"')).rejects.toThrow(/unreadable document/)
+    await expect(reading([[1]])).rejects.toThrow(/unreadable document/)
+    await expect(reading([{ id: 'a' }])).resolves.toEqual({ id: 'a' })
+  })
+
   // Mutation: replace `getDocumentStrict` with `getDocument` in
   // `isDocumentVisible` → a failed read collapses to "absent" and the chunk is
   // returned without a log line.
@@ -245,6 +293,56 @@ describe('searchDocuments — hidden and archived documents', () => {
     expect(await search(fake, fake.callTool, 2)).toHaveLength(2)
   })
 
+  // Mutation: delete `if (out.length >= k) break` → the 4-chunk window holds two
+  // visible hits and both are returned for k = 1.
+  it('stops at k even when a wider window holds more visible hits', async () => {
+    for (const id of ['c', 'd', 'e']) await seedIndexed(fake, id)
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+    await setDocumentFlags('s1', 'b', { hidden: true }, fake.callTool)
+    // Windows tried for k = 1: 1, 2, 4. The 4-window is a, b, c, d.
+    expect(docIds(await search(fake, fake.callTool, 1))).toHaveLength(1)
+  })
+
+  const countingSearches = () => {
+    const ks: number[] = []
+    const callTool = (async (name: string, args: Record<string, unknown>) => {
+      if (name === 'vector_search_hash') {
+        ks.push(Number(args.k))
+        if (ks.length > 20) return { success: true, data: [] }
+      }
+      return fake.callTool(name, args)
+    }) as CallTool
+    return { ks, callTool }
+  }
+
+  // Mutation: raise `MAX_SEARCH_SPAN` → the widening runs past 200 chunks.
+  it('stops widening at the 200-chunk ceiling', async () => {
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+    await setDocumentFlags('s1', 'b', { hidden: true }, fake.callTool)
+    const { ks, callTool } = countingSearches()
+    // An index that always fills the window with the same flagged chunk.
+    const full = (async (name: string, args: Record<string, unknown>) => {
+      if (name === 'vector_search_hash') {
+        const rows = await callTool(name, args)
+        const [first] = rows.data as Array<Record<string, unknown>>
+        return { success: true, data: Array.from({ length: Number(args.k) }, () => first) }
+      }
+      return callTool(name, args)
+    }) as CallTool
+
+    expect(await search(fake, full, 5)).toEqual([])
+    expect(ks).toEqual([5, 10, 20, 40, 80, 160, 200])
+  })
+
+  // Mutation: remove `hits.length < span ||` → the loop keeps widening over an
+  // index that has already been read to the end.
+  it('stops widening once the index holds fewer chunks than the window', async () => {
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+    const { ks, callTool } = countingSearches()
+    expect(docIds(await search(fake, callTool, 5))).toEqual(['b'])
+    expect(ks).toEqual([5])
+  })
+
   it('reads each document’s flags once per search', async () => {
     const reads: string[] = []
     const counting = (async (name: string, args: Record<string, unknown>) => {
@@ -256,6 +354,28 @@ describe('searchDocuments — hidden and archived documents', () => {
     await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
     await search(fake, counting, 1)
     expect(reads.filter((r) => r.endsWith(':a'))).toHaveLength(1)
+  })
+
+  // Mutation: delete the up-front resolution loop (reads run one at a time) →
+  // one read in flight; raise `FLAG_READ_CONCURRENCY` past the document count →
+  // all five at once.
+  it('reads a batch’s distinct documents concurrently, within a bound', async () => {
+    for (const id of ['c', 'd', 'e']) await seedIndexed(fake, id)
+    let inFlight = 0
+    let peak = 0
+    const gated = (async (name: string, args: Record<string, unknown>) => {
+      if (name !== 'json_get' || !String(args.name).startsWith('stash:doc:')) {
+        return fake.callTool(name, args)
+      }
+      peak = Math.max(peak, ++inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      inFlight--
+      return fake.callTool(name, args)
+    }) as CallTool
+
+    expect(docIds(await search(fake, gated, 5))).toEqual(['a', 'b', 'c', 'd', 'e'])
+    expect(peak).toBeGreaterThan(1)
+    expect(peak).toBeLessThan(5)
   })
 
   // Mutation: delete the visibility check in `searchDocuments` → the backend
@@ -302,6 +422,63 @@ describe('ensureSessionIngested — hidden and archived documents', () => {
     expect((await getDocument('s1', 'hidden', fake.callTool))?.ingestStatus).toBeUndefined()
     expect((await getDocument('s1', 'archived', fake.callTool))?.ingestStatus).toBeUndefined()
     expect(fake.hashes.size).toBe(1)
+  })
+
+  it('reports how many flagged documents it left unindexed', async () => {
+    await seed('a')
+    await seed('b')
+    await seed('c')
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+    await setDocumentFlags('s1', 'b', { archived: true }, fake.callTool)
+
+    const first = await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn })
+    expect(first).toEqual({ skippedFlagged: 2 })
+
+    await setDocumentFlags('s1', 'a', { hidden: false }, fake.callTool)
+    await setDocumentFlags('s1', 'b', { archived: false }, fake.callTool)
+    expect(await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn })).toEqual({
+      skippedFlagged: 0,
+    })
+
+    // An already-indexed document that is flagged later needs no further run.
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+    expect(await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn })).toEqual({
+      skippedFlagged: 0,
+    })
+  })
+
+  // Mutation: leave `ensured` true after a run that skipped a flagged document →
+  // the backend never runs the net again and the un-hidden document stays
+  // unindexed.
+  it('re-arms the backend net after skipping a flagged document, so an un-hidden one is indexed', async () => {
+    await seed('a')
+    await setDocumentFlags('s1', 'a', { hidden: true }, fake.callTool)
+
+    let run: Promise<unknown> = Promise.resolve()
+    const ensureFn = vi.fn((sessionId: string) => {
+      const p = ensureSessionIngested(sessionId, { callTool: fake.callTool, embedFn })
+      run = p
+      return p
+    })
+    const backend = createRedisBackend('s1', {
+      ensureFn,
+      searchFn: (session, query, opts) =>
+        searchDocuments(session, query, { ...opts, callTool: fake.callTool, embedOneFn }),
+    })
+
+    expect(await backend.search({ text: 'query' }, { k: 5 })).toEqual([])
+    await run
+    expect(ensureFn).toHaveBeenCalledTimes(1)
+
+    await setDocumentFlags('s1', 'a', { hidden: false }, fake.callTool)
+    await backend.search({ text: 'query' }, { k: 5 })
+    await run
+    expect(ensureFn).toHaveBeenCalledTimes(2)
+
+    expect(docIds(await backend.search({ text: 'query' }, { k: 5 }))).toEqual(['a'])
+    // Everything is indexed now, so the net stays quiet.
+    await run
+    expect(ensureFn).toHaveBeenCalledTimes(2)
   })
 
   it('ingests a document once it is un-hidden', async () => {

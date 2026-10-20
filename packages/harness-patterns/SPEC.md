@@ -1576,8 +1576,9 @@ interface RetrieverBackend {
 
 A backend returns only what the agent may see. The `redis` backend (via
 `searchDocuments`) drops hits of documents the user hid or archived, judged by
-the document's current flags, and drops a hit whose flags cannot be read
-(logged) rather than returning it; un-hiding makes the document retrievable
+the document's current flags, and drops a hit whose flags cannot be read or
+whose document record is absent (logged) rather than returning it; it looks at
+most 200 chunks deep for visible hits. Un-hiding makes the document retrievable
 again without re-indexing. A custom backend over the same data owns the same
 rule.
 

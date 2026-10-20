@@ -417,8 +417,22 @@ export async function getDocumentStrict(
     throw new Error(`stash read failed for a document: ${res.error ?? 'unknown error'}`)
   }
   if (res.data == null) return null
-  const value = unwrapJsonGet(res.data)
-  if (value == null || typeof value !== 'object') return null
+  // Absent is `null`, `'null'` or an empty result. A body that is present but is
+  // not a document (unparseable text such as a command-level error reported as
+  // `success: true`, or a scalar) is an unreadable read, not an absent document.
+  let value: unknown = res.data
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      throw new Error('stash read returned an unreadable document')
+    }
+  }
+  if (Array.isArray(value)) value = value.length > 0 ? value[0] : null
+  if (value == null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('stash read returned an unreadable document')
+  }
   return value as StashDocument
 }
 

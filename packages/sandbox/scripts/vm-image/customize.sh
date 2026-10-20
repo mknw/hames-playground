@@ -16,7 +16,7 @@ mkdir -p /opt/vm-image/no-lists/partial
 apt-get install -y --no-install-recommends --no-download \
   -o Dir::Etc::SourceList=/dev/null -o Dir::Etc::SourceParts=/opt/vm-image/no-lists \
   -o Dir::State::Lists=/opt/vm-image/no-lists \
-  -o Dpkg::Options::=--force-confold ./*.deb >&2  # stderr reaches failed-stage.log
+  -o Dpkg::Options::=--force-confold /opt/vm-image/*.deb >&2  # stderr reaches failed-stage.log
 python3 - <<'PY'
 import json, subprocess
 with open('guest-lock.json') as stream:

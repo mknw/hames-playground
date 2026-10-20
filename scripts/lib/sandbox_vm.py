@@ -22,6 +22,9 @@ import tarfile
 import time
 import uuid
 
+# Run as a script, this module is __main__; sandbox_vm_measure's `import sandbox_vm`
+# must get THIS module (its PRIVATE_LOG, Refusal), not a fresh second copy.
+sys.modules.setdefault("sandbox_vm", sys.modules[__name__])
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE = ROOT / ".sandbox-vm-spike"
 PRIVATE_LOG = None

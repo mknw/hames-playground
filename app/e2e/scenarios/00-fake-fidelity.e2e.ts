@@ -53,6 +53,7 @@ import {
 import { takeEgressAttempts } from '../lib/egress-backstop'
 import { checkAfterAll, checkAfterEach } from '../lib/setup-checks'
 import { IS_HERMETIC, VERDA_MODEL } from '../lib/mode'
+import { packagePath } from '../../src/lib/eval-support/package-layout'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
 
@@ -65,7 +66,7 @@ let declaredInSource: string[]
 /** `function Name(` across the one corpus, comments stripped so a commented-out
  *  example never registers as a declaration. */
 function bamlSourceFunctionNames(): string[] {
-  const dir = path.resolve(process.cwd(), '../packages/harness-baml/baml_src')
+  const dir = packagePath('harness-baml', 'baml_src')
   const names = new Set<string>()
   for (const entry of readdirSync(dir)) {
     if (!entry.endsWith('.baml')) continue

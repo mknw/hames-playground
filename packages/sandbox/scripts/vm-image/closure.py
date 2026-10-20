@@ -15,9 +15,9 @@ Pure dry-run without --apply.
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -83,7 +83,7 @@ def download(manifest, out, codename):
     records = []
     for deb in sorted((state / "archives").glob("*.deb")):
         target = out / deb.name
-        os.replace(deb, target)
+        shutil.move(deb, target)  # the output is a bind mount: another device
         records.append({"name": deb_field(target, "Package"), "version": deb_field(target, "Version"),
                         "path": target.name, "sha256": digest(target)})
     names = [record["name"] for record in records]

@@ -54,6 +54,14 @@ export interface IncusEnvironment {
   teardown(): Promise<void>
 }
 
+/** What one Docker readiness probe found. Only `untrusted-server` is final: the
+ * daemon did not present this environment's certificate, so waiting cannot help.
+ * `refused` means TLS completed and the daemon then dropped the connection before
+ * answering, which is how a refused client certificate looks under TLS 1.3. */
+export type DockerProbe =
+  | { ready: true; clientCertificateValidTo: string }
+  | { ready: false; reason: 'unreachable' | 'refused' | 'untrusted-server' | 'not-ready' }
+
 interface State {
   id: string
   binding: string
@@ -165,6 +173,73 @@ function same(actual: unknown, expected: unknown): boolean {
 function ipv4(value: string): number {
   if (isIP(value) !== 4) throw new EnvironmentError('Incus requires an IPv4 bridge address')
   return value.split('.').reduce((n, octet) => (n * 256 + Number(octet)) >>> 0, 0)
+}
+
+// node:tls codes for a server certificate this client refused to trust.
+const UNTRUSTED_SERVER = new Set([
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'CERT_SIGNATURE_FAILURE',
+  'CERT_HAS_EXPIRED',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+])
+
+/** One mutual-TLS `GET /_ping` with exactly the four settings an app receives.
+ * Both sides are verified and nothing falls back to plaintext. Docker must answer
+ * `OK`. Results and errors never carry file contents or TLS error text. */
+export async function probeDockerEndpoint(
+  dockerEnv: IncusEnvironmentConnection['dockerEnv'],
+): Promise<DockerProbe> {
+  if (!dockerConnectionFromEnv(dockerEnv).includes('--tlsverify'))
+    throw new EnvironmentError('Docker probes require a TLS tcp endpoint')
+  let tls: IncusCredential
+  try {
+    const [ca, cert, key] = await Promise.all(
+      [
+        dockerEnv.SANDBOX_DOCKER_TLS_CA,
+        dockerEnv.SANDBOX_DOCKER_TLS_CERT,
+        dockerEnv.SANDBOX_DOCKER_TLS_KEY,
+      ].map((file) => readFile(file, 'utf8')),
+    )
+    tls = { ca, cert, key }
+  } catch {
+    throw new EnvironmentError('Docker TLS files are unreadable')
+  }
+  const url = new URL(`https://${new URL(dockerEnv.SANDBOX_DOCKER_HOST).host}/_ping`)
+  const outcome = await new Promise<'ready' | Extract<DockerProbe, { ready: false }>['reason']>(
+    (resolve) => {
+      const req = request(
+        url,
+        { ...tls, rejectUnauthorized: true, agent: false, signal: AbortSignal.timeout(10_000) },
+        (res) => {
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => {
+            body += chunk
+            if (body.length > 64) req.destroy()
+          })
+          res.on('error', () => resolve('not-ready'))
+          res.on('end', () =>
+            resolve(res.statusCode === 200 && body === 'OK' ? 'ready' : 'not-ready'),
+          )
+        },
+      )
+      // Under TLS 1.3 the daemon checks the client certificate only after this
+      // side's handshake completes, so its refusal arrives as a later failure.
+      let secured = false
+      req.on('socket', (socket) => socket.once('secureConnect', () => (secured = true)))
+      req.on('error', (error: NodeJS.ErrnoException) => {
+        if (UNTRUSTED_SERVER.has(error.code ?? '')) resolve('untrusted-server')
+        else resolve(secured ? 'refused' : 'unreachable')
+      })
+      req.on('close', () => resolve('not-ready'))
+      req.end()
+    },
+  )
+  if (outcome !== 'ready') return { ready: false, reason: outcome }
+  return { ready: true, clientCertificateValidTo: new X509Certificate(tls.cert).validTo }
 }
 
 /** Create a controller, without network access. Serialize calls per state directory.

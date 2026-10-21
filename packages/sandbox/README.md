@@ -236,11 +236,15 @@ providing the individual sandboxes. It is an operator-side, server-only API;
 import it only from `@hames-ai/sandbox/incus-environment.server`. It does not
 depend on the app and is excluded from the app-facing root entry point.
 The subpath exports the named `IncusEnvironment` controller, `IncusCredential`,
-`IncusEnvironmentOptions` and `IncusEnvironmentConnection` types.
+`IncusEnvironmentOptions` and `IncusEnvironmentConnection` types, and
+`probeDockerEndpoint` with its `DockerProbe` result.
 Existing Docker deployments keep their current behavior until explicitly opted in.
 
 ```typescript
-import { createIncusEnvironment } from '@hames-ai/sandbox/incus-environment.server'
+import {
+  createIncusEnvironment,
+  probeDockerEndpoint,
+} from '@hames-ai/sandbox/incus-environment.server'
 import { readFile } from 'node:fs/promises'
 
 const ca = await readFile('/operator-private/incus-ca.pem', 'utf8')
@@ -264,7 +268,9 @@ const environment = createIncusEnvironment({
 const { project, dockerEnv } = await environment.reconcile()
 // Deliver only dockerEnv and its three files to this environment's app.
 // Remap file paths in dockerEnv if the app runs in a container.
-// Wait for the Docker TLS endpoint to become ready before starting the app.
+// Before starting the app, poll until Docker answers over mutual TLS. Stop on
+// `untrusted-server`: that daemon is not this environment's, and never will be.
+const probe = await probeDockerEndpoint(dockerEnv) // { ready: true, ... } once up
 // Later, from the operator process:
 await environment.teardown()
 ```
@@ -474,20 +480,20 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 
 ### Exports
 
-| Subpath                      | What lives there                                                                                            | Browser-safe?                                  |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, `configureWorkspaceStore`           | **no** — server-only, pulls the Docker backend |
-| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`              | yes — types + constants, no `node:` imports    |
-| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                             | yes — same rule                                |
-| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                                   | yes                                            |
-| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                                        | yes                                            |
-| `./skills`                   | `SandboxSkill`, the skill limits and checks (`isSkillName`, `isSkillDescription`), the index text           | yes                                            |
-| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                                | server                                         |
-| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                                | server                                         |
-| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)                     | server                                         |
-| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                                     | server                                         |
-| `./docker-backend.server`    | the Docker compute backend                                                                                  | server                                         |
-| `./incus-environment.server` | Operator-only `createIncusEnvironment`, `IncusEnvironment`, `IncusCredential`, options and connection types | server; excluded from root                     |
+| Subpath                      | What lives there                                                                                  | Browser-safe?                                  |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `.` (root entry point)       | `withSandbox`, `DockerBackend`, `getComputeBackend`, the compute types, `configureWorkspaceStore` | **no** — server-only, pulls the Docker backend |
+| `./types`                    | `ComputeBackend` / `VMHandle` / `RuntimeConfig` / …, `SANDBOX_TOOL_PREFIX`, `V0_IN_VM_SERVERS`    | yes — types + constants, no `node:` imports    |
+| `./settings`                 | `SandboxSettings` + `DEFAULT_SANDBOX_SETTINGS` (the caps and per-call defaults)                   | yes — same rule                                |
+| `./guard` (= `./bash-guard`) | `screenBashCommand` / `bashGuardPolicyFromEnv` — the shell-command screen                         | yes                                            |
+| `./egress-policy`            | the three selectable egress profiles and the per-boot network naming                              | yes                                            |
+| `./skills`                   | `SandboxSkill`, the skill limits and checks (`isSkillName`, `isSkillDescription`), the index text | yes                                            |
+| `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
+| `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
+| `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
+| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                           | server                                         |
+| `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
+| `./incus-environment.server` | Operator-only `createIncusEnvironment`, `probeDockerEndpoint` and their types                     | server; excluded from root                     |
 
 **The root entry point is server-only and it pulls Docker with it**, because
 `withSandbox` constructs a `DockerBackend` by default. Browser code imports

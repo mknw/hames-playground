@@ -3,20 +3,131 @@
  * on stdin; never save or print that rendered config (it contains secrets).
  * Each clone has its own database and role; dev Docker access is opt-in.
  */
-import { readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { X509Certificate, createPrivateKey } from "node:crypto";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isIPv4 } from "node:net";
+import { dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
+// Where each clone's sandbox reaches Docker (#648): the host socket rules, or
+// its own environment VM over mutual TLS. Common-pool is designed, not built.
+const SANDBOX_MODES = ["socket", "per-env"];
+const TLS_FILES = {
+  SANDBOX_DOCKER_TLS_CA: "/run/sandbox-tls/ca.pem",
+  SANDBOX_DOCKER_TLS_CERT: "/run/sandbox-tls/cert.pem",
+  SANDBOX_DOCKER_TLS_KEY: "/run/sandbox-tls/key.pem",
+};
+// Each reaches host or sibling resources around the mount rules: another
+// container's mounts or /proc/<pid>/root (the gateway holds the host socket),
+// host devices, capabilities or namespaces.
+const HOST_REACH = [
+  "privileged",
+  "volumes_from",
+  "pid",
+  "ipc",
+  "network_mode",
+  "userns_mode",
+  "cgroup",
+  "devices",
+  "cap_add",
+];
+
+const check = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+// A VM clone reaches Docker only through its own environment VM: a tcp endpoint
+// with verified TLS and three read-only files outside both checkouts, and no
+// other mount, so no Docker socket can ride in under another target or name.
+function environmentVm(app, roots) {
+  const env = app.environment ?? {};
+  const volumes = app.volumes ?? [];
+  check(
+    volumes.length === 4 &&
+      volumes.every((v) => v.type === "bind" && v.read_only === true) &&
+      Object.values(TLS_FILES).every(
+        (target) =>
+          volumes.filter(
+            (v) => v.target === target && v.bind?.create_host_path === false,
+          ).length === 1,
+      ),
+    "A VM clone mounts only its configs and its three read-only TLS files",
+  );
+  check(
+    Object.keys(env)
+      .filter((key) => key.startsWith("SANDBOX_DOCKER_"))
+      .sort()
+      .join() === ["SANDBOX_DOCKER_HOST", ...Object.keys(TLS_FILES)].join() &&
+      Object.entries(TLS_FILES).every(([key, target]) => env[key] === target),
+    "A VM clone reaches Docker only with its mounted TLS files",
+  );
+  const endpoint = /^tcp:\/\/([0-9.]+):([0-9]{1,5})$/.exec(
+    env.SANDBOX_DOCKER_HOST,
+  );
+  const [a, b] = endpoint?.[1].split(".").map(Number) ?? [];
+  check(
+    endpoint &&
+      isIPv4(endpoint[1]) &&
+      Number(endpoint[2]) >= 1 &&
+      Number(endpoint[2]) <= 65535 &&
+      !(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254)),
+    "A VM clone needs a tcp://IPv4:port guest endpoint",
+  );
+  const files = {};
+  for (const [key, target] of Object.entries(TLS_FILES)) {
+    const path = realpathSync(volumes.find((v) => v.target === target).source);
+    const stat = statSync(path);
+    // A Docker socket is not a regular file, whatever it is called.
+    check(stat.isFile(), "TLS mounts must be regular files");
+    check(
+      !roots.some((root) => path.startsWith(root + sep)),
+      "TLS files must live outside both checkouts",
+    );
+    files[key] = { stat, pem: readFileSync(path, "utf8") };
+  }
+  check(
+    (files.SANDBOX_DOCKER_TLS_KEY.stat.mode & 0o077) === 0,
+    "The TLS key file must have no group/other permissions",
+  );
+  const ca = files.SANDBOX_DOCKER_TLS_CA.pem;
+  const leaf = files.SANDBOX_DOCKER_TLS_CERT.pem;
+  const certificates = (pem) =>
+    (pem.match(/-----BEGIN CERTIFICATE-----/g) ?? []).length;
+  check(
+    certificates(ca) === 1 &&
+      certificates(leaf) === 1 &&
+      ![ca, leaf].some((pem) => pem.includes("PRIVATE KEY-----")),
+    "TLS CA and certificate files hold one certificate each and no key",
+  );
+  // The CA alone decides which daemon answers: the client verifies the server
+  // against it, and only this environment's VM holds a leaf it signed.
+  const authority = new X509Certificate(ca);
+  const certificate = new X509Certificate(leaf);
+  check(
+    !certificate.ca &&
+      certificate.verify(authority.publicKey) &&
+      certificate.checkPrivateKey(
+        createPrivateKey(files.SANDBOX_DOCKER_TLS_KEY.pem),
+      ),
+    "The client certificate must chain to its own VM's CA and match its key",
+  );
+  return { host: endpoint[1], authority, certificate };
+}
+
 export function validateClones(config) {
-  const check = (condition, message) => {
-    if (!condition) throw new Error(message);
-  };
   const release = config.services?.app;
   const dev = config.services?.["app-dev"];
   check(release && dev, "Both built app services are required");
   const apps = [release, dev];
   const envs = apps.map((app) => app.environment ?? {});
-  for (const app of apps) {
+  const modes = ["release", "dev"].map(
+    (clone) => config[`x-clone-${clone}-sandbox`],
+  );
+  check(
+    modes.every((mode) => SANDBOX_MODES.includes(mode)),
+    "Declare each clone's sandbox endpoint (socket or per-env)",
+  );
+  for (const [i, app] of apps.entries()) {
     check(
       app.build?.context && !app.command && !app.entrypoint,
       "Use the built image runtime",
@@ -26,12 +137,18 @@ export function validateClones(config) {
       "Both apps must use the shared app network",
     );
     check(
-      !(app.volumes ?? []).some(
-        (v) =>
-          v.type === "bind" &&
-          v.target !== "/configs" &&
-          v.target !== "/var/run/docker.sock",
-      ),
+      !HOST_REACH.some((key) => [app[key]].flat().some(Boolean)),
+      "Apps must not join host or sibling namespaces, devices or mounts",
+    );
+    // A VM clone's mounts are pinned exactly by environmentVm instead.
+    check(
+      modes[i] === "per-env" ||
+        !(app.volumes ?? []).some(
+          (v) =>
+            v.type === "bind" &&
+            v.target !== "/configs" &&
+            v.target !== "/var/run/docker.sock",
+        ),
       "No checkout or runtime env bind mounts",
     );
   }
@@ -68,6 +185,55 @@ export function validateClones(config) {
     devDockerSocket || devSockets.length === 0,
     "Dev Docker socket requires the explicit owner opt-in",
   );
+  check(
+    !(devDockerSocket && modes[1] === "per-env"),
+    "Dev cannot combine the socket opt-in with its environment VM",
+  );
+  const roots = contexts.map((context) => dirname(context));
+  const vms = [];
+  for (const [i, name] of ["app", "app-dev"].entries()) {
+    if (modes[i] !== "per-env") {
+      check(
+        !Object.keys(envs[i]).some((key) => key.startsWith("SANDBOX_DOCKER_")),
+        "A socket clone must not carry sandbox VM settings",
+      );
+      continue;
+    }
+    vms.push(environmentVm(apps[i], roots));
+    // Another service built from, tagged as or joined to a VM clone would run
+    // that clone's code beside whatever it mounts: a VM clone is one service.
+    const joins = [
+      name,
+      `service:${name}`,
+      `container:${apps[i].container_name}`,
+    ];
+    for (const [other, service] of Object.entries(config.services)) {
+      check(
+        other === name ||
+          !(
+            service.image === apps[i].image ||
+            (service.build?.context &&
+              realpathSync(service.build.context) === contexts[i]) ||
+            ["network_mode", "pid", "ipc"].some((key) =>
+              joins.includes(service[key]),
+            ) ||
+            [service.volumes_from ?? []]
+              .flat()
+              .some((v) => joins.includes(String(v).replace(/:r[ow]$/, "")))
+          ),
+        "A VM clone runs as one service",
+      );
+    }
+  }
+  if (vms.length === 2) {
+    const [own, other] = vms;
+    check(own.host !== other.host, "Each clone needs its own environment VM");
+    // Symmetric: a shared CA key verifies both leaves, distinct keys neither.
+    check(
+      !other.certificate.verify(own.authority.publicKey),
+      "A clone's TLS identity must not reach the other clone's VM",
+    );
+  }
   check(release.image !== dev.image, "Built images need distinct names");
   check(
     (dev.ports ?? []).length === 0,
@@ -76,7 +242,7 @@ export function validateClones(config) {
   for (const [i, env] of envs.entries()) {
     check(
       !Object.keys(env).some((key) =>
-        /^(RELEASE_DATABASE_URL|DEV_DATABASE_URL|.*_RUNTIME_ENV_FILE|DEV_CLONE_PATH|COMPOSE_FILE)$/.test(
+        /^(RELEASE_DATABASE_URL|DEV_DATABASE_URL|.*_RUNTIME_ENV_FILE|DEV_CLONE_PATH|COMPOSE_FILE|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+)$/.test(
           key,
         ),
       ),

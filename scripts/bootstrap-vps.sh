@@ -451,7 +451,8 @@ env_problems() {
 # select the laptop file.
 # -----------------------------------------------------------------------------
 # Only the persisted root .env selects the shape; a shell export cannot silently
-# drop a clone. Accept exactly §12's file order, including its owner socket opt-in.
+# drop a clone. Accept exactly §12's file order, with at most one of its dev
+# sandbox overlays: the owner socket opt-in or dev's own environment VM.
 compose_files() {
   local files key
   # Compose accepts alternate assignment spellings that env_get cannot read.
@@ -463,7 +464,7 @@ compose_files() {
   fi
   files=$(env_get COMPOSE_FILE)
   case $files in
-    "$CLONE_COMPOSE_FILES"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox.yaml") ;;
+    "$CLONE_COMPOSE_FILES"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox.yaml"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;
     "$COMPOSE_FILES"|'')
       for key in "${CLONE_INPUTS[@]}"; do
         if [[ -n "$(env_get "$key")" ]]; then

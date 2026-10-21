@@ -258,9 +258,21 @@ clone_tests() {
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
   touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py"
-  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
+  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml docker-compose.dev-sandbox-vm.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
+  # Synthetic dev environment VM client material, outside both checkouts.
+  mkdir -p "$dir/tls"
+  (
+    cd "$dir/tls" || exit 1
+    openssl req -new -x509 -nodes -days 1 -subj /CN=dev-ca -newkey rsa:2048 -keyout ca-key.pem \
+      -addext basicConstraints=critical,CA:TRUE -out ca.pem &&
+      openssl req -new -newkey rsa:2048 -nodes -subj /CN=dev-client -keyout key.pem -out client.csr &&
+      printf 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n' >client.ext &&
+      openssl x509 -req -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile client.ext -out cert.pem &&
+      chmod 600 key.pem ca-key.pem
+  ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
+
   for file in release dev; do
     cat >"$dir/$file-runtime.env" <<ENV
 AUTH_SESSION_SECRET=$file-synthetic-session-11111111111111111111111111111111
@@ -290,7 +302,8 @@ for clone, service in [('release', 'app'), ('dev', 'app-dev')]:
             AUTH_SESSION_SECRET=clone + '-synthetic-session-' + '1'*32,
             TOKEN_ENCRYPTION_KEY=clone + '-synthetic-token-' + '2'*32,
             DATABASE_URL=f'postgresql://{clone}_app:{clone}-synthetic@postgres:5432/app_{clone}'))
-(p / 'good.json').write_text(json.dumps({'name': 'synthetic', 'x-clone-dev-docker-socket': False, 'services': apps}))
+(p / 'good.json').write_text(json.dumps({'name': 'synthetic', 'x-clone-dev-docker-socket': False,
+    'x-clone-release-sandbox': 'socket', 'x-clone-dev-sandbox': 'socket', 'services': apps}))
 PY
   cat >"$dir/good.env" <<ENV
 COMPOSE_FILE=$clones
@@ -351,6 +364,16 @@ c['services']['app-dev']['volumes'].append(dict(type='bind',source='/var/run/doc
 p.write_text(json.dumps(c))
 PY
     fi
+    if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+      python3 - "$dir/render.json" "$dir/tls" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); dev=c['services']['app-dev']
+c['x-clone-dev-sandbox']='per-env'
+dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://10.77.2.2:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
+dev['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
+p.write_text(json.dumps(c))
+PY
+    fi
   }
   clone_refused() {
     local label=$1 result status
@@ -373,6 +396,18 @@ PY
   if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox.yaml|app|compose up -d" "$dir/calls"; then
     pass "clones retains the explicit owner socket overlay"
   else flunk "clones owner overlay (rc=$rc)" "$out"; fi
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox-vm.yaml|app|compose up -d" "$dir/calls"; then
+    pass "clones retains the dev environment VM overlay"
+  else flunk "clones dev VM overlay (rc=$rc)" "$out"; fi
+  for shape in "$clones:docker-compose.dev-sandbox.yaml:docker-compose.dev-sandbox-vm.yaml" \
+    "$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.dev-sandbox.yaml" "$base:docker-compose.dev-sandbox-vm.yaml"; do
+    clone_reset
+    printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+    clone_refused 'a combined or clone-less dev sandbox overlay'
+  done
   # Compare every box-changing command byte-for-byte, excluding only the two
   # exact read-only commands added by the coordinator-approved box-state guard.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
@@ -459,7 +494,7 @@ PY
 
   # The real shared wrappers: only Docker/Python/HTTP effects are inert.
   for operation in dc probe smoke images; do
-    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
+    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml" "$clones:docker-compose.dev-sandbox-vm.yaml"; do
       clone_reset
       clone_select "$shape"
       [[ $operation != images ]] || continue # failure path below; image catalogue is out of scope
@@ -625,6 +660,7 @@ mutants = [
     ('runtime-owner-file-parser', 'v=$(env_get "$key" "$file")', 'v=$(env_get "$key")'),
     ('dev-ref-head', '[[ $head == "$ref" && -z $dirty ]]', '[[ -z $dirty ]]'),
     ('dev-checkout-clean', '[[ $head == "$ref" && -z $dirty ]]', '[[ $head == "$ref" ]]'),
+    ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
@@ -650,6 +686,33 @@ with tempfile.TemporaryDirectory() as tmp:
         ('equal-role-passwords', 'passwords[0] !== passwords[1]', 'true'),
         ('root-only-app-inputs', '!Object.keys(env).some', 'true || !Object.keys(env).some'),
         ('reserved-database', '!["postgres", "template0", "template1"].includes', 'true || !["postgres", "template0", "template1"].includes'),
+        # #648: each clone's sandbox endpoint, its own environment VM over TLS.
+        ('sandbox-mode-declared', 'modes.every((mode) => SANDBOX_MODES.includes(mode))', 'true'),
+        ('host-reach', '!HOST_REACH.some((key) => [app[key]].flat().some(Boolean))', 'true'),
+        ('host-reach-pid', '  "pid",\n', ''),
+        ('host-reach-volumes-from', '  "volumes_from",\n', ''),
+        ('vm-exact-mounts', 'volumes.length === 4 &&', ''),
+        ('vm-read-only-mounts', 'volumes.every((v) => v.type === "bind" && v.read_only === true) &&', ''),
+        ('vm-never-create-path', ' && v.bind?.create_host_path === false', ''),
+        ('vm-tls-settings', '.join() === ["SANDBOX_DOCKER_HOST", ...Object.keys(TLS_FILES)].join() &&', '.join() !== "" &&'),
+        ('vm-tls-targets', 'Object.entries(TLS_FILES).every(([key, target]) => env[key] === target)', 'true'),
+        ('vm-ipv4', 'isIPv4(endpoint[1]) &&', ''),
+        ('vm-port-range', 'Number(endpoint[2]) >= 1 &&\n      Number(endpoint[2]) <= 65535 &&', ''),
+        ('vm-address-class', '!(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254))', 'true'),
+        ('vm-regular-file', 'check(stat.isFile(), "TLS mounts must be regular files");', ''),
+        ('vm-outside-checkouts', '!roots.some((root) => path.startsWith(root + sep))', 'true'),
+        ('vm-key-permissions', '(files.SANDBOX_DOCKER_TLS_KEY.stat.mode & 0o077) === 0', 'true'),
+        ('vm-single-certificates', 'certificates(ca) === 1 &&\n      certificates(leaf) === 1 &&', ''),
+        ('vm-no-key-in-certificates', '![ca, leaf].some((pem) => pem.includes("PRIVATE KEY-----"))', 'true'),
+        ('vm-leaf-not-ca', '!certificate.ca &&', ''),
+        ('vm-chain-own-ca', 'certificate.verify(authority.publicKey) &&', ''),
+        ('vm-key-matches', 'certificate.checkPrivateKey(\n        createPrivateKey(files.SANDBOX_DOCKER_TLS_KEY.pem),\n      )', 'true'),
+        ('vm-one-service', 'other === name ||', 'true ||'),
+        ('vm-own-host', 'own.host !== other.host', 'true'),
+        ('vm-cross-identity', '!other.certificate.verify(own.authority.publicKey)', 'true'),
+        ('socket-clone-no-vm-settings', '!Object.keys(envs[i]).some((key) => key.startsWith("SANDBOX_DOCKER_"))', 'true'),
+        ('dev-socket-beside-vm', '!(devDockerSocket && modes[1] === "per-env")', 'true'),
+        ('root-only-vm-inputs', '|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+', ''),
     ]:
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)

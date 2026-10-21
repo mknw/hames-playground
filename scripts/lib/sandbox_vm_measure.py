@@ -292,7 +292,7 @@ def attach(spike):
             pty_output(master, b"24 80")
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 91, 0, 0))
             os.kill(process.pid, signal_winch())
-            pty_output(master, b"37 91")
+            pty_output(master, b"37 91", nudge=lambda: os.kill(process.pid, signal_winch()), deadline=30)
             require(process.wait(timeout=15) == 0, "PTY resize failed")
             spike.metrics["pty_resize"] = True
         finally:
@@ -311,13 +311,18 @@ def attach(spike):
             stream.close()
 
 
-def pty_output(master, expected):
+def pty_output(master, expected, nudge=None, deadline=10):
     # Read before the child exits: some kernels discard PTY output on last close.
+    # `nudge` re-sends an idempotent resize each quiet second: one SIGWINCH to the
+    # Docker CLI was observed to be lost on the way to a nested daemon.
     data = b""
+    end = time.monotonic() + deadline
     with selectors.DefaultSelector() as ready:
         ready.register(master, selectors.EVENT_READ)
         while expected not in data:
-            require(ready.select(10), "PTY output timed out")
+            while not ready.select(1 if nudge else deadline):
+                require(nudge and time.monotonic() < end, "PTY output timed out")
+                nudge()
             try:
                 chunk = os.read(master, 4096)
             except OSError:

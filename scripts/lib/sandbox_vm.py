@@ -786,7 +786,9 @@ class Spike:
                                 f"tcp://{self.address(index)}:{self.args.tls_port}"],
                       "tlsverify": True, "tlscacert": "/etc/docker/spike-tls/ca.pem",
                       "tlscert": "/etc/docker/spike-tls/server.pem",
-                      "tlskey": "/etc/docker/spike-tls/server-key.pem"}
+                      "tlskey": "/etc/docker/spike-tls/server-key.pem",
+                      # Boot the classic store the image preloaded, never Docker 29's default.
+                      "storage-driver": "overlay2", "features": {"containerd-snapshotter": False}}
             self.guest(index, "tee", "/etc/docker/daemon.json", input=json.dumps(config))
             self.guest(index, "mkdir", "-p", "/etc/systemd/system/docker.service.d")
             self.guest(index, "tee", "/etc/systemd/system/docker.service.d/spike.conf",

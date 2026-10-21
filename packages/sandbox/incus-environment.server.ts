@@ -498,6 +498,10 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
           tlscacert: '/etc/docker/tls/ca.pem',
           tlscert: '/etc/docker/tls/cert.pem',
           tlskey: '/etc/docker/tls/key.pem',
+          // The VM image preloads the classic overlay2 store; Docker 29's
+          // default containerd store would boot with none of its images.
+          'storage-driver': 'overlay2',
+          features: { 'containerd-snapshotter': false },
         }),
       ).toString('base64'),
     })

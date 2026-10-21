@@ -123,7 +123,12 @@ impact remains owed in the coordinated live window, not established by fakes.
 
 The save daemon and spike host may use containerd; **guest customization and boot
 remain classic** because preload and runtime selectors use config IDs and the
-populated store is `/var/lib/docker`. Compare the boot daemon's
+populated store is `/var/lib/docker`. Both pin it explicitly: the assembly
+daemon's config and every boot-time `daemon.json` (the spike's `--tls` step and
+`createIncusEnvironment`'s cloud-init) set `storage-driver: overlay2` and
+`features.containerd-snapshotter: false`, and a repo test keeps the three in
+step. A failed image stage leaves its stderr in `failed-stage.log` (0600) inside
+the private build work directory. Compare the boot daemon's
 `docker info --format '{{.Driver}}'` with `guest-inventory.json` during the owed
 Linux boot check. Full rationale and Docker 29 source links are in the pipeline
 README. All operator launch flags below are unchanged.

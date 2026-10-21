@@ -302,7 +302,8 @@ for instance operations. The manager credential is never sent to the guest.
 
 Cloud-init writes a per-environment Docker CA/server certificate, configures
 `tlsverify`, and binds the daemon **only** to the reserved guest IPv4 on the
-Incus bridge at port 2376. It disables socket activation and replaces Docker's
+Incus bridge at port 2376. It pins the classic `overlay2` image store that the
+VM image preloads (Docker 29 would otherwise start on an empty containerd store). It disables socket activation and replaces Docker's
 inherited `-H fd://` command. The managed NIC enables MAC, IPv4 and IPv6 address
 filtering. The operator must enable the bridge netfilter support required by
 Incus for these filters. The app receives the CA certificate and Docker

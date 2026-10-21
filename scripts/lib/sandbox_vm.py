@@ -683,10 +683,17 @@ class Spike:
         ]
 
     def bridge_insert_position(self):
+        """Below the metadata policy: the #646 jump, or #677's inline vps-metadata-forward drops."""
         rules = [shlex.split(line) for line in command("iptables", "-S", "DOCKER-USER").stdout.splitlines() if line.startswith("-A ")]
-        hooks = [i for i, rule in enumerate(rules) if "-j" in rule and rule[rule.index("-j") + 1] == "VPS-METADATA"]
-        require(not hooks or hooks == [0], "metadata jump must remain first and unique")
-        return "2" if hooks else "1"
+        def metadata(rule):
+            jump = rule[rule.index("-j") + 1] if "-j" in rule else ""
+            comment = rule[rule.index("--comment") + 1] if "--comment" in rule else ""
+            return jump == "VPS-METADATA" or re.fullmatch(r"vps-metadata-forward-v[0-9]+", comment) is not None
+        hooks = [i for i, rule in enumerate(rules) if metadata(rule)]
+        require(hooks == list(range(len(hooks))), "metadata policy must remain first and contiguous")
+        require(sum(1 for rule in rules if "-j" in rule and rule[rule.index("-j") + 1] == "VPS-METADATA") <= 1,
+                "metadata jump must remain first and unique")
+        return str(len(hooks) + 1)
 
     def launch(self, index, name):
         require(name.startswith(self.prefix + "-"), "non-spike instance")

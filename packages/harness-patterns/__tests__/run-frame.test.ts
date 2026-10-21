@@ -69,7 +69,7 @@ async function frameMod() {
 function markerGuard(mark: string) {
   return {
     isUntrusted: () => true,
-    options: {},
+    optionsFor: () => ({}),
     sanitize: async (_tool: string, data: unknown) => ({ data: `${mark}:${String(data)}` }),
   }
 }

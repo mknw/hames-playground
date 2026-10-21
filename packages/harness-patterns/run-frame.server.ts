@@ -133,7 +133,9 @@ export type AfterToolCallHook = (
  *  optional; an absent slot means "this run has none", not "use a default". */
 export interface RunFrame {
   /** The active injection guard. Built by the caller — `createInjectionGuard`
-   *  already unions with any enclosing guard, see {@link amendRunFrame}. */
+   *  already ORs the enclosing guard's coverage into its own, and answers each
+   *  tool's sanitizer options from the guard that declares it, see
+   *  {@link amendRunFrame}. */
   guard?: ActiveInjectionGuard
   /** Transports scoped to this run, innermost first. */
   transports?: readonly ToolTransport[]
@@ -316,16 +318,20 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     nested sandboxes both own `sandbox_bash`; a union has no answer to "which
  *     machine" and an order has a deterministic one. See
  *     `tool-transport.server.ts` for the containment invariant this carries.
- *   - `guard` REPLACES — and that is the UNION rule, not its opposite. The
+ *   - `guard` REPLACES — and that is the coverage rule, not its opposite. The
  *     widening happens one level up, at construction: `createInjectionGuard`
- *     reads the enclosing guard and ORs its `isUntrusted` and its sanitizer
- *     options, so the value arriving here is ALREADY the union of inner and
- *     outer (SD-5: an inner wrapper can only widen coverage, never remove it).
- *     Unioning again here would be a second, redundant merge on a value that is
- *     already merged. Do not "simplify" this by making the guard slot prepend
- *     like transports: the two rules are deliberately opposite, a nested guard
- *     being a second reviewer of the same content where a nested sandbox is a
- *     different machine.
+ *     reads the enclosing guard and ORs its `isUntrusted` into its own, so the
+ *     value arriving here ALREADY covers everything inner and outer declare
+ *     (SD-5: an inner wrapper can only widen coverage, never remove it). The
+ *     OPTIONS do not merge: each guard sanitizes the tools it declares with its
+ *     own options and hands any other tool to the enclosing guard
+ *     (`ActiveInjectionGuard.optionsFor`), so a nested guard can neither weaken
+ *     nor inherit another guard's `disableRules`, `spotlight`, `rules` or
+ *     `screen`. Merging again here would be a second, redundant merge on a value
+ *     that already answers both questions. Do not "simplify" this by making the
+ *     guard slot prepend like transports: the two rules are deliberately
+ *     different, a nested guard being a second reviewer of the same content
+ *     where a nested sandbox is a different machine.
  *   - `hitl` passes BY REFERENCE (#433, F7). The slot is the run's, not the
  *     subtree's: `withInjectionGuard` and `withSandbox` amend the frame around
  *     the very patterns whose tool executors call `askHuman`, so a slot

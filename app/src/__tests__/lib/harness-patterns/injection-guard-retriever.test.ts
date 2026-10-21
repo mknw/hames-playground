@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
 import type { RetrieverData } from '@hames-ai/harness-patterns/patterns/retriever.server'
+import type { InjectionGuardConfig } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -82,12 +83,14 @@ function hit(content: string, over: Partial<Hit> = {}): Hit {
   }
 }
 
-/** Run `retriever` (optionally guarded) over one user turn. */
+/** Run `retriever` (optionally guarded, optionally inside an outer guard) over
+ *  one user turn. */
 async function runRetriever(
   hits: Hit[],
   guardConfig?:
     | { namespaces?: string[]; catalog?: string[]; spotlight?: 'on-detection' | 'always' | 'off' }
-    | { tools?: string[]; spotlight?: 'on-detection' | 'always' | 'off' },
+    | InjectionGuardConfig,
+  outerConfig?: InjectionGuardConfig,
 ) {
   const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
   const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
@@ -104,7 +107,8 @@ async function runRetriever(
       throw new Error('never called')
     },
   })
-  const guarded = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
+  const inner = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
+  const guarded = outerConfig ? withInjectionGuard(outerConfig)(inner) : inner
 
   const ctx = createContext<TestData>('what does the board pack say about Q3?')
   await runInFrame(() => runChain(ctx, [guarded]))
@@ -305,5 +309,36 @@ describe('retriever hits — guarded', () => {
       spotlight: 'always',
     })
     expect(matches[0].source).toBe('board-pack.docx')
+  })
+})
+
+describe('retriever hits — no model screen without the retriever guard’s own', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const clean = { injection_detected: false, reason: 'ok', spans: [] }
+
+  it('a retriever guard that declares no screen reaches none, neither for content nor filename', async () => {
+    // The enclosing guard declares the retriever key AND a screen, which is the
+    // shape the orchestrator guard had. Options are no longer inherited, so the
+    // retriever's own guard — which declares none — sanitizes both fields with
+    // the deterministic layer and the fence alone.
+    const screen = vi.fn(async () => clean)
+    const { matches } = await runRetriever(
+      [hit(POISONED_CHUNK), hit(CLEAN_CHUNK, { id: 'chunk-2', source: 'plan.docx' })],
+      { tools: ['retriever'], spotlight: 'always' },
+      { tools: ['retriever'], screen, screenDespiteFindings: true },
+    )
+    expect(screen).not.toHaveBeenCalled()
+    // K1 still ran on the same hits: the injection is neutralized and fenced.
+    expect(matches[0].content).toContain('neutralized:instruction-override')
+    expect(matches[1].content).toContain('UNTRUSTED CONTENT')
+  })
+
+  it('control: the same guard WITH a screen of its own reaches it, once per field', async () => {
+    // Without this the pin above would pass for a screen that can never be
+    // reached from the retriever path at all.
+    const screen = vi.fn(async () => clean)
+    await runRetriever([hit(CLEAN_CHUNK)], { tools: ['retriever'], screen })
+    expect(screen).toHaveBeenCalledTimes(2) // content, then filename
   })
 })

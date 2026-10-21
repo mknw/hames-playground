@@ -178,7 +178,12 @@ def run(argv, work):
                LIBGUESTFS_TMPDIR=str(work.root), LIBGUESTFS_BACKEND="direct", LC_ALL="C")
     result = subprocess.run([str(a) for a in argv], cwd=work.root, env=env,
                             capture_output=True, timeout=1800)
-    require(result.returncode == 0, "stage command failed; build remains incomplete")
+    if result.returncode != 0:
+        # Private diagnosis only: the work directory is 0700, never published.
+        log = work.root / "failed-stage.log"
+        with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "ab") as stream:
+            stream.write(Path(str(argv[0])).name.encode() + b"\n" + result.stderr + b"\n")
+    require(result.returncode == 0, "stage command failed; build remains incomplete (see failed-stage.log in the work directory)")
     return result.stdout
 
 
@@ -309,8 +314,11 @@ def build(args):
     for name in ["guest-lock.json", "customize.sh", *[f"{f}.tar" for f in FLAVOURS],
                  *[f"package-{i}.deb" for i in range(len(lock["packages"]))]]:
         argv += ["--upload", f"{work.root / name}:/opt/vm-image/{name}"]
-    argv += ["--run-command", "sh /opt/vm-image/customize.sh"]
     run(argv, work)
+    # Docker's overlay2 needs the module in the APPLIANCE kernel; the guest chroot
+    # only has modules for the guest's own kernel, so customize.sh cannot load it.
+    run([paths["guestfish"], "--rw", "--format=qcow2", "-a", disk, "-i",
+         "modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"], work)
     inventory_path = work.output("guest-inventory.json")
     run([paths["guestfish"], "--ro", "--format=qcow2", "-a", disk, "-i", "download",
          "/opt/vm-image/inventory.json", inventory_path], work)

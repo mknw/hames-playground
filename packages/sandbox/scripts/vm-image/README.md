@@ -90,7 +90,9 @@ Prepare a complete offline `.deb` closure for that exact distro/architecture.
 It must include `incus-agent`, `docker.io` (including the Docker CLI), `systemd`,
 `python3`, `iproute2`, `cloud-init` and every dependency not already satisfied
 by the base. Record each package name, exact dpkg version and file hash. Missing
-dependencies fail `dpkg --configure -a`; no apt update/install/download or
+dependencies fail the guest's offline apt install (its only source is a flat `file:`
+repository over the verified debs, at the lock's exact versions), which
+orders Pre-Depends upgrades that a bare `dpkg --unpack` cannot; no apt update/download or
 fallback is available. The base must have no custom `/usr/sbin/policy-rc.d` or
 `/etc/docker/daemon.json`; the builder refuses either instead of adopting it.
 An Incus-compatible `incus-agent.service` and its virtio/vsock support must be
@@ -108,6 +110,10 @@ any units. The static `cloud-init.target` is pulled in by cloud-init's generator
 only services are explicitly enabled. A failed enable aborts assembly.
 `guest-inventory.json` records the units passed to the successful
 `systemctl enable` in `enabled_units`; boot validation confirms their state.
+A drop-in (`incus-agent.service.d/host-agent.conf`) makes the unit run the
+agent the host serves on its config drive, which `incus-agent-setup` copies to
+`/run/incus_agent`, as upstream's own unit does. The distribution unit would
+otherwise run its packaged binary, so a 7.x host would talk to a 6.0.x agent.
 Assembly refuses any recorded list outside the two supported layouts, and the
 existing manifest hashes that inventory. CLI arguments and
 the version-1 lock are unchanged, so reviewed locks can be reused with a fresh
@@ -217,16 +223,26 @@ python3 packages/sandbox/scripts/vm-image/build.py build \
 # After review, append --apply on the disposable native Linux runner only.
 ```
 
-The build converts the copied base to a standalone qcow2 and customizes only
-that disk through `virt-customize --no-network`. Package service starts are
+The build converts the copied base to a standalone qcow2, uploads the inputs
+with `virt-customize --no-network`, then runs `customize.sh` in one networkless
+`guestfish --rw` appliance that first loads the `overlay` kernel module. The
+module must come from the **appliance** kernel: customize.sh runs in the guest
+chroot, which only carries modules for the guest's own kernel, so it cannot
+load one itself (a stock appliance has overlay unloaded, and the daemon then
+dies at startup). Package service starts are
 suppressed during offline installation. A temporary guest dockerd uses a Unix
 socket, no bridge, no forwarding/NAT/iptables and the normal `/var/lib/docker`
 data root. It loads and checks the three archives and tags, then shuts down;
 the **image store is populated during assembly**, not deferred to first boot.
-The same pinned guest Docker version uses its default image/storage backend
-at assembly and boot. No custom storage driver is baked into daemon.json.
-The actual appliance must support that Docker storage backend; failure is
-fatal rather than falling back to another driver. Package/image inputs and
+That daemon's config pins `features.containerd-snapshotter=false` and
+`storage-driver=overlay2`, and assembly refuses any other recorded driver:
+Docker 29 otherwise defaults to the containerd snapshotter, and a classic
+daemon without overlay would fall back to `vfs`, a store the boot daemon would
+not see. Both provisioners (#654's cloud-init and the spike's TLS step) write
+the same two keys into the guest's `/etc/docker/daemon.json`, so assembly and
+boot use one store. Nothing is baked into the image's own daemon.json.
+A failed stage's stderr is appended to `failed-stage.log` (0600) in the private
+work directory; the error message itself stays fixed. Package/image inputs and
 temporary logs are removed from the guest after loading. Cloud-init state
 and machine identity are cleaned for cloning. SSH host keys and Docker engine
 identity files are removed after daemon shutdown. The guest inventory records

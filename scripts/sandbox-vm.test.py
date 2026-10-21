@@ -1110,6 +1110,20 @@ class Safety(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         spike.tls()
 
+    def test_tls_daemon_boots_the_preloaded_classic_store(self):
+        state = self.root / "tls-store"
+        state.mkdir()
+        spike = vm.Spike(self.args, state)
+        with patch.object(spike, "make_certs"), patch.object(spike, "guest") as guest, patch.object(spike, "vm"), \
+             patch.object(spike, "remote"), patch.object(vm, "command", return_value=result(code=1, stderr="remote error: tls: bad certificate")):
+            spike.tls()
+        configs = [json.loads(call.kwargs["input"]) for call in guest.call_args_list
+                   if call.args[-1:] == ("/etc/docker/daemon.json",)]
+        self.assertEqual(len(configs), 2)
+        for config in configs:
+            self.assertEqual(config["storage-driver"], "overlay2")
+            self.assertEqual(config["features"], {"containerd-snapshotter": False})
+
     def test_production_host_docker_gate_refuses_destructive_verbs(self):
         with patch.object(vm.subprocess, "run", return_value=result()) as runner:
             for verb in ("stop", "rm", "kill", "prune", "restart", "system"):
@@ -1524,6 +1538,8 @@ def mutations():
         ("guest malformed inventory validation removed", "core", 'isinstance(links, list) and all(isinstance(link, dict)\n                and isinstance(link.get("address"), str) for link in links)', 'True', "test_guest_invalid_mac_or_link_inventory_refused"),
         ("guest link left down", "core", 'self.vm("exec", name, "--", "ip", "link", "set", "dev", interface, "up")', 'pass', "test_guest_predictable_nic"),
         ("guest route interface omitted", "core", 'str(network.ip),\n                "dev", interface)', 'str(network.ip))', "test_guest_two_nics_match_mac_not_position"),
+        ("boot daemon uses Docker 29 default store", "core", '"features": {"containerd-snapshotter": False}}', '}', "test_tls_daemon_boots_the_preloaded_classic_store"),
+        ("boot daemon may fall back from overlay2", "core", '"storage-driver": "overlay2", "features"', '"features"', "test_tls_daemon_boots_the_preloaded_classic_store"),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
         ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),

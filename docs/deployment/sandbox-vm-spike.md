@@ -28,6 +28,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
 3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.
 4. **Packages.**
+   - The owner's approval of the upstream apt trust root is recorded on #648 (see "Upstream Incus packages" below); without it, stop.
    - The upstream Incus source is in place (`sandbox_vm.py source`, below), and `apt-cache madison incus incus-base incus-client` lists `INCUS_PACKAGE_VERSION` only from it.
    - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-base="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
@@ -167,16 +168,29 @@ needs `projects_restricted_virtual_machines_nesting` (Incus 7.3) and
 neither. Install from the Incus maintainers' signed apt repository instead:
 the [Zabbly packages](https://github.com/zabbly/incus), signing key fingerprint
 `4EFC 5906 96CB 15B8 7C73  A3AD 82CC 8797 C838 DCFD` (pinned in the harness).
-Download the key, render the plan, then apply from a root shell:
+**Owner approval required first.** This adds a third-party apt trust root to
+the host, beyond the spike-only Incus install that Q5 authorised. Do not run
+`source --apply` until the owner's ruling is recorded on
+[#648](https://github.com/mknw/hames-playground/issues/648) (pending at the
+time of writing). The Q5 safeguards bind it as well: dry run first, a recorded
+undo, no sshd/UFW/SSH-port change, no reboot, and a fresh external SSH check
+plus a container health check immediately before **and** after
+`source --apply`.
+
+Download the key to a fresh temporary file (the state directory may not exist
+yet, and after a `sudo` survey it is root-owned), render the plan (which parses
+that key and prints whether it matches the pin), then apply from a root shell:
 
 ```bash
-curl -fsSLo "$PWD/.sandbox-vm-spike/upstream-key.asc" https://pkgs.zabbly.com/key.asc
-python3 scripts/lib/sandbox_vm.py source --key "$PWD/.sandbox-vm-spike/upstream-key.asc"
-sudo python3 scripts/lib/sandbox_vm.py source --apply --key "$PWD/.sandbox-vm-spike/upstream-key.asc"
+KEY="$(mktemp)"
+curl -fsSLo "$KEY" https://pkgs.zabbly.com/key.asc
+python3 scripts/lib/sandbox_vm.py source --key "$KEY"
+sudo python3 scripts/lib/sandbox_vm.py source --apply --key "$KEY"
 ```
 
 `source --apply` refuses any key file whose primary keys are not exactly the
-pinned one, and refuses to overwrite an existing source. It writes three files
+pinned one. A re-run with the identical three files in place (for example after
+a failed index refresh) only refreshes again; any other existing file is refused. It writes three files
 (0644): the keyring under `/etc/apt/keyrings/`, a deb822 source for this host's
 codename with `Signed-By` set to that keyring, and an apt preferences file that
 admits only `incus`, `incus-base` and `incus-client` from that origin
@@ -186,10 +200,43 @@ the private `.sandbox-vm-spike/incus-source.private.json`, then runs
 `apt-get update` for that one source only (`Dir::Etc::sourceparts=-`,
 `APT::Get::List-Cleanup=0`). The undo is
 `sudo python3 scripts/lib/sandbox_vm.py source --apply --remove`: it refuses
-while any Incus package is installed, verifies every file against its recorded
-hash before deleting any, and treats a missing file as already removed. It is
+unless every Incus package is absent or removed (a dpkg query error or any
+partial state refuses, too), verifies every file against its recorded
+hash before deleting any, and treats a missing file as already removed. If the
+private journal is lost (for example a cleaned checkout), it refuses by name;
+remove the three files by hand after inspecting them:
+`/etc/apt/keyrings/sbxs-incus-upstream.asc`,
+`/etc/apt/sources.list.d/sbxs-incus-upstream.sources` and
+`/etc/apt/preferences.d/sbxs-incus-upstream`. It is
 a host change outside the spike transaction: journal it, and its undo, with the
-operator's other recorded changes.
+operator's other recorded changes. For a persistent install (not the spike,
+whose cleanup removes Incus), `apt-mark hold incus incus-base incus-client`
+after installation stops a later upgrade moving Incus off the reviewed build;
+`apt-mark unhold` belongs in that install's undo.
+
+**What the package does to the host (not journaled, not reverted by removal).**
+The upstream `incus-base` maintainer scripts:
+
+- apply `/usr/lib/sysctl.d/50-incus.conf` with `systemctl restart systemd-sysctl`:
+  `fs.aio-max-nr`, `fs.inotify.max_queued_events`, `fs.inotify.max_user_instances`,
+  `fs.inotify.max_user_watches`, `kernel.keys.maxbytes`, `kernel.keys.maxkeys`,
+  `net.ipv4.fib_sync_mem`, `net.ipv4.neigh.default.gc_thresh3`,
+  `net.ipv6.neigh.default.gc_thresh3`, `vm.max_map_count` and
+  **`kernel.apparmor_restrict_unprivileged_unconfined=0`**, which relaxes
+  Ubuntu's host-wide restriction on unprivileged user namespaces (an owner
+  decision for any persistent install). Removal deletes the file but leaves the
+  applied values in force until reboot;
+- add subordinate UID/GID ranges for `root` to `/etc/subuid` and `/etc/subgid`
+  (kept after removal and purge);
+- create the `incus` user and the `incus` and `incus-admin` groups (sysusers);
+- enable and start `incus.socket`, `incus-user.socket`, `incus-lxcfs.service`
+  and `incus-startup.service` (stopped again on removal).
+
+The harness records those eleven values before installing, in the private
+`sysctl.before.private.json` of the run's state directory. Undo after the run:
+`sysctl -w <key>=<recorded value>` for each, then remove the added
+`/etc/subuid` and `/etc/subgid` lines for `root`, and `userdel incus`,
+`groupdel incus-admin` and `groupdel incus` if nothing else uses them.
 
 At install, the harness requires `INCUS_PACKAGE_VERSION` to be an exact
 upstream version at 7.3 or later, and every one of the three packages to list

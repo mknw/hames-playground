@@ -87,6 +87,8 @@ class Safety(unittest.TestCase):
             return result()
         if args[:2] == ("apt-cache", "madison"):
             return result(MADISON)
+        if args[:2] == ("sysctl", "-n"):
+            return result("1\n")
         if args[:3] == ("apt-get", "--simulate", "install"):
             return result("Inst incus (1.2.3 synthetic)\nInst incus-base (1.2.3 synthetic)\nInst incus-client (1.2.3 synthetic)\nInst dnsmasq-base (2.90-1 synthetic)\n")
         if args[:2] == ("apt-get", "remove"):
@@ -679,6 +681,9 @@ class Safety(unittest.TestCase):
     def planned(self, plan, madison=MADISON):
         return lambda *args, **kw: result(madison) if args[:2] == ("apt-cache", "madison") else result(plan)
 
+    def apt_only(self, runner):
+        return [call for call in runner.call_args_list if call.args[0] in ("apt-get", "apt-cache")]
+
     def test_package_plan_guard_and_allowlist(self):
         plans = ["Inst incus [1.0] (1.2.3)\nInst incus-client (1.2.3)\n",
                  "Inst incus (1.2.3)\nInst incus-client (1.2.3)\nInst dnsmasq-base [2.89-1] (2.90-1 synthetic)\n",
@@ -717,6 +722,9 @@ class Safety(unittest.TestCase):
         for call in apt:
             self.assertIn("dnsmasq-base=2.90-1", call)
             self.assertIn("--no-install-recommends", call)
+        for call in apt[1:]:  # a third-party index makes these matter: never upgrade or remove
+            self.assertIn("--no-upgrade", call)
+            self.assertIn("--no-remove", call)
 
     def test_dnsmasq_allowlist_and_residual_journal(self):
         self.assertIn("dnsmasq-base", self.args.allow_package)
@@ -875,7 +883,7 @@ class Safety(unittest.TestCase):
         self.assertEqual(len(vm.primary_key_fingerprints(self.armored(old_format, bytes([0xC6, len(other)]) + other))), 2)
         for broken in (self.armored(old_format)[:-40], self.armored(bytes([0xC6, len(key) + 40]) + key),  # length beyond the data
                        self.armored(bytes([0x9B]) + key), self.armored(bytes([0xC6, len(key)]) + b"\x05" + key[1:]),
-                       self.armored(b"\x01" + key)):
+                       self.armored(b"\x01" + key), self.armored(bytes([0xC6, 0xE0]) + len(key).to_bytes(4, "big") + key)):  # partial length: refused even when the bytes fit
             with self.assertRaises((RuntimeError, ValueError)):
                 vm.primary_key_fingerprints(broken)
 
@@ -923,6 +931,12 @@ class Safety(unittest.TestCase):
         self.assertEqual(record, {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files.items()})
         self.assertEqual(self.calls, [("apt-get", "update", "-o", "Dir::Etc::sourcelist=" + str(files["sources"]),
                                        "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")])
+        self.calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()) as out:  # a retry: the exact files are in place
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertEqual(json.loads(out.getvalue())["unchanged"], ["keyring", "preferences", "sources"])
+        self.assertEqual([call[:2] for call in self.calls], [("apt-get", "update")])
+        files["preferences"].write_text("Package: *\nPin: origin pkgs.zabbly.com\nPin-Priority: 1000\n")
         with self.assertRaisesRegex(RuntimeError, "already present"), contextlib.redirect_stdout(io.StringIO()):
             vm.main(["source", "--apply", "--key", str(self.key_file)])
 
@@ -959,6 +973,72 @@ class Safety(unittest.TestCase):
         self.assertFalse(any(path.exists() for path in files.values()))
         self.assertFalse((self.root / "incus-source.private.json").exists())
 
+    def test_source_removal_fails_closed_on_query_errors_and_partial_states(self):
+        files = self.source_fixture()
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        boundary = vm.command.side_effect
+        for label, outcome in (("query error", result(code=2)), ("half-installed", result("install ok half-installed")),
+                               ("unpacked", result("install ok unpacked")), ("half-configured", result("install ok half-configured")),
+                               ("triggers-pending", result("install ok triggers-pending")), ("hold", result("hold ok installed")),
+                               ("reinstreq", result("install reinstreq half-installed")), ("installed", result("install ok installed"))):
+            def answer(*args, **kw):
+                return outcome if args[0] == "dpkg-query" else boundary(*args, **kw)
+            with self.subTest(label), patch.object(vm, "command", side_effect=answer), contextlib.redirect_stdout(io.StringIO()), \
+                 self.assertRaisesRegex(RuntimeError, "remove Incus packages before their source"):
+                vm.main(["source", "--apply", "--remove"])
+            self.assertTrue(all(path.exists() for path in files.values()), label)
+        (self.root / "incus-source.private.json").unlink()  # journal lost, e.g. a cleaned checkout
+        self.dpkg = "unknown ok not-installed"
+        with self.assertRaisesRegex(RuntimeError, "^no source journal; remove the three upstream source files by hand"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--remove"])
+        self.assertTrue(all(path.exists() for path in files.values()))
+
+    def test_source_guards_root_codename_and_dry_run_key(self):
+        files = self.source_fixture()
+        with patch.object(vm.os, "geteuid", return_value=1000), self.assertRaisesRegex(RuntimeError, "source requires Linux root"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        for codename in ("Resolute", "resolute;x", "", "../x"):
+            vm.OS_RELEASE.write_text("VERSION_CODENAME=" + codename + "\n")
+            with self.subTest(codename=codename), self.assertRaisesRegex(RuntimeError, "distribution codename required"), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertFalse(any(path.exists() for path in files.values()))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            vm.main(["source", "--key", str(self.key_file)])
+        self.assertIs(json.loads(out.getvalue())["matches_pin"], True)
+        other = b"\x04" + b"foreign key" * 8
+        self.key_file.write_text(self.armored(bytes([0xC6, len(other)]) + other))
+        with contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaisesRegex(RuntimeError, "fingerprint mismatch"):
+            vm.main(["source", "--key", str(self.key_file)])
+        self.assertIs(json.loads(out.getvalue())["matches_pin"], False)
+        self.assertEqual(self.calls, [])  # a dry run runs nothing
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            vm.main(["source", "--remove"])
+        self.assertEqual(json.loads(out.getvalue())["steps"], ["remove-source"])
+
+    def test_package_sysctls_captured_before_install(self):
+        order = []
+        def boundary(*args, **kw):
+            if args[0] == "sysctl":
+                order.append(("sysctl", args[2]))
+                return result("value-of-" + args[2] + "\n")
+            if args[:2] == ("apt-get", "install") and "--download-only" not in args:
+                order.append(("install",))
+            return self.fake(*args, **kw)
+        with patch.object(vm, "command", side_effect=boundary):
+            self.spike.install()
+        captured = json.loads((self.state / "sysctl.before.private.json").read_text())
+        self.assertEqual(set(captured), set(vm.PACKAGE_SYSCTLS))
+        self.assertIn("kernel.apparmor_restrict_unprivileged_unconfined", captured)
+        self.assertEqual(captured["vm.max_map_count"], "value-of-vm.max_map_count")
+        self.assertLess(max(i for i, o in enumerate(order) if o[0] == "sysctl"), order.index(("install",)))
+
+    def test_default_allow_list_is_exactly_the_reviewed_set(self):
+        self.assertEqual(vm.arguments(["spike"]).allow_package, ["incus", "incus-base", "incus-client", "dnsmasq-base"])
+
     def test_source_dry_run_touches_nothing(self):
         with patch.object(vm, "command") as runner, contextlib.redirect_stdout(io.StringIO()) as out:
             vm.main(["source", "--key", "/synthetic/never-read.asc"])
@@ -982,6 +1062,7 @@ class Safety(unittest.TestCase):
             return result()
         with patch.object(vm, "command", side_effect=apt), self.assertRaises(RuntimeError):
             self.spike.install()
+        calls = [call for call in calls if call[0][0] in ("apt-get", "apt-cache")]
         self.assertEqual(len(calls), 4)
         self.assertIn("--download-only", calls[2][0])
         self.assertTrue(all("--no-install-recommends" in call[0] for call in calls[1:]))
@@ -1669,6 +1750,13 @@ class Safety(unittest.TestCase):
                          "verifies every file against its recorded hash before deleting any",
                          "a distro QEMU on `PATH` is not the one measured"):
             self.assertIn(required, prose)
+        for required in ('KEY="$(mktemp)"', "Owner approval required first",
+                         "The owner's approval of the upstream apt trust root is recorded on #648",
+                         "immediately before **and** after `source --apply`",
+                         "**`kernel.apparmor_restrict_unprivileged_unconfined=0`**", "`sysctl.before.private.json`",
+                         "`apt-mark hold incus incus-base incus-client`", "remove the three files by hand"):
+            self.assertIn(required, prose)
+        self.assertNotIn('curl -fsSLo "$PWD/.sandbox-vm-spike', runbook)
         self.assertNotIn("QEMU_MODULES_PACKAGE_VERSION", runbook)
         self.assertNotIn("--qemu-modules-version", runbook)
 
@@ -1762,8 +1850,8 @@ def mutations():
         ('index refresh not restricted', 'core', '"-o", "Dir::Etc::sourceparts=-", ', '', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
         ('other lists cleaned on refresh', 'core', ', "-o", "APT::Get::List-Cleanup=0")', ')', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
         ('keyring unreadable by apt sandbox', 'core', 'os.fchmod(fd, 0o644)', 'os.fchmod(fd, 0o600)', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
-        ('existing source overwritten', 'core', 'require(not any(path.exists() or path.is_symlink() for path in UPSTREAM_FILES.values()),', 'require(True,', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
-        ('source removed while Incus installed', 'core', 'require(status[2:3] != ["installed"]', 'require(True', 'test_source_removal_is_exact_and_waits_for_package_removal'),
+        ('existing source overwritten', 'core', 'require(not present, "upstream source already present; remove it first")', 'pass', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('source removed while Incus installed', 'core', 'require(incus_removed(package), "remove Incus packages before their source")', 'require(True, "x")', 'test_source_removal_is_exact_and_waits_for_package_removal'),
         ('changed source file deleted', 'core', '                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),', '                    or True),', 'test_source_removal_is_exact_and_waits_for_package_removal'),
         ('removal deletes before verifying all', 'core', '        for name, path in UPSTREAM_FILES.items():\n            require(path not in present or (not path.is_symlink()\n                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),\n                    "upstream source file changed since it was written; inspect it by hand")\n        for path in present:\n            path.unlink()\n', '        for name, path in UPSTREAM_FILES.items():\n            require(path not in present or (not path.is_symlink()\n                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),\n                    "upstream source file changed since it was written; inspect it by hand")\n            if path in present:\n                path.unlink()\n', 'test_source_removal_is_exact_and_waits_for_package_removal'),
         ('runbook key fingerprint omitted', 'runbook', '`4EFC 5906 96CB 15B8 7C73  A3AD 82CC 8797 C838 DCFD`', '`the Zabbly key`', 'test_runbook_upstream_incus_source'),
@@ -1783,6 +1871,26 @@ def mutations():
         ("missing host command stays anonymous", "core", '        raise Refusal("required host command not installed") from None', '        raise', "test_missing_host_command_is_a_named_refusal"),
         ("every exception text printed", "core", '    except Refusal as refusal:', '    except Exception as refusal:', "test_refusals_name_the_guard_but_never_a_value"),
         ("refusal text hidden again", "core", 'print("Spike refused: " + str(refusal), file=sys.stderr)', 'print("Spike refused or failed; inspect private state", file=sys.stderr)', "test_refusals_name_the_guard_but_never_a_value"),
+        ('removal guard fails open again', 'core', 'require(incus_removed(package), "remove Incus packages before their source")', 'require(True, "remove Incus packages before their source")', 'test_source_removal_fails_closed_on_query_errors_and_partial_states'),
+        ('lost source journal crashes unnamed', 'core', '        require(record.is_file(), "no source journal; remove the three upstream source files by hand (runbook)")\n', '', 'test_source_removal_fails_closed_on_query_errors_and_partial_states'),
+        ('identical re-apply refused', 'core', 'if len(present) == len(UPSTREAM_FILES) and all(', 'if False and all(', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('changed files adopted on re-apply', 'core', 'path.read_text() == contents[name]', 'True', 'test_source_adds_pinned_restricted_repository_and_refreshes_only_it'),
+        ('dry run ignores a mismatched key', 'core', '            require(plan.get("matches_pin", True), "upstream signing key fingerprint mismatch")\n', '', 'test_source_guards_root_codename_and_dry_run_key'),
+        ('dry run never reads the key', 'core', '            if not args.remove and args.key and args.key.is_file():', '            if False:', 'test_source_guards_root_codename_and_dry_run_key'),
+        ('dry run remove step mislabelled', 'core', '"remove-source" if args.remove else "add-source"', '"add-source"', 'test_source_guards_root_codename_and_dry_run_key'),
+        ('source root guard removed', 'core', 'require(os.geteuid() == 0 and sys.platform == "linux", "source requires Linux root")', 'pass', 'test_source_guards_root_codename_and_dry_run_key'),
+        ('source codename unchecked', 'core', 'require(re.fullmatch(r"[a-z]+", codename), "distribution codename required")', 'pass', 'test_source_guards_root_codename_and_dry_run_key'),
+        ('package sysctls not captured', 'core', 'private_file(self.state / "sysctl.before.private.json", json.dumps(before, indent=2) + "\\n")', 'pass', 'test_package_sysctls_captured_before_install'),
+        ('AppArmor sysctl not captured', 'core', '"vm.max_map_count",\n                   "kernel.apparmor_restrict_unprivileged_unconfined")', '"vm.max_map_count")', 'test_package_sysctls_captured_before_install'),
+        ('default allow-list widened', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"])', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice"])', 'test_default_allow_list_is_exactly_the_reviewed_set'),
+        ('partial-length key packet admitted', 'core', 'require(first < 224 or first == 255, "partial OpenPGP packet refused")', 'pass', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ("download may remove packages", "core", '                "--no-remove", "--no-upgrade", *packages, timeout=180)', '                "--no-upgrade", *packages, timeout=180)', "test_dnsmasq_pinned_in_simulation_download_and_install"),
+        ("install may upgrade packages", "core", '"--no-install-recommends", "--no-remove", "--no-upgrade", *packages,', '"--no-install-recommends", "--no-remove", *packages,', "test_dnsmasq_pinned_in_simulation_download_and_install"),
+        ("runbook AppArmor side effect omitted", "runbook", "**`kernel.apparmor_restrict_unprivileged_unconfined=0`**", "a sysctl", "test_runbook_upstream_incus_source"),
+        ("runbook key download into a missing directory", "runbook", 'KEY="$(mktemp)"', 'KEY="$PWD/.sandbox-vm-spike/upstream-key.asc"', "test_runbook_upstream_incus_source"),
+        ("runbook trust-root approval gate omitted", "runbook", "**Owner approval required first.**", "", "test_runbook_upstream_incus_source"),
+        ("runbook checklist approval omitted", "runbook", "The owner's approval of the upstream apt trust root is recorded on #648", "The source is fine", "test_runbook_upstream_incus_source"),
+        ("runbook sysctl capture omitted", "runbook", "`sysctl.before.private.json`", "a file", "test_runbook_upstream_incus_source"),
         ("config ID preflight accepts mutable tag", "core", '            require(pinned_image(image),', '            require(True,', "test_config_image_pins_additive_in_preflight"),
         ("host admission accepts mutable tag", "core", 'and pinned_image(tail[image_index])', 'and True', "test_host_run_caps_prefix_label_expiry_and_exec_ownership"),
         ("abbreviated config ID admitted at preflight", "core", 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{64}"', 'r"(?:[a-zA-Z0-9./:_-]+@)?sha256:[a-f0-9]{12,64}"', "test_config_image_pins_additive_in_preflight"),
@@ -1883,7 +1991,7 @@ def mutations():
         ('R4 stop budget removed', 'core', 'int(stop[1]) * {"s": 1, "min": 60, "h": 3600}[stop[2]] >= 900', 'True', 'test_launch_properties_each_refused_independently'),
         ('R4 InvocationID match removed', 'core', 'properties.get("InvocationID") == os.environ["INVOCATION_ID"]', 'True', 'test_launch_properties_each_refused_independently'),
         ('R4 rollback SIG_IGN removed', 'core', '            signal.signal(sig, signal.SIG_IGN)', '            pass', 'test_rollback_ignores_all_disconnect_signals'),
-        ('R4 pre-existing Incus refusal removed', 'core', 'require((query.returncode == 1 and not status) or (', 'require(True or (', 'test_preexisting_incus_each_package_refused'),
+        ('R4 pre-existing Incus refusal removed', 'core', 'return ((query.returncode == 1 and not status) or (', 'return (True or (', 'test_preexisting_incus_each_package_refused'),
         ('dpkg endswith installed restored', 'core', '(query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")\n                and status[1] == "ok" and status[2] in ("not-installed", "config-files"))', 'not " ".join(status).endswith("installed")', 'test_removed_incus_records_allow_preflight'),
         ('dpkg absent record refused', 'core', 'query.returncode == 1 and not status', 'False', 'test_removed_incus_records_allow_preflight'),
         ('dpkg config-files refused', 'core', 'status[2] in ("not-installed", "config-files")', 'status[2] in ("not-installed",)', 'test_preexisting_incus_dpkg_status_matrix'),

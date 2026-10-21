@@ -53,7 +53,9 @@ export function assertLargeModelConfigured(): void {
   if (missing.length > 0) {
     const cause = privateInferenceOnly()
       ? 'INFERENCE_TIERS=self_deployed'
-      : 'the self-deployed tier is in use (it is the tier of a run that names none)'
+      : inferenceEnv('USE_SELF_DEPLOYED_INFERENCE') === '1'
+        ? 'USE_SELF_DEPLOYED_INFERENCE=1'
+        : 'the self-deployed tier was requested (by the conversation, or by a run that names no tier)'
     throw new Error(
       `${cause}, but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
         'Set them (see app/.env.example) — this build refuses to quietly send the flagged ' +

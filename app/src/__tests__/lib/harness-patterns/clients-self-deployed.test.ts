@@ -301,6 +301,26 @@ describe('misconfiguration fails closed', () => {
     delete process.env.LARGE_LLM_BASE_URL
     expect(() => assertLargeModelConfigured()).toThrow(/LARGE_LLM_BASE_URL is not set/)
   })
+
+  // Each cause names its own remedy. Mutation: collapse them back into one shared
+  // sentence and two of these rows go red.
+  it.each([
+    ['restricted', { INFERENCE_TIERS: 'self_deployed' }, /^INFERENCE_TIERS=self_deployed, but/],
+    ['the boot flag', { USE_SELF_DEPLOYED_INFERENCE: '1' }, /^USE_SELF_DEPLOYED_INFERENCE=1, but/],
+    [
+      'a requested tier',
+      {},
+      /^the self-deployed tier was requested \(by the conversation, or by a run that names no tier\), but/,
+    ],
+  ])('the unconfigured-endpoint message names its cause: %s', async (_n, env, expected) => {
+    delete process.env.LARGE_LLM_BASE_URL
+    delete process.env.LARGE_LLM_API_KEY
+    delete process.env.USE_SELF_DEPLOYED_INFERENCE
+    delete process.env.INFERENCE_TIERS
+    Object.assign(process.env, env)
+    const { assertLargeModelConfigured } = await loadPolicy()
+    expect(() => assertLargeModelConfigured()).toThrow(expected)
+  })
 })
 
 describe('settings and baml_src agree about LargeQwen', () => {

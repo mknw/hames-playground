@@ -565,6 +565,8 @@ describe('Incus environment wire contract', () => {
       tlscacert: '/etc/docker/tls/ca.pem',
       tlscert: '/etc/docker/tls/cert.pem',
       tlskey: '/etc/docker/tls/key.pem',
+      'storage-driver': 'overlay2',
+      features: { 'containerd-snapshotter': false },
     })
     expect(cloud.runcmd).toContainEqual(['systemctl', 'disable', '--now', 'docker.socket'])
     const unit = cloud.write_files.find((f: Json) => f.path.endsWith('/sandbox.conf'))

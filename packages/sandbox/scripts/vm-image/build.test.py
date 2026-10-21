@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -78,14 +79,24 @@ class Pipeline(unittest.TestCase):
             return b""
         if name == "virt-customize":
             self.assertIn("--no-network", argv)
-            self.assertEqual(argv[argv.index("--run-command") + 1], "sh /opt/vm-image/customize.sh")
+            self.assertNotIn("--run-command", argv)  # customize.sh runs only after the appliance modprobe
             for index, arg in enumerate(argv):
                 if arg == "--upload":
                     source, target = argv[index + 1].split(":", 1)
                     self.assertTrue(Path(source).is_relative_to(work.root))
                     self.assertTrue(target.startswith("/opt/vm-image/"))
             return b""
+        if name == "guestfish" and "--rw" in argv:
+            self.assertNotIn("--network", argv)
+            self.assertTrue(any(Path(c[0]).name == "virt-customize" and "--upload" in c for c in self.calls[:-1]),
+                            "customize.sh would run before its inputs are uploaded")
+            commands = argv[argv.index("-i") + 1:]
+            self.assertEqual(commands, ["modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"])
+            self.customized = True
+            return b""
         if name == "guestfish":
+            self.assertIn("--ro", argv)
+            self.assertTrue(getattr(self, "customized", False), "inventory read before customization")
             Path(argv[-1]).write_text(json.dumps({"images": {f: self.pin for f in vm.FLAVOURS},
                 "packages": {p["name"]: p["version"] for p in self.lock["packages"]},
                 "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
@@ -324,7 +335,7 @@ class Pipeline(unittest.TestCase):
         original = self.fake
         def boundary(argv, work):
             result = original(argv, work)
-            if Path(argv[0]).name == 'guestfish' and argv[1:] != ['--version']:
+            if Path(argv[0]).name == 'guestfish' and '--ro' in argv:
                 path = Path(argv[-1])
                 value = json.loads(path.read_text())
                 change(value)
@@ -443,7 +454,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_dockerd_uses_runtime_store(self):
         import shlex
         source = (vm.HERE / 'customize.sh').read_text()
-        command = source[source.index('dockerd --config-file'):source.index('daemon_pid=$!')]
+        command = source[source.index('dockerd --debug --config-file'):source.index('daemon_pid=$!')]
         executable, arguments = self.root / 'dockerd', self.root / 'arguments'
         executable.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > ' + shlex.quote(str(arguments)) + '\n')
         executable.chmod(0o700)
@@ -453,6 +464,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         argv = arguments.read_text().splitlines()
         self.assertEqual(argv[argv.index('--data-root') + 1], '/var/lib/docker')
+        self.assertEqual(argv[argv.index('--config-file') + 1], '/opt/vm-image/assembly-daemon.json')
         self.assertEqual([argv[i + 1] for i, v in enumerate(argv) if v == '--host'], ['unix:///run/vm-image-docker.sock'])
         self.assertIn('--iptables=false', argv)
 
@@ -505,6 +517,78 @@ class Pipeline(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'containerd snapshotter'):
             self.guest_calls('overlayfs')
 
+    def test_guest_driver_fallback_refused(self):
+        # A classic store on vfs is invisible to the overlay2 boot daemon.
+        for driver in ('vfs', 'devicemapper', ''):
+            try:
+                with self.subTest(driver=driver), self.assertRaisesRegex(SystemExit, 'overlay2'):
+                    self.guest_calls(driver)
+            finally:
+                shutil.rmtree(self.work, ignore_errors=True)
+
+    def test_guest_packages_installed_offline_by_apt(self):
+        import shlex
+        guest = self.fake_root()
+        record = self.root / 'apt-calls'
+        shims = {'apt-get': 'printf "%s\\n" "$@" >> ' + shlex.quote(str(record)) + '; echo --- >> ' + shlex.quote(str(record)),
+                 'dpkg-deb': 'printf "Package: %s\\nVersion: 1\\n" "$(basename "$2" .deb)"',
+                 'sha256sum': 'printf "%064d  %s\\n" 7 "$1"'}
+        for name, body in shims.items():
+            (guest / 'bin' / name).write_text('#!/bin/sh\n' + body + '\n')
+            (guest / 'bin' / name).chmod(0o700)
+        for name in ('a.deb', 'b.deb'):
+            (guest / 'opt/vm-image' / name).write_text('12345')
+        (guest / 'opt/vm-image/guest-lock.json').write_text(json.dumps({'packages': [
+            {'name': 'a', 'version': '1:2.0-1'}, {'name': 'b', 'version': '3'}]}))
+        child = self.shell_section('export NEEDRESTART_MODE=l', "python3 - <<'PY'", guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        calls = [c.splitlines() for c in record.read_text().split('---\n') if c]
+        self.assertEqual([[v for v in ('update', 'install', 'clean') if v in c] for c in calls], [['update'], ['install'], ['clean']])
+        for call in calls:  # every apt call sees ONLY the local repository
+            self.assertTrue(any(a.startswith('Dir::Etc::SourceList=') and a.endswith('/opt/vm-image/local.list') for a in call))
+            self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/repo-lists') for a in call))
+        self.assertEqual(calls[1][6:], ['install', '-y', '--no-install-recommends', '--no-remove',
+                                        '-o', 'Dpkg::Options::=--force-confold', 'a=1:2.0-1', 'b=3'])  # exactly this, lock versions
+        source = (guest / 'opt/vm-image/local.list').read_text()
+        self.assertTrue(source.startswith('deb [trusted=yes] file:') and source.endswith('/opt/vm-image ./\n'))
+        index = (guest / 'opt/vm-image/Packages').read_text()
+        self.assertIn('Package: a\nVersion: 1\nFilename: a.deb\nSize: 5\nSHA256: ' + '0' * 63 + '7\n\n', index)
+        self.assertIn('Filename: b.deb\n', index)
+        commands = [line for line in (vm.HERE / 'customize.sh').read_text().splitlines() if not line.startswith('#')]
+        self.assertFalse(any(line.startswith('dpkg ') for line in commands))
+
+    def test_guest_assembly_daemon_gets_a_cgroup_hierarchy(self):
+        # The libguestfs appliance mounts no cgroup fs; dockerd then fails inside NewDaemon.
+        source = (vm.HERE / 'customize.sh').read_text()
+        self.assertIn('mount -t cgroup2 none /sys/fs/cgroup', source)
+        mount = source.index('mount -t cgroup2 none /sys/fs/cgroup')
+        self.assertLess(mount, source.index('dockerd --debug --config-file'))
+        self.assertIn('!= cgroup2fs ]', source[source.rindex('if ', 0, mount):mount])
+        cleanup = source[source.index('cleanup() {'):source.index('}', source.index('cleanup() {'))]
+        self.assertIn('if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup', cleanup)
+
+    def test_guest_runs_the_host_supplied_agent(self):
+        guest = self.fake_root()
+        (guest / 'usr/lib/systemd/system').mkdir(parents=True)
+        packaged = guest / 'usr/lib/systemd/system/incus-agent.service'
+        packaged.write_text('[Service]\nExecStart=/usr/libexec/incus/incus-agent\n')  # no setup step
+        child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn('does not run incus-agent-setup', child.stderr)
+        self.assertFalse((guest / 'etc/systemd/system/incus-agent.service.d').exists())
+        packaged.write_text('[Service]\nExecStartPre=/usr/libexec/incus/incus-agent-setup\nExecStart=/usr/libexec/incus/incus-agent\n')
+        child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        unit = guest / 'etc/systemd/system/incus-agent.service.d/host-agent.conf'
+        self.assertEqual(unit.read_text(), '[Service]\nExecStart=\nExecStart=/run/incus_agent/incus-agent\n')
+
+    def test_guest_assembly_daemon_pins_classic_overlay2(self):
+        guest = self.fake_root()
+        child = self.shell_section('# Same classic overlay2 store', '# Diagnostics (stderr', guest)
+        self.assertEqual(child.returncode, 0, child.stderr)
+        config = json.loads((guest / 'opt/vm-image/assembly-daemon.json').read_text())
+        self.assertEqual(config, {'features': {'containerd-snapshotter': False}, 'storage-driver': 'overlay2'})
+
     def fake_root(self):
         guest = self.root / 'guest'
         for directory in ('bin', 'usr/sbin', 'etc/docker', 'etc/ssh', 'etc/cloud/cloud.cfg.d', 'opt/vm-image', 'var/lib/docker'):
@@ -532,10 +616,10 @@ class Pipeline(unittest.TestCase):
 
     def test_guest_daemon_config_adoption_refused(self):
         guest = self.fake_root()
-        child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
+        child = self.shell_section('# Refuse site configuration', '# Diagnostics (stderr', guest)
         self.assertEqual(child.returncode, 0, child.stderr)
         (guest / 'etc/docker/daemon.json').write_text('{}')
-        child = self.shell_section('# Refuse site configuration', 'dockerd --config-file', guest)
+        child = self.shell_section('# Refuse site configuration', '# Diagnostics (stderr', guest)
         self.assertNotEqual(child.returncode, 0)
 
     def guest_units(self, layout, directory='usr/lib/systemd/system', missing=None, enable_status=0, masked=None):
@@ -547,6 +631,8 @@ class Pipeline(unittest.TestCase):
         for unit in [*common, 'cloud-init.target', *layout]:
             if unit == masked:
                 (units / unit).symlink_to('/dev/null')
+            elif unit == 'incus-agent.service' and unit != missing:
+                (units / unit).write_text('[Service]\nExecStartPre=/usr/libexec/incus/incus-agent-setup\n')
             elif unit != missing:
                 (units / unit).write_text('[Unit]\n')
         agent = guest / 'bin/incus-agent'
@@ -621,7 +707,7 @@ class Pipeline(unittest.TestCase):
     def test_guest_cleanup_and_clone_inventory(self):
         guest = self.fake_root()
         work = guest / 'opt/vm-image'
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'assembly-daemon.json', 'enabled-units.txt'):
             (work / name).write_text('private input')
         (work / 'inventory.json').write_text('{}')
         (guest / 'etc/machine-id').write_text('a' * 32)
@@ -640,7 +726,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'cloud-call').is_file())
         self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs --machine-id')
-        for name in ('input.deb', 'base.tar', 'dockerd.log', 'empty-daemon.json', 'enabled-units.txt'):
+        for name in ('input.deb', 'base.tar', 'dockerd.log', 'assembly-daemon.json', 'enabled-units.txt'):
             self.assertFalse((work / name).exists(), name)
         self.assertEqual(list((guest / 'etc/ssh').glob('ssh_host_*')), [])
         self.assertFalse((guest / 'var/lib/docker/engine-id').exists())
@@ -659,6 +745,12 @@ class Pipeline(unittest.TestCase):
             (guest / 'etc/machine-id').write_text('')
             exec(compile(script, 'clone-inventory', 'exec'), {})
             self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
+            (guest / 'etc/machine-id').unlink()  # cloud-init 26 removes it outright
+            exec(compile(script, 'clone-inventory', 'exec'), {})
+            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
+            (guest / 'etc/machine-id').write_text('a' * 32)
+            exec(compile(script, 'clone-inventory', 'exec'), {})
+            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], 'a' * 32)
         finally:
             os.chdir(old)
 
@@ -835,8 +927,21 @@ class Pipeline(unittest.TestCase):
                 self.assertEqual(options["env"][name], str(self.work))
             self.assertEqual(options["env"]["LIBGUESTFS_BACKEND"], "direct")
             child.return_value.returncode = 1
+            child.return_value.stderr = b"synthetic stage diagnosis"
             with self.assertRaises(RuntimeError):
-                vm.run(["synthetic"], work)
+                vm.run(["/private/tools/synthetic", "--flag"], work)
+
+    def test_failed_stage_stderr_kept_privately(self):
+        work = vm.Work(self.work)
+        with patch.object(subprocess, "run") as child:
+            child.return_value.returncode = 1
+            child.return_value.stderr = b"overlay: unknown filesystem type"
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, r"stage command failed; build remains incomplete \(see failed-stage.log in the work directory\)$"):
+                    vm.run([self.root / "guestfish", "--rw"], work)
+        log = self.work / "failed-stage.log"
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(log.read_bytes(), b"guestfish\noverlay: unknown filesystem type\n" * 2)
 
     def test_save_uses_only_explicit_endpoint_inspect_and_save(self):
         with patch.object(vm, "run", side_effect=self.save_boundary):
@@ -874,8 +979,8 @@ class Pipeline(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         exec(compile(scripts[0], "guest-script", "exec"), {})
                 with patch.object(subprocess, "check_output", side_effect=lambda argv, **kw:
-                                  "wrong" if argv[0] == "docker" else output(argv, **kw)):
-                    with self.assertRaises(SystemExit):
+                                  "wrong" if argv[3:5] == ["image", "inspect"] else output(argv, **kw)):
+                    with self.assertRaisesRegex(SystemExit, "guest image ID mismatch"):
                         exec(compile(scripts[1], "guest-script", "exec"), {})
                 Path("base.tar").write_bytes(b"tampered")
                 child.reset_mock()
@@ -964,6 +1069,12 @@ def mutations():
         ("manifest missing disk hash", '"outputs": hashes', '"outputs": {k: v for k, v in hashes.items() if k != "disk.qcow2"}', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("stage writes outside work directory", 'path.resolve().is_relative_to(self.root) and not path.is_symlink()', 'True', "test_write_cannot_escape_or_follow_symlinks"),
         ("customization gets network", '"--no-network", "--format"', '"--network", "--format"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("appliance overlay module not loaded", '"modprobe", "overlay", ":", "sh"', '"sh"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("customize script never run", '"modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"]', '"modprobe", "overlay"]', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("failed stage stderr discarded", 'b"\\n" + result.stderr + b"\\n"', 'b"\\n\\n"', "test_failed_stage_stderr_kept_privately"),
+        ("failure message does not name the log", ' (see failed-stage.log in the work directory)"', '"', "test_failed_stage_stderr_kept_privately"),
+        ("customize runs before the upload", '    run(argv, work)\n    # Docker\'s overlay2 needs the module in the APPLIANCE kernel; the guest chroot\n    # only has modules for the guest\'s own kernel, so customize.sh cannot load it.\n    run([paths["guestfish"], "--rw", "--format=qcow2", "-a", disk, "-i",\n         "modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"], work)\n', '    run([paths["guestfish"], "--rw", "--format=qcow2", "-a", disk, "-i",\n         "modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"], work)\n    run(argv, work)\n', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
+        ("failed stage log world readable", 'os.O_NOFOLLOW, 0o600)', 'os.O_NOFOLLOW, 0o644)', "test_failed_stage_stderr_kept_privately"),
         ("disk backing chain admitted", 'not value.get("backing-filename")', 'True', "test_backing_chain_encryption_external_file_and_size_refused"),
         ("tool version not verified", 'version == record["version"]', 'True', "test_tool_version_mismatch_refuses_manifest"),
         ("required Incus agent package omitted", 'REQUIRED <= set(names)', 'True', "test_required_packages_and_full_ids"),
@@ -998,7 +1109,7 @@ def mutations():
     guest = (vm.HERE / "customize.sh").read_text()
     guest_changes = [
         ('guest masked vendor unit admitted', 'test -f "/usr/lib/systemd/system/$1" || test -f "/lib/systemd/system/$1"', 'test -e "/usr/lib/systemd/system/$1" || test -e "/lib/systemd/system/$1"', 'test_guest_masked_vendor_unit_refused'),
-        ('guest enabled unit temporary file retained', './empty-daemon.json ./enabled-units.txt', './empty-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
+        ('guest enabled unit temporary file retained', './assembly-daemon.json ./enabled-units.txt', './assembly-daemon.json', 'test_guest_cleanup_and_clone_inventory'),
         ('guest legacy unit directory ignored', ' || test -f "/lib/systemd/system/$1"', '', 'test_guest_legacy_cloud_init_units'),
         ('guest modern unit directory ignored', 'test -f "/usr/lib/systemd/system/$1" || ', '', 'test_guest_new_cloud_init_units'),
         ('guest undiscovered units selected', 'if has_unit "$unit"; then', 'if true; then', 'test_guest_legacy_cloud_init_units'),
@@ -1009,17 +1120,35 @@ def mutations():
         ('guest unit enable failure ignored', 'systemctl enable "$@"', 'systemctl enable "$@" || true', 'test_guest_unit_enable_failure_refused'),
         ('guest selected unit list omitted', 'printf \'%s\\n\' "$@" > enabled-units.txt', ':', 'test_guest_new_cloud_init_units'),
         ('guest enabled unit inventory omitted', "'enabled_units': units.read().splitlines()", "'enabled_units': []", 'test_all_images_loaded_from_archives_without_pull'),
-        ("guest machine state inventory omitted", "inventory['machine_id_state'] = Path('/etc/machine-id').read_text().strip()", "pass", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine state inventory omitted", "inventory['machine_id_state'] = machine_id.read_text().strip() if machine_id.exists() else ''", "pass", "test_guest_cleanup_and_clone_inventory"),
+        ("guest uncleaned machine-id read as absent", "machine_id.read_text().strip() if machine_id.exists() else ''", "''", "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH key inventory omitted", "inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))", "pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker data root changed", '--data-root /var/lib/docker', '--data-root /tmp/wrong-store', "test_guest_dockerd_uses_runtime_store"),
         ("guest archive load changed to pull", "'load', '--input', path", "'pull', path", "test_all_images_loaded_from_archives_without_pull"),
         ("guest runtime tag namespace changed", "'kg-sandbox:' + flavour", "'wrong-sandbox:' + flavour", "test_runtime_tags_restored_after_all_loads"),
         ("guest runtime tags omitted", "subprocess.run([*docker, 'tag', actual, 'kg-sandbox:' + flavour], check=True)", 'pass', "test_runtime_tags_restored_after_all_loads"),
-        ("guest containerd snapshotter admitted", "not driver or driver == 'overlayfs' or 'containerd' in driver.lower()", 'False', "test_guest_containerd_snapshotter_refused"),
+        ("guest containerd snapshotter admitted", "driver != 'overlay2'", 'False', "test_guest_containerd_snapshotter_refused"),
+        ("guest driver fallback admitted", "driver != 'overlay2'", "driver == 'overlayfs'", "test_guest_driver_fallback_refused"),
+        ("guest apt uses the image's own sources", "set -- -o Dir::Etc::SourceList=/opt/vm-image/local.list ", "set -- ", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt keeps the image's lists", "  -o Dir::State::Lists=/opt/vm-image/repo-lists\n", "  -o Dir::Etc::Dummy=1\n", "test_guest_packages_installed_offline_by_apt"),
+        ("guest install ignores lock versions", 'p["name"] + "=" + p["version"]', 'p["name"]', "test_guest_packages_installed_offline_by_apt"),
+        ("local index without checksums", "SHA256: %s\\n\\n", "\\n", "test_guest_packages_installed_offline_by_apt"),
+        ("guest packages back to bare dpkg unpack", "apt-get \"$@\" update >&2", "dpkg --unpack /opt/vm-image/*.deb", "test_guest_packages_installed_offline_by_apt"),
+        ("guest assembly daemon without cgroups", "  mount -t cgroup2 none /sys/fs/cgroup\n", "  :\n", "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
+        ("guest cgroup mount left behind", '  if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup || true; fi\n', '', "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
+        ("guest apt may remove base packages", "install -y --no-install-recommends --no-remove -o", "install -y --no-install-recommends -o", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt admits unauthenticated debs", "install -y --no-install-recommends --no-remove -o", "install -y --no-install-recommends --no-remove --allow-unauthenticated -o", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt prompts on conffiles", " -o Dpkg::Options::=--force-confold \\\n", " \\\n", "test_guest_packages_installed_offline_by_apt"),
+        ("assembly dockerd reads another config", "dockerd --debug --config-file /opt/vm-image/assembly-daemon.json", "dockerd --debug --config-file /opt/vm-image/other.json", "test_guest_dockerd_uses_runtime_store"),
+        ("agent drop-in without the setup step", "  || { echo 'incus-agent.service does not run incus-agent-setup' >&2; exit 1; }", "  || :", "test_guest_runs_the_host_supplied_agent"),
+        ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
+        ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
+        ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),
+        ("guest assembly daemon may fall back from overlay2", ',"storage-driver":"overlay2"}', '}', "test_guest_assembly_daemon_pins_classic_overlay2"),
         ("guest driver inventory absent", ", 'docker_driver': driver", '', "test_all_images_loaded_from_archives_without_pull"),
         ("guest package services not suppressed", "printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d", ':', "test_guest_policy_rc_blocks_package_services"),
         ("guest daemon config adopted", 'test ! -e /etc/docker/daemon.json', ':', "test_guest_daemon_config_adoption_refused"),
-        ("guest input cleanup omitted", 'rm -f ./*.deb ./*.tar ./dockerd.log ./empty-daemon.json', ':', "test_guest_cleanup_and_clone_inventory"),
+        ("guest input cleanup omitted", 'rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest clone cleanup omitted", 'cloud-init clean --logs --machine-id', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH host keys retained", 'rm -f /etc/ssh/ssh_host_*', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker identity retained", 'rm -f /var/lib/docker/engine-id /var/lib/docker/key.json', ':', "test_guest_cleanup_and_clone_inventory"),

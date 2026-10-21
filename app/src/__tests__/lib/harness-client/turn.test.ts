@@ -496,13 +496,13 @@ describe('interactive turns', () => {
     claimSession.mockResolvedValue(STORED)
 
     const result = await runTurnAndPersist(
-      interactive({ sessionId: 'sess-3', agentId: 'general', message: 'hi' }),
+      interactive({ sessionId: 'sess-3', agentId: 'retriever', message: 'hi' }),
     )
 
     expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'retriever')
     expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
+    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'retriever', 'serialized:sess-3', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
       memoryRunOrigin: 'interactive',
@@ -532,6 +532,33 @@ describe('interactive turns', () => {
       inferenceTier: 'anthropic',
       memoryRunOrigin: 'interactive',
     })
+  })
+
+  // 2026-10-21: `general` was removed and its id folds into `general-next`. A
+  // stored conversation resumes there (the claim's load maps the row's id), and a
+  // tab loaded before the deploy still SENDS `general`: compared raw, 'general' !==
+  // 'general-next' would read as an agent switch and replace the thread.
+  //
+  // MUTATION: delete `general: 'general-next'` from RENAMED_AGENT_IDS
+  // (agent-ids.ts) → the request's id stays 'general', `harness` runs fresh,
+  // `getOrBuildPatterns` is asked for the removed agent, and every assertion reddens.
+  it('continues a stored conversation when the request names the removed general agent', async () => {
+    claimSession.mockResolvedValue({ ...STORED, agentId: 'general-next' })
+
+    const result = await runTurnAndPersist(
+      interactive({ sessionId: 'sess-gen', agentId: 'general', message: 'and now?' }),
+    )
+
+    expect(harness).not.toHaveBeenCalled()
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-gen', 'general-next')
+    expect(result.response).toBe('continued:and now?')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-gen',
+      'user-1',
+      'general-next',
+      'ctx-a+and now?',
+      { version: 'v-claim', inferenceTier: 'anthropic', memoryRunOrigin: 'interactive' },
+    )
   })
 
   it('exposes the user + conversation to the run as ambient request scope', async () => {
@@ -973,6 +1000,22 @@ describe('triggered turns', () => {
       'run-1',
       'user-1',
       'sandbox',
+      'serialized:run-1',
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
+    )
+  })
+
+  // The removed `general` agent: a routine row or a device URL written before
+  // 2026-10-21 still names it, and runs under its successor rather than failing.
+  it('runs and persists a routine that names the removed general agent under general-next', async () => {
+    await runTurnAndPersist(triggered({ agentId: 'general' }))
+
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'general-next')
+    expect(saveSession).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'user-1',
+      'general-next',
       'serialized:run-1',
       { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )

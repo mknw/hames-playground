@@ -2,9 +2,11 @@
  * The preview deployment's agent-reachable tool surface, pinned at the one
  * place that decides it.
  *
- * `general` hands `tools.all` — every tool the MCP gateway lists — to a single
- * controller loop, so the gateway's enabled server set IS the tool surface a
- * signed-in colleague can reach. On the preview VM that set is narrowed by
+ * The removed `general` agent handed `tools.all` — every tool the MCP gateway
+ * lists — to a single controller loop, so the gateway's enabled server set WAS the
+ * tool surface a signed-in colleague could reach. Every agent now takes a namespace
+ * slice of that listing, which is still bounded by the set of servers the gateway
+ * enables. On the preview VM that set is narrowed by
  * `docker-compose.prod.yaml`, which replaces the base file's
  * `--enable-all-servers` with an explicit `--servers=` allow-list.
  *

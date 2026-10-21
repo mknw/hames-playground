@@ -756,6 +756,15 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-tls-directory-mount', 'within(file, resolved(v.source))', 'file === resolved(v.source)'),
         ('vm-tls-root-mount', 'directory === sep ? directory : directory + sep', 'directory + sep'),
         ('vm-missing-bind-source', 'return resolve(source); // A missing source cannot hold a TLS file.', 'throw new Error("missing");'),
+        # #731 review round 3 (R1): Compose bind-mounts secret and config files
+        # and local-driver volume devices too.
+        ('host-reach-secrets', '  "secrets",\n', ''),
+        ('host-reach-configs', '  "configs",\n', ''),
+        ('host-mounts-secret-files', '["secrets", "configs"].flatMap', '["configs"].flatMap'),
+        ('host-mounts-config-files', '["secrets", "configs"].flatMap', '["secrets"].flatMap'),
+        ('host-mounts-volume-device', 'return device ? [{ source: device, target: v.target }] : [];', 'return [];'),
+        ('socket-clone-host-mounts', '!hostMounts(config, app).some(', '!(app.volumes ?? []).filter((v) => v.type === "bind").some('),
+        ('vm-one-service-host-mounts', 'hostMounts(config, service).some(', '(service.volumes ?? []).filter((v) => v.type === "bind").some('),
     ]:
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)

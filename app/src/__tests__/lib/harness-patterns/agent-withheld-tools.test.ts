@@ -4,8 +4,8 @@ import '../../../lib/inference/config.server'
 /**
  * No agent is offered `write_neo4j_cypher`, whatever the gateway lists (#403).
  *
- * Owner decision, 2026-10-03: agents are read-only against Neo4j, the `general`
- * agent included; the one writer is the memory hook (#419), through the app.
+ * Owner decision, 2026-10-03: agents are read-only against Neo4j (the removed
+ * `general` agent included); the one writer is the memory hook (#419), through the app.
  *
  * Two layers. `configs/mcp-config.yaml` ships `read_only: true`, under which the
  * server does not list the write tool (pinned in
@@ -156,7 +156,7 @@ describe('the Neo4j write tool is withheld from agents', () => {
     const tools = await Tools({ namespaces: mcpNamespace })
 
     // `tools.neo4j` is what `search` and `retriever` hand their Neo4j loop;
-    // `tools.all` is what `general` hands its planner and its loop.
+    // `tools.all` is what the removed `general` agent handed its planner and its loop.
     expect(tools.neo4j).toEqual(['get_neo4j_schema', 'read_neo4j_cypher'])
     for (const [namespace, list] of Object.entries(tools) as [string, string[]][]) {
       expect(list, `${namespace} has ${WRITE}`).not.toContain(WRITE)

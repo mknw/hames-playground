@@ -281,6 +281,22 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     }
   })
 
+  it('refuses a host path behind a named volume on either app (a local-driver bind)', () => {
+    for (const service of ['app', 'app-dev'] as const) {
+      const config = Object.assign(configuration(), {
+        volumes: {
+          plain: {},
+          host: { driver: 'local', driver_opts: { type: 'none', o: 'bind', device: '/' } },
+        },
+      })
+      const volumes = config.services[service].volumes
+      volumes.push({ type: 'volume', source: 'plain', target: '/plain', read_only: false })
+      expect(() => validateClones(config), service).not.toThrow()
+      volumes.push({ type: 'volume', source: 'host', target: '/host', read_only: false })
+      expect(() => validateClones(config), service).toThrow(/bind mounts/)
+    }
+  })
+
   it('refuses a symlink to the same checkout and unresolved build contexts', () => {
     const config = configuration()
     const link = path.join(checkouts, 'release-link')
@@ -657,6 +673,9 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     ['cgroup', 'host'],
     ['devices', [{ source: '/dev/kvm', target: '/dev/kvm', permissions: 'rwm' }]],
     ['cap_add', ['SYS_ADMIN']],
+    // Compose bind-mounts the file behind a secret or config, a socket included.
+    ['secrets', [{ source: 'docker', target: '/var/run/docker.sock' }]],
+    ['configs', [{ source: 'docker', target: '/run/docker.sock' }]],
   ])('refuses %s on either app, VM or not', (key, value) => {
     for (const [name, onVm] of [
       ['app', false],
@@ -664,6 +683,10 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
       ['app-dev', true],
     ] as const) {
       const config = fresh()
+      Object.assign(config, {
+        secrets: { docker: { file: socketPath } },
+        configs: { docker: { file: socketPath } },
+      })
       const app = onVm ? vm(config, name) : (config.services[name] as unknown as Service)
       app[key] = value
       expect(() => validateClones(config), `${name} ${onVm}`).toThrow(/namespaces, devices/)
@@ -672,6 +695,16 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
 
   it('runs a VM clone as one service', () => {
     const devContext = path.join(checkouts, 'dev', 'app')
+    // Host paths a sidecar can mount without a bind volume.
+    const declarations = {
+      secrets: { key: { file: file('dev-client-key.pem') }, other: { file: file('absent') } },
+      configs: { key: { file: file('dev-client-key.pem') } },
+      volumes: {
+        tls: { driver: 'local', driver_opts: { type: 'none', o: 'bind', device: tls } },
+        checkouts: { driver: 'local', driver_opts: { type: 'none', o: 'bind', device: checkouts } },
+        plain: {},
+      },
+    }
     for (const sidecar of [
       { image: 'busybox', pid: 'service:app-dev' },
       { image: 'busybox', network_mode: 'service:app-dev' },
@@ -692,8 +725,11 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
         volumes: [{ type: 'bind', source: tls, target: '/tls', read_only: true }],
       },
       { image: 'busybox', volumes: [{ type: 'bind', source: '/', target: '/host' }] },
+      { image: 'busybox', secrets: [{ source: 'key', target: '/k' }] },
+      { image: 'busybox', configs: [{ source: 'key', target: '/k' }] },
+      { image: 'busybox', volumes: [{ type: 'volume', source: 'tls', target: '/tls' }] },
     ]) {
-      const config = fresh()
+      const config = Object.assign(fresh(), declarations)
       ;(vm(config, 'app-dev') as Service).container_name = 'hames-app-dev'
       Object.assign(config.services, { sidecar })
       expect(() => validateClones(config), JSON.stringify(sidecar)).toThrow(/one service/)
@@ -702,8 +738,16 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
       { image: 'busybox', pid: 'service:app' },
       { image: 'busybox', network_mode: 'container:hames-app' },
       { image: 'busybox', volumes: [{ type: 'bind', source: file('absent'), target: '/x' }] },
+      { image: 'busybox', secrets: [{ source: 'other', target: '/s' }] },
+      {
+        image: 'busybox',
+        volumes: [
+          { type: 'volume', source: 'checkouts', target: '/c' },
+          { type: 'volume', source: 'plain', target: '/p' },
+        ],
+      },
     ]) {
-      const config = fresh()
+      const config = Object.assign(fresh(), declarations)
       ;(config.services.app as unknown as Service).container_name = 'hames-app'
       vm(config, 'app-dev')
       Object.assign(config.services, { sidecar })

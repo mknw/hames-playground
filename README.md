@@ -240,7 +240,7 @@ as everything else. Prompts as code — not string soup.
 flowchart TB
     subgraph APP["app/ — SolidStart app, port 3444"]
         UI["Chat · Graph · Observability timeline"]
-        REG["Agent registry<br/>search · general · sandbox·session<br/>sandbox·flavoured · retriever · M365"]
+        REG["Agent registry<br/>search · general-next · sandbox<br/>retriever · M365"]
         UI --> REG
     end
 
@@ -330,7 +330,6 @@ overlaying an icon and an accent colour, in
 | Agent             | Composition                                                                                           | What it shows                                                                                                                                                                                                                       |
 | ----------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Search**        | `router` → `routes(withReferences(simpleLoop))` → `compactExecution`                                  | Classify into one namespace and dispatch — Neo4j or web search. The `web` route is injection-guarded, `neo4j` is not                                                                                                                |
-| **General**       | `planner` → `simpleLoop` → `compactExecution`                                                         | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions                                                                                          |
 | **Sandbox**       | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                                    | A container per session, persistent across turns: each message goes to the plain box (the one the interactive Shell opens), the data box or the office box, all over one durable workspace                                          |
 | **Retriever**     | `router` → `withInjectionGuard(routes(retriever \| withReferences(simpleLoop)))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web. The guard covers both untrusted routes — `web` and `retriever`, whose chunks come from ingested files — while `neo4j` stays unguarded |
 | **Microsoft 365** | `withInjectionGuard(simpleLoop)` → `compactExecution`                                                 | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                                                                                                         |

@@ -19,6 +19,7 @@
 
 import type { APIEvent } from '@solidjs/start/server'
 import { getAgent } from '../../../lib/harness-client/registry.server'
+import { unattendedIdAccepted } from '../../../lib/harness-client/agent-ids'
 import { bearerSecret, resolveActionUser } from '../../../lib/auth/action-tokens.server'
 import {
   seedActionRow,
@@ -40,7 +41,7 @@ export async function POST(event: APIEvent) {
   const agentId = event.params.id
 
   // 1. Unknown agent → 404, before doing anything else.
-  if (!getAgent(agentId)) {
+  if (!unattendedIdAccepted(agentId) || !getAgent(agentId)) {
     return json({ error: `Unknown agent: ${agentId}` }, 404)
   }
 

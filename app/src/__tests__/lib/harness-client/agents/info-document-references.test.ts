@@ -322,7 +322,7 @@ describe('R1 flow 4', () => {
       createRedisBackend: () => backend,
       pseudonymiseForWeb,
     } satisfies AgentDeps)
-    const result = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const result = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       composed.routes['info-retrieval'].pattern.fn(
         createScope('info', {}),
         createEventView(ctx, { fromLast: false }),

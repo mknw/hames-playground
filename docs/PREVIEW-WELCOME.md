@@ -46,7 +46,7 @@ We would rather over-explain this than have you assume something convenient.
 **By default, your messages stay on our own hardware.** The models answering
 you run on a GPU server we rent and control at a European provider, and in that
 default position no conversation content is sent to any external AI provider.
-The header carries a switch: flip it from **Private (Verda)** to **Anthropic**
+The header carries a switch: flip it from **Private** to **Anthropic**
 and your conversation is instead processed by Anthropic, the company behind the
 Claude models — sometimes worth it for answer quality, and your choice per
 conversation. Whichever position you use, anything the assistant reads on your

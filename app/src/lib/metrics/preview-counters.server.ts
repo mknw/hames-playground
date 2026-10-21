@@ -50,6 +50,7 @@
  * that fails is logged and dropped rather than failing anyone's turn (see
  * `usage-recorder.server.ts`), so treat these as "at most what was spent".
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from '../db/client.server'
 import type { InferenceTier } from '../inference/config.server'
@@ -129,7 +130,7 @@ export async function addUsage(delta: UsageDelta, now: number = Date.now()): Pro
   )
 }
 
-/** Today's totals, and the Verda share of them. */
+/** Today's totals, and the self-deployed share of them. */
 export interface UsageToday {
   /** input + output tokens across every tier. */
   totalTokens: number
@@ -139,7 +140,7 @@ export interface UsageToday {
   /** Share of today's LLM calls that ran on the self-hosted box, 0–1. `null`
    *  when there were no calls at all: 0% would read as "we used none of it"
    *  rather than "nothing has happened yet". */
-  verdaCallShare: number | null
+  selfDeployedCallShare: number | null
 }
 
 /** A row as the counter table stores it — `BIGINT` arrives from `pg` as a
@@ -161,18 +162,19 @@ export function foldUsageRows(rows: CounterRow[]): UsageToday {
   let totalTokens = 0
   let llmCalls = 0
   let turns = 0
-  let verdaCalls = 0
+  let selfDeployedCalls = 0
   for (const row of rows) {
     totalTokens += num(row.input_tokens) + num(row.output_tokens)
     llmCalls += num(row.llm_calls)
     turns += num(row.turns)
-    if (row.tier === 'verda') verdaCalls += num(row.llm_calls)
+    if (normalizeStoredInferenceTier(row.tier) === 'self_deployed')
+      selfDeployedCalls += num(row.llm_calls)
   }
   return {
     totalTokens,
     llmCalls,
     turns,
-    verdaCallShare: llmCalls > 0 ? verdaCalls / llmCalls : null,
+    selfDeployedCallShare: llmCalls > 0 ? selfDeployedCalls / llmCalls : null,
   }
 }
 

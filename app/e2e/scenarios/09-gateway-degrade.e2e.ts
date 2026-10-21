@@ -69,7 +69,7 @@ afterAll(async () => {
 beforeEach(async () => {
   app.fakeLlm.reset()
   app.fakeGateway.reset()
-  await app.setTier('verda')
+  await app.setTier('self_deployed')
 })
 
 /** Does anything the user can see mention that the tools were unavailable? */

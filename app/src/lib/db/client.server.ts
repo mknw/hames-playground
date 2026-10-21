@@ -82,7 +82,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS conversations_user_kind_updated_idx
     ON conversations (user_id, kind, updated_at DESC);
 
-  -- Which inference tier this conversation's turns run on ('verda' | 'anthropic').
+  -- Which inference tier this conversation's turns run on ('self_deployed' | 'anthropic').
   -- A lifted enum like kind/source/status, and plaintext for the same reason:
   -- it is scoped/filtered in SQL and says nothing about what was said. See the
   -- doctrine in \`crypto.server.ts\`; \`encryption-coverage.test.ts\` pins it.

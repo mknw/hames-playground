@@ -55,10 +55,10 @@ export async function routeMessageOp(
   const validRoutes = new Set(routes.map((r) => r.name))
 
   // `router.baml` declares `RouterAnthropic` (Haiku 4.5 primary, Sonnet 4.6
-  // backstop). A verda-tier run overrides that per call: the router is handed
+  // backstop). A self_deployed-tier run overrides that per call: the router is handed
   // the user's raw message, which is the payload the private tier is least
   // entitled to send off the box (2026-08-26 owner decision — see
-  // `VERDA_CLIENT_BY_ROLE`).
+  // `SELF_DEPLOYED_CLIENT_BY_ROLE`).
   const routerOpts = { ...clientOverrideFor('router'), collector }
   const variables = { message, routes, history }
   // Wrap like every other adapter does: the router is the FIRST LLM call of a

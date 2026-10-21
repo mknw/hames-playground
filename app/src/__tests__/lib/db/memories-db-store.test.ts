@@ -80,14 +80,14 @@ async function conv(userId: string): Promise<string> {
 async function memorySourcedFrom(
   userId: string,
   convIds: string[],
-  extra: { embedding?: number[]; tier?: 'verda' | 'anthropic'; content?: string } = {},
+  extra: { embedding?: number[]; tier?: 'self_deployed' | 'anthropic'; content?: string } = {},
 ): Promise<string> {
   const mid = id('mem')
   await insertMemory({
     id: mid,
     userId,
     kind: 'semantic',
-    tier: extra.tier ?? 'verda',
+    tier: extra.tier ?? 'self_deployed',
     content: extra.content ?? 'synthetic fact about a synthetic user',
     evidence: 'synthetic quote',
     evidenceEventId: id('evidence-event'),
@@ -259,7 +259,7 @@ describe('#531: conversation delete erases the memories that ever drew on it', (
         await tx.insert({
           id: ghost,
           kind: 'semantic',
-          tier: 'verda',
+          tier: 'self_deployed',
           content: 'synthetic ghost',
           evidence: 'synthetic ghost',
           evidenceEventId: id('evidence-event'),
@@ -332,37 +332,37 @@ describe('recall store (MemoryStore)', () => {
     const cb = await conv(BOB)
     const same = await memorySourcedFrom(ALICE, [c], {
       embedding: axis(3),
-      content: 'alice verda same-axis',
+      content: 'alice self_deployed same-axis',
     })
     const other = await memorySourcedFrom(ALICE, [c], {
       embedding: axis(4),
-      content: 'alice verda other-axis',
+      content: 'alice self_deployed other-axis',
     })
-    const verdaCount = await createMemoryDbStore(ALICE).count(['verda'])
+    const selfDeployedCount = await createMemoryDbStore(ALICE).count(['self_deployed'])
     const anth = await memorySourcedFrom(ALICE, [c], { tier: 'anthropic', embedding: axis(3) })
-    expect(await createMemoryDbStore(ALICE).count(['verda'])).toBe(verdaCount)
+    expect(await createMemoryDbStore(ALICE).count(['self_deployed'])).toBe(selfDeployedCount)
     const bobs = await memorySourcedFrom(BOB, [cb], { embedding: axis(3) })
 
     const store = createMemoryDbStore(ALICE)
-    const base = await store.count(['verda'])
+    const base = await store.count(['self_deployed'])
     expect(base).toBeGreaterThanOrEqual(2)
     expect(await store.count(['anthropic'])).toBeGreaterThanOrEqual(1)
     expect(await store.count([])).toBe(0)
 
-    const rows = await store.candidates({ embedding: axis(3), tiers: ['verda'] })
+    const rows = await store.candidates({ embedding: axis(3), tiers: ['self_deployed'] })
     const byId = new Map(rows.map((r) => [r.id, r]))
     expect(byId.has(bobs)).toBe(false) // owner scope
     expect(byId.has(anth)).toBe(false) // tier filter
     expect(byId.get(same)!.distance).toBeCloseTo(0, 6)
     expect(byId.get(other)!.distance).toBeCloseTo(1, 6)
-    expect(byId.get(same)!.content).toBe('alice verda same-axis') // decrypted
+    expect(byId.get(same)!.content).toBe('alice self_deployed same-axis') // decrypted
     expect(byId.get(same)!.embedSpace).toBe(SPACE)
-    expect(byId.get(same)!.tier).toBe('verda')
+    expect(byId.get(same)!.tier).toBe('self_deployed')
 
     // Bob's store sees Bob's row and none of Alice's.
     const bobRows = await createMemoryDbStore(BOB).candidates({
       embedding: axis(3),
-      tiers: ['verda'],
+      tiers: ['self_deployed'],
     })
     expect(bobRows.map((r) => r.id)).toContain(bobs)
     expect(bobRows.map((r) => r.id)).not.toContain(same)
@@ -404,7 +404,7 @@ describe('write store (MemoryWriteStore)', () => {
         await tx.insert({
           id: id('mem'),
           kind: 'semantic',
-          tier: 'verda',
+          tier: 'self_deployed',
           content: 'must not be written',
           evidence: 'x',
           evidenceEventId: id('evidence-event'),
@@ -427,7 +427,7 @@ describe('write store (MemoryWriteStore)', () => {
       const row = (mid: string) => ({
         id: mid,
         kind: 'semantic' as const,
-        tier: 'verda',
+        tier: 'self_deployed',
         content: 'synthetic',
         evidence: 'synthetic',
         evidenceEventId: id('evidence-event'),
@@ -473,11 +473,15 @@ describe('write store (MemoryWriteStore)', () => {
     const bobs = await memorySourcedFrom(BOB, [cb], { embedding: axis(7) })
     const store = createMemoryDbStore(owner)
     await store.transaction(async (tx) => {
-      const near = await tx.nearest({ embedding: axis(7), embedSpace: SPACE, tier: 'verda' })
+      const near = await tx.nearest({
+        embedding: axis(7),
+        embedSpace: SPACE,
+        tier: 'self_deployed',
+      })
       expect(near?.id).toBe(mine)
       expect(near?.similarity).toBeCloseTo(1, 6)
       expect(
-        await tx.nearest({ embedding: axis(7), embedSpace: 'other-space', tier: 'verda' }),
+        await tx.nearest({ embedding: axis(7), embedSpace: 'other-space', tier: 'self_deployed' }),
       ).toBeNull()
       expect(
         await tx.nearest({ embedding: axis(7), embedSpace: SPACE, tier: 'anthropic' }),
@@ -510,7 +514,7 @@ describe('write store (MemoryWriteStore)', () => {
       await tx.insert({
         id: mid,
         kind: 'preference',
-        tier: 'verda',
+        tier: 'self_deployed',
         content: 'first',
         evidence: 'first quote',
         embedding: axis(9),
@@ -559,7 +563,7 @@ describe('write store (MemoryWriteStore)', () => {
         await tx.insert({
           id: mid,
           kind: 'semantic',
-          tier: 'verda',
+          tier: 'self_deployed',
           content: 'x',
           evidence: 'x',
           evidenceEventId: id('evidence-event'),
@@ -581,7 +585,7 @@ describe('write store (MemoryWriteStore)', () => {
       tx.insert({
         id: mid,
         kind: 'semantic',
-        tier: 'verda',
+        tier: 'self_deployed',
         content: 'plain synthetic sentence',
         evidence: 'plain synthetic quote',
         evidenceEventId: id('evidence-event'),
@@ -843,7 +847,9 @@ describe('M5c source-derived load repair on real stores', () => {
     expect(await reconcileMemoryReferences(blob, b, BOB)).toBe(blob)
     const repaired = await reconcileMemoryReferences(blob, b, ALICE)
     expect(deserializeContext(repaired).events.filter((e) => e.type === 'memory_written')).toEqual([
-      expect.objectContaining({ data: expect.objectContaining({ memoryId: mid, tier: 'verda' }) }),
+      expect.objectContaining({
+        data: expect.objectContaining({ memoryId: mid, tier: 'self_deployed' }),
+      }),
     ])
     expect(await reconcileMemoryReferences(repaired, b, ALICE)).toBe(repaired)
     await deleteConversation(a, ALICE)
@@ -874,7 +880,7 @@ describe('#552: forget-all shares the candidate owner lock', () => {
       await tx.insert({
         id: mid,
         kind: 'preference',
-        tier: 'verda',
+        tier: 'self_deployed',
         content: 'The user prefers metric units.',
         evidence: 'I prefer metric units',
         evidenceEventId: id('evidence'),
@@ -973,7 +979,7 @@ describe('M7: panel data, access export and per-row Forget', () => {
     expect(exported.every((m) => m.user_id === ALICE)).toBe(true)
     expect(exported.find((m) => m.id === privateMemory)).toMatchObject({
       content: 'Synthetic private preference',
-      tier: 'verda',
+      tier: 'self_deployed',
       sources: [expect.objectContaining({ conversation_id: a })],
     })
     expect(exported.find((m) => m.id === publicMemory)).toMatchObject({

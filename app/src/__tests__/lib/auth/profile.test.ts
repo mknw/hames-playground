@@ -46,12 +46,14 @@ vi.mock('../../../lib/auth/users.server', () => ({
   getUser: (id: string) => getUser(id),
 }))
 
-const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>()
+const getStoredInferenceTier =
+  vi.fn<(id: string) => Promise<'self_deployed' | 'anthropic' | null>>()
 vi.mock('../../../lib/db/user-prefs.server', () => ({
   getStoredInferenceTier: (id: string) => getStoredInferenceTier(id),
 }))
 
-const resolveTier = vi.fn<(conv: string | null, seed: string | null) => 'verda' | 'anthropic'>()
+const resolveTier =
+  vi.fn<(conv: string | null, seed: string | null) => 'self_deployed' | 'anthropic'>()
 vi.mock('../../../lib/inference/tier.server', () => ({
   resolveTier: (conv: string | null, seed: string | null) => resolveTier(conv, seed),
 }))
@@ -77,8 +79,8 @@ beforeEach(() => {
     displayName: 'Session Name',
   })
   getUser.mockResolvedValue(row())
-  getStoredInferenceTier.mockResolvedValue('verda')
-  resolveTier.mockReturnValue('verda')
+  getStoredInferenceTier.mockResolvedValue('self_deployed')
+  resolveTier.mockReturnValue('self_deployed')
 })
 
 describe('getProfile', () => {
@@ -99,7 +101,7 @@ describe('getProfile', () => {
       displayName: 'Stored Name',
       firstLogin: Date.UTC(2026, 0, 2, 3, 4, 5),
       lastLogin: Date.UTC(2026, 7, 26, 9, 0, 0),
-      tier: 'verda',
+      tier: 'self_deployed',
     })
   })
 
@@ -111,7 +113,7 @@ describe('getProfile', () => {
     await expect(getProfile()).resolves.toMatchObject({ tier: 'anthropic' })
     // No conversation to ask about on this page, so the seed is the whole
     // question — passing one would make this a claim about a thread.
-    expect(resolveTier).toHaveBeenCalledWith(null, 'verda')
+    expect(resolveTier).toHaveBeenCalledWith(null, 'self_deployed')
   })
 
   it('falls back to the session snapshot when there is no users row', async () => {
@@ -122,7 +124,7 @@ describe('getProfile', () => {
       displayName: 'Session Name',
       firstLogin: null,
       lastLogin: null,
-      tier: 'verda',
+      tier: 'self_deployed',
     })
   })
 

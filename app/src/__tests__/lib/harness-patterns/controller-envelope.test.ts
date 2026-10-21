@@ -11,8 +11,8 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
 }
 let b: typeof import('@hames-ai/harness-baml/baml_client').b
 beforeAll(async () => {
@@ -71,7 +71,7 @@ it('keeps the shared ControllerAction.tool_args description free of Return', () 
   expect(description).not.toContain('Return')
 })
 
-describe.each(['AnthropicSonnet5', 'VerdaQwen'])('Return contract (%s wire)', (client) => {
+describe.each(['AnthropicSonnet5', 'LargeQwen'])('Return contract (%s wire)', (client) => {
   it('puts the plain-prose instruction only in the loop prompt', async () => {
     const options = { client, env: ENV }
     const actor = (

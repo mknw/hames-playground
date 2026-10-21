@@ -27,10 +27,10 @@ const MESSAGE = 'help with my usual units'
 const BLOCK = '- [preference] MEMTOKEN-7731 prefers metric units'
 const ROUTES = [{ name: 'search', description: 'web search' }]
 const OFFLINE = {
-  client: 'VerdaQwen',
+  client: 'LargeQwen',
   env: {
-    VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-    VERDA_INFERENCE_API_KEY: 'offline-test',
+    LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+    LARGE_LLM_API_KEY: 'offline-test',
   },
 }
 
@@ -72,7 +72,7 @@ let replyBodies: unknown[]
 let toolNeeded = true
 let replyText = 'synthetic reply'
 beforeEach(() => {
-  vi.stubEnv('USE_VERDA_INFERENCE', '')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '')
   routerBodies = []
   replyBodies = []
   toolNeeded = true

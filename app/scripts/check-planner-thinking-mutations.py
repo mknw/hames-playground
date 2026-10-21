@@ -19,13 +19,13 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 ENV = {**os.environ, 'CI': '1', 'TEST_DATABASE_URL': 'postgresql://x:x@127.0.0.1:59999/x', 'BAML_LOG': 'off',
-       'VERDA_INFERENCE_ENDPOINT': 'http://127.0.0.1:59998/v1',
-       'VERDA_INFERENCE_API_KEY': 'mutation-synthetic-key'}
+       'LARGE_LLM_BASE_URL': 'http://127.0.0.1:59998/v1',
+       'LARGE_LLM_API_KEY': 'mutation-synthetic-key'}
 ADAPTER = 'packages/harness-baml/baml-adapters.server.ts'
 CLIENTS = 'packages/harness-baml/clients.server.ts'
 PLANNER = 'packages/harness-patterns/patterns/planner.server.ts'
 SETTINGS = 'app/src/lib/settings.ts'
-VERDA = 'packages/harness-baml/baml_src/verda-client.baml'
+SELF_DEPLOYED = 'packages/harness-baml/baml_src/large-client.baml'
 CONFIG = 'app/src/lib/inference/config.server.ts'
 RENDER = 'src/__tests__/lib/harness-baml/planner-thinking-render.test.ts'
 WIRE = 'src/__tests__/lib/harness-baml/planner-thinking.test.ts'
@@ -37,18 +37,18 @@ def add(name, file, old, new, test=WIRE, generate=False, count=1):
 
 
 # Author's 25 mutations, including the separately reported cap-hit trigger.
-add('A01-thinking-flag', VERDA, 'enable_thinking true', 'enable_thinking false', RENDER, True)
-add('A02-sampling', VERDA, 'temperature 1.0', 'temperature 0.2', RENDER, True)
-add('A03-endpoint', VERDA, 'client<llm> VerdaQwenThink {\n  provider openai-generic\n  options {\n    base_url env.VERDA_INFERENCE_ENDPOINT', 'client<llm> VerdaQwenThink {\n  provider openai-generic\n  options {\n    base_url "https://example.invalid/other/v1"', RENDER, True)
-add('A04-cache-metadata', VERDA, 'client<llm> VerdaQwenThink {\n  provider openai-generic\n  options {', 'client<llm> VerdaQwenThink {\n  provider openai-generic\n  options {\n    allowed_role_metadata ["cache_control"]', RENDER, True)
+add('A01-thinking-flag', SELF_DEPLOYED, 'enable_thinking true', 'enable_thinking false', RENDER, True)
+add('A02-sampling', SELF_DEPLOYED, 'temperature 1.0', 'temperature 0.2', RENDER, True)
+add('A03-endpoint', SELF_DEPLOYED, 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    base_url env.LARGE_LLM_BASE_URL', 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    base_url "https://example.invalid/other/v1"', RENDER, True)
+add('A04-cache-metadata', SELF_DEPLOYED, 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {', 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    allowed_role_metadata ["cache_control"]', RENDER, True)
 add('A05-prompt-drift', 'packages/harness-baml/baml_src/planner.baml', '{{ PlannerBody(user_message, intent, tools, context, false) }}', 'DRIFT {{ PlannerBody(user_message, intent, tools, context, false) }}', RENDER, True)
-add('A06-timeout', VERDA, '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 180000', '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 120000', RENDER, True)
-add('A07-cap-mirror', SETTINGS, '  VerdaQwenThink: 4_096,', '  VerdaQwenThink: 8_192,', 'src/__tests__/lib/client-output-caps.test.ts')
+add('A06-timeout', SELF_DEPLOYED, '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 180000', '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 120000', RENDER, True)
+add('A07-cap-mirror', SETTINGS, '  LargeQwenThink: 4_096,', '  LargeQwenThink: 8_192,', 'src/__tests__/lib/client-output-caps.test.ts')
 add('A08-selected-leaf', ADAPTER, "if (!THINKING_CLIENTS.has(selected?.clientName ?? '')) {", 'if (false) {', 'src/__tests__/lib/harness-patterns/baml-adapters.test.ts')
 add('A09-full-trace', ADAPTER, "reasoning: trace.kind === 'trace' ? trace.text : ''", "reasoning: ''")
 add('A10-parser-policy', ADAPTER, 'if (split?.closed) {', 'if (false) {')
 add('A11-last-delimiter', 'packages/harness-baml/thinking-trace.ts', 'raw.lastIndexOf(THINK_CLOSE)', 'raw.indexOf(THINK_CLOSE)')
-add('A12-retry-thinking-again', ADAPTER, 'const retryClient = VERDA_CLIENT_BY_ROLE.planner', "const retryClient = 'VerdaQwenThink'")
+add('A12-retry-thinking-again', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'LargeQwenThink'")
 add('A13-warning-type', PLANNER, "            'warning',", "            'error',")
 add('A14-private-accounting', CLIENTS, '  ...THINKING_CLIENTS,', '', 'src/__tests__/lib/metrics/usage-recorder.test.ts')
 add('A15-default-cap', PLANNER, 'DEFAULT_MAX_REASONING_CHARS = 2000', 'DEFAULT_MAX_REASONING_CHARS = 5000')
@@ -57,10 +57,10 @@ add('A17-full-event-trace', PLANNER, 'plan: recordedPlan,', 'plan,')
 add('A18-missing-trace-warning', ADAPTER, "if (trace.kind !== 'trace') warning = 'no thinking trace'", '// missing trace silently accepted')
 add('A19-fake-inventory', 'app/e2e/lib/baml-functions.ts', "  ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],", '', RENDER)
 add('A20-classifier', 'app/e2e/lib/baml-functions.ts', "schema.includes('reasoning: string')", "schema.includes('never-present-discriminator')", 'classifier')
-add('A21-private-tier', CLIENTS, "(!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')", "(!THINKING_ROLES.has(role))")
-add('A22-runtime-price', CONFIG, '    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, verdaEurPerHour])),', '')
+add('A21-private-tier', CLIENTS, "(!THINKING_ROLES.has(role) || activeInferenceTier() !== 'self_deployed')", "(!THINKING_ROLES.has(role))")
+add('A22-runtime-price', CONFIG, '    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, largeEurPerHour])),', '')
 add('A23-warm-clock', 'app/src/lib/metrics/usage-recorder.server.ts', " || THINKING_CLIENTS.has(sample.clientName ?? '')", '', 'src/__tests__/lib/metrics/usage-recorder.test.ts')
-add('A24-switched-function', CLIENTS, "planner: ['Planner', 'PlannerThinking']", "planner: ['Planner']", 'src/__tests__/lib/harness-patterns/clients-verda.test.ts')
+add('A24-switched-function', CLIENTS, "planner: ['Planner', 'PlannerThinking']", "planner: ['Planner']", 'src/__tests__/lib/harness-patterns/clients-self-deployed.test.ts')
 add('A25-cap-hit-trigger', ADAPTER, '(noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))', 'noAnswer')
 # Codex's two extra cap mutations, plus discriminators for both numbered findings.
 add('C-cap-plan-slice', PLANNER, 'raw.plan.slice(0, maxPlanChars)', 'raw.plan', 'src/__tests__/lib/harness-patterns/patterns/planner.test.ts')
@@ -70,8 +70,8 @@ add('C1-credentials', ADAPTER, 'headers: Object.entries(request.headers)', 'head
 add('C1-model', ADAPTER, 'model: (request.body.json() as { model?: string }).model,', '')
 add('C2-terminal-trace', ADAPTER, "if (trace?.kind === 'trace') error.llmCall.parsedOutput = { reasoning: trace.text }", '// discard diagnostic trace')
 # Opus's five red mutations and the two formerly surviving live clauses.
-add('O-context-window', SETTINGS, '  VerdaQwenThink: 131_072,', '  RemovedThink: 131_072,', RENDER)
-add('O-time-rate', SETTINGS, '  VerdaQwenThink: DEFAULT_VERDA_EUR_PER_HOUR,', '  RemovedThink: DEFAULT_VERDA_EUR_PER_HOUR,', RENDER)
+add('O-context-window', SETTINGS, '  LargeQwenThink: 131_072,', '  RemovedThink: 131_072,', RENDER)
+add('O-time-rate', SETTINGS, '  LargeQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', '  RemovedThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', RENDER)
 add('O-reused-collector', ADAPTER, "const retryCollector = new Collector('Planner')", 'const retryCollector = collector')
 add('O-undefined-attempt', ADAPTER, 'onRetry?.(failedCall)', 'onRetry?.(undefined)')
 add('O-truncated-flag', PLANNER, '...(reasoningTruncated ? { reasoningTruncated: true } : {}),', '')
@@ -79,12 +79,12 @@ add('O-M4-original-selected-leaf', ADAPTER, "if (THINKING_CLIENTS.has(selectedCa
 add('O-M9-override-bag', ADAPTER, 'const retryOpts = { ...override, collector: retryCollector, client: retryClient }', 'const retryOpts = { collector: retryCollector, client: retryClient }')
 add('O-no-answer-message', ADAPTER, "throw new Error('PlannerThinking returned no answer')", "throw new Error('different no-answer message')")
 # New pins for Opus 1, 3, 4 and 5 (both override branches + pure resolver).
-add('O1-role-guard', CLIENTS, "(!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')", "(activeInferenceTier() !== 'verda')")
+add('O1-role-guard', CLIENTS, "(!THINKING_ROLES.has(role) || activeInferenceTier() !== 'self_deployed')", "(activeInferenceTier() !== 'self_deployed')")
 add('O1-seam-guard', CLIENTS, '    assertThinkingOverride(role,', '    // assertThinkingOverride(role,', count=3)
 add('O1-per-run', CLIENTS, '    assertThinkingOverride(role, perRun)', '    // assertThinkingOverride(role, perRun)')
 add('O1-consumer', CLIENTS, '    assertThinkingOverride(role, consumerBag)', '    // assertThinkingOverride(role, consumerBag)')
 add('O1-resolver', CLIENTS, '    assertThinkingOverride(role, bag)', '    // assertThinkingOverride(role, bag)')
-add('O3-role-map', ADAPTER, 'const retryClient = VERDA_CLIENT_BY_ROLE.planner', "const retryClient = 'VerdaQwen'")
+add('O3-role-map', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'LargeQwen'")
 add('O3-retry-selected-leaf', ADAPTER, 'if (selectedCall(retryCollector)?.clientName !== retryClient) {', 'if (false) {')
 add('O4-missing-trace-reject', ADAPTER, "if (trace.kind !== 'trace') warning = 'no thinking trace'", "if (trace.kind !== 'trace') throw new Error('no thinking trace')")
 add('O4-pattern-warning', PLANNER, '      if (warning) {', '      if (false) {')
@@ -111,7 +111,7 @@ import fs from 'node:fs'
 import {{ classifyPrompt, promptText }} from '{ROOT}/app/e2e/lib/baml-functions.ts'
 const bodies = JSON.parse(fs.readFileSync('{ROOT}/app/src/__tests__/lib/harness-patterns/fixtures/controller-prompts-625-s2.json', 'utf8'))
 for (const scenario of ['first', 'context']) {{
-  const original = bodies[`Planner/${{scenario}}/VerdaQwen`]
+  const original = bodies[`Planner/${{scenario}}/LargeQwen`]
   const twin = original.replace(', and never more than a short paragraph of reasoning', '').replace('  // Why this approach was chosen\\\\n  reasoning: string,\\\\n', '')
   assert.equal(classifyPrompt(promptText(JSON.parse(original).messages)), 'Planner')
   assert.equal(classifyPrompt('CONTEXT reasoning: string\\n' + promptText(JSON.parse(twin).messages)), 'PlannerThinking')

@@ -12,7 +12,7 @@ const row = (
   agent: string,
   scenario: string,
   status: ConversationResult['status'] = 'pass',
-): ConversationResult => ({ agent, scenario, status, tier: 'verda', checks: [] })
+): ConversationResult => ({ agent, scenario, status, tier: 'self_deployed', checks: [] })
 const rows = [
   row('general-next', 'must'),
   row('general', 'baseline'),

@@ -1,7 +1,7 @@
 """The private tier's capable model on Modal: Qwen3.8-27B-FP8, one scale-to-zero GPU container.
 
-The app's `VerdaQwen` client (packages/harness-baml/baml_src/verda-client.baml)
-reaches this over VERDA_INFERENCE_ENDPOINT, so switching the private tier's
+The app's `LargeQwen` client (packages/harness-baml/baml_src/large-client.baml)
+reaches this over LARGE_LLM_BASE_URL, so switching the private tier's
 capable model between hosts is an env change, never a code change. What the
 client depends on is reproduced exactly: the model name it sends (vLLM enforces
 it), a 131072-token window (mirrored app-side in MODEL_CONTEXT_WINDOWS), and an
@@ -56,7 +56,7 @@ COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")
 ROUTING_REGION = _env("HAMES_MODAL_ROUTING_REGION")
 APP_NAME = _env("HAMES_MODAL_27B_APP_NAME", "hames-private-27b")
 # Level-1 sleep moves the ~31 GB of weights to CPU RAM before the snapshot,
-# hence the memory. 300 s idle matches the app's VERDA_SCALEDOWN_SECONDS
+# hence the memory. 300 s idle matches the app's LARGE_LLM_SCALEDOWN_SECONDS
 # default, which the cold-start estimate reads.
 QWEN27B_GPU = _env("HAMES_MODAL_27B_GPU", "H100!")  # "!": no silent H200 substitution
 QWEN27B_CPU = float(_env("HAMES_MODAL_27B_CPU", "4"))
@@ -156,7 +156,7 @@ QWEN27B_FILES_SHA256 = {
     "layers-63.safetensors": "59ba4a3af5e6bc2008c2d6b5d9be8eeaf255cddc0aaf8a0d9583b496bb2e3ae0",
 }
 
-# The name on the wire: what `VerdaQwen` sends, served under exactly that alias.
+# The name on the wire: what `LargeQwen` sends, served under exactly that alias.
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 QWEN27B_DIR = MODELS_DIR / "qwen27b"
 QWEN27B_MAX_MODEL_LEN = 131072

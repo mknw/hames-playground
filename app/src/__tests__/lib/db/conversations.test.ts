@@ -48,6 +48,7 @@ import {
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 import { setStoredInferenceTier } from '../../../lib/db/user-prefs.server'
+import { normalizeStoredInferenceTier } from '../../../lib/inference/tier-value'
 
 const TEST_USER = `test-user-${Math.random().toString(36).slice(2, 10)}`
 
@@ -547,7 +548,7 @@ describe('the turn claim and the versioned save', () => {
 
     await setConversationPinned(id, TEST_USER, true)
     await shareConversation(id, TEST_USER)
-    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    await setConversationInferenceTier(id, TEST_USER, 'self_deployed')
     await updateConversationTitle(id, TEST_USER, 'A better title')
 
     await expect(
@@ -968,7 +969,7 @@ describe('inference_tier (the per-conversation switch)', () => {
       agentId: 'search',
       title: 't',
       serializedContext: '{"turn":1}',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
     })
     // The user flips mid-conversation…
     await setConversationInferenceTier(id, TEST_USER, 'anthropic')
@@ -981,7 +982,7 @@ describe('inference_tier (the per-conversation switch)', () => {
       agentId: 'search',
       title: 't',
       serializedContext: '{"turn":2}',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
     })
     expect(await getConversationInferenceTier(id, TEST_USER)).toBe('anthropic')
   })
@@ -1007,9 +1008,9 @@ describe('inference_tier (the per-conversation switch)', () => {
       agentId: 'search',
       title: 'triggered',
       serializedContext: '{"done":true}',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
     })
-    expect(await getConversationInferenceTier(id, TEST_USER)).toBe('verda')
+    expect(await getConversationInferenceTier(id, TEST_USER)).toBe('self_deployed')
   })
 
   it('setConversationInferenceTier is scoped to the owner and reads back on the list', async () => {
@@ -1025,14 +1026,14 @@ describe('inference_tier (the per-conversation switch)', () => {
 
     // Someone else's write must change nothing — a wrong userId re-routing a
     // conversation is the failure this scoping exists to prevent.
-    await setConversationInferenceTier(id, `${TEST_USER}-other`, 'verda')
+    await setConversationInferenceTier(id, `${TEST_USER}-other`, 'self_deployed')
     expect(await getConversationInferenceTier(id, TEST_USER)).toBe('anthropic')
     // …and it must not leak the row to the wrong reader either.
     expect(await getConversationInferenceTier(id, `${TEST_USER}-other`)).toBeNull()
 
-    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    await setConversationInferenceTier(id, TEST_USER, 'self_deployed')
     const listed = (await listConversations(TEST_USER)).find((r) => r.id === id)
-    expect(listed!.inferenceTier).toBe('verda')
+    expect(listed!.inferenceTier).toBe('self_deployed')
   })
 
   it('does NOT bump updated_at — choosing a tier is not chat activity', async () => {
@@ -1047,7 +1048,7 @@ describe('inference_tier (the per-conversation switch)', () => {
       serializedContext: '{}',
     })
     const before = (await loadConversation(id, TEST_USER))!.updatedAt
-    await setConversationInferenceTier(id, TEST_USER, 'verda')
+    await setConversationInferenceTier(id, TEST_USER, 'self_deployed')
     expect((await loadConversation(id, TEST_USER))!.updatedAt).toEqual(before)
   })
 })
@@ -1064,7 +1065,7 @@ describe('backfillConversationInferenceTier', () => {
     const base = { agentId: 'search', title: 't', serializedContext: '{}' }
 
     await seedRow({ id: untiered, userId: withPref, ...base })
-    await seedRow({ id: alreadyTiered, userId: withPref, ...base, inferenceTier: 'verda' })
+    await seedRow({ id: alreadyTiered, userId: withPref, ...base, inferenceTier: 'self_deployed' })
     await seedRow({ id: foreign, userId: noPref, ...base })
     // Through the repository that owns the table, so this does not depend on
     // `user_prefs` already existing — it bootstraps its own schema, exactly as
@@ -1080,7 +1081,7 @@ describe('backfillConversationInferenceTier', () => {
       // A recorded choice is a FACT about the runs that already happened.
       expect(await getConversationInferenceTier(untiered, withPref)).toBe('anthropic')
       // An existing tier is never overwritten…
-      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('verda')
+      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('self_deployed')
       // …and a user who never chose gets nothing written: their turns ran on
       // `defaultInferenceTier()`, which is host state read per turn, so
       // materialising today's answer would claim a routing nobody observed.
@@ -1089,10 +1090,42 @@ describe('backfillConversationInferenceTier', () => {
       // Idempotent: running it again changes nothing.
       await backfillConversationInferenceTier(run)
       expect(await getConversationInferenceTier(untiered, withPref)).toBe('anthropic')
-      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('verda')
+      expect(await getConversationInferenceTier(alreadyTiered, withPref)).toBe('self_deployed')
     } finally {
       await query('DELETE FROM conversations WHERE user_id = ANY($1)', [[withPref, noPref]])
       await query('DELETE FROM user_prefs WHERE user_id = $1', [withPref])
+    }
+  })
+
+  it('copies a recorded preference that still carries the pre-rename spelling', async () => {
+    // DB-only mutation: drop 'verda' from the backfill's IN list — the row stays untiered
+    // while its owner's recorded choice was the private tier.
+    const legacyPref = `${TEST_USER}-legacy-pref`
+    const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
+    await seedRow({
+      id: untiered,
+      userId: legacyPref,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+    })
+    await setStoredInferenceTier(legacyPref, 'anthropic')
+    await query('UPDATE user_prefs SET inference_tier = $1 WHERE user_id = $2', [
+      'verda',
+      legacyPref,
+    ])
+
+    try {
+      await backfillConversationInferenceTier((text: string, params?: unknown[]) =>
+        query(text, params),
+      )
+
+      expect(
+        normalizeStoredInferenceTier(await getConversationInferenceTier(untiered, legacyPref)),
+      ).toBe('self_deployed')
+    } finally {
+      await query('DELETE FROM conversations WHERE user_id = $1', [legacyPref])
+      await query('DELETE FROM user_prefs WHERE user_id = $1', [legacyPref])
     }
   })
 
@@ -1107,7 +1140,7 @@ describe('backfillConversationInferenceTier', () => {
     //
     // The column is deliberately un-CONSTRAINED plaintext (a lifted enum, like
     // `kind`/`source`/`status`), so nothing below this statement rejects such a
-    // value — which is why the `IN ('verda','anthropic')` filter is the control
+    // value — which is why the `IN ('self_deployed','anthropic')` filter is the control
     // and why it needs a test of its own.
     const unknownPref = `${TEST_USER}-unknown-pref`
     const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`

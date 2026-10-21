@@ -214,27 +214,27 @@ describe('createInjectionScreen — truncation', () => {
 })
 
 describe('createInjectionScreen — client routing', () => {
-  const VERDA_ENV = [
-    'VERDA_INFERENCE_ENDPOINT',
-    'VERDA_INFERENCE_API_KEY',
+  const SELF_DEPLOYED_ENV = [
+    'LARGE_LLM_BASE_URL',
+    'LARGE_LLM_API_KEY',
     // Third member since the describe flip: the private tier is two models and
     // a scope naming it without the 4B's endpoint is refused.
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
     'SMALL_LLM_API_KEY',
   ] as const
-  let savedVerdaEnv: Record<string, string | undefined>
+  let savedSelfDeployedEnv: Record<string, string | undefined>
 
   beforeEach(() => {
     vi.clearAllMocks()
     mockScreen.mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
-    savedVerdaEnv = Object.fromEntries(VERDA_ENV.map((k) => [k, process.env[k]]))
+    savedSelfDeployedEnv = Object.fromEntries(SELF_DEPLOYED_ENV.map((k) => [k, process.env[k]]))
   })
 
   afterEach(() => {
-    for (const k of VERDA_ENV) {
-      if (savedVerdaEnv[k] === undefined) delete process.env[k]
-      else process.env[k] = savedVerdaEnv[k]
+    for (const k of SELF_DEPLOYED_ENV) {
+      if (savedSelfDeployedEnv[k] === undefined) delete process.env[k]
+      else process.env[k] = savedSelfDeployedEnv[k]
     }
   })
 
@@ -258,20 +258,20 @@ describe('createInjectionScreen — client routing', () => {
     // counted drops out of the header's on-prem denominator — and on this tier
     // it carries a collector and nothing else. `clientOverrideFor` returns
     // `undefined` rather than `{}`, so there is no `client` key at all, not even
-    // `client: undefined`. The verda-tier case is the test below.
+    // `client: undefined`. The self_deployed-tier case is the test below.
     const screen = await (await load())()
     await screen(CLEAN)
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
     expect(Object.keys(opts ?? {})).toEqual(['collector'])
   })
 
-  it('ON THE VERDA TIER passes `client: VerdaQwen` — the screen follows the private tier', async () => {
+  it('ON THE SELF_DEPLOYED TIER passes `client: LargeQwen` — the screen follows the private tier', async () => {
     // The other half of the claim above, and the one that would have caught the
     // screen being LEFT BEHIND when every other role moved: a private-tier turn
     // that quietly sent the guarded tool result to Anthropic for screening is
     // exactly the payload the tier exists to keep on the box.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
     // The tier's second endpoint — the 4B summarizer `describe` runs on. Present
     // only so the scope opens; it is the model this screen must NOT be sent to,
     // which is what the second assertion below says.
@@ -283,16 +283,16 @@ describe('createInjectionScreen — client routing', () => {
     const screen = await (await load())()
     // #374: the tier rides the run frame's `inference` slot; the fail-closed
     // reachability check is the host-called `assertInferenceTier`.
-    assertInferenceTier('verda')
-    await withRunFrame({ inference: { tier: 'verda' } }, () => screen(CLEAN))
+    assertInferenceTier('self_deployed')
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, () => screen(CLEAN))
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
-    expect(opts?.client).toBe('VerdaQwen')
-    // AND NOT THE 4B. `describe` moved to `LocalQwenSmall` on the same tier a few
+    expect(opts?.client).toBe('LargeQwen')
+    // AND NOT THE 4B. `describe` moved to `SmallQwen` on the same tier a few
     // hours after the screen moved, and the two declare the SAME chain in
     // `baml_src/` — so this is the assertion that the flip did not carry
     // prompt-injection screening onto a 4B summarizer as a side effect, which is
     // the exact hazard SA-M5 / SD-4 named years before it was available to make.
-    expect(opts?.client).not.toBe('LocalQwenSmall')
+    expect(opts?.client).not.toBe('SmallQwen')
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {
@@ -307,7 +307,7 @@ describe('createInjectionScreen — client routing', () => {
 
     // On the ANTHROPIC tier the call passes no `client` override (first test
     // above), so the client that actually runs the screen is the one DECLARED in
-    // injection-screen.baml; under a verda scope a per-call override wins over
+    // injection-screen.baml; under a self_deployed scope a per-call override wins over
     // the declaration (second test above) and this map is not consulted at all.
     // The map only reports the declared client to callers that need the model
     // behind the call (output cap). Pin it against that declaration:

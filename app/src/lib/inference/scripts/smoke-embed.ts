@@ -135,7 +135,7 @@ async function main(): Promise<void> {
   )
 }
 
-// Same entry-point guard as smoke-verda.ts: a test can import the verdicts
+// Same entry-point guard as smoke-self-deployed.ts: a test can import the verdicts
 // without sending a request.
 const entryPoint = process.argv[1]
 if (!entryPoint || path.resolve(entryPoint) === fileURLToPath(import.meta.url)) {

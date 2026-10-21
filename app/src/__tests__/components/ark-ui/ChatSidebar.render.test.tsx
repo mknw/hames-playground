@@ -239,7 +239,7 @@ describe('ChatSidebar — expanded list', () => {
 
 describe('ChatSidebar — the tier glyph', () => {
   const tiered = [
-    thread({ id: 'a', title: 'Graph audit', inferenceTier: 'verda' }),
+    thread({ id: 'a', title: 'Graph audit', inferenceTier: 'self_deployed' }),
     thread({ id: 'b', title: 'Ontology sweep', inferenceTier: 'anthropic' }),
   ]
 
@@ -249,7 +249,7 @@ describe('ChatSidebar — the tier glyph', () => {
     const { container } = mount(() => <ChatSidebar {...baseProps()} threads={tiered} />)
 
     const glyphs = rows(container).map((r) => r.querySelector('[role="img"][data-tier]'))
-    expect(glyphs.map((g) => g?.getAttribute('data-tier'))).toEqual(['verda', 'anthropic'])
+    expect(glyphs.map((g) => g?.getAttribute('data-tier'))).toEqual(['self_deployed', 'anthropic'])
     expect(glyphs[0]!.className).not.toBe(glyphs[1]!.className)
   })
 
@@ -270,8 +270,8 @@ describe('ChatSidebar — the tier glyph', () => {
 
     const glyph = rows(container)[0].querySelector('[role="img"][data-tier]')!
     // A sentence rather than a label: it is read out of context, in a list.
-    expect(glyph.getAttribute('aria-label')).toBe('Runs on Private (Verda)')
-    expect(glyph.getAttribute('title')).toBe('Runs on Private (Verda)')
+    expect(glyph.getAttribute('aria-label')).toBe('Runs on Private')
+    expect(glyph.getAttribute('title')).toBe('Runs on Private')
     // And it therefore reaches the row button's accessible name.
     expect(rows(container)[0].textContent).toContain('Graph audit')
   })

@@ -75,9 +75,11 @@ registerGraphConnectorTools({
   graphFetch,
   // P4 slice 1: no default-tier coercion. The deployment restriction stays
   // until the tier-flip tag, sandbox isolation and release screen land.
+  // RAW slot, as in decision-documents: a legacy `verda` frame is routed as self_deployed
+  // but does not ingest files here (closed direction, on purpose).
   fileIngestAllowed: () => {
     try {
-      return currentRunFrame()?.inference?.tier === 'verda' && privateInferenceOnly()
+      return currentRunFrame()?.inference?.tier === 'self_deployed' && privateInferenceOnly()
     } catch {
       return false
     }

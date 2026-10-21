@@ -8,7 +8,7 @@ import {
   clientOverrideFor,
   resolveClientForRole,
   configureConsumerClients,
-  VERDA_CLIENT_BY_ROLE,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
 } from '@hames-ai/harness-baml/clients.server'
 import * as clientPolicy from '@hames-ai/harness-baml/clients.server'
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
@@ -124,7 +124,7 @@ beforeEach(() => {
   samples = []
 })
 
-function run<T>(fn: () => Promise<T>, client = 'VerdaQwenThink', tier = 'verda') {
+function run<T>(fn: () => Promise<T>, client = 'LargeQwenThink', tier = 'self_deployed') {
   return withRunFrame(
     {
       inference: {
@@ -134,8 +134,8 @@ function run<T>(fn: () => Promise<T>, client = 'VerdaQwenThink', tier = 'verda')
             ? {
                 client,
                 env: {
-                  VERDA_INFERENCE_ENDPOINT: endpoint,
-                  VERDA_INFERENCE_API_KEY: 'synthetic-key',
+                  LARGE_LLM_BASE_URL: endpoint,
+                  LARGE_LLM_API_KEY: 'synthetic-key',
                 },
               }
             : undefined,
@@ -150,17 +150,17 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-function registryRun<T>(registry: ClientRegistry, fn: () => Promise<T>, client = 'VerdaQwenThink') {
+function registryRun<T>(registry: ClientRegistry, fn: () => Promise<T>, client = 'LargeQwenThink') {
   return withRunFrame(
     {
       inference: {
-        tier: 'verda',
+        tier: 'self_deployed',
         clientOverride: () => ({
           client,
           clientRegistry: registry,
           env: {
-            VERDA_INFERENCE_ENDPOINT: endpoint,
-            VERDA_INFERENCE_API_KEY: 'default-synthetic-key',
+            LARGE_LLM_BASE_URL: endpoint,
+            LARGE_LLM_API_KEY: 'default-synthetic-key',
           },
         }),
       },
@@ -179,7 +179,7 @@ function registered(
     base_url: url,
     api_key: key,
     model,
-    chat_template_kwargs: { enable_thinking: name === 'VerdaQwenThink' },
+    chat_template_kwargs: { enable_thinking: name === 'LargeQwenThink' },
   })
 }
 
@@ -203,7 +203,7 @@ describe('Planner thinking mode', () => {
     'refuses a %s override carrying its own collector at both routing lookups',
     async (layer) => {
       const registry = new ClientRegistry()
-      registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+      registry.addLlmClient('Hidden', 'fallback', { strategy: ['LargeQwenThink'] })
       const override = () => ({
         client: 'Hidden',
         clientRegistry: registry,
@@ -213,7 +213,7 @@ describe('Planner thinking mode', () => {
       await withRunFrame(
         {
           inference: {
-            tier: 'verda',
+            tier: 'self_deployed',
             clientOverride: layer === 'per-run' ? override : undefined,
           },
         },
@@ -233,7 +233,7 @@ describe('Planner thinking mode', () => {
 
   it('preserves the loop collector when an unsafe bag bypasses routing validation', async () => {
     const registry = new ClientRegistry()
-    registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+    registry.addLlmClient('Hidden', 'fallback', { strategy: ['LargeQwenThink'] })
     replies.push({
       content: JSON.stringify({
         reasoning: 'draft',
@@ -262,8 +262,8 @@ describe('Planner thinking mode', () => {
 
   it('preserves the title accounting collector against bare consumer deps', async () => {
     const registry = new ClientRegistry()
-    registered(registry, 'VerdaQwenThink')
-    registry.addLlmClient('Hidden', 'fallback', { strategy: ['VerdaQwenThink'] })
+    registered(registry, 'LargeQwenThink')
+    registry.addLlmClient('Hidden', 'fallback', { strategy: ['LargeQwenThink'] })
     replies.push({ content: 'draft', reasoning: TRACE })
     // This dependency deliberately bypasses clientOverrideFor, like a standalone consumer.
     const result = await createTitleAgent({
@@ -287,7 +287,7 @@ describe('Planner thinking mode', () => {
   })
 
   it.each(
-    ['Sneaky', 'VerdaQwen'].flatMap((name) =>
+    ['Sneaky', 'LargeQwen'].flatMap((name) =>
       ['valid', 'capped', 'http-failure'].map((response) => ({ name, response })),
     ),
   )(
@@ -336,11 +336,11 @@ describe('Planner thinking mode', () => {
     'refuses thinking first selected on the $name corrective retry status $status',
     async ({ name, status }) => {
       const registry = new ClientRegistry()
-      registered(registry, 'VerdaQwen')
-      registered(registry, 'VerdaQwenThink')
-      registry.addLlmClient('Alternating', 'fallback', { strategy: ['VerdaQwen'] })
+      registered(registry, 'LargeQwen')
+      registered(registry, 'LargeQwenThink')
+      registry.addLlmClient('Alternating', 'fallback', { strategy: ['LargeQwen'] })
       onRequest = () => {
-        registry.addLlmClient('Alternating', 'fallback', { strategy: ['VerdaQwenThink'] })
+        registry.addLlmClient('Alternating', 'fallback', { strategy: ['LargeQwenThink'] })
         onRequest = undefined
       }
       replies.push(
@@ -367,7 +367,11 @@ describe('Planner thinking mode', () => {
       expect(failure).toMatchObject({
         recoverable: false,
         message: expect.stringContaining(`${name} selected a thinking leaf`),
-        llmCall: { functionName: name, clientName: 'VerdaQwenThink', parsedOutput: undefined },
+        llmCall: {
+          functionName: name,
+          clientName: 'LargeQwenThink',
+          parsedOutput: undefined,
+        },
       })
       expect(requests).toHaveLength(2)
       expect(samples).toHaveLength(1)
@@ -381,14 +385,14 @@ describe('Planner thinking mode', () => {
       replies.push({ content: JSON.stringify(ANSWER), [field]: TRACE })
       const result = await run(call)
       expect(result.plan).toEqual({ ...ANSWER, reasoning: TRACE })
-      expect(result.llmCall?.clientName).toBe('VerdaQwenThink')
+      expect(result.llmCall?.clientName).toBe('LargeQwenThink')
       expect(result.llmCall?.functionName).toBe('PlannerThinking')
       expect(result.llmCall?.metrics?.basis).toBe('time')
       expect(requests).toHaveLength(1)
       expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
       expect(JSON.stringify(requests[0].messages)).not.toContain('reasoning: string')
       expect(samples).toHaveLength(1)
-      expect(samples[0].clientName).toBe('VerdaQwenThink')
+      expect(samples[0].clientName).toBe('LargeQwenThink')
     },
   )
 
@@ -431,7 +435,7 @@ describe('Planner thinking mode', () => {
   it.each(['per-run', 'consumer'] as const)(
     'refuses the twin at both seam readers from %s bags before any request',
     async (layer) => {
-      for (const tier of ['anthropic', 'verda']) {
+      for (const tier of ['anthropic', 'self_deployed']) {
         for (const role of [
           'controller',
           'critic',
@@ -442,8 +446,8 @@ describe('Planner thinking mode', () => {
           'decide',
           'planner',
         ] as BamlRole[]) {
-          if (role === 'planner' && tier === 'verda') continue
-          const override = () => ({ client: 'VerdaQwenThink' })
+          if (role === 'planner' && tier === 'self_deployed') continue
+          const override = () => ({ client: 'LargeQwenThink' })
           if (layer === 'consumer') configureConsumerClients(override)
           await withRunFrame(
             { inference: { tier, ...(layer === 'per-run' ? { clientOverride: override } : {}) } },
@@ -465,10 +469,10 @@ describe('Planner thinking mode', () => {
         await import('@hames-ai/harness-baml/baml-adapters.server')
       const action: () => Promise<unknown> = () =>
         role === 'planner' ? call() : createLoopControllerAdapter()('q', 'i', '[]', 0)
-      for (const tier of role === 'planner' ? ['anthropic'] : ['anthropic', 'verda']) {
+      for (const tier of role === 'planner' ? ['anthropic'] : ['anthropic', 'self_deployed']) {
         await expect(
           withRunFrame(
-            { inference: { tier, clientOverride: () => ({ client: 'VerdaQwenThink' }) } },
+            { inference: { tier, clientOverride: () => ({ client: 'LargeQwenThink' }) } },
             action,
           ),
         ).rejects.toThrow(/private tier/i)
@@ -483,14 +487,14 @@ describe('Planner thinking mode', () => {
       const registry = new ClientRegistry()
       registered(
         registry,
-        'VerdaQwenThink',
+        'LargeQwenThink',
         endpoint.replace('/v1', '/eval/v1'),
         'eval-synthetic-key',
       )
       if (mismatch !== 'registered counterpart') {
         registered(
           registry,
-          'VerdaQwen',
+          'LargeQwen',
           mismatch === 'endpoint' ? endpoint : endpoint.replace('/v1', '/eval/v1'),
           mismatch === 'credentials' ? 'default-synthetic-key' : 'eval-synthetic-key',
           mismatch === 'model' ? 'other-synthetic-model' : undefined,
@@ -507,10 +511,10 @@ describe('Planner thinking mode', () => {
   )
 
   it('supports a matching registered pair for exactly one thinking-off retry, preserving the bag env over process env', async () => {
-    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', endpoint.replace('/v1', '/process/v1'))
-    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'process-synthetic-key')
+    vi.stubEnv('LARGE_LLM_BASE_URL', endpoint.replace('/v1', '/process/v1'))
+    vi.stubEnv('LARGE_LLM_API_KEY', 'process-synthetic-key')
     const registry = new ClientRegistry()
-    for (const name of ['VerdaQwenThink', 'VerdaQwen'])
+    for (const name of ['LargeQwenThink', 'LargeQwen'])
       registered(registry, name, endpoint.replace('/v1', '/eval/v1'), 'eval-synthetic-key')
     replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
     expect((await registryRun(registry, call)).plan).toEqual(OFF)
@@ -527,8 +531,8 @@ describe('Planner thinking mode', () => {
   })
 
   it('keeps bag env when using the declared counterpart even if process env points elsewhere', async () => {
-    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', endpoint.replace('/v1', '/process/v1'))
-    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'process-synthetic-key')
+    vi.stubEnv('LARGE_LLM_BASE_URL', endpoint.replace('/v1', '/process/v1'))
+    vi.stubEnv('LARGE_LLM_API_KEY', 'process-synthetic-key')
     replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
     expect((await run(call)).plan).toEqual(OFF)
     expect(transports).toEqual(
@@ -538,9 +542,9 @@ describe('Planner thinking mode', () => {
 
   it('refuses a retry whose collector selected another leaf despite a matching rendered transport', async () => {
     const registry = new ClientRegistry()
-    registered(registry, 'VerdaQwenThink')
+    registered(registry, 'LargeQwenThink')
     registered(registry, 'SyntheticOriginal')
-    registry.addLlmClient('VerdaQwen', 'fallback', { strategy: ['SyntheticOriginal'] })
+    registry.addLlmClient('LargeQwen', 'fallback', { strategy: ['SyntheticOriginal'] })
     replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
     const failure = await registryRun(registry, call).catch((e: unknown) => e)
     expect(failure).toMatchObject({
@@ -552,10 +556,10 @@ describe('Planner thinking mode', () => {
 
   it('derives the thinking-off retry client from the planner role map', async () => {
     // Deliberately change the fixture's map to distinguish a lookup from a literal.
-    const roleMap = VERDA_CLIENT_BY_ROLE as Partial<Record<BamlRole, string>>
+    const roleMap = SELF_DEPLOYED_CLIENT_BY_ROLE as Partial<Record<BamlRole, string>>
     const original = roleMap.planner
     const registry = new ClientRegistry()
-    registered(registry, 'VerdaQwenThink')
+    registered(registry, 'LargeQwenThink')
     registered(registry, 'SyntheticOriginal')
     replies.push({ content: '', reasoning: TRACE }, { content: JSON.stringify(OFF) })
     try {
@@ -571,15 +575,17 @@ describe('Planner thinking mode', () => {
 
   it('refuses a thinking leaf selected through an original-schema registry chain', async () => {
     const registry = new ClientRegistry()
-    registered(registry, 'VerdaQwenThink')
-    registry.addLlmClient('SyntheticOriginalChain', 'fallback', { strategy: ['VerdaQwenThink'] })
+    registered(registry, 'LargeQwenThink')
+    registry.addLlmClient('SyntheticOriginalChain', 'fallback', {
+      strategy: ['LargeQwenThink'],
+    })
     replies.push({ content: JSON.stringify(OFF), reasoning: TRACE })
     const failure = await registryRun(registry, call, 'SyntheticOriginalChain').catch(
       (e: unknown) => e,
     )
     expect(failure).toMatchObject({
       message: expect.stringMatching(/Planner selected a thinking leaf/),
-      llmCall: { clientName: 'VerdaQwenThink' },
+      llmCall: { clientName: 'LargeQwenThink' },
     })
     expect(requests).toHaveLength(1)
   })
@@ -671,7 +677,9 @@ describe('Planner thinking mode', () => {
     'refuses a hidden thinking leaf in $name status $status before returning any result',
     async ({ name, call, answer, status }) => {
       const registry = new ClientRegistry()
-      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', {
+        strategy: ['LargeQwenThink'],
+      })
       const content = typeof answer === 'string' ? answer : JSON.stringify(answer)
       replies.push({ content, reasoning: TRACE, status })
       const failure = await registryRun<unknown>(registry, call, 'SyntheticHiddenThinking').catch(
@@ -688,7 +696,7 @@ describe('Planner thinking mode', () => {
         expect(failure).toMatchObject({
           message: expect.stringMatching(new RegExp(`${name} selected a thinking leaf`)),
           recoverable: false,
-          llmCall: { functionName: name, clientName: 'VerdaQwenThink' },
+          llmCall: { functionName: name, clientName: 'LargeQwenThink' },
         })
         if (status === 200)
           expect((failure as { llmCall: { rawOutput: string } }).llmCall.rawOutput).toBe(content)
@@ -699,7 +707,7 @@ describe('Planner thinking mode', () => {
       expect(requests).toHaveLength(1)
       expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
       expect(samples).toHaveLength(1)
-      expect(samples[0].clientName).toBe('VerdaQwenThink')
+      expect(samples[0].clientName).toBe('LargeQwenThink')
     },
   )
 
@@ -707,7 +715,9 @@ describe('Planner thinking mode', () => {
     'does not retry a hidden thinking leaf with an empty capped %s completion',
     async (name) => {
       const registry = new ClientRegistry()
-      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', { strategy: ['VerdaQwenThink'] })
+      registry.addLlmClient('SyntheticHiddenThinking', 'fallback', {
+        strategy: ['LargeQwenThink'],
+      })
       replies.push({ content: '', reasoning: TRACE, tokens: 4096 })
       const call = () =>
         name === 'LoopController'
@@ -720,7 +730,7 @@ describe('Planner thinking mode', () => {
         message: expect.stringMatching(/selected a thinking leaf/),
         recoverable: false,
         llmCall: {
-          clientName: 'VerdaQwenThink',
+          clientName: 'LargeQwenThink',
           hitOutputCap: true,
           usage: { outputTokens: 4096 },
         },
@@ -776,7 +786,7 @@ describe('Planner thinking mode', () => {
 
   it('leaves private thinking-off calls on the original and its written reasoning', async () => {
     replies.push({ content: JSON.stringify(OFF) })
-    const result = await run(call, 'VerdaQwen')
+    const result = await run(call, 'LargeQwen')
     expect(result.plan).toEqual(OFF)
     expect(result.llmCall?.functionName).toBe('Planner')
     expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: false })
@@ -784,7 +794,7 @@ describe('Planner thinking mode', () => {
   })
 
   it('refuses a thinking twin on the Anthropic tier before any call', async () => {
-    await expect(run(call, 'VerdaQwenThink', 'anthropic')).rejects.toThrow(/private tier/i)
+    await expect(run(call, 'LargeQwenThink', 'anthropic')).rejects.toThrow(/private tier/i)
     expect(requests).toHaveLength(0)
   })
 
@@ -810,12 +820,12 @@ describe('Planner thinking mode', () => {
       expect(JSON.stringify(requests[1].messages)).not.toContain('tool_args compact')
       expect(result.events.filter((e) => e.type === 'warning')).toHaveLength(1)
       expect(result.events.find((e) => e.type === 'warning')?.llmCall?.clientName).toBe(
-        'VerdaQwenThink',
+        'LargeQwenThink',
       )
       expect(result.events.find((e) => e.type === 'plan_created')?.llmCall?.clientName).toBe(
-        'VerdaQwen',
+        'LargeQwen',
       )
-      expect(samples.map((s) => s.clientName)).toEqual(['VerdaQwenThink', 'VerdaQwen'])
+      expect(samples.map((s) => s.clientName)).toEqual(['LargeQwenThink', 'LargeQwen'])
       expect(samples.map((s) => s.metrics?.attempts)).toEqual([1, 1])
       expect(result.events.map((e) => e.llmCall?.metrics?.attempts)).toEqual([1, 1])
       expect(result.data.plan).toEqual(OFF)

@@ -11,7 +11,7 @@
  *
  * Every BAML function declares an Anthropic-only chain in `baml_src/` —
  * `ControllerAnthropic`, `CriticAnthropic`, and so on. That is what runs
- * unless a single opt-in env flag says otherwise (see `USE_VERDA_INFERENCE`
+ * unless a single opt-in env flag says otherwise (see `USE_SELF_DEPLOYED_INFERENCE`
  * below); no other configuration re-points a call. The mixed-provider chains
  * that used to be swapped in by `USE_MIXED_CHAINS=1` (`ControllerFallback` &c.
  * across Groq / OpenRouter / OpenAI) were removed 2026-08-24 — their combined
@@ -25,11 +25,11 @@
  * `baml_src/` AND updating this map to match; the map alone would only
  * re-budget prompts for a model no call actually reaches.
  *
- * **`USE_VERDA_INFERENCE=1`** takes the other seam — a per-call `client`
+ * **`USE_SELF_DEPLOYED_INFERENCE=1`** takes the other seam — a per-call `client`
  * override, so no `client` line moves and the default posture is one env var
  * away in both directions. It re-points the roles in
- * `VERDA_CLIENT_BY_ROLE` at `VerdaQwen`, the
- * company-hosted vLLM deployment declared in `baml_src/verda-client.baml`.
+ * `SELF_DEPLOYED_CLIENT_BY_ROLE` at `LargeQwen`, the
+ * company-hosted vLLM deployment declared in `baml_src/large-client.baml`.
  * Confidential compute is the point — those prompts stay on infrastructure the
  * company controls. Three properties are deliberate:
  *
@@ -41,7 +41,7 @@
  *   decision*, not its scope: the tier rides the RUN FRAME's `inference` slot
  *   (`@hames-ai/harness-patterns/run-frame.server`), so one user's turn can run on
  *   a different tier than another's while everything inside that turn stays on
- *   one tier. `USE_VERDA_INFERENCE` remains the process default for anything
+ *   one tier. `USE_SELF_DEPLOYED_INFERENCE` remains the process default for anything
  *   running outside a frame, or inside one whose slot nobody filled.
  * - **Unset changes nothing.** With no flag and no scope, `clientOverrideFor()`
  *   returns `undefined`, no options bag gains a `client` key, and every
@@ -53,7 +53,7 @@
  *   the provider the operator just asked to avoid, which is the one failure
  *   this flag exists to prevent.
  *
- * EVERY role is in the Verda map — there is no longer an exception. `router`,
+ * EVERY role is in the self-deployed map — there is no longer an exception. `router`,
  * `planner` and `describe` were held out until 2026-08-26 on latency and cost
  * grounds; the owner overruled that (the router is handed the user's raw
  * message and describe is handed tool results verbatim). `screen`, the
@@ -62,21 +62,21 @@
  * under the private tier may be sent to any public AI provider** (owner
  * decision 2026-08-26, answer 7; no exception was sought).
  *
- * So a verda-tier turn now sends NO BAML call off the box. Two things that
+ * So a self_deployed-tier turn now sends NO BAML call off the box. Two things that
  * claim does not cover, stated rather than rounded off:
  *
  * - It is about MODEL calls routed through this file. `EMBEDDINGS_PROVIDER`
  *   (`docs/DATA_STASH.md`) has its own route and its `openrouter` setting would
  *   send the user's query text to a third party; the default is `local`, so the
  *   claim holds as shipped, but it is a different seam.
- * - The screen's move buys the posture and costs a MEASUREMENT: `VerdaQwen` is
+ * - The screen's move buys the posture and costs a MEASUREMENT: `LargeQwen` is
  *   unmeasured on the two properties a screener needs (see the map entry). The
  *   trade was made knowingly, so the honest record is "accepted, unmeasured,
  *   measurable" — the eval suite's `screen-on-the-tier` scenario is where the
  *   measurement lands, not a promise in a comment.
  *
  * **The private tier is TWO models, not one** (owner decision 2026-08-26). The
- * heavy roles take `VerdaQwen`, the 27B; `describe` takes `LocalQwenSmall`, the
+ * heavy roles take `LargeQwen`, the 27B; `describe` takes `SmallQwen`, the
  * 4B summarizer reached over `SMALL_LLM_BASE_URL` (the #256 env-vars-only
  * contract — "local" names the wire format, not the machine). Summarization is
  * the highest-frequency, lowest-value call in the repo and it was making a
@@ -98,7 +98,7 @@
  * This module is package-shaped: it ships in v1 and must not import host-app
  * code — an installed tarball cannot resolve it (the same exit criterion
  * #342/#346 gave `harness-patterns`). So everything APP-side it used to reach
- * for directly — the model tables, the `USE_VERDA_INFERENCE` env default, the
+ * for directly — the model tables, the `USE_SELF_DEPLOYED_INFERENCE` env default, the
  * endpoint asserts, the cold-start wake hook, the EUR rates — is FED IN instead:
  * the host calls the three `configure*` accessors below at its composition root
  * (`lib/inference/config.server.ts`), and this module reads them through
@@ -114,6 +114,7 @@
  * core's `run-frame.test.ts` as well.
  */
 
+import { applyLegacyInferenceEnv } from './inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
@@ -125,6 +126,7 @@ import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
 import type { BamlClientOverride, ClientOverride } from './consumer-clients.server'
 
 assertServerOnImport()
+applyLegacyInferenceEnv()
 
 /**
  * Which inference tier a run is on.
@@ -135,13 +137,13 @@ assertServerOnImport()
  * extraction forbids. `config.server.ts` re-exports it, so every existing
  * importer keeps its import path.
  *
- * `'verda'` is the self-hosted deployment (`VERDA_CLIENT_BY_ROLE` below);
+ * `'self_deployed'` is the self-hosted deployment (`SELF_DEPLOYED_CLIENT_BY_ROLE` below);
  * `'anthropic'` is "no override at all", i.e. every function runs the chain it
  * declares. Named rather than boolean because it reaches the browser — a
  * header control shows the user which one their chats are on, and a label is
  * what a preview user can act on.
  */
-export type InferenceTier = 'verda' | 'anthropic'
+export type InferenceTier = 'self_deployed' | 'anthropic'
 
 // ============================================================================
 // THE HOST SEAM — where the app's configuration is FED IN (PR-1a)
@@ -155,11 +157,11 @@ export type InferenceTier = 'verda' | 'anthropic'
 //   → 16 384, `limitsFor` → undefined cap), so empty tables degrade the same
 //   way an unknown client name always did;
 // - tier policy: the default tier is 'anthropic' (no confidential traffic
-//   without registration) and a 'verda' scope with no reachability assert is
+//   without registration) and a 'self_deployed' scope with no reachability assert is
 //   REFUSED, not opened — fail closed, like every gate on this tier;
 // - wake hook: absent means no notice, a degraded UX but never a wrong route;
 // - cost rates: the two literal fallbacks below, pinned equal to the app's
-//   `DEFAULT_EUR_PER_USD` / `DEFAULT_VERDA_EUR_PER_HOUR` by
+//   `DEFAULT_EUR_PER_USD` / `DEFAULT_LARGE_LLM_EUR_PER_HOUR` by
 //   `clients-seam.test.ts` so the copies cannot drift silently.
 // ============================================================================
 
@@ -182,22 +184,22 @@ export function configureModelTables(tables: ModelTables): void {
 }
 
 /** The app-policy half of the tier seam: what a run takes outside any scope,
- *  whether a 'verda' scope is reachable, and what to announce when a
+ *  whether a 'self_deployed' scope is reachable, and what to announce when a
  *  private-tier client is about to take a call. */
 export interface InferenceTierPolicy {
   /** The tier outside any run frame, or inside one whose `inference` slot
    *  nobody filled (a script, a background job). The host reads
-   *  `USE_VERDA_INFERENCE` here; the package-side default is 'anthropic' — the
+   *  `USE_SELF_DEPLOYED_INFERENCE` here; the package-side default is 'anthropic' — the
    *  safe direction, never confidential traffic. */
   defaultTier: () => InferenceTier
   /** Restrict this deployment to the built-in private clients. Unset preserves all routing. */
   privateOnly?: () => boolean
   /** Fail-closed reachability check, run by {@link assertInferenceTier} before
-   *  a host puts 'verda' in a run frame (the host's
+   *  a host puts 'self_deployed' in a run frame (the host's
    *  `assertPrivateTierConfigured`).
    *  Unregistered → the tier is REFUSED, not opened. */
   assertTierReachable?: (tier: InferenceTier) => void
-  /** A private-tier client (`VERDA_CLIENT_BY_ROLE`'s values) is about to take
+  /** A private-tier client (`SELF_DEPLOYED_CLIENT_BY_ROLE`'s values) is about to take
    *  a call. The host decides what that means — the wake/cold-start notice
    *  filters on its own scale-to-zero client name here, keeping the "which
    *  client scales to zero" knowledge host-side. */
@@ -216,20 +218,20 @@ export function configureInferencePolicy(policy: InferenceTierPolicy): void {
  *  seen by the next step. */
 export interface CostRates {
   eurPerUsd: () => number
-  verdaEurPerHour: () => number
+  largeEurPerHour: () => number
 }
 
 // Package-side fallbacks, deliberately LITERALS: settings.ts is client-safe
 // and cannot be imported here (the extraction's one direction rule). Kept
-// equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_VERDA_EUR_PER_HOUR by
+// equal to the app's DEFAULT_EUR_PER_USD / DEFAULT_LARGE_LLM_EUR_PER_HOUR by
 // clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
 // TIME_PRICED_CLIENTS in settings.ts.
 const SEAM_DEFAULT_EUR_PER_USD = 0.86
-const SEAM_DEFAULT_VERDA_EUR_PER_HOUR = 1.819
+const SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
 
 let costRates: CostRates = {
   eurPerUsd: () => SEAM_DEFAULT_EUR_PER_USD,
-  verdaEurPerHour: () => SEAM_DEFAULT_VERDA_EUR_PER_HOUR,
+  largeEurPerHour: () => SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR,
 }
 
 /** Feed the host's EUR rates in. Called once at the composition root. */
@@ -275,7 +277,7 @@ export type CostEstimator = (
 
 export interface CostPricing {
   estimate: CostEstimator
-  /** @deprecated Single-client compatibility form; uses verdaEurPerHour.
+  /** @deprecated Single-client compatibility form; uses largeEurPerHour.
    * Includes usage-less attempts for this client in the cost floor. */
   timePricedClient?: string
   /** Per-client rate readers, resolved once per step. Includes usage-less
@@ -309,9 +311,9 @@ export function activeCostPricing(): CostPricing {
 //
 //   - a role the consumer MAPS takes the consumer's client (registry + primary)
 //     over the built-in tier, whatever the tier scope says;
-//   - a role the consumer does not map falls through to `verdaClientFor`
+//   - a role the consumer does not map falls through to `selfDeployedClientFor`
 //     untouched — the declared Anthropic chain, or the built-in private tier
-//     under a Verda-tier scope;
+//     under a self-deployed tier scope;
 //   - with no layer registered this module behaves exactly as it did before
 //     the layer existed.
 //
@@ -384,14 +386,14 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // summarization would carry prompt-injection screening along as a side
   // effect; with two, moving the screen is its own line, its own owner
   // decision and its own eval scenario. That is exactly what happened
-  // (SA-M5 / SD-4): `VERDA_CLIENT_BY_ROLE` below now names both roles, on the
+  // (SA-M5 / SD-4): `SELF_DEPLOYED_CLIENT_BY_ROLE` below now names both roles, on the
   // record, rather than one edit having moved both.
   //
   // AND THEN THE HYPOTHETICAL HAPPENED. On 2026-08-26 `describe` was re-pointed
-  // at `LocalQwenSmall` — a 4B summarizer — on the private tier, which is
+  // at `SmallQwen` — a 4B summarizer — on the private tier, which is
   // literally the "re-pointed at a cheap summarization model" this comment had
   // been describing in the abstract since SA-M5. The screen did not move: it is
-  // its own line naming `VerdaQwen`, a 27B. This is the role separation paying
+  // its own line naming `LargeQwen`, a 27B. This is the role separation paying
   // for itself once, in production, and it is worth noting that the mechanism
   // that saved it was two map lines rather than any test — the tests pin the
   // outcome, the separation is what made the outcome possible to get right.
@@ -407,8 +409,8 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
 }
 
 /**
- * The roles a verda tier decision re-points at the self-hosted deployment
- * (`baml_src/verda-client.baml`).
+ * The roles a self_deployed tier decision re-points at the self-hosted deployment
+ * (`baml_src/large-client.baml`).
  *
  * EVERY role is here. That is the 2026-08-26 owner decision and
  * it replaced a narrower map: `router`, `planner` and `describe` were held out
@@ -423,7 +425,7 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  *
  * `screen` — the injection screen — was the last exception, and it is one no
  * longer. It was held back on the SA-M5 / SD-4 grounds recorded on
- * `CLIENT_BY_ROLE` above: `VerdaQwen` is unmeasured both on refusing to be
+ * `CLIENT_BY_ROLE` above: `LargeQwen` is unmeasured both on refusing to be
  * talked out of reporting by the content it reviews and on copying matched
  * spans VERBATIM, and a paraphrased span is a missed injection. The owner
  * settled it on 2026-08-26 (answer 7) on a rule that outranks the measurement
@@ -439,14 +441,14 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * summarization. See `CLIENT_BY_ROLE` above.
  *
  * NOT EVERY ROLE HERE NAMES THE SAME CLIENT, since 2026-08-26. `describe` names
- * `LocalQwenSmall`. Read the values, never the key set, when you want to know
- * where a role's calls land — `Object.keys(VERDA_CLIENT_BY_ROLE)` answers "does
+ * `SmallQwen`. Read the values, never the key set, when you want to know
+ * where a role's calls land — `Object.keys(SELF_DEPLOYED_CLIENT_BY_ROLE)` answers "does
  * the tier move this role", which is a different question and the one
  * `TIER_SWITCHED_FUNCTIONS` asks.
  *
  * ADDING A ROLE HERE IS NOT ENOUGH ON ITS OWN — the call site for that role
  * must also spread `clientOverrideFor(role)` into its BAML options bag, or the
- * entry reads like routing and changes nothing. `clients-verda.test.ts` pins
+ * entry reads like routing and changes nothing. `clients-self-deployed.test.ts` pins
  * that both halves exist for every role in this map, `screen` included: the
  * scan that used to require `clientOverrideFor('screen')` to appear NOWHERE now
  * requires the map entry AND the spread inside `b.ScreenUntrustedContent(...)`'s
@@ -462,26 +464,26 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * and nothing may route through it directly — `clientOverrideFor` is the only
  * thing that routes, because it is the only thing that consults the active tier.
  */
-export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> = {
-  controller: 'VerdaQwen', // LoopController + ActorController
-  critic: 'VerdaQwen',
-  compactExecution: 'VerdaQwen', // Synthesize
-  router: 'VerdaQwen',
+export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> = {
+  controller: 'LargeQwen', // LoopController + ActorController
+  critic: 'LargeQwen',
+  compactExecution: 'LargeQwen', // Synthesize
+  router: 'LargeQwen',
   // THE COMPOSITE CONSEQUENCE OF THIS ONE LINE, stated whole because each piece
   // is individually mild and the set is not. This is the authoritative
   // statement; `CLAUDE.md`, `evals/client.ts` and `createPlannerAdapter` point
   // here rather than restating it.
   //
   //  1. `PlannerAnthropic`'s documented justification is "thinking left ON —
-  //     the reasoning IS the deliverable". `VerdaQwen` declares
+  //     the reasoning IS the deliverable". `LargeQwen` declares
   //     `chat_template_kwargs { enable_thinking false }`, so on this tier that
   //     justification does not hold: the planner reasons without a thinking
   //     budget, in the same tokens as its output.
   //  2. Its output ceiling drops EIGHTFOLD — `AnthropicSonnet5`'s 32 768 to
-  //     `VerdaQwen`'s 4 096 (the F2 timeout derivation on PR #279) — on
+  //     `LargeQwen`'s 4 096 (the F2 timeout derivation on PR #279) — on
   //     the role whose output is longest, over the largest tool catalog in the
   //     repo (~134 tools in the preview deployment).
-  //  3. Cap-hits are detected (`VerdaQwen` is in `CLIENT_MAX_OUTPUT_TOKENS`, so
+  //  3. Cap-hits are detected (`LargeQwen` is in `CLIENT_MAX_OUTPUT_TOKENS`, so
   //     `planParseRetry` fires), but the recovery is ONE retry of the same
   //     prompt with guidance appended. A plan that truncated once on a halved
   //     ceiling truncates again, and then the adapter throws.
@@ -503,7 +505,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // to a visible failure, and until the eval suite's `planner-plan-shape`
   // scenario is run against a client, nothing measures 1–3. That scenario
   // exists precisely so this stops being four flags in four files.
-  planner: 'VerdaQwen',
+  planner: 'LargeQwen',
   // THE ONE ROLE ON THIS TIER THAT IS NOT THE 27B. Owner decision 2026-08-26,
   // and the composite consequence stated whole in the style of `planner:` above,
   // because three of the four pieces are improvements and the fourth is not.
@@ -513,7 +515,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     retriever's query rewrite, the citation picker — were queueing behind a
   //     single-replica scale-to-zero 27B. A turn with four tool results is four
   //     more calls into that queue, where concurrency is queueing rather than
-  //     scaling (measured 2026-08-25, `smoke-verda-load.ts`).
+  //     scaling (measured 2026-08-25, `smoke-large-load.ts`).
   //  2. The POSTURE is unchanged, which is the only reason this is allowed at
   //     all: `SMALL_LLM_BASE_URL` is infrastructure the company runs, so the
   //     2026-08-26 rule — no call made under the private tier may be sent to any
@@ -530,11 +532,11 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.54/h) times measured
   //     per-attempt duration. Missing duration reads as unknown; measured
   //     calls carry the same floor marker as the larger GPU. Attribution
-  //     follows LocalQwenSmall, never the endpoint URL.
+  //     follows SmallQwen, never the endpoint URL.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
-  describe: 'LocalQwenSmall', // the eight summarization functions
+  describe: 'SmallQwen', // the eight summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -544,7 +546,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
   // "recorded rather than hidden" still holds and the guard's own regex layer is
   // untouched by it; what the tier buys back is that no such payload leaves the
   // box. Blast radius is zero today because no agent enables the LLM screen.
-  screen: 'VerdaQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
+  screen: 'LargeQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
   // Private systemone URL; never the public endpoint or its key.
   decide: 'PrivateSystemOne',
 }
@@ -552,7 +554,7 @@ export const VERDA_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> =
 /** The only functions designated to consume each trace-exposing leaf (#637).
  * Loop/actor counterparts still require G19 Q2's live measurement. */
 export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
-  VerdaQwenThink: ['PlannerThinking'],
+  LargeQwenThink: ['PlannerThinking'],
 }
 
 /** Trace-exposing leaves, never chains: mode is verified against the collector's
@@ -571,7 +573,7 @@ function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
   }
   if (
     THINKING_CLIENTS.has(bag.client) &&
-    (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'verda')
+    (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'self_deployed')
   ) {
     throw new Error(`Thinking client '${bag.client}' requires the planner role on the private tier`)
   }
@@ -579,7 +581,7 @@ function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
 
 /** Includes dormant thinking leaves without changing the tier's routing map. */
 export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
-  ...Object.values(VERDA_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
+  ...Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
   ...THINKING_CLIENTS,
 ])
 
@@ -596,16 +598,16 @@ export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
  * screen decision there are NONE: every role is here, so the derived set below
  * is every BAML function in the repo and the filter it feeds currently excludes
  * nothing. That is honest rather than redundant. The mechanism stays because it
- * is derived: pull a role back out of `VERDA_CLIENT_BY_ROLE` and the filter
+ * is derived: pull a role back out of `SELF_DEPLOYED_CLIENT_BY_ROLE` and the filter
  * starts excluding again with no second edit. The key set is pinned equal to
- * `VERDA_CLIENT_BY_ROLE`'s by `clients-verda.test.ts`, so a role added there
+ * `SELF_DEPLOYED_CLIENT_BY_ROLE`'s by `clients-self-deployed.test.ts`, so a role added there
  * without its functions here fails CI instead of quietly dropping out of the
  * comparison.
  *
  * The `describe` list IS the second copy of a list whose canonical home is the
  * `DescribeAnthropic` block in `baml_src/anthropic-only.baml`, and there is no
  * way around that once the role moves: this file needs the function NAMES and
- * BAML has no export of them. `clients-verda.test.ts` reads the eight `client
+ * BAML has no export of them. `clients-self-deployed.test.ts` reads the eight `client
  * DescribeAnthropic` declarations out of `baml_src/` and pins them equal to
  * this array, which is what stops the copy drifting — and, more to the point,
  * what fails if a seventh describe function is added and forgotten here, since
@@ -644,7 +646,7 @@ export function onExplicitAnthropicTier(): boolean {
  * BAML function names a tier decision re-points, and therefore the only calls
  * whose duration means the same thing in both switch positions.
  *
- * Derived from `VERDA_CLIENT_BY_ROLE` — the authority on what moves — rather
+ * Derived from `SELF_DEPLOYED_CLIENT_BY_ROLE` — the authority on what moves — rather
  * than written out again, and independent of whether the flag or a scope is on:
  * the two windows have to hold the same role mix in every position, or neither
  * figure is comparable with the other.
@@ -676,7 +678,7 @@ export function onExplicitAnthropicTier(): boolean {
  * medians still compare like with like.
  */
 export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
-  (Object.keys(VERDA_CLIENT_BY_ROLE) as BamlRole[]).flatMap(
+  (Object.keys(SELF_DEPLOYED_CLIENT_BY_ROLE) as BamlRole[]).flatMap(
     (role) => SWITCHED_FUNCTIONS_BY_ROLE[role] ?? [],
   ),
 )
@@ -691,12 +693,12 @@ export function privateInferenceOnly(): boolean {
  * live inside `runWithInferenceTier` before the run frame replaced it.
  *
  * The scope moved to core and core is GENERIC: the frame's `inference.tier` is
- * an opaque string, and core neither knows what `'verda'` means nor what would
+ * an opaque string, and core neither knows what `'self_deployed'` means nor what would
  * make it unreachable (ruling D1, issue #374 — provider specifics stay in this
  * companion). So the fail-closed gate moved here, and the HOST calls it before
  * it puts a tier in a frame.
  *
- * FAIL CLOSED on `'verda'`: checked through the host-registered
+ * FAIL CLOSED on `'self_deployed'`: checked through the host-registered
  * `assertTierReachable`, and refused outright when NO policy is registered —
  * matching every other gate on this tier. The alternative — shrug and let BAML
  * fall through to the declared Anthropic chain — is the one failure this whole
@@ -709,16 +711,16 @@ export function privateInferenceOnly(): boolean {
  * no callback, so there is no such caller to protect.
  */
 export function assertInferenceTier(tier: InferenceTier): void {
-  if (privateInferenceOnly() && tier !== 'verda') {
+  if (privateInferenceOnly() && tier !== 'self_deployed') {
     throw new Error(
       'Private-only inference: the Anthropic tier is disabled on this deployment; no request was made.',
     )
   }
-  if (tier !== 'verda') return
+  if (tier !== 'self_deployed') return
   const assertReachable = tierPolicy.assertTierReachable
   if (!assertReachable) {
     throw new Error(
-      "The 'verda' inference tier was requested but no inference policy is registered. " +
+      "The 'self_deployed' inference tier was requested but no inference policy is registered. " +
         'The host registers one at its composition root (lib/inference/config.server.ts, ' +
         'via configureInferencePolicy); refusing rather than guessing is the fail-closed default.',
     )
@@ -747,14 +749,19 @@ export function assertInferenceTier(tier: InferenceTier): void {
  */
 export function activeInferenceTier(): InferenceTier {
   const tier = currentRunFrame()?.inference?.tier
-  const active = tier === 'verda' || tier === 'anthropic' ? tier : tierPolicy.defaultTier()
+  const active =
+    tier === 'verda'
+      ? 'self_deployed'
+      : tier === 'self_deployed' || tier === 'anthropic'
+        ? tier
+        : tierPolicy.defaultTier()
   if (privateInferenceOnly()) assertInferenceTier(active)
   return active
 }
 
 /**
- * `{ client: 'VerdaQwen' }` for a Verda-routed role while the active tier is
- * `'verda'` (the run frame's `inference.tier`, or `USE_VERDA_INFERENCE=1` as the
+ * `{ client: 'LargeQwen' }` for a self-deployed role while the active tier is
+ * `'self_deployed'` (the run frame's `inference.tier`, or `USE_SELF_DEPLOYED_INFERENCE=1` as the
  * deployment default), otherwise `undefined` — letting the BAML function fall
  * through to the Anthropic chain it declares. A per-run `clientOverride` in the
  * frame's generic inference slot pre-empts both.
@@ -776,7 +783,7 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // THE COMPOSITION RULE, stated where it is enforced (pinned — see the
   // module's own test): the consumer's client wins over the built-in tier for
   // a role the consumer maps; everything else falls through unchanged. A
-  // mapped role returns BEFORE the verda path, so the consumer's registry and
+  // mapped role returns BEFORE the self_deployed path, so the consumer's registry and
   // primary ride the options bag and the private-call hook below does not fire
   // — the consumer's client is not the private tier and owes nobody a wake.
   //
@@ -803,7 +810,7 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
     return consumerBag
   }
 
-  const client = verdaClientFor(role)
+  const client = selfDeployedClientFor(role)
   if (!client) return undefined
   // A bag naming a private-tier client is a call about to take the override —
   // #274 wrote this hook when the `router` still answered on Anthropic, so the
@@ -823,13 +830,13 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   return { client }
 }
 
-/** The Verda client for `role` while the active tier says so, with no side
+/** The self-deployed client for `role` while the active tier says so, with no side
  *  effect — the shared half of {@link clientOverrideFor} and
  *  {@link resolveClientForRole}, which differ only in whether asking counts as
  *  a call. */
-function verdaClientFor(role: BamlRole): string | undefined {
-  if (activeInferenceTier() !== 'verda') return undefined
-  return VERDA_CLIENT_BY_ROLE[role]
+function selfDeployedClientFor(role: BamlRole): string | undefined {
+  if (activeInferenceTier() !== 'self_deployed') return undefined
+  return SELF_DEPLOYED_CLIENT_BY_ROLE[role]
 }
 
 /**
@@ -839,8 +846,8 @@ function verdaClientFor(role: BamlRole): string | undefined {
  * than hardcoding a chain name that can silently miss `MODEL_CONTEXT_WINDOWS`
  * and default to 16K.
  *
- * It reports the OVERRIDE when one is active, so a Verda-routed role trims
- * against VerdaQwen's 131K window instead of Anthropic's 200K — over-trimming
+ * It reports the OVERRIDE when one is active, so a self-deployed role trims
+ * against LargeQwen's 131K window instead of Anthropic's 200K — over-trimming
  * costs context, under-trimming costs the whole call.
  */
 export function resolveClientForRole(role: BamlRole): string {
@@ -868,7 +875,7 @@ export function resolveClientForRole(role: BamlRole): string {
     assertThinkingOverride(role, bag)
     return bag.client
   }
-  return verdaClientFor(role) ?? CLIENT_BY_ROLE[role]
+  return selfDeployedClientFor(role) ?? CLIENT_BY_ROLE[role]
 }
 
 /**
@@ -892,7 +899,7 @@ export function getContextWindow(clientName?: string): number {
  * spend against.
  *
  * PER CALL, not per construction: a tier decision is a slot of the run frame,
- * so a value captured at pattern-construction time would budget a verda-tier
+ * so a value captured at pattern-construction time would budget a self_deployed-tier
  * turn against the wrong model. `resolveClientForRole` reads the frame that is
  * open at the moment of the call — which is why the patterns
  * ask the seam (`controller.limits()`) immediately before dispatching, and
@@ -926,7 +933,7 @@ function assertPrivateClient(role: BamlRole, options: unknown): void {
   const thinking = role === 'planner' && typeof client === 'string' && THINKING_CLIENTS.has(client)
   if (
     !bag ||
-    (client !== VERDA_CLIENT_BY_ROLE[role] && !thinking) ||
+    (client !== SELF_DEPLOYED_CLIENT_BY_ROLE[role] && !thinking) ||
     'clientRegistry' in bag ||
     'env' in bag
   ) {

@@ -9,7 +9,7 @@
  * hermetic — a fake inference endpoint and a fake MCP gateway, no credential
  * and no bill — but it is still the wrong thing for a merge gate: one scenario
  * deliberately sits through a 90-second cold start, the suite needs a database,
- * and its opt-in `E2E_LIVE=verda` mode makes real calls against a
+ * and its opt-in `E2E_LIVE=self_deployed` mode makes real calls against a
  * scale-to-zero GPU box. A CI job that picked it up would take minutes longer,
  * go red on someone else's docker, and turn a diagnostic into a gate.
  *

@@ -106,7 +106,7 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
 
   const choose = (value: string) => {
     if (value === 'anthropic' && state()?.anthropicAvailable === false) return
-    if (value !== 'verda' && value !== 'anthropic') return
+    if (value !== 'self_deployed' && value !== 'anthropic') return
     if (value === state()?.tier) return
     const sid = props.sessionId
     setBusy(true)
@@ -170,8 +170,8 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                 data-testid="conversation-tier-switch"
               >
                 <SegmentGroup.Item
-                  value="verda"
-                  disabled={!s().verdaAvailable}
+                  value="self_deployed"
+                  disabled={!s().selfDeployedAvailable}
                   flex="~"
                   items="center"
                   gap="1"
@@ -180,13 +180,17 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                   cursor="pointer"
                   transition="all"
                   ring="2 transparent focus-within:ui-accent/40"
-                  text={s().tier === 'verda' ? 'xs ui-accent' : 'xs ui-text-secondary'}
-                  bg={s().tier === 'verda' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
-                  op={s().verdaAvailable ? '100' : '50'}
-                  title={s().verdaAvailable ? TIER_HINTS.verda : TIER_UNAVAILABLE_HINT}
+                  text={s().tier === 'self_deployed' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                  bg={
+                    s().tier === 'self_deployed' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'
+                  }
+                  op={s().selfDeployedAvailable ? '100' : '50'}
+                  title={
+                    s().selfDeployedAvailable ? TIER_HINTS.self_deployed : TIER_UNAVAILABLE_HINT
+                  }
                 >
-                  <span class={TIER_ICONS.verda} w="3.5" h="3.5" aria-hidden="true" />
-                  <SegmentGroup.ItemText>{TIER_LABELS.verda}</SegmentGroup.ItemText>
+                  <span class={TIER_ICONS.self_deployed} w="3.5" h="3.5" aria-hidden="true" />
+                  <SegmentGroup.ItemText>{TIER_LABELS.self_deployed}</SegmentGroup.ItemText>
                   <SegmentGroup.ItemHiddenInput />
                 </SegmentGroup.Item>
                 <SegmentGroup.Item

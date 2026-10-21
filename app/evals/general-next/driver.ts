@@ -134,7 +134,7 @@ export async function createDriver(
     }),
     // The Decide step's view of the seeded documents (#507). The eval runs on the
     // private tier only, so this is the names-bearing shape the host's source gives
-    // a `'verda'` run; the host's own tier line and owner check are pinned at layers
+    // a `'self_deployed'` run; the host's own tier line and owner check are pinned at layers
     // 1 and 2, not re-derived in a fixture.
     createDecisionDocuments: () => async () => ({
       total: documents.size,
@@ -198,26 +198,29 @@ export async function createDriver(
       documents.set('lantern-notes.md', NOTES)
       documents.set('lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n')
       const sessionId = `eval-${key.agent}-${next.id}`
-      return withRunFrame({ inference: { tier: 'verda' }, hitl: { attended: false } }, async () => {
-        const patterns = await agent.createPatterns(sessionId, deps)
-        const run = harness(...patterns)
-        let serialized: string | undefined
-        for (turn = 0; turn < next.messages.length; turn++) {
-          fake?.turn(next, turn)
-          const result = serialized
-            ? await continueSession(serialized, patterns, next.messages[turn])
-            : await run(next.messages[turn], sessionId)
-          const events = result.context.events
-          const lastUser = events.findLastIndex((e) => e.type === 'user_message')
-          trace.turns.push({
-            response: result.response,
-            status: result.status,
-            events: events.slice(lastUser),
-          })
-          serialized = result.serialized
-        }
-        return trace
-      })
+      return withRunFrame(
+        { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
+        async () => {
+          const patterns = await agent.createPatterns(sessionId, deps)
+          const run = harness(...patterns)
+          let serialized: string | undefined
+          for (turn = 0; turn < next.messages.length; turn++) {
+            fake?.turn(next, turn)
+            const result = serialized
+              ? await continueSession(serialized, patterns, next.messages[turn])
+              : await run(next.messages[turn], sessionId)
+            const events = result.context.events
+            const lastUser = events.findLastIndex((e) => e.type === 'user_message')
+            trace.turns.push({
+              response: result.response,
+              status: result.status,
+              events: events.slice(lastUser),
+            })
+            serialized = result.serialized
+          }
+          return trace
+        },
+      )
     },
     async close() {
       dispose()

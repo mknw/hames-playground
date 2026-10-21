@@ -56,7 +56,7 @@ import {
   maxOutputTokensFor,
   THINKING_CLIENTS,
   THINKING_FUNCTIONS_BY_CLIENT,
-  VERDA_CLIENT_BY_ROLE,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
@@ -506,7 +506,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // rates come through the host seam (PR-1a) — `configureCostRates` at the
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
-  const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
+  const { eurPerUsd: eurPerUsdRate, largeEurPerHour: largeEurPerHour } = activeCostRates()
   const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
   const timeRates = Object.fromEntries(
@@ -514,7 +514,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   )
   // Keep the published single-client form working for existing consumers.
   if (timePricedClient && !Object.hasOwn(timeRates, timePricedClient)) {
-    timeRates[timePricedClient] = verdaEurPerHour()
+    timeRates[timePricedClient] = largeEurPerHour()
   }
   let attempts = 0
   let costEur = 0
@@ -559,7 +559,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         if (est.basis === 'time') {
           timePricedAttempts++
           timeRate = {
-            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? verdaEurPerHour(),
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? largeEurPerHour(),
             durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
           }
         }
@@ -1149,7 +1149,7 @@ export function createLoopControllerAdapter(
     // in the bag even when no tier override is, so the bag is never empty and
     // the old with/without-opts dual call is gone. BAML routes the call to
     // `ControllerAnthropic` — its declared client in `simpleLoop.baml` —
-    // unless `USE_VERDA_INFERENCE=1` overrides the `controller` role onto the
+    // unless `USE_SELF_DEPLOYED_INFERENCE=1` overrides the `controller` role onto the
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
@@ -1332,7 +1332,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
 
     const variables = { user_message, intent, tools, context }
 
-    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` for the tier's composite consequence.
+    // Read the `planner:` entry in `SELF_DEPLOYED_CLIENT_BY_ROLE` for the tier's composite consequence.
     const override = clientOverrideFor('planner')
     const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
     const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
@@ -1418,7 +1418,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         try {
           // SAME box and credentials. Never the original's Anthropic default;
           // no public fallback, and no further corrective retry in this branch.
-          const retryClient = VERDA_CLIENT_BY_ROLE.planner
+          const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner
           const retryOpts = { ...override, collector: retryCollector, client: retryClient }
           const retryRequest = await b.request.Planner(
             user_message,
@@ -1644,7 +1644,7 @@ export function createActorControllerAdapter(
     // Call with options always — the implementation-owned collector is in the
     // bag, so the old with/without-opts dual call is gone. BAML routes to
     // `ActorAnthropic` (declared in `actorCritic.baml`) — or to the self-hosted
-    // deployment when `USE_VERDA_INFERENCE=1` re-points the `controller` role,
+    // deployment when `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `controller` role,
     // which covers the actor too. Mirrors `createLoopControllerAdapter` above:
     // a truncated or empty completion takes one corrective retry, anything
     // else — including a genuine structured-output failure, a network error or
@@ -1788,7 +1788,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     // Call with options always — the implementation-owned collector is in the
     // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
     // declares `CriticAnthropic`, overridden onto the self-hosted deployment
-    // when `USE_VERDA_INFERENCE=1` re-points the `critic` role.
+    // when `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `critic` role.
     const criticOpts = { ...clientOverrideFor('critic'), collector }
     let result: CriticResult
     try {
@@ -1962,7 +1962,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     const source = `${namespace}/${tool}`
     // THE ONE SPREAD THAT ROUTES A SECURITY CONTROL, and the only call site of
     // `clientOverrideFor('screen')` in the repo. Until 2026-08-26 this call
-    // deliberately had no override and `clients-verda.test.ts` scanned for the
+    // deliberately had no override and `clients-self-deployed.test.ts` scanned for the
     // absence; the owner then ruled that no call made under the private tier
     // may be sent to any public AI provider, so the screen follows the tier
     // like every other role. The scan is inverted accordingly: the map entry
@@ -1970,8 +1970,8 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // than quietly leaving the screen on Anthropic through a turn the user
     // asked to keep on the box.
     //
-    // WHAT MOVING IT COSTS is on `VERDA_CLIENT_BY_ROLE` and is not restated
-    // here: `VerdaQwen` is unmeasured on the two properties a screener needs,
+    // WHAT MOVING IT COSTS is on `SELF_DEPLOYED_CLIENT_BY_ROLE` and is not restated
+    // here: `LargeQwen` is unmeasured on the two properties a screener needs,
     // and the eval suite's `screen-on-the-tier` scenario is what measures them.
     //
     // POSITIONALLY SAFE (#154) without a `hasOpts` branch, unlike the Router

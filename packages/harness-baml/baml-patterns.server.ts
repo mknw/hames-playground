@@ -69,7 +69,7 @@ export function createCompactIntentAdapter(): CompactIntentFn {
     const variables = { history, latest }
 
     // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
-    // on a verda-tier run — the intent is compacted FROM the conversation's
+    // on a self_deployed-tier run — the intent is compacted FROM the conversation's
     // own history, so it moves with the rest of the describe role.
     const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
@@ -104,7 +104,7 @@ export function createRetrieveQueryAdapter(): RetrieveQueryFn {
     const startTime = Date.now()
     const collector = new Collector('retriever')
     const variables = { history, latest }
-    // describe-tier, and it moves with a verda tier decision: the rewrite is
+    // describe-tier, and it moves with a self_deployed tier decision: the rewrite is
     // built from the user's own question and the conversation history.
     const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
@@ -174,7 +174,7 @@ export function createMemoryExtractAdapter(): (
     let items: ExtractedMemory[]
     try {
       // The spread is INLINE in the argument list, not hoisted into a local:
-      // `clients-verda.test.ts` pins it on this very call by balanced parens,
+      // `clients-self-deployed.test.ts` pins it on this very call by balanced parens,
       // and a variable would read as unwired to a pin built to fail loudly.
       items = await b.ExtractMemory(
         kindHint,

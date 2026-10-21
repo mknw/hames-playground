@@ -1,7 +1,7 @@
 /**
- * Live LOAD measurement for the self-hosted Verda deployment (`VerdaQwen`).
+ * Live LOAD measurement for the self-deployed 27B deployment (`LargeQwen`).
  *
- * Sibling of `smoke-verda.ts`, which answers "does the route work". This one
+ * Sibling of `smoke-self-deployed.ts`, which answers "does the route work". This one
  * answers "what does it do under the preview's load", and it exists because
  * every capacity claim about a single-GPU vLLM box is otherwise a guess: the
  * deployment serves one replica, so concurrency is queueing, not scaling.
@@ -12,8 +12,8 @@
  *
  * Run from `app/` (the endpoint bills while awake — run it once, in one burst):
  *
- *   USE_VERDA_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/inference/scripts/smoke-verda-load.ts
+ *   USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env \
+ *     src/lib/inference/scripts/smoke-large-load.ts
  *
  * WHAT IT MEASURES, and why each phase is shaped the way it is:
  *
@@ -54,10 +54,10 @@ import type { LoopTurn, ToolDescription } from '@hames-ai/harness-patterns/types
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
-import { assertVerdaConfigured, verdaInferenceEnabled } from '../config.server'
+import { assertLargeModelConfigured, selfDeployedInferenceEnabled } from '../config.server'
 import { clientOverrideFor } from '@hames-ai/harness-baml/clients.server'
 
-const EXPECTED_CLIENT = 'VerdaQwen'
+const EXPECTED_CLIENT = 'LargeQwen'
 
 /** Phase sizes. Small on purpose: this is a measurement, not a soak, and the
  *  box is billed per GPU-second while awake. */
@@ -339,13 +339,13 @@ async function burst(
 }
 
 async function main(): Promise<void> {
-  if (!verdaInferenceEnabled()) {
+  if (!selfDeployedInferenceEnabled()) {
     throw new Error(
-      'USE_VERDA_INFERENCE is not 1 — this run would measure Anthropic. See the header.',
+      'USE_SELF_DEPLOYED_INFERENCE is not 1 — this run would measure Anthropic. See the header.',
     )
   }
-  assertVerdaConfigured()
-  console.log('🔒 Verda load measurement — self-hosted, single replica')
+  assertLargeModelConfigured()
+  console.log('🔒 self-deployed load measurement — self-hosted, single replica')
   console.log(
     `   catalog=${TOOLS.length} tools · turn log=${TURNS.length} turns · output target ~300 tokens`,
   )

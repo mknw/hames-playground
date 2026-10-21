@@ -32,7 +32,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
     setConversationInferenceTier(id, userId, tier),
 }))
 
-const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>(
+const getStoredInferenceTier = vi.fn<(id: string) => Promise<'self_deployed' | 'anthropic' | null>>(
   async () => null,
 )
 const setStoredInferenceTier = vi.fn<(id: string, tier: string) => Promise<void>>(async () => {})
@@ -54,21 +54,21 @@ import {
 } from '../../../lib/inference/tier.server'
 
 /** BOTH endpoints the private tier needs — the 27B and the 4B summarizer.
- *  `verdaConfigured()` asks about both, so a fixture setting only the first
+ *  `selfDeployedConfigured()` asks about both, so a fixture setting only the first
  *  describes a deployment on which the private position is refused. */
 const ENV_KEYS = [
   'INFERENCE_TIERS',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
 ] as const
 let saved: Record<string, string | undefined>
 
-function configureVerda(): void {
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+function configureSelfDeployed(): void {
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -90,23 +90,27 @@ afterEach(() => {
 })
 
 describe('resolveTier — the order', () => {
+  it('normalizes a legacy conversation before considering a public seed', () => {
+    expect(resolveTier('verda', 'anthropic')).toBe('self_deployed')
+  })
+
   it('prefers the conversation over everything else', () => {
-    configureVerda() // the default would be 'verda'
-    expect(resolveTier('anthropic', 'verda')).toBe('anthropic')
+    configureSelfDeployed() // the default would be 'self_deployed'
+    expect(resolveTier('anthropic', 'self_deployed')).toBe('anthropic')
   })
 
   it('falls to the user’s last-used tier when the conversation has none', () => {
-    configureVerda()
+    configureSelfDeployed()
     expect(resolveTier(null, 'anthropic')).toBe('anthropic')
   })
 
   it('falls to the deployment default when neither says anything', () => {
-    configureVerda()
-    expect(resolveTier(null, null)).toBe('verda')
+    configureSelfDeployed()
+    expect(resolveTier(null, null)).toBe('self_deployed')
   })
 
   it('is anthropic by default when the private tier is unconfigured', () => {
-    // Not a second policy — `runWithInferenceTier('verda')` throws when the
+    // Not a second policy — `runWithInferenceTier('self_deployed')` throws when the
     // endpoint is unset, so defaulting there would make every turn fail rather
     // than fall through (the fall-through is refused by design).
     expect(resolveTier(null, null)).toBe('anthropic')
@@ -145,15 +149,15 @@ describe('resolveConversationTier', () => {
     // `Promise.all` this rejected, and the caller's fall-back is the env flag
     // (`activeInferenceTier()`), not `defaultInferenceTier()` — so on the
     // deployment shape docs/PREVIEW.md allows (endpoints configured,
-    // USE_VERDA_INFERENCE unset) a conversation the user had PINNED to the
+    // USE_SELF_DEPLOYED_INFERENCE unset) a conversation the user had PINNED to the
     // private tier ran its next turn on Anthropic, while its sidebar glyph
     // still said Private. The seed is only ever consulted when the column has
     // nothing, so losing it here costs nothing at all.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    getConversationInferenceTier.mockResolvedValue('verda')
+    getConversationInferenceTier.mockResolvedValue('self_deployed')
     getStoredInferenceTier.mockRejectedValue(new Error('user_prefs schema is unavailable'))
 
-    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('self_deployed')
 
     // `allSettled` is also what makes the failure invisible — the caller's
     // `.catch()` can no longer fire — so the resolver says which half it lost.
@@ -184,7 +188,7 @@ describe('resolveConversationTier', () => {
 
   it('falls to the deployment default when BOTH reads fail', async () => {
     // Fail-closed by construction: `defaultInferenceTier()` answers `anthropic`
-    // on a deployment with no endpoint and `verda` on one that has it. The
+    // on a deployment with no endpoint and `self_deployed` on one that has it. The
     // pre-existing fall-open ABOVE this function — a rejection reaching
     // `turn.server.ts`'s `activeInferenceTier()` — is #303 and is deliberately
     // not touched here; this pins that the rejection no longer happens.
@@ -201,22 +205,24 @@ describe('resolveConversationTier', () => {
       expect.stringContaining('last-used inference tier for user-1'),
     ])
 
-    configureVerda()
-    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('verda')
+    configureSelfDeployed()
+    await expect(resolveConversationTier('conv-1', 'user-1')).resolves.toBe('self_deployed')
     warn.mockRestore()
   })
 })
 
 describe('chooseConversationTier', () => {
   it('writes BOTH the conversation and the seed, against the owner it was given', async () => {
-    configureVerda()
-    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).resolves.toBe('verda')
+    configureSelfDeployed()
+    await expect(chooseConversationTier('conv-1', 'user-1', 'self_deployed')).resolves.toBe(
+      'self_deployed',
+    )
 
     // The row write is what makes the flip stick to THIS conversation; the seed
     // write is where a flip lands when the conversation has no row yet, and is
     // what makes the next new chat start here.
-    expect(setConversationInferenceTier).toHaveBeenCalledWith('conv-1', 'user-1', 'verda')
-    expect(setStoredInferenceTier).toHaveBeenCalledWith('user-1', 'verda')
+    expect(setConversationInferenceTier).toHaveBeenCalledWith('conv-1', 'user-1', 'self_deployed')
+    expect(setStoredInferenceTier).toHaveBeenCalledWith('user-1', 'self_deployed')
     // ROW FIRST. The seed is the observable half — one row per user — so
     // ordering them is what makes its arrival imply the conversation's, instead
     // of leaving a window where the choice looks landed and the conversation is
@@ -229,17 +235,24 @@ describe('chooseConversationTier', () => {
   it('leaves the seed alone when the conversation write fails', async () => {
     // The better failure direction: a flip that did not take must not silently
     // re-aim the user's next new chat.
-    configureVerda()
+    configureSelfDeployed()
     setConversationInferenceTier.mockRejectedValueOnce(new Error('postgres is down'))
 
-    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).rejects.toThrow(
+    await expect(chooseConversationTier('conv-1', 'user-1', 'self_deployed')).rejects.toThrow(
       'postgres is down',
     )
     expect(setStoredInferenceTier).not.toHaveBeenCalled()
   })
 
+  it("reads a pre-rename tab's legacy literal as self_deployed and stores the new one", async () => {
+    configureSelfDeployed()
+    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).resolves.toBe('self_deployed')
+    expect(setConversationInferenceTier).toHaveBeenCalledWith('conv-1', 'user-1', 'self_deployed')
+    expect(setStoredInferenceTier).toHaveBeenCalledWith('user-1', 'self_deployed')
+  })
+
   it('refuses a tier it does not recognise rather than storing it', async () => {
-    for (const bad of ['openai', null, { tier: 'verda' }, '']) {
+    for (const bad of ['openai', null, { tier: 'self_deployed' }, '', 'Verda', 'private']) {
       await expect(chooseConversationTier('conv-1', 'user-1', bad)).rejects.toThrow(
         /Unknown inference tier/,
       )
@@ -252,7 +265,7 @@ describe('chooseConversationTier', () => {
     // Storing it would park a row that `runWithInferenceTier` throws on, so the
     // user's next message breaks — and the alternative the flag exists to
     // prevent (quietly running on Anthropic instead) is worse still.
-    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).rejects.toThrow(
+    await expect(chooseConversationTier('conv-1', 'user-1', 'self_deployed')).rejects.toThrow(
       /self-hosted inference endpoint is not configured/,
     )
     expect(setConversationInferenceTier).not.toHaveBeenCalled()
@@ -268,9 +281,9 @@ describe('chooseConversationTier', () => {
     // The private tier is two models, so its configuration is a conjunction:
     // a deployment with no summarizer endpoint is REFUSED rather than descaled
     // onto the 27B, which would be a routing change nobody asked for.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
-    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).rejects.toThrow(
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
+    await expect(chooseConversationTier('conv-1', 'user-1', 'self_deployed')).rejects.toThrow(
       /self-hosted inference endpoint is not configured/,
     )
   })
@@ -279,24 +292,24 @@ describe('chooseConversationTier', () => {
 describe('private-only deployment', () => {
   beforeEach(() => {
     process.env.INFERENCE_TIERS = 'private'
-    configureVerda()
+    configureSelfDeployed()
   })
 
   it.each([
     ['anthropic', 'anthropic'],
-    ['anthropic', 'verda'],
+    ['anthropic', 'self_deployed'],
     [null, 'anthropic'],
     [null, null],
     ['unknown', 'anthropic'],
-    ['verda', 'anthropic'],
+    ['self_deployed', 'anthropic'],
   ] as const)('clamps stored tier %s and seed %s to private', (stored, seed) => {
-    expect(resolveTier(stored, seed)).toBe('verda')
+    expect(resolveTier(stored, seed)).toBe('self_deployed')
   })
 
   it('clamps old rows through the asynchronous resolver', async () => {
     getConversationInferenceTier.mockResolvedValue('anthropic')
     getStoredInferenceTier.mockResolvedValue('anthropic')
-    expect(await resolveConversationTier('old-conversation', 'user-1')).toBe('verda')
+    expect(await resolveConversationTier('old-conversation', 'user-1')).toBe('self_deployed')
   })
 
   it('refuses a public selection before either write', async () => {
@@ -308,6 +321,8 @@ describe('private-only deployment', () => {
   })
 
   it('allows the private selection', async () => {
-    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).resolves.toBe('verda')
+    await expect(chooseConversationTier('conv-1', 'user-1', 'self_deployed')).resolves.toBe(
+      'self_deployed',
+    )
   })
 })

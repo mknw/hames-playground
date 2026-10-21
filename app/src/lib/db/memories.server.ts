@@ -77,6 +77,7 @@
  * conversation deletes run in their own transaction
  * ({@link deleteMemoriesForConversations}, #531).
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -105,7 +106,29 @@ assertServerOnImport()
 export type MemoryKind = 'episodic' | 'semantic' | 'preference' | 'trait'
 
 /** The inference tier a memory was written under (D8: tiers never mix). */
-export type MemoryTier = 'verda' | 'anthropic'
+export type MemoryTier = 'self_deployed' | 'anthropic'
+
+function memoryTier(value: unknown): MemoryTier {
+  const tier = normalizeStoredInferenceTier(value)
+  if (!tier) throw new Error('Unknown stored memory tier; refusing to read or write it.')
+  return tier
+}
+
+/** Query both spellings of the same tier; unknown tiers select no rows. */
+function storedMemoryTiers(tiers: readonly string[]): string[] {
+  return [
+    ...new Set(
+      tiers.flatMap((value) => {
+        const tier = normalizeStoredInferenceTier(value)
+        return tier === 'self_deployed'
+          ? ['self_deployed', 'verda']
+          : tier === 'anthropic'
+            ? ['anthropic']
+            : []
+      }),
+    ),
+  ]
+}
 
 /**
  * Every column of both tables, classified — the data the
@@ -170,7 +193,7 @@ const MEMORY_DDL = `
     id             TEXT PRIMARY KEY,
     user_id        TEXT NOT NULL,
     kind           TEXT NOT NULL CHECK (kind IN ('episodic','semantic','preference','trait')),
-    tier           TEXT NOT NULL CHECK (tier IN ('verda','anthropic')),
+    tier           TEXT NOT NULL CHECK (tier IN ('verda','self_deployed','anthropic')),
     content        TEXT NOT NULL,
     evidence       TEXT NOT NULL,
     embedding      vector(1024) NOT NULL,
@@ -185,6 +208,18 @@ const MEMORY_DDL = `
   -- already has it picks the column up here (idempotent; no backfill: NULL is
   -- the truthful value for a row nobody recorded an event for).
   ALTER TABLE memories ADD COLUMN IF NOT EXISTS evidence_event_id TEXT;
+  -- Widen the old check under the schema transaction; retain every old row.
+  DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'memories'::regclass AND conname = 'memories_tier_check'
+        AND pg_get_constraintdef(oid) NOT LIKE '%self_deployed%'
+    ) THEN
+      ALTER TABLE memories DROP CONSTRAINT memories_tier_check;
+      ALTER TABLE memories ADD CONSTRAINT memories_tier_check
+        CHECK (tier IN ('verda','self_deployed','anthropic'));
+    END IF;
+  END $$;
   CREATE INDEX IF NOT EXISTS memories_user_idx ON memories (user_id, tier, kind);
 
   -- One row per (source event, candidate ordinal). The primary key is the
@@ -451,7 +486,7 @@ export async function insertMemory(input: MemoryInsert): Promise<void> {
       input.id,
       input.userId,
       input.kind,
-      input.tier,
+      memoryTier(input.tier),
       encryptField(input.content),
       encryptField(input.evidence),
       toVectorLiteral(input.embedding),
@@ -497,7 +532,7 @@ export async function listMemoriesForUser(userId: string): Promise<MemoryRow[]> 
     id: r.id as string,
     userId: r.user_id as string,
     kind: r.kind as MemoryKind,
-    tier: r.tier as MemoryTier,
+    tier: memoryTier(r.tier),
     content: decryptField(r.content as string, 'memories.content'),
     evidence: decryptField(r.evidence as string, 'memories.evidence'),
     embedSpace: r.embed_space as string,
@@ -676,7 +711,7 @@ export function createMemoryDbStore(
       await ready()
       const { rows } = await query<{ n: number }>(
         `SELECT count(*)::int AS n FROM memories WHERE user_id = $1 AND tier = ANY($2)`,
-        [userId, [...tiers]],
+        [userId, storedMemoryTiers(tiers)],
       )
       return rows[0]?.n ?? 0
     },
@@ -691,12 +726,12 @@ export function createMemoryDbStore(
                 embedding <=> $3::vector AS distance
            FROM memories
           WHERE user_id = $1 AND tier = ANY($2)`,
-        [userId, [...tiers], toVectorLiteral(embedding)],
+        [userId, storedMemoryTiers(tiers), toVectorLiteral(embedding)],
       )
       return rows.map((r) => ({
         id: r.id as string,
         kind: r.kind as MemoryKind,
-        tier: r.tier as string,
+        tier: memoryTier(r.tier),
         content: decryptContent(r.content),
         embedSpace: r.embed_space as string,
         distance: Number(r.distance),
@@ -769,10 +804,10 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
       const { rows } = await client.query(
         `SELECT id, kind, content, 1 - (embedding <=> $1::vector) AS similarity
            FROM memories
-          WHERE user_id = $2 AND tier = $3 AND embed_space = $4
+          WHERE user_id = $2 AND tier = ANY($3) AND embed_space = $4
           ORDER BY embedding <=> $1::vector
           LIMIT 1`,
-        [toVectorLiteral(embedding), userId, tier, embedSpace],
+        [toVectorLiteral(embedding), userId, storedMemoryTiers([tier]), embedSpace],
       )
       const r = rows[0]
       if (!r) return null
@@ -792,7 +827,7 @@ function writeTx(client: pg.PoolClient, userId: string): MemoryWriteTx {
           row.id,
           userId,
           row.kind,
-          row.tier,
+          memoryTier(row.tier),
           encryptField(row.content),
           encryptField(row.evidence),
           toVectorLiteral(row.embedding),
@@ -894,7 +929,7 @@ export async function listMemorySourcesForConversation(conversationId: string, u
       ORDER BY s.created_at, s.event_id, s.ordinal`,
     [conversationId, userId],
   )
-  return rows
+  return rows.map((row) => ({ ...row, tier: memoryTier(row.tier) }))
 }
 
 /** Owner-scoped row erasure; the owner lock also serializes compaction. */

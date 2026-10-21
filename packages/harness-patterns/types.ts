@@ -534,7 +534,7 @@ export type CriticFnWithLLMData = (
  *
  *  Per CALL, not per construction: a tier decision is an AsyncLocalStorage
  *  scope, so a value captured at pattern-construction time would budget a
- *  verda-tier turn against the wrong model. `limitsFor(role)` in
+ *  self_deployed-tier turn against the wrong model. `limitsFor(role)` in
  *  `clients.server.ts` resolves per call; the adapter-backed seam functions
  *  expose it as `limits()`. */
 export interface ModelLimits {

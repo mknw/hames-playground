@@ -7,12 +7,12 @@
  * Postgres this suite provisions for itself (`hames_test_apppath` — its own since
  * #280; see `docs/testing/pyramid.md`).
  *
- * LIVE (`E2E_LIVE=verda`) points the same scenarios at the real self-hosted
+ * LIVE (`E2E_LIVE=self_deployed`) points the same scenarios at the real self-hosted
  * deployment. It is a pre-release check, not a routine one: the endpoint scales
  * to zero and pays a multi-minute cold start, so the run is burst-disciplined
  * — one process, one file at a time, at most two turns in flight (the
  * deployment is a single replica, where concurrency is queueing rather than
- * scaling; measured 2026-08-25 by `smoke-verda-load.ts`) — and the
+ * scaling; measured 2026-08-25 by `smoke-large-load.ts`) — and the
  * fault-injection scenarios, which have no live analogue that is safe to
  * cause, are skipped rather than faked.
  *
@@ -21,9 +21,9 @@
  * `app/evals/README.md` draws for the eval runner and this suite has no reason
  * to cross.
  *
- * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=verda` was
+ * WHAT LIVE MODE STILL BILLS, stated rather than implied. `E2E_LIVE=self_deployed` was
  * never "no Anthropic calls", and after the 2026-08-26 owner decisions it is:
- * the tier switch moves exactly the roles in `VERDA_CLIENT_BY_ROLE`, which is
+ * the tier switch moves exactly the roles in `SELF_DEPLOYED_CLIENT_BY_ROLE`, which is
  * now EVERY role — the injection screen included. So a live run in the
  * self-hosted position bills Anthropic nothing at all. That is a smaller claim
  * than it sounds, because no scenario here triggers a screen call anyway (no
@@ -45,25 +45,25 @@
  * multi-tier scenarios read.
  */
 
-export type E2eMode = 'hermetic' | 'live-verda'
+export type E2eMode = 'hermetic' | 'live-self_deployed'
 
-/** `E2E_LIVE=verda` opts into the real endpoint. Anything else is hermetic. */
+/** `E2E_LIVE=self_deployed` opts into the real endpoint. Anything else is hermetic. */
 export function resolveMode(): E2eMode {
   const raw = process.env.E2E_LIVE?.trim().toLowerCase()
   if (!raw || raw === '0' || raw === 'false') return 'hermetic'
-  if (raw === 'verda') return 'live-verda'
+  if (raw === 'self_deployed') return 'live-self_deployed'
   throw new Error(
-    `E2E_LIVE=${raw} is not a mode. Use E2E_LIVE=verda for the self-hosted endpoint, or ` +
+    `E2E_LIVE=${raw} is not a mode. Use E2E_LIVE=self_deployed for the self-hosted endpoint, or ` +
       'unset it for the hermetic run.',
   )
 }
 
 export const MODE: E2eMode = resolveMode()
 export const IS_HERMETIC = MODE === 'hermetic'
-export const IS_LIVE = MODE === 'live-verda'
+export const IS_LIVE = MODE === 'live-self_deployed'
 
 /** The two positions of the tier switch. */
-export type Tier = 'anthropic' | 'verda'
+export type Tier = 'anthropic' | 'self_deployed'
 
 /**
  * The tiers a multi-tier scenario runs its legs over — one definition, read by
@@ -73,7 +73,9 @@ export type Tier = 'anthropic' | 'verda'
  * way to tell "the app works" from "the app works on one route". Live mode runs
  * the self-hosted tier only, for the billing reason in the header.
  */
-export const TIERS: readonly Tier[] = IS_HERMETIC ? ['anthropic', 'verda'] : ['verda']
+export const TIERS: readonly Tier[] = IS_HERMETIC
+  ? ['anthropic', 'self_deployed']
+  : ['self_deployed']
 
 /**
  * The `api_key` the hermetic run puts in `ANTHROPIC_API_KEY`.
@@ -92,16 +94,16 @@ export const HERMETIC_ANTHROPIC_KEY = 'e2e-hermetic-no-real-anthropic-calls'
  *  off the fake's recorded calls to tell the two tiers apart. */
 export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 
-/** The model id `VerdaQwen` declares in `baml_src/verda-client.baml`. Not
+/** The model id `LargeQwen` declares in `baml_src/large-client.baml`. Not
  *  re-derived here on purpose: a scenario asserting "this call took the
  *  self-hosted route" should fail if the declaration changes under it. */
-export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
- * The model id `LocalQwenSmall` declares in `baml_src/local-client.baml` — the
+ * The model id `SmallQwen` declares in `baml_src/local-client.baml` — the
  * 4B the private tier routes the `describe` role to since 2026-08-26.
  *
- * Hardcoded for VERDA_MODEL's reason, and it buys something extra here: the fake
+ * Hardcoded for LARGE_LLM_MODEL's reason, and it buys something extra here: the fake
  * records each request's `model` field, so this is how a scenario tells a
  * private-tier SUMMARY apart from a private-tier CONTROLLER call. Before the flip
  * those were the same model and indistinguishable on the wire.
@@ -115,9 +117,9 @@ export const SMALL_MODEL = 'qwen3.5-4b-instruct'
  * NOT deliberately sized for a slow model call, which is what those scenarios
  * are there to find.
  *
- * IT HAS A CEILING NOW, and it is 180s — `VerdaQwen`'s `request_timeout_ms`.
+ * IT HAS A CEILING NOW, and it is 180s — `LargeQwen`'s `request_timeout_ms`.
  * Since wake-then-run the cold start is paid by the wake poll (bounded
- * separately, at `VERDA_WAKE_TIMEOUT_MS` = 600s overall) and scenario 4 aims its
+ * separately, at `LARGE_LLM_WAKE_TIMEOUT_MS` = 600s overall) and scenario 4 aims its
  * delay PAST the wake, at a real BAML call. So a value at or above 180 000 no longer
  * asks "does the stack survive a slow call" — it asks the client to break its
  * own budget, and scenario 4 would go red for the one reason that is not a
@@ -127,7 +129,7 @@ export const SMALL_MODEL = 'qwen3.5-4b-instruct'
 export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '90000', 10)
 
 /**
- * What the hermetic run sets `VERDA_WAKE_ATTEMPT_TIMEOUT_MS` to.
+ * What the hermetic run sets `LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS` to.
  *
  * The wake became a POLL on 2026-08-27 — short attempts, retried until one
  * answers — because the live platform was observed ABANDONING every request
@@ -144,7 +146,7 @@ export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '9
  * fake's one-shot behaviour and the poll's first attempt line up: one attempt,
  * one wait, exactly the shape those scenarios assert. The poll's RETRY behaviour
  * is not configured away — it has fake-timer unit coverage in
- * `verda-wake.test.ts`, and scenario 8's "keeps polling until the box answers"
+ * `large-wake.test.ts`, and scenario 8's "keeps polling until the box answers"
  * lowers this var itself for the one test that is about it.
  *
  * Derived from {@link COLD_START_MS} rather than fixed, so raising

@@ -9,6 +9,7 @@ import type { LLMCallData } from '@hames-ai/harness-patterns'
 import type { EventMetrics } from '@hames-ai/harness-patterns/types'
 import { fmtEur } from '@hames-ai/harness-patterns/observability/token-totals'
 import { isTimePricedStep, stepCostEur } from '@hames-ai/harness-patterns/metrics/aggregate'
+import { canonicalClientName } from '../../../lib/settings'
 import { CodeBlock, ParsedPromptView } from './PromptView'
 
 /** The floor caveat, in the words all three time-priced tooltips end with. */
@@ -66,7 +67,7 @@ function stepCost(
   // that mixed a local call with a billed one has a non-zero figure and falls
   // through to the token/floor branches, which describe the part that cost
   // something. `LOCAL_PRICED_CLIENTS` includes LocalGLM; the metered
-  // LocalQwenSmall summarizer takes the time-priced branch above.
+  // SmallQwen summarizer takes the time-priced branch above.
   if (!isFloor && m.basis === 'local' && cost.costEur === 0) {
     return {
       eur: 0,
@@ -139,7 +140,7 @@ const UsageStats = (props: { llmCall: LLMCallData }) => (
         <div flex="~ col" gap="0.5">
           <span text="xs ui-text-tertiary">Client</span>
           <span text="sm ui-text-primary" font="mono">
-            {props.llmCall.clientName}
+            {canonicalClientName(props.llmCall.clientName)}
           </span>
         </div>
       </Show>

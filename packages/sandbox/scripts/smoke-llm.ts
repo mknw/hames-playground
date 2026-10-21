@@ -34,7 +34,7 @@ import { createEventView } from '@hames-ai/harness-patterns/patterns'
 import { printEventSummary, checkRootfsImage } from './_shared'
 // The composition root registers the seam (tier policy, model tables, cost
 // pricing) — without it the adapters' default tier is the seam's safe
-// 'anthropic', so a USE_VERDA_INFERENCE=1 run would silently grade the
+// 'anthropic', so a USE_SELF_DEPLOYED_INFERENCE=1 run would silently grade the
 // Anthropic chains and fail nothing (reviewer finding, PR-1a review → PR-1b).
 import '../inference/config.server'
 

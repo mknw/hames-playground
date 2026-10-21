@@ -38,7 +38,7 @@ Re-homed → [`packages/harness-baml/README.md`](../../packages/harness-baml/REA
 client scope — Anthropic + custom-endpoint per `harness-npm-lib.md` §4.4 — and
 how a consumer points a custom-endpoint client at their own model; every code
 sample typecheck-pinned by
-`app/src/__tests__/lib/harness-baml/baml-readme-docs-pins.test.ts`). The verda
+`app/src/__tests__/lib/harness-baml/baml-readme-docs-pins.test.ts`). The self_deployed
 tier material is app configuration, not package surface — the one-line pointer
 lives in that README.
 

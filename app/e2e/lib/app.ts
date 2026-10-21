@@ -5,8 +5,8 @@
  * configuration at MODULE LOAD rather than per call:
  *
  *   - `mcp-client.server.ts` freezes `MCP_GATEWAY_URL` into a `const`.
- *   - `clients.server.ts` runs `assertVerdaConfigured()` at import when
- *     `USE_VERDA_INFERENCE=1`.
+ *   - `clients.server.ts` runs `assertLargeModelConfigured()` at import when
+ *     `USE_SELF_DEPLOYED_INFERENCE=1`.
  *
  * So every app module is reached through a dynamic `import()` inside
  * {@link bootApp}, after the fakes are listening and `process.env` has been
@@ -70,7 +70,7 @@ export interface AppHandles {
    * no longer reaches it. A scenario that flips between turns of ONE session
    * must pass it, or it is asserting on a tier change the app correctly ignored.
    */
-  setTier(tier: 'anthropic' | 'verda', sessionId?: string): Promise<void>
+  setTier(tier: 'anthropic' | 'self_deployed', sessionId?: string): Promise<void>
   /** The persisted row for a conversation, or null. */
   readRow(sessionId: string): Promise<StoredRow | null>
   /** Delete every row this suite's user owns. Test database only. */
@@ -180,8 +180,8 @@ async function boot(): Promise<AppHandles> {
     process.loadEnvFile('.env')
     for (const name of [
       'ANTHROPIC_API_KEY',
-      'VERDA_INFERENCE_ENDPOINT',
-      'VERDA_INFERENCE_API_KEY',
+      'LARGE_LLM_BASE_URL',
+      'LARGE_LLM_API_KEY',
       // The private tier's 4B summarizer. Required in live mode for the same
       // reason as the two above: the tier is refused without it, so a live run
       // would fail every private-tier turn on a missing var rather than on
@@ -189,7 +189,7 @@ async function boot(): Promise<AppHandles> {
       'SMALL_LLM_BASE_URL',
     ]) {
       if (!process.env[name]) {
-        throw new Error(`E2E_LIVE=verda needs ${name} in app/.env (see app/.env.example).`)
+        throw new Error(`E2E_LIVE=self_deployed needs ${name} in app/.env (see app/.env.example).`)
       }
     }
   }
@@ -214,12 +214,12 @@ async function boot(): Promise<AppHandles> {
 
   const fakeLlm = await startFakeLlm()
   if (IS_HERMETIC) {
-    // The shipped seam: `VerdaQwen` reads this per call. The `/v1` suffix is
-    // required by `assertVerdaConfigured()`, which still runs.
-    process.env.VERDA_INFERENCE_ENDPOINT = fakeLlm.baseUrl
-    process.env.VERDA_INFERENCE_API_KEY = 'e2e-fake-key'
+    // The shipped seam: `LargeQwen` reads this per call. The `/v1` suffix is
+    // required by `assertLargeModelConfigured()`, which still runs.
+    process.env.LARGE_LLM_BASE_URL = fakeLlm.baseUrl
+    process.env.LARGE_LLM_API_KEY = 'e2e-fake-key'
     // The private tier's SECOND model since 2026-08-26: `describe` runs on the 4B
-    // `LocalQwenSmall`, and the tier is refused outright without this. Pointed at
+    // `SmallQwen`, and the tier is refused outright without this. Pointed at
     // the SAME fake, which is what lets a scenario tell the two apart — the fake
     // records the `model` field, so a describe call arrives as the 4B's id and a
     // controller call as the 27B's.
@@ -246,12 +246,12 @@ async function boot(): Promise<AppHandles> {
     // (30s) would cut every one of this fake's injected delays into attempt
     // slices — see WAKE_ATTEMPT_TIMEOUT_MS for why that would make scenarios 3,
     // 4 and 8 measure the poll's cadence instead of the thing each is named for.
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = String(WAKE_ATTEMPT_TIMEOUT_MS)
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = String(WAKE_ATTEMPT_TIMEOUT_MS)
   }
   // Never the process default: every scenario decides its tier per user, the
   // way the switch does, so a stray deployment default would mask a
   // broken preference read.
-  delete process.env.USE_VERDA_INFERENCE
+  delete process.env.USE_SELF_DEPLOYED_INFERENCE
 
   // ---- Routing -----------------------------------------------------------
   // ONE corpus: `@hames-ai/harness-baml/baml_client` is the generated singleton
@@ -396,15 +396,15 @@ async function boot(): Promise<AppHandles> {
     },
 
     async goToSleep() {
-      const activity = await import('../../src/lib/inference/verda-activity.server')
+      const activity = await import('../../src/lib/inference/large-activity.server')
       const wake = await import('../../src/lib/inference/wake.server')
-      activity.resetVerdaActivity()
+      activity.resetLargeActivity()
       const coldStart = await import('../../src/lib/inference/cold-start.server')
       coldStart.resetSmallActivity()
       wake.resetSmallWake()
       // And drop any ping still parked on the shared symbol, so a scenario that
       // just failed one does not attach to its rejected promise.
-      wake.resetVerdaWake()
+      wake.resetLargeWake()
     },
 
     async wipe() {

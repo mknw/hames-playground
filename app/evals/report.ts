@@ -42,12 +42,12 @@ function ok(pass: boolean): string {
  */
 const CACHING_NOTES: Record<string, string> = {
   // Two independent reasons, one in this repo and one on the box. In-repo:
-  // `VerdaQwen` declares no `allowed_role_metadata`, so the controller/actor
+  // `LargeQwen` declares no `allowed_role_metadata`, so the controller/actor
   // templates' `cache_control` breakpoints (#122) are dropped rather than
-  // forwarded (`baml_src/verda-client.baml`). On the deployment: vLLM is
+  // forwarded (`baml_src/large-client.baml`). On the deployment: vLLM is
   // started without `--enable-prefix-caching`, so there is no server-side
   // prefix cache either (owner, 2026-08-26; may change later).
-  VerdaQwen:
+  LargeQwen:
     'NONE today. The deployment runs vLLM without `--enable-prefix-caching`, and the client ' +
     'declares no `allowed_role_metadata` so the templates’ `cache_control` breakpoints are ' +
     'dropped — repeated long prompts pay FULL PREFILL every time. Read every number below as ' +

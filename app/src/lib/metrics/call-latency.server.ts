@@ -52,7 +52,7 @@
  * ## MULTI-INSTANCE CAVEAT (deliberate, and the same one as the warm indicator)
  *
  * The window is **process-local**, exactly like `inference/
- * verda-activity.server.ts`'s clock, and for the same reason: a shared Redis
+ * large-activity.server.ts`'s clock, and for the same reason: a shared Redis
  * key would be real infrastructure for a header stat. Two app instances behind
  * a load balancer each report their own traffic, so two users can see different
  * medians for the same tier at the same moment, and a restart empties the
@@ -89,7 +89,7 @@ const STATE_KEY = Symbol.for('hames-app.call-latency')
 type LatencyState = Record<InferenceTier, number[]>
 type LatencyGlobal = typeof globalThis & { [STATE_KEY]?: LatencyState }
 const state: LatencyState = ((globalThis as LatencyGlobal)[STATE_KEY] ??= {
-  verda: [],
+  self_deployed: [],
   anthropic: [],
 })
 
@@ -147,6 +147,6 @@ export function tierLatency(tier: InferenceTier): TierLatency {
 
 /** Test-only reset. */
 export function resetCallLatency(): void {
-  state.verda = []
+  state.self_deployed = []
   state.anthropic = []
 }

@@ -88,6 +88,8 @@ class Pipeline(unittest.TestCase):
             return b""
         if name == "guestfish" and "--rw" in argv:
             self.assertNotIn("--network", argv)
+            self.assertTrue(any(Path(c[0]).name == "virt-customize" and "--upload" in c for c in self.calls[:-1]),
+                            "customize.sh would run before its inputs are uploaded")
             commands = argv[argv.index("-i") + 1:]
             self.assertEqual(commands, ["modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"])
             self.customized = True
@@ -462,6 +464,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(child.returncode, 0, child.stderr)
         argv = arguments.read_text().splitlines()
         self.assertEqual(argv[argv.index('--data-root') + 1], '/var/lib/docker')
+        self.assertEqual(argv[argv.index('--config-file') + 1], '/opt/vm-image/assembly-daemon.json')
         self.assertEqual([argv[i + 1] for i, v in enumerate(argv) if v == '--host'], ['unix:///run/vm-image-docker.sock'])
         self.assertIn('--iptables=false', argv)
 
@@ -544,7 +547,8 @@ class Pipeline(unittest.TestCase):
         for call in calls:  # every apt call sees ONLY the local repository
             self.assertTrue(any(a.startswith('Dir::Etc::SourceList=') and a.endswith('/opt/vm-image/local.list') for a in call))
             self.assertTrue(any(a.startswith('Dir::State::Lists=') and a.endswith('/opt/vm-image/repo-lists') for a in call))
-        self.assertEqual(calls[1][-2:], ['a=1:2.0-1', 'b=3'])  # the lock's exact versions
+        self.assertEqual(calls[1][6:], ['install', '-y', '--no-install-recommends', '--no-remove',
+                                        '-o', 'Dpkg::Options::=--force-confold', 'a=1:2.0-1', 'b=3'])  # exactly this, lock versions
         source = (guest / 'opt/vm-image/local.list').read_text()
         self.assertTrue(source.startswith('deb [trusted=yes] file:') and source.endswith('/opt/vm-image ./\n'))
         index = (guest / 'opt/vm-image/Packages').read_text()
@@ -565,6 +569,14 @@ class Pipeline(unittest.TestCase):
 
     def test_guest_runs_the_host_supplied_agent(self):
         guest = self.fake_root()
+        (guest / 'usr/lib/systemd/system').mkdir(parents=True)
+        packaged = guest / 'usr/lib/systemd/system/incus-agent.service'
+        packaged.write_text('[Service]\nExecStart=/usr/libexec/incus/incus-agent\n')  # no setup step
+        child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
+        self.assertNotEqual(child.returncode, 0)
+        self.assertIn('does not run incus-agent-setup', child.stderr)
+        self.assertFalse((guest / 'etc/systemd/system/incus-agent.service.d').exists())
+        packaged.write_text('[Service]\nExecStartPre=/usr/libexec/incus/incus-agent-setup\nExecStart=/usr/libexec/incus/incus-agent\n')
         child = self.shell_section('# Run the agent the HOST serves', '# Provisioning owns daemon.json', guest)
         self.assertEqual(child.returncode, 0, child.stderr)
         unit = guest / 'etc/systemd/system/incus-agent.service.d/host-agent.conf'
@@ -619,6 +631,8 @@ class Pipeline(unittest.TestCase):
         for unit in [*common, 'cloud-init.target', *layout]:
             if unit == masked:
                 (units / unit).symlink_to('/dev/null')
+            elif unit == 'incus-agent.service' and unit != missing:
+                (units / unit).write_text('[Service]\nExecStartPre=/usr/libexec/incus/incus-agent-setup\n')
             elif unit != missing:
                 (units / unit).write_text('[Unit]\n')
         agent = guest / 'bin/incus-agent'
@@ -923,7 +937,7 @@ class Pipeline(unittest.TestCase):
             child.return_value.returncode = 1
             child.return_value.stderr = b"overlay: unknown filesystem type"
             for _ in range(2):
-                with self.assertRaisesRegex(RuntimeError, "stage command failed"):
+                with self.assertRaisesRegex(RuntimeError, r"stage command failed; build remains incomplete \(see failed-stage.log in the work directory\)$"):
                     vm.run([self.root / "guestfish", "--rw"], work)
         log = self.work / "failed-stage.log"
         self.assertEqual(log.stat().st_mode & 0o777, 0o600)
@@ -1057,7 +1071,9 @@ def mutations():
         ("customization gets network", '"--no-network", "--format"', '"--network", "--format"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("appliance overlay module not loaded", '"modprobe", "overlay", ":", "sh"', '"sh"', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("customize script never run", '"modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"]', '"modprobe", "overlay"]', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
-        ("failed stage stderr discarded", 'stream.write(Path(str(argv[0])).name.encode()', 'stream.write(b"" and Path(str(argv[0])).name.encode()', "test_failed_stage_stderr_kept_privately"),
+        ("failed stage stderr discarded", 'b"\\n" + result.stderr + b"\\n"', 'b"\\n\\n"', "test_failed_stage_stderr_kept_privately"),
+        ("failure message does not name the log", ' (see failed-stage.log in the work directory)"', '"', "test_failed_stage_stderr_kept_privately"),
+        ("customize runs before the upload", '    run(argv, work)\n    # Docker\'s overlay2 needs the module in the APPLIANCE kernel; the guest chroot\n    # only has modules for the guest\'s own kernel, so customize.sh cannot load it.\n    run([paths["guestfish"], "--rw", "--format=qcow2", "-a", disk, "-i",\n         "modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"], work)\n', '    run([paths["guestfish"], "--rw", "--format=qcow2", "-a", disk, "-i",\n         "modprobe", "overlay", ":", "sh", "sh /opt/vm-image/customize.sh"], work)\n    run(argv, work)\n', "test_full_stage_plan_manifest_hashes_and_fingerprint"),
         ("failed stage log world readable", 'os.O_NOFOLLOW, 0o600)', 'os.O_NOFOLLOW, 0o644)', "test_failed_stage_stderr_kept_privately"),
         ("disk backing chain admitted", 'not value.get("backing-filename")', 'True', "test_backing_chain_encryption_external_file_and_size_refused"),
         ("tool version not verified", 'version == record["version"]', 'True', "test_tool_version_mismatch_refuses_manifest"),
@@ -1120,6 +1136,11 @@ def mutations():
         ("guest packages back to bare dpkg unpack", "apt-get \"$@\" update >&2", "dpkg --unpack /opt/vm-image/*.deb", "test_guest_packages_installed_offline_by_apt"),
         ("guest assembly daemon without cgroups", "  mount -t cgroup2 none /sys/fs/cgroup\n", "  :\n", "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
         ("guest cgroup mount left behind", '  if [ -n "$cgroup_mounted" ]; then umount /sys/fs/cgroup || true; fi\n', '', "test_guest_assembly_daemon_gets_a_cgroup_hierarchy"),
+        ("guest apt may remove base packages", "install -y --no-install-recommends --no-remove -o", "install -y --no-install-recommends -o", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt admits unauthenticated debs", "install -y --no-install-recommends --no-remove -o", "install -y --no-install-recommends --no-remove --allow-unauthenticated -o", "test_guest_packages_installed_offline_by_apt"),
+        ("guest apt prompts on conffiles", " -o Dpkg::Options::=--force-confold \\\n", " \\\n", "test_guest_packages_installed_offline_by_apt"),
+        ("assembly dockerd reads another config", "dockerd --debug --config-file /opt/vm-image/assembly-daemon.json", "dockerd --debug --config-file /opt/vm-image/other.json", "test_guest_dockerd_uses_runtime_store"),
+        ("agent drop-in without the setup step", "  || { echo 'incus-agent.service does not run incus-agent-setup' >&2; exit 1; }", "  || :", "test_guest_runs_the_host_supplied_agent"),
         ("guest agent drop-in omitted", "printf '[Service]\\nExecStart=\\nExecStart=/run/incus_agent/incus-agent\\n'", ':', "test_guest_runs_the_host_supplied_agent"),
         ("guest agent keeps packaged binary", "ExecStart=\\nExecStart=/run/incus_agent/incus-agent", "ExecStart=/usr/libexec/incus/incus-agent", "test_guest_runs_the_host_supplied_agent"),
         ("guest assembly daemon uses Docker 29 default store", '{"features":{"containerd-snapshotter":false},"storage-driver":"overlay2"}', '{}', "test_guest_assembly_daemon_pins_classic_overlay2"),

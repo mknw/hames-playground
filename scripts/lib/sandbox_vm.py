@@ -42,6 +42,13 @@ UPSTREAM_FILES = {"keyring": Path("/etc/apt/keyrings/sbxs-incus-upstream.asc"),
                   "preferences": Path("/etc/apt/preferences.d/sbxs-incus-upstream")}
 MINIMUM_INCUS = (7, 3)
 OS_RELEASE = Path("/etc/os-release")
+# Applied by the upstream incus-base postinst (/usr/lib/sysctl.d/50-incus.conf) and NOT
+# reverted by its removal; captured before install so the operator can restore them.
+PACKAGE_SYSCTLS = ("fs.aio-max-nr", "fs.inotify.max_queued_events", "fs.inotify.max_user_instances",
+                   "fs.inotify.max_user_watches", "kernel.keys.maxbytes", "kernel.keys.maxkeys",
+                   "net.ipv4.fib_sync_mem", "net.ipv4.neigh.default.gc_thresh3",
+                   "net.ipv6.neigh.default.gc_thresh3", "vm.max_map_count",
+                   "kernel.apparmor_restrict_unprivileged_unconfined")
 REQUIRED_API_EXTENSIONS = ("projects_restricted_virtual_machines_nesting",
                            "projects_restricted_storage_pool_access")
 
@@ -174,7 +181,7 @@ def upstream_version(value):
 
 
 def primary_key_fingerprints(armored):
-    """v4 fingerprints of every primary key (tag 6) in an armored key block."""
+    """v4 fingerprints of every primary key (tag 6) in an armored transferable public key block."""
     lines = armored.strip().splitlines()
     require(armored.count("-----BEGIN ") == 1 and lines[:1] == ["-----BEGIN PGP PUBLIC KEY BLOCK-----"]
             and lines[-1:] == ["-----END PGP PUBLIC KEY BLOCK-----"] and "" in lines,
@@ -202,6 +209,11 @@ def primary_key_fingerprints(armored):
             position += 1 + size
         packet = data[position:position + length]
         require(len(packet) == length, "truncated OpenPGP packet")
+        # Public key, user ID, subkey, signature and user attribute only: a secret
+        # key (5, 7) or compressed (8) packet is invisible to this parser but one
+        # verifier would still trust the key inside it.
+        require(tag in (2, 6, 13, 14, 17), "public key packets only")
+        require(tag == 6 or found, "key block must begin with a primary public key")
         if tag == 6:
             require(packet[:1] == b"\x04", "v4 primary key required")
             found.append(hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + packet).hexdigest().upper())
@@ -224,9 +236,9 @@ def upstream_source(args):
     require(os.geteuid() == 0 and sys.platform == "linux", "source requires Linux root")
     record = DEFAULT_STATE / "incus-source.private.json"
     if args.remove:
-        for package in INCUS_PACKAGES:
-            status = command("dpkg-query", "-W", "-f=${Status}", package, check=False).stdout.split()
-            require(status[2:3] != ["installed"], "remove Incus packages before their source")
+        for package in INCUS_PACKAGES:  # fail closed: a query error or partial state keeps the source
+            require(incus_removed(package), "remove Incus packages before their source")
+        require(record.is_file(), "no source journal; remove the three upstream source files by hand (runbook)")
         journal = json.loads(record.read_text())
         present = [path for path in UPSTREAM_FILES.values() if path.exists() or path.is_symlink()]
         # Verify every file before deleting any: a refusal leaves the source whole.
@@ -244,12 +256,22 @@ def upstream_source(args):
     codename = release.get("VERSION_CODENAME", "").strip('"')
     require(re.fullmatch(r"[a-z]+", codename), "distribution codename required")
     contents = upstream_contents(key, codename)
-    require(not any(path.exists() or path.is_symlink() for path in UPSTREAM_FILES.values()),
-            "upstream source already present; remove it first")
+    journal = json.dumps({name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()})
+    present = [path for path in UPSTREAM_FILES.values() if path.exists() or path.is_symlink()]
+    if len(present) == len(UPSTREAM_FILES) and all(not path.is_symlink() and path.read_text() == contents[name]
+                                                   for name, path in UPSTREAM_FILES.items()):
+        # A retry after a failed index refresh: the exact files are already in place.
+        # Rewrite the journal from them, so a lost one does not block --remove.
+        DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
+        private_file(record, journal)
+        apt_transaction("update", "-o", "Dir::Etc::sourcelist=" + str(UPSTREAM_FILES["sources"]),
+                        "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
+        return {"unchanged": sorted(UPSTREAM_FILES), "suite": codename}
+    require(not present, "upstream source already present; remove it first")
     require(all(path.parent.is_dir() and not path.parent.is_symlink() for path in UPSTREAM_FILES.values()),
             "apt configuration directories required")
     DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
-    private_file(record, json.dumps({name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()}))
+    private_file(record, journal)
     for name, path in UPSTREAM_FILES.items():
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         os.fchmod(fd, 0o644)  # apt reads the keyring as its unprivileged _apt user
@@ -259,6 +281,16 @@ def upstream_source(args):
     apt_transaction("update", "-o", "Dir::Etc::sourcelist=" + str(UPSTREAM_FILES["sources"]),
                     "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
     return {"added": sorted(UPSTREAM_FILES), "suite": codename}
+
+
+def incus_removed(package):
+    """dpkg reports this package absent, or removed with conffiles only. Anything else refuses."""
+    query = command("dpkg-query", "-W", "-f=${Status}", package, check=False)
+    status = query.stdout.split()
+    # remove leaves conffiles, not installed payload. Refuse holds, broken
+    # flags, installed/partial states and failed or contradictory queries.
+    return ((query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")
+                and status[1] == "ok" and status[2] in ("not-installed", "config-files")))
 
 
 def offered_only_upstream(listing, version):
@@ -585,6 +617,8 @@ class Spike:
         command("apt-get", "install", "--download-only", "-y", "--no-install-recommends",
                 "--no-remove", "--no-upgrade", *packages, timeout=180)
         self.residual_packages = sorted(set(planned) - set(INCUS_PACKAGES))
+        before = {key: command("sysctl", "-n", key, check=False).stdout.strip() for key in PACKAGE_SYSCTLS}
+        private_file(self.state / "sysctl.before.private.json", json.dumps(before, indent=2) + "\n")
         self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.
         self.persist()
         install_env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", NEEDRESTART_MODE="l")
@@ -929,13 +963,7 @@ def preflight(args):
     require(args.ssh_probe and args.ssh_probe.is_absolute() and args.ssh_probe.is_file(),
             "independent SSH witness executable required")
     for package in ("incus", "incus-base", "incus-client"):
-        query = command("dpkg-query", "-W", "-f=${Status}", package, check=False)
-        status = query.stdout.split()
-        # remove leaves conffiles, not installed payload. Refuse holds, broken
-        # flags, installed/partial states and failed or contradictory queries.
-        require((query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")
-                and status[1] == "ok" and status[2] in ("not-installed", "config-files")),
-                "pre-existing Incus refused")
+        require(incus_removed(package), "pre-existing Incus refused")
     require(paging() and Path("/dev/kvm").is_char_device(), "nested paging/KVM unavailable")
     require(args.kvm_user and args.kvm_user != "root", "non-root KVM user required")
     command("runuser", "-u", args.kvm_user, "--", "python3", "-c",
@@ -1011,9 +1039,15 @@ def main(argv=None):
         return
     if args.mode == "source":
         if not args.apply:
-            print(json.dumps({"mode": "dry-run", "steps": ["remove-source" if args.remove else "add-source"],
-                              "uri": UPSTREAM_URI, "key_fingerprint": UPSTREAM_KEY_FINGERPRINT,
-                              "files": sorted(str(path) for path in UPSTREAM_FILES.values())}, indent=2))
+            plan = {"mode": "dry-run", "steps": ["remove-source" if args.remove else "add-source"],
+                    "uri": UPSTREAM_URI, "key_fingerprint": UPSTREAM_KEY_FINGERPRINT,
+                    "files": sorted(str(path) for path in UPSTREAM_FILES.values())}
+            if not args.remove and args.key and args.key.is_file():
+                # Pure parse, no root, no writes: the dry plan checks the very key it will install.
+                plan["key_fingerprints"] = primary_key_fingerprints(args.key.read_text())
+                plan["matches_pin"] = plan["key_fingerprints"] == [UPSTREAM_KEY_FINGERPRINT]
+            print(json.dumps(plan, indent=2))
+            require(plan.get("matches_pin", True), "upstream signing key fingerprint mismatch")
             return
         require(args.remove or (args.key and args.key.is_file()), "downloaded upstream key file required")
         print(json.dumps(upstream_source(args), indent=2))

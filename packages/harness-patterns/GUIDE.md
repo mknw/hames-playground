@@ -222,8 +222,7 @@ configuration withholds earlier content and refuses web calls. The outer
 injection guard always fences route outputs and enables the screen. Only its
 `think` planner sets `screenOutput: false`, keeping deterministic checks and
 fencing while avoiding a model-screen call on its own plan. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` and turn-results
-materialisation remain disabled until P4. The rollout still requires live
+is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
 acceptance evidence; registration does not change the default agent.
 
 ### Deciding with probabilities

@@ -198,6 +198,10 @@ const registry = createAppToolRegistry({
 })
 
 registerGraphConnectorTools({
+  // Per-call host policy. This example deliberately disables file import.
+  // A host enabling it must positively identify a private run; the app also
+  // requires a private-only deployment until tier-flip release ships.
+  fileIngestAllowed: () => false,
   registerAppTool: registry.registerAppTool,
   graphFetch,
   // 3 and 4 are used only by the file-import tool (`graph_file_ingest`), which
@@ -234,14 +238,15 @@ tools.
 
 ## Configuration
 
-### What the four suppliers are, and why you pass them in
+### What the suppliers are, and why you pass them in
 
-| Supplier         | What it is                                                                                                        | Why the package cannot default it                                         | Smallest stub                                   |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------- |
-| `resolveContext` | two functions returning the current user id and conversation id                                                   | only your application knows who is signed in                              | `{ userId: () => 'me', sessionId: () => null }` |
-| `graphFetch`     | `(userId, path, init?) => Promise<unknown>`, a Graph call with that user's token                                  | tokens and sign-in belong to your application; the package never sees one | none — without it no Graph tool can work        |
-| `content`        | four small functions that classify a downloaded file (MIME type, text or not, convertible to text or not)         | how you convert and store documents is yours                              | the object in the example above                 |
-| `stash`          | `loadStore()` and `ingest()`: where an imported file is saved, and a hook that indexes it and says how that ended | the document store is yours                                               | the object in the example above                 |
+| Supplier            | What it is                                                                                                                                       | Why the package cannot default it                                         | Smallest stub                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------- |
+| `resolveContext`    | two functions returning the current user id and conversation id                                                                                  | only your application knows who is signed in                              | `{ userId: () => 'me', sessionId: () => null }` |
+| `graphFetch`        | `(userId, path, init?) => Promise<unknown>`, a Graph call with that user's token                                                                 | tokens and sign-in belong to your application; the package never sees one | none — without it no Graph tool can work        |
+| `content`           | four small functions that classify a downloaded file (MIME type, text or not, convertible to text or not)                                        | how you convert and store documents is yours                              | the object in the example above                 |
+| `fileIngestAllowed` | per-call host predicate allowing file ingestion only on a positively private run (and, until tier-flip release ships, a private-only deployment) | inference policy belongs to your application                              | `() => false`                                   |
+| `stash`             | `loadStore()` and `ingest()`: where an imported file is saved, and a hook that indexes it and says how that ended                                | the document store is yours                                               | the object in the example above                 |
 
 Every supplier is **required**: a missing one throws when you call the factory,
 not later on the turn that first needs it. That is why the stubs exist.

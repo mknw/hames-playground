@@ -164,6 +164,10 @@ export interface GraphConnectorDeps {
   /** The Data Stash bridge for the file-ingest path. REQUIRED — throws if
    *  missing, including any missing member. */
   stash: GraphStashBridge
+  /** Host policy, evaluated PER CALL before Graph or stash I/O. Must positively
+   * identify a private run. Until tier-flip release ships, the host must also
+   * require a private-only deployment. No deployment-default tier fallback. */
+  fileIngestAllowed: () => boolean
 }
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
@@ -375,7 +379,7 @@ const NOT_INDEXED: IndexReport = { status: 'not_indexed' }
 
 /**
  * Start the index run and wait up to {@link INGEST_OUTCOME_WAIT_MS} for how it
- * ends. Never throws: a run that rejects is a `failed` outcome with its message
+ * ends. Never throws: a run that rejects is a `failed` outcome with fixed feedback
  * (the store it failed against is not the tool's problem — the copy is already
  * stored), and a run still going at the bound is `pending` and keeps going.
  */
@@ -392,10 +396,15 @@ async function awaitIngestOutcome(
       (outcome) =>
         outcome?.status === 'indexed'
           ? { status: 'indexed' }
-          : { status: 'failed', error: outcome?.error ?? 'the index run reported no reason' },
-      (err: unknown) => ({
+          : {
+              status: 'failed',
+              error:
+                'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
+            },
+      () => ({
         status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error:
+          'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
       }),
     )
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -418,7 +427,7 @@ async function awaitIngestOutcome(
  * pages; measured live: 22 of this tenant's 25 .loop items). Re-signing-in
  * cannot help; app-only guest access is the tracked fix (#137).
  *
- * 401 and token-acquisition failures (status undefined) pass through — for
+ * 401 and token-acquisition failures (status undefined) get fixed sign-in advice — for
  * those, "sign in again" is the correct advice.
  */
 function translateIngestDenial(err: unknown, itemId: string): unknown {
@@ -432,7 +441,14 @@ function translateIngestDenial(err: unknown, itemId: string): unknown {
         'If this is an ordinary file, the account may genuinely lack access to it.',
     )
   }
-  return err
+  if (err instanceof GraphAuthRequiredError && (err.status === 401 || err.status === undefined)) {
+    return new Error(
+      'Microsoft 365 sign-in is required. Ask the user to sign in again; do not retry this turn.',
+    )
+  }
+  return new Error(
+    'Microsoft 365 file retrieval failed. Tell the user the file could not be copied; do not retry this turn.',
+  )
 }
 
 // ============================================================================
@@ -1304,6 +1320,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     'registerAppTool',
   )
   const graphFetch = requireGraphSupplier<GraphFetchFn>(deps, 'graphFetch')
+  const fileIngestAllowed = requireGraphSupplier<() => boolean>(deps, 'fileIngestAllowed')
   const content = requireGraphBag<GraphContentClassifier>(deps, 'content')
   requireGraphSupplier(content, 'conversionEnabled')
   requireGraphSupplier(content, 'isConvertible')
@@ -1412,15 +1429,14 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     name: 'graph_file_ingest',
     namespace: 'graph',
     description:
-      "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
-      "SharePoint) into this conversation's Data Stash, so later turns can read it, " +
-      'hand it to the sandbox and — when it can be indexed — search it. Identify the file by item_id, ' +
+      "Copy one Microsoft 365 file the signed-in person can open (OneDrive or SharePoint) into this conversation's Data Stash, so the sandbox can open it in /work/in and, when it can be indexed, it can be searched. Identify the file by item_id, " +
       'optionally with drive_id for a shared/SharePoint drive. Returns the stash ' +
       'document id and metadata — never the file contents — and indexStatus, ' +
       'which says whether the copy can be searched: indexed (yes), pending (still ' +
       'indexing), failed (stored but NOT searchable; indexError says why) or ' +
       'not_indexed (a format with no text to index: stored as-is, NOT searchable). ' +
       'For failed and not_indexed, tell the person the copy cannot be searched. ' +
+      'A configuration refusal is final for this turn: do not retry or fetch the file another way; tell the user it could not be copied here and relay search metadata only. ' +
       'Acts as the current signed-in person.',
     inputSchema: {
       type: 'object',
@@ -1442,6 +1458,18 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       additionalProperties: false,
     },
     execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+      // P4: fail closed for EVERY caller, before metadata, bytes or stash I/O.
+      // Policy belongs to the host; connectors do not interpret inference tiers.
+      if (fileIngestAllowed() !== true) {
+        throw new Error(
+          'Copying Microsoft 365 files into this conversation is not enabled on this deployment (it needs private inference on a private-only deployment). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
+        )
+      }
+      if (process.env.EMBEDDINGS_PROVIDER === 'openrouter') {
+        throw new Error(
+          'Copying Microsoft 365 files into this conversation is not enabled on this deployment (its document index uses an external embedding service). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
+        )
+      }
       // Fail closed: the Data Stash is keyed by conversation, so without one in
       // scope there is no correct place to put the file — and guessing would mean
       // writing one person's file into another conversation's stash.

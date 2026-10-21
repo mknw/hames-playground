@@ -183,7 +183,7 @@ def run(argv, work):
         log = work.root / "failed-stage.log"
         with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "ab") as stream:
             stream.write(Path(str(argv[0])).name.encode() + b"\n" + result.stderr + b"\n")
-    require(result.returncode == 0, "stage command failed; build remains incomplete")
+    require(result.returncode == 0, "stage command failed; build remains incomplete (see failed-stage.log in the work directory)")
     return result.stdout
 
 

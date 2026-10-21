@@ -23,7 +23,7 @@ set -- -o Dir::Etc::SourceList=/opt/vm-image/local.list -o Dir::Etc::SourceParts
   -o Dir::State::Lists=/opt/vm-image/repo-lists
 apt-get "$@" update >&2
 # shellcheck disable=SC2046 # one name=version word per lock package
-apt-get "$@" install -y --no-install-recommends -o Dpkg::Options::=--force-confold \
+apt-get "$@" install -y --no-install-recommends --no-remove -o Dpkg::Options::=--force-confold \
   $(python3 -c 'import json; print(" ".join(p["name"] + "=" + p["version"] for p in json.load(open("guest-lock.json"))["packages"]))') \
   >&2  # stderr reaches failed-stage.log
 apt-get "$@" clean
@@ -75,6 +75,10 @@ printf '%s\n' "$@" > enabled-units.txt
 # Run the agent the HOST serves on its config drive (copied to /run/incus_agent
 # by incus-agent-setup), as upstream's own unit does: it matches the host's
 # Incus version, where the packaged binary is the distro's (6.0.x) build.
+# The drop-in relies on the unit's ExecStartPre copying it there: refuse without.
+grep -qs '^ExecStartPre=.*incus-agent-setup' /usr/lib/systemd/system/incus-agent.service \
+  /lib/systemd/system/incus-agent.service \
+  || { echo 'incus-agent.service does not run incus-agent-setup' >&2; exit 1; }
 mkdir -p /etc/systemd/system/incus-agent.service.d
 printf '[Service]\nExecStart=\nExecStart=/run/incus_agent/incus-agent\n' \
   > /etc/systemd/system/incus-agent.service.d/host-agent.conf

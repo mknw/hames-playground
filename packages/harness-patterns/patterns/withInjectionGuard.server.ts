@@ -37,10 +37,8 @@ import {
   applyScreenVerdict,
   redactReport,
   sanitizeUntrusted,
-  strictestSpotlight,
   type ActiveInjectionGuard,
   type InjectionGuardOptions,
-  type InjectionRule,
   type SanitizeReport,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
@@ -110,18 +108,19 @@ export function createInjectionGuard(
   emit: (event: ContextEvent) => void,
   patternId: string,
 ): ActiveInjectionGuard {
-  // UNION with any outer guard, never shadow it. ALS nesting would otherwise
-  // let an inner `withInjectionGuard({ namespaces: ['graph'] })` silently
-  // REMOVE the outer wrapper's `web` protection for its whole subtree — the one
-  // composition mistake a security control must not permit. Widening is always
-  // safe; narrowing is what needs an explicit decision, and there is no way to
-  // ask for it (deliberately).
+  // COVERAGE unions with any outer guard, never shadows it. ALS nesting would
+  // otherwise let an inner `withInjectionGuard({ namespaces: ['graph'] })`
+  // silently REMOVE the outer wrapper's `web` protection for its whole subtree —
+  // the one composition mistake a security control must not permit. Widening is
+  // always safe; narrowing is what needs an explicit decision, and there is no
+  // way to ask for it (deliberately). OPTIONS do not union: a tool is sanitized
+  // with the options of the guard that DECLARED it (see `optionsFor` below).
   const outer = currentRunFrame()?.guard
   // A guard that declares neither namespaces nor tools covers nothing and
   // would read as protection while doing none (#242 item 4). Omission is not
   // indistinguishable from decision: `namespaces: []` is the explicit line
-  // that says "this agent trusts everything it calls", and it still unions
-  // with any outer guard (SD-5).
+  // that says "this agent trusts everything it calls", and its coverage still
+  // unions with any outer guard (SD-5).
   if (
     config.namespaces === undefined &&
     (config.tools === undefined || config.tools.length === 0)
@@ -149,24 +148,31 @@ export function createInjectionGuard(
     refuseUnmatchableNamespaces(namespaces, config.catalog)
   }
 
+  const declares = (tool: string): boolean => tools.has(tool) || namespaces.has(inferServer(tool))
   const isUntrusted = (tool: string): boolean =>
-    tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
+    declares(tool) || (outer?.isUntrusted(tool) ?? false)
 
-  // The SANITIZER options are unioned on exactly the same charter as
-  // `isUntrusted` above — and unioning the namespaces alone was not enough.
-  // Once an inner guard widens the boundary, its `config` is what sanitizes the
-  // OUTER guard's namespaces too, so an inner `disableRules` or a weaker
-  // `spotlight` re-opened a hole for tools the inner wrapper never mentioned.
-  const options = unionOptions(config, outer?.options)
+  // A tool is sanitized with the options of the INNERMOST guard that declares
+  // it. A guard that does not declare the tool hands the question outward, so
+  // the options that govern an outer guard's namespace are always that guard's
+  // own: an inner `disableRules`, a weaker `spotlight` or a missing `screen`
+  // cannot reach a tool the inner wrapper never mentioned, and an outer
+  // `screen` is not inherited by a tool the inner guard declares. Each guard's
+  // declaration is therefore readable where the guard is written. The fallback
+  // is this guard's own options for a tool nobody declares, which `sanitize`
+  // never asks about.
+  const optionsFor = (tool: string): InjectionGuardOptions =>
+    declares(tool) ? config : (outer?.optionsFor(tool) ?? config)
 
   return {
     isUntrusted,
-    options,
+    optionsFor,
 
     async sanitize(tool, data, overrides) {
       if (!isUntrusted(tool)) return { data }
 
       const namespace = inferServer(tool)
+      const options = optionsFor(tool)
       // Per-CALL overrides still win: they are a deliberate, local decision by a
       // known call site (the retriever's `spotlight: 'off'` on a filename), not
       // an agent-level config that could silently weaken a nested boundary.
@@ -335,43 +341,6 @@ function refuseUnmatchableNamespaces(namespaces: Set<string>, catalog: string[])
 /** Test-only: forget which namespaces have already been warned about. */
 export function __resetInjectionGuardNamespaceWarnings(): void {
   warnedNamespaces.clear()
-}
-
-/**
- * Merge a guard's own sanitizer options with the enclosing guard's, taking the
- * STRICTEST of each. Every arm exists because the loose version was a way for a
- * nested guard to weaken a boundary it did not own:
- *
- *   - `disableRules` INTERSECTS. A rule is only switched off if every guard in
- *     the nest agreed to switch it off. `disableRules` is a false-positive
- *     escape hatch for one agent's corpus; inheriting it outward would let that
- *     agent's exemption apply to the outer wrapper's namespaces.
- *   - `rules` UNION (deduped by id) — extra detection is always safe to inherit.
- *   - `spotlight` takes the strictest mode (`always` > `on-detection` > `off`).
- *   - `screen` is kept if EITHER guard has one; a nested guard cannot remove the
- *     outer wrapper's paid-for second layer. The inner one wins when both are
- *     set, since it is the more specific declaration.
- */
-function unionOptions(
-  own: InjectionGuardOptions,
-  outer: InjectionGuardOptions | undefined,
-): InjectionGuardOptions {
-  if (!outer) return own
-
-  const outerDisabled = new Set(outer.disableRules ?? [])
-  const disableRules = (own.disableRules ?? []).filter((id) => outerDisabled.has(id))
-
-  const byId = new Map<string, InjectionRule>()
-  for (const r of [...(outer.rules ?? []), ...(own.rules ?? [])]) byId.set(r.id, r)
-
-  return {
-    ...own,
-    disableRules,
-    ...(byId.size > 0 ? { rules: [...byId.values()] } : {}),
-    spotlight: strictestSpotlight(own.spotlight, outer.spotlight),
-    screen: own.screen ?? outer.screen,
-    screenDespiteFindings: own.screenDespiteFindings || outer.screenDespiteFindings,
-  }
 }
 
 function buildEvent(patternId: string, report: SanitizeReport): ContextEvent {

@@ -524,7 +524,6 @@ export {
   applyScreenVerdict,
   redactReport,
   resolveRules,
-  strictestSpotlight,
   INJECTION_RULES,
   type InjectionRule,
   type InjectionGuardOptions,

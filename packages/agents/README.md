@@ -143,15 +143,17 @@ was removed (see the changelog for the migration); the default remains `search`.
 `deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
 web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
-orchestrator's guarded route records. The outer guard's screen and unconditional
-fencing apply inside every route too. It enables `screenDespiteFindings`, so
-even results with deterministic findings are screened after sanitization; those
-neutralizations stay intact. This adds a screen call per result and per
-nonempty route-output field (the retriever also screens each content/source
-projection), including extra inference time on the private tier. A screen
-outage inside a route is recorded
-and fails open; at the route-output boundary it withholds the output before
-state, handoff and synthesis. The web route admits only its own and retriever
+orchestrator's guarded route records. Each guard declares its own options and
+none is inherited: the office and info route guards declare an always-on fence
+and a screen, and enable `screenDespiteFindings`, so even results with
+deterministic findings are screened after sanitization; those neutralizations
+stay intact. That is a screen call per office or info result, including extra
+inference time on the private tier. The documents route's guard declares the
+fence and no screen, so retrieved hits get the deterministic pass only. The
+orchestrator's guard declares the route-output key and the fence, and no screen:
+a route record is capped, sanitized and fenced, but no model reads it for
+injection. A screen outage inside a route is recorded and fails open. The web
+route admits only its own and retriever
 references, excluding sandbox-promoted documents, and pseudonymises inherited
 content on the private tier. Missing private host wiring withholds earlier
 content and refuses web calls. An unconfigured private decisions endpoint
@@ -357,13 +359,13 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                                        | Injection guard                                                                                    |
-| --------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                 |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)           |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                       |
-| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards and a screened, always-fenced output boundary; private web input pseudonymisation |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                         |
+| Agent           | Composition                                                      | Tools                                                                        | Injection guard                                                                                                    |
+| --------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                                 |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                           |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                       |
+| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards with their own fence and screen, and a fenced output boundary; private web input pseudonymisation |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                                         |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets

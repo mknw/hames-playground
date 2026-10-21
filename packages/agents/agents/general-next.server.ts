@@ -142,7 +142,22 @@ async function createPatterns(
   // The sandbox host declares its in-VM names through capabilities.tools.
   // They are exact tool keys, never the unverifiable 'sandbox' namespace.
   const sandboxTools = collectToolNames(office).filter((name) => name.startsWith('sandbox_'))
-  const docGuard = { namespaces: ['graph'], tools: sandboxTools, catalog: tools.all }
+  // Each guard sanitizes the tools it declares with its OWN options; nothing is
+  // inherited from the orchestrator's guard below. The fence is declared on every
+  // route guard because route records carry it onward. The screen sits on the
+  // two routes that read content from outside (office: mail, files and sandbox
+  // results; info: web, library docs and the graph, no gate in front of it); the
+  // documents route declares none, so the retriever's hits get the deterministic
+  // pass and the fence only. `screenDespiteFindings` keeps the screen on results
+  // with deterministic findings too, as it was when the screen was inherited.
+  const docGuard = {
+    namespaces: ['graph'],
+    tools: sandboxTools,
+    catalog: tools.all,
+    spotlight: 'always' as const,
+    screen: createInjectionScreen(),
+    screenDespiteFindings: true,
+  }
   // The guard refuses a declared namespace that matches no catalog tool, so the
   // two optional servers are declared only when the gateway offers them.
   const infoGuard = {
@@ -153,6 +168,9 @@ async function createPatterns(
       ...(memoryReads.length ? ['memory'] : []),
     ],
     catalog: tools.all,
+    spotlight: 'always' as const,
+    screen: createInjectionScreen(),
+    screenDespiteFindings: true,
   }
   const doc = withInjectionGuard(docGuard)(office)
   const info = withInjectionGuard(infoGuard)(
@@ -192,7 +210,7 @@ async function createPatterns(
       ),
     ),
   )
-  const retrieve = withInjectionGuard({ tools: ['retriever'] })(
+  const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
     retriever<AgentData>({
       patternId: 'retriever',
       backends: [deps.createRedisBackend(sessionId)],
@@ -212,8 +230,6 @@ async function createPatterns(
     tools: [...sandboxTools, 'retriever', DECISION_LOOP_OUTPUT_KEY],
     catalog: tools.all,
     spotlight: 'always',
-    screen: createInjectionScreen(),
-    screenDespiteFindings: true,
   })(
     decisionLoop<AgentData>(
       {

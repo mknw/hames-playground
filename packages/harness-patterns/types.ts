@@ -272,6 +272,14 @@ export type EventType =
    *  ids, kind, tier and action, never the content nor a hash of it (#541). See
    *  `MemoryWrittenEventData`. */
   | 'memory_written'
+  /** One model call that is its own observable step but no pattern's output: the
+   *  injection screen on one tool result, a describe-tier summary of tool
+   *  results. METADATA ONLY — the record rides on `llmCall` with `variables`,
+   *  the rendered prompt and the output stripped (`redactCall`), because those
+   *  hold the untrusted content the call read. What survives is the client BAML
+   *  selected, the duration and the step's `metrics`, so the call is priced on
+   *  the client it actually ran on. See `ModelCallEventData`. */
+  | 'model_call'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -624,6 +632,17 @@ export type PlannerFn = (
   onRetry?: (failedCall: LLMCallRecord | undefined) => void,
 ) => Promise<PlanCallResult>
 
+/** Where an implementation reports the record of a model call whose VALUE is
+ *  all its caller gets back (a summary string, a screen verdict). The caller
+ *  turns it into a `model_call` event, so the call is visible and priced in the
+ *  run's observability instead of only in the process-wide usage counters.
+ *
+ *  Called once per finished call, failed ones included, and never for a call
+ *  that spent nothing (a pre-flight failure). The record may carry the prompt
+ *  and the model's output; the receiver redacts it (`redactCall`) before it
+ *  becomes an event. A sink must not throw into the call that fed it. */
+export type CallRecordSink = (call: LLMCallRecord) => void
+
 /** One tool result queued for a batched describe call. `id` is a
  *  caller-assigned label, unique within the batch, that the model echoes back
  *  on its summary. */
@@ -647,6 +666,11 @@ export type DescribeFn = (
   toolArgs: string,
   reasoning: string,
   result: string,
+  /** Receives the record of every model call this describe made, success or
+   *  failure (a call that threw still spent what it spent). Optional and
+   *  TRAILING: an implementation that never calls it stays correct and simply
+   *  leaves its calls unrecorded. */
+  onCall?: CallRecordSink,
 ) => Promise<string>
 
 /** The batched describe seam: REQUIRED config on `compactBulkData`. Returns a
@@ -656,7 +680,7 @@ export type DescribeFn = (
  *  `limits` is what `maxBatchItems` sizes batches against (the CHAIN FLOOR,
  *  SA-M6). */
 export type DescribeBatchFn = {
-  (items: DescribeBatchItem[]): Promise<Map<string, string>>
+  (items: DescribeBatchItem[], onCall?: CallRecordSink): Promise<Map<string, string>>
   limits?: () => ModelLimits
 }
 
@@ -2205,6 +2229,23 @@ export interface MemoryWrittenEventData {
   readonly eventId: string
   readonly ordinal: number
   readonly action: MemoryWriteAction
+}
+
+/** Which role's call a `model_call` event records. */
+export type ModelCallRole = 'screen' | 'describe'
+
+/** Data payload for `model_call`. METADATA ONLY (SD-3): the role and a label
+ *  for what the call was about. The client, duration, tokens and cost are on
+ *  the event's own `llmCall` / `metrics`, so every fold that already reads
+ *  those (`stepCostEur`, the observability panel's totals) includes the call
+ *  without knowing this type exists. */
+export interface ModelCallEventData {
+  readonly role: ModelCallRole
+  /** What the call read, as a label: `namespace/tool` for a screen, the tool
+   *  name for one summarized result. Absent for a batch. */
+  readonly source?: string
+  /** Results one batched call summarized. */
+  readonly items?: number
 }
 
 // ============================================================================

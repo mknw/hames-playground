@@ -70,6 +70,8 @@ contract as the upload route — see
 
 ## Session ownership
 
+`graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled.
+
 Documents are keyed by `sessionId`, so each route resolves that session's owner
 and answers **404** unless it is the caller's — the same response an unknown
 session gets, so "not yours" and "not there" read alike. `lib/stash/ownership.server.ts`

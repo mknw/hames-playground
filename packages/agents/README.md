@@ -159,8 +159,7 @@ produces a visible error without public fallback.
 
 `general-next` also opts into optional memory; `general` keeps its opt-in until
 the default-agent flip. Only the candidate's final synthesis receives recalled
-memory. Graph file ingestion and turn-results materialisation stay disabled
-until their dedicated integration. The default-agent rollout remains gated by
+memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. The default-agent rollout remains gated by
 the design's acceptance evidence. See the
 [decision-loop design](../../docs/plan/decision-loop-agent.md).
 

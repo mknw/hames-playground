@@ -195,6 +195,7 @@ type EventType =
   | 'hitl_request' // a person is asked to decide (#433) — core writes it; readHitl() derives state from it
   | 'hitl_response' // the decision on one hitl_request (#433) — core writes it
   | 'decision_made' // one typed systemone decision (#418) — metadata only; the state's SIZE rides, never its text
+  | 'model_call' // the injection screen's or a describe-tier summary's model call — metadata only; client and cost ride on `llmCall` / `metrics`, the content the call read never does
 
 // Isolated workspace for each pattern
 interface PatternScope<T> {
@@ -1124,6 +1125,23 @@ silently degraded second layer must be visible).
   `ALWAYS_COMMIT_TYPES` so a later failure cannot discard the proof a control
   fired
 
+- the **screen's own model call** lands as a **`model_call`** event beside it
+  (`role: 'screen'`), one per call and a failed one too, because it was billed:
+  `InjectionScreen` receives an optional `onCall` sink and the guard turns what it
+  is handed into the event. Core redacts the record when it builds the event
+  (`redactCall`: the client, usage, duration and `metrics` survive; `variables`,
+  the rendered prompt and the output — the page the screen read — do not), so the
+  call is priced on the client BAML actually selected and the content never
+  reaches the conversation. `model_call` is in `ALWAYS_COMMIT_TYPES`. The
+  describe-tier summaries are recorded the same way by `compactBulkData`
+  (`role: 'describe'`; `DescribeFn` / `DescribeBatchFn` take the same trailing
+  `onCall`). Screen rows are live; describe rows are not — `compactBulkData` runs
+  after the answer has gone out and pushes to the context without a live emit, so
+  they and their cost reach the panel and the cost summaries on the conversation's
+  next load, through the trailing save. Recording is best effort and isolated: a
+  recorder that throws is logged and never changes a screen verdict, withholds
+  content or fails the call.
+
 **The verbatim-span invariant.** Neutralization is destructive at source: the
 event store holds the sanitized text, because the store IS LLM-visible via `ref:`
 expansion, `serializeCompact()` and `compactExecution` — keeping the raw text there
@@ -1930,9 +1948,7 @@ boundary it follows the marker-only policy above. Its thread synthesizer reads t
 opt-in until the default-agent flip. Only the candidate's synthesis receives
 recalled memory, while decisions and children receive none. The
 private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
-no provider fallback. Until P4, the office allowlist withholds
-`graph_file_ingest` by exact name and declares no turn-results materialisation
-capability. Layer-1 composition pins and the layer-2 graph-count conversation
+no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation
 live in the host; it consumes the separately pinned core
 `screenDespiteFindings` opt-in.
 
@@ -3281,6 +3297,7 @@ transformed into prompt-friendly types. The table below shows which harness
 | `content_sanitized`  | `ContentSanitizedEventData`                                                                                                                       | _(metadata only — NEVER the verbatim spans)_            | withInjectionGuard only (observability + human audit)                       |
 | `loop_recovery`      | `LoopRecoveryEventData` (`failure`, `error`, `tool?`, `turn`, `maxTurns`)                                                                         | _(metadata only — the turn log carries the feedback)_   | simpleLoop / actorCritic only (observability)                               |
 | `decision_made`      | `DecisionMadeEventData` (typed verdict, endpoint probabilities, failure metadata, `stateChars`, `shadow?`)                                        | _(`data`: state SIZE; `rawInput`: the body)_            | typedDecision / decisionRouter (#418); consumers read `data.decisions[key]` |
+| `model_call`         | `ModelCallEventData` (`role`, `source?`, `items?`; the call itself rides on `llmCall` / `metrics`, redacted)                                      | _(metadata only — a label; never the call's record)_    | the guard (screen) and `compactBulkData` (describe)                         |
 | `memory_recalled`    | `MemoryRecalledEventData` (`attached` ids, `considered`, `survivors`, `tier?`, `tokens`, `skipped?`, `gate?`, `wake?`, `errorKind?`)              | _(metadata only — IDS, never memory content)_           | memoryRecall (#419); consumers read `data.memories` / `data.memoryContext`  |
 
 ### Per-Pattern: Events Read → BAML Inputs → BAML Return

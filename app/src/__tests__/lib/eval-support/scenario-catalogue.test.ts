@@ -89,7 +89,7 @@ const RESTRAINS: Record<string, string[]> = {
   noSandboxPath: ['sandbox_bash', 'sandbox_write', 'sandbox_edit'],
   fetchUrlGiven: ['fetch'],
 }
-const STATUSES = ['notMeaningful', 'deferred']
+const STATUSES = ['notMeaningful', 'equivalent', 'deferred']
 const EXPOSURES = ['offered', 'conditional', 'withheld', 'construction']
 const EGRESS = ['web', 'context7']
 const ROUTE: Record<string, string> = {
@@ -135,6 +135,14 @@ const reasoned = (r: unknown) => typeof r === 'string' && r.trim().length > 0
 const graderOf = (s: Json) => (Array.isArray(s.grader) ? s.grader : []) as Item[]
 const dims = (s: Json) => (s.dimensions ?? {}) as Record<string, string | string[]>
 const flat = (v: unknown) => [v ?? []].flat() as string[]
+/** The intent x source pairs a row exercises: its declared cells, else the one pair its tags make. */
+const cellsOf = (s: Json): string[] =>
+  Array.isArray(s.cells)
+    ? (s.cells as string[][]).map(([i, src]) => `${i} x ${src}`)
+    : flat(dims(s).intents).flatMap((i) => flat(dims(s).sources).map((src) => `${i} x ${src}`))
+/** A passive claim ("the file has been changed") must be shown a negated correct answer. */
+const PASSIVE = /\b(?:was|were|has been|have been)\b/
+const NEGATED = /\b(?:no|not|never|nothing)\b|n['’]t\b/i
 
 /** Each check's parameters: present, non-empty and inside their vocabularies. */
 function contract(at: string, item: Item, turns: number, routes: string[]): string[] {
@@ -186,7 +194,7 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
         return bad('needs a file and contains, parts or matches')
       const broken = flat(item.matches).filter((p) => {
         try {
-          return !new RegExp(p, 'i')
+          return !new RegExp(resolveShared(p), 'i')
         } catch {
           return true
         }
@@ -210,19 +218,35 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
   }
 }
 
+/** Shared named patterns ({{name}} in a grader pattern), set from the catalogue under test. */
+let SHARED: Record<string, string> = {}
+function resolveShared(pattern: string): string {
+  let p = pattern
+  for (let pass = 0; pass < 4 && /\{\{\w+\}\}/.test(p); pass++)
+    p = p.replace(/\{\{(\w+)\}\}/g, (m, name: string) => SHARED[name] ?? m)
+  return p
+}
+
 /** A pattern is pinned by what it accepts: it compiles, and its examples come out as declared. */
 function patternErrors(at: string, item: Item): string[] {
   if (!('pattern' in item)) return []
+  const pattern = resolveShared(item.pattern as string)
+  if (/\{\{\w+\}\}/.test(pattern)) return [`${at}: ${item.check} names an unknown shared pattern`]
   let re: RegExp
   try {
-    re = new RegExp(item.pattern as string, 'i')
+    re = new RegExp(pattern, 'i')
   } catch {
     return [`${at}: ${item.check} pattern does not compile`]
   }
   const ex = item.examples ?? {}
   if (!nonEmpty(ex.match) || !nonEmpty(ex.noMatch))
     return [`${at}: ${item.check} "${String(item.says)}" needs examples.match and examples.noMatch`]
+  const claim = ['answerNotMatches', 'noUncoveredAbsenceClaim'].includes(item.check)
+  const negatedShown = ex.noMatch.some((t) => NEGATED.test(t))
   return [
+    ...(claim && PASSIVE.test(pattern) && !negatedShown
+      ? [`${at}: "${String(item.says)}" is a passive claim with no negated noMatch example`]
+      : []),
     ...ex.match
       .filter((t) => !re.test(t))
       .map((t) => `${at}: "${String(item.says)}" misses ${JSON.stringify(t)}`),
@@ -252,8 +276,9 @@ function derivedNeeds(
   return [...need].sort()
 }
 
-function validate(c: Json, md: string, modules: string[]): string[] {
+function validate(c: Json, md: string, modules: string[], handed = sourceTools()): string[] {
   const errors: string[] = []
+  SHARED = (c.sharedPatterns ?? {}) as Record<string, string>
   const required = c.required as string[]
   const allowed = new Set([...required, ...(c.optional as string[])])
   const vocab = c.dimensions as Record<string, { values: string[] }>
@@ -334,7 +359,19 @@ function validate(c: Json, md: string, modules: string[]): string[] {
       const twin = byId.get(s.twin as string)
       if (s.kind !== 'negative' || !twin || twin.kind !== 'positive')
         errors.push(`${at}: twin must name a positive scenario, on a negative row`)
-    }
+    } else if (s.kind === 'negative' && s.status === 'proposed')
+      errors.push(`${at}: a proposed negative needs a twin`)
+    const pairs = flat(d?.intents).length * flat(d?.sources).length
+    if (pairs > 1 && !Array.isArray(s.cells))
+      errors.push(`${at}: several intents or sources, so cells must say which pairs it exercises`)
+    if (Array.isArray(s.cells))
+      for (const cell of s.cells as unknown[]) {
+        const [i, src] = Array.isArray(cell) ? (cell as string[]) : []
+        if (!flat(d?.intents).includes(i) || !flat(d?.sources).includes(src))
+          errors.push(
+            `${at}: cell ${JSON.stringify(cell)} is not one of its own intent x source tags`,
+          )
+      }
     if (s.status === 'proposed') {
       const want = derivedNeeds(s, checks, driver).join()
       if (flat(s.needs).join() !== want) errors.push(`${at}: needs should be [${want}]`)
@@ -354,7 +391,12 @@ function validate(c: Json, md: string, modules: string[]): string[] {
       errors.push(`${String(s.id)}: proposed but not listed in SCENARIOS.md`)
   for (const id of modules)
     if (byId.has(id)) errors.push(...againstModule(byId.get(id)!, moduleText(id)))
-  return [...errors, ...saturation(c, scenarios), ...rulings(c, byId), ...markdown(c, md)]
+  return [
+    ...errors,
+    ...saturation(c, scenarios, handed, byId),
+    ...rulings(c, byId),
+    ...markdown(c, md),
+  ]
 }
 
 /** An existing row carries its module's own checks, so the owner reviews what the suite runs. */
@@ -477,20 +519,32 @@ function toolCases(scenarios: Json[], tools: Record<string, ToolEntry>) {
 
 /** The saturation method: what is covered is derived from the scenarios; what is not must
  * be declared once, with a reason; a declaration for something covered is stale. */
-function saturation(c: Json, scenarios: Json[]): string[] {
+function saturation(
+  c: Json,
+  scenarios: Json[],
+  handed: string[],
+  byId: Map<string, Json>,
+): string[] {
   const errors: string[] = []
   const sat = (c.saturation ?? {}) as Json
   const vocab = c.dimensions as Record<string, { values: string[] }>
 
   // 1. every intent x source cell: covered by a scenario, or declared once with a reason
   const covered = new Set<string>()
-  for (const s of scenarios)
-    for (const i of flat(dims(s).intents))
-      for (const src of flat(dims(s).sources)) covered.add(`${i} x ${src}`)
+  for (const s of scenarios) for (const cell of cellsOf(s)) covered.add(cell)
   const declared = new Map<string, string>()
   for (const [n, group] of ((sat.intentSource ?? []) as Json[]).entries()) {
     if (!STATUSES.includes(group.status as string) || !reasoned(group.reason))
       errors.push(`intentSource[${n}]: needs a status and a reason`)
+    const sameAs = flat(group.sameAs)
+    if (
+      group.status === 'equivalent'
+        ? !sameAs.length || sameAs.some((id) => !byId.has(id))
+        : 'sameAs' in group
+    )
+      errors.push(
+        `intentSource[${n}]: equivalent needs sameAs naming catalogue rows, and only equivalent has it`,
+      )
     for (const i of group.intents as string[])
       for (const src of group.sources as string[]) {
         const cell = `${i} x ${src}`
@@ -507,6 +561,30 @@ function saturation(c: Json, scenarios: Json[]): string[] {
         errors.push(`${i} x ${src}: neither covered nor declared`)
   // A negative-only intent is declared, so an intent cannot lose its positives silently.
   const negativeOnly = (sat.negativeOnlyIntents ?? {}) as Record<string, string>
+  // ...and so is a covered cell no positive row exercises.
+  const positiveCells = new Set(scenarios.filter((s) => s.kind === 'positive').flatMap(cellsOf))
+  const negOnlyCells = new Set<string>()
+  for (const group of (sat.negativeOnlyCells ?? []) as Json[]) {
+    if (!reasoned(group.reason)) errors.push('negativeOnlyCells: a group needs a reason')
+    for (const i of flat(group.intents))
+      for (const src of flat(group.sources)) {
+        const cell = `${i} x ${src}`
+        negOnlyCells.add(cell)
+        if (positiveCells.has(cell) || !covered.has(cell))
+          errors.push(
+            `${cell}: declared negative-only but ${positiveCells.has(cell) ? 'a positive covers it' : 'nothing covers it'}`,
+          )
+      }
+  }
+  for (const cell of covered)
+    if (
+      !positiveCells.has(cell) &&
+      !negOnlyCells.has(cell) &&
+      !reasoned(negativeOnly[cell.split(' x ')[0]])
+    )
+      errors.push(
+        `${cell}: covered only by negatives, with no positive and no negative-only reason`,
+      )
   for (const i of vocab.intents.values) {
     const has = scenarios.some((s) => s.kind === 'positive' && flat(dims(s).intents).includes(i))
     if (!has && !reasoned(negativeOnly[i])) errors.push(`intent ${i}: no positive scenario`)
@@ -540,8 +618,19 @@ function saturation(c: Json, scenarios: Json[]): string[] {
         errors.push(`tool ${t}: ${side} reason but a ${side} case exists`)
     }
   }
-  for (const t of sourceTools())
+  // Exposure is derived from the source that hands the tools over, not only declared.
+  for (const t of handed) {
     if (!(t in tools)) errors.push(`tool ${t}: handed to general-next but not in saturation.tools`)
+    else if (!['offered', 'conditional'].includes(tools[t].exposure))
+      errors.push(`tool ${t}: handed to general-next but declared ${tools[t].exposure}`)
+  }
+  for (const [t, e] of Object.entries(tools))
+    if (
+      ['offered', 'conditional'].includes(e.exposure) &&
+      ['graph', 'memory', 'sandbox'].includes(e.namespace) &&
+      !handed.includes(t)
+    )
+      errors.push(`tool ${t}: declared ${e.exposure} but general-next is not handed it`)
 
   // 3. every dimension value: used by a scenario, or declared unused with a reason
   const unused = (sat.unusedValues ?? {}) as Record<string, string>
@@ -648,15 +737,16 @@ function markdown(c: Json, md: string): string[] {
   for (const g of (sat.intentSource ?? []) as Json[])
     for (const i of g.intents as string[])
       for (const src of g.sources as string[])
-        declared.set(`${i} x ${src}`, g.status === 'notMeaningful' ? '–' : 'd')
+        declared.set(
+          `${i} x ${src}`,
+          g.status === 'notMeaningful' ? '–' : g.status === 'equivalent' ? '=' : 'd',
+        )
   compare(
     '### Intent × source',
     vocab.intents.values.map((i) => [
       `\`${i}\``,
       ...vocab.sources.values.map((src) => {
-        const n = scenarios.filter(
-          (s) => flat(dims(s).intents).includes(i) && flat(dims(s).sources).includes(src),
-        ).length
+        const n = scenarios.filter((s) => cellsOf(s).includes(`${i} x ${src}`)).length
         return n ? String(n) : (declared.get(`${i} x ${src}`) ?? '?')
       }),
     ]),
@@ -969,6 +1059,113 @@ describe('general-next scenario catalogue', () => {
     it('a proposed row whose needs drifted', () => {
       expect(mutate((_, s) => (row(s, 'p01-calendar-today').needs = [])).join()).toMatch(
         /p01-calendar-today: needs should be/,
+      )
+    })
+    // Delta review 1 of 9c7d31b3
+    it('N1: a passive claim pattern with no negated correct answer among its examples', () => {
+      const errors = mutate((_, s) => {
+        const x = graderOf(row(s, 'tn04-edit-sharepoint-file')).find(
+          (i) => i.says === 'no edited-in-place claim',
+        )!
+        x.examples = {
+          match: x.examples!.match,
+          noMatch: ['I saved an edited copy in this conversation.'],
+        }
+      })
+      expect(errors.join()).toMatch(
+        /tn04-edit-sharepoint-file: "no edited-in-place claim" is a passive claim/,
+      )
+    })
+    it('N1: the negation guard removed from a claim pattern', () => {
+      const errors = mutate((_, s) => {
+        const x = graderOf(row(s, 'tn24-out-of-scope-booking')).find(
+          (i) => i.says === 'no booking claim',
+        )!
+        x.pattern = (x.pattern as string).split('{{negationGuard}}').join('')
+      })
+      expect(errors.join()).toMatch(
+        /tn24-out-of-scope-booking: "no booking claim" matches "No ticket has been booked\."/,
+      )
+    })
+    // Delta review 2 of 9c7d31b3
+    it('B1: the shared negation guard emptied', () => {
+      const errors = mutate((c) => (((c.sharedPatterns as Json).negationGuard as string) = ''))
+      expect(errors.join()).toMatch(/matches "No ticket has been booked\."/)
+    })
+    it('B1: the shared refusal pattern narrowed', () => {
+      const errors = mutate((c) => ((c.sharedPatterns as Json).cannot = 'xyzzy'))
+      expect(errors.join()).toMatch(
+        /tn24-out-of-scope-booking: "explains it cannot" misses "I don't have a booking tool\."/,
+      )
+    })
+    it('B1: a pattern naming an unknown shared pattern', () => {
+      const errors = mutate(
+        (_, s) => (itemOf(s, 'tn01-send-mail', 'answerNotMatches').pattern = '{{nope}}'),
+      )
+      expect(errors.join()).toMatch(/names an unknown shared pattern/)
+    })
+    it('B2: an equivalent cell whose sameAs names no row', () => {
+      const errors = mutate((c) => {
+        const g = ((c.saturation as Json).intentSource as Json[]).find(
+          (x) => x.status === 'equivalent',
+        )!
+        g.sameAs = ['p99-nothing']
+      })
+      expect(errors.join()).toMatch(/equivalent needs sameAs naming catalogue rows/)
+    })
+    it('B2: a cell covered only by negatives, undeclared', () => {
+      const errors = mutate((c) => {
+        const sat = c.saturation as Json
+        sat.negativeOnlyCells = (sat.negativeOnlyCells as Json[]).filter(
+          (g) => !flat(g.sources).includes('m365-profile'),
+        )
+      })
+      expect(errors.join()).toMatch(/find-person x m365-profile: covered only by negatives/)
+    })
+    it('B2: a negative-only declaration a positive contradicts', () => {
+      const errors = mutate((c) => {
+        ;((c.saturation as Json).negativeOnlyCells as Json[]).push({
+          intents: ['lookup-fact'],
+          sources: ['knowledge-graph'],
+          reason: 'x',
+        })
+      })
+      expect(errors.join()).toMatch(
+        /lookup-fact x knowledge-graph: declared negative-only but a positive covers it/,
+      )
+    })
+    it('N3: a memory write tool handed to general-next while declared withheld', () => {
+      const errors = validate(catalogue(), scenariosMd, moduleIds, [
+        ...sourceTools(),
+        'create_entities',
+      ])
+      expect(errors.join()).toMatch(
+        /tool create_entities: handed to general-next but declared withheld/,
+      )
+    })
+    it('N4: a multi-tag row without cells', () => {
+      expect(
+        mutate((_, s) => delete row(s, 'tn17-upload-injection-graph-write').cells).join(),
+      ).toMatch(/tn17-upload-injection-graph-write: several intents or sources, so cells must say/)
+    })
+    it("N4: a cell outside the row's own tags", () => {
+      const errors = mutate((_, s) =>
+        (row(s, 'tn17-upload-injection-graph-write').cells as string[][]).push([
+          'summarise',
+          'web',
+        ]),
+      )
+      expect(errors.join()).toMatch(/cell \["summarise","web"\] is not one of its own/)
+    })
+    it('N4: coverage resting on a dropped pair is caught', () => {
+      const errors = mutate(
+        (_, s) => (row(s, 'p01-calendar-today').cells = [['find-person', 'calendar']]),
+      )
+      expect(errors.join()).toMatch(/triage x calendar: neither covered nor declared/)
+    })
+    it('N5: a proposed negative with no twin', () => {
+      expect(mutate((_, s) => delete row(s, 'tn01-send-mail').twin).join()).toMatch(
+        /tn01-send-mail: a proposed negative needs a twin/,
       )
     })
     it('a twin that is not a positive scenario', () => {

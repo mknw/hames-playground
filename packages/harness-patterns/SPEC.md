@@ -1919,7 +1919,7 @@ block per accepted result, each under its own result's fence (a batch can mix to
 are one block under the fence its hits arrived in, the filename in each line
 inside it. A body that arrived unfenced (a guard declared with the default
 `spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents
-a label. The plan, a `simpleLoop` Return, reasoning and the stats are not wrapped.
+a label. The plan, a `simpleLoop` Return, reasoning and the stats are not fenced, and not sanitised either, but where text no fence bounds is rendered into the decision state or the handoff it is one JSON string (newlines escaped), so it cannot start a line that reads as the state's own structure; carried bodies stay raw. The handoff block ends with `HANDOFF_END`, so a context that follows it is not read as data. A fence cut off by the cap inside a failure text is closed (`closeCutFences`), and a label is restored only from a header naming the result's own tool.
 
 **Records an older version persisted.** A conversation saved before the screen-outage
 withholding was removed carries `withheldEventIds` on a loop record's `tool_result`.

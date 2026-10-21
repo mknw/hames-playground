@@ -1331,13 +1331,17 @@ describe('decisionLoop — label trust, failure text and caps (review round 1)',
 
   // MUTATION: drop the `parts.tool !== tool` comparison in `unfence`.
   it('a fenced body whose header names a different tool is quoted unchanged: no header is promoted', async () => {
-    const { decide, states } = scriptedDecide(['act', 'answer'])
-    const other = fenced('OTHER-BODY', 'graph_mail_recent', 'graph')
-    await runUnder(guardOf(['read_mail', 'graph_mail_recent']), [
-      build({ act: route(actorOf('act-p', [{ tool: 'read_mail', result: other }])) }, decide),
+    const { decide } = scriptedDecide(['act', 'answer'])
+    const other = fenced('O'.repeat(500), 'graph_mail_recent', 'graph')
+    const ctx = await runUnder(guardOf(['read_mail', 'graph_mail_recent']), [
+      build({ act: route(actorOf('act-p', [{ tool: 'read_mail', result: other }])) }, decide, {
+        maxResultChars: 100,
+      }),
     ])
-    expect(states[1]).toContain(`[act] ${other}`)
-    expect(states[1].split('⟦UNTRUSTED CONTENT · ')).toHaveLength(2)
+    // capped like any text, and not re-fenced under the label the content wrote
+    expect(recordOf(ctx).result).toBe(
+      other.slice(0, 100) + '…[truncated, ' + (other.length - 100) + ' more characters]',
+    )
   })
 
   // MUTATION: `return text` for a fence the header parser cannot read, in `unfence`.

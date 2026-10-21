@@ -369,7 +369,11 @@ export function extract(kind: RouteKind, events: ContextEvent[], max: number): E
 /** A failure's own text, treated like a quoted body: a tool error that arrived
  *  fenced keeps its closing line under the cap; any other text is just capped. */
 export function carryText(text: string, max: number): string {
-  return closeCutFences(carry(unfence(text), max))
+  const quoted = unfence(text)
+  // Fences still inside the body mean the text EMBEDS several: stripping the outer one
+  // would unbalance the count, so cap the text as it came and close what the cap cut.
+  if (quoted.body.includes('⟦UNTRUSTED CONTENT · ')) return closeCutFences(capText(text, max))
+  return carry(quoted, max)
 }
 
 // ============================================================================

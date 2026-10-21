@@ -275,6 +275,9 @@ support `projects_restricted_storage_pool_access`. Servers missing these keys
 reject project creation, failing closed. See the
 [Incus 7.3 release notes](https://linuxcontainers.org/incus/news/#incus-7-3-has-been-released)
 and [API extensions](https://linuxcontainers.org/incus/docs/main/api-extensions/).
+Distribution packages of Incus 6.0.x lack both; the operator runbook
+([sandbox VM spike runbook](https://github.com/mknw/hames-playground/blob/main/docs/deployment/sandbox-vm-spike.md), "Upstream Incus packages") installs a
+pinned 7.3+ build from the Incus maintainers' signed apt repository.
 The earlier 7.0.1 system-container experiment predates these restrictions and
 does not verify this configuration. The operator supplies an Incus HTTPS manager certificate permitted to create
 projects and register certificates, a bridge, a storage pool and a pinned VM

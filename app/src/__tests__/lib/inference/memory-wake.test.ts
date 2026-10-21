@@ -225,11 +225,11 @@ describe('what goes on the wire', () => {
 })
 
 describe('the three budgets', () => {
-  it('ships the unmeasured defaults D20 states, and no Verda number is inherited', () => {
+  it('ships the unmeasured defaults D20 states, and no large-box number is inherited', () => {
     // The embedder (639MB) is an order of magnitude
-    // smaller than the 27B whose readings sized the Verda wake's 600s, so
+    // smaller than the 27B whose readings sized the large-box wake's 600s, so
     // 180s is a PLACEHOLDER for layer 4 to measure — closer to the truth than
-    // the Verda numbers, but still not a reading.
+    // the large-box numbers, but still not a reading.
     expect(DEFAULT_MEMORY_WAKE_TIMEOUT_MS).toBe(180_000)
     expect(DEFAULT_MEMORY_WAKE_TIMEOUT_MS).toBeLessThan(600_000)
   })
@@ -256,7 +256,7 @@ describe('the three budgets', () => {
   })
 
   it('refuses a zero or garbage override rather than honouring it', () => {
-    // Through the SAME parser as the Verda wake (`wakeEnvMs`), so the two
+    // Through the SAME parser as the large-box wake (`wakeEnvMs`), so the two
     // wakes cannot grow different validation policies either.
     process.env.MEMORY_WAKE_ATTEMPT_TIMEOUT_MS = '0'
     process.env.MEMORY_WAKE_POLL_INTERVAL_MS = 'soon'
@@ -531,7 +531,7 @@ describe('the env knobs are documented where a deployment reads them', () => {
 
 describe('fail-open: a failed wake is not the turn’s failure', () => {
   it('resolves — never throws — when the whole budget expires', async () => {
-    // THE D20 CONTRACT: memory is opportunistic. The Verda wake fails the turn
+    // THE D20 CONTRACT: memory is opportunistic. The large-box wake fails the turn
     // visibly because confidential compute must not silently proceed; a
     // failed memory wake leaves the turn exactly as it was, minus memory.
     vi.useFakeTimers()

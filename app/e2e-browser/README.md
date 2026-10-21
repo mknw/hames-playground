@@ -142,7 +142,7 @@ is a different process and there is no handle to install anything on. Without a
 redirect, those calls would leave the machine on the developer's own key, from a
 suite advertised as hermetic.
 
-> Until the 2026-08-26 tier widening this was true of a _verda_-tier turn too —
+> Until the 2026-08-26 tier widening this was true of a _self_deployed_-tier turn too —
 > `router` / `describe` / `screen` / `planner` and the title call stayed on
 > Anthropic in both switch positions. Every role is on the tier now, so the
 > redirect is reachable only from the anthropic position. It did not become

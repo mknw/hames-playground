@@ -161,7 +161,7 @@ describe('USE_SELF_DEPLOYED_INFERENCE unset — the default posture is untouched
   })
 
   it('an unconfigured endpoint is not an error while the flag is off', async () => {
-    // Importing must not throw: the vast majority of runs have no Verda env at
+    // Importing must not throw: the vast majority of runs have no self-deployed env at
     // all, and a boot-time throw there would be a self-inflicted outage.
     await expect(load()).resolves.toBeDefined()
   })

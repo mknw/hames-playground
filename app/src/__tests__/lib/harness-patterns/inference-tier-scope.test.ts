@@ -191,7 +191,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
   })
 
   it('the anthropic position UNDOES the deployment default', async () => {
-    // A user opting out while the process default is Verda is the whole point
+    // A user opting out while the process default is self_deployed is the whole point
     // of the control. A scope that could only widen would silently ignore them.
     process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     const { runWithInferenceTier, clientOverrideFor, activeInferenceTier } = await load()

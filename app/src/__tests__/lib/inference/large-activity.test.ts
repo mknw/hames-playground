@@ -1,5 +1,5 @@
 /**
- * Verda warm-state — the countdown the header renders, and the two ways it
+ * Large-box warm-state — the countdown the header renders, and the two ways it
  * could lie.
  *
  * The failures pinned here are the ones a reader cannot spot: a countdown that
@@ -182,7 +182,7 @@ describe('largeWarmth', () => {
     expect(largeWarmth(NOW).state).toBe('unknown')
   })
 
-  it('does NOT invent warmth when a turn ends without a Verda call', () => {
+  it('does NOT invent warmth when a turn ends without a large-box call', () => {
     // Only a sample naming LargeQwen stamps the clock. An approval that
     // resolved with no LLM step must not leave the header claiming the box is
     // up for three minutes.

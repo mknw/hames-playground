@@ -1056,7 +1056,7 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
   it('fills the anthropic position too, rather than leaving the slot empty', async () => {
     // The slot must be filled in BOTH positions: a run whose frame names no
     // tier falls back to the deployment default, so "leave it out when the user
-    // picked Anthropic" would silently ignore an opt-out on a Verda-default host.
+    // picked Anthropic" would silently ignore an opt-out on a self_deployed-default host.
     resolveConversationTier.mockResolvedValue('anthropic')
 
     await runTurnAndPersist(interactive())
@@ -1134,7 +1134,7 @@ describe('what the header learns from a turn', () => {
     expect(recordTurn).toHaveBeenCalledWith('self_deployed')
   })
 
-  it('brackets a Verda turn with the in-flight gauge', async () => {
+  it('brackets a self_deployed turn with the in-flight gauge', async () => {
     resolveConversationTier.mockResolvedValue('self_deployed')
 
     await runTurnAndPersist(interactive())

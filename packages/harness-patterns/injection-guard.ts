@@ -163,9 +163,8 @@ export interface SanitizeReport {
    * and never a reading of `screenReason`'s prefix, because detections use that
    * field too and a caller must not parse prose to learn whether a layer ran.
    * The guard itself stays fail-open here (the deterministic verdict stands, the
-   * outage is recorded); a caller whose failure policy is stricter — the
-   * decision loop's, #507 S-d — reads this to withhold what the screen did not
-   * clear.
+   * outage is recorded); a caller with a stricter failure policy can read this
+   * flag to decide what to do with content the screen did not clear.
    */
   screenUnavailable?: boolean
 }
@@ -540,8 +539,10 @@ export function unspotlight(text: string): string {
  * `unspotlight`'s sibling for a reader that has to put the fence back: the body
  * AND the provenance the header named, or `undefined` when `text` carries no
  * fence this function can read (a caller then falls back to `unspotlight`). The
- * header's `<namespace>/<tool>` is code-written by `spotlight`, never content,
- * and the namespace is the part before the first slash.
+ * header's `<namespace>/<tool>` is code-written by `spotlight`, and the namespace
+ * is the part before the first slash. It is never content only for text a guard
+ * sanitized (`sentinel-escape` removes the sentinels); a caller restoring the
+ * label must check the tool is one its guard declares.
  */
 export function unspotlightParts(
   text: string,

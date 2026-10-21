@@ -745,8 +745,9 @@ describe('general-next composition', () => {
     expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
   })
 
-  // MUTATION: reinstate the record sanitise in decisionLoop.server.ts (the loop's own fence and
-  // key come back), or declare `screen: createInjectionScreen()` on the orchestrator guard again.
+  // MUTATION: reinstate the record sanitise in decisionLoop.server.ts AND put the old
+  // `decision_loop_output` key back in the orchestrator guard's tools (the full regression shape;
+  // the key alone, or a screen on that guard alone, screens nothing under per-guard options).
   it('S-c: a route record is neither fenced nor screened by the loop (K3 out)', async () => {
     await run()
     expect(states[1]).toContain('SYNTHETIC-ROUTE-CONTENT')
@@ -1253,7 +1254,6 @@ describe('general-next composition', () => {
       expect(handoff).not.toContain('otto.willow@outside.test')
       // The record carries the fence the mail arrived in, not one of the loop's own.
       expect(handoff).toContain('⟦UNTRUSTED CONTENT · source: graph/graph_mail_recent ·')
-      expect(handoff).not.toContain('decision_loop_output')
       expect(handoff).not.toContain('PERSON_1_GIVEN PERSON_1_FAMILY')
       const mail = result.context.events.find(
         (e) =>

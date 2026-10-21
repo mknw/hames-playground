@@ -70,8 +70,9 @@ also how its events are tagged and later queried.
 groups of capabilities: a loop over a table of _routes_ in which a decisions
 model picks the next route each time round, until it picks `answer` or the
 iteration bound is reached. What each route produced comes back as a _route
-output_ — a record built by code from the route's committed events, capped,
-sanitized as untrusted and rendered into the next decision and the next route's
+output_ — a record built by code from the route's committed events, capped
+(the loop sanitizes and screens nothing; the tool-result bodies it quotes keep
+their ingress fence) and rendered into the next decision and the next route's
 context as data, never as instructions. See
 [`docs/plan/decision-loop-agent.md`](docs/plan/decision-loop-agent.md) and
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md).

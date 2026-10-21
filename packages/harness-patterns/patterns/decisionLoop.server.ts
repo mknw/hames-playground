@@ -91,7 +91,7 @@ import {
   type TypedDecisionData,
 } from './typedDecision.server'
 import {
-  capText,
+  carryText,
   collectPatternIds,
   collectToolNames,
   computeStats,
@@ -655,7 +655,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           ? ({
               ok: false,
               failure: 'the step threw an error',
-              text: capText(thrown instanceof Error ? thrown.message : String(thrown), maxChars),
+              text: carryText(thrown instanceof Error ? thrown.message : String(thrown), maxChars),
             } as const)
           : extract(kind, ownEvents, maxChars)
 

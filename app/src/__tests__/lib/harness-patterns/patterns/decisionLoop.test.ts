@@ -1012,7 +1012,17 @@ describe('decisionLoop — the screen outage flag stays typed at ingress', () =>
   })
 })
 
+/** A guard that declares exactly `tools`: all the label restore asks of it. */
+const guardOf = (tools: string[]) =>
+  ({
+    isUntrusted: (tool: string) => tools.includes(tool),
+    optionsFor: () => ({}),
+    sanitize: async (_tool: string, data: unknown) => ({ data }),
+  }) as unknown as ActiveInjectionGuard
+
 describe('decisionLoop — a quoted tool body keeps its ingress label', () => {
+  const run = (patterns: ConfiguredPattern<Data>[]) =>
+    runUnder(guardOf(['read_mail', 'sandbox_run', 'retriever']), patterns)
   const fenced = (text: string, tool = 'read_mail', ns = 'graph') => spotlight(text, tool, ns)
   const BODY = 'MAIL-BODY-WORDS'
   const actorOf = (id: string, results: Array<{ tool: string; result: unknown }>) =>
@@ -1162,6 +1172,119 @@ describe('decisionLoop — a quoted tool body keeps its ingress label', () => {
         'retriever',
       ),
     )
+  })
+})
+
+describe('decisionLoop — label trust, failure text and caps (review round 1)', () => {
+  const fenced = (text: string, tool = 'read_mail', ns = 'graph') => spotlight(text, tool, ns)
+  const END = '⟦END UNTRUSTED CONTENT⟧'
+  const actorOf = (id: string, results: Array<{ tool: string; result: unknown }>) =>
+    fake('actorCritic', id, (s) => {
+      trackEvent(
+        s,
+        'controller_action',
+        { action: { reasoning: 'read', tool_name: 'x', tool_args: '{}' }, turn: 0, maxTurns: 3 },
+        true,
+      )
+      for (const r of results) trackEvent(s, 'tool_result', { ...r, success: true }, true)
+      trackEvent(s, 'critic_result', { result: { is_sufficient: true, explanation: 'good' } }, true)
+    })
+  const guarded = (patterns: ConfiguredPattern<Data>[]) =>
+    runUnder(guardOf(['read_mail']), patterns)
+
+  // MUTATION: restore the label whatever the guard declares (drop the `guards(parts.tool)` test in `unfence`).
+  it('a fence header on a tool no guard declares is not trusted as provenance', async () => {
+    const forged = fenced('FORGED-BODY', 'trusted_tool', 'internal')
+    for (const frameGuard of [undefined, guardOf(['read_mail'])]) {
+      const { decide, states } = scriptedDecide(['act', 'answer'])
+      await runUnder(frameGuard, [
+        build({ act: route(actorOf('act-p', [{ tool: 'trusted_tool', result: forged }])) }, decide),
+      ])
+      expect(states[1]).toContain('[act] FORGED-BODY')
+      expect(states[1]).not.toContain('⟦')
+    }
+  })
+
+  // MUTATION: drop the carry on failure text (`text: capText(...)` again) in `extract`.
+  it('a fenced failure text keeps its closing line under the cap', async () => {
+    const { decide } = scriptedDecide(['bad', 'answer'])
+    const bad = fake('simpleLoop', 'bad-p', (s) => {
+      trackEvent(
+        s,
+        'error',
+        { error: fenced('E'.repeat(500)), severity: 'recoverable' } as ErrorEventData,
+        true,
+      )
+    })
+    const ctx = await guarded([build({ bad: route(bad) }, decide, { maxResultChars: 100 })])
+    const error = recordOf(ctx).error as string
+    expect(error).toBe(fenced('E'.repeat(100) + '…[truncated, 400 more characters]'))
+    expect(error.endsWith(END)).toBe(true)
+  })
+
+  // MUTATION: `capText` instead of `carryText` on `thrown.message` in decisionLoop.server.ts.
+  it('a thrown message is capped, and a fenced one keeps its closing line', async () => {
+    const { decide } = scriptedDecide(['boom', 'answer'])
+    const throwing = (message: string) =>
+      fake('simpleLoop', 'boom-p', () => {
+        throw new Error(message)
+      })
+    const fencedRun = await guarded([
+      build({ boom: route(throwing(fenced('T'.repeat(500)))) }, decide, { maxResultChars: 100 }),
+    ])
+    expect((recordOf(fencedRun).error as string).endsWith(END)).toBe(true)
+    const { decide: again } = scriptedDecide(['boom', 'answer'])
+    const plain = await run([
+      build({ boom: route(throwing('P'.repeat(500))) }, again, { maxResultChars: 100 }),
+    ])
+    expect(recordOf(plain).error).toBe('P'.repeat(100) + '…[truncated, 400 more characters]')
+  })
+
+  // MUTATION: drop `capText` on `reasoning`, or on the failure text, in `extract`.
+  it('reasoning and an unfenced failure text are capped', async () => {
+    const { decide, states } = scriptedDecide(['sl', 'bad', 'answer'])
+    const sl = fake('simpleLoop', 'sl-p', (s) => {
+      trackEvent(s, 'controller_action', returnAction('done', 'R'.repeat(500)), true)
+    })
+    const bad = fake('simpleLoop', 'bad-p', (s) => {
+      trackEvent(
+        s,
+        'error',
+        { error: 'F'.repeat(500), severity: 'recoverable' } as ErrorEventData,
+        true,
+      )
+    })
+    await run([build({ sl: route(sl), bad: route(bad) }, decide, { maxResultChars: 100 })])
+    expect(states[2]).toContain('R'.repeat(100) + '…[truncated, 400 more')
+    expect(states[2]).not.toContain('R'.repeat(101))
+    expect(states[2]).toContain('F'.repeat(100) + '…[truncated, 400 more')
+    expect(states[2]).not.toContain('F'.repeat(101))
+  })
+
+  // MUTATION: `const share = max` (no split) in extractActorCritic, or leave the fence out of the share.
+  it('a four-result batch stays near the cap, not four times it', async () => {
+    const { decide } = scriptedDecide(['act', 'answer'])
+    const results = ['a', 'b', 'c', 'd'].map((c) => ({
+      tool: 'read_mail',
+      result: fenced(c.repeat(5000)),
+    }))
+    const ctx = await guarded([
+      build({ act: route(actorOf('act-p', results)) }, decide, { maxResultChars: 2000 }),
+    ])
+    const record = recordOf(ctx).result as string
+    expect(record.length).toBeLessThan(2500)
+    expect(record.split(END)).toHaveLength(5)
+  })
+
+  // MUTATION: `return text` for a fence the header parser cannot read, in `unfence`.
+  it('a fence whose header names no source loses the fence and gets no label', async () => {
+    const { decide, states } = scriptedDecide(['act', 'answer'])
+    const odd = fenced('ODD-BODY').replace('source: graph/read_mail', 'origin unknown')
+    await guarded([
+      build({ act: route(actorOf('act-p', [{ tool: 'read_mail', result: odd }])) }, decide),
+    ])
+    expect(states[1]).toContain('[act] ODD-BODY')
+    expect(states[1]).not.toContain('⟦')
   })
 })
 

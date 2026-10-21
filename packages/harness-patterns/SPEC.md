@@ -1910,8 +1910,12 @@ the header, not the body) and puts the SAME fence back around what it quoted
 `unspotlightParts`): no regex pass, no screen, no finding of its own, so the body
 reaches the decisions model and the next child's `plan_context` labelled with
 where it came from. The cap runs before the fence goes on, so a long body cannot
-cut its own closing line. An `actorCritic` batch is one block per accepted result,
-each under its own result's fence (a batch can mix tools); the retriever's lines
+cut its own closing line, so the fence's lines are added AFTER the cap (a batch
+share has them subtracted). A label is restored only when the run's guard declares
+the tool the header names (`isUntrusted`): text no guard sanitized can carry a
+forged header, so it stays unlabelled. A failed route's text (a tool error, a
+thrown message) takes the same cap-then-fence path. An `actorCritic` batch is one
+block per accepted result, each under its own result's fence (a batch can mix tools); the retriever's lines
 are one block under the fence its hits arrived in, the filename in each line
 inside it. A body that arrived unfenced (a guard declared with the default
 `spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents

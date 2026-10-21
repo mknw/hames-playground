@@ -18,14 +18,18 @@
  * loop's own text is the model's, or built by code). Two extractors quote
  * TOOL-RESULT bodies, which passed ingress already; they strip the ingress fence
  * to excerpt and put the SAME provenance fence back around what they quoted
- * (`carry`) — no regex pass, no screen, no finding of their own. Every field an
- * extractor returns is already capped, and the cap runs before the fence goes on
- * so a long body can never cut its own closing line.
+ * (`carry`) — no regex pass, no screen, no finding of their own. A fence's label
+ * is trusted only when the run's guard actually guards the tool it names (content
+ * a guard never saw can carry a forged header). Every text field an extractor
+ * returns is capped; the cap runs before the fence goes on so a long body can
+ * never cut its own closing line, which means a fenced field is `max` of body
+ * plus the fence's own lines.
  */
 
 import { assertServerOnImport } from '../assert.server'
 import { EXPAND_TOOL_NAME } from '../types'
 import { spotlight, unspotlight, unspotlightParts } from '../injection-guard'
+import { currentRunFrame } from '../run-frame.server'
 import type {
   ContextEvent,
   ControllerActionEventData,
@@ -178,12 +182,19 @@ interface Unfenced {
   readonly label?: FenceLabel
 }
 
+/** A header names provenance only when the run's guard covers that tool: content
+ *  no guard sanitized still holds whatever sentinels it was sent, so its header
+ *  may be forged. Without a guard (or a tool it does not declare) nothing is labelled. */
+function guards(tool: string): boolean {
+  return currentRunFrame()?.guard?.isUntrusted(tool) === true
+}
+
 function unfence(value: unknown): Unfenced {
   let label: FenceLabel | undefined
   const stripped = mapStrings(value, (text) => {
     const parts = unspotlightParts(text)
     if (!parts) return unspotlight(text)
-    label ??= { tool: parts.tool, namespace: parts.namespace }
+    if (guards(parts.tool)) label ??= { tool: parts.tool, namespace: parts.namespace }
     return parts.body
   })
   return { body: asText(stripped), label }
@@ -250,16 +261,22 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   }
   // One block per accepted result, each under the fence ITS result arrived in:
   // a batch can mix tools, and one label over all of them would name the wrong
-  // source for all but one. The cap is split so the record stays near `max`.
-  const share = Math.max(1, Math.floor(max / accepted.results.length))
+  // source for all but one. The cap is split (less each fence) so the record stays near `max`.
+  const n = accepted.results.length
   const blocks = accepted.results.map((r) => {
     const value = r.success ? r.result : r.error
-    return accepted.results.length === 1
-      ? carry(unfence(value), share)
-      : carry(
-          unfence(r.success ? { tool: r.tool, result: value } : { tool: r.tool, error: value }),
-          share,
-        )
+    const quoted = unfence(
+      n === 1
+        ? value
+        : r.success
+          ? { tool: r.tool, result: value }
+          : { tool: r.tool, error: value },
+    )
+    // The fence rides on top of the capped body, so its own length comes off the share.
+    const overhead = quoted.label
+      ? spotlight('', quoted.label.tool, quoted.label.namespace).length
+      : 0
+    return carry(quoted, n === 1 ? max : Math.max(1, Math.floor(max / n) - overhead))
   })
   const reasoning = [accepted.action.reasoning ?? '', accepted.why ? `Critic: ${accepted.why}` : '']
     .filter(Boolean)
@@ -295,7 +312,7 @@ function extractRetriever(events: ContextEvent[], max: number): Extracted {
         ? ` [doc ${m.docId}, chars ${m.startOffset}-${m.endOffset}]`
         : ''
     const parts = unspotlightParts(m.content)
-    if (parts) label ??= { tool: parts.tool, namespace: parts.namespace }
+    if (parts && guards(parts.tool)) label ??= { tool: parts.tool, namespace: parts.namespace }
     const excerpt = (parts?.body ?? unspotlight(m.content))
       .replace(/\s+/g, ' ')
       .trim()
@@ -342,7 +359,13 @@ export function extract(kind: RouteKind, events: ContextEvent[], max: number): E
   })()
   return found.ok
     ? { ...found, reasoning: capText(found.reasoning, max) }
-    : { ...found, text: capText(found.text, max) }
+    : { ...found, text: carryText(found.text, max) }
+}
+
+/** A failure's own text, treated like a quoted body: a tool error that arrived
+ *  fenced keeps its closing line under the cap; any other text is just capped. */
+export function carryText(text: string, max: number): string {
+  return carry(unfence(text), max)
 }
 
 // ============================================================================

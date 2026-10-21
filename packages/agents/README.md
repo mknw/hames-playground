@@ -150,9 +150,8 @@ deterministic findings are screened after sanitization; those neutralizations
 stay intact. That is a screen call per office or info result, including extra
 inference time on the private tier. The documents route's guard declares the
 fence and no screen, so retrieved hits get the deterministic pass only. The
-orchestrator's guard declares the route-output key and the fence, and no screen:
-a route record is capped, sanitized and fenced, but no model reads it for
-injection. A screen outage inside a route is recorded and fails open. The web
+orchestrator's loop sanitizes and screens nothing of its own: a route record
+is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web
 route admits only its own and retriever
 references, excluding sandbox-promoted documents, and pseudonymises inherited
 content on the private tier. Missing private host wiring withholds earlier
@@ -360,14 +359,14 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                                        | Injection guard                                                                                                    |
-| --------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                                 |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                           |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                       |
-| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                                                   | not guarded yet (below)                                                                                            |
-| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards with their own fence and screen, and a fenced output boundary; private web input pseudonymisation |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                                         |
+| Agent           | Composition                                                      | Tools                                                                        | Injection guard                                                                                                                            |
+| --------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
+| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                                                   | not guarded yet (below)                                                                                                                    |
+| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets

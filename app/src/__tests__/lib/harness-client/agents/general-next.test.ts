@@ -7,6 +7,7 @@ import '../../../../lib/inference/config.server'
 import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
+  continueSession,
   createContext,
   createInjectionGuard,
   createEvent,
@@ -18,6 +19,7 @@ import {
   harnessUsesMemory,
   harnessUsesSyncWorkspace,
   inferServer,
+  serializeContext,
   withRunFrame,
   type ConfiguredPattern,
   type ControllerFn,
@@ -1282,6 +1284,47 @@ describe('general-next composition', () => {
     const synth = (await agent.createPatterns('synthetic-session', deps))[1]
     expect(synth.config.viewConfig).toEqual({ fromPatterns: ['orchestrator'], fromLastNTurns: 1 })
     expect((synth.config as { threadTurns?: number }).threadTurns).toBe(2)
+  })
+
+  // A conversation the removed `general` agent stored resumes here (agent-ids.ts):
+  // its events carry `plan` / `execute` / `response-synth` pattern ids this chain
+  // never wrote. Pinned as a CONTINUATION, not a fresh run: the new turn must
+  // finish with an answer and no error, and the old turn's records stay in the
+  // transcript the person reads.
+  //
+  // MUTATION: run `harness(...patterns)('And how many relationships?')` instead of
+  // `continueSession` (the stored turn is dropped) and the transcript assertion reddens.
+  // Nothing in the chain inspects a pattern id it does not own, so there is no source
+  // mutation for the tolerance itself: this pins the property, it cannot guard one line.
+  it('continues a conversation stored by the removed general agent', async () => {
+    choices = ['answer']
+    const stored = createContext<AgentData>('How many nodes are in the graph?', {})
+    stored.events.push(
+      createEvent('pattern_enter', 'plan', {}),
+      createEvent('pattern_enter', 'execute', {}),
+      createEvent('tool_call', 'execute', { tool: 'read_neo4j_cypher', args: {} }),
+      createEvent('tool_result', 'execute', {
+        tool: 'read_neo4j_cypher',
+        success: true,
+        result: '42',
+      }),
+      createEvent('assistant_message', 'response-synth', { content: 'There are 42 nodes.' }),
+    )
+    stored.status = 'done'
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+
+    const result = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(stored), patterns, 'And how many relationships?'),
+    )
+
+    expect(result.status).not.toBe('error')
+    expect(result.response).toBeTruthy()
+    expect(result.context.events.some((e) => e.patternId === 'execute')).toBe(true)
+    expect(
+      result.context.events
+        .filter((e) => e.type === 'user_message')
+        .map((e) => (e.data as { content: string }).content),
+    ).toEqual(['How many nodes are in the graph?', 'And how many relationships?'])
   })
 
   it.each(['withSandbox', 'createRedisBackend'] as const)(

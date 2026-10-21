@@ -64,16 +64,18 @@ it('a recorded baseline that failed imposes no bar', () => {
   expect(flipGate(true, true, 'general-next', scenarios, rows.slice(0, 1), {}).eligible).toBe(true)
 })
 
-// A `general` row in the report no longer counts as the baseline: it is the record
-// that decides, whatever rows say.
+// A `general` row in a report no longer counts as the baseline: the record decides,
+// whatever rows say. The record says `fail` and the stray row says `pass`; the
+// candidate is still eligible.
 //
 // MUTATION: read the baseline from `rows` again (agent === 'general') in flip-gate.ts
-// → the first expectation goes green-eligible and this reddens.
+// → the stray row bars the candidate and this reddens.
 it('ignores a stray general row: only the recorded baseline bars the candidate', () => {
   expect(
-    flipGate(true, true, 'general-next', scenarios, [rows[0], row('general', 'baseline')], recorded)
-      .reasons,
-  ).toContain('Baseline regression: baseline')
+    flipGate(true, true, 'general-next', scenarios, [rows[0], row('general', 'baseline')], {
+      baseline: 'fail',
+    }).eligible,
+  ).toBe(true)
 })
 
 // The shipped record has to cover exactly the scenarios flagged `baseline`. A new

@@ -180,14 +180,14 @@ apply here.
 
 ### 3a. The agent-reachable tool surface
 
-Everything the MCP gateway lists reaches an agent controller: the `general`
-agent passes `tools.all` — literally every listed tool
-(`packages/harness-patterns/tools.server.ts:111,130`) — into one loop
-(`packages/agents/agents/general.server.ts:47,57,63`). An agent's
-declared `servers: [...]` array is display metadata for the agent picker
-(`AgentSelector.tsx:182,195`); **it filters nothing**. So the gateway's enabled
-set _is_ the preview's tool surface, and it has to be chosen rather than
-inherited.
+Every agent takes a namespace slice of what the MCP gateway lists, so the
+gateway's enabled set bounds the preview's tool surface, and it has to be chosen
+rather than inherited. (Until 2026-10-21 the `general` agent passed `tools.all` —
+literally every listed tool — into one loop, so the enabled set WAS the surface;
+the agent was removed, and `agent-postgres-tools.test.ts` pins that no agent is
+handed the whole listing again.) An agent's declared `servers: [...]` array is
+display metadata for the agent picker (`AgentSelector.tsx:182,195`); **it filters
+nothing**.
 
 **Two things decide it, and only one of them is the control.**
 
@@ -277,18 +277,17 @@ can tighten here:
   every signed-in colleague's turn reads the same graph. The future writer is
   the memory hook (#419), which writes through the app and asks the user to
   confirm first (#206). §11 records the shared property for `memory`, which
-  agents can still write. `PREVIEW-WELCOME.md` carries both.
-- **The agent holding that surface declares no content boundary.**
-  `withInjectionGuard` is declared by exactly three agents — `microsoft-365`,
-  `search` and `retriever-agent` — and `general`, the one that passes
-  `tools.all` into its loop, is not among them (a known, filed gap: #206). Two
-  of the preview's five servers are `fetch` and `web_search`, so text from a
-  page whose author is not your colleague lands in the same controller turn
-  that holds the shared `memory` writes, unsanitised. (It no longer holds
-  `write_neo4j_cypher`: no agent does, since #403.)
-  No setting on this VM switches that boundary on for `general` — it is the code
-  change filed as #206. It bears on how far to trust an answer that cites a fetched
-  page, and on who you invite — the same register §11 uses for the sandbox.
+  no agent writes since the `general` agent was removed. `PREVIEW-WELCOME.md`
+  carries both.
+- **The agent holding that surface used to declare no content boundary; the
+  one left without one is the sandbox agent.** `withInjectionGuard` is declared
+  by four agents — `microsoft-365`, `search`, `retriever-agent` and
+  `general-next`. The unguarded `general` agent, which passed `tools.all` into
+  one loop (web fetch and the shared `memory` writes in the same controller turn),
+  was removed on 2026-10-21, and no agent now holds a `memory` write tool:
+  `general-next` is handed `search_nodes` and `open_nodes` only. (No agent holds
+  `write_neo4j_cypher` either, since #403.) The gap that remains in this register
+  is the sandbox agent's, the same one §11 records for the sandbox.
 
 **Pre-launch check — the GitHub MCP server and its token (#261 P0-2).** The
 tracked template carries no `github:` block, so a from-scratch provision is
@@ -1067,9 +1066,10 @@ diagnosis, and nothing is reachable from outside.
   `configs/custom-catalog.yaml:88-104`) with no per-user or per-session
   scoping, so anything an agent writes there is readable by every other
   signed-in user's agent. It is in the preview's allow-list (§3a) because
-  `general` advertises it in the picker — a choice made when that list was
-  written, not something the agent's `servers: [...]` array enforces; nothing
-  in the preview writes to it on its own.
+  the `general` agent advertised it in the picker (since removed; `general-next`
+  reads it and never writes) — a choice made when that list was written, not
+  something an agent's `servers: [...]` array enforces; nothing in the preview
+  writes to it on its own.
 - **The sandbox containers are not hardened.** They run as root with no
   capability drops, no read-only root and no seccomp profile, and only the
   strict egress profile is actually enforced — the other profile names fall

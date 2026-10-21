@@ -53,7 +53,7 @@ const act = (tool_name: string, tool_args: string): ControllerAction => ({
   is_final: tool_name === 'Return',
 })
 
-/** `general`'s own synth config, optionally with a wider turn window. */
+/** The synth config of the removed `general` agent, kept as a fixture, optionally with a wider turn window. */
 const viewOf = (turns = 1) => ({
   fromPatterns: ['harness', 'execute'],
   fromLastNTurns: turns,

@@ -24,10 +24,12 @@
  * ## The second agent shape
  *
  * Everything else in this suite drives `search` (router → routes → simpleLoop →
- * compactExecution). `general` is a different chain — planner → simpleLoop →
- * compactExecution over the whole tool surface — and `Planner` is a role the
- * tier switch deliberately does NOT move, so a turn through it is also a second
- * witness for the pinned-role rule.
+ * compactExecution). The `Planner` role belongs to a different chain — planner →
+ * simpleLoop → compactExecution — that no registered agent is still built as
+ * (the `general` agent that was, was removed 2026-10-21; `general-next` runs its
+ * planner as a `think` route the fake decisions endpoint never picks). So the
+ * chain is registered here, under a test-only id, from the same public patterns:
+ * a turn through it is the witness that the planner follows the tier switch.
  *
  * ## Known gap, stated rather than papered over
  *
@@ -38,13 +40,50 @@
  * sandbox fake, which is a larger piece of work than this suite.
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
+import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
+import type { SessionData } from '../../src/lib/harness-client/session.server'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
 import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, LARGE_LLM_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
+/** Test-only id for the planner → simpleLoop → compactExecution chain. */
+const PLANNER_CHAIN = 'e2e-planner-chain'
+
 beforeAll(async () => {
   app = await bootApp()
+  const { registerAgent } = await import('../../src/lib/harness-client/registry.server')
+  const { agentDeps } = await import('../../src/lib/harness-client/session.server')
+  const { planner, simpleLoop, compactExecution, Tools } =
+    await import('@hames-ai/harness-patterns')
+  const { bamlPatterns, createLoopControllerAdapter } = await import('@hames-ai/harness-baml')
+  registerAgent({
+    id: PLANNER_CHAIN,
+    name: PLANNER_CHAIN,
+    description: 'Test-only planner chain',
+    welcome: 'Test-only planner chain',
+    servers: [],
+    icon: 'i-material-symbols-rule',
+    accent: 'indigo',
+    createPatterns: async (): Promise<ConfiguredPattern<SessionData>[]> => {
+      const tools = (await Tools({ namespaces: agentDeps().toolNamespaces })).neo4j ?? []
+      const baml = bamlPatterns()
+      return [
+        planner<SessionData>(baml.planner(tools), tools, { patternId: 'plan' }),
+        simpleLoop<SessionData>(createLoopControllerAdapter(), tools, { patternId: 'execute' }),
+        compactExecution<SessionData>({
+          mode: 'thread',
+          patternId: 'response-synth',
+          synthesize: baml.synthesize,
+          viewConfig: {
+            fromPatterns: ['harness', 'execute'],
+            fromLastNTurns: 1,
+            eventTypes: ['user_message', 'controller_action', 'tool_call', 'tool_result', 'error'],
+          },
+        }),
+      ]
+    },
+  })
   await app.wipe()
 })
 afterAll(async () => {
@@ -85,23 +124,23 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
   })
 })
 
-describe.each(TIERS)('the general agent on the %s tier', (tier) => {
+describe.each(TIERS)('the planner chain on the %s tier', (tier) => {
   it('plans, executes and answers', async () => {
     await app.setTier(tier)
-    const sessionId = newSessionId(`general-${tier}`)
+    const sessionId = newSessionId(`planner-chain-${tier}`)
 
-    const result = await app.runTurn(sessionId, 'Count the nodes in the graph.', 'general')
+    const result = await app.runTurn(sessionId, 'Count the nodes in the graph.', PLANNER_CHAIN)
 
     expect(result.response).toBeTruthy()
     const row = await app.readRow(sessionId)
-    expect(row!.agentId).toBe('general')
+    expect(row!.agentId).toBe(PLANNER_CHAIN)
     expect(row!.status).toBe('done')
     expect(eventsOfType(row!.serializedContext, 'assistant_message').length).toBeGreaterThan(0)
   })
 
   it.runIf(IS_HERMETIC)('routes the planner to whichever tier the turn is on', async () => {
     await app.setTier(tier)
-    await app.runTurn(newSessionId(`plan-${tier}`), 'Count the nodes in the graph.', 'general')
+    await app.runTurn(newSessionId(`plan-${tier}`), 'Count the nodes in the graph.', PLANNER_CHAIN)
 
     const planner = app.fakeLlm.calls.filter((c) => c.fn === 'Planner')
     expect(planner.length, 'the planner never ran').toBeGreaterThan(0)

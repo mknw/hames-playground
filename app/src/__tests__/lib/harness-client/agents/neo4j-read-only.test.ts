@@ -8,8 +8,7 @@ import '../../../mocks/namespace-catalog'
  * A write-shaped request to an agent that reaches Neo4j ends in an answer, not
  * in an error (#401, #403).
  *
- * Owner decision, 2026-10-03: agents are read-only against Neo4j, `general`
- * included. Before this, a write-shaped turn on a read-only gateway broke two
+ * Owner decision, 2026-10-03: agents are read-only against Neo4j. Before this, a write-shaped turn on a read-only gateway broke two
  * ways, and both ended the loop on an error event rather than an answer:
  *
  *   - the shipped Neo4j few-shots demonstrate `write_neo4j_cypher`; a controller
@@ -135,11 +134,6 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
       route: 'neo4j',
       response: 'Looking into that…',
     })),
-    Planner: vi.fn(async () => ({
-      reasoning: 'r',
-      plan: '1. Add the concept to the graph.',
-      n_steps: 1,
-    })),
     Synthesize: vi.fn(async () => READ_ONLY_ANSWER),
   },
 }))
@@ -147,15 +141,13 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
 const REQUEST = "Add 'Stream Processing' as a concept connected to Redis."
 
 async function agents(): Promise<Record<string, AgentDefinition>> {
-  const [search, retriever, general] = await Promise.all([
+  const [search, retriever] = await Promise.all([
     import('@hames-ai/agents/agents/search.server'),
     import('@hames-ai/agents/agents/retriever-agent.server'),
-    import('@hames-ai/agents/agents/general.server'),
   ])
   return {
     search: search.searchAgent,
     retriever: retriever.retrieverAgent,
-    general: general.generalAgent,
   }
 }
 
@@ -182,7 +174,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe.each(['search', 'retriever', 'general'])(
+describe.each(['search', 'retriever'])(
   '%s: a write-shaped request against a read-only graph',
   (agentId) => {
     it('ends in an answer, with no error event and nothing written', async () => {

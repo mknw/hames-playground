@@ -233,22 +233,6 @@ describe('Agent Harnesses', () => {
     })
   })
 
-  describe('generalAgent', () => {
-    it('should have valid config', async () => {
-      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-      validateAgentConfig(generalAgent)
-      expect(generalAgent.id).toBe('general')
-      expect(generalAgent.servers).toContain('neo4j-cypher')
-    })
-
-    it('should create a planner → simpleLoop → compactExecution chain', async () => {
-      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-      const patterns = await validatePatterns(generalAgent)
-
-      expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
-    })
-  })
-
   // 2026-10-03: ONE sandbox agent (owner decision). `sandbox-session` and
   // `flavoured-sandbox` were consolidated into it; the registry maps both old
   // ids here (registry.test.ts).
@@ -407,9 +391,9 @@ describe('Agent Consistency', () => {
 
   it('all agents should contain compactExecution pattern', async () => {
     const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
+    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
 
-    const agents = [searchAgent, generalAgent]
+    const agents = [searchAgent, generalNextAgent]
 
     for (const config of agents) {
       const patterns = (await config.createPatterns('test-session', testAgentDeps)) as Pattern[]
@@ -428,7 +412,6 @@ describe('Agent Consistency', () => {
  * only. The user's message is tracked at the harness level (patternId
  * 'harness'), so it was filtered out and `Synthesize` ran with an empty
  * USER MESSAGE: the answer-writer had the tool results but not the question.
- * `general.server.ts` is the shape the others now follow.
  */
 describe('compactExecution view scope — the user message must survive', () => {
   interface Node {

@@ -25,7 +25,18 @@ describe('package resolution is independent of the working directory', () => {
     expect([packagePath('agents', 'agents'), agentModuleFile('general-next')]).toEqual(fromApp)
     expect(existsSync(packagePath('agents', 'agents'))).toBe(true)
     expect(agentModuleUrl('general-next')).toBe(`file://${resolve(REPO_ROOT, fromApp[1])}`)
-    expect(() => assertPackageLayout(['general', 'general-next'])).not.toThrow()
+    expect(() => assertPackageLayout(['general-next'])).not.toThrow()
+  })
+
+  // `general` was removed 2026-10-21. `EVAL_GENERAL_AGENT=general` therefore dies
+  // here, before any wake or spend, naming the missing module — it must not fall
+  // back to the candidate and report a run that compared nothing.
+  //
+  // MUTATION: restore packages/agents/agents/general.server.ts and this reddens.
+  it('refuses the removed general agent against the real checkout', () => {
+    expect(() => assertPackageLayout(['general'])).toThrow(
+      /Missing: packages\/agents\/agents\/general\.server\.ts\./,
+    )
   })
 
   it('rejects an agent id that could escape the agents directory', () => {
@@ -79,7 +90,7 @@ describe('the layout check fails before anything is spent', () => {
 
   it('names only the missing agent when the directory is present', () => {
     const exists = (p: string) => !p.endsWith('missing-agent.server.ts')
-    expect(() => assertPackageLayout(['general', 'missing-agent'], exists)).toThrow(
+    expect(() => assertPackageLayout(['general-next', 'missing-agent'], exists)).toThrow(
       /Missing: packages\/agents\/agents\/missing-agent\.server\.ts\./,
     )
   })
@@ -87,7 +98,7 @@ describe('the layout check fails before anything is spent', () => {
   it('runs in the runner before the proxy child, the fixture and any wake', () => {
     const run = read('evals/general-next/run.ts')
     // Exact top-level statements: the anchor rejects nesting (`if (live) …`), the literal a dropped agent.
-    const agents = run.match(/^ {2}const agents = \[\.\.\.new Set\(\['general', candidate\]\)\]$/m)
+    const agents = run.match(/^ {2}const agents = \[candidate\]$/m)
     const check = run.match(/^ {2}assertPackageLayout\(agents\)$/m)
     expect(agents, 'agents statement').not.toBeNull()
     expect(check, 'layout check statement').not.toBeNull()

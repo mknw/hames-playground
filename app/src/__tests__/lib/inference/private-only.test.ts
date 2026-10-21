@@ -115,13 +115,19 @@ describe('private-only call guards', () => {
   })
   it('preserves the unset default, override precedence and original argument bytes', async () => {
     vi.stubEnv('INFERENCE_TIERS', '')
-    expect(activeInferenceTier()).toBe('anthropic')
+    // Unset restricts nothing: a frame that NAMES the Anthropic tier keeps it, and
+    // a run that names none is on the host's default (the one tier rule), not
+    // pushed anywhere by the absence of the restriction.
+    expect(activeInferenceTier()).toBe('self_deployed')
     expect(() => assertInferenceTier('anthropic')).not.toThrow()
-    for (const role of roles) expect(clientOverrideFor(role)).toBeUndefined()
     const native = vi
       .spyOn(generated, 'GenerateConversationTitle')
       .mockResolvedValue('Synthetic title')
-    await b.GenerateConversationTitle('same bytes')
+    await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      expect(activeInferenceTier()).toBe('anthropic')
+      for (const role of roles) expect(clientOverrideFor(role)).toBeUndefined()
+      await b.GenerateConversationTitle('same bytes')
+    })
     expect(native).toHaveBeenCalledWith('same bytes')
     configureConsumerClients(() => ({ client: 'CustomClient' }))
     expect(clientOverrideFor('describe')).toEqual({ client: 'CustomClient' })
@@ -131,8 +137,6 @@ describe('private-only call guards', () => {
         expect(clientOverrideFor('describe')).toEqual({ client: 'PerRun' })
       },
     )
-    vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
-    expect(activeInferenceTier()).toBe('self_deployed')
   })
   it('validates a restricted server at boot without changing unset boot behavior', () => {
     vi.stubEnv('SMALL_LLM_BASE_URL', '')

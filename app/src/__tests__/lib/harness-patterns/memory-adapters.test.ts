@@ -65,6 +65,7 @@ afterEach(() => {
 async function load() {
   vi.resetModules()
   await import('../../../lib/inference/config.server')
+  ;(await import('../../mocks/flag-default-tier')).useFlagDrivenDefaultTier()
   return await import('@hames-ai/harness-baml/baml-patterns.server')
 }
 

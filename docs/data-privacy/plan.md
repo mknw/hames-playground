@@ -176,8 +176,9 @@ Two things follow that _are_ in our control:
   the private tier resolves to `PrivateSystemOne` and reads only
   `SMALL_LLM_DECISIONS_URL` plus `SMALL_LLM_API_KEY`. The URL is a full endpoint
   ending in `/v1/systemone`; an unset value refuses the call without a public
-  fallback. Unknown tiers or a client inconsistent with the tier are refused
-  before a request (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
+  fallback. A client inconsistent with the tier is refused before a request, and a
+  frame tier that is present but unrecognised is read as the private tier (refused
+  when that tier is unreachable, never sent to Jev) (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
   other provider is an Art. 28 / Chapter V decision, not a config change.
 
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account
@@ -186,7 +187,7 @@ Two things follow that _are_ in our control:
 
 **Update (2026-08-25, widened twice on 2026-08-26) — a self-hosted route now
 exists, and it now covers every role without exception.** A self_deployed tier decision
-— the `USE_SELF_DEPLOYED_INFERENCE=1` deployment default or a per-conversation switch —
+— a run that names no tier, or a per-conversation switch (`USE_SELF_DEPLOYED_INFERENCE=1` is only the boot-time check that the tier is configured) —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/large-client.baml`). Read against the paragraph above: no

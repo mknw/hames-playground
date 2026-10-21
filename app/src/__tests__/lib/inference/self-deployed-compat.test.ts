@@ -36,19 +36,27 @@ describe('one-release environment migration', () => {
       expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
   })
-  // The alias admits ONE legacy literal and nothing else: any other spelling is an
-  // unrecognised frame value, which falls back to the deployment default (the
-  // public tier here) rather than being trusted as a private one.
-  it.each(['private', 'Verda', 'VERDA', 'self-deployed', 'SELF_DEPLOYED', ''])(
-    'a frame carrying %j is not an alias of self_deployed',
+  // The alias admits ONE legacy literal and nothing else: any other non-empty
+  // spelling is never trusted as a private tier and never the public one — with
+  // no host policy registered it is refused (ruling E). An empty tier names
+  // nothing, so it takes the default.
+  it.each(['private', 'Verda', 'VERDA', 'self-deployed', 'SELF_DEPLOYED'])(
+    'a frame carrying %j is not an alias of self_deployed and is refused',
     async (value) => {
       vi.stubEnv('INFERENCE_TIERS', undefined)
       await withRunFrame({ inference: { tier: value } }, async () => {
-        expect(activeInferenceTier()).toBe('anthropic')
-        expect(clientOverrideFor('controller')).toBeUndefined()
+        expect(() => activeInferenceTier()).toThrow()
+        expect(() => clientOverrideFor('controller')).toThrow()
       })
     },
   )
+  it('an empty frame tier names nothing and takes the default', async () => {
+    vi.stubEnv('INFERENCE_TIERS', undefined)
+    await withRunFrame({ inference: { tier: '' } }, async () => {
+      expect(activeInferenceTier()).toBe('anthropic')
+      expect(clientOverrideFor('controller')).toBeUndefined()
+    })
+  })
   it('legacy environment values reach the regenerated BAML request', async () => {
     vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://large.example.invalid/v1')
     vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')

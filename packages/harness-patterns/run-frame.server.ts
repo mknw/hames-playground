@@ -216,6 +216,46 @@ const holder: StoreHolder = (globalStore[STORE_KEY] ??= {
 })
 const store = holder.store
 
+/**
+ * The ONE TIER RULE's seam (boundary guards, slice 9).
+ *
+ * "Which tier is this run on" has two readers that used to disagree: routing
+ * (an absent or empty frame tier takes the host's default; a present but
+ * unrecognised one is the self-deployed tier, refused when unreachable) and the
+ * guards (the raw string). Core cannot settle it, because core interprets no
+ * tier string — so the companion that does, `@hames-ai/harness-baml`'s tier
+ * module, REGISTERS its answer here and every core reader asks
+ * {@link effectiveTier} instead of the raw slot.
+ *
+ * On a `globalThis` symbol for the same reason as the frame: two loaded copies
+ * of this package must see one registration.
+ */
+const EFFECTIVE_TIER_KEY: unique symbol = Symbol.for(
+  'hames.harness-patterns.effective-tier',
+) as never
+type EffectiveTierHolder = { read?: () => string }
+const tierGlobal = globalThis as unknown as Record<symbol, EffectiveTierHolder | undefined>
+const effectiveTierHolder: EffectiveTierHolder = (tierGlobal[EFFECTIVE_TIER_KEY] ??= {})
+
+/** Register the function that answers {@link effectiveTier}; `undefined`
+ *  unregisters. Called by the tier module that interprets tier strings, at its
+ *  load. The last registration wins. */
+export function registerEffectiveTier(read: (() => string) | undefined): void {
+  effectiveTierHolder.read = read
+}
+
+/**
+ * The tier this run is on, as the registered tier module answers it, or
+ * `undefined` when none is registered (core used without a tier interpreter —
+ * nothing routes, so there is no tier to name and the caller keeps its own
+ * default). Core never inspects the string. A registered reader that refuses
+ * (a restricted deployment) throws, and the throw propagates: a guard that
+ * cannot learn the tier must not guess it.
+ */
+export function effectiveTier(): string | undefined {
+  return effectiveTierHolder.read?.()
+}
+
 /** Which slots a caller actually supplied — an explicit `undefined` is not a
  *  slot, so `{ guard: maybeGuard }` with nothing to put there still joins. */
 function suppliedSlots(frame: RunFrame): string[] {

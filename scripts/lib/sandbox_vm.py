@@ -5,6 +5,7 @@ All subprocess output is private. Public evidence is built from a closed schema,
 never from command output, names, addresses, environment values or exception text.
 """
 import argparse
+import base64
 import hashlib
 import ipaddress
 import json
@@ -21,6 +22,9 @@ import tarfile
 import time
 import uuid
 
+# Run as a script, this module is __main__; sandbox_vm_measure's `import sandbox_vm`
+# must get THIS module (its PRIVATE_LOG, Refusal), not a fresh second copy.
+sys.modules.setdefault("sandbox_vm", sys.modules[__name__])
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE = ROOT / ".sandbox-vm-spike"
 PRIVATE_LOG = None
@@ -28,11 +32,34 @@ STEPS = ("install", "provision", "tls", "measure", "cleanup")
 UNMEASURED = ("vm_per_sandbox_q35", "vm_per_sandbox_minimal", "kata", "firecracker")
 HOST_SOCKET = "unix:///var/run/docker.sock"
 INCUS_STATE = Path("/var/lib/incus")
+INCUS_PACKAGES = ("incus", "incus-base", "incus-client")
+# Upstream Incus packages (the Incus maintainers' signed apt repository). The
+# distro's 6.0.x lacks the project restrictions the environment VMs require.
+UPSTREAM_URI = "https://pkgs.zabbly.com/incus/stable"
+UPSTREAM_KEY_FINGERPRINT = "4EFC590696CB15B87C73A3AD82CC8797C838DCFD"
+UPSTREAM_FILES = {"keyring": Path("/etc/apt/keyrings/sbxs-incus-upstream.asc"),
+                  "sources": Path("/etc/apt/sources.list.d/sbxs-incus-upstream.sources"),
+                  "preferences": Path("/etc/apt/preferences.d/sbxs-incus-upstream")}
+MINIMUM_INCUS = (7, 3)
+OS_RELEASE = Path("/etc/os-release")
+# Applied by the upstream incus-base postinst (/usr/lib/sysctl.d/50-incus.conf) and NOT
+# reverted by its removal; captured before install so the operator can restore them.
+PACKAGE_SYSCTLS = ("fs.aio-max-nr", "fs.inotify.max_queued_events", "fs.inotify.max_user_instances",
+                   "fs.inotify.max_user_watches", "kernel.keys.maxbytes", "kernel.keys.maxkeys",
+                   "net.ipv4.fib_sync_mem", "net.ipv4.neigh.default.gc_thresh3",
+                   "net.ipv6.neigh.default.gc_thresh3", "vm.max_map_count",
+                   "kernel.apparmor_restrict_unprivileged_unconfined")
+REQUIRED_API_EXTENSIONS = ("projects_restricted_virtual_machines_nesting",
+                           "projects_restricted_storage_pool_access")
+
+
+class Refusal(RuntimeError):
+    """A require() failure. Its message is always a fixed literal (pinned), never a value."""
 
 
 def require(condition, message):
     if not condition:
-        raise RuntimeError(message)
+        raise Refusal(message)
 
 
 def size_bytes(value):
@@ -103,8 +130,11 @@ def command(*args, input=None, timeout=60, check=True, env=None, host_scope=None
         else:
             require(args[1:2] == ("--config",), "unscoped host Docker command refused")
         env = docker_env() if env is None else {k: v for k, v in env.items() if not k.startswith("DOCKER_")}
-    result = subprocess.run(args, input=input, text=True, capture_output=True,
-                            timeout=timeout, env=env)
+    try:
+        result = subprocess.run(args, input=input, text=True, capture_output=True,
+                                timeout=timeout, env=env)
+    except FileNotFoundError:
+        raise Refusal("required host command not installed") from None
     if PRIVATE_LOG is not None:
         with PRIVATE_LOG.open("a") as stream:
             stream.write(json.dumps({"argv": args, "exit": result.returncode,
@@ -142,6 +172,135 @@ def apt_transaction(*args, env=None):
             handler(sig, frame)
         elif handler != signal.SIG_IGN:
             raise RuntimeError("interrupted after apt returned; rollback required")
+
+
+def upstream_version(value):
+    """Exact upstream package version, e.g. 1:7.5.1-ubuntu26.04-202610160649, at 7.3 or later."""
+    match = re.fullmatch(r"1:([0-9]+)\.([0-9]+)(?:\.[0-9]+)?-(?:ubuntu|debian)[0-9.]+-[0-9]{12}", value or "")
+    return match is not None and (int(match[1]), int(match[2])) >= MINIMUM_INCUS
+
+
+def primary_key_fingerprints(armored):
+    """v4 fingerprints of every primary key (tag 6) in an armored transferable public key block."""
+    lines = armored.strip().splitlines()
+    require(armored.count("-----BEGIN ") == 1 and lines[:1] == ["-----BEGIN PGP PUBLIC KEY BLOCK-----"]
+            and lines[-1:] == ["-----END PGP PUBLIC KEY BLOCK-----"] and "" in lines,
+            "armored public key block required")
+    body = lines[lines.index("") + 1:-1]
+    data = base64.b64decode("".join(line for line in body if not line.startswith("=")), validate=True)
+    found, position = [], 0
+    while position < len(data):
+        octet = data[position]
+        require(octet & 0x80, "malformed OpenPGP packet")
+        if octet & 0x40:
+            tag, first = octet & 0x3F, data[position + 1]
+            require(first < 224 or first == 255, "partial OpenPGP packet refused")
+            if first < 192:
+                length, position = first, position + 2
+            elif first < 224:
+                length, position = ((first - 192) << 8) + data[position + 2] + 192, position + 3
+            else:
+                length, position = int.from_bytes(data[position + 2:position + 6], "big"), position + 6
+        else:
+            tag, size = (octet >> 2) & 0x0F, octet & 0x03
+            require(size != 3, "indeterminate OpenPGP packet refused")
+            size = 1 << size
+            length = int.from_bytes(data[position + 1:position + 1 + size], "big")
+            position += 1 + size
+        packet = data[position:position + length]
+        require(len(packet) == length, "truncated OpenPGP packet")
+        # Public key, user ID, subkey, signature and user attribute only: a secret
+        # key (5, 7) or compressed (8) packet is invisible to this parser but one
+        # verifier would still trust the key inside it.
+        require(tag in (2, 6, 13, 14, 17), "public key packets only")
+        require(tag == 6 or found, "key block must begin with a primary public key")
+        if tag == 6:
+            require(packet[:1] == b"\x04", "v4 primary key required")
+            found.append(hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + packet).hexdigest().upper())
+        position += length
+    return found
+
+
+def upstream_contents(key, codename):
+    return {"keyring": key,
+            "sources": "Types: deb\nURIs: " + UPSTREAM_URI + "\nSuites: " + codename
+                       + "\nComponents: main\nSigned-By: " + str(UPSTREAM_FILES["keyring"]) + "\n",
+            # Only the three Incus packages may come from upstream; nothing it
+            # publishes can replace or add any other package on the host.
+            "preferences": "Package: " + " ".join(INCUS_PACKAGES) + "\nPin: origin pkgs.zabbly.com\nPin-Priority: 600\n\n"
+                           "Package: *\nPin: origin pkgs.zabbly.com\nPin-Priority: -1\n"}
+
+
+def upstream_source(args):
+    """Add (or, with --remove, take away) the pinned upstream apt source. Journaled by content hash."""
+    require(os.geteuid() == 0 and sys.platform == "linux", "source requires Linux root")
+    record = DEFAULT_STATE / "incus-source.private.json"
+    if args.remove:
+        for package in INCUS_PACKAGES:  # fail closed: a query error or partial state keeps the source
+            require(incus_removed(package), "remove Incus packages before their source")
+        require(record.is_file(), "no source journal; remove the three upstream source files by hand (runbook)")
+        journal = json.loads(record.read_text())
+        present = [path for path in UPSTREAM_FILES.values() if path.exists() or path.is_symlink()]
+        # Verify every file before deleting any: a refusal leaves the source whole.
+        for name, path in UPSTREAM_FILES.items():
+            require(path not in present or (not path.is_symlink()
+                    and hashlib.sha256(path.read_bytes()).hexdigest() == journal[name]),
+                    "upstream source file changed since it was written; inspect it by hand")
+        for path in present:
+            path.unlink()
+        record.unlink()
+        return {"removed": sorted(UPSTREAM_FILES)}
+    key = args.key.read_text()
+    require(primary_key_fingerprints(key) == [UPSTREAM_KEY_FINGERPRINT], "upstream signing key fingerprint mismatch")
+    release = dict(line.split("=", 1) for line in OS_RELEASE.read_text().splitlines() if "=" in line)
+    codename = release.get("VERSION_CODENAME", "").strip('"')
+    require(re.fullmatch(r"[a-z]+", codename), "distribution codename required")
+    contents = upstream_contents(key, codename)
+    journal = json.dumps({name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()})
+    present = [path for path in UPSTREAM_FILES.values() if path.exists() or path.is_symlink()]
+    if len(present) == len(UPSTREAM_FILES) and all(not path.is_symlink() and path.read_text() == contents[name]
+                                                   for name, path in UPSTREAM_FILES.items()):
+        # A retry after a failed index refresh: the exact files are already in place.
+        # Rewrite the journal from them, so a lost one does not block --remove.
+        DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
+        private_file(record, journal)
+        apt_transaction("update", "-o", "Dir::Etc::sourcelist=" + str(UPSTREAM_FILES["sources"]),
+                        "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
+        return {"unchanged": sorted(UPSTREAM_FILES), "suite": codename}
+    require(not present, "upstream source already present; remove it first")
+    require(all(path.parent.is_dir() and not path.parent.is_symlink() for path in UPSTREAM_FILES.values()),
+            "apt configuration directories required")
+    DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
+    private_file(record, journal)
+    for name, path in UPSTREAM_FILES.items():
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        os.fchmod(fd, 0o644)  # apt reads the keyring as its unprivileged _apt user
+        with os.fdopen(fd, "w") as stream:
+            stream.write(contents[name])
+    # Refresh ONLY this source's index; other sources' lists are left untouched.
+    apt_transaction("update", "-o", "Dir::Etc::sourcelist=" + str(UPSTREAM_FILES["sources"]),
+                    "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
+    return {"added": sorted(UPSTREAM_FILES), "suite": codename}
+
+
+def incus_removed(package):
+    """dpkg reports this package absent, or removed with conffiles only. Anything else refuses."""
+    query = command("dpkg-query", "-W", "-f=${Status}", package, check=False)
+    status = query.stdout.split()
+    # remove leaves conffiles, not installed payload. Refuse holds, broken
+    # flags, installed/partial states and failed or contradictory queries.
+    return ((query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")
+                and status[1] == "ok" and status[2] in ("not-installed", "config-files")))
+
+
+def offered_only_upstream(listing, version):
+    """Every Incus package lists this exact version, and no other source offers it."""
+    rows = [[field.strip() for field in line.split("|")] for line in listing.splitlines() if line.count("|") == 2]
+    for package in INCUS_PACKAGES:
+        sources = [row[2] for row in rows if row[0] == package and row[1] == version]
+        if not sources or not all(source.startswith(UPSTREAM_URI + " ") for source in sources):
+            return False
+    return True
 
 
 def new_state(path):
@@ -441,10 +600,12 @@ class Spike:
             self.persist()
 
     def install(self):
-        packages = ("incus=" + self.args.incus_version, "incus-client=" + self.args.incus_version,
-                    "dnsmasq-base=" + self.args.dnsmasq_version,
-                    "qemu-system-modules-spice=" + self.args.qemu_modules_version,
-                    "qemu-system-modules-opengl=" + self.args.qemu_modules_version)
+        require(upstream_version(self.args.incus_version), "pin an upstream Incus 7.3+ package version")
+        require(offered_only_upstream(command("apt-cache", "madison", *INCUS_PACKAGES).stdout, self.args.incus_version),
+                "pinned Incus version is not offered solely by the upstream source")
+        # The upstream package bundles QEMU, OVMF and virtiofsd under /opt/incus.
+        packages = (*(name + "=" + self.args.incus_version for name in INCUS_PACKAGES),
+                    "dnsmasq-base=" + self.args.dnsmasq_version)
         plan = command("apt-get", "--simulate", "install", "--no-install-recommends", *packages).stdout
         planned = re.findall(r"^Inst (\S+)", plan, re.M)
         require(planned and set(planned) <= set(self.args.allow_package)
@@ -455,13 +616,19 @@ class Spike:
                 "package plan touches protected packages or upgrades existing software")
         command("apt-get", "install", "--download-only", "-y", "--no-install-recommends",
                 "--no-remove", "--no-upgrade", *packages, timeout=180)
-        self.residual_packages = sorted(set(planned) - {"incus", "incus-base", "incus-client"})
+        self.residual_packages = sorted(set(planned) - set(INCUS_PACKAGES))
+        before = {key: command("sysctl", "-n", key, check=False).stdout.strip() for key in PACKAGE_SYSCTLS}
+        private_file(self.state / "sysctl.before.private.json", json.dumps(before, indent=2) + "\n")
         self.installed = True  # Mark BEFORE apt: a failed/partial install also rolls back.
         self.persist()
         install_env = dict(os.environ, DEBIAN_FRONTEND="noninteractive", NEEDRESTART_MODE="l")
         apt_transaction("install", "-y", "--no-install-recommends", "--no-remove", "--no-upgrade", *packages,
                         env=install_env)
         self.incus("admin", "waitready", "--timeout=60")
+        server = json.loads(self.incus("query", "/1.0").stdout)
+        extensions = server.get("api_extensions") if isinstance(server, dict) else None
+        require(isinstance(extensions, list) and set(REQUIRED_API_EXTENSIONS) <= set(extensions),
+                "installed Incus lacks the required project restrictions")
 
     def provision(self):
         pool = self.prefix + "-pool"
@@ -550,10 +717,17 @@ class Spike:
         ]
 
     def bridge_insert_position(self):
+        """Below the metadata policy: the #646 jump, or #677's inline vps-metadata-forward drops."""
         rules = [shlex.split(line) for line in command("iptables", "-S", "DOCKER-USER").stdout.splitlines() if line.startswith("-A ")]
-        hooks = [i for i, rule in enumerate(rules) if "-j" in rule and rule[rule.index("-j") + 1] == "VPS-METADATA"]
-        require(not hooks or hooks == [0], "metadata jump must remain first and unique")
-        return "2" if hooks else "1"
+        def metadata(rule):
+            jump = rule[rule.index("-j") + 1] if "-j" in rule else ""
+            comment = rule[rule.index("--comment") + 1] if "--comment" in rule else ""
+            return jump == "VPS-METADATA" or re.fullmatch(r"vps-metadata-forward-v[0-9]+", comment) is not None
+        hooks = [i for i, rule in enumerate(rules) if metadata(rule)]
+        require(hooks == list(range(len(hooks))), "metadata policy must remain first and contiguous")
+        require(sum(1 for rule in rules if "-j" in rule and rule[rule.index("-j") + 1] == "VPS-METADATA") <= 1,
+                "metadata jump must remain first and unique")
+        return str(len(hooks) + 1)
 
     def launch(self, index, name):
         require(name.startswith(self.prefix + "-"), "non-spike instance")
@@ -647,9 +821,12 @@ class Spike:
 
     @staticmethod
     def make_certs(directory, address):
+        # Backdated an hour: the guests verify within seconds of issue, and a guest
+        # clock a few seconds behind refuses a certificate valid only from "now".
+        start = time.strftime("%Y%m%d%H%M%SZ", time.gmtime(time.time() - 3600))
         def openssl(*args):
             return command("openssl", *args)
-        openssl("req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "2",
+        openssl("req", "-x509", "-newkey", "rsa:3072", "-nodes", "-not_before", start, "-days", "2",
                 "-subj", "/CN=spike-ca", "-keyout", str(directory / "ca-key.pem"),
                 "-out", str(directory / "ca.pem"))
         for role in ("server", "client"):
@@ -659,7 +836,7 @@ class Spike:
             private_file(directory / (role + ".ext"),
                          "extendedKeyUsage=" + ("serverAuth\nsubjectAltName=IP:" + address
                                                 if role == "server" else "clientAuth") + "\n")
-            openssl("x509", "-req", "-days", "2", "-in", str(directory / (role + ".csr")),
+            openssl("x509", "-req", "-not_before", start, "-days", "2", "-in", str(directory / (role + ".csr")),
                     "-CA", str(directory / "ca.pem"), "-CAkey", str(directory / "ca-key.pem"),
                     "-CAcreateserial", "-extfile", str(directory / (role + ".ext")),
                     "-out", str(directory / (role + ".pem")))
@@ -694,7 +871,7 @@ class PrivateParser(argparse.ArgumentParser):
 
 def arguments(argv):
     parser = PrivateParser(description=__doc__)
-    parser.add_argument("mode", choices=("survey", "spike", "rollback"))
+    parser.add_argument("mode", choices=("survey", "source", "spike", "rollback"))
     parser.add_argument("--state", type=Path)
     execution = parser.add_mutually_exclusive_group()
     execution.add_argument("--apply", action="store_true")
@@ -706,7 +883,8 @@ def arguments(argv):
     parser.add_argument("--kvm-user")
     parser.add_argument("--incus-version")
     parser.add_argument("--dnsmasq-version")
-    parser.add_argument("--qemu-modules-version")
+    parser.add_argument("--key", type=Path)
+    parser.add_argument("--remove", action="store_true")
     parser.add_argument("--image-metadata", type=Path)
     parser.add_argument("--image-rootfs", type=Path)
     parser.add_argument("--network", action="append", type=ipaddress.IPv4Interface, default=[])
@@ -719,7 +897,7 @@ def arguments(argv):
     parser.add_argument("--memory-reserve", default="2GiB")
     parser.add_argument("--allow-ufw-route", action="store_true")
     parser.add_argument("--launcher-unit")
-    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice", "qemu-system-modules-opengl"])
+    parser.add_argument("--allow-package", action="append", default=["incus", "incus-base", "incus-client", "dnsmasq-base"])
     parser.add_argument("--vm-disk", default="8GiB")
     parser.add_argument("--disk-cap", default="24GiB")
     parser.add_argument("--base-image")
@@ -744,6 +922,9 @@ def storage_preflight(args):
             and not image.get("format-specific", {}).get("data", {}).get("data-file"), "unbounded VM image refused")
     virtual = image.get("virtual-size")
     require(type(virtual) is int and 0 < virtual <= size_bytes(args.vm_disk), "VM image expansion exceeds disk cap")
+    # Incus counts the project's image volume toward limits.disk, beside both root disks.
+    require(2 * size_bytes(args.vm_disk) + virtual <= size_bytes(args.disk_cap),
+            "project disk cap must hold both VM disks and the imported image")
     expanded_metadata = 0
     with tarfile.open(args.image_metadata, "r:") as archive:
         for member in archive:
@@ -782,22 +963,15 @@ def preflight(args):
     require(args.ssh_probe and args.ssh_probe.is_absolute() and args.ssh_probe.is_file(),
             "independent SSH witness executable required")
     for package in ("incus", "incus-base", "incus-client"):
-        query = command("dpkg-query", "-W", "-f=${Status}", package, check=False)
-        status = query.stdout.split()
-        # remove leaves conffiles, not installed payload. Refuse holds, broken
-        # flags, installed/partial states and failed or contradictory queries.
-        require((query.returncode == 1 and not status) or (query.returncode == 0 and len(status) == 3 and status[0] in ("unknown", "install", "deinstall", "purge")
-                and status[1] == "ok" and status[2] in ("not-installed", "config-files")),
-                "pre-existing Incus refused")
+        require(incus_removed(package), "pre-existing Incus refused")
     require(paging() and Path("/dev/kvm").is_char_device(), "nested paging/KVM unavailable")
     require(args.kvm_user and args.kvm_user != "root", "non-root KVM user required")
     command("runuser", "-u", args.kvm_user, "--", "python3", "-c",
             'import os,fcntl; f=os.open("/dev/kvm",os.O_RDWR); assert fcntl.ioctl(f,0xAE00,0)==12; os.close(f)')
     require("kvm" in command("id", "-nG", args.kvm_user).stdout.split(), "KVM group membership required")
     require(args.install and args.provision, "fresh transaction needs --install --provision")
-    require(args.incus_version and re.fullmatch(r"[A-Za-z0-9.+:~_-]+", args.incus_version), "pin Incus package version")
+    require(upstream_version(args.incus_version), "pin an upstream Incus 7.3+ package version")
     require(args.dnsmasq_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.dnsmasq_version), "pin dnsmasq-base package version")
-    require(args.qemu_modules_version and re.fullmatch(r"[0-9][A-Za-z0-9.+:~_-]*", args.qemu_modules_version), "pin QEMU modules package version")
     require(args.image_metadata and args.image_metadata.is_file() and args.image_rootfs
             and args.image_rootfs.is_file(), "local VM image metadata/rootfs required")
     require(len(args.network) == 2 and not args.network[0].network.overlaps(args.network[1].network),
@@ -863,6 +1037,21 @@ def main(argv=None):
         spike.rollback()
         print("Recovery attempted; review private rollback status and fresh SSH/container checks.")
         return
+    if args.mode == "source":
+        if not args.apply:
+            plan = {"mode": "dry-run", "steps": ["remove-source" if args.remove else "add-source"],
+                    "uri": UPSTREAM_URI, "key_fingerprint": UPSTREAM_KEY_FINGERPRINT,
+                    "files": sorted(str(path) for path in UPSTREAM_FILES.values())}
+            if not args.remove and args.key and args.key.is_file():
+                # Pure parse, no root, no writes: the dry plan checks the very key it will install.
+                plan["key_fingerprints"] = primary_key_fingerprints(args.key.read_text())
+                plan["matches_pin"] = plan["key_fingerprints"] == [UPSTREAM_KEY_FINGERPRINT]
+            print(json.dumps(plan, indent=2))
+            require(plan.get("matches_pin", True), "upstream signing key fingerprint mismatch")
+            return
+        require(args.remove or (args.key and args.key.is_file()), "downloaded upstream key file required")
+        print(json.dumps(upstream_source(args), indent=2))
+        return
     if args.mode == "survey":
         require(not args.apply, "survey has no apply mode")
         if args.dry_run:
@@ -913,10 +1102,18 @@ def main(argv=None):
     print("Private artifacts and generic results saved; owner review required.")
 
 
-if __name__ == "__main__":
+def cli(argv=None):
     try:
-        main()
+        main(argv)
+    except Refusal as refusal:
+        # Fixed literal text only (pinned), so the operator sees WHICH guard refused.
+        print("Spike refused: " + str(refusal), file=sys.stderr)
+        sys.exit(1)
     except Exception:
-        # Exception strings may carry argv, file paths, addresses or environment data.
+        # Other exception strings may carry argv, file paths, addresses or environment data.
         print("Spike refused or failed; inspect private state and rollback status locally.", file=sys.stderr)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

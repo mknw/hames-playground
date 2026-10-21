@@ -251,6 +251,12 @@ def workloads(spike, nested):
         spike.metrics[f"{kind}_{work}_p95_ms"] = p95
 
 
+# Print the size, then WAIT for the resize to arrive (bounded at 30 s) before printing it
+# again: a fixed sleep raced the resize's trip through the CLI, TLS and the nested daemon.
+PTY_SCRIPT = ('stty size; i=0; while [ "$(stty size)" = "24 80" ] && [ "$i" -lt 150 ]; '
+              'do sleep 0.2; i=$((i + 1)); done; stty size')
+
+
 def attach(spike):
     target = endpoint(spike, True)
     cid = start_box(spike, target, spike.args.base_image, "attach", ttl=750)
@@ -279,14 +285,14 @@ def attach(spike):
         try:
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             process = subprocess.Popen(exec_argv(spike, True, ("-it",), cid,
-                                                 "sh", "-c", "stty size; sleep 3; stty size"),
+                                                 "sh", "-c", PTY_SCRIPT),
                                        stdin=slave, stdout=slave, stderr=slave, env=docker_env())
             os.close(slave)
             slave = None
             pty_output(master, b"24 80")
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 37, 91, 0, 0))
             os.kill(process.pid, signal_winch())
-            pty_output(master, b"37 91")
+            pty_output(master, b"37 91", nudge=lambda: os.kill(process.pid, signal_winch()), deadline=30)
             require(process.wait(timeout=15) == 0, "PTY resize failed")
             spike.metrics["pty_resize"] = True
         finally:
@@ -305,13 +311,18 @@ def attach(spike):
             stream.close()
 
 
-def pty_output(master, expected):
+def pty_output(master, expected, nudge=None, deadline=10):
     # Read before the child exits: some kernels discard PTY output on last close.
+    # `nudge` re-sends an idempotent resize each quiet second: one SIGWINCH to the
+    # Docker CLI was observed to be lost on the way to a nested daemon.
     data = b""
+    end = time.monotonic() + deadline
     with selectors.DefaultSelector() as ready:
         ready.register(master, selectors.EVENT_READ)
         while expected not in data:
-            require(ready.select(10), "PTY output timed out")
+            while not ready.select(1 if nudge else deadline):
+                require(nudge and time.monotonic() < end, "PTY output timed out")
+                nudge()
             try:
                 chunk = os.read(master, 4096)
             except OSError:
@@ -408,9 +419,21 @@ def memory(spike, cid):
     spike.metrics["nested_memory_kib"] = qemu_pss(spike)
 
 
-def qemu_pss(spike):
+def qemu_pid(spike):
     raw = spike.incus("query", f"/1.0/instances/{spike.name(0)}/state?project={spike.project}")
-    pid = int(json.loads(raw.stdout)["pid"])
+    return int(json.loads(raw.stdout)["pid"])
+
+
+def incus_qemu_version(spike):
+    environment = json.loads(spike.incus("query", "/1.0").stdout).get("environment", {})
+    drivers = str(environment.get("driver", "")).split(" | ")
+    versions = str(environment.get("driver_version", "")).split(" | ")
+    require(len(drivers) == len(versions) and "qemu" in drivers, "Incus QEMU driver version unavailable")
+    return versions[drivers.index("qemu")]
+
+
+def qemu_pss(spike):
+    pid = qemu_pid(spike)
     pss = re.search(r"^Pss:\s+(\d+)", (PROC / str(pid) / "smaps_rollup").read_text(), re.M)
     require(pss, "QEMU PSS unavailable")
     return int(pss[1])
@@ -629,8 +652,10 @@ def saved_config_id(argv):
 
 def image_config_id(spike, image, index=None, config_ids=None):
     target = host_docker if index is None else lambda *args: spike.remote(index, *args)
+    # `index` yields null for a key the store omits (containerd has no GraphDriver,
+    # classic no Descriptor); `.Key` on a missing map key is a template error.
     inspected = json.loads(target("inspect", "--type", "image", "--format",
-        '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}', image).stdout)
+        '{"Id":{{json (index . "Id")}},"Descriptor":{{json (index . "Descriptor")}},"GraphDriver":{{json (index . "GraphDriver")}}}', image).stdout)
     require(isinstance(inspected, dict), "image inspect object required")
     identity = inspected.get("Id")
     require(isinstance(identity, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", identity),
@@ -695,7 +720,8 @@ def measure(spike):
         for nested in (False, True):
             concurrency(spike, count, nested)
     for prefix, output in (("kernel", spike.guest(0, "uname", "-r").stdout),
-                           ("qemu", command("qemu-system-x86_64", "--version").stdout)):
+                           # The QEMU Incus actually runs (upstream bundles its own), as Incus reports it.
+                           ("qemu", incus_qemu_version(spike))):
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
         require(match, "version unreadable")
         for part, value in zip(("major", "minor", "patch"), match.groups()):

@@ -37,6 +37,7 @@ REAL_POPEN, REAL_SLEEP = subprocess.Popen, time.sleep
 IMAGE = "synthetic@sha256:" + "a" * 64
 APP, OTHER, CANARY = "app-net", "probe-net", ("172.18.0.5", 6379)
 QEMU_PID, CANARY_PORT = 4242, 40000
+INCUS_QEMU = "/opt/incus/bin/qemu-system-x86_64"
 HOST_VERBS = {"inspect", "run", "exec", "wait"}
 
 
@@ -181,8 +182,8 @@ class World:
             return self.docker(Path(args[2]).parent.name, args[3:])
         if args[0] == "incus":
             return self.incus(args)
-        if args[0] == "qemu-system-x86_64":
-            return result("QEMU emulator version 8.2.2\n")
+        if args[0] in (INCUS_QEMU, "qemu-system-x86_64"):
+            self.test.fail("QEMU executed; its version comes from Incus")
         self.test.fail("unexpected system command")
 
     def docker(self, where, argv):
@@ -231,6 +232,8 @@ class World:
         rest = args[2:]
         if rest[0] == "--project":
             rest = rest[2:]
+        if rest[:2] == ("query", "/1.0"):
+            return result(json.dumps({"environment": {"driver": "lxc | qemu", "driver_version": "6.0.5 | 10.1.2"}}))
         if rest[0] == "query":
             return result(json.dumps({"pid": QEMU_PID}))
         self.test.assertEqual(rest[0], "exec")
@@ -360,6 +363,7 @@ class Measurement(unittest.TestCase):
         for flag in ("guest_metadata_unreachable", "guest_public_unreachable", "guest_app_data_refused",
                      "ingress_tls_only", "ingress_other_network_refused", "pty_resize", "stream_teardown"):
             self.assertIs(metrics[flag], True)
+        self.assertEqual((metrics["qemu_major"], metrics["qemu_minor"]), (10, 1))  # Incus's QEMU, not PATH's
         vm.report(self.spike.state.parent, ["measure"], metrics)  # The closed schema accepts every key.
         timeline = self.world.timeline
         for index in self.creations():
@@ -440,11 +444,36 @@ class Measurement(unittest.TestCase):
                 self.world.boxes.clear()
                 self.world.timeline.clear()
 
+    def test_pty_wait_resends_the_resize_until_it_lands(self):
+        import pty as pty_module
+        master, slave = pty_module.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        nudges = []
+        def nudge():
+            nudges.append(time.monotonic())
+            if len(nudges) == 2:  # the resize "arrives" only after a re-send
+                os.write(slave, b"37 91\r\n")
+        with patch.object(measure, "time", time):
+            measure.pty_output(master, b"37 91", nudge=nudge, deadline=30)
+        self.assertEqual(len(nudges), 2)
+        started, quiet = time.monotonic(), []
+        def counted():
+            quiet.append(1)
+            self.assertLess(len(quiet), 6, "resize wait ignores its deadline")
+        with patch.object(measure, "time", time), self.assertRaisesRegex(RuntimeError, "PTY output timed out"):
+            measure.pty_output(master, b"never", nudge=counted, deadline=2)
+        self.assertGreaterEqual(len(quiet), 1)
+        self.assertLess(time.monotonic() - started, 6)
+
     def test_attach_pty_child_gets_sanitized_env_and_guest_context(self):
         measure.attach(self.spike)
         spawn = json.loads(self.spawned.read_text())
         self.assertEqual(spawn["env"], {}, "PTY child inherited Docker endpoint overrides")
         self.assertEqual(spawn["argv"][:4], ["--config", str(self.spike.state / "client0/.docker"), "exec", "-it"])
+        script = spawn["argv"][-1]
+        self.assertNotIn("sleep 3", script)  # waits for the resize instead of racing it
+        self.assertIn('while [ "$(stty size)" = "24 80" ] && [ "$i" -lt 150 ]', script)
         self.assertTrue(self.spike.metrics["pty_resize"] and self.spike.metrics["stream_teardown"])
         # The ten-minute hold is health-checked throughout, not only at box creation.
         self.assertGreaterEqual(self.world.timeline.count(("checkpoint",)), 60)
@@ -613,7 +642,7 @@ class Measurement(unittest.TestCase):
                 'Id': 'sha256:' + 'b' * 64, 'GraphDriver': {'Name': 'overlay2'}}))) as inspect:
             measure.image_config_id(self.spike, IMAGE)
         self.assertEqual(inspect.call_args.args[-2],
-            '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}')
+            '{"Id":{{json (index . "Id")}},"Descriptor":{{json (index . "Descriptor")}},"GraphDriver":{{json (index . "GraphDriver")}}}')
 
     def test_config_identity_fake_docker_store_table(self):
         pin, shape, target = self.config_fixture()

@@ -2040,7 +2040,8 @@ def mutations():
         ('export deadline below rate budget', 'measure', 'EXPORT_SECONDS = EXPORT_BYTES / EXPORT_RATE + 60', 'EXPORT_SECONDS = 120', 'test_export_backpressure_and_deadline_budget'),
         ('inspect fails on a key the store omits', 'measure', '{{json (index . "GraphDriver")}}', '{{json .GraphDriver}}', 'test_inspect_projects_only_identity_fields'),
         ('inspect records full config instead of identity projection', 'measure', '\'{"Id":{{json (index . "Id")}},"Descriptor":{{json (index . "Descriptor")}},"GraphDriver":{{json (index . "GraphDriver")}}}\'', "'{{json .}}'", 'test_inspect_projects_only_identity_fields'),
-        ('QEMU version read from PATH, not the running VM', 'measure', 'command(os.readlink(PROC / str(qemu_pid(spike)) / "exe"), "--version")', 'command("qemu-system-x86_64", "--version")', 'test_measure_orchestration_end_to_end'),
+        ('QEMU version read from PATH, not from Incus', 'measure', '("qemu", incus_qemu_version(spike))', '("qemu", command("qemu-system-x86_64", "--version").stdout)', 'test_measure_orchestration_end_to_end'),
+        ('QEMU version taken from the LXC driver slot', 'measure', 'versions[drivers.index("qemu")]', 'versions[0]', 'test_measure_orchestration_end_to_end'),
         ('export operation omitted from private audit', 'measure', 'if sandbox_vm.PRIVATE_LOG is not None:', 'if False:', 'test_export_audit_records_argv_exit_without_content'),
     ])
     for label, target, before, after, test in changes:

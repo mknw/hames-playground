@@ -32,7 +32,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-base="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
    - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
-   - Host `qemu-img` is already present (preflight reads the image with it). The upstream package bundles the QEMU, OVMF and virtiofsd that Incus runs; a distro QEMU on `PATH` is not the one measured.
+   - Host `qemu-img` is already present (preflight reads the image with it). The upstream package bundles the QEMU, OVMF and virtiofsd that Incus runs; a distro QEMU on `PATH` is not the one measured (the version comes from Incus's `GET /1.0`).
 5. **Launch.** Use only the runbook's `systemd-run` block (`:122`). Never run it in the foreground or inside a tool call. Do not stop the unit while the install step is running (R2).
 6. **SSH access.**
    - Test the witness by hand: a fresh key-authenticated login over the public path, not loopback.

@@ -48,9 +48,6 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
 vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
 }))
-vi.mock('@hames-ai/agents/agents/general.server', () => ({
-  generalAgent: stubAgent('general'),
-}))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
 }))
@@ -104,7 +101,7 @@ beforeEach(() => {
 describe('registration + lookup', () => {
   it('registers the bundled agents on import', () => {
     expect(getAllAgents().map((a) => a.id)).toEqual(
-      expect.arrayContaining(['search', 'general', 'sandbox', 'retriever', 'microsoft-365']),
+      expect.arrayContaining(['search', 'general-next', 'sandbox', 'retriever', 'microsoft-365']),
     )
   })
 
@@ -137,6 +134,19 @@ describe('registration + lookup', () => {
       },
     )
 
+    // 2026-10-21: `general` was REMOVED (not renamed), so unlike the ids above
+    // its successor is a different agent. Every stored reference still opens:
+    // `conversations.agent_id` and `routines.agent_id` rows, a stale tab's request,
+    // a device's `/api/agents/general` URL — all resolve here, none throws
+    // `Unknown agent`.
+    //
+    // MUTATION: delete the `general: 'general-next'` entry in agent-ids.ts and
+    // both assertions redden.
+    it("folds the removed 'general' id into general-next", () => {
+      expect(canonicalAgentId('general')).toBe('general-next')
+      expect(getAgent('general')?.id).toBe('general-next')
+    })
+
     it('passes an id it does not know through unchanged', () => {
       expect(canonicalAgentId('retriever')).toBe('retriever')
       expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
@@ -147,6 +157,8 @@ describe('registration + lookup', () => {
       expect(ids).not.toContain('default')
       expect(ids).not.toContain('sandbox-session')
       expect(ids).not.toContain('flavoured-sandbox')
+      // No agent is registered under the removed id: it resolves, it is not listed.
+      expect(ids).not.toContain('general')
     })
   })
 

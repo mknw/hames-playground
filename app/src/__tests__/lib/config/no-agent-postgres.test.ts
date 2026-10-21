@@ -5,7 +5,8 @@
  * Owner decision, 2026-10-03: running agents were never meant to have Postgres
  * access. The `database-server` catalog server ran SQL against the
  * `DATABASE_URL` the gateway handed it, which was the app's own database, and
- * `general` hands every gateway tool to its loop (`tools.all`). So the server
+ * the `general` agent (since removed) handed every gateway tool to its loop
+ * (`tools.all`). So the server
  * is gone from the catalog and the configs, and the gateway is no longer given
  * a Postgres credential to put in a URL.
  *

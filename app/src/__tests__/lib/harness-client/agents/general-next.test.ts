@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../mocks/namespace-catalog'
 import '../../../../lib/inference/config.server'
+import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
   createContext,
@@ -1256,10 +1257,6 @@ describe('general-next composition', () => {
       'withInjectionGuard(decisionLoop)',
       'compactExecution',
     ])
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-    expect(
-      harnessUsesMemory(await generalAgent.createPatterns('old-general', { ...deps, memory })),
-    ).toBe(true)
     const ctx = createContext<AgentData>('synthetic task', {
       memories: [{ content: 'MEMORY-SENTINEL' }],
       memoryContext: 'MEMORY-SENTINEL',
@@ -1296,10 +1293,17 @@ describe('general-next composition', () => {
     },
   )
 
+  // `general` was removed 2026-10-21 and its id folds into this agent. The default
+  // is untouched: `search` stays the default and maps to itself.
+  //
+  // MUTATION: delete the `general: 'general-next'` entry from RENAMED_AGENT_IDS
+  // (agent-ids.ts) and the first assertion reddens.
   it('registers the candidate with its app-side glyph while the default stays search', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
-    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/general-next/)
+    expect(canonicalAgentId('general')).toBe('general-next')
+    expect(canonicalAgentId('general-next')).toBe('general-next')
+    expect(canonicalAgentId('search')).toBe('search')
     expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
     const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
     expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")

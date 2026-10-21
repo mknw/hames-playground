@@ -179,7 +179,7 @@ function exitBuild(sessionId: string): void {
  * next turn builds them again.
  *
  * Called from inside an agent's `createPatterns` when the build came out
- * DEGRADED but usable — the `general` agent's graph-schema fetch failing, say.
+ * DEGRADED but usable — an agent's graph-schema fetch failing, say.
  * Without it a 30-second backend blip during the first message would hand that
  * conversation a schema-less planner and executor for its entire life, since
  * patterns are cached per session and never rebuilt.

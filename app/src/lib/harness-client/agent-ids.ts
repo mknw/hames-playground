@@ -23,6 +23,14 @@ const RENAMED_AGENT_IDS: Record<string, string> = {
   // `flavoured-sandbox` is the router it kept, so both land on it.
   'sandbox-session': 'sandbox',
   'flavoured-sandbox': 'sandbox',
+  // 2026-10-21 — `general` (planner → loop over every tool, no injection guard)
+  // was REMOVED, not renamed: this is a retirement folded into its successor.
+  // Stored conversations resume on `general-next` (the history still renders —
+  // it is the event stream, not the agent — and the row rewrites itself to the
+  // new id on its next save), and so does anything that still NAMES the id: a
+  // stale tab, a routine, a trigger-endpoint URL. One rule for every entry
+  // point, so none of them can throw `Unknown agent: general`.
+  general: 'general-next',
 }
 
 /** Current id for a possibly-legacy agent id. Unknown ids pass through. */

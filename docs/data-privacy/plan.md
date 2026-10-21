@@ -176,8 +176,9 @@ Two things follow that _are_ in our control:
   the private tier resolves to `PrivateSystemOne` and reads only
   `SMALL_LLM_DECISIONS_URL` plus `SMALL_LLM_API_KEY`. The URL is a full endpoint
   ending in `/v1/systemone`; an unset value refuses the call without a public
-  fallback. Unknown tiers or a client inconsistent with the tier are refused
-  before a request (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
+  fallback. A client inconsistent with the tier is refused before a request, and a
+  frame tier that is present but unrecognised is read as the private tier (refused
+  when that tier is unreachable, never sent to Jev) (`packages/harness-baml/jev-decide.server.ts`). Re-introducing any
   other provider is an Art. 28 / Chapter V decision, not a config change.
 
 - Whether **zero-retention / no-training-on-inputs** terms apply to the account

@@ -27,8 +27,9 @@ Migration for consumers (pre-1.0, so a minor bump):
 - `onExplicitAnthropicTier()` now answers from `activeInferenceTier()`: it throws on a
   restricted deployment (it used to answer), and on a defaulted self-deployed tier
   that is not reachable. A frame with an unrecognised tier is read as the
-  self-deployed tier, never as the Anthropic tier, so the decide tier-lock still
-  refuses it before a request is made.
+  self-deployed tier, never as the Anthropic tier, so the decide call never reaches
+  Jev: it takes the private client when that tier is reachable, and is refused
+  before any request otherwise.
 - A host whose policy's `defaultTier` is `'self_deployed'` now has that default
   reachability-checked (`assertTierReachable`) on every read of a run that named no
   tier, and the run is refused when the tier is not configured; it is never routed to

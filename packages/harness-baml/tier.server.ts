@@ -31,8 +31,10 @@
  *
  * ## A default that cannot be taken is refused
  *
- * When the tier came from the DEFAULT (an absent or empty frame value, or a present but unrecognised one that
- * this module reads as the self-deployed tier), reachability is asserted on every read. An unconfigured
+ * When no recognised tier is named and the tier read is the self-deployed one (an
+ * absent or empty frame value that takes a self-deployed default, or a present but
+ * unrecognised one, which this module reads as the self-deployed tier), reachability
+ * is asserted on every read. An unconfigured
  * host therefore refuses the call before any request — it never routes to the
  * Anthropic tier, which is the one outcome the self-deployed tier exists to
  * prevent. A frame that NAMES the tier was already asserted by the host before

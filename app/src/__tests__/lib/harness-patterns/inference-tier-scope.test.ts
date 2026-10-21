@@ -425,7 +425,8 @@ describe('activeInferenceTier — what runs outside any scope', () => {
     expect(() => activeInferenceTier()).toThrow(/self-deployed tier/)
     expect(() => clientOverrideFor('controller')).toThrow(/self-deployed tier/)
     expect(() => resolveClientForRole('controller')).toThrow(/self-deployed tier/)
-    // An unfilled and an unrecognised frame take the same default, so the same refusal.
+    // An unfilled frame takes the self-deployed default and an unrecognised one is read as
+    // the self-deployed tier, so both meet the same refusal.
     await withRunFrame({}, async () => {
       expect(() => activeInferenceTier()).toThrow(/self-deployed tier/)
     })
@@ -587,11 +588,11 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     expect(clients.activeInferenceTier()).toBe('self_deployed')
   })
 
-  it('an unrecognised tier string falls back to the default (the self-deployed tier) rather than routing blind', async () => {
+  it('an unrecognised tier string is read as the self-deployed tier rather than routing blind', async () => {
     // Core carries the tier as an OPAQUE STRING — it cannot know what 'self_deployed'
     // means — so the narrowing happens here, and a host that writes a typo into
-    // the slot gets the default tier rather than an unrouted one. Inverted by the
-    // one tier rule: the default is the self-deployed tier, not the Anthropic one.
+    // the slot gets the self-deployed tier rather than an unrouted one. Inverted by the
+    // one tier rule: an unrecognised value is the self-deployed tier, not the Anthropic one.
     configureEndpointOnly()
     const clients = await load()
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')

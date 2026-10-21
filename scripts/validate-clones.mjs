@@ -19,7 +19,8 @@ const TLS_FILES = {
 };
 // Each reaches host or sibling resources around the mount rules: another
 // container's mounts or /proc/<pid>/root (the gateway holds the host socket),
-// host devices, capabilities or namespaces.
+// host devices, capabilities or namespaces, or a file-backed secret or config,
+// which Compose bind-mounts at any target and of any file type.
 const HOST_REACH = [
   "privileged",
   "volumes_from",
@@ -30,6 +31,8 @@ const HOST_REACH = [
   "cgroup",
   "devices",
   "cap_add",
+  "secrets",
+  "configs",
 ];
 
 const check = (condition, message) => {
@@ -38,6 +41,23 @@ const check = (condition, message) => {
 const within = (path, directory) =>
   path === directory ||
   path.startsWith(directory === sep ? directory : directory + sep);
+// Every host path a service mounts, with its target: bind volumes, the files
+// behind its secrets and configs, and named volumes whose local driver binds a
+// host device.
+const hostMounts = (config, service) => [
+  ...(service.volumes ?? []).flatMap((v) => {
+    if (v.type === "bind") return [v];
+    const device =
+      v.type === "volume" && config.volumes?.[v.source]?.driver_opts?.device;
+    return device ? [{ source: device, target: v.target }] : [];
+  }),
+  ...["secrets", "configs"].flatMap((key) =>
+    (service[key] ?? []).flatMap((entry) => {
+      const file = config[key]?.[entry.source]?.file;
+      return file ? [{ source: file, target: entry.target }] : [];
+    }),
+  ),
+];
 
 // A VM clone reaches Docker only through its own environment VM: a tcp endpoint
 // with verified TLS and three read-only files outside both checkouts, and no
@@ -163,11 +183,8 @@ export function validateClones(config) {
     // A VM clone's mounts are pinned exactly by environmentVm instead.
     check(
       modes[i] === "per-env" ||
-        !(app.volumes ?? []).some(
-          (v) =>
-            v.type === "bind" &&
-            v.target !== "/configs" &&
-            v.target !== "/var/run/docker.sock",
+        !hostMounts(config, app).some(
+          (v) => v.target !== "/configs" && v.target !== "/var/run/docker.sock",
         ),
       "No checkout or runtime env bind mounts",
     );
@@ -223,9 +240,10 @@ export function validateClones(config) {
     vms.push(vm);
     // Another service built from, tagged as or joined to a VM clone would run
     // that clone's code beside whatever it mounts, and one that mounts its TLS
-    // files, or a directory holding them, would reach its VM: a VM clone is
-    // one service. A container id cannot be told apart from the clone's, so
-    // only the other app's container name may be joined.
+    // files, or a directory holding them, by any of hostMounts' routes would
+    // reach its VM: a VM clone is one service. A container id cannot be told
+    // apart from the clone's, so only the other app's container name may be
+    // joined.
     const joins = [
       name,
       `service:${name}`,
@@ -254,10 +272,8 @@ export function validateClones(config) {
             [service.volumes_from ?? []]
               .flat()
               .some((v) => joins.includes(String(v).replace(/:r[ow]$/, ""))) ||
-            (service.volumes ?? []).some(
-              (v) =>
-                v.type === "bind" &&
-                vm.sources.some((file) => within(file, resolved(v.source))),
+            hostMounts(config, service).some((v) =>
+              vm.sources.some((file) => within(file, resolved(v.source))),
             )
           ),
         "A VM clone runs as one service",

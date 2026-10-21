@@ -1357,13 +1357,18 @@ For a clone declared `per-env`, the validator refuses:
   certificate verifying under the other clone's CA;
 - another service built from, tagged as, or sharing a namespace or mounts with
   the VM clone, joining any container by id, or mounting the VM clone's TLS
-  files or a directory that holds them.
+  files or a directory that holds them, whether through a bind, the file behind
+  a `secrets` or `configs` entry, or a named volume whose local driver binds a
+  host path.
 
 For both apps, whatever their mode, it refuses `privileged`, `devices`,
-`cap_add`, `volumes_from` and shared `pid`, `ipc`, `network_mode`,
-`userns_mode` or `cgroup` namespaces. Each reaches host or sibling resources
-around the mount rules; the MCP gateway, for one, holds the host socket. A clone
-declared `socket` must not carry any `SANDBOX_DOCKER_*` setting. The render
+`cap_add`, `volumes_from`, `secrets`, `configs` and shared `pid`, `ipc`,
+`network_mode`, `userns_mode` or `cgroup` namespaces. Each reaches host or
+sibling resources around the mount rules; the MCP gateway, for one, holds the
+host socket, and Compose bind-mounts the file behind a secret or config at any
+target, a socket included. A clone declared `socket` mounts no host path but its
+configs and the socket, including through a named volume whose local driver
+binds one, and must not carry any `SANDBOX_DOCKER_*` setting. The render
 leaves out services of any other profile, so the preflight also refuses a
 `profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
 both running apps' endpoint settings and TLS mounts with the render, and refuses

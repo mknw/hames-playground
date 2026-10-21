@@ -682,8 +682,13 @@ mutants = [
     ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
     ('dev-vm-firewall-evidence', '[[ $path == /* && -f $path && -s $path ]] ||', 'true ||'),
     ('dev-vm-firewall-evidence-empty', ' && -f $path && -s $path ]]', ' && -f $path ]]'),
-    ('clone-profiles-app-only', "if grep -E '^[[:space:]]*profiles:'", "if false && grep -E '^[[:space:]]*profiles:'"),
+    ('clone-profiles-app-only', 'if [[ -n $profiles ]] &&', 'if false &&'),
     ('clone-profiles-allow-app', r'''profiles:[[:space:]]*\["app"\]''', r'''profiles:[[:space:]]*\["none"\]'''),
+    # Behaviourally identical on small files, so only stage 2b's scan sees it.
+    ('profiles-sigpipe-pipeline', '''profiles=$(grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" || true)
+    if [[ -n $profiles ]] && grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$' <<<"$profiles"; then''',
+     '''if grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" | grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$'; then''',
+     'FAIL 2b SIGPIPE-prone pipeline'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
@@ -691,14 +696,14 @@ if baseline.returncode:
 with tempfile.TemporaryDirectory() as tmp:
     validator = source.parent / 'validate-clones.mjs'
     policy = validator.read_text()
-    for name, old, new in mutants:
+    for name, old, new, *expected in mutants:
         if original.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
         changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
         result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
-        if not result.returncode or 'FAIL clones' not in result.stdout:
+        if not result.returncode or (expected or ['FAIL clones'])[0] not in result.stdout:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
     # New validator pins run the actual unit fixtures against a temporary
@@ -778,6 +783,14 @@ PY
   exit $?
 fi
 clone_tests
+# 2b. Never `producer | grep -q` under pipefail: grep -q exits at its first match,
+# the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
+# match is reported as absent. That shipped once here (the sshd -T check
+# refused every box). Comments are exempt.
+# One pipe, not the `||` of an or-list. A static scan needs no GNU tool, so it
+# runs here, where --clones-only (the macOS lanes and the mutants) reaches it.
+hits=$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+if [[ -z $hits ]]; then pass "2b no 'producer | grep -q' pipeline in the script"; else flunk "2b SIGPIPE-prone pipeline" "$hits"; fi
 if [[ ${1:-} == --clones-only ]]; then
   ((failures == 0)) || exit 1
   echo 'all clone checks passed'
@@ -914,13 +927,7 @@ for case in 'disabled|{"features":{"dynamic-tools":"disabled"}}|0' \
   if ((want == 0 ? rc == 0 : rc == 1)); then pass "2c dynamic-tools $label -> exit $rc"; else flunk "2c dynamic-tools $label (rc=$rc)" "$out"; fi
 done
 
-# Never `producer | grep -q` under pipefail: grep -q exits at its first match,
-# the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
-# match is reported as absent. That shipped once here (the sshd -T check
-# refused every box). Comments are exempt.
-# One pipe, not the `||` of an or-list.
-hits=$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
-if [[ -z $hits ]]; then pass "2b no 'producer | grep -q' pipeline in the script"; else flunk "2b SIGPIPE-prone pipeline" "$hits"; fi
+# 2b's static scan runs before the --clones-only exit, above.
 out=$(
   set -o pipefail
   lib "$tmproot/m"

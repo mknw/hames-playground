@@ -8,7 +8,9 @@
  * module registers on import are exercised through the public listing.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { unattendedIdAccepted } from '../../../lib/harness-client/agent-ids'
 import type { AgentConfig } from '../../../lib/harness-client/registry.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -145,6 +147,20 @@ describe('registration + lookup', () => {
     it("folds the removed 'general' id into general-next", () => {
       expect(canonicalAgentId('general')).toBe('general-next')
       expect(getAgent('general')?.id).toBe('general-next')
+    })
+
+    // Unattended entry points (a routine firing, `POST /api/agents/:id`) decide
+    // through ONE function, so refusing legacy ids there later is one line.
+    // Today the owner's answer is pending and the id folds, as above.
+    //
+    // MUTATION: flip FOLD_LEGACY_IDS_UNATTENDED to `false` in agent-ids.ts and the
+    // first assertion reddens (that is the switch to fail-closed, and this pin then
+    // changes with it); drop the call from either entry point and the source pin does.
+    it('lets unattended entry points fold a legacy id, deciding through one function', () => {
+      expect(unattendedIdAccepted('general')).toBe(true)
+      expect(unattendedIdAccepted('search')).toBe(true)
+      for (const file of ['src/lib/routines/dispatch.server.ts', 'src/routes/api/agents/[id].ts'])
+        expect(readFileSync(file, 'utf8'), file).toContain('!unattendedIdAccepted(')
     })
 
     it('passes an id it does not know through unchanged', () => {

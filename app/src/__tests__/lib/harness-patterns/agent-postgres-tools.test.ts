@@ -114,6 +114,19 @@ const KEPT = [
   'graph_calendar_today',
 ]
 
+/** The shared `memory` graph's tools: reads (the only ones an agent may hold,
+ *  and only `general-next`) and every write the server offers. `create_entities`
+ *  is also in KEPT; these are listed for the namespace-aware check below. */
+const MEMORY_READS = ['search_nodes', 'open_nodes']
+const MEMORY_WRITES = [
+  'create_entities',
+  'create_relations',
+  'add_observations',
+  'delete_entities',
+  'delete_relations',
+  'delete_observations',
+]
+
 /** A gateway still serving `database-server` — the regression this layer is
  *  for — interleaved the way the live listing is. */
 const REGRESSED_LISTING = [
@@ -268,27 +281,47 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
   //
   // The shared `memory` graph is one graph for every user, and its write tools
   // are not withheld at the listing (only the Neo4j and Postgres ones are): the
-  // only thing keeping them from an agent is that none is handed them. `general`
-  // was the one that was. KEPT lists `create_entities` for exactly this check.
+  // only thing keeping them from an agent is that none is handed them.
+  // `general-next` is the one agent with a memory slice (reads only, by name), so
+  // the check has to run against the REAL namespaces: under the default test
+  // deps `tools.memory` is undefined and the slice is empty, which would make the
+  // assertion below pass whether or not the agent could write.
   //
-  // MUTATION: restore `general.server.ts` (planner + simpleLoop over `tools.all`)
-  // and re-export it from agents/index.ts → one handed list holds every KEPT
-  // tool, `create_entities` included, and both assertions redden.
+  // MUTATION 1: restore `general.server.ts` (planner + simpleLoop over
+  // `tools.all`) and re-export it from agents/index.ts → one handed list holds
+  // every KEPT tool and the whole-surface assertion reddens.
+  // MUTATION 2: `general-next.server.ts` `infoTools` spreads `...(tools.memory ??
+  // [])` instead of `...memoryReads` → `general-next → simpleLoop holds a memory
+  // write` reddens (and the non-vacuity check below proves the slice is live).
   it('no agent hands any pattern the whole gateway surface or a shared-memory write tool', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockListTools.mockResolvedValue(
+      gatewayListing([...new Set([...KEPT, ...MEMORY_READS, ...MEMORY_WRITES])]),
+    )
+    const deps = { ...testAgentDeps, toolNamespaces: mcpNamespace }
+    const handedBy = new Map<string, { factory: string; tools: string[] }[]>()
     for (const agent of await shippedAgents()) {
       const before = handed.length
-      await agent.createPatterns(`whole-surface-${agent.id}`, testAgentDeps)
-      for (const { factory, tools } of handed.slice(before)) {
+      await agent.createPatterns(`whole-surface-${agent.id}`, deps)
+      const lists = handed.slice(before)
+      handedBy.set(agent.id, lists)
+      for (const { factory, tools } of lists) {
         expect(
           KEPT.every((t) => tools.includes(t)),
           `${agent.id} → ${factory} holds the whole gateway surface`,
         ).toBe(false)
-        expect(tools, `${agent.id} → ${factory} holds a memory write`).not.toContain(
-          'create_entities',
-        )
+        for (const write of MEMORY_WRITES)
+          expect(tools, `${agent.id} → ${factory} holds a memory write (${write})`).not.toContain(
+            write,
+          )
       }
     }
+
+    // Not vacuous: the memory namespace reached `general-next`, whose info loop
+    // holds the read tools and nothing else from that namespace.
+    const info = handedBy.get('general-next')?.filter((h) => h.factory === 'simpleLoop') ?? []
+    expect(info.length, 'general-next built no simpleLoop').toBeGreaterThan(0)
+    expect(info.some((h) => MEMORY_READS.every((t) => h.tools.includes(t)))).toBe(true)
   })
 })
 

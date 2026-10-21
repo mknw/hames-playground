@@ -1293,7 +1293,8 @@ describe('general-next composition', () => {
   // transcript the person reads.
   //
   // MUTATION: run `harness(...patterns)('And how many relationships?')` instead of
-  // `continueSession` (the stored turn is dropped) and the transcript assertion reddens.
+  // `continueSession` (the stored turn is dropped) and the transcript assertion reddens;
+  // dropping `final: true` from the stored answer reddens the decision-state assertion.
   // Nothing in the chain inspects a pattern id it does not own, so there is no source
   // mutation for the tolerance itself: this pins the property, it cannot guard one line.
   it('continues a conversation stored by the removed general agent', async () => {
@@ -1308,7 +1309,10 @@ describe('general-next composition', () => {
         success: true,
         result: '42',
       }),
-      createEvent('assistant_message', 'response-synth', { content: 'There are 42 nodes.' }),
+      createEvent('assistant_message', 'response-synth', {
+        content: 'There are 42 nodes.',
+        final: true,
+      }),
     )
     stored.status = 'done'
     const patterns = await agent.createPatterns('synthetic-session', deps)
@@ -1320,6 +1324,8 @@ describe('general-next composition', () => {
     expect(result.status).not.toBe('error')
     expect(result.response).toBeTruthy()
     expect(result.context.events.some((e) => e.patternId === 'execute')).toBe(true)
+    // The earlier answer reaches the decision: only `final` answers are replayed as turns.
+    expect(states.join('\n')).toContain('There are 42 nodes.')
     expect(
       result.context.events
         .filter((e) => e.type === 'user_message')

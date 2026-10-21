@@ -60,7 +60,22 @@ function mapBody(body: string, fn: (text: string) => string, keys = false): stri
       // Not JSON after all.
     }
   }
-  return fn(body)
+  // A decision record's model-written text (a plan, a Return, reasoning, a failure)
+  // is ONE JSON string literal inside plain text: the same glue, one level down.
+  return body
+    .split(/("(?:[^"\\\n]|\\.)*")/g)
+    .map((part, index) => {
+      if (index % 2 === 0) return part && fn(part)
+      try {
+        const leaf = JSON.parse(part) as unknown
+        if (typeof leaf !== 'string') return fn(part)
+        const next = fn(leaf)
+        return next === leaf ? part : JSON.stringify(next)
+      } catch {
+        return fn(part)
+      }
+    })
+    .join('')
 }
 
 /** Batch every content span so the pure rewriter compiles its matcher once

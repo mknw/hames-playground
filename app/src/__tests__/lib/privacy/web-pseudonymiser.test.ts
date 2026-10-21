@@ -296,6 +296,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     kind: 'simpleLoop' | 'actorCritic' = 'simpleLoop',
     shape: 'graph' | 'compact' = 'compact',
     addressOnly = false,
+    docReturn = `Mail from ${EXTERNAL.name}`,
   ) {
     let prompt: string | undefined
     let data: Data | undefined
@@ -343,7 +344,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
         action: {
           reasoning: 'read mail',
           tool_name: docRound++ === 0 ? 'graph_mail' : 'Return',
-          tool_args: docRound === 1 ? '{}' : `Mail from ${EXTERNAL.name}`,
+          tool_args: docRound === 1 ? '{}' : docReturn,
           is_final: docRound > 1,
         },
       }),
@@ -456,6 +457,20 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     // A simpleLoop Return is the model's own text: the loop adds no fence to it.
     expect(prompt).not.toContain('⟦')
     expect(benignCall).toMatchObject({ success: true })
+  })
+  // Mutation: drop the string-literal branch at the end of mapBody (a name after a quoted
+  // newline then misses apply, and redact withholds the whole handoff).
+  it('D1b: a name after a newline in a quoted Return is rewritten, not withheld', async () => {
+    const { prompt } = await loopRun(
+      ['doc', 'info'],
+      'simpleLoop',
+      'compact',
+      false,
+      `Mail read.\n${EXTERNAL.name} asked for the quote.`,
+    )
+    expect(prompt).toContain('PERSON_2 asked for the quote.')
+    expect(prompt).not.toContain('withheld')
+    expect(prompt).not.toContain(EXTERNAL.name)
   })
   // Mutation: collect sources from only the last-N handed-off records.
   it('E1: a source outside lastN still supplies the identity in PLAN', async () => {

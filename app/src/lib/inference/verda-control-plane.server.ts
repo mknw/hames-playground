@@ -1,7 +1,7 @@
 /**
  * Verda control-plane probe — Server Only
  *
- * The warm clock in `self-deployed-activity.server.ts` is **process-local**: a freshly
+ * The warm clock in `large-activity.server.ts` is **process-local**: a freshly
  * restarted app instance has never seen a call, and until now the header strip
  * could only say "unknown" about a box it had no reading on. This module is the
  * shared half of that answer: it asks the Verda control plane
@@ -21,7 +21,7 @@
  *   its own.
  * - **non-empty → `starting`.** A replica present is NOT ready: the weight load
  *   happens inside the container, after the replica reports. Only a real
- *   completion answered by the deployment (`selfDeployedWarmth`'s completion clock)
+ *   completion answered by the deployment (`largeWarmth`'s completion clock)
  *   may flip the strip to `ready` — never this probe, and never a timer.
  *
  * Probe result shape confirmed against the live OpenAPI schema
@@ -38,7 +38,7 @@
  * ## Deliberately NOT the inference endpoint
  *
  * This module NEVER touches `LARGE_LLM_BASE_URL` or
- * `LARGE_LLM_API_KEY`. Waking the box is `ensureSelfDeployedAwake`'s job (a
+ * `LARGE_LLM_API_KEY`. Waking the box is `ensureLargeAwake`'s job (a
  * 1-token completion, the only probe that proves the weights are loaded); a
  * status check that sent a request to the model endpoint would scale the box
  * up — billing GPU seconds for a look. A source-scan test pins that no read of

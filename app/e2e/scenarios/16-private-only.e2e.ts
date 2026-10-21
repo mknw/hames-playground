@@ -1,7 +1,7 @@
 /** Layer 2: stored public choices cannot escape a private-only deployment. */
 import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { bootApp, newSessionId, settleSummaries, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, SELF_DEPLOYED_MODEL, SMALL_MODEL } from '../lib/mode'
+import { IS_HERMETIC, LARGE_LLM_MODEL, SMALL_MODEL } from '../lib/mode'
 
 let app: AppHandles
 beforeAll(async () => {
@@ -52,7 +52,7 @@ describe('private-only deployment', () => {
         ).toBe(true)
       }
       expect(calls.some((call) => call.fn?.startsWith('ResultDescribe'))).toBe(true)
-      for (const call of calls) expect([SELF_DEPLOYED_MODEL, SMALL_MODEL]).toContain(call.model)
+      for (const call of calls) expect([LARGE_LLM_MODEL, SMALL_MODEL]).toContain(call.model)
       expect((await app.readRow(session))?.status).toBe('done')
     },
   )

@@ -171,7 +171,7 @@ export function browserServerEnv(
     NODE_USE_ENV_PROXY: '1',
     // The SHIPPED seam: `SelfDeployedQwen` declares `base_url env.LARGE_LLM_BASE_URL`
     // and BAML resolves `env.*` at call time. Pointing it at the fake is what a
-    // developer does to run the deployment locally; `assertSelfDeployedConfigured()`
+    // developer does to run the deployment locally; `assertLargeModelConfigured()`
     // still runs its `/v1` check. Setting it also makes the self-hosted tier
     // AVAILABLE, which is what the switch's self_deployed position needs — and
     // what makes it the default tier for a user who has never chosen.
@@ -224,7 +224,7 @@ export function browserServerEnv(
     // the load on the box rather than for anything about the app. Ten minutes is
     // longer than any scenario holds a request (the fake's own fuse is 60s), so
     // one parked wake stays one parked wake. What the poll RETRIES is covered a
-    // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `self-deployed-wake.test.ts`.
+    // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `large-wake.test.ts`.
     LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
     // The Anthropic half, which has no such seam. See
     // `src/lib/inference/dev-fake-inference.server.ts`.

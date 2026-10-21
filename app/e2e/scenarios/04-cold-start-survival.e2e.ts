@@ -49,7 +49,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { COLD_START_MS, IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { COLD_START_MS, IS_HERMETIC, LARGE_LLM_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -85,7 +85,7 @@ function goSlow(app: AppHandles): void {
   app.fakeLlm.arm({
     kind: 'cold-start',
     ms: COLD_START_MS,
-    model: SELF_DEPLOYED_MODEL,
+    model: LARGE_LLM_MODEL,
     times: 1,
     wake: false,
   })
@@ -126,7 +126,7 @@ describe(`a ${Math.round(COLD_START_MS / 1000)}s self-hosted call the app must w
       ).toBeGreaterThanOrEqual(COLD_START_MS)
       const slow = app.fakeLlm.calls.filter((c) => c.delayedMs > 0)
       expect(slow.length, 'no call was actually delayed').toBe(1)
-      expect(slow[0].model).toBe(SELF_DEPLOYED_MODEL)
+      expect(slow[0].model).toBe(LARGE_LLM_MODEL)
       // AND IT WAS A BAML CALL, not the wake ping — the assertion that keeps
       // this file measuring `request_timeout_ms` rather than
       // `LARGE_LLM_WAKE_TIMEOUT_MS`. `fn` is null for the ping and the function name

@@ -109,13 +109,9 @@ async function main() {
   const gateway = await startFakeGateway()
   process.env.MCP_GATEWAY_URL = gateway.url
   const rates = await import('../../src/lib/cost-rates.server')
-  const selfDeployedRate = floorHourlyRate(
-    rates.selfDeployedEurPerHour(),
-    DEFAULT_LARGE_LLM_EUR_PER_HOUR,
-  )
+  const largeRate = floorHourlyRate(rates.largeEurPerHour(), DEFAULT_LARGE_LLM_EUR_PER_HOUR)
   const smallRate = floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)
-  const { selfDeployedScaledownSeconds } =
-    await import('../../src/lib/inference/self-deployed-activity.server')
+  const { largeScaledownSeconds } = await import('../../src/lib/inference/large-activity.server')
   const { smallScaledownSeconds } = await import('../../src/lib/inference/cold-start.server')
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -176,7 +172,7 @@ async function main() {
           stopReason: budget.reason,
           stopDetail: wakeDetail,
           eurPerUsd: budget.eurPerUsd,
-          selfDeployedEurPerHour: selfDeployedRate,
+          largeEurPerHour: largeRate,
           smallEurPerHour: smallRate,
           captureFile: capture ? captureFile : undefined,
           limitation:
@@ -193,8 +189,7 @@ async function main() {
     if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
-    if (active && live)
-      budget.infrastructure(active, Date.now() - started, selfDeployedRate + smallRate)
+    if (active && live) budget.infrastructure(active, Date.now() - started, largeRate + smallRate)
   }
   const stop = () => {
     write()
@@ -241,8 +236,8 @@ async function main() {
             budget.beginInfrastructure(active, started, [
               {
                 box: 'self_deployed',
-                seconds: selfDeployedScaledownSeconds(),
-                eurPerHour: selfDeployedRate,
+                seconds: largeScaledownSeconds(),
+                eurPerHour: largeRate,
               },
               { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
             ])

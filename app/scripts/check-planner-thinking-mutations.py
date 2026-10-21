@@ -58,7 +58,7 @@ add('A18-missing-trace-warning', ADAPTER, "if (trace.kind !== 'trace') warning =
 add('A19-fake-inventory', 'app/e2e/lib/baml-functions.ts', "  ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],", '', RENDER)
 add('A20-classifier', 'app/e2e/lib/baml-functions.ts', "schema.includes('reasoning: string')", "schema.includes('never-present-discriminator')", 'classifier')
 add('A21-private-tier', CLIENTS, "(!THINKING_ROLES.has(role) || activeInferenceTier() !== 'self_deployed')", "(!THINKING_ROLES.has(role))")
-add('A22-runtime-price', CONFIG, '    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, selfDeployedEurPerHour])),', '')
+add('A22-runtime-price', CONFIG, '    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, largeEurPerHour])),', '')
 add('A23-warm-clock', 'app/src/lib/metrics/usage-recorder.server.ts', " || THINKING_CLIENTS.has(sample.clientName ?? '')", '', 'src/__tests__/lib/metrics/usage-recorder.test.ts')
 add('A24-switched-function', CLIENTS, "planner: ['Planner', 'PlannerThinking']", "planner: ['Planner']", 'src/__tests__/lib/harness-patterns/clients-self-deployed.test.ts')
 add('A25-cap-hit-trigger', ADAPTER, '(noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))', 'noAnswer')

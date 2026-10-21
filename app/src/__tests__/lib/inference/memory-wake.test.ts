@@ -493,7 +493,7 @@ describe('the bounded wait both consumers attach through', () => {
 
 describe('the env knobs are documented where a deployment reads them', () => {
   it('every env var the module reads appears in .env.example, inside the memory block (F2 + F5)', () => {
-    // The SELF_DEPLOYED_WAKE_* block is the established precedent: a wake's tunable
+    // The LARGE_LLM_WAKE_* block is the established precedent: a wake's tunable
     // bounds are deployment knobs, documented with their defaults and their
     // reasoning, not discoverable only by reading the module. Source-scan, the
     // uno-fonts pattern: every name this module reads must have a row there —

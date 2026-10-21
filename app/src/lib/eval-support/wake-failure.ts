@@ -25,7 +25,7 @@ export function describeWakeFailure(err: unknown): string {
 }
 
 export type WakeFailureReason =
-  'SELF_DEPLOYED_WAKE_FAILED' | 'SMALL_LLM_WAKE_FAILED' | 'PRIVATE_TIER_WAKE_FAILED'
+  'LARGE_LLM_WAKE_FAILED' | 'SMALL_LLM_WAKE_FAILED' | 'PRIVATE_TIER_WAKE_FAILED'
 
 /**
  * Stop reason naming the box that failed, read from the typed error the wake throws and never
@@ -34,5 +34,5 @@ export type WakeFailureReason =
  */
 export function wakeFailureReason(err: unknown): WakeFailureReason {
   if (!(err instanceof WakeFailure)) return 'PRIVATE_TIER_WAKE_FAILED'
-  return err.box === 'small' ? 'SMALL_LLM_WAKE_FAILED' : 'SELF_DEPLOYED_WAKE_FAILED'
+  return err.box === 'small' ? 'SMALL_LLM_WAKE_FAILED' : 'LARGE_LLM_WAKE_FAILED'
 }

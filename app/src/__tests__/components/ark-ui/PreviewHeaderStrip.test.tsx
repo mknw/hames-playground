@@ -77,7 +77,7 @@ const cold = () => state({ warmth: warmth({ state: 'cold', secondsUntilScaledown
 
 /** The warm indicator, whichever element it currently is. */
 const indicator = (container: HTMLElement) =>
-  container.querySelector('[data-testid="self_deployed-warmth"]') as HTMLElement
+  container.querySelector('[data-testid="large-warmth"]') as HTMLElement
 
 /** Render and wait for the first poll to land. */
 async function mounted(container: HTMLElement) {
@@ -263,7 +263,7 @@ describe('the warm indicator', () => {
   })
 
   it('shows the countdown while a turn is ANSWERING on the box, not only between turns', async () => {
-    // THE COUNTDOWN BUG. `selfDeployedWarmth()` computes `secondsUntilScaledown` for
+    // THE COUNTDOWN BUG. `largeWarmth()` computes `secondsUntilScaledown` for
     // `running` — the state's documented promise is that it implies warm — and
     // the render site gated the number on `=== 'warm'`, so it was computed,
     // serialized to the browser and dropped. `running` is also the state a user
@@ -282,7 +282,7 @@ describe('the warm indicator', () => {
   })
 
   it('holds the ANSWERING figure still instead of ticking it down and resetting it', async () => {
-    // `selfDeployedWarmth()` re-sends the FULL window for `running` on every poll —
+    // `largeWarmth()` re-sends the FULL window for `running` on every poll —
     // correctly, since a box cannot scale down while a turn is on it — so the
     // local countdown ran it down for one poll interval and then snapped it back
     // to the top: traced at one-second intervals as 5:00 | 4:59 | 5:00 | 5:00.
@@ -383,7 +383,7 @@ describe('the warm indicator', () => {
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
-    expect(container.querySelector('[data-testid="self_deployed-warmth"]')).toBeNull()
+    expect(container.querySelector('[data-testid="large-warmth"]')).toBeNull()
   })
 })
 
@@ -637,7 +637,7 @@ describe('starting the box from the header', () => {
   })
 
   it('sends ONE wake however many times it is clicked', async () => {
-    // The dedupe that matters is `ensureSelfDeployedAwake`'s, on the server; this is
+    // The dedupe that matters is `ensureLargeAwake`'s, on the server; this is
     // the client half — a second click while the first is out must not open a
     // second request for the same box.
     getPreviewHeaderState.mockResolvedValue(cold())
@@ -695,7 +695,7 @@ describe('starting the box from the header', () => {
     fireEvent.click(indicator(container))
 
     await waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
-    const banner = container.querySelector('[data-testid="self_deployed-ignite-failed"]')!
+    const banner = container.querySelector('[data-testid="self-deployed-ignite-failed"]')!
     // The words say a START failed. "stale" is the vocabulary for numbers that
     // are merely old, and it was what this reported: a user who pressed start,
     // was told to expect minutes and looked away could not tell the two apart.

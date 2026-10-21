@@ -42,7 +42,7 @@ add('boot-warning', ALIASES, 'console.warn(', 'String(', [COMPAT])
 add('baml-env-propagation', ALIASES,
     'if (process.env[name] === undefined && value !== undefined) process.env[name] = value',
     'void value', [COMPAT])
-add('tier-refusal', TIER_CONFIG, '  assertSelfDeployedConfigured()\n', '', [COMPAT])
+add('tier-refusal', TIER_CONFIG, '  assertLargeModelConfigured()\n', '', [COMPAT])
 add('boot-refusal', TIER_CONFIG,
     'if (privateInferenceOnly()) assertPrivateTierConfigured()', '', [COMPAT])
 add('legacy-restriction', TIER_CONFIG,
@@ -82,6 +82,33 @@ add('bootstrap-alias', 'scripts/bootstrap-vps.sh',
     'LARGE_LLM_BASE_URL) legacy=VERDA_INFERENCE_ENDPOINT',
     'LARGE_LLM_BASE_URL) legacy=REMOVED_LEGACY_ENDPOINT', [BOOTSTRAP], 'one-release bootstrap')
 
+add('legacy-frame-widened', 'packages/harness-baml/clients.server.ts',
+    "tier === 'verda'", "(tier === 'verda' || tier === 'private' || tier === 'Verda')", [COMPAT])
+add('private-restriction-warning', ALIASES,
+    "    warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed')\n", '', [COMPAT])
+TIER_SERVER = 'app/src/lib/inference/tier.server.ts'
+add('stale-tab-literal-refused', TIER_SERVER,
+    'normalizeStoredInferenceTier(requested)',
+    "(requested === 'self_deployed' || requested === 'anthropic' ? requested : null)",
+    ['src/__tests__/lib/inference/tier.test.ts'])
+add('stale-tab-alias-widened', TIER_SERVER,
+    'normalizeStoredInferenceTier(requested)',
+    "(normalizeStoredInferenceTier(requested) ?? (requested === 'private' ? 'self_deployed' : null))",
+    ['src/__tests__/lib/inference/tier.test.ts'])
+add('decision-documents-legacy-frame', 'app/src/lib/harness-client/decision-documents.server.ts',
+    "inference?.tier !== 'self_deployed')",
+    "inference?.tier !== 'self_deployed' && currentRunFrame()?.inference?.tier !== 'verda')",
+    ['src/__tests__/lib/harness-client/decision-documents.test.ts'])
+add('file-ingest-legacy-frame', 'app/src/lib/app-tools/index.server.ts',
+    "currentRunFrame()?.inference?.tier === 'self_deployed' && privateInferenceOnly()",
+    "['self_deployed', 'verda'].includes(currentRunFrame()?.inference?.tier ?? '') && privateInferenceOnly()",
+    ['src/__tests__/lib/app-tools/stash-bridge.test.ts'])
+add('bootstrap-v1-rule', 'scripts/bootstrap-vps.sh',
+    '    [[ -z $v || $v == */v1 ]] || printf', '    printf', [BOOTSTRAP])
+add('bootstrap-test-names-a-missing-key', 'scripts/bootstrap-vps.test.sh',
+    "\\nLARGE_LLM_API_KEY='k'\\n\\\" >>'$good'\"",
+    "\\nSELF_DEPLOYED_INFERENCE_API_KEY='k'\\n\\\" >>'$good'\"", [BOOTSTRAP], 'shell suite')
+
 if '--database' in sys.argv:
     database = os.environ.get('TEST_DATABASE_URL')
     if not database or database == ENV['TEST_DATABASE_URL']:
@@ -90,6 +117,11 @@ if '--database' in sys.argv:
     ENV['TEST_DATABASE_REQUIRED'] = '1'
     add('old-check-postgres-write', MEMORIES, s[a:b], '',
         ['src/__tests__/lib/db/memories.test.ts'], 'widens an old CHECK')
+    add('memory-write-canonical', MEMORIES, 'memoryTier(input.tier),', 'input.tier,',
+        ['src/__tests__/lib/db/memories.test.ts'], 'legacy tier value')
+    add('backfill-legacy-preference', 'app/src/lib/db/conversations.server.ts',
+        "IN ('verda', 'self_deployed', 'anthropic')", "IN ('self_deployed', 'anthropic')",
+        ['src/__tests__/lib/db/conversations.test.ts'], 'pre-rename spelling')
 
 requested = set(sys.argv[1:]) - {'--database'}
 selected = [case for case in CASES if not requested or case[0] in requested]

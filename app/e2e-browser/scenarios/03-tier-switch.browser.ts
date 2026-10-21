@@ -24,7 +24,7 @@
  * browser, and nothing below this layer sends that click.
  */
 import { test, expect } from '../lib/fixtures'
-import { FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL } from '../lib/env'
+import { FAKE_ANTHROPIC_TIER_MODEL, LARGE_LLM_MODEL } from '../lib/env'
 import {
   chooseTier,
   newChat,
@@ -93,7 +93,7 @@ test('the switch moves the next turn to the other endpoint, and shows the positi
   const onSelfDeployed = SWITCHED(await backend.calls())
   expect(onSelfDeployed.length, 'no switched-role call was served at all').toBeGreaterThan(0)
   for (const call of onSelfDeployed) {
-    expect(call.model, `${call.fn} did not take the self-hosted route`).toBe(SELF_DEPLOYED_MODEL)
+    expect(call.model, `${call.fn} did not take the self-hosted route`).toBe(LARGE_LLM_MODEL)
   }
 
   // The switch is a setting, not a fork: both turns are in ONE conversation, so
@@ -162,7 +162,7 @@ test('flips one conversation without moving its neighbour, and says so on every 
   )
   for (const call of onPrivate) {
     expect(call.model, `${call.fn} in the private chat did not take the self-hosted route`).toBe(
-      SELF_DEPLOYED_MODEL,
+      LARGE_LLM_MODEL,
     )
   }
 

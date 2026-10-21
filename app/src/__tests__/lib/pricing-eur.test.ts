@@ -43,7 +43,7 @@ import {
   TIME_PRICED_CLIENTS,
   estimateLlmCostEur,
 } from '../../lib/settings'
-import { SELF_DEPLOYED_CLIENT_NAME } from '../../lib/inference/self-deployed-activity.server'
+import { SELF_DEPLOYED_CLIENT_NAME } from '../../lib/inference/large-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -351,32 +351,32 @@ describe('the env overrides (cost-rates.server.ts)', () => {
   })
 
   it('reads both rates, per call, so a host change needs no rebuild', async () => {
-    const { eurPerUsdRate, selfDeployedEurPerHour } = await import('../../lib/cost-rates.server')
+    const { eurPerUsdRate, largeEurPerHour } = await import('../../lib/cost-rates.server')
     process.env.EUR_PER_USD = '0.9'
     process.env.LARGE_LLM_EUR_PER_HOUR = '2.5'
     expect(eurPerUsdRate()).toBe(0.9)
-    expect(selfDeployedEurPerHour()).toBe(2.5)
+    expect(largeEurPerHour()).toBe(2.5)
     // Changed again without re-importing the module:
     process.env.LARGE_LLM_EUR_PER_HOUR = '3'
-    expect(selfDeployedEurPerHour()).toBe(3)
+    expect(largeEurPerHour()).toBe(3)
   })
 
   it('falls back to the defaults when unset or blank', async () => {
-    const { eurPerUsdRate, selfDeployedEurPerHour } = await import('../../lib/cost-rates.server')
+    const { eurPerUsdRate, largeEurPerHour } = await import('../../lib/cost-rates.server')
     delete process.env.EUR_PER_USD
     delete process.env.LARGE_LLM_EUR_PER_HOUR
     expect(eurPerUsdRate()).toBe(DEFAULT_EUR_PER_USD)
-    expect(selfDeployedEurPerHour()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    expect(largeEurPerHour()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
     process.env.EUR_PER_USD = '   '
     expect(eurPerUsdRate()).toBe(DEFAULT_EUR_PER_USD)
   })
 
   it('warns and falls back on a non-positive or garbage rate, never renders free', async () => {
-    const { selfDeployedEurPerHour } = await import('../../lib/cost-rates.server')
+    const { largeEurPerHour } = await import('../../lib/cost-rates.server')
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const bad of ['0', '-1', 'free', 'NaN']) {
       process.env.LARGE_LLM_EUR_PER_HOUR = bad
-      expect(selfDeployedEurPerHour(), bad).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+      expect(largeEurPerHour(), bad).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
     }
     expect(warn).toHaveBeenCalledTimes(4)
   })

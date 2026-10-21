@@ -1,4 +1,3 @@
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /**
  * Wake-then-run — Server Only
  *
@@ -22,7 +21,7 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  *     there rather than here).
  *  2. **A burst multiplied its own wait.** Three chats into a sleeping box are
  *     one replica's queue, not three parallel cold starts (measured 2026-08-26),
- *     so the third user waited three cold starts. {@link ensureSelfDeployedAwake}
+ *     so the third user waited three cold starts. {@link ensureLargeAwake}
  *     dedupes: concurrent turns share one in-flight wake and all resume when it
  *     lands.
  *  3. **The wait was attributed to a call that was mostly not waiting.** The
@@ -139,7 +138,7 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  * ## Two things it deliberately does and does not account for
  *
  * **It stamps the warm clock** on the attempt that answers. The clock's standard
- * is an answered completion on the deployment naming `SELF_DEPLOYED_MODEL_ID`, and that
+ * is an answered completion on the deployment naming `LARGE_LLM_MODEL_ID`, and that
  * is exactly what this is — so without the stamp a turn arriving just after a
  * poll landed, but before the first BAML sample, paid a second poll and was shown
  * a multi-minute countdown that cleared in about a second.  Stamped from here
@@ -172,19 +171,17 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  * figure, not a per-conversation one — and that is not this module's call to
  * make.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
-  selfDeployedProvenWarm,
+  largeProvenWarm,
   smallProvenWarm,
   noteSmallCallCompleted,
   settleBoxColdStart,
   noteBoxCallStarting,
   type WakeBox,
 } from './cold-start.server'
-import {
-  SELF_DEPLOYED_MODEL_ID,
-  noteSelfDeployedCallCompleted,
-} from './self-deployed-activity.server'
+import { LARGE_LLM_MODEL_ID, noteLargeCallCompleted } from './large-activity.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -297,19 +294,19 @@ export function wakeEnvMs(name: string, fallback: number): number {
 }
 
 /** `LARGE_LLM_WAKE_TIMEOUT_MS`, or {@link DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS}. */
-export function selfDeployedWakeTimeoutMs(): number {
+export function largeWakeTimeoutMs(): number {
   return wakeEnvMs('LARGE_LLM_WAKE_TIMEOUT_MS', DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
 }
 
 /** `LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS`, or
  *  {@link DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS}. */
-export function selfDeployedWakeAttemptTimeoutMs(): number {
+export function largeWakeAttemptTimeoutMs(): number {
   return wakeEnvMs('LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS', DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
 }
 
 /** `LARGE_LLM_WAKE_POLL_INTERVAL_MS`, or
  *  {@link DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS}. */
-export function selfDeployedWakePollIntervalMs(): number {
+export function largeWakePollIntervalMs(): number {
   return wakeEnvMs('LARGE_LLM_WAKE_POLL_INTERVAL_MS', DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS)
 }
 
@@ -322,11 +319,11 @@ export function selfDeployedWakePollIntervalMs(): number {
  * validation error and reads like an app bug), so the fake has to recognise this
  * one. Importing the constant is what stops the two drifting.
  */
-export const SELF_DEPLOYED_WAKE_PROMPT = 'wake'
+export const LARGE_LLM_WAKE_PROMPT = 'wake'
 
 /** Message the user sees when the box never answered. Exported so a test can
  *  assert the visible string rather than a substring it chose itself. */
-export const SELF_DEPLOYED_WAKE_FAILED = 'the private inference box did not wake'
+export const LARGE_LLM_WAKE_FAILED = 'the private inference box did not wake'
 
 /** The promise every wake failure ends with — nothing was sent elsewhere
  *  (SD-12). The reassurance is the point on a confidential-compute route: the
@@ -437,14 +434,14 @@ function createWake(target: WakeTarget) {
   }
 }
 
-const selfDeployedWake = createWake({
-  box: 'self_deployed',
-  failed: `${SELF_DEPLOYED_WAKE_FAILED} (the 27B, LARGE_LLM_BASE_URL)`,
-  timeout: selfDeployedWakeTimeoutMs,
-  attemptTimeout: selfDeployedWakeAttemptTimeoutMs,
-  interval: selfDeployedWakePollIntervalMs,
-  provenWarm: selfDeployedProvenWarm,
-  completed: noteSelfDeployedCallCompleted,
+const largeWake = createWake({
+  box: 'large',
+  failed: `${LARGE_LLM_WAKE_FAILED} (the 27B, LARGE_LLM_BASE_URL)`,
+  timeout: largeWakeTimeoutMs,
+  attemptTimeout: largeWakeAttemptTimeoutMs,
+  interval: largeWakePollIntervalMs,
+  provenWarm: largeProvenWarm,
+  completed: noteLargeCallCompleted,
   // Endpoint and key were checked at private-tier entry. Read them per call,
   // not at module load, so a script setting env before importing a pattern is
   // seen here too; a wake must use the same host configuration as the real call.
@@ -457,8 +454,8 @@ const selfDeployedWake = createWake({
         Authorization: `Bearer ${inferenceEnv('LARGE_LLM_API_KEY') ?? ''}`,
       },
       body: JSON.stringify({
-        model: SELF_DEPLOYED_MODEL_ID,
-        messages: [{ role: 'user', content: SELF_DEPLOYED_WAKE_PROMPT }],
+        model: LARGE_LLM_MODEL_ID,
+        messages: [{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }],
         // The cheapest completion that still forces the weights to load. Not
         // zero: some servers reject `max_tokens: 0` before generation, which
         // proves nothing about readiness.
@@ -490,8 +487,8 @@ const smallWake = createWake({
   }),
 })
 
-export const ensureSelfDeployedAwake = selfDeployedWake.ensure
-export const resetSelfDeployedWake = selfDeployedWake.reset
+export const ensureLargeAwake = largeWake.ensure
+export const resetLargeWake = largeWake.reset
 export const ensureSmallAwake = smallWake.ensure
 export const resetSmallWake = smallWake.reset
 
@@ -499,7 +496,7 @@ export const resetSmallWake = smallWake.reset
 export async function ensurePrivateTierAwake(): Promise<void> {
   const group = new AbortController()
   const wakes = [
-    ensureSelfDeployedAwake(Date.now(), group.signal),
+    ensureLargeAwake(Date.now(), group.signal),
     ensureSmallAwake(Date.now(), group.signal),
   ]
   try {
@@ -562,12 +559,12 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
     const failure = await attempt(target, Math.min(attemptMs, remaining()), signal)
     if (failure === null) {
       // THE BOX IS UP, and this is the evidence the warm clock asks for: a
-      // completion the deployment answered, on `SELF_DEPLOYED_MODEL_ID`. Stamped only on
+      // completion the deployment answered, on `LARGE_LLM_MODEL_ID`. Stamped only on
       // the SUCCESS path, which is where this diverges from the usage observer's
       // rule ("success or failure — a failed call woke the box exactly as much").
       // That rule is safe for a sample: a BAML call that failed still got far
       // enough to be attributed. Here it would be self-defeating — the clock is
-      // what makes `selfDeployedProvenWarm()` skip the wake, so stamping it on a 400 for
+      // what makes `largeProvenWarm()` skip the wake, so stamping it on a 400 for
       // an unknown model id, or on the platform's own 504, would suppress the
       // next wake on the strength of a box that answered an error.
       target.completed()
@@ -585,7 +582,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
     target.box,
     `${target.failed}: ${attempts} attempt${attempts === 1 ? '' : 's'} over ${waitedS}s, ` +
       `and the last one ${lastReason}. The deployment scales to zero and its first call is ` +
-      (target.box === 'self_deployed'
+      (target.box === 'large'
         ? 'slow — the longest start measured on it is about 6 minutes (2026-08-27) — but this is '
         : 'slow — a first boot after redeploy was measured at 577s — but this is ') +
       `past the ${Math.round(budgetMs / 1000)}s this wake is given. ${NO_FALLBACK}`,

@@ -1,4 +1,3 @@
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /**
  * The inference tier's vocabulary — and, since PR-1a, the APP-POLICY half of
  * the private-tier configuration, registered into the harness client seam.
@@ -21,17 +20,18 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  * and the resolution must land in the SAME module instance, and the pin goes
  * red when they do not.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
-import { eurPerUsdRate, selfDeployedEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { eurPerUsdRate, largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
 import { privateInferenceOnly, assertPrivateTierConfigured } from './tier-config.server'
 export {
   privateInferenceOnly,
-  assertSelfDeployedConfigured,
+  assertLargeModelConfigured,
   assertSmallModelConfigured,
   assertPrivateTierConfigured,
 } from './tier-config.server'
-import { SELF_DEPLOYED_CLIENT_NAME } from './self-deployed-activity.server'
+import { SELF_DEPLOYED_CLIENT_NAME } from './large-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
   SELF_DEPLOYED_CLIENT_BY_ROLE,
@@ -84,12 +84,12 @@ configureInferencePolicy({
     // LocalQwenSmallDecide keeps its separate readout and existing notice
     // policy: this change enrolls describe, not every client sharing its host.
     // Changing the decide transport or its failure policy is a separate change.
-    if (client === SELF_DEPLOYED_CLIENT_NAME) noteBoxCallStarting('self_deployed')
+    if (client === SELF_DEPLOYED_CLIENT_NAME) noteBoxCallStarting('large')
     if (client === SELF_DEPLOYED_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })
 
-configureCostRates({ eurPerUsd: eurPerUsdRate, selfDeployedEurPerHour })
+configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 
 // The cost ESTIMATOR stays host-side (its CLIENT_PRICING table is app pricing
 // config beside the client-safe UI that renders it — SA-C2 family); the
@@ -99,8 +99,8 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, selfDeployedEurPerHour })
 configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
-    [SELF_DEPLOYED_CLIENT_NAME]: selfDeployedEurPerHour,
-    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, selfDeployedEurPerHour])),
+    [SELF_DEPLOYED_CLIENT_NAME]: largeEurPerHour,
+    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, largeEurPerHour])),
     LocalQwenSmall: smallLlmEurPerHour,
     PrivateSystemOne: smallLlmEurPerHour,
   },
@@ -109,7 +109,7 @@ configureCostPricing({
 // Checked once, at module load, and only when the flag is on: a misconfigured
 // endpoint should fail loudly and closed rather than surface as a 404 mid-
 // conversation. Module load is the FIRST use of the harness, not process
-// start (see the note on `assertSelfDeployedConfigured` above), so this refuses the
+// start (see the note on `assertLargeModelConfigured` above), so this refuses the
 // first agent call — it does not refuse the boot. Costs nothing on the
 // default path.
 if (selfDeployedInferenceEnabled()) assertPrivateTierConfigured()

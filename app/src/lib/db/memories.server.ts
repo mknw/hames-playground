@@ -1,4 +1,3 @@
-import { normalizeStoredInferenceTier } from '../inference/tier-value'
 /**
  * Memories repository — Server Only.
  *
@@ -78,6 +77,7 @@ import { normalizeStoredInferenceTier } from '../inference/tier-value'
  * conversation deletes run in their own transaction
  * ({@link deleteMemoriesForConversations}, #531).
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { createHash } from 'node:crypto'
 import pg from 'pg'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'

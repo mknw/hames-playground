@@ -506,7 +506,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // rates come through the host seam (PR-1a) — `configureCostRates` at the
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
-  const { eurPerUsd: eurPerUsdRate, selfDeployedEurPerHour: selfDeployedEurPerHour } =
+  const { eurPerUsd: eurPerUsdRate, largeEurPerHour: largeEurPerHour } =
     activeCostRates()
   const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
@@ -515,7 +515,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   )
   // Keep the published single-client form working for existing consumers.
   if (timePricedClient && !Object.hasOwn(timeRates, timePricedClient)) {
-    timeRates[timePricedClient] = selfDeployedEurPerHour()
+    timeRates[timePricedClient] = largeEurPerHour()
   }
   let attempts = 0
   let costEur = 0
@@ -560,7 +560,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         if (est.basis === 'time') {
           timePricedAttempts++
           timeRate = {
-            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? selfDeployedEurPerHour(),
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? largeEurPerHour(),
             durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
           }
         }

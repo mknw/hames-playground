@@ -582,7 +582,7 @@ custom-endpoint client slots in.
 Open — see §7. Nothing in §2/§4 depends on the answer: `workspace:*` in
 `app/` and a normal `npm install` for external consumers work identically
 whether the registry is the public npm registry, a GitHub Packages scoped
-registry, or a private registry (SelfDeployedccio, npm Enterprise).
+registry, or a private registry (Verdaccio, npm Enterprise).
 
 ---
 

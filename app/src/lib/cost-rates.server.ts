@@ -1,4 +1,3 @@
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /**
  * Cost rates from the environment — Server Only.
  *
@@ -11,13 +10,14 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  *
  * All are read PER CALL rather than captured at module load, so an operator can
  * change a rate on the host without a rebuild — the same rule
- * `selfDeployedScaledownSeconds()` follows, and for the same reason.
+ * `largeScaledownSeconds()` follows, and for the same reason.
  *
  * No rate is fetched from anywhere. The USD→EUR figure is deliberately
  * static (see `DEFAULT_EUR_PER_USD`); a live FX lookup would put a network
  * dependency behind a spend estimate and make two page loads of the same
  * conversation disagree.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   DEFAULT_EUR_PER_USD,
@@ -49,7 +49,7 @@ export function eurPerUsdRate(): number {
 }
 
 /** EUR per hour the self-hosted GPU is awake, from `LARGE_LLM_EUR_PER_HOUR`. */
-export function selfDeployedEurPerHour(): number {
+export function largeEurPerHour(): number {
   return positiveRate(
     'LARGE_LLM_EUR_PER_HOUR',
     inferenceEnv('LARGE_LLM_EUR_PER_HOUR'),

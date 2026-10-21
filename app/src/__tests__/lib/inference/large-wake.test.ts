@@ -44,23 +44,23 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
-  ensureSelfDeployedAwake,
-  resetSelfDeployedWake,
-  SELF_DEPLOYED_WAKE_FAILED,
-  SELF_DEPLOYED_WAKE_PROMPT,
+  ensureLargeAwake,
+  resetLargeWake,
+  LARGE_LLM_WAKE_FAILED,
+  LARGE_LLM_WAKE_PROMPT,
   DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS,
   DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS,
   DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS,
-  selfDeployedWakeTimeoutMs,
-  selfDeployedWakeAttemptTimeoutMs,
-  selfDeployedWakePollIntervalMs,
+  largeWakeTimeoutMs,
+  largeWakeAttemptTimeoutMs,
+  largeWakePollIntervalMs,
 } from '../../../lib/inference/wake.server'
 import {
-  noteSelfDeployedCallCompleted,
-  resetSelfDeployedActivity,
-  selfDeployedLastCallCompletedAt,
-  SELF_DEPLOYED_MODEL_ID,
-} from '../../../lib/inference/self-deployed-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+  largeLastCallCompletedAt,
+  LARGE_LLM_MODEL_ID,
+} from '../../../lib/inference/large-activity.server'
 import {
   coldStartEstimate,
   resetColdStartHistory,
@@ -114,8 +114,8 @@ const WAKE_VARS = [
 ]
 
 beforeEach(() => {
-  resetSelfDeployedWake()
-  resetSelfDeployedActivity()
+  resetLargeWake()
+  resetLargeActivity()
   resetColdStartHistory()
   process.env.LARGE_LLM_BASE_URL = ENDPOINT
   process.env.LARGE_LLM_API_KEY = 'test-key'
@@ -127,8 +127,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
-  resetSelfDeployedWake()
-  resetSelfDeployedActivity()
+  resetLargeWake()
+  resetLargeActivity()
   resetColdStartHistory()
   delete process.env.LARGE_LLM_BASE_URL
   delete process.env.LARGE_LLM_API_KEY
@@ -152,21 +152,21 @@ describe('when the wake is sent at all', () => {
     // restarted. It pings anyway, which costs one 1-token request and is the
     // cheap side of the error — the other side is a user sitting through minutes
     // of silence.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('pings when a call finished longer ago than the scale-down window', async () => {
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
-    await ensureSelfDeployedAwake()
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('sends NOTHING when a recent call proves the box is up', async () => {
     // The whole point of the warm clock. A ping per turn on a warm box is a
     // wasted request and a wasted second on every single message.
-    noteSelfDeployedCallCompleted(Date.now())
-    await ensureSelfDeployedAwake()
+    noteLargeCallCompleted(Date.now())
+    await ensureLargeAwake()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -175,7 +175,7 @@ describe('when the wake is sent at all', () => {
     // first attempt covers a warm call with room to spare (single-call 4.1s,
     // 9.9s p95 at 8-way, 2026-08-25), and a second request here would be a
     // regression nothing else would catch.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -188,7 +188,7 @@ describe('what goes on the wire', () => {
     // 200 there means "the deployment exists and the key is accepted", never
     // "the next call will be quick". Only a request that makes the model produce
     // a token proves the weights are loaded.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(`${ENDPOINT}/chat/completions`)
     expect(init.method).toBe('POST')
@@ -199,16 +199,16 @@ describe('what goes on the wire', () => {
     // The cheapest thing that still forces a generation. `max_tokens: 1` rather
     // than 0 because a request rejected before generation proves nothing about
     // readiness, and temperature 0 because nothing reads the answer.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     const body = sentBody()
     expect(body.max_tokens).toBe(1)
     expect(body.temperature).toBe(0)
-    expect(body.messages).toEqual([{ role: 'user', content: SELF_DEPLOYED_WAKE_PROMPT }])
+    expect(body.messages).toEqual([{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }])
   })
 
   it('names the model the deployment serves, and carries the key', async () => {
-    await ensureSelfDeployedAwake()
-    expect(sentBody().model).toBe(SELF_DEPLOYED_MODEL_ID)
+    await ensureLargeAwake()
+    expect(sentBody().model).toBe(LARGE_LLM_MODEL_ID)
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key')
   })
@@ -220,10 +220,10 @@ describe('what goes on the wire', () => {
     // size, because "small" is not the property — "nothing from the turn" is, and
     // an exact comparison is what fails if a future edit threads the user's
     // message through here for a warmer cache.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(sentBody()).toEqual({
-      model: SELF_DEPLOYED_MODEL_ID,
-      messages: [{ role: 'user', content: SELF_DEPLOYED_WAKE_PROMPT }],
+      model: LARGE_LLM_MODEL_ID,
+      messages: [{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }],
       max_tokens: 1,
       temperature: 0,
     })
@@ -233,7 +233,7 @@ describe('what goes on the wire', () => {
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls())
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
     await wake
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -242,7 +242,7 @@ describe('what goes on the wire', () => {
 
   it('joins the /v1 base to the path without doubling the slash', async () => {
     process.env.LARGE_LLM_BASE_URL = `${ENDPOINT}/`
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock.mock.calls[0][0]).toBe(`${ENDPOINT}/chat/completions`)
   })
 
@@ -253,13 +253,13 @@ describe('what goes on the wire', () => {
     // `smoke-self-deployed.ts`'s preflight learned the first half the hard way — an
     // unbounded probe hung a diagnostic for four minutes and then reported the
     // bare string `fetch failed`.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(init.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('pins the model id against the .baml declaration', async () => {
-    // `SELF_DEPLOYED_MODEL_ID` is a COPY of the `model` line on `SelfDeployedQwen` — the ping is
+    // `LARGE_LLM_MODEL_ID` is a COPY of the `model` line on `SelfDeployedQwen` — the ping is
     // a hand-rolled fetch, so it has to name a model and BAML exports nothing to
     // read it from. vLLM 400s an unknown id, so drift would break the FIRST call
     // of every session and nothing else. This is the pin that makes the copy
@@ -271,7 +271,7 @@ describe('what goes on the wire', () => {
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
-    expect(declared).toContain(`model "${SELF_DEPLOYED_MODEL_ID}"`)
+    expect(declared).toContain(`model "${LARGE_LLM_MODEL_ID}"`)
   })
 })
 
@@ -306,9 +306,9 @@ describe('the three budgets', () => {
     process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '900000'
     process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '45000'
     process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '2500'
-    expect(selfDeployedWakeTimeoutMs()).toBe(900_000)
-    expect(selfDeployedWakeAttemptTimeoutMs()).toBe(45_000)
-    expect(selfDeployedWakePollIntervalMs()).toBe(2_500)
+    expect(largeWakeTimeoutMs()).toBe(900_000)
+    expect(largeWakeAttemptTimeoutMs()).toBe(45_000)
+    expect(largeWakePollIntervalMs()).toBe(2_500)
   })
 
   it('refuses a zero or garbage override rather than honouring it', () => {
@@ -320,9 +320,9 @@ describe('the three budgets', () => {
     process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '0'
     process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = 'soon'
     process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '-1'
-    expect(selfDeployedWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
-    expect(selfDeployedWakePollIntervalMs()).toBe(DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS)
-    expect(selfDeployedWakeTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
+    expect(largeWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
+    expect(largeWakePollIntervalMs()).toBe(DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS)
+    expect(largeWakeTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
     expect(warn).toHaveBeenCalledTimes(3)
 
     // A FRACTION UNDER 1ms is the same refusal, and it is the case the three
@@ -331,7 +331,7 @@ describe('the three budgets', () => {
     // the caller actually receives — silently, the warning already skipped. The
     // guard therefore floors first and validates the floored value.
     process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '0.5'
-    expect(selfDeployedWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
+    expect(largeWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
     expect(warn).toHaveBeenCalledTimes(4)
     warn.mockRestore()
   })
@@ -352,7 +352,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls())
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(9_000)
     expect(fetchMock, 'it gave up on the first attempt early').toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
@@ -369,7 +369,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(
       fetchMock,
@@ -387,12 +387,12 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     const err = (await wake) as Error
 
     expect(fetchMock).toHaveBeenCalledTimes(FAST_ATTEMPTS)
-    expect(err.message).toContain(SELF_DEPLOYED_WAKE_FAILED)
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
     // The count and the elapsed time are in the message because they are what
     // separates "the box is slow" from "the endpoint is wrong" for whoever reads
     // it — a poll that made ten attempts and got nothing is a different report
@@ -412,10 +412,10 @@ describe('the poll survives a box that drops what it is sent', () => {
     process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '1000'
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(4_000)
     const err = (await wake) as Error
-    expect(err.message).toContain(SELF_DEPLOYED_WAKE_FAILED)
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
     // One attempt, cut at the budget rather than at its own 30s — and the
     // message reports the 4s it was really given, not the 30s it asked for.
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -431,7 +431,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     // slow.
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     // Four attempts dropped, the fifth answers instantly: 4 × 11s of wait.
     fetchMock
       .mockImplementationOnce(stalls())
@@ -444,7 +444,7 @@ describe('the poll survives a box that drops what it is sent', () => {
       runWithColdStartWatch(
         (e) => seen.push(e),
         async () => {
-          await ensureSelfDeployedAwake()
+          await ensureLargeAwake()
         },
       ),
     )
@@ -475,7 +475,7 @@ describe('which failures are retried, and which end it on the spot', () => {
         new Response(JSON.stringify({ error: 'inference request was canceled' }), { status: 504 }),
     )
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
     expect(await wake).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -488,7 +488,7 @@ describe('which failures are retried, and which end it on the spot', () => {
       .mockImplementationOnce(async () => new Response('slow down', { status: 429 }))
       .mockImplementationOnce(async () => new Response('too slow', { status: 408 }))
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
     expect(await wake).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(3)
@@ -506,7 +506,7 @@ describe('which failures are retried, and which end it on the spot', () => {
       throw new TypeError('fetch failed')
     })
 
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     const err = (await wake) as Error
     expect(err.message).toContain('fetch failed')
@@ -523,7 +523,7 @@ describe('which failures are retried, and which end it on the spot', () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ error: 'unknown model' }), { status: 400 }),
     )
-    const err = (await quiet(ensureSelfDeployedAwake())) as Error
+    const err = (await quiet(ensureLargeAwake())) as Error
     expect(err.message).toContain(
       'did not wake (the 27B, LARGE_LLM_BASE_URL): it answered HTTP 400',
     )
@@ -533,7 +533,7 @@ describe('which failures are retried, and which end it on the spot', () => {
 
   it('stops DEAD on a 401 — a bad key is not a cold box', async () => {
     fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
-    const err = (await quiet(ensureSelfDeployedAwake())) as Error
+    const err = (await quiet(ensureLargeAwake())) as Error
     expect(err.message).toContain(
       'did not wake (the 27B, LARGE_LLM_BASE_URL): it answered HTTP 401',
     )
@@ -545,14 +545,14 @@ describe('which failures are retried, and which end it on the spot', () => {
     // mode a user would fear is a silent fall-back, and the error says it did not
     // happen (SD-12).
     fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
-    const refused = (await quiet(ensureSelfDeployedAwake())) as Error
+    const refused = (await quiet(ensureLargeAwake())) as Error
     expect(refused.message).toContain('nothing was sent to any other provider')
 
-    resetSelfDeployedWake()
+    resetLargeWake()
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
-    const expired = quiet(ensureSelfDeployedAwake())
+    const expired = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     expect(((await expired) as Error).message).toContain('nothing was sent to any other provider')
   })
@@ -565,10 +565,10 @@ describe('which failures are retried, and which end it on the spot', () => {
     process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '1000'
     process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '500'
     process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '100'
-    const wake = quiet(ensureSelfDeployedAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(1_000)
     const err = (await wake) as Error
-    const occurrences = (err.message.match(new RegExp(SELF_DEPLOYED_WAKE_FAILED, 'g')) ?? []).length
+    const occurrences = (err.message.match(new RegExp(LARGE_LLM_WAKE_FAILED, 'g')) ?? []).length
     expect(occurrences).toBe(1)
   })
 
@@ -578,8 +578,8 @@ describe('which failures are retried, and which end it on the spot', () => {
     // 400 for an unknown model id or the platform's own 504 would suppress the
     // next one on the strength of a box that answered an error.
     fetchMock.mockImplementation(async () => new Response('nope', { status: 400 }))
-    await expect(ensureSelfDeployedAwake()).rejects.toThrow(SELF_DEPLOYED_WAKE_FAILED)
-    expect(selfDeployedLastCallCompletedAt()).toBeNull()
+    await expect(ensureLargeAwake()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
+    expect(largeLastCallCompletedAt()).toBeNull()
   })
 })
 
@@ -593,7 +593,7 @@ describe('concurrent turns share one poll', () => {
       () => new Promise<Response>((resolve) => (release = () => resolve(ok()))),
     )
 
-    const turns = [ensureSelfDeployedAwake(), ensureSelfDeployedAwake(), ensureSelfDeployedAwake()]
+    const turns = [ensureLargeAwake(), ensureLargeAwake(), ensureLargeAwake()]
     // Let the three reach their await before the request resolves.
     await Promise.resolve()
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -611,10 +611,10 @@ describe('concurrent turns share one poll', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls()).mockImplementationOnce(stalls())
 
-    const first = quiet(ensureSelfDeployedAwake())
+    const first = quiet(ensureLargeAwake())
     // Land the second turn in the GAP between attempt 1 and attempt 2.
     await vi.advanceTimersByTimeAsync(10_500)
-    const second = quiet(ensureSelfDeployedAwake())
+    const second = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
 
     expect(await first).toBeUndefined()
@@ -627,29 +627,29 @@ describe('concurrent turns share one poll', () => {
     // The shared promise is an in-flight dedupe, not a memo. A box that went back
     // to sleep after the scale-down window has to be woken again, and the warm
     // clock — not this module — is what decides that.
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     // Which is why the clock has to be wound back to make the point: a
     // successful wake STAMPS it (see the next test), so within the scale-down
     // window the second turn is right to send nothing. Idle past the window and
     // the wake returns — no memory of the earlier success anywhere.
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
-    await ensureSelfDeployedAwake()
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('a successful wake stamps the warm clock, so the next turn sends nothing', async () => {
     // The clock's own standard is an answered completion on the deployment
-    // naming SELF_DEPLOYED_MODEL_ID — which is exactly what an attempt is, so it counts
+    // naming LARGE_LLM_MODEL_ID — which is exactly what an attempt is, so it counts
     // as evidence rather than needing a BAML call to confirm it. Without this, a
     // turn arriving after a wake landed but before the first usage sample paid a
     // SECOND wake and was shown a multi-minute countdown that cleared in a second
     // (#279 review, F5).
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(selfDeployedLastCallCompletedAt()).not.toBeNull()
+    expect(largeLastCallCompletedAt()).not.toBeNull()
 
-    await ensureSelfDeployedAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -663,26 +663,26 @@ describe('concurrent turns share one poll', () => {
     fetchMock.mockImplementation(async () => new Response('unknown model', { status: 400 }))
 
     const turns = [
-      ensureSelfDeployedAwake(),
-      ensureSelfDeployedAwake(),
-      ensureSelfDeployedAwake(),
-      ensureSelfDeployedAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
     ].map((p) => p.catch((err: unknown) => (err instanceof Error ? err.message : String(err))))
     const outcomes = await Promise.all(turns)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(outcomes).toHaveLength(4)
-    for (const outcome of outcomes) expect(outcome).toContain(SELF_DEPLOYED_WAKE_FAILED)
+    for (const outcome of outcomes) expect(outcome).toContain(LARGE_LLM_WAKE_FAILED)
 
     // And the shared failure did not poison the next wake for any of them.
     fetchMock.mockImplementation(async () => ok())
-    await expect(ensureSelfDeployedAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
   })
 
   it('retries after a failed poll instead of remembering the failure', async () => {
     fetchMock.mockImplementationOnce(async () => new Response('nope', { status: 400 }))
-    await expect(ensureSelfDeployedAwake()).rejects.toThrow(SELF_DEPLOYED_WAKE_FAILED)
+    await expect(ensureLargeAwake()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
     // A remembered rejection would make one bad minute poison every later turn.
-    await expect(ensureSelfDeployedAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
@@ -708,7 +708,7 @@ describe('what the wait teaches the estimate', () => {
     await runWithColdStartWatch(
       () => order.push('notice'),
       async () => {
-        await ensureSelfDeployedAwake()
+        await ensureLargeAwake()
       },
     )
     expect(order).toEqual(['notice', 'ping'])
@@ -720,13 +720,13 @@ describe('what the wait teaches the estimate', () => {
     // the request is "in flight", which is the only way to produce a duration
     // above the 36.5s plausibility floor without actually waiting.
     vi.useFakeTimers()
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     fetchMock.mockImplementation(async () => {
       vi.advanceTimersByTime(150_000)
       return ok()
     })
     await watched(async () => {
-      await ensureSelfDeployedAwake()
+      await ensureLargeAwake()
     })
     expect(coldStartEstimate()).toEqual({
       estimateMs: 150_000,
@@ -741,9 +741,9 @@ describe('what the wait teaches the estimate', () => {
     // floor is the only thing between that and a "measured" 4-second cold start
     // being promised to every future user, and the wake is the path that makes it
     // load-bearing rather than theoretical.
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     await watched(async () => {
-      await ensureSelfDeployedAwake()
+      await ensureLargeAwake()
     })
     expect(coldStartEstimate().basis).toBe('default')
   })
@@ -758,7 +758,7 @@ describe('what the wait teaches the estimate', () => {
     // Three turns, one poll, one reading, and the reading is the poll's own
     // duration rather than any turn's share of it.
     vi.useFakeTimers()
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     let release: () => void = () => {}
     fetchMock.mockImplementation(
       () =>
@@ -774,7 +774,7 @@ describe('what the wait teaches the estimate', () => {
       runWithColdStartWatch(
         () => {},
         async () => {
-          await ensureSelfDeployedAwake()
+          await ensureLargeAwake()
         },
       )
     const turns = [attach(), attach(), attach()]
@@ -792,10 +792,10 @@ describe('what the wait teaches the estimate', () => {
   })
 
   it('records nothing when the poll failed — the budget is not a cold start', async () => {
-    noteSelfDeployedCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     fetchMock.mockImplementation(async () => new Response('down', { status: 400 }))
     await watched(async () => {
-      await ensureSelfDeployedAwake().catch(() => {})
+      await ensureLargeAwake().catch(() => {})
     }).catch(() => [])
     expect(coldStartEstimate().basis).toBe('default')
   })
@@ -803,7 +803,7 @@ describe('what the wait teaches the estimate', () => {
   it('waits, and announces nothing, with no watch armed', async () => {
     // A triggered run or a script has no listener. The wake is not a UI feature:
     // it still runs, silently.
-    await expect(ensureSelfDeployedAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

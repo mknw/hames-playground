@@ -31,7 +31,7 @@
  * the run resumes with nobody reading it.
  */
 import { test, expect } from '../lib/fixtures'
-import { FAKE_TITLE, SELF_DEPLOYED_MODEL } from '../lib/env'
+import { FAKE_TITLE, LARGE_LLM_MODEL } from '../lib/env'
 import { expectHeld } from '../lib/control'
 import { conversationRows } from '../lib/db'
 import {
@@ -71,7 +71,7 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   // of those is true is exactly the kind of thing this scenario must not depend
   // on.
   await backend.reset()
-  await backend.arm({ kind: 'hold', model: SELF_DEPLOYED_MODEL, wake: false })
+  await backend.arm({ kind: 'hold', model: LARGE_LLM_MODEL, wake: false })
   await send(page, 'second question')
 
   // "In flight" as the user sees it: Send has been replaced by Stop.

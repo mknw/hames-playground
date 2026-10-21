@@ -34,10 +34,7 @@ import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import { resolveTier } from '../inference/tier.server'
 import { selfDeployedConfigured, type InferenceTier } from '../inference/config.server'
-import {
-  selfDeployedWarmth,
-  type SelfDeployedWarmth,
-} from '../inference/self-deployed-activity.server'
+import { largeWarmth, type LargeWarmth } from '../inference/large-activity.server'
 import {
   probeVerdaReplicas,
   type VerdaControlPlaneProbe,
@@ -58,7 +55,7 @@ async function requireUser(): Promise<{ id: string }> {
  * The warmth the strip DISPLAYS, after both of its sources have had their say.
  *
  * Two sources, deliberately not merged into one module's opinion: the
- * process-local completion clock (`selfDeployedWarmth`) is the only thing allowed to
+ * process-local completion clock (`largeWarmth`) is the only thing allowed to
  * say `ready` — a real completion answered by the deployment, zero-second
  * accurate, never a timer — and the control-plane probe
  * (`inference/verda-control-plane.server.ts`) is the shared observation that
@@ -145,7 +142,7 @@ export interface PreviewHeaderState {
  * already had); and only the no-turn, no-evidence cases ask the control plane,
  * where an unavailable probe — the one error path — is `unknown`.
  */
-function displayWarmth(w: SelfDeployedWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
+function displayWarmth(w: LargeWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
   let state: WarmthDisplayState
   if (w.state === 'running') state = 'answering'
   else if (w.state === 'warm') state = 'ready'
@@ -211,7 +208,7 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
   return {
     tier,
     selfDeployedAvailable: selfDeployedConfigured(),
-    warmth: displayWarmth(selfDeployedWarmth(), probe),
+    warmth: displayWarmth(largeWarmth(), probe),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,

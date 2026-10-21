@@ -84,7 +84,7 @@
 //
 // WHERE 180 000 COMES FROM, AND WHY IT IS DERIVED FROM `max_tokens` RATHER THAN
 // FROM THE p95. The load test measured this deployment WARM at a 2.75k-token
-// prompt (2026-08-25, `smoke-self-deployed-load.ts`): 4.1s for a single call, 6.3s p50
+// prompt (2026-08-25, `smoke-large-load.ts`): 4.1s for a single call, 6.3s p50
 // and 9.9s p95 with 8 requests in flight, one replica, so concurrency is
 // queueing rather than scaling. A multiple of that p95 is what the first version
 // of this number was ("~12x"), and #279's review was right that it does not
@@ -173,7 +173,7 @@ client<llm> SelfDeployedQwen {
     // The OpenAI-COMPATIBLE BASE — the deployment root plus `/v1`. Passed to
     // the provider verbatim (BAML options take an `env.X` reference, not an
     // expression, so nothing can append the path for us), which is why
-    // `assertSelfDeployedConfigured()` refuses a value that does not end in `/v1`:
+    // `assertLargeModelConfigured()` refuses a value that does not end in `/v1`:
     // without it every call 404s on `<root>/chat/completions`.
     base_url env.LARGE_LLM_BASE_URL
     api_key env.LARGE_LLM_API_KEY

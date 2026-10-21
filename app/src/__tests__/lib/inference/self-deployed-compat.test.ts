@@ -36,6 +36,19 @@ describe('one-release environment migration', () => {
       expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
     })
   })
+  // The alias admits ONE legacy literal and nothing else: any other spelling is an
+  // unrecognised frame value, which falls back to the deployment default (the
+  // public tier here) rather than being trusted as a private one.
+  it.each(['private', 'Verda', 'VERDA', 'self-deployed', 'SELF_DEPLOYED', ''])(
+    'a frame carrying %j is not an alias of self_deployed',
+    async (value) => {
+      vi.stubEnv('INFERENCE_TIERS', undefined)
+      await withRunFrame({ inference: { tier: value } }, async () => {
+        expect(activeInferenceTier()).toBe('anthropic')
+        expect(clientOverrideFor('controller')).toBeUndefined()
+      })
+    },
+  )
   it('legacy environment values reach the regenerated BAML request', async () => {
     vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://large.example.invalid/v1')
     vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')
@@ -78,6 +91,24 @@ describe('one-release environment migration', () => {
     expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain(
       'synthetic.example.invalid',
     )
+  })
+  it('the legacy INFERENCE_TIERS=private value warns once, naming its replacement', async () => {
+    vi.resetModules()
+    const fresh = await import('@hames-ai/harness-baml/inference-env.server')
+    vi.stubEnv('INFERENCE_TIERS', 'private')
+    fresh.applyLegacyInferenceEnv()
+    fresh.applyLegacyInferenceEnv()
+    expect(console.warn).toHaveBeenCalledOnce()
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/INFERENCE_TIERS=private.*INFERENCE_TIERS=self_deployed.*one release/),
+    )
+  })
+  it('the canonical INFERENCE_TIERS value does not warn', async () => {
+    vi.resetModules()
+    const fresh = await import('@hames-ai/harness-baml/inference-env.server')
+    vi.stubEnv('INFERENCE_TIERS', 'self_deployed')
+    fresh.applyLegacyInferenceEnv()
+    expect(console.warn).not.toHaveBeenCalled()
   })
   it.each(['self_deployed', 'private'])(
     'restriction %s stays fail-closed with neither env family',

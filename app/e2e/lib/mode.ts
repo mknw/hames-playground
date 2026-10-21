@@ -12,7 +12,7 @@
  * to zero and pays a multi-minute cold start, so the run is burst-disciplined
  * — one process, one file at a time, at most two turns in flight (the
  * deployment is a single replica, where concurrency is queueing rather than
- * scaling; measured 2026-08-25 by `smoke-self-deployed-load.ts`) — and the
+ * scaling; measured 2026-08-25 by `smoke-large-load.ts`) — and the
  * fault-injection scenarios, which have no live analogue that is safe to
  * cause, are skipped rather than faked.
  *
@@ -97,13 +97,13 @@ export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 /** The model id `SelfDeployedQwen` declares in `baml_src/self-deployed-client.baml`. Not
  *  re-derived here on purpose: a scenario asserting "this call took the
  *  self-hosted route" should fail if the declaration changes under it. */
-export const SELF_DEPLOYED_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
  * The model id `LocalQwenSmall` declares in `baml_src/local-client.baml` — the
  * 4B the private tier routes the `describe` role to since 2026-08-26.
  *
- * Hardcoded for SELF_DEPLOYED_MODEL's reason, and it buys something extra here: the fake
+ * Hardcoded for LARGE_LLM_MODEL's reason, and it buys something extra here: the fake
  * records each request's `model` field, so this is how a scenario tells a
  * private-tier SUMMARY apart from a private-tier CONTROLLER call. Before the flip
  * those were the same model and indistinguishable on the wire.
@@ -146,7 +146,7 @@ export const COLD_START_MS = Number.parseInt(process.env.E2E_COLD_START_MS ?? '9
  * fake's one-shot behaviour and the poll's first attempt line up: one attempt,
  * one wait, exactly the shape those scenarios assert. The poll's RETRY behaviour
  * is not configured away — it has fake-timer unit coverage in
- * `self-deployed-wake.test.ts`, and scenario 8's "keeps polling until the box answers"
+ * `large-wake.test.ts`, and scenario 8's "keeps polling until the box answers"
  * lowers this var itself for the one test that is about it.
  *
  * Derived from {@link COLD_START_MS} rather than fixed, so raising

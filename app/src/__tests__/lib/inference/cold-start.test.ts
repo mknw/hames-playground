@@ -25,7 +25,7 @@ import '../../../lib/inference/config.server'
  *
  * The routing half — that the notice fires from a self_deployed-bound call and never
  * from an anthropic-tier one — is exercised through `clientOverrideFor` itself
- * rather than by calling `noteSelfDeployedCallStarting` directly, because the tier
+ * rather than by calling `noteLargeCallStarting` directly, because the tier
  * gate lives there and a test that bypassed it would pass with the wiring
  * removed.
  */
@@ -41,7 +41,7 @@ import {
   COLD_START_WINDOW,
   coldStartEstimate,
   noteColdStartMeasured,
-  noteSelfDeployedCallStarting,
+  noteLargeCallStarting,
   resetColdStartHistory,
   runWithColdStartWatch,
   settleColdStart,
@@ -50,10 +50,10 @@ import {
 import {
   beginSelfDeployedTurn,
   endSelfDeployedTurn,
-  noteSelfDeployedCallCompleted,
-  resetSelfDeployedActivity,
-  selfDeployedWarmth,
-} from '../../../lib/inference/self-deployed-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+  largeWarmth,
+} from '../../../lib/inference/large-activity.server'
 import {
   assertInferenceTier,
   clientOverrideFor,
@@ -82,7 +82,7 @@ const LONG_AGO = NOW - 10 * 60 * 1000
 
 beforeEach(() => {
   resetColdStartHistory()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   process.env.LARGE_LLM_BASE_URL = 'https://e2e.invalid/v1'
   process.env.LARGE_LLM_API_KEY = 'test-key'
   // The private tier's second endpoint (the 4B summarizer `describe` runs on).
@@ -94,7 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetColdStartHistory()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   delete process.env.LARGE_LLM_BASE_URL
   delete process.env.LARGE_LLM_API_KEY
   delete process.env.SMALL_LLM_DECISIONS_URL
@@ -213,17 +213,17 @@ describe('the plausibility floor', () => {
   it('refuses a warm call the CONFIGURED scale-down window mistook for a cold box', async () => {
     // A host that set the var below its own deployment's setting: the app is told
     // 180s, the box is held for 300s. A 200s idle gap passes the coldness gate —
-    // `selfDeployedWarmth` agrees
+    // `largeWarmth` agrees
     // the box is cold — and the call still comes back in 4.1s because the
     // platform never released the GPU.
     process.env.LARGE_LLM_SCALEDOWN_SECONDS = '180'
-    noteSelfDeployedCallCompleted(NOW - 200_000)
-    expect(selfDeployedWarmth(NOW).state).toBe('cold')
+    noteLargeCallCompleted(NOW - 200_000)
+    expect(largeWarmth(NOW).state).toBe('cold')
 
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteSelfDeployedCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(4_100)
       },
     )
@@ -282,7 +282,7 @@ describe('when the notice fires', () => {
   })
 
   it('stays silent when a recent call proves the box is warm', async () => {
-    noteSelfDeployedCallCompleted(Date.now())
+    noteLargeCallCompleted(Date.now())
     const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
         beginSelfDeployedTurn()
@@ -376,11 +376,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   it('records the wait when this process watched the box go cold', async () => {
     // Evidence of coldness: a call finished, and the scale-down window has
     // long since elapsed.
-    noteSelfDeployedCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteSelfDeployedCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(155_000)
       },
     )
@@ -388,14 +388,14 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('measures NOTHING on a process that has never seen the box', async () => {
-    // No `noteSelfDeployedCallCompleted` at all — the box may well have been warm and
+    // No `noteLargeCallCompleted` at all — the box may well have been warm and
     // this process simply had not noticed (a restart, a second instance). The
     // notice still shows, pessimistically; the reading must not be kept.
     const seen: ColdStartEstimate[] = []
     await runWithColdStartWatch(
       (e) => seen.push(e),
       async () => {
-        noteSelfDeployedCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(4_000)
       },
     )
@@ -404,11 +404,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('records one reading per turn, not one per call', async () => {
-    noteSelfDeployedCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteSelfDeployedCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(150_000)
         settleColdStart(2_000)
       },
@@ -417,11 +417,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('keeps nothing when BAML measured nothing', async () => {
-    noteSelfDeployedCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteSelfDeployedCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(undefined)
       },
     )
@@ -429,7 +429,7 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('ignores a settle from a turn that never announced anything', async () => {
-    noteSelfDeployedCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {

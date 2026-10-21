@@ -286,12 +286,12 @@ describe('misconfiguration fails closed', () => {
     await expect(load()).resolves.toBeDefined()
   })
 
-  it('assertSelfDeployedConfigured is callable directly, for script preflights', async () => {
+  it('assertLargeModelConfigured is callable directly, for script preflights', async () => {
     enable()
-    const { assertSelfDeployedConfigured } = await loadPolicy()
-    expect(() => assertSelfDeployedConfigured()).not.toThrow()
+    const { assertLargeModelConfigured } = await loadPolicy()
+    expect(() => assertLargeModelConfigured()).not.toThrow()
     delete process.env.LARGE_LLM_BASE_URL
-    expect(() => assertSelfDeployedConfigured()).toThrow(/LARGE_LLM_BASE_URL is not set/)
+    expect(() => assertLargeModelConfigured()).toThrow(/LARGE_LLM_BASE_URL is not set/)
   })
 })
 
@@ -357,7 +357,7 @@ describe('settings and baml_src agree about SelfDeployedQwen', () => {
     //
     // The rate is the load test's own worst reading, not a fresh assumption:
     // 208 tok/s aggregate with 8 requests in flight on one replica (2026-08-25,
-    // `smoke-self-deployed-load.ts`) is 26 tok/s per stream. Single-stream measured
+    // `smoke-large-load.ts`) is 26 tok/s per stream. Single-stream measured
     // 64 tok/s; the slower figure is the one a bound has to survive.
     const declared = readFileSync(
       path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),

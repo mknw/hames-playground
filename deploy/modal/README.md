@@ -155,7 +155,7 @@ uv run --env-file deploy.local.env measure.py --box 27b --stop --samples 3
 HAMES_MODAL_SERVER=Qwen27B uv run --env-file deploy.local.env ops.py status   # every ops.py command, for this box
 ```
 
-Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and `smoke-self-deployed-load.ts` (`src/lib/inference/scripts/`), with the endpoint and key in an overlay env file.
+Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and `smoke-large-load.ts` (`src/lib/inference/scripts/`), with the endpoint and key in an overlay env file.
 
 **Switching the app to it is env-only, and these move together:**
 
@@ -180,7 +180,7 @@ Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and
 - Routes (`Caddyfile.27b`): `POST /v1/chat/completions`, `GET /v1/models`, `GET /health` (vLLM's, answered only once those checks passed) and `GET /status`. Everything else is a 404, including every dot-segment path that resolves off the list.
 - Shape: 4 cores and 64 GiB (level-1 sleep holds the ~31 GB of weights in CPU RAM for the snapshot), `H100!` (the `!` stops Modal substituting an H200, which would need snapshots of its own), up to 8 requests in flight, 300 s idle.
 
-**Reference measurements, 2026-10-17** (synthetic inputs; `eu-west`; the load figures are `smoke-self-deployed-load.ts`, 2.75k-token prompts, the same script Verda was measured with on 2026-08-25):
+**Reference measurements, 2026-10-17** (synthetic inputs; `eu-west`; the load figures are `smoke-large-load.ts`, 2.75k-token prompts, the same script Verda was measured with on 2026-08-25):
 
 |                                                   | RTX PRO 6000, MTP 2 | **H100, MTP 2** (default) | H100, MTP off | Verda, 2026-08-25       |
 | ------------------------------------------------- | ------------------- | ------------------------- | ------------- | ----------------------- |

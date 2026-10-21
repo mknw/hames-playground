@@ -46,7 +46,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, type AppHandles, type SseFrame } from '../lib/app'
-import { COLD_START_MS, IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { COLD_START_MS, IS_HERMETIC, LARGE_LLM_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -69,13 +69,13 @@ beforeEach(async () => {
 
 /** Withhold the first self-hosted response for the configured cold start. */
 function goCold(app: AppHandles): void {
-  app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_START_MS, model: SELF_DEPLOYED_MODEL, times: 1 })
+  app.fakeLlm.arm({ kind: 'cold-start', ms: COLD_START_MS, model: LARGE_LLM_MODEL, times: 1 })
 }
 
 /** The first frame carrying evidence that the self-hosted model itself
  *  answered — the accounting BAML stamps on the call, naming the client it
  *  actually selected. The router's own frames precede it and are not it. */
-function firstSelfDeployedAnswer(frames: SseFrame[]): number {
+function firstLargeAnswer(frames: SseFrame[]): number {
   return frames.findIndex((f) => {
     const call = (f.data as { llmCall?: { clientName?: string } }).llmCall
     return call?.clientName === 'SelfDeployedQwen'
@@ -161,7 +161,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     ).toBeGreaterThanOrEqual(COLD_START_MS)
 
     // And the ordering: nothing from the self-hosted model precedes the notice.
-    const answerIdx = firstSelfDeployedAnswer(frames)
+    const answerIdx = firstLargeAnswer(frames)
     const warmingIdx = frames.indexOf(warming[0])
     expect(answerIdx, 'no frame carried a SelfDeployedQwen call').toBeGreaterThan(-1)
     expect(warmingIdx).toBeLessThan(answerIdx)
@@ -236,7 +236,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
       kind: 'status',
       status: 400,
       message: 'unknown model',
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
     })
 
     const { status, frames } = await app.runTurnOverSse({
@@ -259,7 +259,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     //
     // Driven at 1/300th of the shipped budget, because the property under test is
     // "it gives up, loudly, at the budget" and the budget's VALUE is an arithmetic
-    // decision pinned in `self-deployed-wake.test.ts`. A 503 is a transient status, so
+    // decision pinned in `large-wake.test.ts`. A 503 is a transient status, so
     // every attempt is retried.
     await app.setTier('self_deployed')
     const sessionId = newSessionId('coldux-wake-never')
@@ -267,7 +267,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
       kind: 'status',
       status: 503,
       message: 'no capacity',
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
     })
 
     const { status, frames } = await withWakeEnv(
@@ -306,7 +306,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     app.fakeLlm.arm({
       kind: 'cold-start',
       ms: attemptMs * 3,
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
       wake: true,
       times: 1,
     })

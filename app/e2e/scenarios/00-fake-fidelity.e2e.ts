@@ -52,7 +52,7 @@ import {
 } from '../lib/baml-functions'
 import { takeEgressAttempts } from '../lib/egress-backstop'
 import { checkAfterAll, checkAfterEach } from '../lib/setup-checks'
-import { IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { IS_HERMETIC, LARGE_LLM_MODEL } from '../lib/mode'
 import { packagePath } from '../../src/lib/eval-support/package-layout'
 
 type Renderer = () => Promise<{ body: { json: () => unknown } }>
@@ -228,9 +228,7 @@ describe('the fake recognises every BAML function', () => {
       // Anthropic render lifts the leading system block into a top-level
       // `system` field, so `messages` would not contain the marker at all and
       // the classifier would be checked against a shape the fake never sees.
-      expect(body.model, `${name} did not render through SelfDeployedQwen`).toBe(
-        SELF_DEPLOYED_MODEL,
-      )
+      expect(body.model, `${name} did not render through SelfDeployedQwen`).toBe(LARGE_LLM_MODEL)
       const text = promptText(body.messages ?? [])
       expect(text.length, `${name} rendered an empty prompt`).toBeGreaterThan(0)
       expect(classifyPrompt(text)).toBe(name)

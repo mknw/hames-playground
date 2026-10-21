@@ -10,7 +10,7 @@
  * variable to the fake's base is therefore not a trick — it is what a developer
  * does when they run the deployment locally. Nothing in `src/` changes, the
  * `chat_template_kwargs` and `max_tokens` the client declares still go on the
- * wire, and `assertSelfDeployedConfigured()` still runs its `/v1` check.
+ * wire, and `assertLargeModelConfigured()` still runs its `/v1` check.
  *
  * ## The anthropic tier: a test-only client registry, and no new env switch
  *
@@ -35,7 +35,7 @@
  *   - no override (the anthropic tier, and every role the switch never moves)
  *     → the registry's primary → the fake, reporting `FAKE_ANTHROPIC_TIER_MODEL`
  *   - `clientOverrideFor('controller')` → `setPrimary('SelfDeployedQwen')` → the
- *     declaration in `baml_src/` → the fake, reporting `SELF_DEPLOYED_MODEL`
+ *     declaration in `baml_src/` → the fake, reporting `LARGE_LLM_MODEL`
  *
  * The registry is rebuilt PER CALL, through a getter, because `setPrimary` is a
  * mutation: one shared instance would keep `SelfDeployedQwen` as primary after the

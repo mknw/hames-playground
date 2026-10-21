@@ -2,7 +2,7 @@
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
-import { SELF_DEPLOYED_CLIENT_NAME } from '../../../lib/inference/self-deployed-activity.server'
+import { SELF_DEPLOYED_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
 /**
  * Event-level token/cost accounting (#122).
  *

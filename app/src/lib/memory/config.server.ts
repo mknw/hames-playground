@@ -1,5 +1,5 @@
-import { normalizeStoredInferenceTier } from '../inference/tier-value'
 /** App policy for memory (#419 M5c). Constructing this bag performs no IO. */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern, MemoryConfig } from '@hames-ai/harness-patterns'
 import { harnessUsesMemory } from '@hames-ai/harness-patterns/pattern-capabilities'

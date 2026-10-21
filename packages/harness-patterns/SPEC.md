@@ -3656,7 +3656,7 @@ packages/harness-baml/                   # The BAML companion PACKAGE (Lane A6) 
 
 Both trees are abridged to the files this spec refers to; `patterns/` is a
 directory of the CORE package, not of the BAML companion. The live self-hosted
-endpoint checks (`smoke-self-deployed.ts`, `smoke-self-deployed-load.ts`) are the HOST's, not
+endpoint checks (`smoke-self-deployed.ts`, `smoke-large-load.ts`) are the HOST's, not
 either package's — they live in `app/src/lib/inference/scripts/`.
 
 ## Design Principles

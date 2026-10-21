@@ -5,7 +5,7 @@
  * configuration at MODULE LOAD rather than per call:
  *
  *   - `mcp-client.server.ts` freezes `MCP_GATEWAY_URL` into a `const`.
- *   - `clients.server.ts` runs `assertSelfDeployedConfigured()` at import when
+ *   - `clients.server.ts` runs `assertLargeModelConfigured()` at import when
  *     `USE_SELF_DEPLOYED_INFERENCE=1`.
  *
  * So every app module is reached through a dynamic `import()` inside
@@ -215,7 +215,7 @@ async function boot(): Promise<AppHandles> {
   const fakeLlm = await startFakeLlm()
   if (IS_HERMETIC) {
     // The shipped seam: `SelfDeployedQwen` reads this per call. The `/v1` suffix is
-    // required by `assertSelfDeployedConfigured()`, which still runs.
+    // required by `assertLargeModelConfigured()`, which still runs.
     process.env.LARGE_LLM_BASE_URL = fakeLlm.baseUrl
     process.env.LARGE_LLM_API_KEY = 'e2e-fake-key'
     // The private tier's SECOND model since 2026-08-26: `describe` runs on the 4B
@@ -396,15 +396,15 @@ async function boot(): Promise<AppHandles> {
     },
 
     async goToSleep() {
-      const activity = await import('../../src/lib/inference/self-deployed-activity.server')
+      const activity = await import('../../src/lib/inference/large-activity.server')
       const wake = await import('../../src/lib/inference/wake.server')
-      activity.resetSelfDeployedActivity()
+      activity.resetLargeActivity()
       const coldStart = await import('../../src/lib/inference/cold-start.server')
       coldStart.resetSmallActivity()
       wake.resetSmallWake()
       // And drop any ping still parked on the shared symbol, so a scenario that
       // just failed one does not attach to its rejected promise.
-      wake.resetSelfDeployedWake()
+      wake.resetLargeWake()
     },
 
     async wipe() {

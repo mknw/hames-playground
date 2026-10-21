@@ -3,7 +3,7 @@ import {
   ensurePrivateTierAwake,
   ensureSmallAwake,
   resetSmallWake,
-  resetSelfDeployedWake,
+  resetLargeWake,
   SMALL_LLM_WAKE_FAILED,
   NO_FALLBACK,
   DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS,
@@ -28,9 +28,9 @@ import {
   type ColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
-  noteSelfDeployedCallCompleted,
-  resetSelfDeployedActivity,
-} from '../../../lib/inference/self-deployed-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+} from '../../../lib/inference/large-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -42,9 +42,9 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.useFakeTimers()
   resetSmallWake()
-  resetSelfDeployedWake()
+  resetLargeWake()
   resetSmallActivity()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   resetSmallColdStartHistory()
   resetColdStartHistory()
   vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
@@ -67,7 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   resetSmallActivity()
   resetSmallColdStartHistory()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   resetColdStartHistory()
 })
 
@@ -291,13 +291,13 @@ describe('small box wake', () => {
     await runWithColdStartWatch(
       (e) => notices.push(e),
       async () => {
-        noteBoxCallStarting('self_deployed')
+        noteBoxCallStarting('large')
         noteBoxCallStarting('small')
       },
     )
     expect(notices).toEqual([{ estimateMs: 400_000, basis: 'measured', samples: 1 }])
     resetSmallColdStartHistory()
-    noteSelfDeployedCallCompleted()
+    noteLargeCallCompleted()
     notices.length = 0
     await runWithColdStartWatch(
       (e) => notices.push(e),

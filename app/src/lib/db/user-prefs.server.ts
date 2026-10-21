@@ -1,4 +1,3 @@
-import { normalizeStoredInferenceTier } from '../inference/tier-value'
 /**
  * Per-user preferences (Postgres) — Server Only.
  *
@@ -29,6 +28,7 @@ import { normalizeStoredInferenceTier } from '../inference/tier-value'
  * the session and pass it in — the same contract `turn.server.ts` and
  * `action-runner.server.ts` carry.
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
 import {

@@ -1,4 +1,3 @@
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /**
  * self-deployed warm-state — Server Only
  *
@@ -24,7 +23,7 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  * now" would need a hook at every adapter for no extra information. It is
  * incremented at turn ENTRY, though, so on its own it is a statement of intent,
  * not of warmth — which is why a running turn with no recent completed call
- * reads as `starting` rather than `running` (see {@link SelfDeployedWarmth}).
+ * reads as `starting` rather than `running` (see {@link LargeWarmth}).
  *
  * ## MULTI-INSTANCE CAVEAT (deliberate, and a preview-only compromise)
  *
@@ -40,6 +39,7 @@ import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
  * Restarting the app also resets the clock to "cold" while the box may still be
  * warm — same direction, same reasoning.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
@@ -54,12 +54,12 @@ export const SELF_DEPLOYED_CLIENT_NAME = 'SelfDeployedQwen'
  * A COPY, and the copy is the smaller evil. It exists for the wake ping
  * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
  * it has to name a model, vLLM 400s any other id, and BAML exports nothing that
- * would let this be read from the declaration. `self-deployed-wake.test.ts` parses that
+ * would let this be read from the declaration. `large-wake.test.ts` parses that
  * line out of the `.baml` file and pins it equal to this constant, so the
  * failure mode of a re-deployment under a new id is a red test rather than a
  * wake ping that 400s on every first turn of every session.
  */
-export const SELF_DEPLOYED_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
 
 /** Default scale-down delay, in seconds — the live deployment's setting. The
  *  committed default used to sit at 180 on the argument that a default tracking
@@ -82,7 +82,7 @@ export const DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = 300
  * change it without a rebuild, and clamped to a positive integer: a `0` or a
  * garbage value would render as "scaling down now, forever".
  */
-export function selfDeployedScaledownSeconds(): number {
+export function largeScaledownSeconds(): number {
   const raw = inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')
   if (raw === undefined) return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS
   const parsed = Number(raw)
@@ -99,13 +99,13 @@ export function selfDeployedScaledownSeconds(): number {
 /** Process-local state. Parked on a `globalThis` symbol for the same reason the
  *  routine scheduler is: a dev-server HMR reload re-evaluates this module, and
  *  a fresh module scope would silently reset the clock to "cold". */
-const STATE_KEY = Symbol.for('hames-app.self-deployed-activity')
-interface SelfDeployedState {
+const STATE_KEY = Symbol.for('hames-app.large-activity')
+interface LargeState {
   lastCompletedAt: number | null
   inFlight: number
 }
-type SelfDeployedGlobal = typeof globalThis & { [STATE_KEY]?: SelfDeployedState }
-const state: SelfDeployedState = ((globalThis as SelfDeployedGlobal)[STATE_KEY] ??= {
+type LargeGlobal = typeof globalThis & { [STATE_KEY]?: LargeState }
+const state: LargeState = ((globalThis as LargeGlobal)[STATE_KEY] ??= {
   lastCompletedAt: null,
   inFlight: 0,
 })
@@ -117,7 +117,7 @@ const state: SelfDeployedState = ((globalThis as SelfDeployedGlobal)[STATE_KEY] 
  *  one), and the wake ping, which is not a BAML call and so has no sample. The
  *  ping stamps only on success, and `wake.server.ts` says why that is not the
  *  same rule rather than an inconsistency. */
-export function noteSelfDeployedCallCompleted(at: number = Date.now()): void {
+export function noteLargeCallCompleted(at: number = Date.now()): void {
   state.lastCompletedAt = at
 }
 
@@ -138,13 +138,13 @@ export function endSelfDeployedTurn(): void {
 }
 
 /** Test-only reset. */
-export function resetSelfDeployedActivity(): void {
+export function resetLargeActivity(): void {
   state.lastCompletedAt = null
   state.inFlight = 0
 }
 
 /** What the header renders. */
-export interface SelfDeployedWarmth {
+export interface LargeWarmth {
   /**
    * - `running` — a turn is on the box right now, AND the box was already warm
    *   when it started (so it implies warm, which is what the word promises).
@@ -170,8 +170,8 @@ export interface SelfDeployedWarmth {
  * The current warm state. Pure w.r.t. `now`, which is what makes the countdown
  * arithmetic testable without faking a clock at every call site.
  */
-export function selfDeployedWarmth(now: number = Date.now()): SelfDeployedWarmth {
-  const scaledownSeconds = selfDeployedScaledownSeconds()
+export function largeWarmth(now: number = Date.now()): LargeWarmth {
+  const scaledownSeconds = largeScaledownSeconds()
   const last = state.lastCompletedAt
 
   // A running turn keeps the box awake regardless of when the last call
@@ -210,13 +210,13 @@ export function selfDeployedWarmth(now: number = Date.now()): SelfDeployedWarmth
 /**
  * When this process last saw a call to the box FINISH, or `null` if it never
  * has. The narrow accessor exists for one caller — `inference/cold-start.server.ts`
- * — which needs a claim {@link selfDeployedWarmth} deliberately collapses: `starting`
+ * — which needs a claim {@link largeWarmth} deliberately collapses: `starting`
  * covers both "we have seen the box go cold" and "we have never seen it at
  * all", and only the first is evidence a cold start is actually being paid.
  * Reporting a measurement taken under the second would let "the box was warm
  * and this process had not noticed" enter the cold-start history as a
  * four-second cold start.
  */
-export function selfDeployedLastCallCompletedAt(): number | null {
+export function largeLastCallCompletedAt(): number | null {
   return state.lastCompletedAt
 }

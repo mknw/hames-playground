@@ -3,7 +3,7 @@
  *
  * Bridges `harness-patterns`' LLM-usage observer to the three things the
  * preview header shows: the global counters (`preview-counters.server.ts`), the
- * self-hosted box's warm clock (`inference/self-deployed-activity.server.ts`), and the
+ * self-hosted box's warm clock (`inference/large-activity.server.ts`), and the
  * rolling per-tier call latency (`call-latency.server.ts`) — plus a fourth
  * consumer that is not on the header at all: the chat's cold-start notice
  * (`inference/cold-start.server.ts`), which closes the loop on the wait it
@@ -52,9 +52,9 @@ import {
   type LlmUsageSample,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import {
-  noteSelfDeployedCallCompleted,
+  noteLargeCallCompleted,
   SELF_DEPLOYED_CLIENT_NAME,
-} from '../inference/self-deployed-activity.server'
+} from '../inference/large-activity.server'
 import { noteSmallCallCompleted, settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
@@ -106,7 +106,7 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
     sample.clientName === SELF_DEPLOYED_CLIENT_NAME ||
     THINKING_CLIENTS.has(sample.clientName ?? '')
   ) {
-    noteSelfDeployedCallCompleted(at)
+    noteLargeCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and
     // BAML's own timing for it is the next estimate's raw material. No-op on
     // every other sample, and on a turn that announced nothing — so the

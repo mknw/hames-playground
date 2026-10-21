@@ -244,8 +244,15 @@ describe('chooseConversationTier', () => {
     expect(setStoredInferenceTier).not.toHaveBeenCalled()
   })
 
+  it("reads a pre-rename tab's legacy literal as self_deployed and stores the new one", async () => {
+    configureSelfDeployed()
+    await expect(chooseConversationTier('conv-1', 'user-1', 'verda')).resolves.toBe('self_deployed')
+    expect(setConversationInferenceTier).toHaveBeenCalledWith('conv-1', 'user-1', 'self_deployed')
+    expect(setStoredInferenceTier).toHaveBeenCalledWith('user-1', 'self_deployed')
+  })
+
   it('refuses a tier it does not recognise rather than storing it', async () => {
-    for (const bad of ['openai', null, { tier: 'self_deployed' }, '']) {
+    for (const bad of ['openai', null, { tier: 'self_deployed' }, '', 'Verda', 'private']) {
       await expect(chooseConversationTier('conv-1', 'user-1', bad)).rejects.toThrow(
         /Unknown inference tier/,
       )

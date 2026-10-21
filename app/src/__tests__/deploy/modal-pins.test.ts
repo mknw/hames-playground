@@ -56,7 +56,7 @@ const selfDeployedClient = read(
   '../../../../packages/harness-baml/baml_src/self-deployed-client.baml',
 )
 const settings = read('../../lib/settings.ts')
-const selfDeployedActivity = read('../../lib/inference/self-deployed-activity.server.ts')
+const largeActivity = read('../../lib/inference/large-activity.server.ts')
 const coldStart = read('../../lib/inference/cold-start.server.ts')
 const smoke27b = read('../../../../deploy/modal/smoke_27b.py')
 const app = read('../../../../deploy/modal/hames_small_models.py')
@@ -331,15 +331,13 @@ describe('deploy/modal: the 27B box (Qwen27B)', () => {
   it("idles as long as the app assumes, and the smoke sends the client's own body", () => {
     // The app's cold-start countdown reads LARGE_LLM_SCALEDOWN_SECONDS; its default
     // and this box's must agree, or the countdown is wrong on a default deploy.
-    const appDefault = selfDeployedActivity.match(
-      /DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = (\d+)/,
-    )?.[1]
+    const appDefault = largeActivity.match(/DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = (\d+)/)?.[1]
     expect(appDefault).toBeTruthy()
     expect(bigApp).toContain(`_env("HAMES_MODAL_27B_SCALEDOWN_S", "${appDefault}")`)
     const clientMax = selfDeployedClient.match(/^\s*max_tokens (\d+)$/m)?.[1]
     const clientTemperature = selfDeployedClient.match(/^\s*temperature ([\d.]+)$/m)?.[1]
     expect(clientMax && clientTemperature).toBeTruthy()
-    const body = smoke27b.match(/^SELF_DEPLOYED_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
+    const body = smoke27b.match(/^LARGE_LLM_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
     expect(body).toContain(`"max_tokens": ${clientMax},`)
     expect(body).toContain(`"temperature": ${clientTemperature},`)
     expect(body).toContain('"chat_template_kwargs": {"enable_thinking": False}')

@@ -195,16 +195,16 @@ vi.mock('../../../lib/inference/tier.server', () => ({
 
 const beginSelfDeployedTurn = vi.fn()
 const endSelfDeployedTurn = vi.fn()
-vi.mock('../../../lib/inference/self-deployed-activity.server', () => ({
+vi.mock('../../../lib/inference/large-activity.server', () => ({
   beginSelfDeployedTurn: () => beginSelfDeployedTurn(),
   endSelfDeployedTurn: () => endSelfDeployedTurn(),
   // The cold-start watch reads these three to decide whether a wait is worth
   // announcing. Stubbed as a box nobody has called ("starting", never seen), so
   // a turn that arms a watch actually fires its notice — otherwise the
   // concurrent-wake test below would pass by announcing nothing at all.
-  selfDeployedWarmth: () => ({ state: 'starting', secondsUntilScaledown: null }),
-  selfDeployedLastCallCompletedAt: () => null,
-  selfDeployedScaledownSeconds: () => 300,
+  largeWarmth: () => ({ state: 'starting', secondsUntilScaledown: null }),
+  largeLastCallCompletedAt: () => null,
+  largeScaledownSeconds: () => 300,
   // The name `clientOverrideFor` compares against to decide whether a bag is
   // about to wait on the scale-to-zero box.
   SELF_DEPLOYED_CLIENT_NAME: 'SelfDeployedQwen',
@@ -212,7 +212,7 @@ vi.mock('../../../lib/inference/self-deployed-activity.server', () => ({
 
 // The wake ping is MOCKED here, and the split is deliberate: what this file owns
 // is the turn's scope plumbing — is the box woken before the harness runs, on the
-// right tier, and does a failure end the turn — while `self-deployed-wake.test.ts` owns
+// right tier, and does a failure end the turn — while `large-wake.test.ts` owns
 // what the ping puts on the wire and how it dedupes. Running the real one here
 // would open a socket from a scope test.
 const ensurePrivateTierAwake = vi.fn(async () => {})

@@ -154,7 +154,7 @@ async function main(): Promise<void> {
   const results: ScenarioResult[] = []
   // Sequential on purpose. The self-hosted endpoint is ONE box: running the
   // scenarios concurrently would measure queueing rather than the client, and
-  // `smoke-self-deployed-load.ts` is where throughput under concurrency belongs.
+  // `smoke-large-load.ts` is where throughput under concurrency belongs.
   for (const scenario of scenarios) {
     process.stdout.write(`   ▶ ${scenario.id} … `)
     const result = await runScenario(scenario, routing)

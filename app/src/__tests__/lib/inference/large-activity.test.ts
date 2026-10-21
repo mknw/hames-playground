@@ -18,44 +18,44 @@ import {
   DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS,
   beginSelfDeployedTurn,
   endSelfDeployedTurn,
-  noteSelfDeployedCallCompleted,
-  resetSelfDeployedActivity,
-  selfDeployedScaledownSeconds,
-  selfDeployedWarmth,
-} from '../../../lib/inference/self-deployed-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+  largeScaledownSeconds,
+  largeWarmth,
+} from '../../../lib/inference/large-activity.server'
 
 const NOW = 1_700_000_000_000
 
 beforeEach(() => {
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   delete process.env.LARGE_LLM_SCALEDOWN_SECONDS
 })
 
 afterEach(() => {
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   delete process.env.LARGE_LLM_SCALEDOWN_SECONDS
 })
 
-describe('selfDeployedScaledownSeconds', () => {
+describe('largeScaledownSeconds', () => {
   it('defaults to the deployment’s current 300s', () => {
     // Owner-confirmed 2026-08-26. Pinned as a literal, not just as "whatever
     // the constant says": the countdown is a claim about a deployment the app
     // cannot interrogate, so the number is the assertion. `app/.env.example`
     // carries the same value uncommented and the two must not drift.
-    expect(selfDeployedScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
+    expect(largeScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
     expect(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS).toBe(300)
   })
 
   it('takes the env value, so production can raise it without a rebuild', () => {
     process.env.LARGE_LLM_SCALEDOWN_SECONDS = '900'
-    expect(selfDeployedScaledownSeconds()).toBe(900)
+    expect(largeScaledownSeconds()).toBe(900)
   })
 
   it('falls back rather than rendering "scaling down now, forever"', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     for (const bad of ['0', '-5', 'soon', '']) {
       process.env.LARGE_LLM_SCALEDOWN_SECONDS = bad
-      expect(selfDeployedScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
+      expect(largeScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
     }
     // A silent fallback would hide a misconfigured deployment behind a
     // plausible countdown.
@@ -64,12 +64,12 @@ describe('selfDeployedScaledownSeconds', () => {
   })
 })
 
-describe('selfDeployedWarmth', () => {
+describe('largeWarmth', () => {
   it('reports unknown — NOT cold — before this process has seen a call', () => {
     // The distinction is the point: another instance may be keeping the box
     // warm, and presenting that guess as "cold" would be a measurement the
     // process never made.
-    expect(selfDeployedWarmth(NOW)).toEqual({
+    expect(largeWarmth(NOW)).toEqual({
       state: 'unknown',
       secondsUntilScaledown: null,
       scaledownSeconds: 300,
@@ -77,22 +77,22 @@ describe('selfDeployedWarmth', () => {
   })
 
   it('is warm with a countdown inside the scale-down window', () => {
-    noteSelfDeployedCallCompleted(NOW)
-    expect(selfDeployedWarmth(NOW + 30_000)).toMatchObject({
+    noteLargeCallCompleted(NOW)
+    expect(largeWarmth(NOW + 30_000)).toMatchObject({
       state: 'warm',
       secondsUntilScaledown: 270,
     })
   })
 
   it('rounds the countdown UP, so it never shows 0 while still warm', () => {
-    noteSelfDeployedCallCompleted(NOW)
-    expect(selfDeployedWarmth(NOW + 299_500).secondsUntilScaledown).toBe(1)
+    noteLargeCallCompleted(NOW)
+    expect(largeWarmth(NOW + 299_500).secondsUntilScaledown).toBe(1)
   })
 
   it('goes cold exactly at the window, and stays cold', () => {
-    noteSelfDeployedCallCompleted(NOW)
-    expect(selfDeployedWarmth(NOW + 300_000).state).toBe('cold')
-    expect(selfDeployedWarmth(NOW + 10_000_000)).toEqual({
+    noteLargeCallCompleted(NOW)
+    expect(largeWarmth(NOW + 300_000).state).toBe('cold')
+    expect(largeWarmth(NOW + 10_000_000)).toEqual({
       state: 'cold',
       secondsUntilScaledown: null,
       scaledownSeconds: 300,
@@ -101,8 +101,8 @@ describe('selfDeployedWarmth', () => {
 
   it('follows the configured window rather than the default', () => {
     process.env.LARGE_LLM_SCALEDOWN_SECONDS = '900'
-    noteSelfDeployedCallCompleted(NOW)
-    expect(selfDeployedWarmth(NOW + 300_000)).toMatchObject({
+    noteLargeCallCompleted(NOW)
+    expect(largeWarmth(NOW + 300_000)).toMatchObject({
       state: 'warm',
       secondsUntilScaledown: 600,
       scaledownSeconds: 900,
@@ -112,9 +112,9 @@ describe('selfDeployedWarmth', () => {
   it('reports running while a turn is in flight, with no countdown ticking down', () => {
     // Scale-down cannot happen while work is on the box, so a countdown here
     // would be counting towards something that will not occur.
-    noteSelfDeployedCallCompleted(NOW)
+    noteLargeCallCompleted(NOW)
     beginSelfDeployedTurn()
-    const warmth = selfDeployedWarmth(NOW + 295_000)
+    const warmth = largeWarmth(NOW + 295_000)
     expect(warmth.state).toBe('running')
     expect(warmth.secondsUntilScaledown).toBe(300)
   })
@@ -126,7 +126,7 @@ describe('selfDeployedWarmth', () => {
     // pay the multi-minute cold start this indicator exists to warn about —
     // and tells everyone else reading the strip to send into the same wait.
     beginSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW)).toMatchObject({
+    expect(largeWarmth(NOW)).toMatchObject({
       state: 'starting',
       secondsUntilScaledown: null,
     })
@@ -136,29 +136,29 @@ describe('selfDeployedWarmth', () => {
     // Same claim, reached the other way: the box scaled down at some point
     // after that call, so this turn is paying a cold start too. Only a call
     // inside the window is evidence of warmth.
-    noteSelfDeployedCallCompleted(NOW)
+    noteLargeCallCompleted(NOW)
     beginSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW + 301_000).state).toBe('starting')
+    expect(largeWarmth(NOW + 301_000).state).toBe('starting')
   })
 
   it('returns to the countdown when the turn ends', () => {
-    noteSelfDeployedCallCompleted(NOW)
+    noteLargeCallCompleted(NOW)
     beginSelfDeployedTurn()
     endSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW + 60_000)).toMatchObject({
+    expect(largeWarmth(NOW + 60_000)).toMatchObject({
       state: 'warm',
       secondsUntilScaledown: 240,
     })
   })
 
   it('tracks concurrent turns rather than the last one to finish', () => {
-    noteSelfDeployedCallCompleted(NOW)
+    noteLargeCallCompleted(NOW)
     beginSelfDeployedTurn()
     beginSelfDeployedTurn()
     endSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW).state).toBe('running')
+    expect(largeWarmth(NOW).state).toBe('running')
     endSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW).state).toBe('warm')
+    expect(largeWarmth(NOW).state).toBe('warm')
   })
 
   it('clamps the in-flight gauge at zero, so a later turn still registers', () => {
@@ -169,7 +169,7 @@ describe('selfDeployedWarmth', () => {
     endSelfDeployedTurn()
     endSelfDeployedTurn()
     beginSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW).state).toBe('starting')
+    expect(largeWarmth(NOW).state).toBe('starting')
   })
 
   it('cannot be pinned to running by an unbalanced decrement', () => {
@@ -179,7 +179,7 @@ describe('selfDeployedWarmth', () => {
     endSelfDeployedTurn()
     beginSelfDeployedTurn()
     endSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
   })
 
   it('does NOT invent warmth when a turn ends without a Verda call', () => {
@@ -188,6 +188,6 @@ describe('selfDeployedWarmth', () => {
     // up for three minutes.
     beginSelfDeployedTurn()
     endSelfDeployedTurn()
-    expect(selfDeployedWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
   })
 })

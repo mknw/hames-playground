@@ -11,7 +11,7 @@ a claim it does not make.
 | 1   | Unit + integration — modules and components in jsdom, coverage floors enforced      | `pnpm test:run --coverage`                                                   | a Postgres, or `CI=1` to skip its DB-backed tests (below) | **yes**; its DB tests on PRs only (below) |
 | 2   | App-path e2e — whole conversations through the real server action and the SSE route | `pnpm test:e2e`                                                              | Postgres                                                  | no                                        |
 | 3   | Browser e2e — Chromium against a real `vinxi dev`, both themes, screenshots, axe    | `pnpm test:e2e:browser`                                                      | Postgres, a browser, a dev-server boot                    | no                                        |
-| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-self-deployed.ts`, `smoke-self-deployed-load.ts` | a provider key or a GPU endpoint                          | never                                     |
+| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-self-deployed.ts`, `smoke-large-load.ts` | a provider key or a GPU endpoint                          | never                                     |
 
 Layers 1–3 are **hermetic**: no provider key, no GPU, no bill. Layer 4 is not,
 and is coordinated by hand.

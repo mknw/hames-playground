@@ -13,6 +13,7 @@ import { spawn } from 'node-pty'
 vi.mock('../../lib/db/client.server', () => ({ query: vi.fn() }))
 import { assertPrivateTierConfigured } from '../../lib/inference/config.server'
 import { defaultInferenceTier } from '../../lib/db/user-prefs.server'
+import { LEGACY_INFERENCE_ENV } from '@hames-ai/harness-baml/inference-env.server'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..')
 const read = (file: string) => readFileSync(path.join(REPO, file), 'utf8')
@@ -471,6 +472,27 @@ describe('private-only bootstrap (#653)', () => {
       { env: shellEnv(dir) as unknown as NodeJS.ProcessEnv, encoding: 'utf8' },
     )
     expect(out).toBe('')
+  })
+})
+
+describe('the shell suite names real settings', () => {
+  // `bootstrap-vps.test.sh` only runs on Linux CI, and its assertions are "something was
+  // flagged" — a mechanical rename once left it writing a key that exists nowhere
+  // while both cases still flagged, for the wrong reason. This is the check that
+  // runs where the rename is made.
+  it('every inference setting it writes is a canonical or legacy name the app reads', () => {
+    const real = new Set<string>([
+      ...Object.keys(REQUIRED),
+      ...Object.entries(LEGACY_INFERENCE_ENV).flat(),
+    ])
+    const used = new Set(
+      // `printf "...\nNAME=..."` writes a literal backslash-n, which hides the word boundary.
+      read('scripts/bootstrap-vps.test.sh')
+        .replaceAll('\\n', '\n')
+        .match(/\b(?:LARGE_LLM|SMALL_LLM|VERDA|SELF_DEPLOYED)_[A-Z0-9_]+\b/g),
+    )
+    expect(used.size).toBeGreaterThan(0)
+    expect([...used].filter((name) => !real.has(name))).toEqual([])
   })
 })
 

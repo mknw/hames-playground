@@ -238,7 +238,7 @@ describe('accounting coverage across roles', () => {
    * to show.
    */
   const UNACCOUNTED: Record<string, string> = {
-    'src/lib/inference/scripts/smoke-self-deployed-load.ts:LoopController':
+    'src/lib/inference/scripts/smoke-large-load.ts:LoopController':
       'A manual live-load measurement run by hand against the endpoint, not a path any turn ' +
       'takes. Counting it would put a benchmark burst into the preview header as if users had ' +
       'spent it. Excluded from coverage for the same reason.',

@@ -1,4 +1,3 @@
-import { applyLegacyInferenceEnv } from './inference-env.server'
 /**
  * Client resolution — Server Only
  *
@@ -115,6 +114,7 @@ import { applyLegacyInferenceEnv } from './inference-env.server'
  * core's `run-frame.test.ts` as well.
  */
 
+import { applyLegacyInferenceEnv } from './inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
@@ -218,7 +218,7 @@ export function configureInferencePolicy(policy: InferenceTierPolicy): void {
  *  seen by the next step. */
 export interface CostRates {
   eurPerUsd: () => number
-  selfDeployedEurPerHour: () => number
+  largeEurPerHour: () => number
 }
 
 // Package-side fallbacks, deliberately LITERALS: settings.ts is client-safe
@@ -231,7 +231,7 @@ const SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
 
 let costRates: CostRates = {
   eurPerUsd: () => SEAM_DEFAULT_EUR_PER_USD,
-  selfDeployedEurPerHour: () => SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+  largeEurPerHour: () => SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR,
 }
 
 /** Feed the host's EUR rates in. Called once at the composition root. */
@@ -277,7 +277,7 @@ export type CostEstimator = (
 
 export interface CostPricing {
   estimate: CostEstimator
-  /** @deprecated Single-client compatibility form; uses selfDeployedEurPerHour.
+  /** @deprecated Single-client compatibility form; uses largeEurPerHour.
    * Includes usage-less attempts for this client in the cost floor. */
   timePricedClient?: string
   /** Per-client rate readers, resolved once per step. Includes usage-less
@@ -515,7 +515,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   //     retriever's query rewrite, the citation picker — were queueing behind a
   //     single-replica scale-to-zero 27B. A turn with four tool results is four
   //     more calls into that queue, where concurrency is queueing rather than
-  //     scaling (measured 2026-08-25, `smoke-self-deployed-load.ts`).
+  //     scaling (measured 2026-08-25, `smoke-large-load.ts`).
   //  2. The POSTURE is unchanged, which is the only reason this is allowed at
   //     all: `SMALL_LLM_BASE_URL` is infrastructure the company runs, so the
   //     2026-08-26 rule — no call made under the private tier may be sent to any

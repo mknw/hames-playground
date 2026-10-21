@@ -78,16 +78,16 @@ import {
 } from '../../../lib/inference/cold-start.server'
 import {
   resetSmallWake,
-  resetSelfDeployedWake,
-  SELF_DEPLOYED_WAKE_FAILED,
+  resetLargeWake,
+  LARGE_LLM_WAKE_FAILED,
 } from '../../../lib/inference/wake.server'
 import {
-  noteSelfDeployedCallCompleted,
-  resetSelfDeployedActivity,
+  noteLargeCallCompleted,
+  resetLargeActivity,
   beginSelfDeployedTurn,
   endSelfDeployedTurn,
-  selfDeployedScaledownSeconds,
-} from '../../../lib/inference/self-deployed-activity.server'
+  largeScaledownSeconds,
+} from '../../../lib/inference/large-activity.server'
 import type { VerdaControlPlaneProbe } from '../../../lib/inference/verda-control-plane.server'
 
 const ENV_KEYS = [
@@ -159,12 +159,12 @@ beforeEach(() => {
     at: 0,
   })
   resetCallLatency()
-  resetSelfDeployedWake()
+  resetLargeWake()
   resetSmallWake()
   resetSmallActivity()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   // The wake ping is a hand-rolled `fetch`; stubbing it is what keeps this file
-  // hermetic while still exercising the real `ensureSelfDeployedAwake`, which is the
+  // hermetic while still exercising the real `ensureLargeAwake`, which is the
   // whole point of the cases below — a mock of that function would prove the
   // action calls SOMETHING, not that it joins the dedupe every other caller uses.
   fetchMock = vi.fn(
@@ -178,10 +178,10 @@ let fetchMock: ReturnType<typeof vi.fn>
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  resetSelfDeployedWake()
+  resetLargeWake()
   resetSmallWake()
   resetSmallActivity()
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k]
     else process.env[k] = saved[k]
@@ -257,7 +257,7 @@ describe('getPreviewHeaderState', () => {
   })
 })
 
-// The display state machine: completion evidence (`selfDeployedWarmth`'s clock) says
+// The display state machine: completion evidence (`largeWarmth`'s clock) says
 // `ready`; the control-plane probe decides cold vs starting when there is none;
 // and `unknown` is reachable ONLY through the probe failing. Each case here
 // pins one rule, named in `displayWarmth`.
@@ -302,7 +302,7 @@ describe('the warmth display mapping', () => {
       reason: 'http 500',
       at: 0,
     })
-    noteSelfDeployedCallCompleted()
+    noteLargeCallCompleted()
 
     expect((await getPreviewHeaderState()).warmth.state).toBe('ready')
   })
@@ -347,7 +347,7 @@ describe('the warmth display mapping', () => {
     // The warm-to-cold regression: the process-local window has run out and
     // the control plane OBSERVES the scale-down, rather than the strip
     // guessing from silence.
-    noteSelfDeployedCallCompleted(Date.now() - (selfDeployedScaledownSeconds() + 5) * 1000)
+    noteLargeCallCompleted(Date.now() - (largeScaledownSeconds() + 5) * 1000)
 
     expect((await getPreviewHeaderState()).warmth.state).toBe('cold')
   })
@@ -355,7 +355,7 @@ describe('the warmth display mapping', () => {
   it('answers starting when the window has elapsed but a replica is still present', async () => {
     // Replica present + no completion evidence = starting, per the settled
     // rule — the count is all the display machine asks of the probe.
-    noteSelfDeployedCallCompleted(Date.now() - (selfDeployedScaledownSeconds() + 5) * 1000)
+    noteLargeCallCompleted(Date.now() - (largeScaledownSeconds() + 5) * 1000)
     probeVerdaReplicas.mockResolvedValue({
       ok: true,
       replicaCount: 2,
@@ -418,7 +418,7 @@ describe('igniteSelfDeployedBox', () => {
     // The property the owner asked for by name. The deployment is a single
     // replica where concurrency is queueing, so a click that opened its own ping
     // beside a turn's would make both wait two cold starts. It holds because
-    // this action calls the SAME `ensureSelfDeployedAwake` the turn runner does; a
+    // this action calls the SAME `ensureLargeAwake` the turn runner does; a
     // second wake path would not inherit it.
     configureSelfDeployed()
     const releases: (() => void)[] = []
@@ -443,10 +443,10 @@ describe('igniteSelfDeployedBox', () => {
   })
 
   it('is a no-op on a box that is already up', async () => {
-    // Clicking a warm indicator must not bill GPU seconds. `ensureSelfDeployedAwake`
-    // returns on `selfDeployedProvenWarm` before touching the network.
+    // Clicking a warm indicator must not bill GPU seconds. `ensureLargeAwake`
+    // returns on `largeProvenWarm` before touching the network.
     configureSelfDeployed()
-    noteSelfDeployedCallCompleted()
+    noteLargeCallCompleted()
     noteSmallCallCompleted()
 
     const state = await igniteSelfDeployedBox()
@@ -467,7 +467,7 @@ describe('igniteSelfDeployedBox', () => {
     shortWakeBudget()
     fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
 
-    await expect(igniteSelfDeployedBox()).rejects.toThrow(SELF_DEPLOYED_WAKE_FAILED)
+    await expect(igniteSelfDeployedBox()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
     // It kept trying rather than giving up on the first 5xx — the property that
     // makes this case a poll running out, and not a refusal by another name.
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1)
@@ -485,7 +485,7 @@ describe('igniteSelfDeployedBox', () => {
         new Response('unknown model', { status: url.includes('/small/') ? 200 : 400 }),
     )
 
-    await expect(igniteSelfDeployedBox()).rejects.toThrow(SELF_DEPLOYED_WAKE_FAILED)
+    await expect(igniteSelfDeployedBox()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

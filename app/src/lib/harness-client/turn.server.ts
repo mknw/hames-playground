@@ -101,10 +101,7 @@ import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
 import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
-import {
-  beginSelfDeployedTurn,
-  endSelfDeployedTurn,
-} from '../inference/self-deployed-activity.server'
+import { beginSelfDeployedTurn, endSelfDeployedTurn } from '../inference/large-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'

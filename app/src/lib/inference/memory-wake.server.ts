@@ -170,7 +170,7 @@ const state: MemoryWakeState = ((globalThis as MemoryWakeGlobal)[MEMORY_WAKE_KEY
  * Resolves as soon as every requested target answered its forward pass — which,
  * on a warm box, is the first attempt: one cheap request, the cheapest warm
  * check there is. (There is deliberately no warm-clock skip like the self-deployed
- * wake's `selfDeployedProvenWarm`: the embedder has no usage observer to stamp,
+ * wake's `largeProvenWarm`: the embedder has no usage observer to stamp,
  * and its probe costs milliseconds — it IS the warm check.)
  */
 export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {

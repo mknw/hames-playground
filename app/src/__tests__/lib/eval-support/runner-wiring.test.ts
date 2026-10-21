@@ -182,13 +182,11 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
   const s = run()
   expect(s).toContain('flipGate: flipGate(')
   expect(s).toContain('budget.beginInfrastructure(active, started, [')
-  expect(s).toContain('seconds: selfDeployedScaledownSeconds()')
+  expect(s).toContain('seconds: largeScaledownSeconds()')
   expect(s).toContain('seconds: smallScaledownSeconds()')
-  expect(s).toContain(
-    'budget.infrastructure(active, Date.now() - started, selfDeployedRate + smallRate)',
-  )
+  expect(s).toContain('budget.infrastructure(active, Date.now() - started, largeRate + smallRate)')
   expect(s).toMatch(
-    /floorHourlyRate\(\s*rates\.selfDeployedEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
+    /floorHourlyRate\(\s*rates\.largeEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
   )
   expect(s).toContain('floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)')
   expect(read('scripts/release-check.ts')).toContain('eval:general-next --live')

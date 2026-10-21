@@ -1,4 +1,3 @@
-import { normalizeStoredInferenceTier } from '../inference/tier-value'
 /**
  * The app's half of memory confirmation (#419 M6 = #433 S11) — Server Only.
  *
@@ -39,6 +38,7 @@ import { normalizeStoredInferenceTier } from '../inference/tier-value'
  * vectors were computed when the proposal was prepared, and the tier stamp is
  * the one the proposing turn ran under.
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   deserializeContext,

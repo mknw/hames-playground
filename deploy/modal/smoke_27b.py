@@ -27,7 +27,7 @@ from smoke_probes import PROBE_URL
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 
 # The body `SelfDeployedQwen` sends (packages/harness-baml/baml_src/self-deployed-client.baml).
-SELF_DEPLOYED_BODY = {
+LARGE_LLM_BODY = {
     "model": QWEN27B_MODEL,
     "messages": [
         {"role": "system", "content": "Reply with one JSON object and nothing else."},
@@ -92,7 +92,7 @@ def main() -> int:
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", WAKE_BODY, timeout=60)
     check("wake ping: 200", status == 200, f"{seconds:.2f}s")
 
-    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", SELF_DEPLOYED_BODY, timeout=180)
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", LARGE_LLM_BODY, timeout=180)
     choice = (body.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     text = (message.get("content") or "").strip()
@@ -134,7 +134,7 @@ def main() -> int:
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
     image = {
-        **SELF_DEPLOYED_BODY,
+        **LARGE_LLM_BODY,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": "Describe this."},
             {"type": "image_url", "image_url": {"url": PROBE_URL}},

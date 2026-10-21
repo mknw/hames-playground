@@ -5,7 +5,7 @@
  * The strip is the one surface in the app that reports on the DEPLOYMENT rather
  * than on a conversation, and the reason it needs a browser is the reason this
  * layer exists: it shipped computing the right thing and showing the wrong one.
- * The countdown was gated on `warmthKey() === 'warm'` while `selfDeployedWarmth()` also
+ * The countdown was gated on `warmthKey() === 'warm'` while `largeWarmth()` also
  * computes one for `running`, and the strip re-read the server on a single
  * 15-second interval, so the `cold` → `warm` flip a user's own message causes
  * landed long after they had stopped looking. Both were invisible below here:
@@ -31,14 +31,14 @@
  * puts a request on the wire, and that the wire request is the SHARED wake.
  */
 import { test, expect } from '../lib/fixtures'
-import { COLD_START_HEADLINE, IGNITE_LABEL, SELF_DEPLOYED_MODEL } from '../lib/env'
+import { COLD_START_HEADLINE, IGNITE_LABEL, LARGE_LLM_MODEL } from '../lib/env'
 import { expectHeld } from '../lib/control'
 import { chooseTier, letTheBoxGoCold, open } from '../lib/chat'
 
 /** The indicator, whichever element it currently is — a `<div>` that reports, or
  *  the `<button>` a cold box turns it into. */
 const indicator = (page: import('@playwright/test').Page) =>
-  page.locator('[data-testid="self_deployed-warmth"]')
+  page.locator('[data-testid="large-warmth"]')
 
 test('a cold box offers to start, and pressing it sends the shared wake', async ({
   page,
@@ -52,7 +52,7 @@ test('a cold box offers to start, and pressing it sends the shared wake', async 
 
   // Park every request to the 27B, so the wake this test presses for is a state
   // it controls rather than one it races.
-  await backend.arm({ kind: 'hold', model: SELF_DEPLOYED_MODEL })
+  await backend.arm({ kind: 'hold', model: LARGE_LLM_MODEL })
   await letTheBoxGoCold(page)
 
   // ---- It reports the state, and only the state, at rest -------------------
@@ -77,7 +77,7 @@ test('a cold box offers to start, and pressing it sends the shared wake', async 
 
   // The request is on the wire and PARKED, so the pending state below is a fact
   // rather than a deadline. `wake: true` is the load-bearing half: it is the
-  // shared `ensureSelfDeployedAwake` ping, not a second wake path this button opened
+  // shared `ensureLargeAwake` ping, not a second wake path this button opened
   // for itself — which is what makes a click during a turn's own wake join it
   // instead of queueing a second cold start on a single-replica deployment.
   const parked = await expectHeld(
@@ -111,7 +111,7 @@ test('pressing the indicator is reachable from the keyboard', async ({ page, app
   // the second trigger for the label swap, so this covers both.
   await open(page, appUrl)
   await chooseTier(page, 'self_deployed')
-  await backend.arm({ kind: 'hold', model: SELF_DEPLOYED_MODEL })
+  await backend.arm({ kind: 'hold', model: LARGE_LLM_MODEL })
   await letTheBoxGoCold(page)
 
   await expect(indicator(page)).toContainText('cold')

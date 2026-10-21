@@ -69,7 +69,9 @@ export function createDecisionDocuments(
     if (!(await owns(sessionId, userId))) return { total: 0 }
 
     const visible = (await list(sessionId, signal)).filter((d) => !d.excluded)
-    // The tier line. The RAW slot, compared with the private tier's literal.
+    // The tier line. The RAW slot, compared with the private tier's literal. A frame
+    // still carrying the pre-rename `verda` is routed as self_deployed by
+    // `activeInferenceTier()` but gets the count here: the closed direction, on purpose.
     if (currentRunFrame()?.inference?.tier !== 'self_deployed') return { total: visible.length }
     return {
       total: visible.length,

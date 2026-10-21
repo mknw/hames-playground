@@ -138,7 +138,9 @@ describe('graph_file_ingest through the app bridge (#420)', () => {
 // Mutations: raw tier !== 'anthropic'; activeInferenceTier() fallback; drop the
 // privateInferenceOnly conjunction; drop the executor policy/embedding checks.
 describe('P4 fail-closed ingestion policy', () => {
-  it.each([undefined, {}, { tier: 'unknown-tier' }, { tier: 'anthropic' }])(
+  // `{ tier: 'verda' }`: a pre-rename frame is ROUTED as self_deployed by `activeInferenceTier()`,
+  // but this gate reads the raw slot, so it stays closed (fail-closed, deliberately).
+  it.each([undefined, {}, { tier: 'unknown-tier' }, { tier: 'anthropic' }, { tier: 'verda' }])(
     'refuses raw inference slot %j, even with a private deployment default',
     async (inference) => {
       vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')

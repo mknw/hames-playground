@@ -48,6 +48,7 @@ import {
 } from '../../../lib/db/conversations.server'
 import { closePool, query } from '../../../lib/db/client.server'
 import { setStoredInferenceTier } from '../../../lib/db/user-prefs.server'
+import { normalizeStoredInferenceTier } from '../../../lib/inference/tier-value'
 
 const TEST_USER = `test-user-${Math.random().toString(36).slice(2, 10)}`
 
@@ -1093,6 +1094,38 @@ describe('backfillConversationInferenceTier', () => {
     } finally {
       await query('DELETE FROM conversations WHERE user_id = ANY($1)', [[withPref, noPref]])
       await query('DELETE FROM user_prefs WHERE user_id = $1', [withPref])
+    }
+  })
+
+  it('copies a recorded preference that still carries the pre-rename spelling', async () => {
+    // DB-only mutation: drop 'verda' from the backfill's IN list — the row stays untiered
+    // while its owner's recorded choice was the private tier.
+    const legacyPref = `${TEST_USER}-legacy-pref`
+    const untiered = `bf-${Math.random().toString(36).slice(2, 10)}`
+    await seedRow({
+      id: untiered,
+      userId: legacyPref,
+      agentId: 'search',
+      title: 't',
+      serializedContext: '{}',
+    })
+    await setStoredInferenceTier(legacyPref, 'anthropic')
+    await query('UPDATE user_prefs SET inference_tier = $1 WHERE user_id = $2', [
+      'verda',
+      legacyPref,
+    ])
+
+    try {
+      await backfillConversationInferenceTier((text: string, params?: unknown[]) =>
+        query(text, params),
+      )
+
+      expect(
+        normalizeStoredInferenceTier(await getConversationInferenceTier(untiered, legacyPref)),
+      ).toBe('self_deployed')
+    } finally {
+      await query('DELETE FROM conversations WHERE user_id = $1', [legacyPref])
+      await query('DELETE FROM user_prefs WHERE user_id = $1', [legacyPref])
     }
   })
 

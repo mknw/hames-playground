@@ -951,12 +951,30 @@ expect_problem() { # LABEL EDIT-COMMAND… — apply the edit to a copy, expect 
   mv "$tmproot/c/.env.bak" "$good"
   if [[ -n $p ]]; then pass "5 flags: $label"; else flunk "5 not flagged: $label"; fi
 }
+# expect_problem_like LABEL PATTERN EDIT-COMMAND… — as expect_problem, but the output
+# must carry a line matching PATTERN: a bare "something was flagged" is also true
+# when the edit names a setting that does not exist and a different rule fires.
+expect_problem_like() {
+  local label=$1 pattern=$2
+  shift 2
+  cp "$good" "$tmproot/c/.env.bak"
+  "$@"
+  local p
+  p=$(
+    lib "$tmproot/c"
+    env_problems
+    owner_missing
+  )
+  mv "$tmproot/c/.env.bak" "$good"
+  if grep -qE "$pattern" <<<"$p"; then pass "5 flags: $label"; else flunk "5 not flagged as /$pattern/: $label"; fi
+}
 expect_problem "placeholder allow-list" sed -i "s/^VITE_ALLOWED_EMAILS=.*/VITE_ALLOWED_EMAILS='*@contoso.com'/" "$good"
 expect_problem "empty DATA_ENCRYPTION_KEY" sed -i "s/^DATA_ENCRYPTION_KEY=.*/DATA_ENCRYPTION_KEY=''/" "$good"
 expect_problem "missing ANTHROPIC_API_KEY line" sed -i "/^ANTHROPIC_API_KEY=/d" "$good"
 expect_problem "example.com left in" sed -i "s/^APP_DOMAIN=.*/APP_DOMAIN='preview.example.com'/" "$good"
-expect_problem "two of three private-tier values" bash -c "printf \"LARGE_LLM_BASE_URL='https://h/v1'\nSELF_DEPLOYED_INFERENCE_API_KEY='k'\n\" >>'$good'"
-expect_problem "endpoint without /v1" bash -c "printf \"LARGE_LLM_BASE_URL='https://h'\nSELF_DEPLOYED_INFERENCE_API_KEY='k'\nSMALL_LLM_BASE_URL='https://s/v1'\n\" >>'$good'"
+expect_problem_like "two of five private-tier values" 'private tier: 2 of' bash -c "printf \"LARGE_LLM_BASE_URL='https://h/v1'\nLARGE_LLM_API_KEY='k'\n\" >>'$good'"
+# A COMPLETE five-value set, so the partial-tier rule cannot fire and the /v1 rule is the only one left.
+expect_problem_like "endpoint without /v1, tier otherwise complete" '^LARGE_LLM_BASE_URL must end in /v1$' bash -c "printf \"LARGE_LLM_BASE_URL='https://h'\nLARGE_LLM_API_KEY='k'\nSMALL_LLM_BASE_URL='https://s/v1'\nSMALL_LLM_DECISIONS_URL='https://s/v1/systemone'\nSMALL_LLM_API_KEY='k'\n\" >>'$good'"
 expect_problem "VITE_DEV_BYPASS_AUTH present" bash -c "echo \"VITE_DEV_BYPASS_AUTH='false'\" >>'$good'"
 expect_problem "STASH_DIRECT_REDIS unset" sed -i "/^STASH_DIRECT_REDIS=/d" "$good"
 expect_problem "laptop compose file" sed -i "s/^COMPOSE_FILE=.*/COMPOSE_FILE=docker-compose.yaml/" "$good"

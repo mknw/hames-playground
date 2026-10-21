@@ -1,4 +1,3 @@
-import { normalizeStoredContextTiers } from '../inference/tier-value'
 /**
  * Conversations Repository — Server Only
  *
@@ -21,6 +20,7 @@ import { normalizeStoredContextTiers } from '../inference/tier-value'
  * runs SQL against it.
  */
 
+import { normalizeStoredContextTiers } from '../inference/tier-value'
 import { DECISION_LOOP_MAX_ITERATIONS } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import { randomBytes } from 'node:crypto'
 
@@ -63,7 +63,7 @@ export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
  * `isInferenceTier`, whose module imports `clients.server.ts`, whose module load
  * asserts the private tier's configuration when `USE_SELF_DEPLOYED_INFERENCE=1` — and
  * this repository is reached from the schema bootstrap, i.e. from the boot path
- * that assert documents itself as being off (see `assertSelfDeployedConfigured`).
+ * that assert documents itself as being off (see `assertLargeModelConfigured`).
  * Pulling it in would move a documented first-harness-call failure onto boot.
  *
  * The narrowing belongs to `lib/inference/tier.server.ts`, which owns the

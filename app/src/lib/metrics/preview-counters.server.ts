@@ -1,4 +1,3 @@
-import { normalizeStoredInferenceTier } from '../inference/tier-value'
 /**
  * Global usage counters (Postgres) — Server Only.
  *
@@ -51,6 +50,7 @@ import { normalizeStoredInferenceTier } from '../inference/tier-value'
  * that fails is logged and dropped rather than failing anyone's turn (see
  * `usage-recorder.server.ts`), so treat these as "at most what was spent".
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from '../db/client.server'
 import type { InferenceTier } from '../inference/config.server'

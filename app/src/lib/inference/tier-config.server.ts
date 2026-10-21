@@ -1,7 +1,7 @@
-import { inferenceEnv, applyLegacyInferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 /** Synchronous, I/O-free tier configuration. Boot can validate a restricted
  * deployment without registering routing policy or activating the default tier.
  */
+import { inferenceEnv, applyLegacyInferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 
@@ -41,7 +41,7 @@ export function privateInferenceOnly(): boolean {
  * deployment root plus `/v1`. Without the suffix the first request 404s
  * mid-conversation on `<root>/chat/completions`.
  */
-export function assertSelfDeployedConfigured(): void {
+export function assertLargeModelConfigured(): void {
   applyLegacyInferenceEnv()
   const endpoint = inferenceEnv('LARGE_LLM_BASE_URL')
   const missing = [
@@ -87,7 +87,7 @@ export function assertSelfDeployedConfigured(): void {
  * local llama-server can run without authentication. The whole private tier
  * requires it in `assertPrivateTierConfigured` for the systemone bearer key.
  *
- * The URL is checked for the `/v1` suffix for `assertSelfDeployedConfigured`'s reason:
+ * The URL is checked for the `/v1` suffix for `assertLargeModelConfigured`'s reason:
  * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
  * call on `<root>/chat/completions` — mid-conversation, which is the failure
  * this whole family of checks exists to move forward in time.
@@ -127,7 +127,7 @@ export function assertSmallModelConfigured(): void {
  * calls.
  */
 export function assertPrivateTierConfigured(): void {
-  assertSelfDeployedConfigured()
+  assertLargeModelConfigured()
   assertSmallModelConfigured()
   const raw = process.env.SMALL_LLM_DECISIONS_URL
   if (!raw)

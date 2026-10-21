@@ -20,7 +20,7 @@
  * this and it cost no code: nothing here hardcodes a role, and the hook is on the
  * seam, not on a position in the chain. The moment worth telling the user about
  * is still "a call is about to be made and nothing says the box is up" — not "a
- * self_deployed-tier turn began", which is why {@link noteSelfDeployedCallStarting} is called
+ * self_deployed-tier turn began", which is why {@link noteLargeCallStarting} is called
  * from `clientOverrideFor()` (`harness-baml/clients.server.ts`), the per-call
  * seam that builds a self_deployed-bound options bag, and fires at most once per turn.
  * The move made the notice EARLIER by one call, which is the right direction: on
@@ -44,7 +44,7 @@
  * 1. **A coldness gate on the wait**, which is weaker than it reads and is
  *    stated here as what it actually proves: *this process has been quiet
  *    longer than the scale-down value it was **configured with*** — a call to
- *    the box finished (`selfDeployedLastCallCompletedAt() !== null`) and
+ *    the box finished (`largeLastCallCompletedAt() !== null`) and
  *    `LARGE_LLM_SCALEDOWN_SECONDS` has elapsed since. It is not proof the platform
  *    released the GPU. The app cannot read the deployment's own setting, so a
  *    `LARGE_LLM_SCALEDOWN_SECONDS` **lower** than the deployment's poisons the
@@ -71,7 +71,7 @@
  * ## MULTI-INSTANCE CAVEAT
  *
  * The history is **process-local**, on a `globalThis` symbol, the same
- * compromise (and the same eventual Redis move) as `self-deployed-activity.server.ts`'s
+ * compromise (and the same eventual Redis move) as `large-activity.server.ts`'s
  * clock and `metrics/call-latency.server.ts`'s window. A restart empties it and
  * the estimate falls back to {@link COLD_START_FALLBACK_MS} — which is a
  * measurement, not a guess, so falling back costs accuracy rather than honesty.
@@ -84,10 +84,10 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { percentileMs } from '../metrics/call-latency.server'
 import {
-  selfDeployedLastCallCompletedAt,
-  selfDeployedScaledownSeconds,
-  selfDeployedWarmth,
-} from './self-deployed-activity.server'
+  largeLastCallCompletedAt,
+  largeScaledownSeconds,
+  largeWarmth,
+} from './large-activity.server'
 
 assertServerOnImport()
 
@@ -129,7 +129,7 @@ export const COLD_START_WINDOW = 8
 /**
  * Shortest duration the history will accept as a cold start.
  *
- * 36.5s. The recording gate in {@link noteSelfDeployedCallStarting} can only prove that
+ * 36.5s. The recording gate in {@link noteLargeCallStarting} can only prove that
  * THIS process was quiet for longer than the scale-down it was configured with
  * (see the module docstring), and two ordinary situations make that false: a
  * `LARGE_LLM_SCALEDOWN_SECONDS` lower than the deployment's own, and a second app
@@ -175,7 +175,7 @@ const PROVEN_WARM = new Set(['warm', 'running'])
  * Is the box PROVABLY up right now?
  *
  * The one predicate behind two decisions that must never disagree: whether to
- * show the notice ({@link noteSelfDeployedCallStarting}) and whether to send a wake
+ * show the notice ({@link noteLargeCallStarting}) and whether to send a wake
  * ping at all (`wake.server.ts`). Two copies of "warm or running" would be one
  * edit away from a turn that pings without telling anyone, or tells someone
  * without pinging.
@@ -184,15 +184,15 @@ const PROVEN_WARM = new Set(['warm', 'running'])
  * anything short of proof costs a wake ping and a spinner that clears in
  * seconds, where the opposite error costs a user a silent 146-second wait.
  */
-export function selfDeployedProvenWarm(now: number = Date.now()): boolean {
-  return PROVEN_WARM.has(selfDeployedWarmth(now).state)
+export function largeProvenWarm(now: number = Date.now()): boolean {
+  return PROVEN_WARM.has(largeWarmth(now).state)
 }
 
 const HISTORY_KEY = Symbol.for('hames-app.cold-start-history')
 type HistoryGlobal = typeof globalThis & { [HISTORY_KEY]?: number[] }
 const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
 
-export type WakeBox = 'self_deployed' | 'small'
+export type WakeBox = 'large' | 'small'
 /** Snapshot restores measured 21–31s; an estimate, separate from the first-boot budget. */
 export const SMALL_COLD_START_FALLBACK_MS = 30_000
 // Between sub-second warm health checks and the fastest measured cold start (21s).
@@ -233,11 +233,11 @@ export function smallColdStartEstimate(): ColdStartEstimate {
   return estimateFor('small')
 }
 function estimateFor(box: WakeBox): ColdStartEstimate {
-  const values = box === 'self_deployed' ? history : small.history
+  const values = box === 'large' ? history : small.history
   const measured = percentileMs(values, 0.5)
   return measured === null
     ? {
-        estimateMs: box === 'self_deployed' ? COLD_START_FALLBACK_MS : SMALL_COLD_START_FALLBACK_MS,
+        estimateMs: box === 'large' ? COLD_START_FALLBACK_MS : SMALL_COLD_START_FALLBACK_MS,
         basis: 'default',
         samples: 0,
       }
@@ -247,7 +247,7 @@ function estimateFor(box: WakeBox): ColdStartEstimate {
 /** The larger outstanding wait owns the countdown, including its actual basis. */
 function pendingEstimate(now: number): ColdStartEstimate {
   const estimates = [
-    ...(!selfDeployedProvenWarm(now) ? [estimateFor('self_deployed')] : []),
+    ...(!largeProvenWarm(now) ? [estimateFor('large')] : []),
     ...(!smallProvenWarm(now) ? [estimateFor('small')] : []),
   ]
   return estimates.reduce((a, b) => (b.estimateMs > a.estimateMs ? b : a))
@@ -352,22 +352,22 @@ export function runWithColdStartWatch<T>(
  * observer states, and for the same reason: a status frame is not worth an
  * answer. The throw is logged rather than swallowed.
  */
-export function noteSelfDeployedCallStarting(now: number = Date.now()): void {
-  noteBoxCallStarting('self_deployed', now)
+export function noteLargeCallStarting(now: number = Date.now()): void {
+  noteBoxCallStarting('large', now)
 }
 
 export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
   const watch = watchStore.getStore()
   if (!watch || watch.boxes[box]) return
-  if (box === 'self_deployed' ? selfDeployedProvenWarm(now) : smallProvenWarm(now)) return
+  if (box === 'large' ? largeProvenWarm(now) : smallProvenWarm(now)) return
   // Evidence of coldness, not merely absence of evidence of warmth: this
   // process saw this box answer, then its CONFIGURED scale-down window elapsed.
   // Unknown activity can justify a notice but never a measurement. The window
   // may differ from the deployment's, and another instance sees other traffic,
   // so this is necessary, not sufficient: each box's plausibility floor covers
   // that gap before the reading can enter its history.
-  const last = box === 'self_deployed' ? selfDeployedLastCallCompletedAt() : small.lastCompletedAt
-  const seconds = box === 'self_deployed' ? selfDeployedScaledownSeconds() : smallScaledownSeconds()
+  const last = box === 'large' ? largeLastCallCompletedAt() : small.lastCompletedAt
+  const seconds = box === 'large' ? largeScaledownSeconds() : smallScaledownSeconds()
   watch.boxes[box] = { recordable: last !== null && now - last >= seconds * 1000, settled: false }
   if (watch.fired) return
   watch.fired = true
@@ -389,7 +389,7 @@ export function noteBoxCallStarting(box: WakeBox, now = Date.now()): void {
  * already in flight passes `undefined` rather than its own fragment of the wait.
  */
 export function settleColdStart(durationMs: number | undefined): void {
-  settleBoxColdStart('self_deployed', durationMs)
+  settleBoxColdStart('large', durationMs)
 }
 
 export function settleBoxColdStart(box: WakeBox, durationMs: number | undefined): void {
@@ -397,7 +397,7 @@ export function settleBoxColdStart(box: WakeBox, durationMs: number | undefined)
   if (!watched || watched.settled) return
   watched.settled = true
   if (!watched.recordable || durationMs === undefined) return
-  if (box === 'self_deployed') {
+  if (box === 'large') {
     noteColdStartMeasured(durationMs)
     return
   }

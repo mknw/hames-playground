@@ -39,7 +39,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { FAKE_ANTHROPIC_TIER_MODEL, IS_HERMETIC, TIERS, LARGE_LLM_MODEL } from '../lib/mode'
 
 let app: AppHandles
 
@@ -73,7 +73,7 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
 
     // Guard against the check going vacuous: it only means something if calls
     // reached the self-hosted model at all.
-    const selfDeployedCalls = app.fakeLlm.calls.filter((c) => c.model === SELF_DEPLOYED_MODEL)
+    const selfDeployedCalls = app.fakeLlm.calls.filter((c) => c.model === LARGE_LLM_MODEL)
     expect(selfDeployedCalls.length, 'no call took the self-hosted route').toBeGreaterThan(0)
 
     // …and it means much more since the 2026-08-26 widening, because the
@@ -110,7 +110,7 @@ describe.each(TIERS)('the general agent on the %s tier', (tier) => {
     // largest tool catalog, and a structured-output failure throws rather than
     // degrading — which is why it was held back, and why this leg is worth
     // running against the real endpoint rather than only against the fake.
-    const expected = tier === 'self_deployed' ? SELF_DEPLOYED_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+    const expected = tier === 'self_deployed' ? LARGE_LLM_MODEL : FAKE_ANTHROPIC_TIER_MODEL
     for (const call of planner) expect(call.model).toBe(expected)
   })
 })

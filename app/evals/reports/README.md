@@ -32,6 +32,8 @@ Reference runs currently tracked here:
 | `*-default.md`   | The Anthropic baseline — every function on the chain it declares in `baml_src/`.                                                                                                                              |
 | `*-VerdaQwen.md` | The self-hosted Qwen deployment (`baml_src/self-deployed-client.baml`), routing the roles `USE_SELF_DEPLOYED_INFERENCE` moves in production. Its **Latency** section is hand-annotated and says why (see it). |
 
+The tracked `*-VerdaQwen.md` keeps its historical name: the client is now `SelfDeployedQwen`, so the next run (`EVAL_CLIENT=SelfDeployedQwen`) is written as `*-SelfDeployedQwen.md`; delete the old file in the commit that adds it.
+
 Only one reference run per client is kept. Replacing rather than accumulating is
 deliberate: the point is "current client vs. current baseline", and a stale
 baseline in the same directory is the one a reader picks up by accident. Run

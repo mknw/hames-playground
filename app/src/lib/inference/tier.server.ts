@@ -1,4 +1,3 @@
-import { normalizeStoredInferenceTier } from './tier-value'
 /**
  * Which inference tier a CONVERSATION runs on — Server Only.
  *
@@ -37,6 +36,7 @@ import { normalizeStoredInferenceTier } from './tier-value'
  * resolves the owner from the session and passes it in — the same contract
  * `turn.server.ts` and `db/user-prefs.server.ts` carry.
  */
+import { normalizeStoredInferenceTier } from './tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   getConversationInferenceTier,
@@ -45,7 +45,6 @@ import {
 import {
   defaultInferenceTier,
   getStoredInferenceTier,
-  isInferenceTier,
   setStoredInferenceTier,
 } from '../db/user-prefs.server'
 import { privateInferenceOnly, selfDeployedConfigured, type InferenceTier } from './config.server'
@@ -162,10 +161,13 @@ export async function resolveConversationTier(
 export async function chooseConversationTier(
   sessionId: string,
   userId: string,
-  tier: unknown,
+  requested: unknown,
 ): Promise<InferenceTier> {
-  if (!isInferenceTier(tier)) {
-    throw new Error(`Unknown inference tier: ${JSON.stringify(tier)}`)
+  // A tab opened before the rename still posts the old literal; it is read as the
+  // same tier (and only that one) and everything below sees, and stores, the new one.
+  const tier = normalizeStoredInferenceTier(requested)
+  if (!tier) {
+    throw new Error(`Unknown inference tier: ${JSON.stringify(requested)}`)
   }
   if (privateInferenceOnly() && tier === 'anthropic') {
     throw new Error('Anthropic is disabled: this deployment allows private inference only.')

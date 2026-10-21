@@ -193,7 +193,7 @@ that structurally cannot see the failure is the wrong one.
 
 The self-hosted deployment scales to zero and pays a multi-minute cold start on
 the first call after idle, and it is a **single replica** — concurrency there is
-queueing, not scaling (measured with `smoke-self-deployed-load.ts`). Layer 4 therefore
+queueing, not scaling (measured with `smoke-large-load.ts`). Layer 4 therefore
 runs as one coordinated session: the evals in both positions (the baseline and
 `EVAL_CLIENT=tier`), the live e2e leg, the smokes — back to back, paying **one**
 cold start for the lot.

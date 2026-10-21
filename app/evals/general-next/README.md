@@ -82,7 +82,7 @@ HTTP proxy for non-loopback requests. It re-execs a child with `NODE_USE_ENV_PRO
 `/v1/systemone` paths, then installs the same private role map used in production.
 It refuses a missing/stale small-model URL or key before inference; refresh a stale
 worktree copy from the main checkout's `app/.env` without printing key values,
-and escalate if the required values are absent. The runner does not copy or print credentials. After loading `.env`, it poisons all public-provider keys and the public decision URL in both modes, and live mode refuses a non-local embedding provider. Each live job awaits `ensurePrivateTierAwake()` after its elapsed-time clock starts. Wake failure records `SELF_DEPLOYED_WAKE_FAILED` or `SMALL_LLM_WAKE_FAILED` (the box that failed; `PRIVATE_TIER_WAKE_FAILED` if unattributable) and stops without fallback. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
+and escalate if the required values are absent. The runner does not copy or print credentials. After loading `.env`, it poisons all public-provider keys and the public decision URL in both modes, and live mode refuses a non-local embedding provider. Each live job awaits `ensurePrivateTierAwake()` after its elapsed-time clock starts. Wake failure records `LARGE_LLM_WAKE_FAILED` or `SMALL_LLM_WAKE_FAILED` (the box that failed; `PRIVATE_TIER_WAKE_FAILED` if unattributable) and stops without fallback. The owner local embedder at `127.0.0.1:8090` must answer `/health`;
 otherwise escalate. Never start another embedder.
 
 Both modes isolate all tool dependencies with synthetic fixtures. The builtin driver

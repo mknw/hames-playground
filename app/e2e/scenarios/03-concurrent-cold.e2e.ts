@@ -21,7 +21,7 @@
  * interleaving, and the two do not need to be slow twice.
  *
  * ONE withheld response, not two, and that number is the point since wake-then-
- * run landed. Both turns call `ensureSelfDeployedAwake()` and SHARE one in-flight ping
+ * run landed. Both turns call `ensureLargeAwake()` and SHARE one in-flight ping
  * (`inference/wake.server.ts`), so two concurrent turns into a sleeping box pay
  * ONE cold start between them. This scenario used to arm `times: 2` because each
  * turn absorbed its own delay on its own first call — which was the measured
@@ -33,7 +33,7 @@
  */
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from 'vitest'
 import { bootApp, newSessionId, eventsOfType, type AppHandles } from '../lib/app'
-import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { IS_HERMETIC, FAKE_ANTHROPIC_TIER_MODEL, LARGE_LLM_MODEL } from '../lib/mode'
 
 /** Long enough that the two turns genuinely overlap, short enough that the
  *  file stays under a few seconds. */
@@ -147,7 +147,7 @@ describe('two conversations in flight together', () => {
       expect(
         models,
         `expected both tiers among the controller calls, saw ${[...models].join(', ')}`,
-      ).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL, SELF_DEPLOYED_MODEL]))
+      ).toEqual(new Set([FAKE_ANTHROPIC_TIER_MODEL, LARGE_LLM_MODEL]))
     },
   )
 })

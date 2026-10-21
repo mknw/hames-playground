@@ -285,8 +285,8 @@ describe('the reap statement', () => {
   it('mirrors the per-call ceiling declared on SelfDeployedQwen', () => {
     // `PER_CALL_TIMEOUT_MINUTES` is the term that dominates the derivation, and
     // it is a COPY: `request_timeout_ms` lives in BAML, which exports nothing a
-    // module can read it from (same situation as `SELF_DEPLOYED_MODEL_ID`, pinned the
-    // same way in `self-deployed-wake.test.ts`). This scan is what makes the copy safe —
+    // module can read it from (same situation as `LARGE_LLM_MODEL_ID`, pinned the
+    // same way in `large-wake.test.ts`). This scan is what makes the copy safe —
     // without it, the one number that moves the threshold could drift from its
     // declaration with every other test still green.
     const declared = readFileSync(

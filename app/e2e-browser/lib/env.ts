@@ -85,7 +85,7 @@ export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 /** The model id `SelfDeployedQwen` declares in `baml_src/self-deployed-client.baml`. Not
  *  re-derived: a scenario asserting "this call took the self-hosted route"
  *  should fail if the declaration changes under it. */
-export const SELF_DEPLOYED_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
  * The dev-bypass user every turn in THIS suite runs as.
@@ -140,7 +140,7 @@ export const IGNITE_LABEL = 'start RTX PRO 6000'
  * shortcut around the feature — it is the only way to REACH it more than once.
  * The cold-start notice fires when nothing says the box is up, and a completed
  * self-hosted call marks it warm for the whole scale-down window
- * (`inference/self-deployed-activity.server.ts`). The suite's own preflight turn makes
+ * (`inference/large-activity.server.ts`). The suite's own preflight turn makes
  * such a call, so with the shipped value every later scenario would run against
  * a box this process believes is warm, and the notice would never fire — the
  * first draft of scenario 2 failed exactly that way.

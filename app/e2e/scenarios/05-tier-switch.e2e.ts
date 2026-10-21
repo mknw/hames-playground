@@ -30,7 +30,7 @@
  * of the six could lose it and stay green.
  *
  * AND THE PRIVATE TIER IS NOT ONE MODEL. The describe flip later the same day
- * put summarization on a 4B, so "the private tier" is `SELF_DEPLOYED_MODEL` for the
+ * put summarization on a 4B, so "the private tier" is `LARGE_LLM_MODEL` for the
  * heavy roles and `SMALL_MODEL` for the six describe ones. This is the only
  * layer that can catch the two being swapped: the unit tests pin the map, and
  * the map is a statement about intent, while the fake records what each request
@@ -58,7 +58,7 @@ import {
   IS_HERMETIC,
   FAKE_ANTHROPIC_TIER_MODEL,
   SMALL_MODEL,
-  SELF_DEPLOYED_MODEL,
+  LARGE_LLM_MODEL,
   type Tier,
 } from '../lib/mode'
 
@@ -136,7 +136,7 @@ describe('switching tier between turns', () => {
     for (const fn of ['LoopController', 'Synthesize'] as const) {
       turns.forEach(({ tier, from, to }, i) => {
         const models = modelsBetween(app, from, to, fn)
-        const expected = tier === 'self_deployed' ? SELF_DEPLOYED_MODEL : FAKE_ANTHROPIC_TIER_MODEL
+        const expected = tier === 'self_deployed' ? LARGE_LLM_MODEL : FAKE_ANTHROPIC_TIER_MODEL
         expect(models.length, `turn ${i + 1} made no ${fn} call`).toBeGreaterThan(0)
         expect(new Set(models), `${fn} on turn ${i + 1} (${tier})`).toEqual(new Set([expected]))
       })
@@ -173,7 +173,7 @@ describe('switching tier between turns', () => {
     // function that does NOT carry a tool result, so getting it wrong would look
     // harmless and would still be a role split down the middle.
     const expected: Record<string, string> = {
-      Router: SELF_DEPLOYED_MODEL,
+      Router: LARGE_LLM_MODEL,
       GenerateConversationTitle: SMALL_MODEL,
       [describe]: SMALL_MODEL,
     }

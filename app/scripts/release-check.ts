@@ -211,7 +211,7 @@ const LIVE_STEPS_STILL_OWED = [
       'endpoint, none of which a fake can be wrong about.',
   },
   {
-    what: 'the warm-burst check (`smoke-self-deployed-load.ts`) if concurrency behaviour matters to the release',
+    what: 'the warm-burst check (`smoke-large-load.ts`) if concurrency behaviour matters to the release',
     why: 'one replica, so concurrency is queueing rather than scaling; the only measurement of what a burst costs a user',
   },
 ] as const

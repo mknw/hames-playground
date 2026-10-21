@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { bootApp, eventsOfType, newSessionId, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'
-import { IS_HERMETIC, SELF_DEPLOYED_MODEL } from '../lib/mode'
+import { IS_HERMETIC, LARGE_LLM_MODEL } from '../lib/mode'
 
 const AGENT = 'e2e-resume-wake'
 let app: AppHandles
@@ -80,7 +80,7 @@ describe.runIf(IS_HERMETIC)('a resume whose wake fails', () => {
       kind: 'status',
       status: 400,
       wake: true,
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
       times: 1,
     })
     const failed = await app.runTurnOverSse({ sessionId, mode: 'resume' })
@@ -92,7 +92,7 @@ describe.runIf(IS_HERMETIC)('a resume whose wake fails', () => {
     expect(app.fakeLlm.calls[0]).toMatchObject({
       fn: null,
       outcome: 'status',
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
     })
 
     // The actual action the sidebar/reload uses, with no in-memory transcript.

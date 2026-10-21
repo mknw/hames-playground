@@ -93,6 +93,9 @@ describe('createDecisionDocuments — the tier line', () => {
     ['a spelling the code does not have', 'private'],
     ['a typo', 'verd'],
     ['an empty slot', ''],
+    // `activeInferenceTier()` routes this legacy frame value as the private tier; this
+    // raw-slot reader does not, which is the closed direction.
+    ['the pre-rename spelling', 'verda'],
   ])('%s gets the count and no name anywhere', async (_what, tier) => {
     const r = await resolve(tier)
     expect(r).toEqual({ total: 2 })

@@ -1,5 +1,5 @@
 /**
- * Live LOAD measurement for the self-hosted self-deployed deployment (`SelfDeployedQwen`).
+ * Live LOAD measurement for the self-deployed 27B deployment (`SelfDeployedQwen`).
  *
  * Sibling of `smoke-self-deployed.ts`, which answers "does the route work". This one
  * answers "what does it do under the preview's load", and it exists because
@@ -13,7 +13,7 @@
  * Run from `app/` (the endpoint bills while awake — run it once, in one burst):
  *
  *   USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env \
- *     src/lib/inference/scripts/smoke-self-deployed-load.ts
+ *     src/lib/inference/scripts/smoke-large-load.ts
  *
  * WHAT IT MEASURES, and why each phase is shaped the way it is:
  *
@@ -54,7 +54,7 @@ import type { LoopTurn, ToolDescription } from '@hames-ai/harness-patterns/types
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
-import { assertSelfDeployedConfigured, selfDeployedInferenceEnabled } from '../config.server'
+import { assertLargeModelConfigured, selfDeployedInferenceEnabled } from '../config.server'
 import { clientOverrideFor } from '@hames-ai/harness-baml/clients.server'
 
 const EXPECTED_CLIENT = 'SelfDeployedQwen'
@@ -344,7 +344,7 @@ async function main(): Promise<void> {
       'USE_SELF_DEPLOYED_INFERENCE is not 1 — this run would measure Anthropic. See the header.',
     )
   }
-  assertSelfDeployedConfigured()
+  assertLargeModelConfigured()
   console.log('🔒 self-deployed load measurement — self-hosted, single replica')
   console.log(
     `   catalog=${TOOLS.length} tools · turn log=${TURNS.length} turns · output target ~300 tokens`,

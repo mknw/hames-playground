@@ -11,7 +11,7 @@
  *
  * The wake is refused with a 400 aimed AT the wake ping (`wake: true`). A 4xx
  * other than 408/429 ends the poll on the spot, so this needs no 600s budget and
- * is deterministic; it is the same `SELF_DEPLOYED_WAKE_FAILED` path a budget expiry
+ * is deterministic; it is the same `LARGE_LLM_WAKE_FAILED` path a budget expiry
  * takes, because both throw out of `runAndSave`'s try.
  *
  * MUTATION: delete the `recordRunFailure` call from `runAndSave`'s catch in
@@ -21,7 +21,7 @@
  * conversation losing its new message is pinned at the unit layer).
  */
 import { test, expect } from '../lib/fixtures'
-import { SELF_DEPLOYED_MODEL } from '../lib/env'
+import { LARGE_LLM_MODEL } from '../lib/env'
 import { conversationRows } from '../lib/db'
 import {
   chooseTier,
@@ -53,7 +53,7 @@ for (const theme of ['light', 'dark'] as const) {
       kind: 'status',
       status: 400,
       message: 'e2e-browser: the self-hosted box refuses the wake',
-      model: SELF_DEPLOYED_MODEL,
+      model: LARGE_LLM_MODEL,
       wake: true,
     })
 

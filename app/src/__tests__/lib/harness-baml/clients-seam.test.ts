@@ -283,7 +283,7 @@ describe('the configuration the host registers is the configuration the resoluti
     // the same store here proves which one is live.
     const { activeCostRates } = await import(CLIENTS)
     expect(activeCostRates().eurPerUsd()).toBe(1.25)
-    expect(activeCostRates().selfDeployedEurPerHour()).toBe(2.5)
+    expect(activeCostRates().largeEurPerHour()).toBe(2.5)
     expect(bamlAdapters).toBeDefined()
   })
 })
@@ -315,7 +315,7 @@ describe('unregistered — the package-side defaults are safe', () => {
 
     const rates = clients.activeCostRates()
     expect(rates.eurPerUsd()).toBe(DEFAULT_EUR_PER_USD)
-    expect(rates.selfDeployedEurPerHour()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    expect(rates.largeEurPerHour()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
     // The fallback exists so an unregistered consumer still prices sanely; the
     // equality pin is what keeps the two copies from drifting silently.
     expect(DEFAULT_EUR_PER_USD).toBe(0.86)
@@ -330,7 +330,7 @@ describe('unregistered — the package-side defaults are safe', () => {
       defaultTier: () => 'self_deployed',
       onPrivateCallStart: (client: string) => seen.push(client),
     })
-    clients.configureCostRates({ eurPerUsd: () => 3, selfDeployedEurPerHour: () => 4 })
+    clients.configureCostRates({ eurPerUsd: () => 3, largeEurPerHour: () => 4 })
 
     expect(clients.getContextWindow('X')).toBe(99)
     expect(clients.activeInferenceTier()).toBe('self_deployed')

@@ -223,7 +223,7 @@ test, both in `global-setup.ts`:
   turning `held.length === 1` red for the load on the box rather than for
   anything about the app. Ten minutes outlasts any scenario's hold, so one parked
   wake stays one parked wake. What the poll RETRIES is pinned a layer down, in
-  `app/e2e/scenarios/08-cold-start-ux` and `self-deployed-wake.test.ts`.
+  `app/e2e/scenarios/08-cold-start-ux` and `large-wake.test.ts`.
 
 ## The scenarios
 

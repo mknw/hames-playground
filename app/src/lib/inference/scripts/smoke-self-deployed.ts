@@ -1,5 +1,5 @@
 /**
- * Live smoke test for the self-hosted self-deployed deployment (`SelfDeployedQwen`).
+ * Live smoke test for the self-deployed inference tier (`SelfDeployedQwen`).
  *
  * CI cannot run this — the endpoint is company-internal and reachable only
  * from a machine holding `LARGE_LLM_API_KEY`. The hermetic half of the
@@ -10,7 +10,7 @@
  * box actually answers, and that what it answers PARSES into the structured
  * types the patterns depend on.
  *
- * Its sibling `smoke-self-deployed-load.ts` measures the same route under load.
+ * Its sibling `smoke-large-load.ts` measures the same route under load.
  *
  * Run from `app/`:
  *
@@ -18,7 +18,7 @@
  *     src/lib/inference/scripts/smoke-self-deployed.ts
  *
  * `--env-file=.env` supplies `LARGE_LLM_BASE_URL` (which must END IN
- * `/v1` — see `assertSelfDeployedConfigured`) and `LARGE_LLM_API_KEY`. The flag
+ * `/v1` — see `assertLargeModelConfigured`) and `LARGE_LLM_API_KEY`. The flag
  * goes on the command line because the whole point is to exercise the override
  * path; without it this script routes to Anthropic and proves nothing, which
  * is why it refuses to run in that state.
@@ -101,7 +101,7 @@ import {
 // rates) — importing it for its side effect keeps the smoke run on the same
 // wiring a turn takes.
 import '../config.server'
-import { assertSelfDeployedConfigured, selfDeployedInferenceEnabled } from '../config.server'
+import { assertLargeModelConfigured, selfDeployedInferenceEnabled } from '../config.server'
 import {
   clientOverrideFor,
   SELF_DEPLOYED_CLIENT_BY_ROLE,
@@ -227,7 +227,7 @@ async function preflight(): Promise<void> {
   }
   // Same check the module performs at load; called explicitly so the failure
   // reads as a preflight rather than an import-time stack trace.
-  assertSelfDeployedConfigured()
+  assertLargeModelConfigured()
   // The model id is pinned in the client (read live from `GET /v1/models` on
   // 2026-08-25). Re-checked here rather than trusted, because the deployment —
   // not this repo — decides what it serves: a redeploy under a different id, or

@@ -31,10 +31,7 @@ import {
   notifyLlmUsage,
   resetLlmUsageObservers,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
-import {
-  resetSelfDeployedActivity,
-  selfDeployedWarmth,
-} from '../../../lib/inference/self-deployed-activity.server'
+import { resetLargeActivity, largeWarmth } from '../../../lib/inference/large-activity.server'
 import {
   noteSmallCallCompleted,
   resetSmallActivity,
@@ -58,7 +55,7 @@ const metrics = (over: Partial<EventMetrics> = {}): EventMetrics => ({
 beforeEach(async () => {
   addUsage.mockReset()
   addUsage.mockResolvedValue(undefined)
-  resetSelfDeployedActivity()
+  resetLargeActivity()
   resetSmallActivity()
   resetCallLatency()
   await flushUsage() // drain anything a previous case left pending
@@ -93,7 +90,7 @@ describe('tierOfSample — the selected client is the evidence', () => {
     expect(
       tierOfSample({ functionName: 'PlannerThinking', clientName: 'SelfDeployedQwenThink' }),
     ).toBe('self_deployed')
-    expect(selfDeployedWarmth(now).state).toBe('warm')
+    expect(largeWarmth(now).state).toBe('warm')
     expect(tierLatency('self_deployed')).toEqual({ p50Ms: 5000, samples: 1 })
     await flushUsage()
     expect(written('self_deployed')).toMatchObject({ llmCalls: 1, outputTokens: 20 })
@@ -157,13 +154,13 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     // pessimistic so a user is never told the box is up when it is not.
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
-    expect(selfDeployedWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
     // The decide readout is the same 4B on the same server: also not evidence.
     recordSample({ functionName: 'Decide', clientName: 'PrivateSystemOne' }, NOW)
-    expect(selfDeployedWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'LoopController', clientName: 'SelfDeployedQwen' }, NOW)
-    expect(selfDeployedWarmth(NOW).state).toBe('warm')
+    expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
 
@@ -249,10 +246,10 @@ describe('recordSample', () => {
   it('stamps the warm clock for a self-deployed call, and only for a self-deployed call', () => {
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'A', clientName: 'AnthropicSonnet5', metrics: metrics() }, NOW)
-    expect(selfDeployedWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
 
     recordSample({ functionName: 'B', clientName: 'SelfDeployedQwen', metrics: metrics() }, NOW)
-    expect(selfDeployedWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
+    expect(largeWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
   })
 
   it('stamps the clock even for a call that failed', () => {
@@ -261,7 +258,7 @@ describe('recordSample', () => {
     // here would send the next user into a cold start that will not happen.
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'B', clientName: 'SelfDeployedQwen' }, NOW)
-    expect(selfDeployedWarmth(NOW).state).toBe('warm')
+    expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
 
@@ -429,6 +426,6 @@ describe('installUsageRecorder', () => {
     // this file calls `recordSample` directly and would pass without it.
     installUsageRecorder(60_000)
     notifyLlmUsage({ functionName: 'X', clientName: 'SelfDeployedQwen', metrics: metrics() })
-    expect(selfDeployedWarmth().state).not.toBe('unknown')
+    expect(largeWarmth().state).not.toBe('unknown')
   })
 })

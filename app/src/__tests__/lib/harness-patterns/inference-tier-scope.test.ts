@@ -445,7 +445,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     const clients = await load()
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
-    const seen = await withRunFrame({ inference: { tier: 'selfDeployeda' } }, async () => ({
+    const seen = await withRunFrame({ inference: { tier: 'self_deployed_typo' } }, async () => ({
       tier: clients.activeInferenceTier(),
       override: clients.clientOverrideFor('controller'),
     }))

@@ -52,7 +52,7 @@
  * ## MULTI-INSTANCE CAVEAT (deliberate, and the same one as the warm indicator)
  *
  * The window is **process-local**, exactly like `inference/
- * self-deployed-activity.server.ts`'s clock, and for the same reason: a shared Redis
+ * large-activity.server.ts`'s clock, and for the same reason: a shared Redis
  * key would be real infrastructure for a header stat. Two app instances behind
  * a load balancer each report their own traffic, so two users can see different
  * medians for the same tier at the same moment, and a restart empties the

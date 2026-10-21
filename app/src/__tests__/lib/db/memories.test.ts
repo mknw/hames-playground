@@ -209,6 +209,25 @@ describe('encryption at rest', () => {
     expect(read.embedSpace).toBe('test-space-v1')
   })
 
+  it('writes a legacy tier value as its canonical spelling', async () => {
+    // The CHECK admits both spellings, so only `memoryTier` stands between a stale
+    // caller and a new row in the old spelling. DB-only mutation: `memoryTier(input.tier)`
+    // -> `input.tier` in `insertMemory` writes 'verda' and this goes red.
+    const id = memoryId()
+    await insertMemory({
+      id,
+      userId: ALICE,
+      kind: 'preference',
+      tier: 'verda' as never,
+      content: 'legacy caller',
+      evidence: 'legacy caller',
+      embedding: vec(3),
+      embedSpace: 'test-space-v1',
+    })
+    const { rows } = await query<{ tier: string }>('SELECT tier FROM memories WHERE id = $1', [id])
+    expect(rows[0]?.tier).toBe('self_deployed')
+  })
+
   it('stores the embedding as a pgvector literal, lossless to float precision', async () => {
     const id = memoryId()
     const v = vec(7)

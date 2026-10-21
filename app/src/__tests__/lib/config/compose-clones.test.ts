@@ -467,6 +467,26 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     )
     chmodSync(file(`${name}-key.pem`), 0o600)
   }
+  // A CA (no signer) or a client leaf with fixed past or future dates: `openssl
+  // ca` takes explicit dates, where `-days` cannot reach the past.
+  function dated(name: string, window: 'expired' | 'not-yet-valid', ca?: string) {
+    const [start, end] =
+      window === 'expired'
+        ? ['20200101000000Z', '20200102000000Z']
+        : ['20990101000000Z', '20990102000000Z']
+    openssl(
+      ...['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', `/CN=${name}`],
+      ...['-keyout', `${name}-key.pem`, '-out', `${name}.csr`],
+    )
+    openssl(
+      ...['ca', '-batch', '-notext', '-config', 'dated.cnf', '-in', `${name}.csr`],
+      ...['-out', `${name}.pem`, '-startdate', start, '-enddate', end],
+      ...(ca
+        ? ['-cert', `${ca}.pem`, '-keyfile', `${ca}-key.pem`, '-extensions', 'leaf']
+        : ['-selfsign', '-keyfile', `${name}-key.pem`, '-extensions', 'authority']),
+    )
+    chmodSync(file(`${name}-key.pem`), 0o600)
+  }
   const socketPath = file('docker.sock')
   const socket = createServer()
   beforeAll(async () => {
@@ -478,8 +498,39 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     // A distinct CA certificate that reuses release's CA key.
     authority('twin-ca', 'release-ca-key.pem')
     leaf('twin-client', 'twin-ca', 'release-ca-key.pem')
+    // The reverse: a release identity minted with dev's CA key.
+    authority('dev-twin-ca', 'dev-ca-key.pem')
+    leaf('dev-twin-client', 'dev-twin-ca', 'dev-ca-key.pem')
+    // A self-signed certificate that is not a CA, and a leaf it signed.
+    openssl(
+      ...['req', '-new', '-x509', '-nodes', '-days', '1', '-subj', '/CN=plain-ca'],
+      ...['-newkey', 'rsa:2048', '-keyout', 'plain-ca-key.pem', '-out', 'plain-ca.pem'],
+      ...['-addext', 'basicConstraints=critical,CA:FALSE'],
+    )
+    leaf('plain-client', 'plain-ca')
+    // Release's files under other names: the same identity, not the same mount.
+    for (const name of ['release-ca.pem', 'release-client.pem', 'release-client-key.pem'])
+      copyFileSync(file(name), file(`copy-${name}`))
+    chmodSync(file('copy-release-client-key.pem'), 0o600)
     chmodSync(file('release-ca-key.pem'), 0o600)
     chmodSync(file('dev-ca-key.pem'), 0o600)
+    writeFileSync(
+      file('dated.cnf'),
+      [
+        '[ca]\ndefault_ca = dated\n[dated]\ndatabase = index.txt\nnew_certs_dir = .',
+        'serial = serial.txt\ndefault_md = sha256\npolicy = any\nunique_subject = no',
+        '[any]\ncommonName = supplied\n[authority]\nbasicConstraints = critical,CA:TRUE',
+        '[leaf]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = clientAuth\n',
+      ].join('\n'),
+    )
+    writeFileSync(file('index.txt'), '')
+    writeFileSync(file('serial.txt'), '01\n')
+    dated('dev-expired', 'expired', 'dev-ca')
+    dated('dev-future', 'not-yet-valid', 'dev-ca')
+    dated('expired-ca', 'expired')
+    leaf('expired-ca-client', 'expired-ca')
+    dated('future-ca', 'not-yet-valid')
+    leaf('future-ca-client', 'future-ca')
     await new Promise<void>((done) => socket.listen(socketPath, done))
   })
   afterAll(() => {
@@ -496,7 +547,7 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     app: () => triple('release-ca', 'release-client'),
     'app-dev': () => triple('dev-ca', 'dev-client'),
   }
-  const hosts = { app: 'tcp://10.77.1.2:2376', 'app-dev': 'tcp://10.77.2.2:2376' }
+  const hosts = { app: 'tcp://203.0.113.2:2376', 'app-dev': 'tcp://198.51.100.2:2376' }
   function vm(
     config: Config,
     name: 'app' | 'app-dev',
@@ -628,16 +679,36 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
       { image: 'busybox', volumes_from: ['app-dev:ro'] },
       { image: 'app:dev' },
       { build: { context: devContext } },
+      // A container id names no service, so it could be the clone's.
+      { image: 'busybox', network_mode: `container:${'a'.repeat(64)}` },
+      { image: 'busybox', pid: 'container:0123456789ab' },
+      // The clone's TLS files reach its VM from any container that mounts them.
+      {
+        image: 'busybox',
+        volumes: [{ type: 'bind', source: file('dev-client-key.pem'), target: '/k' }],
+      },
+      {
+        image: 'busybox',
+        volumes: [{ type: 'bind', source: tls, target: '/tls', read_only: true }],
+      },
+      { image: 'busybox', volumes: [{ type: 'bind', source: '/', target: '/host' }] },
     ]) {
       const config = fresh()
       ;(vm(config, 'app-dev') as Service).container_name = 'hames-app-dev'
       Object.assign(config.services, { sidecar })
       expect(() => validateClones(config), JSON.stringify(sidecar)).toThrow(/one service/)
     }
-    const config = fresh()
-    vm(config, 'app-dev')
-    Object.assign(config.services, { sidecar: { image: 'busybox', pid: 'service:app' } })
-    expect(() => validateClones(config)).not.toThrow()
+    for (const sidecar of [
+      { image: 'busybox', pid: 'service:app' },
+      { image: 'busybox', network_mode: 'container:hames-app' },
+      { image: 'busybox', volumes: [{ type: 'bind', source: file('absent'), target: '/x' }] },
+    ]) {
+      const config = fresh()
+      ;(config.services.app as unknown as Service).container_name = 'hames-app'
+      vm(config, 'app-dev')
+      Object.assign(config.services, { sidecar })
+      expect(() => validateClones(config), JSON.stringify(sidecar)).not.toThrow()
+    }
   })
 
   it.each([
@@ -647,12 +718,15 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     'tcp://0.0.0.0:2376',
     'tcp://169.254.169.254:2376',
     'tcp://224.0.0.1:2376',
-    'tcp://10.77.2:2376',
-    'tcp://10.77.2.2:0',
-    'tcp://10.77.2.2:65536',
-    'tcp://10.77.2.2',
-    'https://10.77.2.2:2376',
-  ])('reaches Docker only at a routable guest tcp endpoint, not %s', (host) => {
+    'tcp://198.51.100:2376',
+    'tcp://198.51.100.2:0',
+    'tcp://198.51.100.2:65536',
+    'tcp://198.51.100.2',
+    'https://198.51.100.2:2376',
+    'tcp://198.51.100.2:2376/x',
+    ' tcp://198.51.100.2:2376',
+    'tcp://198.51.100.2:23760000',
+  ])('reaches Docker only at a routable guest tcp endpoint, not %j', (host) => {
     const config = fresh()
     vm(config, 'app-dev', undefined, host)
     expect(() => validateClones(config)).toThrow(/tcp:\/\/IPv4:port/)
@@ -679,6 +753,29 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     }
   })
 
+  // The terminal path inherits the app's environment, beside the backend's flags.
+  it.each([
+    ['DOCKER_HOST', 'unix:///var/run/docker.sock'],
+    ['DOCKER_CONTEXT', 'default'],
+    ['DOCKER_TLS_VERIFY', '0'],
+    ['DOCKER_CERT_PATH', '/configs'],
+  ])('refuses a second Docker endpoint on a VM clone: %s', (key, value) => {
+    const config = fresh()
+    vm(config, 'app-dev').environment[key] = value
+    expect(() => validateClones(config)).toThrow(/Docker client variables/)
+  })
+
+  it.each([
+    ['an expired client certificate', () => triple('dev-ca', 'dev-expired')],
+    ['a client certificate not yet valid', () => triple('dev-ca', 'dev-future')],
+    ['an expired CA', () => triple('expired-ca', 'expired-ca-client')],
+    ['a CA not yet valid', () => triple('future-ca', 'future-ca-client')],
+  ])('refuses %s', (_label, files) => {
+    const config = fresh()
+    vm(config, 'app-dev', files())
+    expect(() => validateClones(config)).toThrow(/validity period/)
+  })
+
   it('refuses CA keys, chains, foreign or mismatched leaves and loose key files', () => {
     const write = (name: string, ...parts: string[]) => {
       writeFileSync(file(name), parts.map((part) => readFileSync(file(part), 'utf8')).join(''))
@@ -691,6 +788,7 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
       [{ cert: file('dev-ca.pem'), key: file('dev-ca-key.pem') }, /chain to its own/],
       [{ key: file('release-client-key.pem') }, /chain to its own/],
       [{ cert: file('dev-foreign.pem'), key: file('dev-foreign-key.pem') }, /chain to its own/],
+      [triple('plain-ca', 'plain-client'), /chain to its own/],
     ]
     for (const [files, error] of cases) {
       const config = fresh()
@@ -720,14 +818,22 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
   it("keeps each clone on its own VM, unreachable with the other clone's identity", () => {
     let config = fresh()
     vm(config, 'app')
-    vm(config, 'app-dev', undefined, 'tcp://10.77.1.2:2377')
+    vm(config, 'app-dev', undefined, 'tcp://203.0.113.2:2377')
     expect(() => validateClones(config)).toThrow(/own environment VM/)
-    for (const files of [own.app(), triple('twin-ca', 'twin-client')]) {
+    for (const files of [
+      triple('copy-release-ca', 'copy-release-client'),
+      triple('twin-ca', 'twin-client'),
+    ]) {
       config = fresh()
       vm(config, 'app')
       vm(config, 'app-dev', files)
       expect(() => validateClones(config), files.ca).toThrow(/other clone's VM/)
     }
+    // And the other way round: release's leaf minted with dev's CA key.
+    config = fresh()
+    vm(config, 'app', triple('dev-twin-ca', 'dev-twin-client'))
+    vm(config, 'app-dev')
+    expect(() => validateClones(config)).toThrow(/other clone's VM/)
   })
 
   it('refuses VM settings on a socket clone and the dev socket opt-in beside its VM', () => {

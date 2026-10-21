@@ -2,7 +2,7 @@
 export interface SpendKey {
   agent: string
   scenario: string
-  tier: 'verda'
+  tier: 'self_deployed'
 }
 
 /** The injection screen's BAML function. general-next's orchestrator screens every guarded

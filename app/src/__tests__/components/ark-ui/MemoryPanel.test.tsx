@@ -19,7 +19,7 @@ const row = {
   id: 'memory-1',
   content: 'I prefer synthetic examples',
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   createdAt: new Date('2026-01-01'),
   lastSeenAt: new Date('2026-02-01'),
   compactedFrom: 3,

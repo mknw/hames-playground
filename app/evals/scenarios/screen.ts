@@ -119,7 +119,7 @@ export const screenScenario: Scenario = {
 
     // WHY THE PROPERTY CHECKS CALL THE RAW FUNCTION, not `createInjectionScreen()`.
     // The adapter resolves its client through PRODUCTION
-    // (`clientOverrideFor('screen')`, i.e. `USE_VERDA_INFERENCE` / a tier
+    // (`clientOverrideFor('screen')`, i.e. `USE_SELF_DEPLOYED_INFERENCE` / a tier
     // scope), so on an `EVAL_CLIENT=X` run its calls would go wherever
     // production points while the report claimed to be measuring X — a
     // scenario measuring a different model than its own header says. Going
@@ -193,7 +193,7 @@ export const screenScenario: Scenario = {
     // The production path, once, for WIRING rather than behaviour: the adapter
     // is what the guard calls, and it is the half whose client comes from
     // `clientOverrideFor('screen')`. Recorded rather than graded — a run that
-    // sets `EVAL_CLIENT` without `USE_VERDA_INFERENCE=1` legitimately has these
+    // sets `EVAL_CLIENT` without `USE_SELF_DEPLOYED_INFERENCE=1` legitimately has these
     // two disagreeing, and it is the report's job to show that rather than
     // fail on it. To measure the screen on the box end to end, set both.
     const adapterVerdict = await createInjectionScreen()({

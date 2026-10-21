@@ -11,7 +11,7 @@ import '../../../lib/inference/config.server'
  * 1. **A notice on a warm box.** Telling a user to expect a two-minute wait
  *    that is about to take four seconds trains them to ignore the notice, which
  *    costs the one case it exists for.
- * 2. **A notice fired more than once per turn** — the second verda-bound call
+ * 2. **A notice fired more than once per turn** — the second self_deployed-bound call
  *    of a turn is on a box the first one woke, so a second spinner would
  *    announce a wait nobody is paying.
  * 3. **A warm call recorded as a cold start.** This is the expensive one: a
@@ -23,9 +23,9 @@ import '../../../lib/inference/config.server'
  *    scale-down value this process was CONFIGURED with, so the plausibility
  *    floor below covers the two cases where that value is not the deployment's.
  *
- * The routing half — that the notice fires from a verda-bound call and never
+ * The routing half — that the notice fires from a self_deployed-bound call and never
  * from an anthropic-tier one — is exercised through `clientOverrideFor` itself
- * rather than by calling `noteVerdaCallStarting` directly, because the tier
+ * rather than by calling `noteLargeCallStarting` directly, because the tier
  * gate lives there and a test that bypassed it would pass with the wiring
  * removed.
  */
@@ -41,19 +41,19 @@ import {
   COLD_START_WINDOW,
   coldStartEstimate,
   noteColdStartMeasured,
-  noteVerdaCallStarting,
+  noteLargeCallStarting,
   resetColdStartHistory,
   runWithColdStartWatch,
   settleColdStart,
   type ColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
-  beginVerdaTurn,
-  endVerdaTurn,
-  noteVerdaCallCompleted,
-  resetVerdaActivity,
-  verdaWarmth,
-} from '../../../lib/inference/verda-activity.server'
+  beginSelfDeployedTurn,
+  endSelfDeployedTurn,
+  noteLargeCallCompleted,
+  resetLargeActivity,
+  largeWarmth,
+} from '../../../lib/inference/large-activity.server'
 import {
   assertInferenceTier,
   clientOverrideFor,
@@ -67,7 +67,10 @@ import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
  * `assertInferenceTier`. Bound together here — both, in that order, is what a
  * turn does — so the assertions below stay as they were.
  */
-function runWithInferenceTier<T>(tier: 'verda' | 'anthropic', fn: () => Promise<T>): Promise<T> {
+function runWithInferenceTier<T>(
+  tier: 'self_deployed' | 'anthropic',
+  fn: () => Promise<T>,
+): Promise<T> {
   assertInferenceTier(tier)
   return withRunFrame({ inference: { tier } }, fn)
 }
@@ -79,11 +82,11 @@ const LONG_AGO = NOW - 10 * 60 * 1000
 
 beforeEach(() => {
   resetColdStartHistory()
-  resetVerdaActivity()
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://e2e.invalid/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  resetLargeActivity()
+  process.env.LARGE_LLM_BASE_URL = 'https://e2e.invalid/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   // The private tier's second endpoint (the 4B summarizer `describe` runs on).
-  // Needed only so a 'verda' frame is allowed to open at all.
+  // Needed only so a 'self_deployed' frame is allowed to open at all.
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://e2e.invalid/small/v1'
@@ -91,14 +94,14 @@ beforeEach(() => {
 
 afterEach(() => {
   resetColdStartHistory()
-  resetVerdaActivity()
-  delete process.env.VERDA_INFERENCE_ENDPOINT
-  delete process.env.VERDA_INFERENCE_API_KEY
+  resetLargeActivity()
+  delete process.env.LARGE_LLM_BASE_URL
+  delete process.env.LARGE_LLM_API_KEY
   delete process.env.SMALL_LLM_DECISIONS_URL
   delete process.env.SMALL_LLM_API_KEY
   delete process.env.SMALL_LLM_BASE_URL
-  delete process.env.USE_VERDA_INFERENCE
-  delete process.env.VERDA_SCALEDOWN_SECONDS
+  delete process.env.USE_SELF_DEPLOYED_INFERENCE
+  delete process.env.LARGE_LLM_SCALEDOWN_SECONDS
 })
 
 /** Collect every notice a watched body produces. */
@@ -166,7 +169,7 @@ describe('the estimate', () => {
  * The coldness gate one layer up proves less than it reads: it proves THIS
  * process was quiet for longer than the scale-down value it was CONFIGURED
  * with. Two ordinary situations make that a lie in the same direction — a
- * `VERDA_SCALEDOWN_SECONDS` lower than the deployment's own — no longer the
+ * `LARGE_LLM_SCALEDOWN_SECONDS` lower than the deployment's own — no longer the
  * committed default's doing (it was settled at 300 on 2026-08-26, matching the
  * live box) but still one env var away on any host whose box differs — and a
  * second app instance that has seen a call finish and then gone quiet. Both admit a warm ~4s call, and a
@@ -210,17 +213,17 @@ describe('the plausibility floor', () => {
   it('refuses a warm call the CONFIGURED scale-down window mistook for a cold box', async () => {
     // A host that set the var below its own deployment's setting: the app is told
     // 180s, the box is held for 300s. A 200s idle gap passes the coldness gate —
-    // `verdaWarmth` agrees
+    // `largeWarmth` agrees
     // the box is cold — and the call still comes back in 4.1s because the
     // platform never released the GPU.
-    process.env.VERDA_SCALEDOWN_SECONDS = '180'
-    noteVerdaCallCompleted(NOW - 200_000)
-    expect(verdaWarmth(NOW).state).toBe('cold')
+    process.env.LARGE_LLM_SCALEDOWN_SECONDS = '180'
+    noteLargeCallCompleted(NOW - 200_000)
+    expect(largeWarmth(NOW).state).toBe('cold')
 
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteVerdaCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(4_100)
       },
     )
@@ -232,7 +235,7 @@ describe('the plausibility floor', () => {
       basis: 'default',
       samples: 0,
     })
-    delete process.env.VERDA_SCALEDOWN_SECONDS
+    delete process.env.LARGE_LLM_SCALEDOWN_SECONDS
   })
 
   it('keeps the estimate honest when most of the window is poisoned', () => {
@@ -257,12 +260,12 @@ describe('the plausibility floor', () => {
 })
 
 describe('when the notice fires', () => {
-  it('fires on a verda-bound call while nothing says the box is up', async () => {
-    const seen = await runWithInferenceTier('verda', () =>
+  it('fires on a self_deployed-bound call while nothing says the box is up', async () => {
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
+        beginSelfDeployedTurn()
         clientOverrideFor('controller')
-        endVerdaTurn()
+        endSelfDeployedTurn()
       }),
     )
     expect(seen).toHaveLength(1)
@@ -279,34 +282,34 @@ describe('when the notice fires', () => {
   })
 
   it('stays silent when a recent call proves the box is warm', async () => {
-    noteVerdaCallCompleted(Date.now())
-    const seen = await runWithInferenceTier('verda', () =>
+    noteLargeCallCompleted(Date.now())
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
+        beginSelfDeployedTurn()
         clientOverrideFor('controller')
-        endVerdaTurn()
+        endSelfDeployedTurn()
       }),
     )
     expect(seen).toEqual([])
   })
 
   it('fires at most once per turn — the second call is on a box the first woke', async () => {
-    const seen = await runWithInferenceTier('verda', () =>
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
+        beginSelfDeployedTurn()
         clientOverrideFor('controller')
         clientOverrideFor('critic')
         clientOverrideFor('compactExecution')
-        endVerdaTurn()
+        endSelfDeployedTurn()
       }),
     )
     expect(seen).toHaveLength(1)
   })
 
   it('fires for a describe call bound to the small box', async () => {
-    const seen = await runWithInferenceTier('verda', () =>
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+        expect(clientOverrideFor('describe')).toEqual({ client: 'SmallQwen' })
       }),
     )
     expect(seen).toEqual([{ estimateMs: COLD_START_FALLBACK_MS, basis: 'default', samples: 0 }])
@@ -317,50 +320,50 @@ describe('when the notice fires', () => {
     // A describe call BEFORE the controller's must not consume the turn's one
     // announcement, or the flip would have silently deleted the cold-start UX for
     // every turn whose first override happened to be a summary.
-    const seen = await runWithInferenceTier('verda', () =>
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
+        beginSelfDeployedTurn()
         clientOverrideFor('describe')
         clientOverrideFor('controller')
-        endVerdaTurn()
+        endSelfDeployedTurn()
       }),
     )
     expect(seen).toHaveLength(1)
   })
 
   it('is not fired by a budgeting lookup, which asks the same question', async () => {
-    const seen = await runWithInferenceTier('verda', () =>
+    const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        beginVerdaTurn()
+        beginSelfDeployedTurn()
         // `resolveClientForRole` is how a pattern learns the model's context
         // window before building a prompt. It may run more than once, and it
         // does not mean a call is on the wire.
-        expect(resolveClientForRole('controller')).toBe('VerdaQwen')
-        endVerdaTurn()
+        expect(resolveClientForRole('controller')).toBe('LargeQwen')
+        endSelfDeployedTurn()
       }),
     )
     expect(seen).toEqual([])
   })
 
   it('does nothing at all with no watch armed — a script, a triggered run', async () => {
-    await runWithInferenceTier('verda', async () => {
-      beginVerdaTurn()
+    await runWithInferenceTier('self_deployed', async () => {
+      beginSelfDeployedTurn()
       expect(() => clientOverrideFor('controller')).not.toThrow()
-      endVerdaTurn()
+      endSelfDeployedTurn()
     })
   })
 
   it('survives a listener that throws — a status frame is not worth an answer', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-    await runWithInferenceTier('verda', () =>
+    await runWithInferenceTier('self_deployed', () =>
       runWithColdStartWatch(
         () => {
           throw new Error('the stream is gone')
         },
         async () => {
-          beginVerdaTurn()
+          beginSelfDeployedTurn()
           expect(() => clientOverrideFor('controller')).not.toThrow()
-          endVerdaTurn()
+          endSelfDeployedTurn()
         },
       ),
     )
@@ -373,11 +376,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   it('records the wait when this process watched the box go cold', async () => {
     // Evidence of coldness: a call finished, and the scale-down window has
     // long since elapsed.
-    noteVerdaCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteVerdaCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(155_000)
       },
     )
@@ -385,14 +388,14 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('measures NOTHING on a process that has never seen the box', async () => {
-    // No `noteVerdaCallCompleted` at all — the box may well have been warm and
+    // No `noteLargeCallCompleted` at all — the box may well have been warm and
     // this process simply had not noticed (a restart, a second instance). The
     // notice still shows, pessimistically; the reading must not be kept.
     const seen: ColdStartEstimate[] = []
     await runWithColdStartWatch(
       (e) => seen.push(e),
       async () => {
-        noteVerdaCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(4_000)
       },
     )
@@ -401,11 +404,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('records one reading per turn, not one per call', async () => {
-    noteVerdaCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteVerdaCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(150_000)
         settleColdStart(2_000)
       },
@@ -414,11 +417,11 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('keeps nothing when BAML measured nothing', async () => {
-    noteVerdaCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {
-        noteVerdaCallStarting(NOW)
+        noteLargeCallStarting(NOW)
         settleColdStart(undefined)
       },
     )
@@ -426,7 +429,7 @@ describe('what the wait is allowed to teach the estimate', () => {
   })
 
   it('ignores a settle from a turn that never announced anything', async () => {
-    noteVerdaCallCompleted(LONG_AGO)
+    noteLargeCallCompleted(LONG_AGO)
     await runWithColdStartWatch(
       () => {},
       async () => {

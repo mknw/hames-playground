@@ -222,7 +222,7 @@ configuration withholds earlier content and refuses web calls. The outer
 injection guard always fences route outputs and enables the screen. Only its
 `think` planner sets `screenOutput: false`, keeping deterministic checks and
 fencing while avoiding a model-screen call on its own plan. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=private`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
+is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
 acceptance evidence; registration does not change the default agent.
 
 ### Deciding with probabilities
@@ -331,10 +331,10 @@ fallback is allowed. For the later app wiring slice, wrap the reachability check
 
 ```typescript
 // Supplied by the app from @hames-ai/harness-baml/clients.server:
-declare const assertInferenceTier: (tier: 'anthropic' | 'verda') => void
+declare const assertInferenceTier: (tier: 'anthropic' | 'self_deployed') => void
 
 const assertTier = (tier: string) => {
-  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')
+  if (tier !== 'anthropic' && tier !== 'self_deployed') throw new TypeError('unknown memory tier')
   assertInferenceTier(tier)
 }
 ```

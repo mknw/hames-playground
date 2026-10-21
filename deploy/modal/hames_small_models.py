@@ -2,7 +2,7 @@
 
 Two roles, one box, one bill:
 
-  * `describe` — the Qwen3.5-4B summarizer the app's `LocalQwenSmall` client
+  * `describe` — the Qwen3.5-4B summarizer the app's `SmallQwen` client
     reaches over `SMALL_LLM_BASE_URL` (OpenAI chat-completions, model name
     `qwen3.5-4b-instruct`).
   * `decide` — H2O-Lightning-4B, a LoRA on THAT SAME base, behind H2O's own

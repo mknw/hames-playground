@@ -2,7 +2,8 @@
  * Conversations Repository — Server Only
  *
  * One table, one JSONB blob per conversation. The blob is the full
- * `serializeContext()` output; we don't normalize events or messages here.
+ * `serializeContext()` output. A read projection normalizes legacy tier metadata;
+ * content and stored rows are preserved.
  *
  * `title` and `context` are encrypted at rest (`crypto.server.ts`): the blob
  * carries verbatim tool results, which since per-user Graph access can include
@@ -19,6 +20,7 @@
  * runs SQL against it.
  */
 
+import { normalizeStoredContextTiers } from '../inference/tier-value'
 import { DECISION_LOOP_MAX_ITERATIONS } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import { randomBytes } from 'node:crypto'
 
@@ -53,15 +55,15 @@ export type ConversationSource = 'chat' | 'post' | 'routine'
 export type ConversationStatus = 'running' | 'paused' | 'done' | 'error'
 
 /**
- * The tier column, exactly as stored: `'verda'`, `'anthropic'`, or `null` for a
+ * The tier column, exactly as stored: `'self_deployed'`, `'anthropic'`, or `null` for a
  * row that has none of its own.
  *
  * Deliberately `string | null` rather than the `InferenceTier` union, and this
  * module deliberately does NOT narrow it. Narrowing here would mean importing
  * `isInferenceTier`, whose module imports `clients.server.ts`, whose module load
- * asserts the private tier's configuration when `USE_VERDA_INFERENCE=1` — and
+ * asserts the private tier's configuration when `USE_SELF_DEPLOYED_INFERENCE=1` — and
  * this repository is reached from the schema bootstrap, i.e. from the boot path
- * that assert documents itself as being off (see `assertVerdaConfigured`).
+ * that assert documents itself as being off (see `assertLargeModelConfigured`).
  * Pulling it in would move a documented first-harness-call failure onto boot.
  *
  * The narrowing belongs to `lib/inference/tier.server.ts`, which owns the
@@ -167,7 +169,9 @@ function rowToConversation(row: DbRow): ConversationRow {
     userId: row.user_id,
     agentId: row.agent_id,
     title: decryptFieldOrNull(row.title, 'conversations.title'),
-    serializedContext: decryptJsonb(row.context, 'conversations.context'),
+    serializedContext: normalizeStoredContextTiers(
+      decryptJsonb(row.context, 'conversations.context'),
+    ),
     kind: row.kind,
     source: row.source,
     status: row.status,
@@ -721,7 +725,7 @@ export async function getConversationInferenceTier(
  * and bumping it would reorder the list and report the owner as chatting.
  *
  * The value is written as given. Validation is the caller's — `lib/inference/
- * tier.server.ts` is the one that narrows to the union and refuses `'verda'` on
+ * tier.server.ts` is the one that narrows to the union and refuses `'self_deployed'` on
  * a deployment with no endpoint, because that refusal is about the deployment
  * rather than about the row.
  */
@@ -777,15 +781,15 @@ export async function backfillConversationInferenceTier(run: QueryRunner): Promi
            FROM user_prefs p
           WHERE p.user_id = c.user_id
             AND c.inference_tier IS NULL
-            AND p.inference_tier IN ('verda', 'anthropic');
+            AND p.inference_tier IN ('verda', 'self_deployed', 'anthropic');
        END IF;
      END $$;`,
   )
 }
 
 /**
- * The per-LLM-call ceiling in force: `VerdaQwen`'s `request_timeout_ms` of
- * 180_000 (`baml_src/verda-client.baml`), which is the only declared one and
+ * The per-LLM-call ceiling in force: `LargeQwen`'s `request_timeout_ms` of
+ * 180_000 (`baml_src/large-client.baml`), which is the only declared one and
  * belongs to the DEPLOYMENT DEFAULT tier. It is the single term below that
  * dominates everything else, so it is the number that moves the threshold.
  *
@@ -858,7 +862,7 @@ export const TOOL_CALL_TIMEOUT_MINUTES = 1
 
 /**
  * The longest a turn is parked on the private tier's wake before its first call:
- * the larger of `DEFAULT_VERDA_WAKE_TIMEOUT_MS` (600 s) and
+ * the larger of `DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS` (600 s) and
  * `DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS` (720 s). The two boxes wake in PARALLEL, so
  * it is the max and not the sum. A mirror — `lib/inference/wake.server.ts` pulls
  * in the whole transport stack, which this module must not — pinned against both
@@ -1134,7 +1138,9 @@ export async function listConversationEvents(userId: string): Promise<Conversati
     [userId],
   )
   return rows.map((r) => {
-    const context = JSON.parse(decryptJsonb(r.context, 'conversations.context')) as {
+    const context = JSON.parse(
+      normalizeStoredContextTiers(decryptJsonb(r.context, 'conversations.context')),
+    ) as {
       events?: unknown
     } | null
     return {
@@ -1469,7 +1475,9 @@ export async function loadSharedConversation(token: string): Promise<SharedConve
   return {
     id: rows[0].id,
     title: decryptFieldOrNull(rows[0].title, 'conversations.title'),
-    serializedContext: decryptJsonb(rows[0].context, 'conversations.context'),
+    serializedContext: normalizeStoredContextTiers(
+      decryptJsonb(rows[0].context, 'conversations.context'),
+    ),
     sharedAt: rows[0].shared_at,
   }
 }

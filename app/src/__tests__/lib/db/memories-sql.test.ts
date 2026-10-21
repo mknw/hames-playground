@@ -49,7 +49,7 @@ const insert = () =>
     id: 'mem-1',
     userId: 'user-a',
     kind: 'preference',
-    tier: 'verda',
+    tier: 'self_deployed',
     content: 'I prefer short answers',
     evidence: 'I prefer short answers',
     embedding: new Array(1024).fill(0.5),
@@ -232,7 +232,7 @@ describe('every write to a memory row carries ciphertext, and every read is owne
           id: 'mem-1',
           user_id: 'user-a',
           kind: 'preference',
-          tier: 'verda',
+          tier: 'self_deployed',
           content: encryptField('I prefer short answers'),
           evidence: encryptField('I prefer short answers'),
           embed_space: 'qwen3-0.6b',
@@ -409,5 +409,63 @@ describe('M7 row erase and access export', () => {
     expect(select.params).toEqual(['synthetic-owner'])
     expect(select.sql).toContain('m.user_id = $1')
     expect(select.sql).toContain('s.user_id = $1 AND s.memory_id = m.id')
+  })
+})
+
+describe('legacy tier rows', () => {
+  it('widens the old constraint idempotently without rewriting tier rows', async () => {
+    await repo.ensureMemoriesSchema()
+    const ddl = sent.find((s) => s.sql.includes('CREATE TABLE IF NOT EXISTS memories'))!.sql
+    expect(ddl).toContain("CHECK (tier IN ('verda','self_deployed','anthropic'))")
+    expect(ddl).toContain("pg_get_constraintdef(oid) NOT LIKE '%self_deployed%'")
+    expect(ddl).toContain('ALTER TABLE memories DROP CONSTRAINT memories_tier_check')
+    expect(ddl).toContain('ALTER TABLE memories ADD CONSTRAINT memories_tier_check')
+    expect(ddl).not.toMatch(/UPDATE memories SET tier/i)
+  })
+  it('normalizes an old row and provenance on read without writing them back', async () => {
+    const { encryptField } = await import('../../../lib/db/crypto.server')
+    reply = dataReply(() => ({
+      rows: [
+        {
+          id: 'old',
+          user_id: 'user-a',
+          kind: 'trait',
+          tier: 'verda',
+          content: encryptField('Synthetic content'),
+          evidence: encryptField('Synthetic evidence'),
+          distance: 0.1,
+          last_seen_at: new Date(0),
+        },
+      ],
+    }))
+    expect((await repo.listMemoriesForUser('user-a'))[0].tier).toBe('self_deployed')
+    expect(
+      (
+        await repo
+          .createMemoryDbStore('user-a')
+          .candidates({ embedding: new Array(1024).fill(0), tiers: ['self_deployed'] })
+      )[0].tier,
+    ).toBe('self_deployed')
+    expect((await repo.listMemorySourcesForConversation('conversation-a', 'user-a'))[0].tier).toBe(
+      'self_deployed',
+    )
+    expect(sent.some((s) => /^(UPDATE|INSERT INTO) memories/.test(s.sql))).toBe(false)
+  })
+  it.each([
+    ['self_deployed', ['self_deployed', 'verda']],
+    ['verda', ['self_deployed', 'verda']],
+    ['anthropic', ['anthropic']],
+    ['unknown', []],
+  ] as const)('queries only the same stored tier for %s', async (tier, expected) => {
+    const store = repo.createMemoryDbStore('user-a')
+    await store.count([tier])
+    await store.candidates({ embedding: new Array(1024).fill(0), tiers: [tier] })
+    const reads = sent.filter(
+      (s) =>
+        s.sql.includes('FROM memories WHERE user_id') ||
+        s.sql.includes('WHERE user_id = $1 AND tier = ANY'),
+    )
+    expect(reads).toHaveLength(2)
+    for (const read of reads) expect(read.params[1]).toEqual(expected)
   })
 })

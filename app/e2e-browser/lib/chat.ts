@@ -78,7 +78,7 @@ export function progressRange(page: Page): Locator {
  * should go red if the app renames it.
  */
 export const TIER_LABEL = {
-  verda: 'Private (Verda)',
+  self_deployed: 'Private',
   anthropic: 'Anthropic',
 } as const
 
@@ -115,7 +115,7 @@ export function tierOption(page: Page, label: string): Locator {
  * handler returns early when the clicked value equals the current one, so no
  * action fires and no row appears. That is not an edge case: every scenario
  * starts with `wipeUserRows()` having deleted the seed, and the private tier is
- * the DEFAULT when the endpoint is configured — so `chooseTier(page, 'verda')`
+ * the DEFAULT when the endpoint is configured — so `chooseTier(page, 'self_deployed')`
  * on a fresh page is exactly that no-op. This therefore always goes VIA the
  * other position, unconditionally rather than conditionally: a branch on "is a
  * row already there" would make the wait's behaviour depend on the state it is
@@ -129,7 +129,7 @@ export function tierOption(page: Page, label: string): Locator {
  * line is running on the tier it asked for, provably.
  */
 export async function chooseTier(page: Page, tier: Tier): Promise<void> {
-  const other: Tier = tier === 'verda' ? 'anthropic' : 'verda'
+  const other: Tier = tier === 'self_deployed' ? 'anthropic' : 'self_deployed'
 
   await clickTier(page, other)
   // The FIRST click's persistence is deliberately not asserted: when the page
@@ -244,7 +244,7 @@ export function expectFakeAnswer(text: string): void {
  *
  * A real wall-clock wait, and it has to be: warmth is "a call completed inside
  * the scale-down window", so the only way to leave that window is for time to
- * pass. The window is two seconds here (`VERDA_SCALEDOWN_SECONDS` in global
+ * pass. The window is two seconds here (`LARGE_LLM_SCALEDOWN_SECONDS` in global
  * setup), which is what makes waiting for it affordable — see that constant for
  * why the shipped 180 would make the cold-start notice untestable.
  */

@@ -135,7 +135,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   // bag even when no tier override is, so the old with/without-opts dual call
   // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
   // 4.5), overridden onto the self-hosted deployment when
-  // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
+  // `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `compactExecution` role.
   const synthOpts = { ...clientOverrideFor('compactExecution'), collector }
   let content: string
   try {
@@ -296,7 +296,7 @@ export const defaultSelector: SelectorFn = async (input) => {
       input.intent,
       input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
       candidates,
-      // describe-tier, so a verda tier decision moves it: the candidates it
+      // describe-tier, so a self_deployed tier decision moves it: the candidates it
       // ranks are summaries of this conversation's own tool results.
       { ...clientOverrideFor('describe'), collector },
     )

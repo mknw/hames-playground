@@ -10,6 +10,6 @@ export default defineConfig({
     maxWorkers: 1,
     fileParallelism: false,
     coverage: { enabled: false },
-    env: { BAML_LOG: 'off', USE_VERDA_INFERENCE: '', ANTHROPIC_API_KEY: 'synthetic-key' },
+    env: { BAML_LOG: 'off', USE_SELF_DEPLOYED_INFERENCE: '', ANTHROPIC_API_KEY: 'synthetic-key' },
   },
 })

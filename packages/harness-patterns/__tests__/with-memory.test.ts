@@ -50,7 +50,7 @@ type Data = Record<string, unknown>
 const row: MemoryCandidate = {
   id: 'm1',
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   content: 'prefers metric units',
   embedSpace: SPACE,
   distance: 0.1,
@@ -79,7 +79,7 @@ function memoryConfig(over: Partial<MemoryConfig> = {}): MemoryConfig {
       documents: async (t: string[]) => t.map(() => [1, 0]),
     },
     owner: () => 'user-1',
-    visibleTiers: () => ['verda', 'anthropic'],
+    visibleTiers: () => ['self_deployed', 'anthropic'],
     enabled: () => true,
     ...over,
   }
@@ -199,7 +199,7 @@ describe('with-memory-one-switch', () => {
       enabled: () => false,
       store: { count: async () => 1, candidates: async () => [row], transaction },
     })
-    await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       settleMemory(createContext('hi'), memoryStoreConfig(cfg)),
     )
     expect(transaction).not.toHaveBeenCalled()

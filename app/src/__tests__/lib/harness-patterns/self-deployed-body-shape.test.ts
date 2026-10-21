@@ -2,7 +2,7 @@
  * What the PRIVATE TIER actually puts on the wire — for every function it routes,
  * against the client it routes that function to.
  *
- * `clients-verda.test.ts` pins the ROUTING decision (which role goes where).
+ * `clients-self-deployed.test.ts` pins the ROUTING decision (which role goes where).
  * This file pins the REQUEST, because two of the client's properties are
  * invisible in a routing assertion and both fail silently:
  *
@@ -24,10 +24,10 @@
  *     is the authority, and this test is what makes that readable.
  *
  * SINCE 2026-08-26 THAT IS TWO CLIENTS, not one. The tier routes `describe` to
- * the 4B `LocalQwenSmall` and everything else to the 27B `VerdaQwen`, so this
- * file derives each function's client from `VERDA_CLIENT_BY_ROLE` rather than
+ * the 4B `SmallQwen` and everything else to the 27B `LargeQwen`, so this
+ * file derives each function's client from `SELF_DEPLOYED_CLIENT_BY_ROLE` rather than
  * rendering everything against one name. The reason is not tidiness: rendering a
- * describe function against `VerdaQwen` would pin a request nothing makes, and
+ * describe function against `LargeQwen` would pin a request nothing makes, and
  * the 4B's own body would then be checked by nothing at all — while the file
  * still read as complete coverage of the tier.
  *
@@ -35,11 +35,11 @@
  * different weight: Qwen3.5-4B is a thinking model too, and its output cap is
  * 2 048 rather than 16 384, so an unsuppressed reasoning block does not just eat
  * the budget — it eats all of it. The `cache_control` and served-model checks are
- * VerdaQwen's alone: they are properties of the confidential-compute deployment.
+ * LargeQwen's alone: they are properties of the confidential-compute deployment.
  *
  * Rendered offline via `b.request.*`: no socket is opened, so this runs in CI
  * where the endpoint is unreachable. The live counterpart is
- * `scripts/smoke-verda.ts`.
+ * `scripts/smoke-self-deployed.ts`.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import type { LoopTurn, ToolDescription } from '@hames-ai/harness-baml/baml_client/types'
@@ -52,15 +52,15 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/deployment/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/deployment/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
   SMALL_LLM_BASE_URL: 'https://example.invalid/small/v1',
   SMALL_LLM_API_KEY: 'offline-render-test',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
 }
-const VERDA = { client: 'VerdaQwen', env: ENV }
+const SELF_DEPLOYED = { client: 'LargeQwen', env: ENV }
 /** The 4B summarizer the tier routes `describe` to. Same options-bag contract. */
-const SMALL = { client: 'LocalQwenSmall', env: ENV }
+const SMALL = { client: 'SmallQwen', env: ENV }
 
 type Body = {
   model?: string
@@ -124,19 +124,35 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   [
     'LoopController',
     () =>
-      b.request.LoopController('q', 'i', TOOLS, TURNS, null, null, null, null, null, null, VERDA),
+      b.request.LoopController(
+        'q',
+        'i',
+        TOOLS,
+        TURNS,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        SELF_DEPLOYED,
+      ),
   ],
   [
     'ActorController',
-    () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, VERDA),
+    () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, SELF_DEPLOYED),
   ],
-  ['Critic', () => b.request.Critic('i', [], VERDA)],
-  ['Synthesize', () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, VERDA)],
+  ['Critic', () => b.request.Critic('i', [], SELF_DEPLOYED)],
+  [
+    'Synthesize',
+    () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, SELF_DEPLOYED),
+  ],
   [
     'Router',
-    () => b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, VERDA),
+    () =>
+      b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, SELF_DEPLOYED),
   ],
-  ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, VERDA)],
+  ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, SELF_DEPLOYED)],
   // The eight describe functions, on the 4B — the shipped route since the flip
   // (six of them at the flip, the two memory functions of #419 M9 since).
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
@@ -157,7 +173,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ],
   [
     'ScreenUntrustedContent',
-    () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', VERDA),
+    () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', SELF_DEPLOYED),
   ],
 ]
 
@@ -174,16 +190,17 @@ describe('private-tier request bodies', () => {
     // request production never makes. So the table is compared against the
     // production map, by reading the `model` field off each rendered body — the
     // one field that names the client BAML actually resolved.
-    const { VERDA_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
+    const { SELF_DEPLOYED_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
       await import('@hames-ai/harness-baml/clients.server')
     const MODEL_OF: Record<string, string> = {
-      VerdaQwen: 'Qwen/Qwen3.8-27B-FP8',
-      LocalQwenSmall: 'qwen3.5-4b-instruct',
+      LargeQwen: 'Qwen/Qwen3.8-27B-FP8',
+      SmallQwen: 'qwen3.5-4b-instruct',
     }
     const expected = new Map<string, string>()
     for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
       if (role === 'decide') continue // REST systemone, outside the BAML corpus.
-      const client = VERDA_CLIENT_BY_ROLE[role as keyof typeof VERDA_CLIENT_BY_ROLE]!
+      const client =
+        SELF_DEPLOYED_CLIENT_BY_ROLE[role as keyof typeof SELF_DEPLOYED_CLIENT_BY_ROLE]!
       for (const fn of fns as readonly string[]) expected.set(fn, MODEL_OF[client])
     }
     // Every routed client has a model id here — a third one added to the tier
@@ -204,7 +221,7 @@ describe('private-tier request bodies', () => {
   })
 
   it('renders every function a tier decision routes, and nothing it does not', async () => {
-    // Without this, adding a role to `VERDA_CLIENT_BY_ROLE` would route new
+    // Without this, adding a role to `SELF_DEPLOYED_CLIENT_BY_ROLE` would route new
     // functions to a client whose one silent-failure property nothing checked
     // for them. Compared against the derived set, so the list above cannot go
     // short — and `ScreenUntrustedContent` is now present in BOTH, which is the
@@ -224,7 +241,7 @@ describe('private-tier request bodies', () => {
     // `GET /v1/models` reports one model and vLLM 400s any other id.
     expect(body.model).toBe('Qwen/Qwen3.8-27B-FP8')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
-    expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+    expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LargeQwen)
   })
 
   it('caps the 4B at its own max_tokens, not the 27B’s', async () => {
@@ -239,8 +256,8 @@ describe('private-tier request bodies', () => {
       await b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)
     ).body.json() as Body
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
-    expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall)
-    expect(body.max_tokens).toBeLessThan(CLIENT_MAX_OUTPUT_TOKENS.VerdaQwen)
+    expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.SmallQwen)
+    expect(body.max_tokens).toBeLessThan(CLIENT_MAX_OUTPUT_TOKENS.LargeQwen)
   })
 
   it('carries a recalled memory block on the wire as ONE user message, and costs nothing when absent', async () => {
@@ -258,10 +275,13 @@ describe('private-tier request bodies', () => {
         'Router',
         (m) =>
           m === undefined
-            ? b.request.Router('q', ROUTES, MESSAGES, undefined, VERDA)
-            : b.request.Router('q', ROUTES, MESSAGES, m, VERDA),
+            ? b.request.Router('q', ROUTES, MESSAGES, undefined, SELF_DEPLOYED)
+            : b.request.Router('q', ROUTES, MESSAGES, m, SELF_DEPLOYED),
       ],
-      ['Synthesize', (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, VERDA)],
+      [
+        'Synthesize',
+        (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, SELF_DEPLOYED),
+      ],
     ]
     for (const [name, render] of renders) {
       const bodyOf = async (m: string | null | undefined) =>
@@ -284,8 +304,8 @@ describe('private-tier request bodies', () => {
   })
 
   it('sends no cache_control anywhere in the body, where the Anthropic chain does', async () => {
-    const verda = JSON.stringify((await CALLS[0][1]()).body.json())
-    expect(verda).not.toContain('cache_control')
+    const self_deployed = JSON.stringify((await CALLS[0][1]()).body.json())
+    expect(self_deployed).not.toContain('cache_control')
     // Not a vacuous assertion: the SAME function on the declared chain carries
     // the breakpoints, so this proves the client's omission is what drops them
     // rather than the template having stopped rendering them.

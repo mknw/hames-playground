@@ -21,7 +21,7 @@
  * USAGE (always from `app/`):
  *
  *   pnpm eval:harness                          # baseline: the declared Anthropic chains
- *   EVAL_CLIENT=VerdaQwen pnpm eval:harness    # the self-hosted deployment
+ *   EVAL_CLIENT=LargeQwen pnpm eval:harness    # the self-hosted deployment
  *   EVAL_RELIABILITY_N=5 pnpm eval:harness     # shorter reliability sample
  *   EVAL_ROLES=screen pnpm eval:harness        # narrow to one role while bisecting
  *
@@ -29,7 +29,10 @@
  */
 
 import { Collector } from '@boundaryml/baml'
-import { privateInferenceOnly, VERDA_CLIENT_BY_ROLE } from '@hames-ai/harness-baml/clients.server'
+import {
+  privateInferenceOnly,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
+} from '@hames-ai/harness-baml/clients.server'
 import { resolveEvalRouting } from './client'
 import { runScenario, scenarioPassed, type Scenario, type ScenarioResult } from './harness'
 import { renderReport, writeReport } from './report'
@@ -133,8 +136,8 @@ async function main(): Promise<void> {
   console.log(`   client under test : ${routing.client ?? 'default (declared Anthropic chains)'}`)
   console.log(`   routing           : ${routing.note}`)
   console.log(`   scenarios         : ${scenarios.length}`)
-  if (routing.client === 'VerdaQwen') {
-    console.log('   NOTE: the Verda box scales to zero — a cold start can take minutes.')
+  if (routing.client === 'LargeQwen') {
+    console.log('   NOTE: the large-model box scales to zero — a cold start can take minutes.')
   }
   console.log('')
 
@@ -142,14 +145,16 @@ async function main(): Promise<void> {
   if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide'))
     await preflight(
       routing.client ??
-        (privateInferenceOnly() && routing.byRole ? VERDA_CLIENT_BY_ROLE.critic : undefined),
+        (privateInferenceOnly() && routing.byRole
+          ? SELF_DEPLOYED_CLIENT_BY_ROLE.critic
+          : undefined),
     )
 
   const t0 = Date.now()
   const results: ScenarioResult[] = []
   // Sequential on purpose. The self-hosted endpoint is ONE box: running the
   // scenarios concurrently would measure queueing rather than the client, and
-  // `smoke-verda-load.ts` is where throughput under concurrency belongs.
+  // `smoke-large-load.ts` is where throughput under concurrency belongs.
   for (const scenario of scenarios) {
     process.stdout.write(`   ▶ ${scenario.id} … `)
     const result = await runScenario(scenario, routing)

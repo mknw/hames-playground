@@ -43,7 +43,7 @@ function splitTopLevel(sql: string, delimiter: string): string[] {
 }
 const normalized = (sql: string) => sql.replace(/\s+/g, ' ').trim()
 
-// Two existing, exact legacy exceptions, each bound to its source. No blanket
+// Exact compatibility migrations, each bound to its source. No blanket
 // ALTER COLUMN or DO permission: changing even one token must make the pin red.
 const LEGACY_SEQUENCE_DEFAULT =
   "ALTER TABLE conversations ALTER COLUMN context_version SET DEFAULT nextval('conversations_context_version_seq')"
@@ -56,12 +56,29 @@ const LEGACY_MEMORY_OWNER_FK = normalized(`DO $$ BEGIN
     END IF;
   END $$`)
 
+// #722: this exact widening admits the new spelling and preserves old rows.
+const SELF_DEPLOYED_MEMORY_TIER_CHECK = normalized(`DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'memories'::regclass AND conname = 'memories_tier_check'
+        AND pg_get_constraintdef(oid) NOT LIKE '%self_deployed%'
+    ) THEN
+      ALTER TABLE memories DROP CONSTRAINT memories_tier_check;
+      ALTER TABLE memories ADD CONSTRAINT memories_tier_check
+        CHECK (tier IN ('verda','self_deployed','anthropic'));
+    END IF;
+  END $$`)
+
 /** Fail closed on each statement AND each top-level ALTER action. */
 function nonAdditive(sql: string, source = ''): string[] {
   return splitTopLevel(withoutComments(sql), ';').filter((statement) => {
     const exact = normalized(statement)
     if (source === 'db/client.server.ts' && exact === LEGACY_SEQUENCE_DEFAULT) return false
-    if (source === 'db/memories.server.ts' && exact === LEGACY_MEMORY_OWNER_FK) return false
+    if (
+      source === 'db/memories.server.ts' &&
+      (exact === LEGACY_MEMORY_OWNER_FK || exact === SELF_DEPLOYED_MEMORY_TIER_CHECK)
+    )
+      return false
     const masked = statement.replace(QUOTED_OR_COMMENT, "''")
     // ON DELETE CASCADE is an existing FK declaration, not a data DELETE.
     const operations = masked.replace(/\bON DELETE (?:CASCADE|SET NULL|NO ACTION|RESTRICT)\b/g, '')
@@ -153,6 +170,11 @@ describe('boot DDL remains additive-only (#432 row 8)', () => {
     'CREATE OR REPLACE VIEW hidden AS SELECT 1;',
     'DO $$ BEGIN DELETE FROM conversations; END $$;',
     LEGACY_MEMORY_OWNER_FK.replace('NOT VALID', ''),
+    SELF_DEPLOYED_MEMORY_TIER_CHECK.replace(
+      "'verda','self_deployed','anthropic'",
+      "'self_deployed','anthropic'",
+    ),
+    SELF_DEPLOYED_MEMORY_TIER_CHECK.replace('NOT LIKE', 'LIKE'),
   ])('rejects destructive/non-idempotent mutation %s', (sql) => {
     expect(nonAdditive(sql, 'db/memories.server.ts').length).toBeGreaterThan(0)
   })

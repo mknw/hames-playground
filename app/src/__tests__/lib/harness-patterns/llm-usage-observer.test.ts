@@ -69,11 +69,11 @@ describe('llm-usage observer', () => {
     observeLlmUsage((s) => a.push(s))
     observeLlmUsage((s) => b.push(s))
 
-    notifyLlmUsage({ functionName: 'LoopController', clientName: 'VerdaQwen' })
+    notifyLlmUsage({ functionName: 'LoopController', clientName: 'LargeQwen' })
 
     expect(a).toHaveLength(1)
     expect(b).toHaveLength(1)
-    expect(a[0].clientName).toBe('VerdaQwen')
+    expect(a[0].clientName).toBe('LargeQwen')
   })
 
   it('is a no-op with no listeners — the normal state everywhere but production', () => {
@@ -120,10 +120,13 @@ describe('accountBamlCall — the one place usage is stamped', () => {
   })
 
   it('reports the client BAML SELECTED, with the step metrics', () => {
-    accountBamlCall(stubCollector('VerdaQwen', 100, 40), 'LoopController')
+    accountBamlCall(stubCollector('LargeQwen', 100, 40), 'LoopController')
 
     expect(samples).toHaveLength(1)
-    expect(samples[0]).toMatchObject({ functionName: 'LoopController', clientName: 'VerdaQwen' })
+    expect(samples[0]).toMatchObject({
+      functionName: 'LoopController',
+      clientName: 'LargeQwen',
+    })
     expect(samples[0].metrics).toMatchObject({ inputUncachedTokens: 100, outputTokens: 40 })
   })
 
@@ -143,19 +146,19 @@ describe('accountBamlCall — the one place usage is stamped', () => {
   })
 
   it('reports the duration BAML measured, so a rolling latency can be taken', () => {
-    accountBamlCall(stubCollector('VerdaQwen', 100, 40, { durationMs: 4123 }), 'LoopController')
+    accountBamlCall(stubCollector('LargeQwen', 100, 40, { durationMs: 4123 }), 'LoopController')
     expect(samples[0].durationMs).toBe(4123)
   })
 
   it('leaves the duration ABSENT when BAML measured none', () => {
     // A 0 here would enter a rolling median as an instant call. Undefined is
     // the honest reading of "not measured", and the consumer drops it.
-    accountBamlCall(stubCollector('VerdaQwen', 100, 40, { durationMs: null }), 'LoopController')
+    accountBamlCall(stubCollector('LargeQwen', 100, 40, { durationMs: null }), 'LoopController')
     expect(samples[0].durationMs).toBeUndefined()
 
     // Same for a collector with no timing at all, which is what a stub — and a
     // client version that stops reporting it — looks like.
-    accountBamlCall(stubCollector('VerdaQwen'), 'Critic')
+    accountBamlCall(stubCollector('LargeQwen'), 'Critic')
     expect(samples[1].durationMs).toBeUndefined()
   })
 
@@ -229,7 +232,7 @@ describe('accounting coverage across roles', () => {
    * to show.
    */
   const UNACCOUNTED: Record<string, string> = {
-    'src/lib/inference/scripts/smoke-verda-load.ts:LoopController':
+    'src/lib/inference/scripts/smoke-large-load.ts:LoopController':
       'A manual live-load measurement run by hand against the endpoint, not a path any turn ' +
       'takes. Counting it would put a benchmark burst into the preview header as if users had ' +
       'spent it. Excluded from coverage for the same reason.',
@@ -245,7 +248,7 @@ describe('accounting coverage across roles', () => {
       /(?:extractLLMCallData|extractFailureLLMCallData|wrapAsLLMCallError|accountBamlCall|withUsageAccounting)\(([^)]*)/g
     const offenders: string[] = []
 
-    // COMMENTS STRIPPED FIRST, the same way `clients-verda.test.ts` does it and
+    // COMMENTS STRIPPED FIRST, the same way `clients-self-deployed.test.ts` does it and
     // for the same reason in the opposite direction: a scan that reads prose
     // cannot tell a call from an explanation of one. `clients.server.ts`
     // DISCUSSES `b.ScreenUntrustedContent(...)` while documenting the screen's

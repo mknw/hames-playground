@@ -9,7 +9,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 /** The turn's tier, under the test's control — the wake reads it at poll start
  *  through `activeInferenceTier()`, the SAME seam the run frame fills. */
-const tier = vi.hoisted(() => ({ current: 'verda' as 'verda' | 'anthropic' }))
+const tier = vi.hoisted(() => ({ current: 'self_deployed' as 'self_deployed' | 'anthropic' }))
 vi.mock('@hames-ai/harness-baml/clients.server', () => ({
   activeInferenceTier: () => tier.current,
 }))
@@ -78,7 +78,7 @@ const WAKE_VARS = [
 
 beforeEach(() => {
   resetMemoryWake()
-  tier.current = 'verda'
+  tier.current = 'self_deployed'
   process.env.SMALL_LLM_BASE_URL = SMALL_BASE
   process.env.EMBEDDINGS_LOCAL_URL = EMBED_BASE
   process.env.SMALL_LLM_API_KEY = 'small-key'
@@ -225,11 +225,11 @@ describe('what goes on the wire', () => {
 })
 
 describe('the three budgets', () => {
-  it('ships the unmeasured defaults D20 states, and no Verda number is inherited', () => {
+  it('ships the unmeasured defaults D20 states, and no large-box number is inherited', () => {
     // The embedder (639MB) is an order of magnitude
-    // smaller than the 27B whose readings sized the Verda wake's 600s, so
+    // smaller than the 27B whose readings sized the large-box wake's 600s, so
     // 180s is a PLACEHOLDER for layer 4 to measure — closer to the truth than
-    // the Verda numbers, but still not a reading.
+    // the large-box numbers, but still not a reading.
     expect(DEFAULT_MEMORY_WAKE_TIMEOUT_MS).toBe(180_000)
     expect(DEFAULT_MEMORY_WAKE_TIMEOUT_MS).toBeLessThan(600_000)
   })
@@ -256,7 +256,7 @@ describe('the three budgets', () => {
   })
 
   it('refuses a zero or garbage override rather than honouring it', () => {
-    // Through the SAME parser as the Verda wake (`wakeEnvMs`), so the two
+    // Through the SAME parser as the large-box wake (`wakeEnvMs`), so the two
     // wakes cannot grow different validation policies either.
     process.env.MEMORY_WAKE_ATTEMPT_TIMEOUT_MS = '0'
     process.env.MEMORY_WAKE_POLL_INTERVAL_MS = 'soon'
@@ -493,7 +493,7 @@ describe('the bounded wait both consumers attach through', () => {
 
 describe('the env knobs are documented where a deployment reads them', () => {
   it('every env var the module reads appears in .env.example, inside the memory block (F2 + F5)', () => {
-    // The VERDA_WAKE_* block is the established precedent: a wake's tunable
+    // The LARGE_LLM_WAKE_* block is the established precedent: a wake's tunable
     // bounds are deployment knobs, documented with their defaults and their
     // reasoning, not discoverable only by reading the module. Source-scan, the
     // uno-fonts pattern: every name this module reads must have a row there —
@@ -531,7 +531,7 @@ describe('the env knobs are documented where a deployment reads them', () => {
 
 describe('fail-open: a failed wake is not the turn’s failure', () => {
   it('resolves — never throws — when the whole budget expires', async () => {
-    // THE D20 CONTRACT: memory is opportunistic. The Verda wake fails the turn
+    // THE D20 CONTRACT: memory is opportunistic. The large-box wake fails the turn
     // visibly because confidential compute must not silently proceed; a
     // failed memory wake leaves the turn exactly as it was, minus memory.
     vi.useFakeTimers()
@@ -571,7 +571,7 @@ describe('fail-open: a failed wake is not the turn’s failure', () => {
     resetMemoryWake()
 
     // 2. budget expiry (ten dropped attempts)
-    tier.current = 'verda'
+    tier.current = 'self_deployed'
     byUrl(stalls(), stalls())
     const stalled = quiet(ensureMemoryAwake(true))
     await vi.advanceTimersByTimeAsync(100_000)

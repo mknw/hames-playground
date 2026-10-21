@@ -121,7 +121,7 @@ template_string ActorMultiCalls(multi_call_mode: string?, with_reasoning: bool) 
 // and rewrites the rest to `user`), false of an OpenAI-compatible server. vLLM
 // rejects the whole request with `System message must be at the beginning.`, so
 // a `system` marker here 400s every actor call that carries a context — and
-// under `USE_VERDA_INFERENCE=1` that is every sandbox actor call. Rendering it
+// under `USE_SELF_DEPLOYED_INFERENCE=1` that is every sandbox actor call. Rendering it
 // `user` is byte-identical on the Anthropic wire (pinned by
 // `prompt-role-order.test.ts`) and legal on both.
 // An upstream planner's plan (#27) rides `context` here and stays cache-safe:

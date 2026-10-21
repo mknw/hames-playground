@@ -71,16 +71,16 @@ describe('percentileMs', () => {
 
 describe('the rolling window', () => {
   it('reports no median and no samples before anything is recorded', () => {
-    expect(tierLatency('verda')).toEqual({ p50Ms: null, samples: 0 })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: null, samples: 0 })
   })
 
   it('keeps only the last LATENCY_WINDOW calls', () => {
     // A slow first call, then a full window of fast ones: the slow one must
     // have fallen out, or "rolling" means nothing.
-    noteCallLatency('verda', 600_000)
-    for (let i = 0; i < LATENCY_WINDOW; i++) noteCallLatency('verda', 4000)
+    noteCallLatency('self_deployed', 600_000)
+    for (let i = 0; i < LATENCY_WINDOW; i++) noteCallLatency('self_deployed', 4000)
 
-    const { p50Ms, samples } = tierLatency('verda')
+    const { p50Ms, samples } = tierLatency('self_deployed')
     expect(samples).toBe(LATENCY_WINDOW)
     expect(p50Ms).toBe(4000)
   })
@@ -91,29 +91,29 @@ describe('the rolling window', () => {
   })
 
   it('keeps the tiers apart', () => {
-    noteCallLatency('verda', 9000)
+    noteCallLatency('self_deployed', 9000)
     noteCallLatency('anthropic', 1000)
 
-    expect(tierLatency('verda')).toEqual({ p50Ms: 9000, samples: 1 })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: 9000, samples: 1 })
     expect(tierLatency('anthropic')).toEqual({ p50Ms: 1000, samples: 1 })
   })
 
   it('includes a cold start rather than filtering it out', () => {
     // It is time a user waited. The warm indicator beside it is what says
     // which case they are looking at.
-    noteCallLatency('verda', 4000)
-    noteCallLatency('verda', 180_000)
-    noteCallLatency('verda', 5000)
-    expect(tierLatency('verda').p50Ms).toBe(5000)
+    noteCallLatency('self_deployed', 4000)
+    noteCallLatency('self_deployed', 180_000)
+    noteCallLatency('self_deployed', 5000)
+    expect(tierLatency('self_deployed').p50Ms).toBe(5000)
   })
 
   it('drops an unmeasured reading instead of recording it as 0', () => {
-    noteCallLatency('verda', 4000)
-    noteCallLatency('verda', Number.NaN)
-    noteCallLatency('verda', Number.POSITIVE_INFINITY)
-    noteCallLatency('verda', -1)
+    noteCallLatency('self_deployed', 4000)
+    noteCallLatency('self_deployed', Number.NaN)
+    noteCallLatency('self_deployed', Number.POSITIVE_INFINITY)
+    noteCallLatency('self_deployed', -1)
 
-    expect(tierLatency('verda')).toEqual({ p50Ms: 4000, samples: 1 })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: 4000, samples: 1 })
   })
 
   it('accepts a genuine zero — a cache-served call is not an unmeasured one', () => {
@@ -122,8 +122,8 @@ describe('the rolling window', () => {
   })
 
   it('is emptied by the reset the tests share, so no case inherits a window', () => {
-    noteCallLatency('verda', 1000)
+    noteCallLatency('self_deployed', 1000)
     resetCallLatency()
-    expect(tierLatency('verda').samples).toBe(0)
+    expect(tierLatency('self_deployed').samples).toBe(0)
   })
 })

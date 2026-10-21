@@ -14,7 +14,7 @@ assertServerOnImport()
  * How long the whole poll is given, across every attempt: **180s**.
  *
  * UNMEASURED, and stated as that rather than derived: the embedder being woken is
- * an order of magnitude smaller than the 27B whose readings sized the Verda
+ * an order of magnitude smaller than the 27B whose readings sized the self-deployed
  * wake (600s against a ~360s measured tail), so those numbers are NOT
  * inherited. 180s is a cold start of the same shape, shorter — one overall
  * budget to be replaced by the first real measurement (eval slice M11's
@@ -26,7 +26,7 @@ export const DEFAULT_MEMORY_WAKE_TIMEOUT_MS = 180_000
 
 /**
  * How long ONE attempt is given before it is abandoned and a fresh one sent:
- * **30s** — the same bet the Verda wake makes, and not an estimate of load time
+ * **30s** — the same bet the self-deployed wake makes, and not an estimate of load time
  * either. It is how long the poll bets on the queue-and-answer reading before
  * spending one more token, and it must stay well clear of a warm call (a warm
  * embedder answers a one-item probe in milliseconds), so
@@ -39,7 +39,7 @@ export const DEFAULT_MEMORY_WAKE_ATTEMPT_TIMEOUT_MS = 30_000
 
 /**
  * How long the poll waits between a failed attempt and the next one: **5s**, for
- * the Verda wake's reason — an attempt costs the deployment a queued request,
+ * the self-deployed wake's reason — an attempt costs the deployment a queued request,
  * so hammering a starting container adds queue depth the box has to work
  * through once it is up; and the gap must not be long, because it is dead time
  * in which a box that just became ready is not being asked anything.
@@ -66,7 +66,7 @@ export function memoryWakePollIntervalMs(): number {
 /**
  * The prefix of every memory-wake failure message. Exported so a test can
  * assert the visible string rather than a substring it chose itself. Unlike the
- * Verda wake's, a memory-wake failure is never user-facing — memory is
+ * self-deployed wake's, a memory-wake failure is never user-facing — memory is
  * opportunistic and the turn is unaffected — so this names the thing that did
  * not wake for whoever reads the log, not for a spinner.
  */
@@ -93,7 +93,7 @@ export function embedderWakeModel(): string {
 /**
  * One wake target. The labels carry the env var that names the endpoint,
  * because a target that never answers has to be diagnosable from the failure
- * message alone — the Verda lesson ("late, but named") applied per target.
+ * message alone — the self-deployed lesson ("late, but named") applied per target.
  */
 interface WakeTarget {
   /** Human-readable name, used in every failure message about this target. */
@@ -169,15 +169,15 @@ const state: MemoryWakeState = ((globalThis as MemoryWakeGlobal)[MEMORY_WAKE_KEY
  *
  * Resolves as soon as every requested target answered its forward pass — which,
  * on a warm box, is the first attempt: one cheap request, the cheapest warm
- * check there is. (There is deliberately no warm-clock skip like the Verda
- * wake's `verdaProvenWarm`: the embedder has no usage observer to stamp,
+ * check there is. (There is deliberately no warm-clock skip like the self-deployed
+ * wake's `largeProvenWarm`: the embedder has no usage observer to stamp,
  * and its probe costs milliseconds — it IS the warm check.)
  */
 export async function ensureMemoryAwake(optsIn: boolean): Promise<void> {
   if (!optsIn) return
 
   // One poll, shared — the dedupe wraps the WHOLE loop (a poll = all requested
-  // target loops), not one request, exactly as in the Verda wake: every caller
+  // target loops), not one request, exactly as in the self-deployed wake: every caller
   // that arrives while a poll is running attaches to it, and a burst against
   // the same sleeping box is one queue rather than N independent polls.
   if (state.inFlight === null) {
@@ -305,7 +305,7 @@ async function pollTargets(targets: readonly WakeTarget[]): Promise<void> {
  * a message naming THIS target — which is what Promise.all surfaces as the
  * joint wake's failure — when the target refuses outright or the budget runs
  * out. The message carries the attempt count, the elapsed time and the last
- * error verbatim (the Verda wake's diagnosability rule, applied per target).
+ * error verbatim (the self-deployed wake's diagnosability rule, applied per target).
  */
 async function pollTarget(target: WakeTarget, shared: AbortSignal): Promise<void> {
   const budgetMs = memoryWakeTimeoutMs()

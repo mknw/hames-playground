@@ -1,8 +1,8 @@
 /**
  * Planner — the plan's SHAPE, and the ceiling it has to fit under.
  *
- * This scenario exists because of one line: `planner: 'VerdaQwen'` in
- * `VERDA_CLIENT_BY_ROLE`. The composite consequence of that line is stated in
+ * This scenario exists because of one line: `planner: 'LargeQwen'` in
+ * `SELF_DEPLOYED_CLIENT_BY_ROLE`. The composite consequence of that line is stated in
  * full on the entry itself and is not repeated here; what matters for this file
  * is that until it existed, nothing in the repo measured the role with the
  * harshest degradation path on the tier that is the deployment default. It was
@@ -72,7 +72,7 @@ export function isThinkingPlannerRun(
   routing: EvalRouting,
   scenarios: readonly Scenario[],
 ): boolean {
-  if (routing.client !== 'VerdaQwenThink') return false
+  if (routing.client !== 'LargeQwenThink') return false
   if (
     routing.routed.length !== 1 ||
     routing.routed[0] !== 'planner' ||
@@ -80,7 +80,7 @@ export function isThinkingPlannerRun(
     scenarios[0].id !== 'planner-plan-shape'
   ) {
     throw new Error(
-      'VerdaQwenThink eval requires EVAL_ROLES=planner and EVAL_ONLY=planner-plan-shape',
+      'LargeQwenThink eval requires EVAL_ROLES=planner and EVAL_ONLY=planner-plan-shape',
     )
   }
   return true
@@ -195,7 +195,7 @@ const CONTEXT = 'The graph is a knowledge graph of documents and the entities me
 async function evaluatePlan(ctx: ScenarioContext, client: string, registry?: ClientRegistry) {
   const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('eval-planner')
-  const thinking = client === 'VerdaQwenThink'
+  const thinking = client === 'LargeQwenThink'
   const opts = {
     ...ctx.opts('planner', collector),
     ...(registry ? { clientRegistry: registry, client } : {}),
@@ -354,7 +354,7 @@ export const plannerScenario: Scenario = {
   what: 'plan structure and output headroom; the thinking twin measures trace + answer with a same-box thinking-off comparison',
   run: async (ctx) => {
     const client = expectedClientFor(ctx.routing, 'planner')
-    if (client !== 'VerdaQwenThink') return evaluatePlan(ctx, client)
+    if (client !== 'LargeQwenThink') return evaluatePlan(ctx, client)
     isThinkingPlannerRun(ctx.routing, [plannerScenario])
     const n = Number(process.env.EVAL_PLANNER_N ?? 20)
     if (!Number.isSafeInteger(n) || n < 1)
@@ -365,7 +365,7 @@ export const plannerScenario: Scenario = {
     const template = await b.request.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, opts)
     const off = await b.request.Planner(REQUEST, INTENT, TOOLS, CONTEXT, {
       ...opts,
-      client: 'VerdaQwen',
+      client: 'LargeQwen',
     })
     const transport = (request: typeof template) =>
       JSON.stringify({
@@ -381,10 +381,10 @@ export const plannerScenario: Scenario = {
     // definition. Rendering a request is offline; it neither probes nor wakes.
     const { messages: _messages, ...body } = template.body.json() as Record<string, unknown>
     const registry = new ClientRegistry()
-    registry.addLlmClient('VerdaQwenThink', 'openai-generic', {
+    registry.addLlmClient('LargeQwenThink', 'openai-generic', {
       ...body,
-      base_url: process.env.VERDA_INFERENCE_ENDPOINT,
-      api_key: process.env.VERDA_INFERENCE_API_KEY,
+      base_url: process.env.LARGE_LLM_BASE_URL,
+      api_key: process.env.LARGE_LLM_API_KEY,
       max_tokens: THINKING_EVAL_MAX_TOKENS,
       http: { connect_timeout_ms: 30_000, request_timeout_ms: THINKING_EVAL_TIMEOUT_MS },
     })
@@ -396,7 +396,7 @@ export const plannerScenario: Scenario = {
       },
     ]
     const collectors: Collector[] = []
-    for (const mode of ['VerdaQwenThink', 'VerdaQwen']) {
+    for (const mode of ['LargeQwenThink', 'LargeQwen']) {
       const tokens: number[] = []
       for (let i = 0; i < n; i++) {
         const result = await evaluatePlan(ctx, mode, registry)

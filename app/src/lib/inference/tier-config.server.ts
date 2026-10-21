@@ -1,6 +1,7 @@
 /** Synchronous, I/O-free tier configuration. Boot can validate a restricted
  * deployment without registering routing policy or activating the default tier.
  */
+import { inferenceEnv, applyLegacyInferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 
@@ -8,10 +9,12 @@ assertServerOnImport()
 
 export function privateInferenceOnly(): boolean {
   const setting = process.env.INFERENCE_TIERS
-  if (setting && setting !== 'private') {
-    throw new Error('INFERENCE_TIERS must be unset or private; refusing invalid inference policy.')
+  if (setting && setting !== 'self_deployed' && setting !== 'private') {
+    throw new Error(
+      'INFERENCE_TIERS must be unset or self_deployed (legacy: private); refusing invalid inference policy.',
+    )
   }
-  return setting === 'private'
+  return setting === 'self_deployed' || setting === 'private'
 }
 
 // ============================================================================
@@ -20,7 +23,7 @@ export function privateInferenceOnly(): boolean {
 // ============================================================================
 
 /**
- * Throws unless the Verda endpoint is configured well enough to reach.
+ * Throws unless the self-deployed endpoint is configured well enough to reach.
  *
  * FAIL CLOSED, and deliberately: the alternative — warn, then let BAML fall
  * through to the declared Anthropic client — would silently route
@@ -38,25 +41,28 @@ export function privateInferenceOnly(): boolean {
  * deployment root plus `/v1`. Without the suffix the first request 404s
  * mid-conversation on `<root>/chat/completions`.
  */
-export function assertVerdaConfigured(): void {
-  const endpoint = process.env.VERDA_INFERENCE_ENDPOINT
+export function assertLargeModelConfigured(): void {
+  applyLegacyInferenceEnv()
+  const endpoint = inferenceEnv('LARGE_LLM_BASE_URL')
   const missing = [
-    ['VERDA_INFERENCE_ENDPOINT', endpoint],
-    ['VERDA_INFERENCE_API_KEY', process.env.VERDA_INFERENCE_API_KEY],
+    ['LARGE_LLM_BASE_URL', endpoint],
+    ['LARGE_LLM_API_KEY', inferenceEnv('LARGE_LLM_API_KEY')],
   ]
     .filter(([, value]) => !value)
     .map(([name]) => name)
   if (missing.length > 0) {
-    const setting = privateInferenceOnly() ? 'INFERENCE_TIERS=private' : 'USE_VERDA_INFERENCE=1'
+    const setting = privateInferenceOnly()
+      ? 'INFERENCE_TIERS=self_deployed'
+      : 'USE_SELF_DEPLOYED_INFERENCE=1'
     throw new Error(
       `${setting} but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
-        `Set them (see app/.env.example) or unset ${privateInferenceOnly() ? 'INFERENCE_TIERS' : 'USE_VERDA_INFERENCE'} — this build refuses to ` +
+        `Set them (see app/.env.example) or unset ${privateInferenceOnly() ? 'INFERENCE_TIERS' : 'USE_SELF_DEPLOYED_INFERENCE'} — this build refuses to ` +
         'quietly send the flagged roles to Anthropic instead.',
     )
   }
   if (!/\/v1\/?$/.test(endpoint as string)) {
     throw new Error(
-      'VERDA_INFERENCE_ENDPOINT must be the OpenAI-compatible base URL, i.e. end in `/v1` ' +
+      'LARGE_LLM_BASE_URL must be the OpenAI-compatible base URL, i.e. end in `/v1` ' +
         '(the deployment root plus the version path). BAML passes it to openai-generic verbatim, ' +
         'so a root URL makes every call 404 on `<root>/chat/completions`.',
     )
@@ -81,7 +87,7 @@ export function assertVerdaConfigured(): void {
  * local llama-server can run without authentication. The whole private tier
  * requires it in `assertPrivateTierConfigured` for the systemone bearer key.
  *
- * The URL is checked for the `/v1` suffix for `assertVerdaConfigured`'s reason:
+ * The URL is checked for the `/v1` suffix for `assertLargeModelConfigured`'s reason:
  * BAML hands `base_url` to `openai-generic` verbatim, so a root URL 404s every
  * call on `<root>/chat/completions` — mid-conversation, which is the failure
  * this whole family of checks exists to move forward in time.
@@ -90,7 +96,7 @@ export function assertSmallModelConfigured(): void {
   const base = process.env.SMALL_LLM_BASE_URL
   if (!base) {
     throw new Error(
-      'The private inference tier routes the `describe` role to LocalQwenSmall, but ' +
+      'The private inference tier routes the `describe` role to SmallQwen, but ' +
         'SMALL_LLM_BASE_URL is not set. Set it (see app/.env.example — `make llm-small` serves ' +
         'http://localhost:8095/v1) or use the anthropic tier. This build refuses to quietly ' +
         'descale summarization back onto the 27B: that would re-route the role handed tool ' +
@@ -110,18 +116,18 @@ export function assertSmallModelConfigured(): void {
  * Throws unless EVERY endpoint the private tier needs is configured.
  *
  * The tier requires the 27B endpoint, the summarizer endpoint and the systemone
- * decisions endpoint (see `VERDA_CLIENT_BY_ROLE`); this function checks their
+ * decisions endpoint (see `SELF_DEPLOYED_CLIENT_BY_ROLE`); this function checks their
  * configuration together. Every gate on the
- * tier — the module-load check below, `assertInferenceTier('verda')` (through
- * the seam's registered `assertTierReachable`), and `verdaConfigured()`'s
+ * tier — the module-load check below, `assertInferenceTier('self_deployed')` (through
+ * the seam's registered `assertTierReachable`), and `selfDeployedConfigured()`'s
  * "may a user pick this?" — goes through here.
  *
- * The two halves stay separately callable on purpose: `scripts/smoke-verda.ts`
+ * The two halves stay separately callable on purpose: `scripts/smoke-self-deployed.ts`
  * exercises only the 27B roles and must not be refused for a summarizer it never
  * calls.
  */
 export function assertPrivateTierConfigured(): void {
-  assertVerdaConfigured()
+  assertLargeModelConfigured()
   assertSmallModelConfigured()
   const raw = process.env.SMALL_LLM_DECISIONS_URL
   if (!raw)
@@ -152,6 +158,7 @@ export function assertPrivateTierConfigured(): void {
 
 /** A restriction fails at boot; unset leaves existing lazy initialization alone. */
 export function assertInferenceDeploymentConfigured(): void {
+  applyLegacyInferenceEnv()
   if (privateInferenceOnly()) assertPrivateTierConfigured()
 }
 

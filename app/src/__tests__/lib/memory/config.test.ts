@@ -86,7 +86,7 @@ describe('host memory composition', () => {
     expect(() => cfg.store.count([])).toThrow('owner')
   })
   it('private memories are visible only privately; unknown tiers are refused', () => {
-    expect(visibleMemoryTiers('verda')).toEqual(['anthropic', 'verda'])
+    expect(visibleMemoryTiers('self_deployed')).toEqual(['anthropic', 'self_deployed'])
     expect(visibleMemoryTiers('anthropic')).toEqual(['anthropic'])
     expect(visibleMemoryTiers('future')).toEqual([])
     expect(visibleMemoryTiers(undefined)).toEqual([])
@@ -96,7 +96,7 @@ describe('host memory composition', () => {
       await import('@hames-ai/harness-patterns/patterns/withMemory.server')
     const cfg = agentDeps().memory!
     expect(cfg.visibleTiers('anthropic')).toEqual(['anthropic'])
-    expect(cfg.visibleTiers('verda')).toEqual(['anthropic', 'verda'])
+    expect(cfg.visibleTiers('self_deployed')).toEqual(['anthropic', 'self_deployed'])
     expect(cfg.visibleTiers('future')).toEqual([])
     expect(cfg.visibleTiers(undefined)).toEqual([])
     expect(memoryStoreConfig(cfg).settings?.wakeBudgetMs).toBe(30)
@@ -142,7 +142,7 @@ describe('host memory composition', () => {
   it('embeds query and documents explicitly locally despite a public stash setting', async () => {
     vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
     const cfg = createHostMemoryConfig()
-    await withRunFrame({ inference: { tier: 'verda' } }, async () => {
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, async () => {
       await cfg.embed.query('synthetic query')
       await cfg.embed.documents(['synthetic document'])
     })
@@ -221,3 +221,10 @@ it.each(['disabled', 'throw'] as const)(
     )
   },
 )
+
+it('legacy private memories stay invisible to public and unknown runs', () => {
+  expect(visibleMemoryTiers('verda')).toEqual(visibleMemoryTiers('self_deployed'))
+  expect(visibleMemoryTiers('verda')).toEqual(['anthropic', 'self_deployed'])
+  expect(visibleMemoryTiers('anthropic')).toEqual(['anthropic'])
+  expect(visibleMemoryTiers('unknown')).toEqual([])
+})

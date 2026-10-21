@@ -84,7 +84,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 }))
 
 // ── the tier resolver (its own order is pinned by lib/inference/tier.test.ts) ─
-const getStoredInferenceTier = vi.fn<(id: string) => Promise<'verda' | 'anthropic' | null>>(
+const getStoredInferenceTier = vi.fn<(id: string) => Promise<'self_deployed' | 'anthropic' | null>>(
   async () => null,
 )
 vi.mock('../../../lib/db/user-prefs.server', async () => {
@@ -97,9 +97,9 @@ vi.mock('../../../lib/db/user-prefs.server', async () => {
 })
 
 const chooseConversationTier = vi.fn<
-  (sessionId: string, userId: string, tier: unknown) => Promise<'verda' | 'anthropic'>
->(async (_s, _u, tier) => tier as 'verda' | 'anthropic')
-const verdaConfigured = vi.fn(() => true)
+  (sessionId: string, userId: string, tier: unknown) => Promise<'self_deployed' | 'anthropic'>
+>(async (_s, _u, tier) => tier as 'self_deployed' | 'anthropic')
+const selfDeployedConfigured = vi.fn(() => true)
 vi.mock('../../../lib/inference/tier.server', async () => {
   const actual = await vi.importActual<typeof import('../../../lib/inference/tier.server')>(
     '../../../lib/inference/tier.server',
@@ -111,7 +111,7 @@ vi.mock('../../../lib/inference/tier.server', async () => {
     resolveTier: actual.resolveTier,
     privateInferenceOnly: actual.privateInferenceOnly,
     chooseConversationTier: (s: string, u: string, t: unknown) => chooseConversationTier(s, u, t),
-    verdaConfigured: () => verdaConfigured(),
+    selfDeployedConfigured: () => selfDeployedConfigured(),
   }
 })
 
@@ -139,8 +139,10 @@ beforeEach(() => {
   dbDeleteConversations.mockImplementation(async (ids: string[]) => ids)
   dbGetConversationInferenceTier.mockResolvedValue(null)
   getStoredInferenceTier.mockResolvedValue(null)
-  verdaConfigured.mockReturnValue(true)
-  chooseConversationTier.mockImplementation(async (_s, _u, tier) => tier as 'verda' | 'anthropic')
+  selfDeployedConfigured.mockReturnValue(true)
+  chooseConversationTier.mockImplementation(
+    async (_s, _u, tier) => tier as 'self_deployed' | 'anthropic',
+  )
   dbSetConversationPinned.mockResolvedValue('pinned')
   getAuthenticatedUser.mockResolvedValue({ id: 'entra-user', email: 'e@x.dev' })
 })
@@ -216,7 +218,7 @@ describe('sidebar actions', () => {
         kind: 'conversation',
         source: 'chat',
         status: 'done',
-        inferenceTier: 'verda',
+        inferenceTier: 'self_deployed',
         updatedAt: new Date('2026-01-02T03:04:05.000Z'),
         pinnedAt: new Date('2026-01-03T00:00:00.000Z'),
       },
@@ -248,7 +250,7 @@ describe('sidebar actions', () => {
       kind: 'conversation',
       source: 'chat',
       status: 'done',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
       updatedAt: '2026-01-02T03:04:05.000Z',
       // Serialized like `updatedAt`: a Date does not survive the server-action
       // boundary, and an unpinned row carries an explicit null rather than an
@@ -338,10 +340,10 @@ describe('regenerateConversationTitle', () => {
 describe('getConversationTier / setConversationTier — the switch’s RPC surface', () => {
   it('answers for the conversation, resolving an untiered row through the seed', async () => {
     getStoredInferenceTier.mockResolvedValue('anthropic')
-    dbGetConversationInferenceTier.mockResolvedValue('verda')
+    dbGetConversationInferenceTier.mockResolvedValue('self_deployed')
     await expect(actions.getConversationTier('c1')).resolves.toEqual({
-      tier: 'verda',
-      verdaAvailable: true,
+      tier: 'self_deployed',
+      selfDeployedAvailable: true,
     })
 
     // Every chat before its first message: no row, so the answer is the seed —
@@ -360,18 +362,18 @@ describe('getConversationTier / setConversationTier — the switch’s RPC surfa
   })
 
   it('tells the switch to disable the private position on an unconfigured deployment', async () => {
-    verdaConfigured.mockReturnValue(false)
+    selfDeployedConfigured.mockReturnValue(false)
     await expect(actions.getConversationTier('c1')).resolves.toMatchObject({
-      verdaAvailable: false,
+      selfDeployedAvailable: false,
     })
   })
 
   it('writes against the session’s user, and takes no owner argument', async () => {
-    await expect(actions.setConversationTier('c1', 'verda')).resolves.toEqual({
-      tier: 'verda',
-      verdaAvailable: true,
+    await expect(actions.setConversationTier('c1', 'self_deployed')).resolves.toEqual({
+      tier: 'self_deployed',
+      selfDeployedAvailable: true,
     })
-    expect(chooseConversationTier).toHaveBeenCalledWith('c1', 'bypass-user', 'verda')
+    expect(chooseConversationTier).toHaveBeenCalledWith('c1', 'bypass-user', 'self_deployed')
     // Two arguments — the conversation and the tier. A third for the owner would
     // let the caller choose whose conversation to re-route.
     expect(actions.setConversationTier.length).toBe(2)
@@ -381,7 +383,7 @@ describe('getConversationTier / setConversationTier — the switch’s RPC surfa
     isBypassEnabled.mockReturnValue(false)
     getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
 
-    await expect(actions.setConversationTier('c1', 'verda')).rejects.toThrow(
+    await expect(actions.setConversationTier('c1', 'self_deployed')).rejects.toThrow(
       'Authentication required',
     )
     expect(chooseConversationTier).not.toHaveBeenCalled()
@@ -394,7 +396,7 @@ describe('getConversationTier / setConversationTier — the switch’s RPC surfa
     chooseConversationTier.mockRejectedValueOnce(
       new Error('The self-hosted inference endpoint is not configured on this deployment'),
     )
-    await expect(actions.setConversationTier('c1', 'verda')).rejects.toThrow(
+    await expect(actions.setConversationTier('c1', 'self_deployed')).rejects.toThrow(
       /not configured on this deployment/,
     )
   })
@@ -443,13 +445,13 @@ it('reports the public position disabled on private-only servers without changin
     dbGetConversationInferenceTier.mockResolvedValue('anthropic')
     getStoredInferenceTier.mockResolvedValue('anthropic')
     expect(await actions.getConversationTier('legacy')).toEqual({
-      tier: 'verda',
-      verdaAvailable: true,
+      tier: 'self_deployed',
+      selfDeployedAvailable: true,
       anthropicAvailable: false,
     })
-    expect(await actions.setConversationTier('legacy', 'verda')).toEqual({
-      tier: 'verda',
-      verdaAvailable: true,
+    expect(await actions.setConversationTier('legacy', 'self_deployed')).toEqual({
+      tier: 'self_deployed',
+      selfDeployedAvailable: true,
       anthropicAvailable: false,
     })
   } finally {

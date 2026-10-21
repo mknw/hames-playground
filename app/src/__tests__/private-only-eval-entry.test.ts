@@ -35,11 +35,11 @@ afterEach(() => {
 })
 
 it.each([
-  ['private', '', 'VerdaQwen', 'VerdaQwen', true],
-  ['private', 'screen', 'VerdaQwen', 'VerdaQwen', true],
-  ['', '', undefined, 'VerdaQwen', true],
-  ['', 'screen', undefined, 'VerdaQwen', true],
-  ['private', 'screen', 'VerdaQwen', 'WrongClient', false],
+  ['private', '', 'LargeQwen', 'LargeQwen', true],
+  ['private', 'screen', 'LargeQwen', 'LargeQwen', true],
+  ['', '', undefined, 'LargeQwen', true],
+  ['', 'screen', undefined, 'LargeQwen', true],
+  ['private', 'screen', 'LargeQwen', 'WrongClient', false],
 ] as const)(
   'preflights the real eval entry: restriction=%s roles=%s',
   async (restriction, roles, client, served, shouldPass) => {
@@ -49,8 +49,8 @@ it.each([
       EVAL_ROLES: roles,
       EVAL_ONLY: 'screen-on-the-tier',
       ANTHROPIC_API_KEY: '',
-      VERDA_INFERENCE_ENDPOINT: 'https://chat.example.invalid/v1',
-      VERDA_INFERENCE_API_KEY: 'synthetic-key',
+      LARGE_LLM_BASE_URL: 'https://chat.example.invalid/v1',
+      LARGE_LLM_API_KEY: 'synthetic-key',
       SMALL_LLM_BASE_URL: 'https://small.example.invalid/v1',
       SMALL_LLM_DECISIONS_URL: 'https://small.example.invalid/v1/systemone',
       SMALL_LLM_API_KEY: 'synthetic-key',

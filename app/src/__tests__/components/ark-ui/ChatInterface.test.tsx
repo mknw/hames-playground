@@ -73,10 +73,10 @@ const AGENTS = [
 ]
 const getAgentList = vi.fn(async () => AGENTS)
 
-const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', verdaAvailable: true }))
+const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', selfDeployedAvailable: true }))
 const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
   tier,
-  verdaAvailable: true,
+  selfDeployedAvailable: true,
 }))
 // The memory confirmation prompt (M6) asks the server for proposals; here it
 // only has to answer, and count the asks. Its own behaviour is

@@ -14,7 +14,7 @@ import { TIER_ICONS, tierRowLabel } from '../../lib/tier-presentation'
 export type ThreadKind = 'conversation' | 'action'
 export type ThreadStatus = 'running' | 'paused' | 'done' | 'error'
 /** Mirror of `InferenceTier`, local for the same reason. */
-export type ThreadTier = 'verda' | 'anthropic'
+export type ThreadTier = 'self_deployed' | 'anthropic'
 
 export interface ChatThreadSummary {
   id: string
@@ -1077,7 +1077,7 @@ export const ChatSidebar = (props: ChatSidebarProps) => {
                             Not decorative, so not `aria-hidden`: it is the only
                             place the row says this. `role="img"` + `aria-label`
                             makes it part of the row button's accessible name
-                            ("… Runs on Private (Verda)"), and the same words
+                            ("… Runs on Private"), and the same words
                             ride in `title` for a pointer. Sized by inline style
                             like the other glyphs in this file — a 14px box is
                             not on the spacing scale — and coloured with a theme

@@ -8,7 +8,7 @@ import {
   type SpendKey,
 } from '../../../lib/eval-support/spend-budget'
 
-const key: SpendKey = { agent: 'general-next', scenario: 'count', tier: 'verda' }
+const key: SpendKey = { agent: 'general-next', scenario: 'count', tier: 'self_deployed' }
 
 describe('eval spend budget (hermetic, no provider calls)', () => {
   it('defaults to 20 and accepts the absolute ceiling of 25', () => {
@@ -109,20 +109,26 @@ describe('rates and scale-down reservations', () => {
   it('reserves one tail per box per run, and after idle gaps longer than its window', () => {
     const b = new SpendBudget(20, 0.8)
     const boxes = [
-      { box: 'verda', seconds: 300, eurPerHour: 1.819 },
+      { box: 'self_deployed', seconds: 300, eurPerHour: 1.819 },
       { box: 'small', seconds: 120, eurPerHour: 1.54 },
     ]
     b.beginInfrastructure(key, 0, boxes)
-    expect(b.tailLines.map((t) => t.box)).toEqual(['verda', 'small'])
+    expect(b.tailLines.map((t) => t.box)).toEqual(['self_deployed', 'small'])
     expect(b.totalUsd).toBeCloseTo((300 * 1.819 + 120 * 1.54) / 3600 / 0.8)
     b.endInfrastructure(1000)
     b.beginInfrastructure(key, 121000, boxes)
     expect(b.tailLines).toHaveLength(2)
     b.beginInfrastructure(key, 121001, boxes)
-    expect(b.tailLines.map((t) => t.box)).toEqual(['verda', 'small', 'small'])
+    expect(b.tailLines.map((t) => t.box)).toEqual(['self_deployed', 'small', 'small'])
     b.endInfrastructure(122000)
     b.beginInfrastructure(key, 423000, boxes)
-    expect(b.tailLines.map((t) => t.box)).toEqual(['verda', 'small', 'small', 'verda', 'small'])
+    expect(b.tailLines.map((t) => t.box)).toEqual([
+      'self_deployed',
+      'small',
+      'small',
+      'self_deployed',
+      'small',
+    ])
     const tiny = new SpendBudget(0.01, 0.8)
     tiny.beginInfrastructure(key, 0, boxes)
     expect(tiny.stopped).toBe(true)

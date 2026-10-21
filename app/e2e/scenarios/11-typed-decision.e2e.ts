@@ -83,12 +83,12 @@ afterAll(async () => {
 })
 /** Decisions are identified by the endpoint that served them: both systemone
  *  clients send the same compatibility model id (#584). */
-const endpointFor = (tier: string) => (tier === 'verda' ? 'private' : 'jev')
+const endpointFor = (tier: string) => (tier === 'self_deployed' ? 'private' : 'jev')
 const decided = () => app.fakeLlm.calls.filter((c) => c.endpoint)
 
 describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
   it('exercises both tier positions', () => {
-    expect([...TIERS].sort()).toEqual(['anthropic', 'verda'])
+    expect([...TIERS].sort()).toEqual(['anthropic', 'self_deployed'])
   })
   describe.each(TIERS)('on the %s tier', (tier) => {
     it('streams and persists the decision with its actual serving client', async () => {
@@ -123,7 +123,9 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
         method: 'jev',
       })
       expect((event.data as DecisionMadeEventData).probs.take).toBeCloseTo(0.9)
-      expect(event.llmCall?.clientName).toBe(tier === 'verda' ? 'PrivateSystemOne' : 'JevDecide')
+      expect(event.llmCall?.clientName).toBe(
+        tier === 'self_deployed' ? 'PrivateSystemOne' : 'JevDecide',
+      )
       expect((event.llmCall as LLMCallRecord)?.hitOutputCap).toBe(false)
       expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
       expect(JSON.stringify(event.data)).not.toContain(STATE)
@@ -178,7 +180,9 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
       })
       expect((events[1].data as DecisionMadeEventData).pTrue).toBeCloseTo(0.9)
       for (const event of events) {
-        expect(event.llmCall?.clientName).toBe(tier === 'verda' ? 'PrivateSystemOne' : 'JevDecide')
+        expect(event.llmCall?.clientName).toBe(
+          tier === 'self_deployed' ? 'PrivateSystemOne' : 'JevDecide',
+        )
         expect((event.llmCall as LLMCallRecord)?.hitOutputCap).toBe(false)
         expect(event.llmCall?.variables).toMatchObject({ state: expect.stringContaining(STATE) })
         expect(JSON.stringify(event.data)).not.toContain(STATE)
@@ -266,7 +270,7 @@ describe.runIf(IS_HERMETIC)('typed decisions through a conversation', () => {
       }
       return [step]
     })
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     try {
       const result = await app.runTurn(newSessionId('post-reply'), STATE, 'e2e-post-reply')
       expect(result.response).toContain(FAKE_ANSWER_MARK)

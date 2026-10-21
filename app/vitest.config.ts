@@ -92,7 +92,7 @@ export default defineConfig({
         // grew a second home under `src/lib/harness-baml/scripts/`. Both of
         // those homes have since left the app (#225 Step 1a, and the
         // @hames-ai/sandbox extraction); what the pattern still covers is
-        // `src/lib/inference/scripts/smoke-verda*.ts`, and it stays a glob so
+        // `src/lib/inference/scripts/smoke-self-deployed*.ts`, and it stays a glob so
         // the next one needs no edit.
         'src/lib/**/scripts/smoke-*.ts',
         // Same reason: run by hand against the live tenant and the live Neo4j.

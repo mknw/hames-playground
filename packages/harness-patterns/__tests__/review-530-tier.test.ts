@@ -25,9 +25,9 @@ import type {
 type Data = Record<string, unknown>
 const SPACE = 's'
 const privateRow: MemoryCandidate = {
-  id: 'm-verda',
+  id: 'm-self_deployed',
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   content: 'prefers metric units',
   embedSpace: SPACE,
   distance: 0.1,
@@ -40,16 +40,16 @@ const retrieves = (async () =>
     calibrated: true,
   }) as DecideResult) as unknown as DecideFn
 
-// The tier rule exactly as #419 states it: anthropic sees anthropic, verda sees both.
+// The tier rule exactly as #419 states it: anthropic sees anthropic, self_deployed sees both.
 const visibleTiers = (t: string | undefined) =>
-  t === 'verda' ? ['verda', 'anthropic'] : t === 'anthropic' ? ['anthropic'] : []
+  t === 'self_deployed' ? ['self_deployed', 'anthropic'] : t === 'anthropic' ? ['anthropic'] : []
 
 function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
   return {
     store: {
       count: async () => 1,
       // An honest store: it returns only rows of the tiers asked for.
-      candidates: async ({ tiers }) => (tiers.includes('verda') ? [privateRow] : []),
+      candidates: async ({ tiers }) => (tiers.includes('self_deployed') ? [privateRow] : []),
       transaction: async () => {
         throw new Error('no writes expected')
       },
@@ -69,7 +69,7 @@ function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
 }
 
 describe('review-530: a tier override that disagrees with the run frame', () => {
-  it('recall never puts a verda memory into an anthropic-tier turn', async () => {
+  it('recall never puts a self_deployed memory into an anthropic-tier turn', async () => {
     const inputs: CompactExecutionInput[] = []
     const responder = compactExecution<Data>({
       mode: 'message',
@@ -78,7 +78,7 @@ describe('review-530: a tier override that disagrees with the run frame', () => 
         return { value: 'ok' }
       },
     })
-    const c = cfg({ tier: () => 'verda' } as unknown as Partial<MemoryConfig>)
+    const c = cfg({ tier: () => 'self_deployed' } as unknown as Partial<MemoryConfig>)
     const ctx = createContext<Data>('what units do I prefer?')
     await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
       runChain(ctx, withMemory<Data>(c)([responder])),
@@ -90,7 +90,7 @@ describe('review-530: a tier override that disagrees with the run frame', () => 
   })
 
   it('the store half carries no tier of its own either: the frame is the one truth', () => {
-    const c = cfg({ tier: () => 'verda' } as unknown as Partial<MemoryConfig>)
+    const c = cfg({ tier: () => 'self_deployed' } as unknown as Partial<MemoryConfig>)
     // Mutation (memoryStoreConfig forwards `cfg.tier` again): the key is back.
     expect('tier' in memoryStoreConfig(c)).toBe(false)
   })

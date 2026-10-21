@@ -439,7 +439,7 @@ describe('P4 executor policy before I/O', () => {
     async () => false,
     async () => true,
     () => 1,
-    () => 'verda',
+    () => 'self_deployed',
     () => undefined,
   ])('refuses any predicate that is not literal true: %s', async (predicate) => {
     const denied = buildGraphHarness(predicate as () => boolean)

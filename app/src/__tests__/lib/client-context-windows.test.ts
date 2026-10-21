@@ -4,7 +4,7 @@
  * Sibling of client-output-caps.test.ts, and the same trick applied to the one
  * number that had no pin. The output side is already a real control: bumping
  * `max_tokens` in local-client.baml without touching CLIENT_MAX_OUTPUT_TOKENS
- * fails that test by name. The INPUT side was not — `LocalQwenSmall: 32_768`
+ * fails that test by name. The INPUT side was not — `SmallQwen: 32_768`
  * could be changed to anything and the whole suite still passed, even though
  * both local-client.baml and the Makefile instruct the reader to "keep the two
  * in step". A prompt budget sized for a window the server does not serve
@@ -53,14 +53,14 @@ describe('MODEL_CONTEXT_WINDOWS mirrors the Makefile --ctx-size', () => {
     expect(ctxSizeOfTarget(makefile, 'embed')).toBeTypeOf('number')
   })
 
-  it('LocalQwenSmall equals the --ctx-size `make llm-small` serves it with', () => {
-    expect(MODEL_CONTEXT_WINDOWS.LocalQwenSmall).toBe(ctxSizeOfTarget(makefile, 'llm-small'))
+  it('SmallQwen equals the --ctx-size `make llm-small` serves it with', () => {
+    expect(MODEL_CONTEXT_WINDOWS.SmallQwen).toBe(ctxSizeOfTarget(makefile, 'llm-small'))
   })
 
   it('every local client the Makefile serves has a window entry at all', () => {
     // A `provider openai-generic` client with no entry falls through to
     // getContextWindow()'s 16_384 default — silently, and wrongly for anything
     // the Makefile starts with a larger window.
-    expect(MODEL_CONTEXT_WINDOWS.LocalQwenSmall).toBeTypeOf('number')
+    expect(MODEL_CONTEXT_WINDOWS.SmallQwen).toBeTypeOf('number')
   })
 })

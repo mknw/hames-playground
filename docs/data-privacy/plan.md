@@ -185,11 +185,11 @@ Two things follow that _are_ in our control:
   code one.
 
 **Update (2026-08-25, widened twice on 2026-08-26) — a self-hosted route now
-exists, and it now covers every role without exception.** A verda tier decision
-— the `USE_VERDA_INFERENCE=1` deployment default or a per-conversation switch —
+exists, and it now covers every role without exception.** A self_deployed tier decision
+— the `USE_SELF_DEPLOYED_INFERENCE=1` deployment default or a per-conversation switch —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
-Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/verda-client.baml`). Read against the paragraph above: no
+Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/large-client.baml`). Read against the paragraph above: no
 chat configuration still sends a prompt to Groq, OpenRouter or OpenAI (the
 `decide` exception above is Anthropic-tier only), and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it
@@ -239,7 +239,7 @@ stop being assumed:
   not looked at any of them.
 - **Update (2026-10-17): the claim depends on the host.** The same model can
   run on Modal (`deploy/modal/hames_private_27b.py`), selected by
-  `VERDA_INFERENCE_ENDPOINT` alone. On that host the processor is Modal, Inc.
+  `LARGE_LLM_BASE_URL` alone. On that host the processor is Modal, Inc.
   (US): its edge sees request bodies (it checks the proxy token there), and
   images, memory snapshots and container logs are stored in the US whatever the
   compute region. So "moves prompts _off_ a third-country processor" is true of

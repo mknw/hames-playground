@@ -132,7 +132,7 @@ const result = (id: string, payload: unknown, summary: string) => ({
 /** Read real previews and then a real expansion in the loop's next prompt. */
 async function referencesRun(
   pseudonymise: PseudonymiseForWeb | undefined,
-  tier: string | undefined = 'verda',
+  tier: string | undefined = 'self_deployed',
 ) {
   const ctx = createContext<Data>(USER)
   // An earlier user message is rewritten too; only the latest is exempt.
@@ -401,7 +401,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     const ctx = createContext<Data>('Research the correspondent')
     await withRunFrame(
       {
-        ...frame('verda'),
+        ...frame('self_deployed'),
         transports: [
           {
             ...transport,
@@ -589,7 +589,7 @@ describe('fix round 2 regressions', () => {
       },
     })(child)
     const scope = createScope<Data>('probe', {})
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       wrapped.fn(scope, createEventView(ctx, child.config.viewConfig, 'probe')),
     )
     expect(JSON.stringify(ctx.events)).toBe(original)
@@ -667,7 +667,7 @@ describe('fix round 2 regressions', () => {
       )
       await withRunFrame(
         {
-          ...frame('verda'),
+          ...frame('self_deployed'),
           transports: [{ ...transport, callTool: async () => ({ success: true, data: MAIL }) }],
         },
         () => runChain(createContext<Data>('Research'), [loop]),
@@ -716,7 +716,7 @@ describe('fix round 1 Critical and High regressions', () => {
         return s
       })
       const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
-      await withRunFrame(frame('verda'), () => wrapped.fn(scope, createEventView(ctx)))
+      await withRunFrame(frame('self_deployed'), () => wrapped.fn(scope, createEventView(ctx)))
       expect(scope.events.filter((e) => e.type === 'warning')).toHaveLength(0)
       expect(JSON.stringify(ctx.events)).toBe(original)
       expect(outgoing).toHaveBeenCalledOnce()
@@ -744,7 +744,7 @@ describe('fix round 1 remaining findings', () => {
         expect(await callTool(name, { query: 'ordinary facts' })).toMatchObject({ success: true })
         return s
       })
-      await withRunFrame(frame('verda'), () =>
+      await withRunFrame(frame('self_deployed'), () =>
         withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
           createScope('probe', {}),
           createEventView(createContext('Research')),
@@ -780,7 +780,7 @@ describe('fix round 1 remaining findings', () => {
         const guarded = fenced
           ? withInjectionGuard({ tools: [name], spotlight: 'always' })(wrapped)
           : wrapped
-        await withRunFrame(frame('verda'), () =>
+        await withRunFrame(frame('self_deployed'), () =>
           guarded.fn(createScope('probe', {}), createEventView(createContext('Research'))),
         )
         expect(outgoing).toHaveBeenCalledTimes(2)
@@ -815,7 +815,7 @@ describe('fix round 1 remaining findings', () => {
       })
       return s
     })
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
         createScope('probe', {}),
         createEventView(createContext('Research')),
@@ -869,7 +869,7 @@ describe('fix round 1 remaining findings', () => {
       await callTool('resolve-library-id', { libraryName: 'DOCS-ARG' })
       return s
     })
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       withPseudonymisedInputs({ pseudonymise })(child).fn(
         createScope('probe', {}),
         createEventView(createContext('Research')),
@@ -919,7 +919,7 @@ describe('fix round 1 remaining findings', () => {
         })
         return s
       })
-      await withRunFrame(frame('verda'), () =>
+      await withRunFrame(frame('self_deployed'), () =>
         withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
           createScope('probe', {}),
           createEventView(createContext('Research')),
@@ -952,7 +952,7 @@ describe('fix round 1 remaining findings', () => {
       return s
     })
     const scope = createScope<Data>('probe', {})
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
         scope,
         createEventView(createContext('Research')),
@@ -1037,7 +1037,7 @@ describe('fix round 1 remaining findings', () => {
         seen = structuredClone(s.data)
         return s
       })
-      await withRunFrame(frame('verda'), () =>
+      await withRunFrame(frame('self_deployed'), () =>
         runChain(ctx, [
           intent,
           withPseudonymisedInputs({ pseudonymise: missing ? undefined : createWebPseudonymiser() })(
@@ -1084,7 +1084,7 @@ describe('withholding and outgoing checks', () => {
     )
     const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(loop)
     const scope = createScope<Data>('info', {})
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       wrapped.fn(scope, createEventView(createContext('Find public background'))),
     )
     expect(seen).toHaveLength(3)
@@ -1137,7 +1137,7 @@ describe('withholding and outgoing checks', () => {
         return s
       })
       const wrapped = withPseudonymisedInputs({ pseudonymise: filter })(inner)
-      await withRunFrame(frame('verda'), () =>
+      await withRunFrame(frame('self_deployed'), () =>
         wrapped.fn(
           createScope('probe', { [WEB_ROSTER_INPUT]: { payloads: [], steps: '' } }),
           createEventView(createContext('task')),
@@ -1157,7 +1157,9 @@ describe('withholding and outgoing checks', () => {
     })
     const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
     await expect(
-      withRunFrame(frame('verda'), () => wrapped.fn(scope, createEventView(createContext('task')))),
+      withRunFrame(frame('self_deployed'), () =>
+        wrapped.fn(scope, createEventView(createContext('task'))),
+      ),
     ).rejects.toThrow('inner')
     expect(scope.data).not.toHaveProperty(WEB_ROSTER_INPUT)
   })
@@ -1191,7 +1193,7 @@ describe('withholding and outgoing checks', () => {
       return s
     })
     const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       wrapped.fn(createScope('probe', {}), createEventView(createContext(USER))),
     )
     expect(outgoing).toHaveBeenCalledTimes(3)
@@ -1203,7 +1205,7 @@ describe('withholding and outgoing checks', () => {
     const calls: string[] = []
     await withRunFrame(
       {
-        ...frame('verda'),
+        ...frame('self_deployed'),
         egressChecks: [
           () => {
             calls.push('outer')
@@ -1239,7 +1241,7 @@ describe('withholding and outgoing checks', () => {
       },
     )
     expect(outgoing).not.toHaveBeenCalled()
-    await withRunFrame(frame('verda'), async () => {
+    await withRunFrame(frame('self_deployed'), async () => {
       expect(await callTool('fetch', {})).toMatchObject({ success: true })
     })
   })
@@ -1248,7 +1250,7 @@ describe('withholding and outgoing checks', () => {
     const after = vi.fn()
     await withRunFrame(
       {
-        ...frame('verda'),
+        ...frame('self_deployed'),
         egressChecks: [
           () => {
             throw new Error(DIRECTORY.mail)
@@ -1442,7 +1444,7 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
     const scope = createScope<Data>('probe', {
       [WEB_ROSTER_INPUT]: { payloads: [screened(EXTERNAL.name)], steps: 'Steps so far' },
     })
-    await withRunFrame(frame('verda'), () =>
+    await withRunFrame(frame('self_deployed'), () =>
       withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
         scope,
         createEventView(createContext('Research')),

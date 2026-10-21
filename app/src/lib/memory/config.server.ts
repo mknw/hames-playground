@@ -1,4 +1,5 @@
 /** App policy for memory (#419 M5c). Constructing this bag performs no IO. */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern, MemoryConfig } from '@hames-ai/harness-patterns'
 import { harnessUsesMemory } from '@hames-ai/harness-patterns/pattern-capabilities'
@@ -28,7 +29,12 @@ assertServerOnImport()
 
 /** Fail closed for tiers the host does not recognise. */
 export function visibleMemoryTiers(tier: string | undefined): readonly string[] {
-  return tier === 'verda' ? ['anthropic', 'verda'] : tier === 'anthropic' ? ['anthropic'] : []
+  const canonical = normalizeStoredInferenceTier(tier)
+  return canonical === 'self_deployed'
+    ? ['anthropic', 'self_deployed']
+    : canonical === 'anthropic'
+      ? ['anthropic']
+      : []
 }
 
 /** Every operation resolves the SAME supplier as core, even on a cached chain. */

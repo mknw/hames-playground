@@ -21,7 +21,7 @@
  * {@link configureConsumerClients}, is layered ON TOP of the built-in tier
  * inside that one function rather than at any call site. Unmapped roles fall
  * through to the built-in behaviour exactly as before: the declared Anthropic
- * chain, or — under a Verda-tier scope — the built-in private tier. With no
+ * chain, or — under a self-deployed tier scope — the built-in private tier. With no
  * consumer layer registered, `clientOverrideFor` is byte-identical to what it
  * was before this module existed.
  *
@@ -40,8 +40,8 @@
  *
  * - **Prompts.** The registry re-points which CLIENT a declared function calls;
  *   it cannot add, edit or reorder one (owner ruling a).
- * - **Provider-specific definitions.** `VerdaQwen`, `verda-client.baml`,
- *   `VERDA_CLIENT_BY_ROLE`, `assertPrivateTierConfigured` and `InferenceTier`
+ * - **Provider-specific definitions.** `LargeQwen`, `large-client.baml`,
+ *   `SELF_DEPLOYED_CLIENT_BY_ROLE`, `assertPrivateTierConfigured` and `InferenceTier`
  *   are the built-in tier's, untouched here (owner ruling b).
  * - **Prompt budgeting tables.** `resolveClientForRole` DOES report a mapped
  *   role's consumer client (its docstring already promises "the client BAML
@@ -166,7 +166,7 @@ export function defineInferenceClients(config: InferenceClientsConfig): ClientOv
     const client = byRole[role]
     // Mapped roles take the consumer's registry and primary; unmapped roles
     // return undefined so the call falls through to the built-in chain (or,
-    // under a Verda-tier scope, the built-in tier). Mapping one role never
+    // under a self-deployed tier scope, the built-in tier). Mapping one role never
     // widens the mapping — `screen` in particular moves only by its own key.
     return client ? { clientRegistry: registry, client } : undefined
   }

@@ -322,7 +322,7 @@ async function propose(
         documents: async (t: string[]) => t.map((_, i) => (i === 0 ? [1, 0] : [0, 1])),
       },
       owner: () => 'alice',
-      tier: () => 'verda',
+      tier: () => 'self_deployed',
       confirm: createMemoryConfirmSeam(() => 'alice'),
       settings: { enabled: () => true },
     },
@@ -1130,4 +1130,33 @@ describe('#579 review 2a: "nothing written" is the database\'s call', () => {
     expect(responses()).toEqual([expect.objectContaining({ choice: 'discard' })])
     expect(memories()).toEqual([])
   })
+})
+
+it('reads a legacy proposal tier canonically without rewriting the held payload', async () => {
+  await propose()
+  const id = requestId()
+  const h = held.get(id)!
+  const payload = h.payload as MemoryProposalPayload
+  h.payload = { ...payload, tier: 'verda' }
+  expect(await listMemoryProposalsFor('alice', 's1')).toHaveLength(1)
+  await answerMemoryProposalFor('alice', 's1', id, 'save')
+  expect(memories().length).toBeGreaterThan(0)
+  expect(
+    blob()
+      .events.filter((e) => e.type === 'memory_written')
+      .every((e) => (e.data as { tier: string }).tier === 'self_deployed'),
+  ).toBe(true)
+  expect((h.payload as MemoryProposalPayload).tier).toBe('verda')
+})
+
+it('refuses an unknown proposal tier before writing a memory', async () => {
+  await propose()
+  const id = requestId()
+  const h = held.get(id)!
+  h.payload = { ...(h.payload as MemoryProposalPayload), tier: 'unknown' }
+  expect(await listMemoryProposalsFor('alice', 's1')).toHaveLength(0)
+  expect(await answerMemoryProposalFor('alice', 's1', id, 'save')).toEqual({
+    outcome: 'unavailable',
+  })
+  expect(memories()).toEqual([])
 })

@@ -130,7 +130,7 @@ and pick an agent to watch a first run stream in.
 
 By default every agent call runs on Anthropic. A self-hosted inference tier
 exists as an opt-in for deployments that must keep prompts on their own
-infrastructure — see `USE_VERDA_INFERENCE` in `app/.env.example`.
+infrastructure — see `USE_SELF_DEPLOYED_INFERENCE` in `app/.env.example`.
 
 **The install runs at the repo root; the app's `pnpm` scripts run from `app/`** —
 never npm/npx, and each package's own scripts run from that package's directory.
@@ -277,7 +277,7 @@ streams that log over SSE, and `compactExecution` turns the accumulated events
 into the final answer.
 
 Not drawn: the optional **self-hosted inference tier**. With
-`USE_VERDA_INFERENCE=1`, or a per-conversation switch in the UI, the BAML leaf
+`USE_SELF_DEPLOYED_INFERENCE=1`, or a per-conversation switch in the UI, the BAML leaf
 calls above go to a private endpoint instead of Anthropic; the boxes and arrows
 are otherwise the same.
 

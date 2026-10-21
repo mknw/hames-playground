@@ -6,7 +6,7 @@
  * reads a tier and renders whatever it is handed; this source decides what a
  * run may reveal:
  *
- *   - the run frame's raw tier slot is exactly `'verda'` (the private tier:
+ *   - the run frame's raw tier slot is exactly `'self_deployed'` (the private tier:
  *     the self-hosted decisions shim, no public provider) → the visible total
  *     AND every visible document's name, type and size;
  *   - anything else (`'anthropic'`, an unrecognised value, a frame with no tier
@@ -18,7 +18,7 @@
  * a typo see names; a comparison with `'private'` is false everywhere (no such
  * tier value exists in code), so the ruling would be silently never in force; and
  * `activeInferenceTier()` instead of the raw slot would hand names to a frameless
- * run on a deployment whose default is `'verda'`, where the safe error is a count.
+ * run on a deployment whose default is `'self_deployed'`, where the safe error is a count.
  * The policy is set here in code, never by an environment variable.
  *
  * Hidden and archived documents are left out of the list AND the count: they are
@@ -69,8 +69,10 @@ export function createDecisionDocuments(
     if (!(await owns(sessionId, userId))) return { total: 0 }
 
     const visible = (await list(sessionId, signal)).filter((d) => !d.excluded)
-    // The tier line. The RAW slot, compared with the private tier's literal.
-    if (currentRunFrame()?.inference?.tier !== 'verda') return { total: visible.length }
+    // The tier line. The RAW slot, compared with the private tier's literal. A frame
+    // still carrying the pre-rename `verda` is routed as self_deployed by
+    // `activeInferenceTier()` but gets the count here: the closed direction, on purpose.
+    if (currentRunFrame()?.inference?.tier !== 'self_deployed') return { total: visible.length }
     return {
       total: visible.length,
       names: visible.map((d) => ({

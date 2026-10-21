@@ -2,7 +2,7 @@
  * decisionLoop — the conversation's documents in the decide state (#507 slice 10;
  * docs/plan/decide-document-context.md, "Tests and mutations a builder needs").
  *
- * The tier line (names on `'verda'`, a count elsewhere) is the HOST's and is
+ * The tier line (names on `'self_deployed'`, a count elsewhere) is the HOST's and is
  * pinned in `harness-client/decision-documents.test.ts`. What is pinned here is
  * what core does with whatever it is handed: the rendering, the one read per run,
  * the failure policy and where names do not travel.

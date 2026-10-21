@@ -1,9 +1,9 @@
 /** Step 5's verdict with fake describe calls; never run the live smoke or preflight. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as adapters from '@hames-ai/harness-baml/baml-adapters.server'
-import { VERDA_CLIENT_BY_ROLE } from '@hames-ai/harness-baml/clients.server'
+import { SELF_DEPLOYED_CLIENT_BY_ROLE } from '@hames-ai/harness-baml/clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
-import { smokeDescribe } from '../../../lib/inference/scripts/smoke-verda'
+import { smokeDescribe } from '../../../lib/inference/scripts/smoke-self-deployed'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -18,12 +18,15 @@ beforeEach(() => {
   vi.spyOn(adapters, 'describeToolResultsBatchOp').mockImplementation(async () => {
     notifyLlmUsage({
       functionName: 'ResultDescribeBatch',
-      clientName: VERDA_CLIENT_BY_ROLE.describe,
+      clientName: SELF_DEPLOYED_CLIENT_BY_ROLE.describe,
     })
     return new Map([['a', 'Synthetic batch summary']])
   })
   vi.spyOn(adapters, 'describeToolResultOp').mockImplementation(async () => {
-    notifyLlmUsage({ functionName: 'ResultDescribe', clientName: VERDA_CLIENT_BY_ROLE.describe })
+    notifyLlmUsage({
+      functionName: 'ResultDescribe',
+      clientName: SELF_DEPLOYED_CLIENT_BY_ROLE.describe,
+    })
     return 'Synthetic single summary'
   })
 })
@@ -43,18 +46,18 @@ describe('smokeDescribe', () => {
     async (fn) => {
       if (fn === 'ResultDescribeBatch') {
         vi.mocked(adapters.describeToolResultsBatchOp).mockImplementation(async () => {
-          notifyLlmUsage({ functionName: fn, clientName: 'VerdaQwen' })
+          notifyLlmUsage({ functionName: fn, clientName: 'LargeQwen' })
           return new Map([['a', 'Synthetic batch summary']])
         })
       } else {
         vi.mocked(adapters.describeToolResultOp).mockImplementation(async () => {
-          notifyLlmUsage({ functionName: fn, clientName: 'VerdaQwen' })
+          notifyLlmUsage({ functionName: fn, clientName: 'LargeQwen' })
           return 'Synthetic single summary'
         })
       }
 
       await expect(smokeDescribe()).rejects.toThrow(
-        `${fn}: accounted against VerdaQwen, expected ${VERDA_CLIENT_BY_ROLE.describe}`,
+        `${fn}: accounted against LargeQwen, expected ${SELF_DEPLOYED_CLIENT_BY_ROLE.describe}`,
       )
     },
   )

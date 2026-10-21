@@ -4,7 +4,7 @@ Two Modal apps, each one scale-to-zero GPU box: the small models (below) and [th
 
 First time? [Serving the small models on Modal](../../docs/tutorials/serving-the-small-models-on-modal.md) walks the whole setup once; this page is the reference.
 
-The private tier's two small roles on one scale-to-zero GPU container: the Qwen3.5-4B summarizer the app reaches as `LocalQwenSmall`, and the H2O-Lightning-4B decision LoRA (same base) behind H2O's `systemone` shim. One vLLM process serves both; a Caddy route list is the only public surface.
+The private tier's two small roles on one scale-to-zero GPU container: the Qwen3.5-4B summarizer the app reaches as `SmallQwen`, and the H2O-Lightning-4B decision LoRA (same base) behind H2O's `systemone` shim. One vLLM process serves both; a Caddy route list is the only public surface.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ uv run --env-file deploy.local.env smoke.py                 # both models, in th
 uv run --env-file deploy.local.env measure.py --samples 3   # cold starts + warm calls, synthetic inputs
 ```
 
-`smoke.py` passing is the signal the app can be pointed at the box: the summarizer answers `LocalQwenSmall`'s exact body, every decision answer parses the way the app's systemone transport parses it, and the closed routes and the image-URL lock are checked on the live box rather than only in the file.
+`smoke.py` passing is the signal the app can be pointed at the box: the summarizer answers `SmallQwen`'s exact body, every decision answer parses the way the app's systemone transport parses it, and the closed routes and the image-URL lock are checked on the live box rather than only in the file.
 
 No `uv`? `nix run nixpkgs#uv -- …` works in place of `uv …`.
 
@@ -146,26 +146,26 @@ Billed while a container exists: boot, the snapshot creation, serving, and the s
 
 ## The 27B (`hames_private_27b.py`)
 
-Qwen3.8-27B-FP8 for the app's `VerdaQwen` client, a drop-in for the Verda deployment: the same model name (vLLM enforces it), a 131072-token window and an OpenAI-compatible `/v1`. `modal-pins.test.ts` pins the name and the window against the client's own files.
+Qwen3.8-27B-FP8 for the app's `LargeQwen` client, a drop-in for the Verda deployment: the same model name (vLLM enforces it), a 131072-token window and an OpenAI-compatible `/v1`. `modal-pins.test.ts` pins the name and the window against the client's own files.
 
 ```bash
 uv run --env-file deploy.local.env modal deploy hames_private_27b.py
-uv run --env-file deploy.local.env smoke_27b.py                         # PASS/FAIL, in VerdaQwen's request shape
+uv run --env-file deploy.local.env smoke_27b.py                         # PASS/FAIL, in LargeQwen's request shape
 uv run --env-file deploy.local.env measure.py --box 27b --stop --samples 3
 HAMES_MODAL_SERVER=Qwen27B uv run --env-file deploy.local.env ops.py status   # every ops.py command, for this box
 ```
 
-Then, from `app/`, the app's own checks against it: `smoke-verda.ts` and `smoke-verda-load.ts` (`src/lib/inference/scripts/`), with the endpoint and key in an overlay env file.
+Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and `smoke-large-load.ts` (`src/lib/inference/scripts/`), with the endpoint and key in an overlay env file.
 
 **Switching the app to it is env-only, and these move together:**
 
-| App setting                | Value                                                                                                                                                    |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VERDA_INFERENCE_ENDPOINT` | `<27B URL>/v1`                                                                                                                                           |
-| `VERDA_INFERENCE_API_KEY`  | the Proxy Token, `wk-….ws-…`                                                                                                                             |
-| `VERDA_EUR_PER_HOUR`       | this box's rate, not Verda's (an H100 below is ≈ 7.00)                                                                                                   |
-| `VERDA_SCALEDOWN_SECONDS`  | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                                                                                            |
-| `VERDA_WAKE_TIMEOUT_MS`    | `1200000` for as long as the endpoint points here: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default, and one can come unannounced |
+| App setting                   | Value                                                                                                                                                    |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LARGE_LLM_BASE_URL`          | `<27B URL>/v1`                                                                                                                                           |
+| `LARGE_LLM_API_KEY`           | the Proxy Token, `wk-….ws-…`                                                                                                                             |
+| `LARGE_LLM_EUR_PER_HOUR`      | this box's rate, not Verda's (an H100 below is ≈ 7.00)                                                                                                   |
+| `LARGE_LLM_SCALEDOWN_SECONDS` | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                                                                                            |
+| `LARGE_LLM_WAKE_TIMEOUT_MS`   | `1200000` for as long as the endpoint points here: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default, and one can come unannounced |
 
 **The processor.** Modal is an approved processor for the private tier: G15 (#567 comment 6194622280) approved it, and its company-data condition, a DPA with Modal, is met (owner, 2026-10-18). The approval holds on two conditions the code enforces: snapshots hold public weights and synthetic warm-up only, and no request or response content reaches a log; a change that breaks either reopens it. Modal's answer on which country backs the narrow EU region is still owed to the record. On this host the transfer picture differs from Verda's (`docs/data-privacy/plan.md`, finding 1, update of 2026-10-17).
 
@@ -173,14 +173,14 @@ Then, from `app/`, the app's own checks against it: `smoke-verda.ts` and `smoke-
 
 **What differs from the small box:**
 
-- Thinking. vLLM runs the `qwen3` reasoning parser, so the model can think and its reasoning arrives in the response's `reasoning` field (and counts in `completion_tokens`); `VerdaQwen` turns it off per request with `chat_template_kwargs`. `smoke_27b.py` checks both: with thinking off, `content` is non-empty and parses and `reasoning` is empty; with it on, nothing leaks into `content`.
+- Thinking. vLLM runs the `qwen3` reasoning parser, so the model can think and its reasoning arrives in the response's `reasoning` field (and counts in `completion_tokens`); `LargeQwen` turns it off per request with `chat_template_kwargs`. `smoke_27b.py` checks both: with thinking off, `content` is non-empty and parses and `reasoning` is empty; with it on, nothing leaks into `content`.
 - Text only (`--language-model-only`): no vision tower is loaded and an image part is a 400 before anything is fetched.
 - Multi-token prediction (`HAMES_MODAL_27B_MTP_TOKENS`, 2 by default) drafts tokens with the model's own MTP head. A damaged draft head costs speed, never correctness, so the restore check reads its acceptance rate on a literal generation before the sleep and after the restore.
 - After a restore, before Caddy listens: the reference distribution (as the small box), a literal question that must parse to the exact JSON answer with thinking off, and MTP acceptance within 0.15 of its pre-sleep value.
 - Routes (`Caddyfile.27b`): `POST /v1/chat/completions`, `GET /v1/models`, `GET /health` (vLLM's, answered only once those checks passed) and `GET /status`. Everything else is a 404, including every dot-segment path that resolves off the list.
 - Shape: 4 cores and 64 GiB (level-1 sleep holds the ~31 GB of weights in CPU RAM for the snapshot), `H100!` (the `!` stops Modal substituting an H200, which would need snapshots of its own), up to 8 requests in flight, 300 s idle.
 
-**Reference measurements, 2026-10-17** (synthetic inputs; `eu-west`; the load figures are `smoke-verda-load.ts`, 2.75k-token prompts, the same script Verda was measured with on 2026-08-25):
+**Reference measurements, 2026-10-17** (synthetic inputs; `eu-west`; the load figures are `smoke-large-load.ts`, 2.75k-token prompts, the same script Verda was measured with on 2026-08-25):
 
 |                                                   | RTX PRO 6000, MTP 2 | **H100, MTP 2** (default) | H100, MTP off | Verda, 2026-08-25       |
 | ------------------------------------------------- | ------------------- | ------------------------- | ------------- | ----------------------- |

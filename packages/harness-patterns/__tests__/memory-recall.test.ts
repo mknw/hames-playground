@@ -7,7 +7,7 @@
  *   bm25-rrf-floors              — tokenizer, BM25, RRF, the floors BEFORE
  *                                  fusion, cap, budget; an irrelevant corpus
  *                                  attaches nothing
- *   tier-filter                  — a verda memory never appears on an anthropic
+ *   tier-filter                  — a self_deployed memory never appears on an anthropic
  *                                  turn, even from a store that ignores `tiers`
  *   per-turn-clear               — turn 2 never sees turn 1's memories after a
  *                                  skip or a failure
@@ -70,7 +70,7 @@ const mem = (
 ): MemoryCandidate => ({
   id,
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   content,
   embedSpace: SPACE,
   distance: 1 - similarity,
@@ -126,10 +126,10 @@ function fakeDecide(
 const retrieves = () => fakeDecide(() => answer({ retrieve: 0.9, skip: 0.1 }))
 
 const visibleTiers = (t: string | undefined) =>
-  t === 'verda' ? ['verda', 'anthropic'] : ['anthropic']
+  t === 'self_deployed' ? ['self_deployed', 'anthropic'] : ['anthropic']
 
 const TWO_TIERS = [
-  mem('v1', 'prefers metric units', 0.9, { tier: 'verda' }),
+  mem('v1', 'prefers metric units', 0.9, { tier: 'self_deployed' }),
   mem('a1', 'prefers metric units for recipes', 0.8, { tier: 'anthropic' }),
 ]
 
@@ -140,7 +140,7 @@ function config(over: Partial<MemoryRecallConfig> = {}): MemoryRecallConfig {
     embed: embedder(),
     owner: () => 'user-1',
     visibleTiers,
-    tier: () => 'verda',
+    tier: () => 'self_deployed',
     ...over,
   }
 }
@@ -342,7 +342,7 @@ describe('memoryRecall: the happy path', () => {
     )
     const [ev] = recalled(ctx)
     expect(ev.attached).toEqual(['v1', 'a1'])
-    expect(ev).toMatchObject({ considered: 2, survivors: 2, tier: 'verda', wake: 'awake' })
+    expect(ev).toMatchObject({ considered: 2, survivors: 2, tier: 'self_deployed', wake: 'awake' })
     expect(ev.skipped).toBeUndefined()
     expect(ev.gate).toMatchObject({ label: 'retrieve', abstained: false, calibrated: true })
   })
@@ -380,7 +380,9 @@ describe('memoryRecall: the happy path', () => {
 
   it('formats one line per memory without the id', () => {
     expect(
-      formatMemoryContext([{ id: 'secret-id', kind: 'trait', tier: 'verda', content: 'a\n b' }]),
+      formatMemoryContext([
+        { id: 'secret-id', kind: 'trait', tier: 'self_deployed', content: 'a\n b' },
+      ]),
     ).toBe('- [trait] a b')
   })
 })
@@ -461,7 +463,7 @@ describe('memoryRecall: skip reasons', () => {
 // ============================================================================
 
 describe('tier-filter', () => {
-  it('an anthropic turn never sees a verda memory, though the store returns one', async () => {
+  it('an anthropic turn never sees a self_deployed memory, though the store returns one', async () => {
     const { store, asked } = fakeStore(TWO_TIERS)
     const ctx = await run(config({ store, tier: () => 'anthropic' }))
     expect(ctx.data.memories!.map((m) => m.id)).toEqual(['a1'])
@@ -471,16 +473,16 @@ describe('tier-filter', () => {
     expect(asked.candidates[0].tiers).toEqual(['anthropic'])
   })
 
-  it('a verda turn sees both tiers', async () => {
-    const ctx = await run(config({ tier: () => 'verda' }))
+  it('a self_deployed turn sees both tiers', async () => {
+    const ctx = await run(config({ tier: () => 'self_deployed' }))
     expect(ctx.data.memories!.map((m) => m.id).sort()).toEqual(['a1', 'v1'])
   })
 
-  it('reads the turn’s tier from the run frame when no resolver is given (verda sees both)', async () => {
+  it('reads the turn’s tier from the run frame when no resolver is given (self_deployed sees both)', async () => {
     const { tier: _t, ...rest } = config()
-    const ctx = await run(rest, { frame: { inference: { tier: 'verda' } } })
+    const ctx = await run(rest, { frame: { inference: { tier: 'self_deployed' } } })
     expect(ctx.data.memories!.map((m) => m.id).sort()).toEqual(['a1', 'v1'])
-    expect(recalled(ctx)[0].tier).toBe('verda')
+    expect(recalled(ctx)[0].tier).toBe('self_deployed')
   })
 
   it('reads the turn’s tier from the run frame when no resolver is given (anthropic sees one)', async () => {
@@ -501,7 +503,7 @@ describe('tier-filter', () => {
 
 describe('per-turn-clear', () => {
   const STALE: Data = {
-    memories: [{ id: 'old', kind: 'trait', tier: 'verda', content: 'turn one leftover' }],
+    memories: [{ id: 'old', kind: 'trait', tier: 'self_deployed', content: 'turn one leftover' }],
     memoryContext: '- [trait] turn one leftover',
   }
   const cases: Array<[string, Partial<MemoryRecallConfig>]> = [

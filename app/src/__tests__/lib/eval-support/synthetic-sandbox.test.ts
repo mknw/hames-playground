@@ -152,7 +152,7 @@ const walk = (ps: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[
 
 beforeAll(async () => {
   vi.stubEnv('ANTHROPIC_API_KEY', 'offline-replay-test')
-  vi.stubEnv('USE_VERDA_INFERENCE', '0')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '0')
   const { b } = await import('@hames-ai/harness-baml/baml_client')
   let call = 0
   vi.spyOn(b, 'ActorController').mockImplementation((async (...args: unknown[]) => {

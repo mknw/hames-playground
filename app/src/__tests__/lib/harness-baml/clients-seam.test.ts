@@ -40,23 +40,23 @@ const CONFIG = '../../../lib/inference/config.server'
 const SETTINGS = '../../../lib/settings'
 
 const ENV_KEYS = [
-  'USE_VERDA_INFERENCE',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'USE_SELF_DEPLOYED_INFERENCE',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
   'EUR_PER_USD',
-  'VERDA_EUR_PER_HOUR',
+  'LARGE_LLM_EUR_PER_HOUR',
   'SMALL_LLM_EUR_PER_HOUR',
 ] as const
 
 let saved: Record<string, string | undefined>
 
 function enable(): void {
-  process.env.USE_VERDA_INFERENCE = '1'
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -87,7 +87,7 @@ async function loadWired() {
   // `assertInferenceTier`. Bound together here — both, in that order, is what a
   // turn does — so the seam assertions below are unchanged.
   const runWithInferenceTier = async <T>(
-    tier: 'verda' | 'anthropic',
+    tier: 'self_deployed' | 'anthropic',
     fn: () => Promise<T>,
   ): Promise<T> => {
     clients.assertInferenceTier(tier)
@@ -97,17 +97,17 @@ async function loadWired() {
 }
 
 describe('the configuration the host registers is the configuration the resolution reads', () => {
-  it('a verda scope flows through the seam: override, tables and hook all land', async () => {
+  it('a self_deployed scope flows through the seam: override, tables and hook all land', async () => {
     enable()
     const clients = await loadWired()
 
-    await clients.runWithInferenceTier('verda', async () => {
+    await clients.runWithInferenceTier('self_deployed', async () => {
       // The override names the client the host's tables know.
-      expect(clients.clientOverrideFor('planner')).toEqual({ client: 'VerdaQwen' })
-      // The host's model tables: 131 072 window and 4 096 cap for VerdaQwen —
+      expect(clients.clientOverrideFor('planner')).toEqual({ client: 'LargeQwen' })
+      // The host's model tables: 131 072 window and 4 096 cap for LargeQwen —
       // impossible from the package-side defaults (16 384 / undefined), so
       // these two numbers are a direct readout of which store answered.
-      expect(clients.getContextWindow('VerdaQwen')).toBe(131_072)
+      expect(clients.getContextWindow('LargeQwen')).toBe(131_072)
       expect(clients.limitsFor('planner')).toEqual({
         contextWindow: 131_072,
         maxOutputTokens: 4_096,
@@ -124,18 +124,18 @@ describe('the configuration the host registers is the configuration the resoluti
     // mutation that points the reader at a second AsyncLocalStorage passes
     // every default-tier test — with the flag on, the default tier routes
     // exactly like the scope — and only a test that holds the default at
-    // 'anthropic' while the scope says 'verda' catches it.
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    // 'anthropic' while the scope says 'self_deployed' catches it.
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
     process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const clients = await loadWired()
 
     expect(clients.activeInferenceTier()).toBe('anthropic')
-    await clients.runWithInferenceTier('verda', async () => {
-      expect(clients.activeInferenceTier()).toBe('verda')
-      expect(clients.clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
+    await clients.runWithInferenceTier('self_deployed', async () => {
+      expect(clients.activeInferenceTier()).toBe('self_deployed')
+      expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
     expect(clients.activeInferenceTier()).toBe('anthropic')
   })
@@ -144,28 +144,28 @@ describe('the configuration the host registers is the configuration the resoluti
     enable()
     const clients = await loadWired()
 
-    await clients.runWithInferenceTier('verda', async () => {
-      expect(clients.clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+    await clients.runWithInferenceTier('self_deployed', async () => {
+      expect(clients.clientOverrideFor('describe')).toEqual({ client: 'SmallQwen' })
       expect(noteBoxCallStarting).toHaveBeenCalledWith('small')
     })
   })
 
-  it('the host env default flows: USE_VERDA_INFERENCE=1 outside any scope still routes', async () => {
+  it('the host env default flows: USE_SELF_DEPLOYED_INFERENCE=1 outside any scope still routes', async () => {
     enable()
     const clients = await loadWired()
 
-    expect(clients.activeInferenceTier()).toBe('verda')
-    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
+    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
   })
 
-  it('a verda scope is checked through the registered assert, not opened blind', async () => {
+  it('a self_deployed scope is checked through the registered assert, not opened blind', async () => {
     // Registered directly rather than via the composition root: with the flag
     // on and the env missing, config.server's own module-load check throws at
-    // import (its own pin, in clients-verda.test.ts). This test isolates the
+    // import (its own pin, in clients-self-deployed.test.ts). This test isolates the
     // gate itself — `assertInferenceTier` consulting `assertTierReachable`.
     //
     // #374 moved the tier onto core's generic run frame, which cannot know what
-    // 'verda' means, so the gate is no longer on the way INTO a scope: it is
+    // 'self_deployed' means, so the gate is no longer on the way INTO a scope: it is
     // this exported check, and the host calls it before it puts a tier in a
     // frame (`turn.server.ts`). Asserted against the check rather than through
     // a frame, because the check is now the whole of the refusal.
@@ -176,7 +176,7 @@ describe('the configuration the host registers is the configuration the resoluti
         throw new Error('fixture assert: the scope is not reachable')
       },
     })
-    expect(() => clients.assertInferenceTier('verda')).toThrow(
+    expect(() => clients.assertInferenceTier('self_deployed')).toThrow(
       /fixture assert: the scope is not reachable/,
     )
     // And the anthropic position is never gated — it needs no endpoint.
@@ -193,7 +193,7 @@ describe('the configuration the host registers is the configuration the resoluti
         {
           calls: [
             {
-              clientName: 'LocalQwenSmall',
+              clientName: 'SmallQwen',
               timing: { durationMs },
             },
           ],
@@ -235,7 +235,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const collector = {
       logs: [
         {
-          calls: ['VerdaQwen', 'LocalQwenSmall'].map((clientName) => ({
+          calls: ['LargeQwen', 'SmallQwen'].map((clientName) => ({
             clientName,
             timing: { durationMs: 2_000 },
           })),
@@ -251,15 +251,18 @@ describe('the configuration the host registers is the configuration the resoluti
   it('retains the published single-client pricing registration', async () => {
     const clients = await loadWired()
     const { estimateLlmCostEur } = await import(SETTINGS)
-    clients.configureCostPricing({ estimate: estimateLlmCostEur, timePricedClient: 'VerdaQwen' })
-    process.env.VERDA_EUR_PER_HOUR = '4'
+    clients.configureCostPricing({
+      estimate: estimateLlmCostEur,
+      timePricedClient: 'LargeQwen',
+    })
+    process.env.LARGE_LLM_EUR_PER_HOUR = '4'
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const measured = computeEventMetrics({
       logs: [
         {
           calls: [
             {
-              clientName: 'VerdaQwen',
+              clientName: 'LargeQwen',
               timing: { durationMs: 2_000 },
             },
           ],
@@ -273,31 +276,33 @@ describe('the configuration the host registers is the configuration the resoluti
   it('the host EUR rates flow through the seam, env override included', async () => {
     enable()
     process.env.EUR_PER_USD = '1.25'
-    process.env.VERDA_EUR_PER_HOUR = '2.5'
+    process.env.LARGE_LLM_EUR_PER_HOUR = '2.5'
     await loadWired()
     const bamlAdapters = await import('@hames-ai/harness-baml/baml-adapters.server')
     // computeEventMetrics reads the rates through the seam per step; reading
     // the same store here proves which one is live.
     const { activeCostRates } = await import(CLIENTS)
     expect(activeCostRates().eurPerUsd()).toBe(1.25)
-    expect(activeCostRates().verdaEurPerHour()).toBe(2.5)
+    expect(activeCostRates().largeEurPerHour()).toBe(2.5)
     expect(bamlAdapters).toBeDefined()
   })
 })
 
 describe('unregistered — the package-side defaults are safe', () => {
-  it('the default tier is anthropic and an unregistered verda scope is REFUSED', async () => {
+  it('the default tier is anthropic and an unregistered self_deployed scope is REFUSED', async () => {
     enable() // env alone must not route anything: registration is the act, not the flag
     const clients = await import(CLIENTS)
 
     expect(clients.activeInferenceTier()).toBe('anthropic')
     expect(clients.clientOverrideFor('controller')).toBeUndefined()
-    expect(() => clients.assertInferenceTier('verda')).toThrow(/no inference policy is registered/)
+    expect(() => clients.assertInferenceTier('self_deployed')).toThrow(
+      /no inference policy is registered/,
+    )
   })
 
   it('unknown clients keep the documented fallbacks with no tables registered', async () => {
     const clients = await import(CLIENTS)
-    expect(clients.getContextWindow('VerdaQwen')).toBe(16_384)
+    expect(clients.getContextWindow('LargeQwen')).toBe(16_384)
     expect(clients.limitsFor('controller')).toEqual({
       contextWindow: 16_384,
       maxOutputTokens: undefined,
@@ -306,15 +311,15 @@ describe('unregistered — the package-side defaults are safe', () => {
 
   it('the package-side rate fallbacks are pinned equal to the app defaults they mirror', async () => {
     const clients = await import(CLIENTS)
-    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } = await import(SETTINGS)
+    const { DEFAULT_EUR_PER_USD, DEFAULT_LARGE_LLM_EUR_PER_HOUR } = await import(SETTINGS)
 
     const rates = clients.activeCostRates()
     expect(rates.eurPerUsd()).toBe(DEFAULT_EUR_PER_USD)
-    expect(rates.verdaEurPerHour()).toBe(DEFAULT_VERDA_EUR_PER_HOUR)
+    expect(rates.largeEurPerHour()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
     // The fallback exists so an unregistered consumer still prices sanely; the
     // equality pin is what keeps the two copies from drifting silently.
     expect(DEFAULT_EUR_PER_USD).toBe(0.86)
-    expect(DEFAULT_VERDA_EUR_PER_HOUR).toBe(1.819)
+    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
   })
 
   it('a host that does register gets exactly what it hands over', async () => {
@@ -322,15 +327,15 @@ describe('unregistered — the package-side defaults are safe', () => {
     const seen: string[] = []
     clients.configureModelTables({ maxOutputTokens: { X: 1 }, contextWindows: { X: 99 } })
     clients.configureInferencePolicy({
-      defaultTier: () => 'verda',
+      defaultTier: () => 'self_deployed',
       onPrivateCallStart: (client: string) => seen.push(client),
     })
-    clients.configureCostRates({ eurPerUsd: () => 3, verdaEurPerHour: () => 4 })
+    clients.configureCostRates({ eurPerUsd: () => 3, largeEurPerHour: () => 4 })
 
     expect(clients.getContextWindow('X')).toBe(99)
-    expect(clients.activeInferenceTier()).toBe('verda')
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
     expect(clients.activeCostRates().eurPerUsd()).toBe(3)
-    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
-    expect(seen).toEqual(['VerdaQwen'])
+    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(seen).toEqual(['LargeQwen'])
   })
 })

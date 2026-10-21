@@ -59,20 +59,20 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
  * stub was called. The endpoint values are fakes — nothing opens a socket, they
  * exist to satisfy the fail-closed check the scope runs before `fn`.
  */
-async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
+async function withSelfDeployedTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('@hames-ai/harness-baml/clients.server')
   // BOTH endpoints: the private tier is the 27B plus the 4B summarizer, and a
   // scope naming it without the second is refused outright (2026-08-26).
   const KEYS = [
-    'VERDA_INFERENCE_ENDPOINT',
-    'VERDA_INFERENCE_API_KEY',
+    'LARGE_LLM_BASE_URL',
+    'LARGE_LLM_API_KEY',
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
     'SMALL_LLM_API_KEY',
   ]
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -81,8 +81,8 @@ async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
     // reachability check the old opener made on the way in is now the
     // host-called `assertInferenceTier`. Both, in that order, is what a turn does.
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
-    clients.assertInferenceTier('verda')
-    return await withRunFrame({ inference: { tier: 'verda' } }, fn)
+    clients.assertInferenceTier('self_deployed')
+    return await withRunFrame({ inference: { tier: 'self_deployed' } }, fn)
   } finally {
     for (const k of KEYS) {
       if (saved[k] === undefined) delete process.env[k]
@@ -293,25 +293,30 @@ describe('createPlannerAdapter', () => {
           calls: [
             {
               selected: false,
-              clientName: 'VerdaQwenThink',
+              clientName: 'LargeQwenThink',
               httpResponse: {
                 body: { json: () => ({ choices: [{ message: { reasoning: 'STALE TRACE' } }] }) },
               },
             },
-            { selected: true, clientName: 'VerdaQwen' },
+            { selected: true, clientName: 'LargeQwen' },
           ],
         },
       })
       return { plan: '1. Search', n_steps: 1 }
     })
     const failure = await withRunFrame(
-      { inference: { tier: 'verda', clientOverride: () => ({ client: 'VerdaQwenThink' }) } },
+      {
+        inference: {
+          tier: 'self_deployed',
+          clientOverride: () => ({ client: 'LargeQwenThink' }),
+        },
+      },
       () => createPlannerAdapter([])('msg', 'intent'),
     ).catch((error: unknown) => error)
     expect(failure).toBeInstanceOf(LLMCallError)
     expect(failure).toMatchObject({
       message: 'PlannerThinking did not select a known thinking client',
-      llmCall: { clientName: 'VerdaQwen' },
+      llmCall: { clientName: 'LargeQwen' },
     })
     expect(mockPlannerThinking).toHaveBeenCalledTimes(1)
     expect(mockPlanner).not.toHaveBeenCalled()
@@ -787,7 +792,7 @@ describe('describeToolResultOp', () => {
     )
 
     expect(result).toBe('Found 3 nodes in the graph.')
-    // OUTSIDE a verda scope the trailing options bag carries a collector and
+    // OUTSIDE a self_deployed scope the trailing options bag carries a collector and
     // NOTHING else — no `client` key, so the function runs the chain
     // `describe.baml` declares. The collector is not optional either: describe
     // is the repo's highest-frequency role, so an unaccounted describe call
@@ -802,23 +807,23 @@ describe('describeToolResultOp', () => {
     expect(Object.keys(mockResultDescribe.mock.calls[0][4] as object)).toEqual(['collector'])
   })
 
-  it('adds the client override inside a verda scope', async () => {
-    // The 2026-08-26 half of the pair above. `clients-verda.test.ts` greps for
+  it('adds the client override inside a self_deployed scope', async () => {
+    // The 2026-08-26 half of the pair above. `clients-self-deployed.test.ts` greps for
     // the literal ONCE PER ROLE, and describe has six call sites, so five could
     // lose their spread and stay green there; the e2e tier scenario only ever
     // exercises whichever describe path that turn happened to take. This is the
     // per-call-site check for the two that carry tool results.
     //
-    // `LocalQwenSmall`, not `VerdaQwen` — the describe flip later the same day.
+    // `SmallQwen`, not `LargeQwen` — the describe flip later the same day.
     // Asserting the specific client rather than "some override" is what makes
     // this the test that would catch summarization being sent to the 27B (or to
     // Anthropic) on a private-tier turn.
     const { describeToolResultOp } = await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribe.mockResolvedValue('ok')
 
-    await withVerdaTier(() => describeToolResultOp('search', '{}', '', 'data'))
+    await withSelfDeployedTier(() => describeToolResultOp('search', '{}', '', 'data'))
 
-    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'SmallQwen' })
   })
 
   // #420: a failed call THROWS. It used to resolve `''`, the same value as a
@@ -860,7 +865,7 @@ describe('describeToolResultsBatchOp', () => {
     expect(byId.get('1')).toBe('Found A.')
     expect(byId.get('2')).toBe('Fetched B.')
     // `toolArgs` is renamed to the BAML class's snake_case `tool_args`; outside
-    // a verda scope the trailing bag is the accounting collector only (see
+    // a self_deployed scope the trailing bag is the accounting collector only (see
     // `describeToolResultOp`).
     expect(mockResultDescribeBatch).toHaveBeenCalledWith(
       [
@@ -872,7 +877,7 @@ describe('describeToolResultsBatchOp', () => {
     expect(Object.keys(mockResultDescribeBatch.mock.calls[0][1] as object)).toEqual(['collector'])
   })
 
-  it('adds the client override inside a verda scope', async () => {
+  it('adds the client override inside a self_deployed scope', async () => {
     // The BATCH path specifically. The e2e tier scenario cannot reach it — its
     // turns produce a single tool result, which routes to the single-item call
     // — so without this the busiest describe path would be pinned by nothing
@@ -882,9 +887,9 @@ describe('describeToolResultsBatchOp', () => {
       await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({ summaries: [{ id: '1', summary: 'A.' }] })
 
-    await withVerdaTier(() => describeToolResultsBatchOp(items))
+    await withSelfDeployedTier(() => describeToolResultsBatchOp(items))
 
-    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'SmallQwen' })
   })
 
   it('omits ids the model dropped or answered blank', async () => {

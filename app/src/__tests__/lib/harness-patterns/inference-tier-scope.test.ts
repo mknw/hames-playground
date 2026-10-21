@@ -487,7 +487,7 @@ describe('the one tier rule — every reader names the same tier', () => {
     })
   })
 
-  it('with no host policy registered, the package fallback is the Anthropic tier for every reader (security delta N4)', async () => {
+  it('with no host policy registered, the package fallback is the Anthropic tier for an absent or empty tier (security delta N4)', async () => {
     // A library user has no self-deployed tier to default to. `effectiveTier()`
     // answers the tier routing takes, so a guard's `ByTier` key for the Anthropic
     // tier applies rather than its `default`. Mutation: have the package answer
@@ -495,7 +495,7 @@ describe('the one tier rule — every reader names the same tier', () => {
     vi.resetModules()
     const clients = await import('@hames-ai/harness-baml/clients.server')
     const core = await import('@hames-ai/harness-patterns/run-frame.server')
-    for (const frame of [undefined, '', 'future'] as const) {
+    for (const frame of [undefined, ''] as const) {
       await core.withRunFrame(
         { inference: frame === undefined ? {} : { tier: frame } },
         async () => {
@@ -506,6 +506,20 @@ describe('the one tier rule — every reader names the same tier', () => {
         },
       )
     }
+  })
+
+  it('with no host policy registered, a PRESENT but unknown tier is refused by every reader, never the Anthropic tier (ruling E)', async () => {
+    // Mutation: `named ?? tierPolicy.defaultTier()` for a non-empty unknown
+    // string (the pre-fix line): every reader answers 'anthropic' and these go red.
+    vi.resetModules()
+    const clients = await import('@hames-ai/harness-baml/clients.server')
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    await core.withRunFrame({ inference: { tier: 'future' } }, async () => {
+      expect(() => clients.activeInferenceTier()).toThrow(/no inference policy/)
+      expect(() => clients.onExplicitAnthropicTier()).toThrow(/no inference policy/)
+      expect(() => core.effectiveTier()).toThrow(/no inference policy/)
+      expect(() => clients.clientOverrideFor('controller')).toThrow(/no inference policy/)
+    })
   })
 })
 

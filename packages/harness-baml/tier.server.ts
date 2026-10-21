@@ -11,11 +11,13 @@
  * ## The rule
  *
  * A frame tier is the Anthropic tier only when it says exactly `'anthropic'`
- * (and the deployment is not restricted to the self-deployed tier). An absent,
- * empty or unrecognised tier is whatever the HOST'S policy names as its default
- * — which the reference host sets to `'self_deployed'` — and, with no host
- * policy registered, the package's own fallback, `'anthropic'`: a library user
- * has no self-deployed tier to default to.
+ * (and the deployment is not restricted to the self-deployed tier). An absent
+ * or empty tier is whatever the HOST'S policy names as its default — which the
+ * reference host sets to `'self_deployed'` — and, with no host policy
+ * registered, the package's own fallback, `'anthropic'`: a library user has no
+ * self-deployed tier to default to. A PRESENT but unrecognised tier is the
+ * self-deployed tier, so an unreachable one is refused on every host rather
+ * than taken as the public tier.
  *
  * ## One function, two readers
  *
@@ -29,7 +31,7 @@
  *
  * ## A default that cannot be taken is refused
  *
- * When the tier came from the DEFAULT (no recognised frame value) and is the
+ * When the tier came from the DEFAULT (no recognised frame value, or an unrecognised one) and is the
  * self-deployed tier, reachability is asserted on every read. An unconfigured
  * host therefore refuses the call before any request — it never routes to the
  * Anthropic tier, which is the one outcome the self-deployed tier exists to
@@ -145,9 +147,10 @@ export function assertInferenceTier(tier: InferenceTier): void {
  *
  * The frame carries the tier as an OPAQUE STRING, because core must not know
  * provider vocabulary. The narrowing back to this module's union happens here,
- * and an unrecognised value takes the default rather than being trusted: a host
- * that writes a typo into the slot gets the default tier — refused when that
- * tier is unreachable — not an unrouted one. `'verda'` is the pre-rename
+ * and an unrecognised value is never trusted as the Anthropic tier: a host
+ * that writes a typo into the slot gets the self-deployed tier — refused when
+ * it is unreachable — not an unrouted one. Only an ABSENT or empty tier takes
+ * the policy's default. `'verda'` is the pre-rename
  * spelling of `'self_deployed'` (and only that spelling).
  */
 export function activeInferenceTier(): InferenceTier {
@@ -158,7 +161,11 @@ export function activeInferenceTier(): InferenceTier {
       : tier === 'anthropic'
         ? tier
         : undefined
-  const active = named ?? tierPolicy.defaultTier()
+  // An ABSENT or empty tier takes the host default; a tier that is present but
+  // unrecognised is never the Anthropic tier (ruling E) — it is the self-deployed
+  // tier, so an unreachable one is refused below instead of reaching a public
+  // provider on a host whose default is Anthropic.
+  const active = named ?? (tier ? 'self_deployed' : tierPolicy.defaultTier())
   // A tier a frame names was asserted by the host before the slot was filled;
   // one taken by default has not been, so the assertion happens here, per read.
   if (privateInferenceOnly() || (!named && active === 'self_deployed')) {

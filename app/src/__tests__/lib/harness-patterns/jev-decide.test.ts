@@ -430,10 +430,6 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
   it.each(['self_deployed', 'unknown', 'future'])(
     'refuses tier %s before reading the key',
     async (tier) => {
-      // An unrecognised tier takes the host's DEFAULT (the one tier rule), so on
-      // a deployment whose default is the private tier it is the private tier:
-      // the flag makes this file's flag-driven default say so.
-      if (tier !== 'self_deployed') vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       const { decideAll } = await transport()
       const real = process.env
       let keyReads = 0
@@ -451,7 +447,6 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
         expect(requests).toHaveLength(0)
       } finally {
         process.env = real
-        vi.unstubAllEnvs()
       }
     },
   )

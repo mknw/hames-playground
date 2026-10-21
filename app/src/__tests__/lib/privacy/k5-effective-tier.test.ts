@@ -42,7 +42,6 @@ async function k5Runs(defaultTier: InferenceTier, tier: string | undefined): Pro
 describe('K5 reads the one tier rule, not the raw frame string', () => {
   it.each([
     ['an unfilled frame', undefined],
-    ['an unknown tier', 'future'],
     ['an empty tier', ''],
   ])('%s on a deployment whose default is the Anthropic tier: no rewrite', async (_n, tier) => {
     expect(await k5Runs('anthropic', tier)).toBe(false)
@@ -55,6 +54,13 @@ describe('K5 reads the one tier rule, not the raw frame string', () => {
     ['the self-deployed tier', 'self_deployed'],
   ])('%s on a deployment whose default is the self-deployed tier: rewrites', async (_n, tier) => {
     expect(await k5Runs('self_deployed', tier)).toBe(true)
+  })
+
+  // A present but unrecognised tier is never the Anthropic tier (ruling E), whatever
+  // the host default is: K5 rewrites. Mutation: default an unknown tier to the host
+  // default again and the Anthropic-default row goes red.
+  it('an unknown tier on a deployment whose default is the Anthropic tier: rewrites', async () => {
+    expect(await k5Runs('anthropic', 'future')).toBe(true)
   })
 
   it.each(['anthropic', 'self_deployed'] as const)(

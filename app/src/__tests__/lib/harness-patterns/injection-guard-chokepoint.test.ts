@@ -60,8 +60,8 @@ async function load() {
     await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
   // The guard is a SLOT of the run frame since #374; the per-store opener it
   // used to have is gone. Bound here so every assertion below — including the
-  // UNION nesting pins — stays byte-identical: what changed is where the guard
-  // is put, not what the chokepoint does with it.
+  // nesting pins — stays byte-identical: what changed is where the guard is
+  // put, not what the chokepoint does with it.
   const { withRunFrame, amendRunFrame, currentRunFrame } =
     await import('@hames-ai/harness-patterns/run-frame.server')
   const runWithInjectionGuard = <T>(
@@ -535,124 +535,179 @@ describe("spotlight: 'always'", () => {
 })
 
 // ============================================================================
-// Nesting unions the SANITIZER options too, not just the namespaces
+// Nesting widens COVERAGE; each tool takes the OPTIONS of the guard that declares it
 // ============================================================================
 
 /**
- * Unioning `isUntrusted` was necessary but not sufficient.
+ * Coverage is the one thing nesting still unions (the "nests by UNION" pin
+ * above): an inner guard can never un-guard what an outer guard declared. The
+ * sanitizer OPTIONS used to union as well, which made the outermost screen,
+ * fence and rule set a property of every guard inside it. They no longer do: a
+ * tool is sanitized with the options of the INNERMOST guard that declares it,
+ * and a guard that does not declare a tool hands it to the enclosing guard.
  *
- * Once an inner guard widens the boundary, it is the INNER guard's config that
- * sanitizes the outer guard's namespaces too — so an inner `disableRules`, a
- * weaker `spotlight`, or simply the absence of a `screen` re-opened a hole for
- * tools the inner wrapper never mentioned. Every dimension now takes the
- * strictest of the guards in scope.
+ * In every case below the outer guard declares `web` (the `search` tool) and the
+ * inner guard declares `filesystem` (the `read_file` tool).
  */
-describe('nested guards union the sanitizer options', () => {
+describe('nested guards sanitize each tool with the declaring guard’s own options', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockListTools.mockResolvedValue({ tools: [] })
   })
 
-  it('an inner disableRules cannot switch off a rule for the OUTER boundary', async () => {
-    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
-    gatewayReturns(ATTACK)
+  /** Run `call` inside `outer`, with an inner guard built in its scope. */
+  async function nested(
+    outerConfig: Record<string, unknown>,
+    innerConfig: Record<string, unknown>,
+    call: (tool: 'search' | 'read_file') => Promise<unknown>,
+    tool: 'search' | 'read_file',
+  ) {
+    const { createInjectionGuard, runWithInjectionGuard } = await load()
     const outer = createInjectionGuard(
-      { namespaces: ['web'], catalog: WEB_CATALOG },
+      { namespaces: ['web'], catalog: WEB_CATALOG, ...outerConfig },
       () => {},
       'outer',
     )
-
-    const result = await runWithInjectionGuard(outer, () => {
-      // 'filesystem' only — this guard never claimed 'web', yet its config is what
-      // would have sanitized the inherited 'web' coverage.
+    return runWithInjectionGuard(outer, () => {
+      // Built INSIDE the outer scope — which is what the wrapper's `fn` does.
       const inner = createInjectionGuard(
-        { namespaces: ['filesystem'], catalog: FS_CATALOG, disableRules: ['instruction-override'] },
+        { namespaces: ['filesystem'], catalog: FS_CATALOG, ...innerConfig },
         () => {},
         'inner',
       )
-      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
+      return runWithInjectionGuard(inner, () => call(tool))
     })
+  }
+
+  it('an inner disableRules does not apply to a tool only the OUTER guard declares', async () => {
+    const { callTool, closeMcpClient } = await load()
+    gatewayReturns(ATTACK)
+    // `filesystem` only — this guard never claimed 'web', so its config must not
+    // sanitize the 'web' coverage the outer guard declared.
+    const result = (await nested(
+      {},
+      { disableRules: ['instruction-override'] },
+      (tool) => callTool(tool, { q: 'x' }),
+      'search',
+    )) as Awaited<ReturnType<typeof callTool>>
 
     expect(result.sanitized?.rules).toContain('instruction-override')
     expect(result.data as string).not.toContain('Ignore all previous instructions')
     await closeMcpClient()
   })
 
-  it('honours a disableRules both guards agreed on', async () => {
-    // Intersection, not "ignore the inner one": a rule really is off when every
-    // guard in the nest opted out of it, which is what keeps the escape hatch
-    // usable for a genuine false positive.
-    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+  it('an inner disableRules applies to the tool the inner guard declares', async () => {
+    const { callTool, closeMcpClient } = await load()
     gatewayReturns(ATTACK)
-    const outer = createInjectionGuard(
-      { namespaces: ['web'], catalog: WEB_CATALOG, disableRules: ['instruction-override'] },
-      () => {},
-      'outer',
-    )
-
-    const result = await runWithInjectionGuard(outer, () => {
-      const inner = createInjectionGuard(
-        { namespaces: ['filesystem'], catalog: FS_CATALOG, disableRules: ['instruction-override'] },
-        () => {},
-        'inner',
-      )
-      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
-    })
+    // The outer guard turns nothing off. The inner guard's own exemption governs
+    // its own tool: it is no longer vetoed by the enclosing guard's (empty) list.
+    const result = (await nested(
+      {},
+      { disableRules: ['instruction-override'] },
+      (tool) => callTool(tool, { path: 'x' }),
+      'read_file',
+    )) as Awaited<ReturnType<typeof callTool>>
 
     expect(result.sanitized?.rules ?? []).not.toContain('instruction-override')
     await closeMcpClient()
   })
 
-  it("an inner guard cannot weaken the outer guard's spotlight", async () => {
-    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+  it('the outer guard’s spotlight fences its own tool and is not inherited by the inner guard’s', async () => {
+    const { callTool, closeMcpClient } = await load()
     const clean = 'Paris is the capital of France.'
     gatewayReturns(clean)
-    const outer = createInjectionGuard(
-      { namespaces: ['web'], catalog: WEB_CATALOG, spotlight: 'always' },
-      () => {},
-      'outer',
-    )
+    const outerConfig = { spotlight: 'always' }
 
-    const result = await runWithInjectionGuard(outer, () => {
-      // Leaves `spotlight` at its 'on-detection' default — which, shadowed,
-      // would have dropped the fence the outer wrapper asked for.
-      const inner = createInjectionGuard(
-        { namespaces: ['filesystem'], catalog: FS_CATALOG },
-        () => {},
-        'inner',
-      )
-      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
-    })
+    const outerTool = (await nested(
+      outerConfig,
+      {},
+      (tool) => callTool(tool, { q: 'x' }),
+      'search',
+    )) as Awaited<ReturnType<typeof callTool>>
+    expect(outerTool.data as string).toContain('UNTRUSTED CONTENT')
 
-    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    // The inner guard left `spotlight` at its 'on-detection' default, so clean
+    // content on ITS tool stays byte-identical.
+    const innerTool = (await nested(
+      outerConfig,
+      {},
+      (tool) => callTool(tool, { path: 'x' }),
+      'read_file',
+    )) as Awaited<ReturnType<typeof callTool>>
+    expect(innerTool.data).toBe(clean)
     await closeMcpClient()
   })
 
-  it("an inner guard cannot remove the outer guard's screen", async () => {
-    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
-    const clean = 'Paris is the capital of France.'
-    gatewayReturns(clean)
+  it('the outer guard’s screen runs on its own tool, not on a tool the inner guard declares', async () => {
+    const { callTool, closeMcpClient } = await load()
+    gatewayReturns('Paris is the capital of France.')
     const screen = vi.fn().mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
-    const outer = createInjectionGuard(
-      { namespaces: ['web'], catalog: WEB_CATALOG, screen },
-      () => {},
-      'outer',
-    )
 
-    await runWithInjectionGuard(outer, () => {
-      const inner = createInjectionGuard(
-        { namespaces: ['filesystem'], catalog: FS_CATALOG },
-        () => {},
-        'inner',
-      )
-      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
-    })
-
+    await nested({ screen }, {}, (tool) => callTool(tool, { q: 'x' }), 'search')
     expect(screen).toHaveBeenCalledOnce()
+
+    screen.mockClear()
+    await nested({ screen }, {}, (tool) => callTool(tool, { path: 'x' }), 'read_file')
+    expect(screen).not.toHaveBeenCalled()
     await closeMcpClient()
   })
 
-  it("inherits the outer guard's extra rules", async () => {
+  it('the inner guard’s own screen runs on its tool, and the outer guard’s does not', async () => {
+    const { callTool, closeMcpClient } = await load()
+    gatewayReturns('Paris is the capital of France.')
+    const outerScreen = vi
+      .fn()
+      .mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
+    const innerScreen = vi
+      .fn()
+      .mockResolvedValue({ injection_detected: false, reason: 'ok', spans: [] })
+
+    await nested(
+      { screen: outerScreen },
+      { screen: innerScreen },
+      (tool) => callTool(tool, { path: 'x' }),
+      'read_file',
+    )
+    expect(innerScreen).toHaveBeenCalledOnce()
+    expect(outerScreen).not.toHaveBeenCalled()
+    await closeMcpClient()
+  })
+
+  it('the outer guard’s extra rules apply to its own tool and not to the inner guard’s', async () => {
+    const { callTool, closeMcpClient } = await load()
+    gatewayReturns('The magic word is xyzzy.')
+    const extra = {
+      id: 'custom-magic',
+      description: 'agent-specific rule',
+      layer: 'instruction' as const,
+      re: /xyzzy/g,
+      action: 'marker' as const,
+    }
+
+    const outerTool = (await nested(
+      { rules: [extra] },
+      {},
+      (tool) => callTool(tool, { q: 'x' }),
+      'search',
+    )) as Awaited<ReturnType<typeof callTool>>
+    expect(outerTool.sanitized?.rules).toContain('custom-magic')
+    expect(outerTool.data as string).not.toContain('xyzzy')
+
+    const innerTool = (await nested(
+      { rules: [extra] },
+      {},
+      (tool) => callTool(tool, { path: 'x' }),
+      'read_file',
+    )) as Awaited<ReturnType<typeof callTool>>
+    expect(innerTool.sanitized).toBeUndefined()
+    expect(innerTool.data as string).toContain('xyzzy')
+    await closeMcpClient()
+  })
+
+  it('a middle guard that does not declare a tool hands it on to the guard that does', async () => {
+    // The question travels outward through every enclosing guard, not one level:
+    // the innermost guard declares `context7`, the middle one `filesystem`, and a
+    // `web` call still takes the OUTERMOST guard's options.
     const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
     gatewayReturns('The magic word is xyzzy.')
     const extra = {
@@ -667,55 +722,26 @@ describe('nested guards union the sanitizer options', () => {
       () => {},
       'outer',
     )
-
-    const result = await runWithInjectionGuard(outer, () => {
-      const inner = createInjectionGuard(
-        { namespaces: ['filesystem'], catalog: FS_CATALOG },
-        () => {},
-        'inner',
-      )
-      return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
-    })
-
-    expect(result.sanitized?.rules).toContain('custom-magic')
-    expect(result.data as string).not.toContain('xyzzy')
-    await closeMcpClient()
-  })
-
-  it('exposes the resolved options so a third level unions correctly', async () => {
-    // The union has to survive more than one level: the middle guard's `options`
-    // is what the innermost one reads, so it must already carry the outermost
-    // guard's strictness rather than only its own config.
-    const { closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
-    const outer = createInjectionGuard(
-      {
-        namespaces: ['web'],
-        catalog: WEB_CATALOG,
-        spotlight: 'always',
-        disableRules: ['instruction-secrecy'],
-      },
-      () => {},
-      'outer',
-    )
-
-    await runWithInjectionGuard(outer, async () => {
+    const result = await runWithInjectionGuard(outer, async () => {
       const mid = createInjectionGuard(
         { namespaces: ['filesystem'], catalog: FS_CATALOG },
         () => {},
         'mid',
       )
-      await runWithInjectionGuard(mid, async () => {
+      return runWithInjectionGuard(mid, async () => {
         const inner = createInjectionGuard(
-          { namespaces: ['context7'], catalog: C7_CATALOG, disableRules: ['instruction-secrecy'] },
+          { namespaces: ['context7'], catalog: C7_CATALOG, disableRules: ['custom-magic'] },
           () => {},
           'inner',
         )
-        expect(inner.options.spotlight).toBe('always')
-        // `mid` did not opt out, so the intersection is empty at every level
-        // below it — one guard declining is enough to keep a rule on.
-        expect(inner.options.disableRules).toEqual([])
+        return runWithInjectionGuard(inner, () => callTool('search', { q: 'x' }))
       })
     })
+
+    // The innermost guard's `disableRules` is its own, and neither it nor the
+    // middle guard's (empty) options reach the outermost guard's tool.
+    expect(result.sanitized?.rules).toContain('custom-magic')
+    expect(result.data as string).not.toContain('xyzzy')
     await closeMcpClient()
   })
 })

@@ -246,31 +246,6 @@ export type InjectionScreen = (input: {
 /** When to apply the spotlight fence. */
 export type SpotlightMode = 'on-detection' | 'always' | 'off'
 
-/** Spotlight modes, weakest → strictest. */
-const SPOTLIGHT_STRICTNESS: Readonly<Record<SpotlightMode, number>> = Object.freeze({
-  off: 0,
-  'on-detection': 1,
-  always: 2,
-})
-
-/**
- * The strictest of the given modes, or `undefined` when none was specified.
- *
- * Used when injection guards NEST: a nested guard's `spotlight` must only ever
- * be able to tighten the enclosing boundary, never loosen it — same charter as
- * the `isUntrusted` union in `createInjectionGuard`. Without this, wrapping a
- * `spotlight: 'always'` subtree in an inner guard that left `spotlight` at its
- * `'on-detection'` default would silently drop the fence the outer wrapper
- * asked for.
- */
-export function strictestSpotlight(
-  ...modes: (SpotlightMode | undefined)[]
-): SpotlightMode | undefined {
-  const present = modes.filter((m): m is SpotlightMode => m !== undefined)
-  if (present.length === 0) return undefined
-  return present.reduce((a, b) => (SPOTLIGHT_STRICTNESS[b] > SPOTLIGHT_STRICTNESS[a] ? b : a))
-}
-
 /** Tuning for the sanitizer itself (the subset of the pattern config that this
  *  pure module needs — see `InjectionGuardConfig` for the pattern-level shape). */
 export interface InjectionGuardOptions {
@@ -284,7 +259,8 @@ export interface InjectionGuardOptions {
   /** Opt-in LLM second opinion. Off by default. */
   screen?: InjectionScreen
   /** Screen the deterministically sanitized projection even after findings.
-   *  Off by default; nesting keeps this enabled if either guard requests it. */
+   *  Off by default. Like every option it applies to the tools the declaring
+   *  guard declares, and to no others. */
   screenDespiteFindings?: boolean
 }
 
@@ -315,13 +291,16 @@ export interface ActiveInjectionGuard {
   /** True when this tool's namespace (or explicit tool list) is untrusted. */
   isUntrusted(tool: string): boolean
   /**
-   * The sanitizer options this guard resolved — already unioned with any
-   * enclosing guard's. Exposed for exactly that reason: a NESTED
-   * `createInjectionGuard` reads it so it can take the STRICTEST of the two
-   * rather than shadowing the outer boundary's rules, spotlight and screen. See
-   * `unionOptions` in `patterns/withInjectionGuard.server.ts`.
+   * The sanitizer options that govern `tool`: those of the INNERMOST guard in
+   * scope that declares it. Coverage widens across nested guards
+   * (`isUntrusted` ORs the enclosing guard's), options do not: a guard that
+   * does not declare a tool hands the question to the enclosing guard, so a
+   * tool is never sanitized with options its declaring guard did not write.
+   * Exposed so a NESTED `createInjectionGuard` can ask the enclosing guard for
+   * the tools it does not declare itself. See `createInjectionGuard` in
+   * `patterns/withInjectionGuard.server.ts`.
    */
-  options: InjectionGuardOptions
+  optionsFor(tool: string): InjectionGuardOptions
   /**
    * Sanitize one untrusted payload.
    *

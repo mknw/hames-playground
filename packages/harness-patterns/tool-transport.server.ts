@@ -38,10 +38,10 @@
  * ## Nesting SHADOWS, and that is not the injection guard's rule
  *
  * Two nested transport scopes resolve a name they BOTH own in favour of the
- * inner one. That is the opposite of `withInjectionGuard`, which unions and
- * never shadows (SD-5) — and the inconsistency is deliberate, so do not "fix"
- * it. A nested guard is a second reviewer of the same content and the strictest
- * reading must win; two nested sandboxes are two different machines that both
+ * inner one. That is the opposite of `withInjectionGuard`, whose COVERAGE
+ * unions and never shadows (SD-5) — and the inconsistency is deliberate, so do
+ * not "fix" it. A nested guard is a second reviewer of the same content and may
+ * only widen what is covered; two nested sandboxes are two different machines that both
  * own `sandbox_bash`, and a union has no answer to "which machine" while an
  * order has a deterministic one. Since the run frame, BOTH rules are stated in
  * one place — `amendRunFrame` in `run-frame.server.ts` — rather than one in

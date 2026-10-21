@@ -42,7 +42,6 @@ import {
   resolveRules,
   sanitizeText,
   sanitizeUntrusted,
-  strictestSpotlight,
   type InjectionRule,
   type SanitizeReport,
   type SpotlightMode,
@@ -715,19 +714,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
   })
 
   describe('nesting', () => {
-    it('strictestSpotlight orders the modes always > on-detection > off', () => {
-      expect(strictestSpotlight('off', 'on-detection')).toBe('on-detection')
-      expect(strictestSpotlight('on-detection', 'always')).toBe('always')
-      expect(strictestSpotlight('off', 'always')).toBe('always')
-      expect(strictestSpotlight(undefined, undefined)).toBeUndefined()
-      // An explicit 'off' next to an unspecified mode wins, because
-      // `undefined` is filtered out rather than treated as the default. So
-      // nesting an `{ spotlight: 'off' }` guard inside a guard that never named
-      // a mode yields 'off' — the default is not a floor.
-      expect(strictestSpotlight('off', undefined)).toBe('off')
-    })
-
-    it("an inner guard cannot loosen the outer guard's spotlight", async () => {
+    it("an inner guard's spotlight governs its own tools and not the outer guard's", async () => {
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } = await loadGuardScope()
       const outer = createInjectionGuard(
@@ -741,16 +728,41 @@ describe('spotlight modes: what actually reaches the controller', () => {
           () => {},
           'inner',
         )
-        expect(inner.options.spotlight).toBe('always')
+        // The outer guard's tool keeps the outer guard's fence, even through the
+        // inner guard that does not declare it...
+        const outerTool = (await inner.sanitize('search', 'clean')).data as string
+        expect(outerTool.includes(FENCE_BANNER)).toBe(true)
+        // ...and the inner guard's own tool takes the inner guard's 'off'.
+        const innerTool = (await inner.sanitize('list_graph_messages', ATTACK)).data as string
+        expect(innerTool.includes(FENCE_BANNER)).toBe(false)
+        expect(innerTool.includes('neutralized:instruction-override')).toBe(true)
       })
     })
 
-    it('nested guards fence a result exactly ONCE (no double-wrap)', async () => {
+    it('a tool two guards both declare takes the INNERMOST guard’s spotlight', async () => {
+      const createInjectionGuard = await loadGuard()
+      const { runWithInjectionGuard } = await loadGuardScope()
+      const outer = createInjectionGuard(
+        { namespaces: ['web'], catalog: ['search', 'fetch'], spotlight: 'always' },
+        () => {},
+        'outer',
+      )
+      await runWithInjectionGuard(outer, async () => {
+        const inner = createInjectionGuard(
+          { namespaces: ['web'], catalog: ['search', 'fetch'], spotlight: 'off' },
+          () => {},
+          'inner',
+        )
+        expect((await inner.sanitize('search', 'clean')).data).toBe('clean')
+      })
+    })
+
+    it('an outer guard’s tool is fenced exactly ONCE, by the outer guard (no double-wrap)', async () => {
       // The invariant that makes nesting safe to do casually: only the
-      // innermost guard's `sanitize` runs for a given call — the outer guard is
-      // consulted at CONSTRUCTION (to union its options), not at call time — so
-      // wrapping a guarded subtree in another guard does not double the banner
-      // or nest a fence inside a fence.
+      // innermost guard's `sanitize` runs for a given call, and for a tool it
+      // does not declare it asks the outer guard for its OPTIONS rather than
+      // sanitizing twice — so wrapping a guarded subtree in another guard does
+      // not double the banner or nest a fence inside a fence.
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } = await loadGuardScope()
       const outer = createInjectionGuard(
@@ -771,11 +783,12 @@ describe('spotlight modes: what actually reaches the controller', () => {
       expect(out.split(FENCE_END).length - 1).toBe(1)
     })
 
-    it("an inner guard cannot drop the outer guard's screen, and the inner one wins when both have one", async () => {
+    it("an inner guard's screen runs on its own tools, and the outer guard's screen does not", async () => {
       const createInjectionGuard = await loadGuard()
       const { runWithInjectionGuard } = await loadGuardScope()
-      const outerScreen = vi.fn()
-      const innerScreen = vi.fn()
+      const verdict = { injection_detected: false, reason: 'ok', spans: [] }
+      const outerScreen = vi.fn().mockResolvedValue(verdict)
+      const innerScreen = vi.fn().mockResolvedValue(verdict)
       const outer = createInjectionGuard(
         { namespaces: ['web'], catalog: ['search', 'fetch'], screen: outerScreen },
         () => {},
@@ -787,13 +800,21 @@ describe('spotlight modes: what actually reaches the controller', () => {
           () => {},
           'inner',
         )
-        expect(bare.options.screen).toBe(outerScreen)
+        // A bare inner guard has no screen of its own and inherits none.
+        await bare.sanitize('list_graph_messages', 'clean')
+        expect(outerScreen).not.toHaveBeenCalled()
+        // The outer guard's tool is still screened, by the outer guard's screen.
+        await bare.sanitize('search', 'clean')
+        expect(outerScreen).toHaveBeenCalledTimes(1)
+
         const own = createInjectionGuard(
           { namespaces: ['graph'], catalog: ['list_graph_messages'], screen: innerScreen },
           () => {},
           'i2',
         )
-        expect(own.options.screen).toBe(innerScreen)
+        await own.sanitize('list_graph_messages', 'clean')
+        expect(innerScreen).toHaveBeenCalledTimes(1)
+        expect(outerScreen).toHaveBeenCalledTimes(1)
       })
     })
   })

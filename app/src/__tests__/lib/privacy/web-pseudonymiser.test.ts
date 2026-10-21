@@ -400,6 +400,13 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     await withRunFrame(
       {
         ...frame('self_deployed'),
+        // The loop's label restore asks the run's guard whether the tool is declared; the route
+        // guard sits inside the child, so an enclosing declaration stands in for general-next's.
+        guard: {
+          isUntrusted: (tool: string) => tool === 'graph_mail',
+          optionsFor: () => ({}),
+          sanitize: async (_tool: string, data: unknown) => ({ data }),
+        } as never,
         transports: [
           {
             ...transport,

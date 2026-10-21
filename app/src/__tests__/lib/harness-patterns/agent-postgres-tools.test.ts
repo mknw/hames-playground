@@ -6,7 +6,8 @@ import '../../../lib/inference/config.server'
  *
  * Owner decision, 2026-10-03: running agents were never meant to have Postgres
  * access. The `database-server` catalog server ran SQL against the app's own
- * database, and `general` hands every gateway tool to its planner and its loop.
+ * database, and the `general` agent (since removed) handed every gateway tool
+ * to its planner and its loop.
  *
  * Two layers. The server is gone from the catalog and the configs, and the
  * gateway gets no Postgres credential (pinned in
@@ -111,6 +112,19 @@ const KEPT = [
   'create_entities',
   'graph_mail_recent',
   'graph_calendar_today',
+]
+
+/** The shared `memory` graph's tools: reads (the only ones an agent may hold,
+ *  and only `general-next`) and every write the server offers. `create_entities`
+ *  is also in KEPT; these are listed for the namespace-aware check below. */
+const MEMORY_READS = ['search_nodes', 'open_nodes']
+const MEMORY_WRITES = [
+  'create_entities',
+  'create_relations',
+  'add_observations',
+  'delete_entities',
+  'delete_relations',
+  'delete_observations',
 ]
 
 /** A gateway still serving `database-server` — the regression this layer is
@@ -240,7 +254,7 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
     // The five registered today. A new agent lands in this list by export,
     // without an edit here.
     expect(agents.map((a) => a.id).sort()).toEqual(
-      expect.arrayContaining(['general', 'microsoft-365', 'retriever', 'sandbox', 'search']),
+      expect.arrayContaining(['general-next', 'microsoft-365', 'retriever', 'sandbox', 'search']),
     )
 
     for (const agent of agents) {
@@ -253,10 +267,61 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
           expect(tools, `${agent.id} → ${factory} holds ${name}`).not.toContain(name)
     }
 
-    // Not vacuous: `general` hands its planner and its loop the whole gateway
-    // surface, so the listing above did reach the agents.
-    const general = handed.filter((h) => h.factory === 'planner' || h.factory === 'simpleLoop')
-    expect(general.some((h) => KEPT.every((t) => h.tools.includes(t)))).toBe(true)
+    // Not vacuous: the listing above did reach the agents — their loops hold
+    // gateway tools, not an empty list.
+    const loops = handed.filter((h) => h.factory === 'planner' || h.factory === 'simpleLoop')
+    expect(loops.some((h) => h.tools.includes('read_neo4j_cypher'))).toBe(true)
+  })
+
+  // The `general` agent was the only one handed `tools.all`. Removing it is what
+  // makes this a property of the whole package rather than of one agent: every
+  // other agent takes a namespace SLICE, so a Postgres tool that slipped past the
+  // listing would reach one slice, never every loop at once. If an agent is ever
+  // handed the full surface again, this is the pin that says so.
+  //
+  // The shared `memory` graph is one graph for every user, and its write tools
+  // are not withheld at the listing (only the Neo4j and Postgres ones are): the
+  // only thing keeping them from an agent is that none is handed them.
+  // `general-next` is the one agent with a memory slice (reads only, by name), so
+  // the check has to run against the REAL namespaces: under the default test
+  // deps `tools.memory` is undefined and the slice is empty, which would make the
+  // assertion below pass whether or not the agent could write.
+  //
+  // MUTATION 1: restore `general.server.ts` (planner + simpleLoop over
+  // `tools.all`) and re-export it from agents/index.ts → one handed list holds
+  // every KEPT tool and the whole-surface assertion reddens.
+  // MUTATION 2: `general-next.server.ts` `infoTools` spreads `...(tools.memory ??
+  // [])` instead of `...memoryReads` → `general-next → simpleLoop holds a memory
+  // write` reddens (and the non-vacuity check below proves the slice is live).
+  it('no agent hands any pattern the whole gateway surface or a shared-memory write tool', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    mockListTools.mockResolvedValue(
+      gatewayListing([...new Set([...KEPT, ...MEMORY_READS, ...MEMORY_WRITES])]),
+    )
+    const deps = { ...testAgentDeps, toolNamespaces: mcpNamespace }
+    const handedBy = new Map<string, { factory: string; tools: string[] }[]>()
+    for (const agent of await shippedAgents()) {
+      const before = handed.length
+      await agent.createPatterns(`whole-surface-${agent.id}`, deps)
+      const lists = handed.slice(before)
+      handedBy.set(agent.id, lists)
+      for (const { factory, tools } of lists) {
+        expect(
+          KEPT.every((t) => tools.includes(t)),
+          `${agent.id} → ${factory} holds the whole gateway surface`,
+        ).toBe(false)
+        for (const write of MEMORY_WRITES)
+          expect(tools, `${agent.id} → ${factory} holds a memory write (${write})`).not.toContain(
+            write,
+          )
+      }
+    }
+
+    // Not vacuous: the memory namespace reached `general-next`, whose info loop
+    // holds the read tools and nothing else from that namespace.
+    const info = handedBy.get('general-next')?.filter((h) => h.factory === 'simpleLoop') ?? []
+    expect(info.length, 'general-next built no simpleLoop').toBeGreaterThan(0)
+    expect(info.some((h) => MEMORY_READS.every((t) => h.tools.includes(t)))).toBe(true)
   })
 })
 

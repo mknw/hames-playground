@@ -5,8 +5,10 @@ existing role-level compatibility evals with whole conversations: run the shippe
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.
 
-**Private tier only**, per the owner amendment of 2026-10-15. `general` runs the
-baseline cases beside the selected candidate. The default agent is unchanged.
+**Private tier only**, per the owner amendment of 2026-10-15. The
+baseline cases run on the selected candidate only: `general` was removed on
+2026-10-21 and its last live results are a **recorded** baseline
+(`src/lib/eval-support/general-baseline.ts`), not a run. The default agent is unchanged.
 No live run or default-flip evidence was produced in this PR.
 
 ```bash
@@ -100,8 +102,8 @@ leg is off: `directory: 'none'`). Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
 Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
 
-The acceptance gate after S3 is: all `must` scenarios and the unchanged `general`
-baseline pass on the **private tier**, with all expected scenarios present and live
+The acceptance gate after S3 is: all `must` scenarios pass and no recorded `general`
+baseline result regresses (the candidate passes every scenario `general` last passed) on the **private tier**, with all expected scenarios present and live
 model evidence. `should` / `nice` outcomes remain visible. No scenario can pass
 with zero checks. A separate default-flip draft is prepared only after that evidence.
 

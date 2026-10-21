@@ -13,10 +13,10 @@
 
 ## What this is
 
-Six ready-made AI agents to register in your own application: search over the
+Five ready-made AI agents to register in your own application: search over the
 web and a Neo4j knowledge graph, question-answering over documents you have
-uploaded, a Microsoft 365 assistant, a general-purpose agent with every tool,
-its decision-loop candidate `general-next`,
+uploaded, a Microsoft 365 assistant, the general-purpose decision-loop agent
+`general-next`,
 and one that runs code in a container, picking a plain, data or office
 container for each message. Each one is built from
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
@@ -138,8 +138,8 @@ configured in
 
 ### How the shipped agents are composed
 
-`general-next` is the selectable decision-loop candidate beside `general`;
-the default remains `search`. It requires `deps.withSandbox` and
+`general-next` is the selectable decision-loop agent. It replaced `general`, which
+was removed (see the changelog for the migration); the default remains `search`. It requires `deps.withSandbox` and
 `deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
 web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
@@ -158,8 +158,7 @@ content on the private tier. Missing private host wiring withholds earlier
 content and refuses web calls. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
-`general-next` also opts into optional memory; `general` keeps its opt-in until
-the default-agent flip. Only the candidate's final synthesis receives recalled
+`general-next` also opts into optional memory. Only its final synthesis receives recalled
 memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The default-agent rollout remains gated by
 the design's acceptance evidence. See the
 [decision-loop design](../../docs/plan/decision-loop-agent.md).
@@ -364,7 +363,6 @@ email) before a model reads it.
 | `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
 | `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
 | `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
-| `general`       | planner → simpleLoop(tools.all) → compactExecution               | everything                                                                   | not guarded yet (below)                                                                                                                    |
 | `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
 | `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
 
@@ -375,8 +373,8 @@ command against a denylist before it runs. Guardrails beyond these two are in
 active development; the Warning below has the status and what to do meanwhile.
 
 > **Warning:** Guardrails for these routes are in active development, and a
-> release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`,
-> `retriever` and `general` are not meant for production use. What keeps your
+> release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`
+> and `retriever` are not meant for production use. What keeps your
 > data safe while you try them:
 >
 > - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
@@ -413,11 +411,11 @@ active development; the Warning below has the status and what to do meanwhile.
 > reach the MCP server, Postgres, Redis or public URLs. Other deployments must
 > provide equivalent isolation.
 >
-> Why: these three agents let the model write Cypher and run it through the MCP
-> server's `read_neo4j_cypher` tool, and none of the three guards its Neo4j
+> Why: these two agents let the model write Cypher and run it through the MCP
+> server's `read_neo4j_cypher` tool, and neither guards its Neo4j
 > route. No agent holds `write_neo4j_cypher`, and the read tool refuses queries
 > that look like writes. But what these agents
-> read, whether a person types it or `general` and the web route fetch it, can
+> read, whether a person types it or the web route fetches it, can
 > still try to make the database fetch URLs: the Neo4j this
 > repository ships installs APOC (baked into `docker/neo4j/Dockerfile`, used by [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
 > and with APOC's load procedures enabled (the default once APOC is installed) a

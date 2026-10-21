@@ -91,7 +91,8 @@ async function createPatterns(
     // drags the slider down to 3 now gets 3 rounds on a briefing loop that
     // used to get 8 regardless. That is the user getting what they asked for,
     // which is the right design, but it is a degradation for that agent.
-    // `general` still pins, because 12 is a value the default does not carry.
+    // The one agent that pinned 12 (`general`, a value the default does not carry)
+    // was removed; a pin that differs from the default is still the only reason to keep one.
     // The controller never needs a URL to decide the next action, and a Loop
     // hit's webUrl is ~519 chars of base64 — half the hit. The compactExecution
     // still gets every webUrl for citation links (it reads the full events,

@@ -487,7 +487,7 @@ rather than do work, and agents misread them: `mcp-exec` as a shell, `mcp-add`'s
 
 `write_neo4j_cypher` is never in that catalog either, whatever the gateway
 lists, and `listTools()` warns once when it does (#403). Agents are read-only
-against Neo4j, `general` included: the one writer is the memory hook (#419),
+against Neo4j (the removed `general` agent included): the one writer is the memory hook (#419),
 through the app. The list (`AGENT_WITHHELD_TOOLS`, asked through
 `isAgentWithheldTool`, which also sees through a gateway prefix and a server
 namespace prefix) is enforced twice: `listTools()` drops it, and every loop's
@@ -1563,9 +1563,9 @@ soft hint (steps are not tool calls) — it does not clamp `maxTurns`.
 > `planner` and `router` solve different problems and compose: router is cheap
 > one-of-N intent classification; planner is strategic decomposition before
 > execution. `chain(router(...), routes({ x: chain(planner(...), simpleLoop(...)) }))`
-> is valid. The `general` agent
-> (`packages/agents/agents/general.server.ts`) demonstrates the flat
-> planner → simpleLoop → compactExecution chain alongside the router-based `search`.
+> is valid, and so is the flat planner → simpleLoop → compactExecution chain. The
+> reference agents no longer ship that flat chain (the removed `general` agent was
+> its example); `general-next` runs the planner as its `think` route.
 
 ### `retriever(config)`
 
@@ -1945,8 +1945,8 @@ by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
 `commitStrategy 'always'`, `errorSeverity 'recoverable'` (the first-iteration
 failure is stamped at the event).
 
-The reference host's `general-next` composition (#507 S3) uses this loop beside
-`general`, without changing the default agent. Its `orchestrator` chooses among
+The reference host's `general-next` composition (#507 S3) uses this loop; it replaced
+the removed `general` agent and the default agent is unchanged. Its `orchestrator` chooses among
 `office-data` (guarded Microsoft 365 tools and an office sandbox),
 `info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
@@ -1962,8 +1962,7 @@ text the extractor built, and a quoted tool body carries the fence its result
 arrived in. A screen failure inside a route is recorded and fails
 open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
 
-`general-next` also opts into M7's optional `withMemory`; `general` keeps its
-opt-in until the default-agent flip. Only the candidate's synthesis receives
+`general-next` also opts into M7's optional `withMemory`. Only its synthesis receives
 recalled memory, while decisions and children receive none. The
 private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
 no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation

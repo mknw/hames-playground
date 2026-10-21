@@ -4,8 +4,10 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../mocks/namespace-catalog'
 import '../../../../lib/inference/config.server'
+import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
+  continueSession,
   createContext,
   createEvent,
   createEventView,
@@ -16,6 +18,7 @@ import {
   harnessUsesMemory,
   harnessUsesSyncWorkspace,
   inferServer,
+  serializeContext,
   withRunFrame,
   type ConfiguredPattern,
   type ControllerFn,
@@ -1351,10 +1354,6 @@ describe('general-next composition', () => {
       'withInjectionGuard(decisionLoop)',
       'compactExecution',
     ])
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-    expect(
-      harnessUsesMemory(await generalAgent.createPatterns('old-general', { ...deps, memory })),
-    ).toBe(true)
     const ctx = createContext<AgentData>('synthetic task', {
       memories: [{ content: 'MEMORY-SENTINEL' }],
       memoryContext: 'MEMORY-SENTINEL',
@@ -1382,6 +1381,53 @@ describe('general-next composition', () => {
     expect((synth.config as { threadTurns?: number }).threadTurns).toBe(2)
   })
 
+  // A conversation the removed `general` agent stored resumes here (agent-ids.ts):
+  // its events carry `plan` / `execute` / `response-synth` pattern ids this chain
+  // never wrote. Pinned as a CONTINUATION, not a fresh run: the new turn must
+  // finish with an answer and no error, and the old turn's records stay in the
+  // transcript the person reads.
+  //
+  // MUTATION: run `harness(...patterns)('And how many relationships?')` instead of
+  // `continueSession` (the stored turn is dropped) and the transcript assertion reddens;
+  // dropping `final: true` from the stored answer reddens the decision-state assertion.
+  // Nothing in the chain inspects a pattern id it does not own, so there is no source
+  // mutation for the tolerance itself: this pins the property, it cannot guard one line.
+  it('continues a conversation stored by the removed general agent', async () => {
+    choices = ['answer']
+    const stored = createContext<AgentData>('How many nodes are in the graph?', {})
+    stored.events.push(
+      createEvent('pattern_enter', 'plan', {}),
+      createEvent('pattern_enter', 'execute', {}),
+      createEvent('tool_call', 'execute', { tool: 'read_neo4j_cypher', args: {} }),
+      createEvent('tool_result', 'execute', {
+        tool: 'read_neo4j_cypher',
+        success: true,
+        result: '42',
+      }),
+      createEvent('assistant_message', 'response-synth', {
+        content: 'There are 42 nodes.',
+        final: true,
+      }),
+    )
+    stored.status = 'done'
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+
+    const result = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(stored), patterns, 'And how many relationships?'),
+    )
+
+    expect(result.status).not.toBe('error')
+    expect(result.response).toBeTruthy()
+    expect(result.context.events.some((e) => e.patternId === 'execute')).toBe(true)
+    // The earlier answer reaches the decision: only `final` answers are replayed as turns.
+    expect(states.join('\n')).toContain('There are 42 nodes.')
+    expect(
+      result.context.events
+        .filter((e) => e.type === 'user_message')
+        .map((e) => (e.data as { content: string }).content),
+    ).toEqual(['How many nodes are in the graph?', 'And how many relationships?'])
+  })
+
   it.each(['withSandbox', 'createRedisBackend'] as const)(
     'refuses missing host %s',
     async (key) => {
@@ -1391,10 +1437,17 @@ describe('general-next composition', () => {
     },
   )
 
+  // `general` was removed 2026-10-21 and its id folds into this agent. The default
+  // is untouched: `search` stays the default and maps to itself.
+  //
+  // MUTATION: delete the `general: 'general-next'` entry from RENAMED_AGENT_IDS
+  // (agent-ids.ts) and the first assertion reddens.
   it('registers the candidate with its app-side glyph while the default stays search', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
-    expect(readFileSync('src/lib/harness-client/agent-ids.ts', 'utf8')).not.toMatch(/general-next/)
+    expect(canonicalAgentId('general')).toBe('general-next')
+    expect(canonicalAgentId('general-next')).toBe('general-next')
+    expect(canonicalAgentId('search')).toBe('search')
     expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
     const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
     expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")

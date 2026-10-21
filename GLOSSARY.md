@@ -130,8 +130,9 @@ used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
 exposes, not a security boundary.
 
 **general-next** — the candidate general agent that chooses successive groups
-of capabilities within a turn, offered beside `general` while rollout evidence
-is gathered. See [`packages/agents/README.md`](packages/agents/README.md).
+of capabilities within a turn. It replaces the removed `general` agent (stored
+`general` ids resolve to it); the default agent stays `search` until the rollout
+evidence is in. See [`packages/agents/README.md`](packages/agents/README.md).
 
 ## Storage and runtime
 
@@ -166,8 +167,8 @@ when a routine's trigger fires, its run lands as an ordinary action row marked
 `source='routine'`. See [`docs/ROUTINES.md`](docs/ROUTINES.md).
 
 **general-next Eval** — #507's conversation acceptance catalogue and opt-in runner,
-under `app/evals/general-next/`. Compares the candidate with the current `general`
-baseline on the private tier alone. Scripted inference proves wiring; live model
+under `app/evals/general-next/`. Compares the candidate with the removed `general` agent's
+recorded baseline (`general-baseline.ts`) on the private tier alone. Scripted inference proves wiring; live model
 behaviour is separate evidence. Shares one conservative USD spend ledger across
 scenarios, stops at 80% of the configured cap and reports P4-gated cases explicitly.
 See [the runner guide](app/evals/general-next/README.md).

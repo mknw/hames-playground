@@ -209,8 +209,8 @@ Only the declared local `neo4j` and `memory` namespaces are exempt (`context7` i
 hook extends outgoing literals from identities discovered by local reads;
 an update failure withholds the result and refuses further outgoing calls.
 
-The reference application registers `general-next` as a selectable candidate
-beside `general` (#507 S3), built in `packages/agents/agents/general-next.server.ts`.
+The reference application registers `general-next` as a selectable agent
+(#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
 lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private

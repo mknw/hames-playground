@@ -16,7 +16,7 @@ uses it:
 | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `router` and `routes`, `withReferences`, `withInjectionGuard`                      | [`search.server.ts`](../../packages/agents/agents/search.server.ts), agent `search`                      |
 | `retriever` routed beside tool loops                                               | [`retriever-agent.server.ts`](../../packages/agents/agents/retriever-agent.server.ts), agent `retriever` |
-| `planner` ahead of a loop over every tool                                          | [`general.server.ts`](../../packages/agents/agents/general.server.ts), agent `general`                   |
+| `planner` as a route inside a decision loop                                        | [`general-next.server.ts`](../../packages/agents/agents/general-next.server.ts), agent `general-next`    |
 | A loop over an explicit tool list, fully guarded                                   | [`microsoft-365.server.ts`](../../packages/agents/agents/microsoft-365.server.ts), agent `microsoft-365` |
 | `router` choosing between sandbox flavours, each an `actorCritic` inside a sandbox | [`sandbox.server.ts`](../../packages/agents/agents/sandbox.server.ts), agent `sandbox`                   |
 

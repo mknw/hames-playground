@@ -559,6 +559,19 @@ export function unspotlightParts(
   return { body, namespace: source.slice(0, slash), tool: source.slice(slash + 1) }
 }
 
+/**
+ * Close every spotlight fence `text` opens and does not close: for text that
+ * EMBEDS fences mid-string (a failure quoting fenced tool errors) after a cap
+ * cut one off. Content cannot hold the sentinels (`sentinel-escape`), so only
+ * code-written lines are counted.
+ */
+export function closeCutFences(text: string): string {
+  const close = `${SENTINEL_OPEN}END UNTRUSTED CONTENT${SENTINEL_CLOSE}`
+  const missing =
+    text.split(`${SENTINEL_OPEN}UNTRUSTED CONTENT · `).length - text.split(close).length
+  return missing > 0 ? text + `\n${close}`.repeat(missing) : text
+}
+
 // ============================================================================
 // Single-string sanitization
 // ============================================================================

@@ -28,7 +28,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { EXPAND_TOOL_NAME } from '../types'
-import { spotlight, unspotlight, unspotlightParts } from '../injection-guard'
+import { closeCutFences, spotlight, unspotlight, unspotlightParts } from '../injection-guard'
 import { currentRunFrame } from '../run-frame.server'
 import type {
   ContextEvent,
@@ -189,11 +189,13 @@ function guards(tool: string): boolean {
   return currentRunFrame()?.guard?.isUntrusted(tool) === true
 }
 
-function unfence(value: unknown): Unfenced {
+function unfence(value: unknown, tool?: string): Unfenced {
   let label: FenceLabel | undefined
   const stripped = mapStrings(value, (text) => {
     const parts = unspotlightParts(text)
     if (!parts) return unspotlight(text)
+    // A header naming another tool than the event's own was not written for this result.
+    if (tool !== undefined && parts.tool !== tool) return text
     if (guards(parts.tool)) label ??= { tool: parts.tool, namespace: parts.namespace }
     return parts.body
   })
@@ -271,6 +273,7 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
         : r.success
           ? { tool: r.tool, result: value }
           : { tool: r.tool, error: value },
+      r.tool,
     )
     // The fence rides on top of the capped body, so its own length comes off the share.
     const overhead = quoted.label
@@ -312,7 +315,8 @@ function extractRetriever(events: ContextEvent[], max: number): Extracted {
         ? ` [doc ${m.docId}, chars ${m.startOffset}-${m.endOffset}]`
         : ''
     const parts = unspotlightParts(m.content)
-    if (parts && guards(parts.tool)) label ??= { tool: parts.tool, namespace: parts.namespace }
+    if (parts && parts.tool === 'retriever' && guards(parts.tool))
+      label ??= { tool: parts.tool, namespace: parts.namespace }
     const excerpt = (parts?.body ?? unspotlight(m.content))
       .replace(/\s+/g, ' ')
       .trim()
@@ -365,7 +369,7 @@ export function extract(kind: RouteKind, events: ContextEvent[], max: number): E
 /** A failure's own text, treated like a quoted body: a tool error that arrived
  *  fenced keeps its closing line under the cap; any other text is just capped. */
 export function carryText(text: string, max: number): string {
-  return carry(unfence(text), max)
+  return closeCutFences(carry(unfence(text), max))
 }
 
 // ============================================================================
@@ -481,10 +485,18 @@ export function stepLine(r: RouteOutput): string {
 /** One full output block: `[route] <result>` plus its reasoning. */
 export function resultBlock(r: RouteOutput): string {
   if (r.status === 'failed') {
-    return `[${r.route}] failed: ${r.failure ?? 'unknown'}.${r.result ? ` Reason: ${r.result}` : ''}`
+    return `[${r.route}] failed: ${r.failure ?? 'unknown'}.${r.result ? ` Reason: ${asLine(r.result)}` : ''}`
   }
-  return `[${r.route}] ${r.result}${r.reasoning ? `\n(reasoning: ${r.reasoning})` : ''}`
+  // Carried bodies stay raw: their fences are what a reader (the pseudonymiser) splits on.
+  const body =
+    r.stats.kind === 'actorCritic' || r.stats.kind === 'retriever' ? r.result : asLine(r.result)
+  return `[${r.route}] ${body}${r.reasoning ? `\n(reasoning: ${asLine(r.reasoning)})` : ''}`
 }
+
+/** Text no ingress fence bounds (a plan, a Return, reasoning, failure text) as
+ *  ONE JSON string, so a newline in it cannot start a line that reads as the
+ *  state's own structure: a `User:` turn, a step line, a heading. */
+const asLine = (text: string): string => JSON.stringify(text)
 
 /** The step list and the last `lastN` outputs — the block both the decisions
  *  model ("This turn so far" + "Latest results") and the next child (its handoff)

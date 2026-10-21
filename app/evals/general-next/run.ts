@@ -18,7 +18,10 @@ import {
   proxyEnvironment,
   assertEgressSelfTest,
 } from '../../src/lib/eval-support/hermetic-egress'
-import { DEFAULT_VERDA_EUR_PER_HOUR, DEFAULT_SMALL_LLM_EUR_PER_HOUR } from '../../src/lib/settings'
+import {
+  DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+  DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+} from '../../src/lib/settings'
 import {
   assertLivePreconditions,
   poisonPublicProviders,
@@ -87,8 +90,8 @@ async function main() {
     const { fixtureInference } = await import('./fixture-inference')
     fake = await fixtureInference()
     Object.assign(process.env, {
-      VERDA_INFERENCE_ENDPOINT: fake.base,
-      VERDA_INFERENCE_API_KEY: 'fixture',
+      LARGE_LLM_BASE_URL: fake.base,
+      LARGE_LLM_API_KEY: 'fixture',
       SMALL_LLM_BASE_URL: fake.base,
       SMALL_LLM_DECISIONS_URL: `${fake.base}/systemone`,
       SMALL_LLM_API_KEY: 'fixture',
@@ -96,7 +99,7 @@ async function main() {
   }
   poisonPublicProviders(process.env)
   // All model calls use the production private-role map. No EVAL_CLIENT overrides.
-  process.env.USE_VERDA_INFERENCE = '1'
+  process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
   const liveCatalog = live
     ? await (
         await import('./tool-catalog')
@@ -106,20 +109,20 @@ async function main() {
   const gateway = await startFakeGateway()
   process.env.MCP_GATEWAY_URL = gateway.url
   const rates = await import('../../src/lib/cost-rates.server')
-  const verdaRate = floorHourlyRate(rates.verdaEurPerHour(), DEFAULT_VERDA_EUR_PER_HOUR)
+  const largeRate = floorHourlyRate(rates.largeEurPerHour(), DEFAULT_LARGE_LLM_EUR_PER_HOUR)
   const smallRate = floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)
-  const { verdaScaledownSeconds } = await import('../../src/lib/inference/verda-activity.server')
+  const { largeScaledownSeconds } = await import('../../src/lib/inference/large-activity.server')
   const { smallScaledownSeconds } = await import('../../src/lib/inference/cold-start.server')
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
-  clients.assertInferenceTier('verda')
+  clients.assertInferenceTier('self_deployed')
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
   let wakeDetail: string | undefined
   const jobs = picked.flatMap((s) =>
     (s.baseline && candidate !== 'general' ? ['general', candidate] : [candidate]).map((agent) => ({
       scenario: s,
-      key: { agent, scenario: s.id, tier: 'verda' as const },
+      key: { agent, scenario: s.id, tier: 'self_deployed' as const },
     })),
   )
   const file = resolve(
@@ -149,7 +152,7 @@ async function main() {
       JSON.stringify(
         {
           mode: live ? 'live' : 'hermetic',
-          tier: 'verda',
+          tier: 'self_deployed',
           candidate,
           selectionComplete: picked.length === scenarios.length,
           flipGate: flipGate(
@@ -169,7 +172,7 @@ async function main() {
           stopReason: budget.reason,
           stopDetail: wakeDetail,
           eurPerUsd: budget.eurPerUsd,
-          verdaEurPerHour: verdaRate,
+          largeEurPerHour: largeRate,
           smallEurPerHour: smallRate,
           captureFile: capture ? captureFile : undefined,
           limitation:
@@ -186,7 +189,7 @@ async function main() {
     if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
-    if (active && live) budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)
+    if (active && live) budget.infrastructure(active, Date.now() - started, largeRate + smallRate)
   }
   const stop = () => {
     write()
@@ -231,7 +234,11 @@ async function main() {
         try {
           if (live) {
             budget.beginInfrastructure(active, started, [
-              { box: 'verda', seconds: verdaScaledownSeconds(), eurPerHour: verdaRate },
+              {
+                box: 'self_deployed',
+                seconds: largeScaledownSeconds(),
+                eurPerHour: largeRate,
+              },
               { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
             ])
             if (budget.stopped) stop()

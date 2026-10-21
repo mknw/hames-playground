@@ -35,7 +35,7 @@ for (const theme of ['dark', 'light'] as const) {
       ] as const) {
         await client.query(
           `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space, compacted_from)
-          VALUES ($1, $2, 'preference', 'verda', $3, $3, $4::vector, 'synthetic', $5)`,
+          VALUES ($1, $2, 'preference', 'self_deployed', $3, $3, $4::vector, 'synthetic', $5)`,
           [id, BYPASS_USER_ID, content, vector, merged],
         )
       }
@@ -94,7 +94,7 @@ for (const theme of ['dark', 'light'] as const) {
     try {
       await reseed.query(
         `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space)
-         VALUES ('m7-third', $1, 'preference', 'verda', 'Synthetic again', 'Synthetic again', $2::vector, 'synthetic')`,
+         VALUES ('m7-third', $1, 'preference', 'self_deployed', 'Synthetic again', 'Synthetic again', $2::vector, 'synthetic')`,
         [BYPASS_USER_ID, JSON.stringify(Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)))],
       )
     } finally {

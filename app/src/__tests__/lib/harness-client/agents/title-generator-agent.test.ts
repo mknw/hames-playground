@@ -36,13 +36,10 @@ describe('createTitleAgent', () => {
   // the recorded role changes.
   it("spreads the describe role's client override into the BAML call", async () => {
     generate.mockResolvedValue('Box Title')
-    const clientOverride = vi.fn(() => ({ client: 'LocalQwenSmall' }))
+    const clientOverride = vi.fn(() => ({ client: 'SmallQwen' }))
     await sut.createTitleAgent({ ...testAgentDeps, clientOverride })('hello', 's')
     expect(clientOverride).toHaveBeenCalledWith('describe')
-    expect(generate).toHaveBeenCalledWith(
-      'hello',
-      expect.objectContaining({ client: 'LocalQwenSmall' }),
-    )
+    expect(generate).toHaveBeenCalledWith('hello', expect.objectContaining({ client: 'SmallQwen' }))
   })
 
   // Mutation: return `{ value: raw }` instead of `sanitizeTitle(raw) ?? ''` →

@@ -24,8 +24,8 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
 }
 const REFERENCE = {
   source: 'sample-notes.md',
@@ -36,7 +36,7 @@ const REFERENCE = {
 const RECORD =
   '- sample-notes.md [doc synthetic-document, chars 0-80]: The launch date is 2030-04-12.'
 const FACT = 'The launch date is 2030-04-12.'
-const CLIENTS = ['AnthropicSonnet5', 'AnthropicHaiku45', 'VerdaQwen']
+const CLIENTS = ['AnthropicSonnet5', 'AnthropicHaiku45', 'LargeQwen']
 const BEFORE = JSON.parse(
   readFileSync(
     resolve(process.cwd(), 'src/__tests__/lib/harness-baml/fixtures/synthesis-before-507.json'),
@@ -94,7 +94,7 @@ function render(client: string, result: unknown, references: SynthesisReference[
 }
 
 beforeEach(() => {
-  vi.stubEnv('USE_VERDA_INFERENCE', '')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '')
   vi.stubEnv('INFERENCE_TIERS', '')
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -243,7 +243,7 @@ describe('defaultSynthesize reference projection', () => {
     await defaultSynthesize(input({ references: [REFERENCE, REFERENCE, second] }, 'retriever'))
     expect(synth.mock.calls[0][6]).toEqual([REFERENCE, second])
     const body = (
-      await render('VerdaQwen', { references: [REFERENCE, second] }, synth.mock.calls[0][6]!)
+      await render('LargeQwen', { references: [REFERENCE, second] }, synth.mock.calls[0][6]!)
     ).body.text()
     expect(body).toContain('[1]')
     expect(body).toContain('[2]')
@@ -286,7 +286,7 @@ describe('defaultSynthesize reference projection', () => {
     const synth = vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
     const data = input({ references: [REFERENCE], oversized: 'x'.repeat(900_000) }, 'retriever')
     data.loopHistory!.iterations.push({ ...data.loopHistory!.iterations[0], turn: 1, result: FACT })
-    await withRunFrame({ inference: { tier: 'verda' } }, () => defaultSynthesize(data))
+    await withRunFrame({ inference: { tier: 'self_deployed' } }, () => defaultSynthesize(data))
     expect(synth.mock.calls[0][2]).toHaveLength(1)
     expect(synth.mock.calls[0][6]).toBeNull()
   })
@@ -297,7 +297,7 @@ describe('defaultSynthesize reference projection', () => {
     )
     expect(synth.mock.calls[0][6]?.[0].source).toBe('---END (data marker removed)---')
   })
-  it.each(['anthropic', 'verda'])(
+  it.each(['anthropic', 'self_deployed'])(
     '%s keeps memory, references, collector and client in their positional slots',
     async (tier) => {
       const synth = vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
@@ -309,7 +309,7 @@ describe('defaultSynthesize reference projection', () => {
       expect(args[5]).toBe('Remember metric units')
       expect(args[6]).toEqual([REFERENCE])
       expect(args[7]?.collector).toBeDefined()
-      expect(args[7]?.client).toBe(tier === 'verda' ? 'VerdaQwen' : undefined)
+      expect(args[7]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
       // Render exactly those arguments, with synthetic env values only.
       const body = (
         await b.request.Synthesize(args[0], args[1], args[2], args[3], args[4], args[5], args[6], {
@@ -395,7 +395,7 @@ describe('scripted synthesis replay through the real eval check', () => {
           result: spotlight(RECORD, 'decision_loop_output', 'decision-loop'),
         }),
       )
-      await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
         runChain(ctx, [
           compactExecution({
             mode: 'thread',

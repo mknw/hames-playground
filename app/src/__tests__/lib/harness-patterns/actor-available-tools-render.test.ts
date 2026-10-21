@@ -29,7 +29,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 let lastBody = ''
 beforeAll(async () => {
   vi.stubEnv('ANTHROPIC_API_KEY', 'offline-render-test')
-  vi.stubEnv('USE_VERDA_INFERENCE', '0')
+  vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '0')
   const { b } = await import('@hames-ai/harness-baml/baml_client')
   vi.spyOn(b, 'ActorController').mockImplementation((async (...args: unknown[]) => {
     const request = await b.request.ActorController(

@@ -14,7 +14,7 @@
  *
  * WHICH CLIENT THIS GRADES matters more than it used to. Until 2026-08-26 the
  * describe role only ever resolved to an Anthropic chain; the private tier now
- * routes it to the 4B `LocalQwenSmall`, so this is the scenario standing in front
+ * routes it to the 4B `SmallQwen`, so this is the scenario standing in front
  * of "does a 4B keep the id discipline a 200B model kept". Run it with
  * `EVAL_CLIENT=tier` to grade the shipped route; the observations name the client
  * so a green cell cannot be mistaken for a green cell about a different model.

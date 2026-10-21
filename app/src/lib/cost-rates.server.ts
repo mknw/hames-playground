@@ -10,17 +10,18 @@
  *
  * All are read PER CALL rather than captured at module load, so an operator can
  * change a rate on the host without a rebuild — the same rule
- * `verdaScaledownSeconds()` follows, and for the same reason.
+ * `largeScaledownSeconds()` follows, and for the same reason.
  *
  * No rate is fetched from anywhere. The USD→EUR figure is deliberately
  * static (see `DEFAULT_EUR_PER_USD`); a live FX lookup would put a network
  * dependency behind a spend estimate and make two page loads of the same
  * conversation disagree.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   DEFAULT_EUR_PER_USD,
-  DEFAULT_VERDA_EUR_PER_HOUR,
+  DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 } from './settings'
 
@@ -47,12 +48,12 @@ export function eurPerUsdRate(): number {
   return positiveRate('EUR_PER_USD', process.env.EUR_PER_USD, DEFAULT_EUR_PER_USD)
 }
 
-/** EUR per hour the self-hosted GPU is awake, from `VERDA_EUR_PER_HOUR`. */
-export function verdaEurPerHour(): number {
+/** EUR per hour the self-hosted GPU is awake, from `LARGE_LLM_EUR_PER_HOUR`. */
+export function largeEurPerHour(): number {
   return positiveRate(
-    'VERDA_EUR_PER_HOUR',
-    process.env.VERDA_EUR_PER_HOUR,
-    DEFAULT_VERDA_EUR_PER_HOUR,
+    'LARGE_LLM_EUR_PER_HOUR',
+    inferenceEnv('LARGE_LLM_EUR_PER_HOUR'),
+    DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   )
 }
 

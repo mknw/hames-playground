@@ -2,7 +2,7 @@
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
-import { VERDA_CLIENT_NAME } from '../../../lib/inference/verda-activity.server'
+import { LARGE_LLM_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
 /**
  * Event-level token/cost accounting (#122).
  *
@@ -159,12 +159,12 @@ describe('computeEventMetrics', () => {
 
   it('prices a self-hosted attempt by its OWN measured duration, not by tokens', async () => {
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
+    const { DEFAULT_LARGE_LLM_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -173,9 +173,9 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     expect(m.basis).toBe('time')
     // Nearly a million tokens and the price is 6.3 GPU-seconds. Tokens are free.
-    expect(m.costEur).toBeCloseTo((6.3 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 12)
+    expect(m.costEur).toBeCloseTo((6.3 / 3600) * DEFAULT_LARGE_LLM_EUR_PER_HOUR, 12)
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
       durationMs: 6_300,
     })
     expect(m.rates).toBeUndefined()
@@ -189,13 +189,13 @@ describe('computeEventMetrics', () => {
     // tokens for the second. Pricing the whole step by the run's intended tier
     // would bill one of the two wrong.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } =
+    const { DEFAULT_EUR_PER_USD, DEFAULT_LARGE_LLM_EUR_PER_HOUR } =
       await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
             timing: { durationMs: 3_600_000 },
           },
           {
@@ -208,7 +208,7 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_EUR_PER_USD
     expect(m.attempts).toBe(2)
-    expect(m.costEur).toBeCloseTo(DEFAULT_VERDA_EUR_PER_HOUR + anthropicEur, 9)
+    expect(m.costEur).toBeCloseTo(DEFAULT_LARGE_LLM_EUR_PER_HOUR + anthropicEur, 9)
     // `basis` still names the LAST priced attempt — the Anthropic one — which is
     // the convention `rates` already had, and why it is NOT the floor test.
     expect(m.basis).toBe('tokens')
@@ -223,7 +223,7 @@ describe('computeEventMetrics', () => {
     expect(isTimePricedStep(m)).toBe(true)
     // Both audit fields survive the mix rather than only the last basis'.
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
       durationMs: 3_600_000,
     })
   })
@@ -235,19 +235,19 @@ describe('computeEventMetrics', () => {
     // plus a 6.3s call as €0.003 — with a `≥` in front of it, which reads as
     // accounted for.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
+    const { DEFAULT_LARGE_LLM_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           // Usage-less: no httpResponse to read, no Collector usage either.
           {
             selected: false,
-            clientName: VERDA_CLIENT_NAME,
+            clientName: LARGE_LLM_CLIENT_NAME,
             provider: 'openai-generic',
             timing: { durationMs: 900_000 },
           },
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -256,13 +256,13 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(2)
     expect(m.timePricedAttempts).toBe(2)
-    expect(m.costEur).toBeCloseTo((906.3 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 9)
+    expect(m.costEur).toBeCloseTo((906.3 / 3600) * DEFAULT_LARGE_LLM_EUR_PER_HOUR, 9)
     // Its tokens are free, so the missing count changes no figure — and the ones
     // that were reported are still summed.
     expect(m.inputUncachedTokens).toBe(2_000)
     // The audit field describes the seconds `costEur` charged for, both attempts.
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
       durationMs: 906_300,
     })
     expect(m.noCacheEur).toBeCloseTo(m.costEur!, 12) // caching cannot save wall-clock
@@ -275,9 +275,9 @@ describe('computeEventMetrics', () => {
     const collector = fakeCollector([
       {
         calls: [
-          { selected: false, clientName: VERDA_CLIENT_NAME, provider: 'openai-generic' },
+          { selected: false, clientName: LARGE_LLM_CLIENT_NAME, provider: 'openai-generic' },
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -323,7 +323,7 @@ describe('computeEventMetrics', () => {
     // cannot stand in for it: the honest reading is unknown.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
+      { calls: [apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
     ])
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(1)
@@ -334,14 +334,14 @@ describe('computeEventMetrics', () => {
 
   it('honours the env rates when pricing a step', async () => {
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const saved = process.env.VERDA_EUR_PER_HOUR
-    process.env.VERDA_EUR_PER_HOUR = '3.5'
+    const saved = process.env.LARGE_LLM_EUR_PER_HOUR
+    process.env.LARGE_LLM_EUR_PER_HOUR = '3.5'
     try {
       const collector = fakeCollector([
         {
           calls: [
             {
-              ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
+              ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
               timing: { durationMs: 3_600_000 },
             },
           ],
@@ -349,8 +349,8 @@ describe('computeEventMetrics', () => {
       ])
       expect(computeEventMetrics(collector as never)!.costEur).toBeCloseTo(3.5, 9)
     } finally {
-      if (saved === undefined) delete process.env.VERDA_EUR_PER_HOUR
-      else process.env.VERDA_EUR_PER_HOUR = saved
+      if (saved === undefined) delete process.env.LARGE_LLM_EUR_PER_HOUR
+      else process.env.LARGE_LLM_EUR_PER_HOUR = saved
     }
   })
 

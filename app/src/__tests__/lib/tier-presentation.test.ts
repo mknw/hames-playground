@@ -57,7 +57,7 @@ describe('tier glyphs', () => {
   it('names a DIFFERENT glyph per tier', () => {
     // Two rows showing the same icon would read as one setting rather than a
     // distinction, which is the whole content of the sidebar affordance.
-    expect(TIER_ICONS.verda).not.toBe(TIER_ICONS.anthropic)
+    expect(TIER_ICONS.self_deployed).not.toBe(TIER_ICONS.anthropic)
   })
 
   it('carries no colour of its own', () => {
@@ -74,17 +74,17 @@ describe('tier words', () => {
   it('names both positions in words a preview user can act on', () => {
     // The switch has to be self-explanatory without documentation, which means
     // the label leads with the property, not the vendor.
-    expect(TIER_LABELS.verda).toBe('Private (Verda)')
+    expect(TIER_LABELS.self_deployed).toBe('Private')
     expect(TIER_LABELS.anthropic).toBe('Anthropic')
   })
 
   it('reads as a sentence on a sidebar row, where there is no surrounding label', () => {
-    expect(tierRowLabel('verda')).toBe('Runs on Private (Verda)')
+    expect(tierRowLabel('self_deployed')).toBe('Runs on Private')
     expect(tierRowLabel('anthropic')).toBe('Runs on Anthropic')
   })
 
   it('explains each position in terms of where the prompts go', () => {
-    expect(TIER_HINTS.verda).toMatch(/infrastructure we control/)
+    expect(TIER_HINTS.self_deployed).toMatch(/infrastructure we control/)
     expect(TIER_HINTS.anthropic).toMatch(/Anthropic/)
   })
 })

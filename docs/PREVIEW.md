@@ -512,7 +512,7 @@ grep -n 'example\.com' .env       # must return nothing
 
 The other half of the preflight is the required values with no default or
 fallback. `ANTHROPIC_API_KEY` may be empty only on a private-only server
-(`INFERENCE_TIERS=private`); the three encryption/session keys remain required. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
+(`INFERENCE_TIERS=self_deployed`); the three encryption/session keys remain required. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
 boot on a fresh database. The schema init finds no encrypted rows, logs a
 warning and continues
 (`app/src/lib/db/migrate-encryption.server.ts:363-379`), so the stack comes up
@@ -526,7 +526,7 @@ opaque error and takes steps 5–9 with it. Catch it here instead:
 K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
 # Ordinary deployments also require ANTHROPIC_API_KEY (4 keys total).
 # A private-only deployment requires only these 3; env_problems below checks policy.
-if ! grep -qE "^INFERENCE_TIERS=[\"']?private[\"']?$" .env; then
+if ! grep -qE "^INFERENCE_TIERS=[\"']?(self_deployed|private)[\"']?$" .env; then
   K="$K|ANTHROPIC_API_KEY"
 fi
 grep -nE "^($K)=(''|\"\")?$" .env    # must return nothing — a hit is still empty
@@ -545,9 +545,9 @@ appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
 with the summarizer, even if a local llama-server accepts unauthenticated
 summarization. `CLAUDE.md`'s private-tier section is the routing contract.
 
-P4 file ingestion (#717) is enabled only when INFERENCE_TIERS=private. Do not unset it on a deployment whose conversations hold ingested files: history is not screened on a tier flip until the release slice in #693 lands.
+P4 file ingestion (#717) is enabled only when INFERENCE_TIERS=self_deployed. Do not unset it on a deployment whose conversations hold ingested files: history is not screened on a tier flip until the release slice in #693 lands.
 
-**Private-only server (#653):** set `INFERENCE_TIERS=private` in the runtime `.env`.
+**Private-only server (#653):** set `INFERENCE_TIERS=self_deployed` in the runtime `.env`.
 The bootstrap and server boot then require all five private-tier values and accept
 an empty `ANTHROPIC_API_KEY`. Existing Anthropic conversation rows and last-used
 seeds resolve to private for their next turn, without rewriting the history.
@@ -555,14 +555,14 @@ Server actions refuse new Anthropic selections. The switch keeps Anthropic visib
 but greyed out, disabled, with an explanation. Explicit public run frames and
 public/unverified client overrides fail before a provider request; summaries,
 screening, memory and titles use their private role clients. Unset preserves
-all existing behavior. `USE_VERDA_INFERENCE=1` by itself does **not** disable
+all existing behavior. `USE_SELF_DEPLOYED_INFERENCE=1` by itself does **not** disable
 Anthropic or waive its key. This is a configuration check, never a health probe.
 
 For staging, **configure all five values** with the operator's private-tier
 endpoints and keys. A user who never chose starts on Private whenever the
-whole tier is configured, even with `USE_VERDA_INFERENCE` unset; the first turn
+whole tier is configured, even with `USE_SELF_DEPLOYED_INFERENCE` unset; the first turn
 may pay a metered cold start. The conversation's own tier and the user's
-last-used tier take precedence. `USE_VERDA_INFERENCE=1` also selects the
+last-used tier take precedence. `USE_SELF_DEPLOYED_INFERENCE=1` also selects the
 private deployment default for runs without a conversation choice. A host
 that intentionally offers only Anthropic leaves all five values and the flag
 unset. These instructions change no tier default in code.
@@ -570,7 +570,7 @@ unset. These instructions change no tier default in code.
 ```bash
 # Must print 5 for staging (0 only for an Anthropic-only host); any partial set
 # must be completed before boot. Counts only; never print keys or endpoint values.
-K_PRIVATE="VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL|SMALL_LLM_DECISIONS_URL|SMALL_LLM_API_KEY"
+K_PRIVATE="LARGE_LLM_BASE_URL|LARGE_LLM_API_KEY|SMALL_LLM_BASE_URL|SMALL_LLM_DECISIONS_URL|SMALL_LLM_API_KEY"
 grep -cE "^($K_PRIVATE)='.+'$" .env
 
 # Run from the checkout root. Use boot's shared validation (requires python3);
@@ -1600,11 +1600,11 @@ for these:
 - `VITE_ALLOWED_EMAILS`: this deployment's allow-list. The template's
   `*@contoso.com` counts as missing.
 - `ANTHROPIC_API_KEY`.
-- The private tier (§6): `VERDA_INFERENCE_ENDPOINT`,
-  `VERDA_INFERENCE_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
+- The private tier (§6): `LARGE_LLM_BASE_URL`,
+  `LARGE_LLM_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
   and `SMALL_LLM_API_KEY` — all five or none; staging configures all five.
   The two base URLs end in `/v1`; the full decisions URL ends in
-  `/v1/systemone`. `USE_VERDA_INFERENCE` is a separate deployment-default flag,
+  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate deployment-default flag,
   not a sixth required tier value.
 - `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
   line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
@@ -1694,7 +1694,7 @@ nothing but this instruction connects the two.
 > `PREVIEW-WELCOME.md`'s "What happens to what you type" still tells preview
 > users _"Your messages are sent to Anthropic … That is the only external model
 > provider involved — nothing is sent anywhere else for inference."_ The row
-> above has now landed twice, and the default path for a new user is **verda
+> above has now landed twice, and the default path for a new user is **self_deployed
 > when the endpoint is configured**, so that sentence is wrong on the default
 > path rather than on an opt-in edge — and it is wrong in the direction of
 > over-stating what leaves, which is the harmless direction for a
@@ -1768,3 +1768,5 @@ One local result that is **not** a finding about the VM: running redis-stack
 natively on Apple Silicon dies with `Illegal instruction` on the RediSearch
 module. That is the arm64 defect `docker-compose.override.yml` exists for, it
 reproduces with or without these changes, and it is why §1 says x86.
+
+Inference naming and one-release compatibility: [complete migration table](deployment/self-deployed-migration.md).

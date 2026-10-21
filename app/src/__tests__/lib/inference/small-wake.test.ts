@@ -3,7 +3,7 @@ import {
   ensurePrivateTierAwake,
   ensureSmallAwake,
   resetSmallWake,
-  resetVerdaWake,
+  resetLargeWake,
   SMALL_LLM_WAKE_FAILED,
   NO_FALLBACK,
   DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS,
@@ -28,9 +28,9 @@ import {
   type ColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
-  noteVerdaCallCompleted,
-  resetVerdaActivity,
-} from '../../../lib/inference/verda-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+} from '../../../lib/inference/large-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -42,15 +42,15 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.useFakeTimers()
   resetSmallWake()
-  resetVerdaWake()
+  resetLargeWake()
   resetSmallActivity()
-  resetVerdaActivity()
+  resetLargeActivity()
   resetSmallColdStartHistory()
   resetColdStartHistory()
   vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
   vi.stubEnv('SMALL_LLM_API_KEY', 'synthetic-key')
-  vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://example.invalid/large/v1')
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-large-key')
+  vi.stubEnv('LARGE_LLM_BASE_URL', 'https://example.invalid/large/v1')
+  vi.stubEnv('LARGE_LLM_API_KEY', 'synthetic-large-key')
   for (const name of [
     'SMALL_LLM_WAKE_TIMEOUT_MS',
     'SMALL_LLM_WAKE_ATTEMPT_TIMEOUT_MS',
@@ -67,7 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   resetSmallActivity()
   resetSmallColdStartHistory()
-  resetVerdaActivity()
+  resetLargeActivity()
   resetColdStartHistory()
 })
 
@@ -204,7 +204,7 @@ describe('small box wake', () => {
     )
     const wake = quiet(ensurePrivateTierAwake())
     await vi.advanceTimersByTimeAsync(100)
-    expect(String(await wake)).toContain('VERDA_INFERENCE_ENDPOINT')
+    expect(String(await wake)).toContain('LARGE_LLM_BASE_URL')
     expect(String(await wake)).toContain('27B')
     expect(String(await wake)).toContain(NO_FALLBACK)
     expect(vi.getTimerCount()).toBe(0)
@@ -291,13 +291,13 @@ describe('small box wake', () => {
     await runWithColdStartWatch(
       (e) => notices.push(e),
       async () => {
-        noteBoxCallStarting('verda')
+        noteBoxCallStarting('large')
         noteBoxCallStarting('small')
       },
     )
     expect(notices).toEqual([{ estimateMs: 400_000, basis: 'measured', samples: 1 }])
     resetSmallColdStartHistory()
-    noteVerdaCallCompleted()
+    noteLargeCallCompleted()
     notices.length = 0
     await runWithColdStartWatch(
       (e) => notices.push(e),

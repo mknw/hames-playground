@@ -20,7 +20,7 @@ The full set of decisions:
   databases, volumes and `DATA_ENCRYPTION_KEY`.
 - **Data.** Dev and staging use the org graph the project has now, which is not
   exhaustive yet. Conversation databases are never shared between environments.
-- **Inference.** All environments share the one Verda box, a single replica that
+- **Inference.** All environments share the one large-model box, a single replica that
   scales to zero. The queueing that causes is accepted.
 - **Access.** Each environment admits users through its own
   `VITE_ALLOWED_EMAILS` under Entra sign-in (#119). Staging lists a subset of

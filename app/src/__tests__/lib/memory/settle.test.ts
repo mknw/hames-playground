@@ -66,7 +66,7 @@ describe('host settle fail-closed seams', () => {
     async (code) => {
       const { ctx, cfg, transaction } = fixture()
       transaction.mockRejectedValue(Object.assign(new Error('delete won'), { code }))
-      const report = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      const report = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
         settleMemory(ctx, cfg, { conversationId: 'claimed-row-id' }),
       )
       expect(report.failed).toBe(1)
@@ -83,7 +83,7 @@ describe('host settle fail-closed seams', () => {
       async () => 'skipped' as const,
     ]) {
       const { ctx, cfg, extract, transaction } = fixture()
-      const report = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+      const report = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
         settleMemory(ctx, { ...cfg, awaitWake }, { conversationId: 'claimed-row-id' }),
       )
       expect(report.skipped).toBe('waking')

@@ -34,7 +34,7 @@
  * hit depended on whether the first half had left the box warm. See its `arm`.
  */
 import { test, expect } from '../lib/fixtures'
-import { COLD_START_HEADLINE, VERDA_MODEL } from '../lib/env'
+import { COLD_START_HEADLINE, LARGE_LLM_MODEL } from '../lib/env'
 import { expectHeld } from '../lib/control'
 import {
   chooseTier,
@@ -62,7 +62,7 @@ test('a cold private box shows the warming spinner, suppresses the bar, then cle
   // did not set. Clicking it is also what a preview user does — and `chooseTier`
   // waits for the SERVER to have the choice, not just the widget, without which
   // the turn below could still run on the tier this click is leaving.
-  await chooseTier(page, 'verda')
+  await chooseTier(page, 'self_deployed')
 
   // PARKED, not delayed — and that is the whole #280 fix for this file. Every
   // self-hosted request is held open until this test releases it, so each claim
@@ -77,7 +77,7 @@ test('a cold private box shows the warming spinner, suppresses the bar, then cle
   // tier every role is self-hosted — but it does still separate the 27B from the
   // 4B `describe` model, which is why the withheld-call assertion at the end can
   // still count.
-  await backend.arm({ kind: 'hold', model: VERDA_MODEL })
+  await backend.arm({ kind: 'hold', model: LARGE_LLM_MODEL })
 
   // The notice fires when nothing says the box is up, and this process has
   // seen self-hosted calls complete (the preflight, and every scenario before
@@ -149,7 +149,7 @@ test('a cold private box shows the warming spinner, suppresses the bar, then cle
   // test parked were withheld, and both named the declared model.
   const withheld = (await backend.calls()).filter((call) => call.delayedMs > 0)
   expect(withheld.length).toBe(2)
-  for (const call of withheld) expect(call.model).toBe(VERDA_MODEL)
+  for (const call of withheld) expect(call.model).toBe(LARGE_LLM_MODEL)
 })
 
 test('a private box that will not serve ends the turn visibly, with no spinner left behind', async ({
@@ -158,7 +158,7 @@ test('a private box that will not serve ends the turn visibly, with no spinner l
   backend,
 }) => {
   await open(page, appUrl)
-  await chooseTier(page, 'verda')
+  await chooseTier(page, 'self_deployed')
 
   // Every self-hosted call refused, for the whole turn. A 503 rather than a
   // dropped socket because it is deterministic and fast; `mid-stream` and a
@@ -178,13 +178,13 @@ test('a private box that will not serve ends the turn visibly, with no spinner l
   // same file exercised the wake-failure path or the harness-failure path
   // depending on how long a teardown took. Aiming past the ping fixes the path:
   // the box always wakes, and the harness's first call is always the one refused.
-  // The wake-failure twin (`VERDA_WAKE_FAILED` reaching the transcript) is
+  // The wake-failure twin (`LARGE_LLM_WAKE_FAILED` reaching the transcript) is
   // `app/e2e/scenarios/06`'s, on the wire.
   await backend.arm({
     kind: 'status',
     status: 503,
     message: 'e2e-browser: the self-hosted box is not serving',
-    model: VERDA_MODEL,
+    model: LARGE_LLM_MODEL,
     wake: false,
   })
 

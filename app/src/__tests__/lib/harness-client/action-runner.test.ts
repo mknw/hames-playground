@@ -127,7 +127,7 @@ describe('runAgentInBackground', () => {
   // MUTATION: drop the release from the `.catch` → the assertion reddens.
   it('lets go of the seed’s claim, marking the run failed, whatever threw', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
-    runTurnAndPersist.mockRejectedValueOnce(new Error('verda tier is not configured'))
+    runTurnAndPersist.mockRejectedValueOnce(new Error('self_deployed tier is not configured'))
 
     await runAgentInBackground('run-6', 'user-1', 'x', 'search', TRIGGER, 'v-seed')
 

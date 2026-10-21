@@ -1,12 +1,12 @@
-// Self-hosted inference — the company's own Qwen deployment on a Verda
-// (DataCrunch) GPU, served by vLLM behind an OpenAI-compatible API.
+// Self-deployed inference — the company's own Qwen deployment, served by
+// vLLM behind an OpenAI-compatible API on Verda or Modal.
 //
 // WHY IT EXISTS: a confidential-compute route. A prompt sent here never leaves
 // infrastructure the company controls, which is a different property from
 // "cheaper" or "faster" and is the only reason to accept the trade-offs below.
 //
 // NOT in any chain and not the default. It is reached only through
-// `USE_VERDA_INFERENCE=1`, which re-points the controller / actor / critic /
+// `USE_SELF_DEPLOYED_INFERENCE=1`, which re-points the controller / actor / critic /
 // synthesizer roles in `harness-patterns/clients.server.ts`. With the flag
 // unset nothing in this file is read.
 //
@@ -16,7 +16,7 @@
 //     --gpu-memory-utilization 0.90 --language-model-only
 //     --speculative-config {method:mtp,num_speculative_tokens:3}
 // `--max-model-len 131072` is the server's hard ceiling on prompt+completion
-// and is mirrored as VerdaQwen in MODEL_CONTEXT_WINDOWS (settings.ts); an
+// and is mirrored as LargeQwen in MODEL_CONTEXT_WINDOWS (settings.ts); an
 // earlier plan for this client assumed a 250k window, and the deployment wins.
 //
 // NO CACHING, DELIBERATELY. This client declares no `allowed_role_metadata`,
@@ -84,7 +84,7 @@
 //
 // WHERE 180 000 COMES FROM, AND WHY IT IS DERIVED FROM `max_tokens` RATHER THAN
 // FROM THE p95. The load test measured this deployment WARM at a 2.75k-token
-// prompt (2026-08-25, `smoke-verda-load.ts`): 4.1s for a single call, 6.3s p50
+// prompt (2026-08-25, `smoke-large-load.ts`): 4.1s for a single call, 6.3s p50
 // and 9.9s p95 with 8 requests in flight, one replica, so concurrency is
 // queueing rather than scaling. A multiple of that p95 is what the first version
 // of this number was ("~12x"), and #279's review was right that it does not
@@ -114,7 +114,7 @@
 // generation aborted by the timeout yields a `BamlTimeoutError` with NO usage
 // sample, so that detection is blind and there is no retry — a dead turn with a
 // generic error. If the cap is not reachable inside the timeout, the recovery
-// path for long outputs is unreachable code. `clients-verda.test.ts` pins the
+// path for long outputs is unreachable code. `clients-self-deployed.test.ts` pins the
 // inequality against both literals, so neither number can move alone.
 //
 // WHAT MOVED, AND THE ALTERNATIVE NOT TAKEN. `max_tokens` was 16 384, inherited
@@ -132,13 +132,13 @@
 // Three things it must stay clear of, in both directions:
 //   - the ~150s FLOOR the old comment named no longer binds this client, because
 //     the wake absorbs the first call of a session — that floor moved to
-//     `VERDA_WAKE_TIMEOUT_MS`, and lowering THAT below the measured cold-start
+//     `LARGE_LLM_WAKE_TIMEOUT_MS`, and lowering THAT below the measured cold-start
 //     tail (~360s, 2026-08-27) would reliably fail the first turn of every
 //     session, which is exactly what happened at 300s;
 //   - it is above the 55s at which the platform's own gateway was once seen to
 //     cancel, so a prompt 504 still surfaces as a 504 rather than as our
 //     timeout — which is the more diagnosable of the two;
-//   - it stays BELOW `VERDA_WAKE_TIMEOUT_MS` (600s), so the wait a user sits
+//   - it stays BELOW `LARGE_LLM_WAKE_TIMEOUT_MS` (600s), so the wait a user sits
 //     through on a cold box is bounded by the requests whose whole job is to
 //     wait, not by a real call that will be retried.
 // What is NOT a judgement call, and is fixed: a turn that spends that time and
@@ -167,16 +167,16 @@
 // shorter than the deployment's own. Deriving it from the fallback broke the
 // moment the fallback rose: a quarter of 360s is 90s, which would have rejected
 // the genuine 71.7s cold start above.
-client<llm> VerdaQwen {
+client<llm> LargeQwen {
   provider openai-generic
   options {
     // The OpenAI-COMPATIBLE BASE — the deployment root plus `/v1`. Passed to
     // the provider verbatim (BAML options take an `env.X` reference, not an
     // expression, so nothing can append the path for us), which is why
-    // `assertVerdaConfigured()` refuses a value that does not end in `/v1`:
+    // `assertLargeModelConfigured()` refuses a value that does not end in `/v1`:
     // without it every call 404s on `<root>/chat/completions`.
-    base_url env.VERDA_INFERENCE_ENDPOINT
-    api_key env.VERDA_INFERENCE_API_KEY
+    base_url env.LARGE_LLM_BASE_URL
+    api_key env.LARGE_LLM_API_KEY
     // The id `GET /v1/models` reports, i.e. the HF path vLLM was started with
     // (no `--served-model-name` override on this deployment). Read live on
     // 2026-08-25 and pinned here; exactly one model is served, and vLLM 400s a
@@ -201,7 +201,7 @@ client<llm> VerdaQwen {
     // the top-level `chat_template_kwargs` field vLLM reads. Nothing in
     // `clients.server.ts` or the adapters passes it — declaring it on the
     // client is what makes it unconditional, i.e. it cannot be forgotten at a
-    // call site the way a per-call option could. `verda-body-shape.test.ts`
+    // call site the way a per-call option could. `self-deployed-body-shape.test.ts`
     // renders a real request offline and pins the field, because a silent typo
     // here degrades to "the model thinks out loud again" rather than an error.
     chat_template_kwargs {
@@ -214,7 +214,7 @@ client<llm> VerdaQwen {
     // version: a full-cap generation has to be able to FINISH inside the
     // timeout, or the truncation-recovery retry for long outputs is unreachable
     // code. 4 096 / 26 tok/s = 158s, inside 180s. Raising this without raising
-    // the timeout breaks that, and `clients-verda.test.ts` fails when it does.
+    // the timeout breaks that, and `clients-self-deployed.test.ts` fails when it does.
     max_tokens 4096
     // The Anthropic leaves declare no temperature at all, so there is no house
     // value to copy — they run at their provider default. This one is set low
@@ -231,9 +231,9 @@ client<llm> VerdaQwen {
       // (26 tok/s at 8-way concurrency) is 158s, plus a prefill/queue
       // allowance. The derivation, the alternative not taken and the reason the
       // inequality must hold in this direction are all in WHERE 180 000 COMES
-      // FROM above; `clients-verda.test.ts` pins it against both literals. It is
+      // FROM above; `clients-self-deployed.test.ts` pins it against both literals. It is
       // no longer sized for a cold start — the wake poll ahead of the harness
-      // pays that, and its own bound is `VERDA_WAKE_TIMEOUT_MS`. Read the SCALE
+      // pays that, and its own bound is `LARGE_LLM_WAKE_TIMEOUT_MS`. Read the SCALE
       // TO ZERO note above before changing either number; raising this one back
       // towards ten minutes would quietly re-create the
       // indistinguishable-from-working window the wake ping exists to end.
@@ -242,20 +242,20 @@ client<llm> VerdaQwen {
   }
 }
 
-// #625 G19: requires the endpoint VERDA_INFERENCE_ENDPOINT names to run a
+// #625 G19: requires the endpoint LARGE_LLM_BASE_URL names to run a
 // reasoning parser; </think> in content fails loudly.
 // A twin call through a per-run or consumer override shows no warming notice.
-// Dormant: never a VERDA_CLIENT_BY_ROLE value or a fallback-chain member.
+// Dormant: never a SELF_DEPLOYED_CLIENT_BY_ROLE value or a fallback-chain member.
 // PROVISIONAL / UNMEASURED: keep the shipped 4096 / 180s pair until the separately
 // authorised eval measures trace + answer at 8192 / ~340s (eval-only).
 // Sampling is the Qwen3.8 model card's thinking preset, not the original's 0.2:
 // https://huggingface.co/Qwen/Qwen3.8-27B-FP8#best-practices
 // No allowed_role_metadata: cache_control must never reach this box.
-client<llm> VerdaQwenThink {
+client<llm> LargeQwenThink {
   provider openai-generic
   options {
-    base_url env.VERDA_INFERENCE_ENDPOINT
-    api_key env.VERDA_INFERENCE_API_KEY
+    base_url env.LARGE_LLM_BASE_URL
+    api_key env.LARGE_LLM_API_KEY
     model "Qwen/Qwen3.8-27B-FP8"
     chat_template_kwargs {
       enable_thinking true

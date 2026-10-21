@@ -1,7 +1,7 @@
 /**
  * Verda control-plane probe — Server Only
  *
- * The warm clock in `verda-activity.server.ts` is **process-local**: a freshly
+ * The warm clock in `large-activity.server.ts` is **process-local**: a freshly
  * restarted app instance has never seen a call, and until now the header strip
  * could only say "unknown" about a box it had no reading on. This module is the
  * shared half of that answer: it asks the Verda control plane
@@ -21,7 +21,7 @@
  *   its own.
  * - **non-empty → `starting`.** A replica present is NOT ready: the weight load
  *   happens inside the container, after the replica reports. Only a real
- *   completion answered by the deployment (`verdaWarmth`'s completion clock)
+ *   completion answered by the deployment (`largeWarmth`'s completion clock)
  *   may flip the strip to `ready` — never this probe, and never a timer.
  *
  * Probe result shape confirmed against the live OpenAPI schema
@@ -37,8 +37,8 @@
  *
  * ## Deliberately NOT the inference endpoint
  *
- * This module NEVER touches `VERDA_INFERENCE_ENDPOINT` or
- * `VERDA_INFERENCE_API_KEY`. Waking the box is `ensureVerdaAwake`'s job (a
+ * This module NEVER touches `LARGE_LLM_BASE_URL` or
+ * `LARGE_LLM_API_KEY`. Waking the box is `ensureLargeAwake`'s job (a
  * 1-token completion, the only probe that proves the weights are loaded); a
  * status check that sent a request to the model endpoint would scale the box
  * up — billing GPU seconds for a look. A source-scan test pins that no read of
@@ -49,7 +49,7 @@
  * Missing credentials, an HTTP error, a timeout or an unexpected body all
  * resolve to `{ ok: false }` rather than throwing: the strip then shows
  * `unknown` (the error path — it must be unreachable on every happy path) and
- * the ignite button stays available, because `igniteVerdaBox` is independent of
+ * the ignite button stays available, because `igniteSelfDeployedBox` is independent of
  * this probe. Messaging is never blocked by it. Both fetches are bounded at
  * {@link PROBE_TIMEOUT_MS} — a slow control plane degrades, never hangs the
  * strip. At most one `console.warn` per state transition: a reason that has
@@ -78,7 +78,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 assertServerOnImport()
 
 /** The control plane's base URL. Its own API, not the model endpoint. An env
- *  override exists for the same reason `VERDA_INFERENCE_ENDPOINT` is one: the
+ *  override exists for the same reason `LARGE_LLM_BASE_URL` is one: the
  *  hermetic browser suite points this at its fake, and a host can too. Read at
  *  module load — the dev server's environment is fixed at spawn, which is the
  *  only process that legitimately overrides it. */

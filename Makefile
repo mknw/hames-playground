@@ -4,7 +4,7 @@
 #
 #   8080  chat, GLM-4.7-Flash              `pnpm dev:llama` from app/ (no target here)
 #   8090  embeddings, Qwen3-Embedding-0.6B `make embed`     — Data Stash
-#   8095  chat, small summarizer           `make llm-small` — describe role (LocalQwenSmall)
+#   8095  chat, small summarizer           `make llm-small` — describe role (SmallQwen)
 #
 # The GGUF weights live in models/, which is gitignored — see models/README.md.
 # Both targets run in the FOREGROUND: one server per terminal.
@@ -57,12 +57,12 @@ embed:
 # --ctx-size 32768: generous headroom, not a fitted number. compactBulkData
 # truncates each tool result at `maxResultForSummary` (3000 chars, settings.ts)
 # and derives the batch from the describe OUTPUT cap — `maxBatchItems()` returns
-# floor(2048 * 0.5 / 200) = 5 at LocalQwenSmall's max_tokens 2048, not the
+# floor(2048 * 0.5 / 200) = 5 at SmallQwen's max_tokens 2048, not the
 # ceiling of 8 — so the real worst case is ~5 x 3000 chars, about 3.7k tokens.
 # Note the behaviour that 2048 cap carries: it re-imposes the batch-of-5 floor
 # compactBulkData.server.ts records from the removed mixed chains, so a turn's
 # tool results cost more describe calls here than on Haiku's 16384.
-# Keep this number in step with MODEL_CONTEXT_WINDOWS.LocalQwenSmall in
+# Keep this number in step with MODEL_CONTEXT_WINDOWS.SmallQwen in
 # app/src/lib/settings.ts — client-context-windows.test.ts parses this line and
 # fails if the two drift. No --parallel: one slot gets the whole window.
 # --chat-template-kwargs disables Qwen3.5's thinking mode server-side. Without

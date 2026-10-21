@@ -39,14 +39,14 @@ it.each([
 
 it('redacts the literal value of a configured key wherever it appears', () => {
   vi.stubEnv('SMALL_LLM_API_KEY', 'literalKeyValue77')
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', 'oth!er#Lit 8899')
+  vi.stubEnv('LARGE_LLM_API_KEY', 'oth!er#Lit 8899')
   const out = describeWakeFailure(new Error('rejected literalKeyValue77 and oth!er#Lit 8899 plain'))
   expect(out).not.toMatch(/literalKeyValue77|oth!er#Lit 8899/)
 })
 
 it('redacts a cut-off echo of a configured key', () => {
   const key = '0123456789abcdef0123456789abcdef0123456789abcdef'
-  vi.stubEnv('VERDA_INFERENCE_API_KEY', key)
+  vi.stubEnv('LARGE_LLM_API_KEY', key)
   const out = describeWakeFailure(new Error(`401 bad credential ${key.slice(0, 30)}`))
   expect(out).toContain('bad credential')
   expect(out).not.toContain(key.slice(0, 12))

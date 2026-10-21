@@ -6,7 +6,7 @@ Every check prints PASS or FAIL; the exit status is 0 only when all pass. A cold
 box is started the way the app's wake starts it (GET /health until a 200) and is
 left to scale down on its own. Synthetic inputs only.
 
-What a PASS means for the app: the summarizer answers `LocalQwenSmall`'s exact
+What a PASS means for the app: the summarizer answers `SmallQwen`'s exact
 body under its model alias with thinking off, and the decision answers parse the
 way the app's systemone transport parses them (every asked label present, each
 in [0, 1], mass within 0.01 of 1, a score consistent with its distribution).
@@ -27,7 +27,7 @@ MASS_TOLERANCE = 0.01  # the app's decide transport refuses an answer further fr
 # vLLM's modality-limit refusal precedes media fetching; a generic 400 does not.
 IMAGE_REFUSAL = "At most 0 image(s) may be provided in one prompt"
 
-# The body `LocalQwenSmall` sends (packages/harness-baml/baml_src/local-client.baml).
+# The body `SmallQwen` sends (packages/harness-baml/baml_src/local-client.baml).
 SUMMARIZE = {
     "model": SUMMARIZER_MODEL,
     "messages": [

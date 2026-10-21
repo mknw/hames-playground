@@ -17,9 +17,9 @@ process.env.NODE_ENV ??= 'test'
 
 // A hermetic run must never reach a real provider. `lib/app.ts` overwrites the
 // Anthropic key as well; this refuses the far more common mistake of a
-// developer exporting `USE_VERDA_INFERENCE=1` in their shell and quietly
+// developer exporting `USE_SELF_DEPLOYED_INFERENCE=1` in their shell and quietly
 // changing which tier every scenario measures.
-delete process.env.USE_VERDA_INFERENCE
+delete process.env.USE_SELF_DEPLOYED_INFERENCE
 
 // Failing closed is structural, not something each scenario has to remember
 // (#433 S9). Inside a turn a fake's refusal becomes a failed tool result or a

@@ -294,7 +294,7 @@ describe('saveSession — title + status lifting', () => {
     const ctx = createContext('Explain the graph schema please', undefined, 'sess-a')
     const written = await saveSession('sess-a', 'u1', 'known', serializeContext(ctx), {
       version: 'v-7',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
     })
 
     expect(saveConversation).toHaveBeenCalledWith({
@@ -306,7 +306,7 @@ describe('saveSession — title + status lifting', () => {
       // The harness never flips a successful run to 'done' — a persisted
       // 'running' means "completed, never flipped".
       status: 'done',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
       // The save names the version the turn's claim holds…
       version: 'v-7',
     })
@@ -502,7 +502,7 @@ it('claimSession reconciles committed memory sources without changing the claim 
   const sources = vi
     .spyOn(repo, 'listMemorySourcesForConversation')
     .mockResolvedValue([
-      { eventId: 'source-input', ordinal: 0, memoryId: 'surviving-memory', tier: 'verda' },
+      { eventId: 'source-input', ordinal: 0, memoryId: 'surviving-memory', tier: 'self_deployed' },
     ])
   const store = vi.spyOn(repo, 'createMemoryDbStore').mockReturnValue({
     transaction: async (fn: (tx: never) => Promise<unknown>) =>

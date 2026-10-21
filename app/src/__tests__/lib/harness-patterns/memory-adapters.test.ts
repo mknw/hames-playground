@@ -41,9 +41,9 @@ vi.mock('@boundaryml/baml', () => {
 })
 
 const ENV_KEYS = [
-  'USE_VERDA_INFERENCE',
-  'VERDA_INFERENCE_ENDPOINT',
-  'VERDA_INFERENCE_API_KEY',
+  'USE_SELF_DEPLOYED_INFERENCE',
+  'LARGE_LLM_BASE_URL',
+  'LARGE_LLM_API_KEY',
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
   'SMALL_LLM_API_KEY',
@@ -99,9 +99,9 @@ describe('createMemoryExtractAdapter', () => {
 
   it('puts the collector in the bag and, on a private-tier turn, the describe client', async () => {
     extract.mockResolvedValue([])
-    process.env.USE_VERDA_INFERENCE = '1'
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'k'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'k'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
     process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -109,7 +109,7 @@ describe('createMemoryExtractAdapter', () => {
     await createMemoryExtractAdapter()({ kindHint: 'k', window: 'w', latestUser: 'u' })
     const bag = extract.mock.calls[0][3] as { collector?: unknown; client?: string }
     expect(bag.collector).toBeDefined()
-    expect(bag.client).toBe('LocalQwenSmall')
+    expect(bag.client).toBe('SmallQwen')
   })
 
   it('leaves the Anthropic tier on its declared chain (no client override)', async () => {
@@ -142,15 +142,15 @@ describe('createMemoryCompactAdapter', () => {
 
   it('rides the describe client on a private-tier turn', async () => {
     compact.mockResolvedValue({ content: 'c', evidence: 'e' })
-    process.env.USE_VERDA_INFERENCE = '1'
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'k'
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'k'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
     process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { createMemoryCompactAdapter } = await load()
     await createMemoryCompactAdapter()({ kind: 'preference', members: MEMBERS })
-    expect((compact.mock.calls[0][2] as { client?: string }).client).toBe('LocalQwenSmall')
+    expect((compact.mock.calls[0][2] as { client?: string }).client).toBe('SmallQwen')
   })
 
   it('throws LLMCallError on a failure', async () => {

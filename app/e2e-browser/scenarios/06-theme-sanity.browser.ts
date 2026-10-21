@@ -25,7 +25,7 @@ import { test, expect } from '../lib/fixtures'
 import { open, sendButton, tierOption } from '../lib/chat'
 import { expectGlyphRenders, expectReadable } from '../lib/visible'
 
-const PRIVATE = 'Private (Verda)'
+const PRIVATE = 'Private'
 
 for (const theme of ['dark', 'light'] as const) {
   test(`the header strip and sidebar render visibly in ${theme}`, async ({ page, appUrl }) => {

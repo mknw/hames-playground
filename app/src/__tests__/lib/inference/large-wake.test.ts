@@ -44,23 +44,23 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import {
-  ensureVerdaAwake,
-  resetVerdaWake,
-  VERDA_WAKE_FAILED,
-  VERDA_WAKE_PROMPT,
-  DEFAULT_VERDA_WAKE_TIMEOUT_MS,
-  DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS,
-  DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS,
-  verdaWakeTimeoutMs,
-  verdaWakeAttemptTimeoutMs,
-  verdaWakePollIntervalMs,
+  ensureLargeAwake,
+  resetLargeWake,
+  LARGE_LLM_WAKE_FAILED,
+  LARGE_LLM_WAKE_PROMPT,
+  DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS,
+  DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS,
+  DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS,
+  largeWakeTimeoutMs,
+  largeWakeAttemptTimeoutMs,
+  largeWakePollIntervalMs,
 } from '../../../lib/inference/wake.server'
 import {
-  noteVerdaCallCompleted,
-  resetVerdaActivity,
-  verdaLastCallCompletedAt,
-  VERDA_MODEL_ID,
-} from '../../../lib/inference/verda-activity.server'
+  noteLargeCallCompleted,
+  resetLargeActivity,
+  largeLastCallCompletedAt,
+  LARGE_LLM_MODEL_ID,
+} from '../../../lib/inference/large-activity.server'
 import {
   coldStartEstimate,
   resetColdStartHistory,
@@ -98,9 +98,9 @@ function stalls(): (url: string, init: RequestInit) => Promise<Response> {
 
 /** A short, deterministic poll: 10 attempts of 10s with a 1s gap, in 100s. */
 const FAST_POLL = {
-  VERDA_WAKE_TIMEOUT_MS: '100000',
-  VERDA_WAKE_ATTEMPT_TIMEOUT_MS: '10000',
-  VERDA_WAKE_POLL_INTERVAL_MS: '1000',
+  LARGE_LLM_WAKE_TIMEOUT_MS: '100000',
+  LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: '10000',
+  LARGE_LLM_WAKE_POLL_INTERVAL_MS: '1000',
 }
 const FAST_CYCLE_MS = 11_000
 const FAST_ATTEMPTS = 10
@@ -108,17 +108,17 @@ const FAST_ATTEMPTS = 10
 let fetchMock: ReturnType<typeof vi.fn>
 
 const WAKE_VARS = [
-  'VERDA_WAKE_TIMEOUT_MS',
-  'VERDA_WAKE_ATTEMPT_TIMEOUT_MS',
-  'VERDA_WAKE_POLL_INTERVAL_MS',
+  'LARGE_LLM_WAKE_TIMEOUT_MS',
+  'LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS',
+  'LARGE_LLM_WAKE_POLL_INTERVAL_MS',
 ]
 
 beforeEach(() => {
-  resetVerdaWake()
-  resetVerdaActivity()
+  resetLargeWake()
+  resetLargeActivity()
   resetColdStartHistory()
-  process.env.VERDA_INFERENCE_ENDPOINT = ENDPOINT
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.LARGE_LLM_BASE_URL = ENDPOINT
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   for (const name of WAKE_VARS) delete process.env[name]
   fetchMock = vi.fn(async () => ok())
   vi.stubGlobal('fetch', fetchMock)
@@ -127,11 +127,11 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
-  resetVerdaWake()
-  resetVerdaActivity()
+  resetLargeWake()
+  resetLargeActivity()
   resetColdStartHistory()
-  delete process.env.VERDA_INFERENCE_ENDPOINT
-  delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.LARGE_LLM_BASE_URL
+  delete process.env.LARGE_LLM_API_KEY
   for (const name of WAKE_VARS) delete process.env[name]
 })
 
@@ -152,21 +152,21 @@ describe('when the wake is sent at all', () => {
     // restarted. It pings anyway, which costs one 1-token request and is the
     // cheap side of the error — the other side is a user sitting through minutes
     // of silence.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('pings when a call finished longer ago than the scale-down window', async () => {
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
-    await ensureVerdaAwake()
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('sends NOTHING when a recent call proves the box is up', async () => {
     // The whole point of the warm clock. A ping per turn on a warm box is a
     // wasted request and a wasted second on every single message.
-    noteVerdaCallCompleted(Date.now())
-    await ensureVerdaAwake()
+    noteLargeCallCompleted(Date.now())
+    await ensureLargeAwake()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -175,7 +175,7 @@ describe('when the wake is sent at all', () => {
     // first attempt covers a warm call with room to spare (single-call 4.1s,
     // 9.9s p95 at 8-way, 2026-08-25), and a second request here would be a
     // regression nothing else would catch.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
@@ -188,7 +188,7 @@ describe('what goes on the wire', () => {
     // 200 there means "the deployment exists and the key is accepted", never
     // "the next call will be quick". Only a request that makes the model produce
     // a token proves the weights are loaded.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(`${ENDPOINT}/chat/completions`)
     expect(init.method).toBe('POST')
@@ -199,16 +199,16 @@ describe('what goes on the wire', () => {
     // The cheapest thing that still forces a generation. `max_tokens: 1` rather
     // than 0 because a request rejected before generation proves nothing about
     // readiness, and temperature 0 because nothing reads the answer.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     const body = sentBody()
     expect(body.max_tokens).toBe(1)
     expect(body.temperature).toBe(0)
-    expect(body.messages).toEqual([{ role: 'user', content: VERDA_WAKE_PROMPT }])
+    expect(body.messages).toEqual([{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }])
   })
 
   it('names the model the deployment serves, and carries the key', async () => {
-    await ensureVerdaAwake()
-    expect(sentBody().model).toBe(VERDA_MODEL_ID)
+    await ensureLargeAwake()
+    expect(sentBody().model).toBe(LARGE_LLM_MODEL_ID)
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key')
   })
@@ -220,10 +220,10 @@ describe('what goes on the wire', () => {
     // size, because "small" is not the property — "nothing from the turn" is, and
     // an exact comparison is what fails if a future edit threads the user's
     // message through here for a warmer cache.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(sentBody()).toEqual({
-      model: VERDA_MODEL_ID,
-      messages: [{ role: 'user', content: VERDA_WAKE_PROMPT }],
+      model: LARGE_LLM_MODEL_ID,
+      messages: [{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }],
       max_tokens: 1,
       temperature: 0,
     })
@@ -233,7 +233,7 @@ describe('what goes on the wire', () => {
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls())
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
     await wake
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -241,8 +241,8 @@ describe('what goes on the wire', () => {
   })
 
   it('joins the /v1 base to the path without doubling the slash', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = `${ENDPOINT}/`
-    await ensureVerdaAwake()
+    process.env.LARGE_LLM_BASE_URL = `${ENDPOINT}/`
+    await ensureLargeAwake()
     expect(fetchMock.mock.calls[0][0]).toBe(`${ENDPOINT}/chat/completions`)
   })
 
@@ -250,28 +250,28 @@ describe('what goes on the wire', () => {
     // An unbounded attempt would hang the turn FOREVER, which is strictly worse
     // than the 600s BAML timeout it replaced. It is also what makes the poll a
     // poll: with no per-attempt bound there is nothing to retry FROM.
-    // `smoke-verda.ts`'s preflight learned the first half the hard way — an
+    // `smoke-self-deployed.ts`'s preflight learned the first half the hard way — an
     // unbounded probe hung a diagnostic for four minutes and then reported the
     // bare string `fetch failed`.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(init.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('pins the model id against the .baml declaration', async () => {
-    // `VERDA_MODEL_ID` is a COPY of the `model` line on `VerdaQwen` — the ping is
+    // `LARGE_LLM_MODEL_ID` is a COPY of the `model` line on `LargeQwen` — the ping is
     // a hand-rolled fetch, so it has to name a model and BAML exports nothing to
     // read it from. vLLM 400s an unknown id, so drift would break the FIRST call
     // of every session and nothing else. This is the pin that makes the copy
     // safe.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
-    expect(declared).toContain(`model "${VERDA_MODEL_ID}"`)
+    expect(declared).toContain(`model "${LARGE_LLM_MODEL_ID}"`)
   })
 })
 
@@ -280,8 +280,8 @@ describe('the three budgets', () => {
     // ~360s, 2026-08-27, which is what took this number from 300s to 600s: the
     // old bound expired while the box was still coming up and the turn died for
     // a wait that was going to end.
-    expect(DEFAULT_VERDA_WAKE_TIMEOUT_MS).toBe(600_000)
-    expect(DEFAULT_VERDA_WAKE_TIMEOUT_MS).toBeGreaterThan(360_000)
+    expect(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS).toBe(600_000)
+    expect(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS).toBeGreaterThan(360_000)
   })
 
   it('ships a per-attempt bound that a WARM call clears and a cold start does not', () => {
@@ -289,39 +289,40 @@ describe('the three budgets', () => {
     // (9.9s at 8-way, 2026-08-25) with room, so a warm box answers first time and
     // never retries; far below a cold start, so an abandoned request is abandoned
     // early rather than riding out the whole wait.
-    expect(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS).toBe(30_000)
-    expect(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS).toBeGreaterThan(10_000)
-    expect(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS).toBeLessThan(72_000)
+    expect(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS).toBe(30_000)
+    expect(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS).toBeGreaterThan(10_000)
+    expect(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS).toBeLessThan(72_000)
   })
 
   it('leaves room for many attempts inside the overall budget', () => {
     // A poll whose cycle does not divide the budget several times over is a
     // single request wearing a loop.
-    const cycle = DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS + DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS
-    expect(Math.floor(DEFAULT_VERDA_WAKE_TIMEOUT_MS / cycle)).toBeGreaterThanOrEqual(10)
+    const cycle =
+      DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS + DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS
+    expect(Math.floor(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS / cycle)).toBeGreaterThanOrEqual(10)
   })
 
   it('takes env overrides, so a different deployment needs no rebuild', () => {
-    process.env.VERDA_WAKE_TIMEOUT_MS = '900000'
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '45000'
-    process.env.VERDA_WAKE_POLL_INTERVAL_MS = '2500'
-    expect(verdaWakeTimeoutMs()).toBe(900_000)
-    expect(verdaWakeAttemptTimeoutMs()).toBe(45_000)
-    expect(verdaWakePollIntervalMs()).toBe(2_500)
+    process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '900000'
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '45000'
+    process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '2500'
+    expect(largeWakeTimeoutMs()).toBe(900_000)
+    expect(largeWakeAttemptTimeoutMs()).toBe(45_000)
+    expect(largeWakePollIntervalMs()).toBe(2_500)
   })
 
   it('refuses a zero or garbage override rather than honouring it', () => {
-    // `VERDA_WAKE_ATTEMPT_TIMEOUT_MS=0` would abort every attempt before it left
+    // `LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS=0` would abort every attempt before it left
     // the process — a wake that fails instantly, silently, in a loop. Falling
     // back with a warning is the only safe reading of a value that cannot mean
     // what it says.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '0'
-    process.env.VERDA_WAKE_POLL_INTERVAL_MS = 'soon'
-    process.env.VERDA_WAKE_TIMEOUT_MS = '-1'
-    expect(verdaWakeAttemptTimeoutMs()).toBe(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
-    expect(verdaWakePollIntervalMs()).toBe(DEFAULT_VERDA_WAKE_POLL_INTERVAL_MS)
-    expect(verdaWakeTimeoutMs()).toBe(DEFAULT_VERDA_WAKE_TIMEOUT_MS)
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '0'
+    process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = 'soon'
+    process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '-1'
+    expect(largeWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
+    expect(largeWakePollIntervalMs()).toBe(DEFAULT_LARGE_LLM_WAKE_POLL_INTERVAL_MS)
+    expect(largeWakeTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS)
     expect(warn).toHaveBeenCalledTimes(3)
 
     // A FRACTION UNDER 1ms is the same refusal, and it is the case the three
@@ -329,8 +330,8 @@ describe('the three budgets', () => {
     // that reads the raw parse, and only BECOMES the forbidden `0` at the floor
     // the caller actually receives — silently, the warning already skipped. The
     // guard therefore floors first and validates the floored value.
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '0.5'
-    expect(verdaWakeAttemptTimeoutMs()).toBe(DEFAULT_VERDA_WAKE_ATTEMPT_TIMEOUT_MS)
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '0.5'
+    expect(largeWakeAttemptTimeoutMs()).toBe(DEFAULT_LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS)
     expect(warn).toHaveBeenCalledTimes(4)
     warn.mockRestore()
   })
@@ -351,7 +352,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls())
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(9_000)
     expect(fetchMock, 'it gave up on the first attempt early').toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
@@ -368,7 +369,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(10_000)
     expect(
       fetchMock,
@@ -386,12 +387,12 @@ describe('the poll survives a box that drops what it is sent', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     const err = (await wake) as Error
 
     expect(fetchMock).toHaveBeenCalledTimes(FAST_ATTEMPTS)
-    expect(err.message).toContain(VERDA_WAKE_FAILED)
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
     // The count and the elapsed time are in the message because they are what
     // separates "the box is slow" from "the endpoint is wrong" for whoever reads
     // it — a poll that made ten attempts and got nothing is a different report
@@ -403,18 +404,18 @@ describe('the poll survives a box that drops what it is sent', () => {
 
   it('never overshoots the budget: the last attempt is capped by what is left', async () => {
     // A budget below one attempt's timeout has to still mean what it says. The
-    // shape this protects is an operator setting VERDA_WAKE_TIMEOUT_MS low to
+    // shape this protects is an operator setting LARGE_LLM_WAKE_TIMEOUT_MS low to
     // fail fast and getting a full 30s attempt anyway.
     vi.useFakeTimers()
-    process.env.VERDA_WAKE_TIMEOUT_MS = '4000'
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '30000'
-    process.env.VERDA_WAKE_POLL_INTERVAL_MS = '1000'
+    process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '4000'
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '30000'
+    process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '1000'
     fetchMock.mockImplementation(stalls())
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(4_000)
     const err = (await wake) as Error
-    expect(err.message).toContain(VERDA_WAKE_FAILED)
+    expect(err.message).toContain(LARGE_LLM_WAKE_FAILED)
     // One attempt, cut at the budget rather than at its own 30s — and the
     // message reports the 4s it was really given, not the 30s it asked for.
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -430,7 +431,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     // slow.
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     // Four attempts dropped, the fifth answers instantly: 4 × 11s of wait.
     fetchMock
       .mockImplementationOnce(stalls())
@@ -443,7 +444,7 @@ describe('the poll survives a box that drops what it is sent', () => {
       runWithColdStartWatch(
         (e) => seen.push(e),
         async () => {
-          await ensureVerdaAwake()
+          await ensureLargeAwake()
         },
       ),
     )
@@ -474,7 +475,7 @@ describe('which failures are retried, and which end it on the spot', () => {
         new Response(JSON.stringify({ error: 'inference request was canceled' }), { status: 504 }),
     )
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
     expect(await wake).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
@@ -487,7 +488,7 @@ describe('which failures are retried, and which end it on the spot', () => {
       .mockImplementationOnce(async () => new Response('slow down', { status: 429 }))
       .mockImplementationOnce(async () => new Response('too slow', { status: 408 }))
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
     expect(await wake).toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(3)
@@ -505,7 +506,7 @@ describe('which failures are retried, and which end it on the spot', () => {
       throw new TypeError('fetch failed')
     })
 
-    const wake = quiet(ensureVerdaAwake())
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     const err = (await wake) as Error
     expect(err.message).toContain('fetch failed')
@@ -522,9 +523,9 @@ describe('which failures are retried, and which end it on the spot', () => {
     fetchMock.mockImplementation(
       async () => new Response(JSON.stringify({ error: 'unknown model' }), { status: 400 }),
     )
-    const err = (await quiet(ensureVerdaAwake())) as Error
+    const err = (await quiet(ensureLargeAwake())) as Error
     expect(err.message).toContain(
-      'did not wake (the 27B, VERDA_INFERENCE_ENDPOINT): it answered HTTP 400',
+      'did not wake (the 27B, LARGE_LLM_BASE_URL): it answered HTTP 400',
     )
     expect(err.message).toContain('unknown model')
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -532,9 +533,9 @@ describe('which failures are retried, and which end it on the spot', () => {
 
   it('stops DEAD on a 401 — a bad key is not a cold box', async () => {
     fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
-    const err = (await quiet(ensureVerdaAwake())) as Error
+    const err = (await quiet(ensureLargeAwake())) as Error
     expect(err.message).toContain(
-      'did not wake (the 27B, VERDA_INFERENCE_ENDPOINT): it answered HTTP 401',
+      'did not wake (the 27B, LARGE_LLM_BASE_URL): it answered HTTP 401',
     )
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -544,14 +545,14 @@ describe('which failures are retried, and which end it on the spot', () => {
     // mode a user would fear is a silent fall-back, and the error says it did not
     // happen (SD-12).
     fetchMock.mockImplementation(async () => new Response('bad key', { status: 401 }))
-    const refused = (await quiet(ensureVerdaAwake())) as Error
+    const refused = (await quiet(ensureLargeAwake())) as Error
     expect(refused.message).toContain('nothing was sent to any other provider')
 
-    resetVerdaWake()
+    resetLargeWake()
     vi.useFakeTimers()
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementation(stalls())
-    const expired = quiet(ensureVerdaAwake())
+    const expired = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(100_000)
     expect(((await expired) as Error).message).toContain('nothing was sent to any other provider')
   })
@@ -561,13 +562,13 @@ describe('which failures are retried, and which end it on the spot', () => {
       throw new TypeError('ECONNREFUSED')
     })
     vi.useFakeTimers()
-    process.env.VERDA_WAKE_TIMEOUT_MS = '1000'
-    process.env.VERDA_WAKE_ATTEMPT_TIMEOUT_MS = '500'
-    process.env.VERDA_WAKE_POLL_INTERVAL_MS = '100'
-    const wake = quiet(ensureVerdaAwake())
+    process.env.LARGE_LLM_WAKE_TIMEOUT_MS = '1000'
+    process.env.LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS = '500'
+    process.env.LARGE_LLM_WAKE_POLL_INTERVAL_MS = '100'
+    const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(1_000)
     const err = (await wake) as Error
-    const occurrences = (err.message.match(new RegExp(VERDA_WAKE_FAILED, 'g')) ?? []).length
+    const occurrences = (err.message.match(new RegExp(LARGE_LLM_WAKE_FAILED, 'g')) ?? []).length
     expect(occurrences).toBe(1)
   })
 
@@ -577,8 +578,8 @@ describe('which failures are retried, and which end it on the spot', () => {
     // 400 for an unknown model id or the platform's own 504 would suppress the
     // next one on the strength of a box that answered an error.
     fetchMock.mockImplementation(async () => new Response('nope', { status: 400 }))
-    await expect(ensureVerdaAwake()).rejects.toThrow(VERDA_WAKE_FAILED)
-    expect(verdaLastCallCompletedAt()).toBeNull()
+    await expect(ensureLargeAwake()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
+    expect(largeLastCallCompletedAt()).toBeNull()
   })
 })
 
@@ -592,7 +593,7 @@ describe('concurrent turns share one poll', () => {
       () => new Promise<Response>((resolve) => (release = () => resolve(ok()))),
     )
 
-    const turns = [ensureVerdaAwake(), ensureVerdaAwake(), ensureVerdaAwake()]
+    const turns = [ensureLargeAwake(), ensureLargeAwake(), ensureLargeAwake()]
     // Let the three reach their await before the request resolves.
     await Promise.resolve()
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -610,10 +611,10 @@ describe('concurrent turns share one poll', () => {
     Object.assign(process.env, FAST_POLL)
     fetchMock.mockImplementationOnce(stalls()).mockImplementationOnce(stalls())
 
-    const first = quiet(ensureVerdaAwake())
+    const first = quiet(ensureLargeAwake())
     // Land the second turn in the GAP between attempt 1 and attempt 2.
     await vi.advanceTimersByTimeAsync(10_500)
-    const second = quiet(ensureVerdaAwake())
+    const second = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
 
     expect(await first).toBeUndefined()
@@ -626,29 +627,29 @@ describe('concurrent turns share one poll', () => {
     // The shared promise is an in-flight dedupe, not a memo. A box that went back
     // to sleep after the scale-down window has to be woken again, and the warm
     // clock — not this module — is what decides that.
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     // Which is why the clock has to be wound back to make the point: a
     // successful wake STAMPS it (see the next test), so within the scale-down
     // window the second turn is right to send nothing. Idle past the window and
     // the wake returns — no memory of the earlier success anywhere.
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
-    await ensureVerdaAwake()
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('a successful wake stamps the warm clock, so the next turn sends nothing', async () => {
     // The clock's own standard is an answered completion on the deployment
-    // naming VERDA_MODEL_ID — which is exactly what an attempt is, so it counts
+    // naming LARGE_LLM_MODEL_ID — which is exactly what an attempt is, so it counts
     // as evidence rather than needing a BAML call to confirm it. Without this, a
     // turn arriving after a wake landed but before the first usage sample paid a
     // SECOND wake and was shown a multi-minute countdown that cleared in a second
     // (#279 review, F5).
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(verdaLastCallCompletedAt()).not.toBeNull()
+    expect(largeLastCallCompletedAt()).not.toBeNull()
 
-    await ensureVerdaAwake()
+    await ensureLargeAwake()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -662,26 +663,26 @@ describe('concurrent turns share one poll', () => {
     fetchMock.mockImplementation(async () => new Response('unknown model', { status: 400 }))
 
     const turns = [
-      ensureVerdaAwake(),
-      ensureVerdaAwake(),
-      ensureVerdaAwake(),
-      ensureVerdaAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
+      ensureLargeAwake(),
     ].map((p) => p.catch((err: unknown) => (err instanceof Error ? err.message : String(err))))
     const outcomes = await Promise.all(turns)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(outcomes).toHaveLength(4)
-    for (const outcome of outcomes) expect(outcome).toContain(VERDA_WAKE_FAILED)
+    for (const outcome of outcomes) expect(outcome).toContain(LARGE_LLM_WAKE_FAILED)
 
     // And the shared failure did not poison the next wake for any of them.
     fetchMock.mockImplementation(async () => ok())
-    await expect(ensureVerdaAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
   })
 
   it('retries after a failed poll instead of remembering the failure', async () => {
     fetchMock.mockImplementationOnce(async () => new Response('nope', { status: 400 }))
-    await expect(ensureVerdaAwake()).rejects.toThrow(VERDA_WAKE_FAILED)
+    await expect(ensureLargeAwake()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
     // A remembered rejection would make one bad minute poison every later turn.
-    await expect(ensureVerdaAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
@@ -707,7 +708,7 @@ describe('what the wait teaches the estimate', () => {
     await runWithColdStartWatch(
       () => order.push('notice'),
       async () => {
-        await ensureVerdaAwake()
+        await ensureLargeAwake()
       },
     )
     expect(order).toEqual(['notice', 'ping'])
@@ -719,13 +720,13 @@ describe('what the wait teaches the estimate', () => {
     // the request is "in flight", which is the only way to produce a duration
     // above the 36.5s plausibility floor without actually waiting.
     vi.useFakeTimers()
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     fetchMock.mockImplementation(async () => {
       vi.advanceTimersByTime(150_000)
       return ok()
     })
     await watched(async () => {
-      await ensureVerdaAwake()
+      await ensureLargeAwake()
     })
     expect(coldStartEstimate()).toEqual({
       estimateMs: 150_000,
@@ -740,9 +741,9 @@ describe('what the wait teaches the estimate', () => {
     // floor is the only thing between that and a "measured" 4-second cold start
     // being promised to every future user, and the wake is the path that makes it
     // load-bearing rather than theoretical.
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     await watched(async () => {
-      await ensureVerdaAwake()
+      await ensureLargeAwake()
     })
     expect(coldStartEstimate().basis).toBe('default')
   })
@@ -757,7 +758,7 @@ describe('what the wait teaches the estimate', () => {
     // Three turns, one poll, one reading, and the reading is the poll's own
     // duration rather than any turn's share of it.
     vi.useFakeTimers()
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     let release: () => void = () => {}
     fetchMock.mockImplementation(
       () =>
@@ -773,7 +774,7 @@ describe('what the wait teaches the estimate', () => {
       runWithColdStartWatch(
         () => {},
         async () => {
-          await ensureVerdaAwake()
+          await ensureLargeAwake()
         },
       )
     const turns = [attach(), attach(), attach()]
@@ -791,10 +792,10 @@ describe('what the wait teaches the estimate', () => {
   })
 
   it('records nothing when the poll failed — the budget is not a cold start', async () => {
-    noteVerdaCallCompleted(Date.now() - 10 * 60 * 1000)
+    noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     fetchMock.mockImplementation(async () => new Response('down', { status: 400 }))
     await watched(async () => {
-      await ensureVerdaAwake().catch(() => {})
+      await ensureLargeAwake().catch(() => {})
     }).catch(() => [])
     expect(coldStartEstimate().basis).toBe('default')
   })
@@ -802,7 +803,7 @@ describe('what the wait teaches the estimate', () => {
   it('waits, and announces nothing, with no watch armed', async () => {
     // A triggered run or a script has no listener. The wake is not a UI feature:
     // it still runs, silently.
-    await expect(ensureVerdaAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBeUndefined()
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

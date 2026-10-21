@@ -48,7 +48,7 @@ const memory = {
   id: 'm1',
   content: 'a memory',
   kind: 'preference',
-  tier: 'verda',
+  tier: 'self_deployed',
   createdAt: new Date(),
   lastSeenAt: new Date(),
   compactedFrom: 1,

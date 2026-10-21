@@ -28,12 +28,13 @@
  * the session and pass it in — the same contract `turn.server.ts` and
  * `action-runner.server.ts` carry.
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
 import {
   type InferenceTier,
   privateInferenceOnly,
-  verdaConfigured,
+  selfDeployedConfigured,
 } from '../inference/config.server'
 
 assertServerOnImport()
@@ -70,24 +71,24 @@ function ensureSchema(): Promise<void> {
  *  written by an older/newer build can hold something this build does not
  *  understand, which is what this narrows. */
 export function isInferenceTier(value: unknown): value is InferenceTier {
-  return value === 'verda' || value === 'anthropic'
+  return value === 'self_deployed' || value === 'anthropic'
 }
 
 /**
  * The tier a user with no stored preference gets.
  *
- * **Verda when the self-hosted endpoint is configured** — the owner's preview
+ * **Self-deployed when the self-hosted endpoint is configured** — the owner's preview
  * decision (2026-08-25): every preview user starts on the company's own
  * deployment and opts *out* to Anthropic, not the other way round.
  *
  * **Anthropic when it is not.** That is not a second policy, it is the same
- * one under a fail-closed constraint: `assertInferenceTier('verda')` throws
+ * one under a fail-closed constraint: `assertInferenceTier('self_deployed')` throws
  * when the endpoint is unset (see `clients.server.ts`), so defaulting an
- * unconfigured deployment — a dev box, CI — to Verda would make every turn
+ * unconfigured deployment — a dev box, CI — to the self-deployed tier would make every turn
  * throw rather than fall through to Anthropic. The fall-through is refused by
  * design; refusing to *default* there is the only remaining option.
  *
- * Note for the owner: `USE_VERDA_INFERENCE` keeps its base-branch meaning as
+ * Note for the owner: `USE_SELF_DEPLOYED_INFERENCE` keeps its base-branch meaning as
  * the deployment default for runs OUTSIDE a user scope, but it no longer gates
  * the per-user default. A deployment that has the endpoint configured and
  * nevertheless wants its users to start on Anthropic has no lever today — that
@@ -95,7 +96,7 @@ export function isInferenceTier(value: unknown): value is InferenceTier {
  * naming the gap here.
  */
 export function defaultInferenceTier(): InferenceTier {
-  return privateInferenceOnly() || verdaConfigured() ? 'verda' : 'anthropic'
+  return privateInferenceOnly() || selfDeployedConfigured() ? 'self_deployed' : 'anthropic'
 }
 
 /**
@@ -111,7 +112,7 @@ export async function getStoredInferenceTier(userId: string): Promise<InferenceT
     [userId],
   )
   const stored = rows[0]?.inference_tier
-  return isInferenceTier(stored) ? stored : null
+  return normalizeStoredInferenceTier(stored)
 }
 
 // The user-level resolver that used to live here is gone: since the switch

@@ -203,14 +203,14 @@ describe('CaptureLog', () => {
   it('leaves a row for a scenario that threw, so a missing row never reads as no decisions', () => {
     const log = new CaptureLog()
     log.addError(
-      { agent: 'general-next', scenario: '13-two-sources', tier: 'verda' },
+      { agent: 'general-next', scenario: '13-two-sources', tier: 'self_deployed' },
       'BamlTimeoutError',
     )
     expect(JSON.parse(JSON.stringify(log)).scenarios).toEqual([
       {
         agent: 'general-next',
         scenario: '13-two-sources',
-        tier: 'verda',
+        tier: 'self_deployed',
         decisions: [],
         controllerCalls: [],
         error: 'BamlTimeoutError',
@@ -221,7 +221,7 @@ describe('CaptureLog', () => {
   it('serialises one entry per scenario under its key, with the synthetic-only note', () => {
     const log = new CaptureLog()
     log.add(
-      { agent: 'general-next', scenario: '13-two-sources', tier: 'verda' },
+      { agent: 'general-next', scenario: '13-two-sources', tier: 'self_deployed' },
       trace([decision('answer')]),
       true,
     )

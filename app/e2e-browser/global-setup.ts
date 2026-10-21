@@ -29,7 +29,7 @@ import {
   POISONED_ANTHROPIC_KEY,
   SERVER_BOOT_TIMEOUT_MS,
   TEST_DATABASE_URL,
-  VERDA_SCALEDOWN_SECONDS,
+  LARGE_LLM_SCALEDOWN_SECONDS,
 } from './lib/env'
 
 export default async function globalSetup(): Promise<() => Promise<void>> {
@@ -169,16 +169,16 @@ export function browserServerEnv(
     NO_PROXY: '127.0.0.1,localhost,::1',
     no_proxy: '127.0.0.1,localhost,::1',
     NODE_USE_ENV_PROXY: '1',
-    // The SHIPPED seam: `VerdaQwen` declares `base_url env.VERDA_INFERENCE_ENDPOINT`
+    // The SHIPPED seam: `LargeQwen` declares `base_url env.LARGE_LLM_BASE_URL`
     // and BAML resolves `env.*` at call time. Pointing it at the fake is what a
-    // developer does to run the deployment locally; `assertVerdaConfigured()`
+    // developer does to run the deployment locally; `assertLargeModelConfigured()`
     // still runs its `/v1` check. Setting it also makes the self-hosted tier
-    // AVAILABLE, which is what the switch's verda position needs — and
+    // AVAILABLE, which is what the switch's self_deployed position needs — and
     // what makes it the default tier for a user who has never chosen.
-    VERDA_INFERENCE_ENDPOINT: backend.llm.baseUrl,
-    VERDA_INFERENCE_API_KEY: 'e2e-browser-fake-key',
+    LARGE_LLM_BASE_URL: backend.llm.baseUrl,
+    LARGE_LLM_API_KEY: 'e2e-browser-fake-key',
     // The private tier's SECOND model (2026-08-26): `describe` runs on the 4B
-    // `LocalQwenSmall` over this var, and `verdaConfigured()` asks about BOTH
+    // `SmallQwen` over this var, and `selfDeployedConfigured()` asks about BOTH
     // endpoints — so without this line the switch renders its private
     // position DISABLED and every scenario that clicks it fails on the click,
     // not on anything it was written to test. Same fake as above: it records
@@ -214,7 +214,7 @@ export function browserServerEnv(
     // See the constant: with the shipped 180s, the suite's own preflight turn
     // would leave the box "warm" for the whole run and the cold-start notice
     // could never fire again.
-    VERDA_SCALEDOWN_SECONDS: String(VERDA_SCALEDOWN_SECONDS),
+    LARGE_LLM_SCALEDOWN_SECONDS: String(LARGE_LLM_SCALEDOWN_SECONDS),
     // The wake is a POLL since 2026-08-27, and its shipped 30s per-attempt bound
     // would put a clock back into the one scenario #280 took the clocks OUT of.
     // Scenario 2 PARKS the wake ping and then makes several browser assertions
@@ -224,8 +224,8 @@ export function browserServerEnv(
     // the load on the box rather than for anything about the app. Ten minutes is
     // longer than any scenario holds a request (the fake's own fuse is 60s), so
     // one parked wake stays one parked wake. What the poll RETRIES is covered a
-    // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `verda-wake.test.ts`.
-    VERDA_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
+    // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `large-wake.test.ts`.
+    LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
     // The Anthropic half, which has no such seam. See
     // `src/lib/inference/dev-fake-inference.server.ts`.
     E2E_FAKE_INFERENCE_URL: backend.llm.baseUrl,
@@ -236,7 +236,7 @@ export function browserServerEnv(
     // Never the process default: each scenario decides its tier the way the
     // switch does, so a stray deployment default would mask a broken
     // preference read.
-    USE_VERDA_INFERENCE: undefined,
+    USE_SELF_DEPLOYED_INFERENCE: undefined,
 
     BAML_LOG: process.env.BAML_LOG ?? 'warn',
   }
@@ -247,7 +247,7 @@ export function browserServerEnv(
  *
  * 1. **The run is hermetic.** A real turn's BAML calls have to arrive at the
  *    fake — including at least one on an Anthropic-chain role, which is the
- *    half the shipped `VERDA_INFERENCE_ENDPOINT` seam cannot cover.
+ *    half the shipped `LARGE_LLM_BASE_URL` seam cannot cover.
  * 2. **The server is on the throwaway database.** The turn above persists a
  *    row; it has to be visible in this suite's own database. If `app/.env` or a stray
  *    shell export won the `DATABASE_URL` race, this suite would be writing to a

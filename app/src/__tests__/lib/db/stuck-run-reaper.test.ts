@@ -52,7 +52,7 @@ import {
 } from '../../../lib/db/conversations.server'
 import { SETTINGS_BOUNDS } from '../../../lib/settings'
 import {
-  DEFAULT_VERDA_WAKE_TIMEOUT_MS,
+  DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS,
   DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS,
 } from '../../../lib/inference/wake.server'
 import { DEFAULT_REQUEST_TIMEOUT_MSEC } from '@modelcontextprotocol/sdk/shared/protocol.js'
@@ -233,7 +233,7 @@ describe('the reap statement', () => {
     // reads it (#597 review finding 2).
     expect(TOOL_CALL_TIMEOUT_MINUTES * 60_000).toBe(DEFAULT_REQUEST_TIMEOUT_MSEC)
     expect(WAKE_ALLOWANCE_MINUTES * 60_000).toBe(
-      Math.max(DEFAULT_VERDA_WAKE_TIMEOUT_MS, DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS),
+      Math.max(DEFAULT_LARGE_LLM_WAKE_TIMEOUT_MS, DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS),
     )
   })
 
@@ -282,22 +282,22 @@ describe('the reap statement', () => {
     expect(TURN_CLAIM_TTL_SECONDS / 60).toBeLessThan(HUNG_TURN_BACKSTOP_MINUTES / 10)
   })
 
-  it('mirrors the per-call ceiling declared on VerdaQwen', () => {
+  it('mirrors the per-call ceiling declared on LargeQwen', () => {
     // `PER_CALL_TIMEOUT_MINUTES` is the term that dominates the derivation, and
     // it is a COPY: `request_timeout_ms` lives in BAML, which exports nothing a
-    // module can read it from (same situation as `VERDA_MODEL_ID`, pinned the
-    // same way in `verda-wake.test.ts`). This scan is what makes the copy safe —
+    // module can read it from (same situation as `LARGE_LLM_MODEL_ID`, pinned the
+    // same way in `large-wake.test.ts`). This scan is what makes the copy safe —
     // without it, the one number that moves the threshold could drift from its
     // declaration with every other test still green.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/verda-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
     const match = /request_timeout_ms\s+(\d+)/.exec(declared)
-    expect(match, 'VerdaQwen no longer declares a request_timeout_ms').not.toBeNull()
+    expect(match, 'LargeQwen no longer declares a request_timeout_ms').not.toBeNull()
     expect(
       PER_CALL_TIMEOUT_MINUTES * 60_000,
       'the reaper threshold is derived from a per-call ceiling the client no longer has',

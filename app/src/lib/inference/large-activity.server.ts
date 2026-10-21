@@ -1,9 +1,9 @@
 /**
- * Verda warm-state — Server Only
+ * self-deployed warm-state — Server Only
  *
- * The self-hosted deployment scales to zero: after `VERDA_SCALEDOWN_SECONDS`
+ * The self-hosted deployment scales to zero: after `LARGE_LLM_SCALEDOWN_SECONDS`
  * with no traffic the GPU is released, and the next call pays a cold start
- * measured in minutes (see `baml_src/verda-client.baml`'s deliberately generous
+ * measured in minutes (see `baml_src/large-client.baml`'s deliberately generous
  * `request_timeout_ms`). This module is the one place that knows whether the
  * box is currently up, so the header can say so before a user sends a message
  * into a multi-minute wait.
@@ -11,19 +11,19 @@
  * ## What is measured, precisely
  *
  * `lastCompletedAt` is stamped from an `LlmUsageSample` whose **`clientName` is
- * `VerdaQwen`** — the client BAML actually selected, not the tier anyone
+ * `LargeQwen`** — the client BAML actually selected, not the tier anyone
  * intended. A routing change that reads like it moved traffic but did not
  * cannot make this clock tick.
  *
  * `inFlight` is a different and weaker claim, and the wording in the UI has to
- * match it: it counts **turns running on the Verda tier**, incremented by
- * `beginVerdaTurn()` around the turn, not individual outstanding HTTP calls.
- * A turn holds the box awake for its whole duration, so "a Verda turn is
+ * match it: it counts **turns running on the self-deployed tier**, incremented by
+ * `beginSelfDeployedTurn()` around the turn, not individual outstanding HTTP calls.
+ * A turn holds the box awake for its whole duration, so "a self-deployed turn is
  * running" is exactly the thing worth showing; "one call is on the wire right
  * now" would need a hook at every adapter for no extra information. It is
  * incremented at turn ENTRY, though, so on its own it is a statement of intent,
  * not of warmth — which is why a running turn with no recent completed call
- * reads as `starting` rather than `running` (see {@link VerdaWarmth}).
+ * reads as `starting` rather than `running` (see {@link LargeWarmth}).
  *
  * ## MULTI-INSTANCE CAVEAT (deliberate, and a preview-only compromise)
  *
@@ -39,26 +39,27 @@
  * Restarting the app also resets the clock to "cold" while the box may still be
  * warm — same direction, same reasoning.
  */
+import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 
 /** BAML client name that means "this call reached the self-hosted box". */
-export const VERDA_CLIENT_NAME = 'VerdaQwen'
+export const LARGE_LLM_CLIENT_NAME = 'LargeQwen'
 
 /**
  * The model id the deployment serves, copied from the `model` line on
- * `VerdaQwen` in `baml_src/verda-client.baml`.
+ * `LargeQwen` in `baml_src/large-client.baml`.
  *
  * A COPY, and the copy is the smaller evil. It exists for the wake ping
  * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
  * it has to name a model, vLLM 400s any other id, and BAML exports nothing that
- * would let this be read from the declaration. `verda-wake.test.ts` parses that
+ * would let this be read from the declaration. `large-wake.test.ts` parses that
  * line out of the `.baml` file and pins it equal to this constant, so the
  * failure mode of a re-deployment under a new id is a red test rather than a
  * wake ping that 400s on every first turn of every session.
  */
-export const VERDA_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
 
 /** Default scale-down delay, in seconds — the live deployment's setting. The
  *  committed default used to sit at 180 on the argument that a default tracking
@@ -74,23 +75,23 @@ export const VERDA_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
  *  from this default can still no longer poison the cold-start ESTIMATE —
  *  `inference/cold-start.server.ts` carries its own plausibility floor for
  *  exactly that gap. */
-export const DEFAULT_VERDA_SCALEDOWN_SECONDS = 300
+export const DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = 300
 
 /**
- * `VERDA_SCALEDOWN_SECONDS`, or the default. Read per call so an operator can
+ * `LARGE_LLM_SCALEDOWN_SECONDS`, or the default. Read per call so an operator can
  * change it without a rebuild, and clamped to a positive integer: a `0` or a
  * garbage value would render as "scaling down now, forever".
  */
-export function verdaScaledownSeconds(): number {
-  const raw = process.env.VERDA_SCALEDOWN_SECONDS
-  if (raw === undefined) return DEFAULT_VERDA_SCALEDOWN_SECONDS
+export function largeScaledownSeconds(): number {
+  const raw = inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')
+  if (raw === undefined) return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed <= 0) {
     console.warn(
-      `[verda] VERDA_SCALEDOWN_SECONDS=${JSON.stringify(raw)} is not a positive number; ` +
-        `falling back to ${DEFAULT_VERDA_SCALEDOWN_SECONDS}s.`,
+      `[self_deployed] LARGE_LLM_SCALEDOWN_SECONDS=${JSON.stringify(raw)} is not a positive number; ` +
+        `falling back to ${DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS}s.`,
     )
-    return DEFAULT_VERDA_SCALEDOWN_SECONDS
+    return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS
   }
   return Math.floor(parsed)
 }
@@ -98,52 +99,52 @@ export function verdaScaledownSeconds(): number {
 /** Process-local state. Parked on a `globalThis` symbol for the same reason the
  *  routine scheduler is: a dev-server HMR reload re-evaluates this module, and
  *  a fresh module scope would silently reset the clock to "cold". */
-const STATE_KEY = Symbol.for('hames-app.verda-activity')
-interface VerdaState {
+const STATE_KEY = Symbol.for('hames-app.large-activity')
+interface LargeState {
   lastCompletedAt: number | null
   inFlight: number
 }
-type VerdaGlobal = typeof globalThis & { [STATE_KEY]?: VerdaState }
-const state: VerdaState = ((globalThis as VerdaGlobal)[STATE_KEY] ??= {
+type LargeGlobal = typeof globalThis & { [STATE_KEY]?: LargeState }
+const state: LargeState = ((globalThis as LargeGlobal)[STATE_KEY] ??= {
   lastCompletedAt: null,
   inFlight: 0,
 })
 
 /** Record that a call to the self-hosted box just finished. Two callers, both
  *  holding the same evidence — an answered completion on the deployment:
- *  the LLM-usage observer, for every sample naming `VerdaQwen` (success or
+ *  the LLM-usage observer, for every sample naming `LargeQwen` (success or
  *  failure, because a failed call woke the box exactly as much as a successful
  *  one), and the wake ping, which is not a BAML call and so has no sample. The
  *  ping stamps only on success, and `wake.server.ts` says why that is not the
  *  same rule rather than an inconsistency. */
-export function noteVerdaCallCompleted(at: number = Date.now()): void {
+export function noteLargeCallCompleted(at: number = Date.now()): void {
   state.lastCompletedAt = at
 }
 
-/** A turn on the Verda tier started. Pair with {@link endVerdaTurn} in a
+/** A turn on the self-deployed tier started. Pair with {@link endSelfDeployedTurn} in a
  *  `finally` — an unbalanced increment leaves the header claiming a run that
  *  ended. */
-export function beginVerdaTurn(): void {
+export function beginSelfDeployedTurn(): void {
   state.inFlight += 1
 }
 
-/** A turn on the Verda tier finished. Deliberately does NOT stamp the clock:
- *  only a sample naming `VerdaQwen` may do that, so a turn that happened to
- *  make no Verda-routed call (an approval that resolved without an LLM step)
+/** A turn on the self-deployed tier finished. Deliberately does NOT stamp the clock:
+ *  only a sample naming `LargeQwen` may do that, so a turn that happened to
+ *  make no self-deployed call (an approval that resolved without an LLM step)
  *  cannot invent warmth the box never had. Never lets the gauge go negative —
  *  a mispaired decrement would otherwise pin the header to "running". */
-export function endVerdaTurn(): void {
+export function endSelfDeployedTurn(): void {
   state.inFlight = Math.max(0, state.inFlight - 1)
 }
 
 /** Test-only reset. */
-export function resetVerdaActivity(): void {
+export function resetLargeActivity(): void {
   state.lastCompletedAt = null
   state.inFlight = 0
 }
 
 /** What the header renders. */
-export interface VerdaWarmth {
+export interface LargeWarmth {
   /**
    * - `running` — a turn is on the box right now, AND the box was already warm
    *   when it started (so it implies warm, which is what the word promises).
@@ -152,7 +153,7 @@ export interface VerdaWarmth {
    *   countdown: there is nothing measured to count down from.
    * - `warm` — a call completed within the scale-down window.
    * - `cold` — nothing recent; the next call pays a cold start.
-   * - `unknown` — this process has never seen a Verda call, so it cannot tell
+   * - `unknown` — this process has never seen a self-deployed call, so it cannot tell
    *   `cold` from "warm because another instance is using it". Distinct from
    *   `cold` on purpose: presenting a guess as a measurement is the failure.
    */
@@ -169,8 +170,8 @@ export interface VerdaWarmth {
  * The current warm state. Pure w.r.t. `now`, which is what makes the countdown
  * arithmetic testable without faking a clock at every call site.
  */
-export function verdaWarmth(now: number = Date.now()): VerdaWarmth {
-  const scaledownSeconds = verdaScaledownSeconds()
+export function largeWarmth(now: number = Date.now()): LargeWarmth {
+  const scaledownSeconds = largeScaledownSeconds()
   const last = state.lastCompletedAt
 
   // A running turn keeps the box awake regardless of when the last call
@@ -209,13 +210,13 @@ export function verdaWarmth(now: number = Date.now()): VerdaWarmth {
 /**
  * When this process last saw a call to the box FINISH, or `null` if it never
  * has. The narrow accessor exists for one caller — `inference/cold-start.server.ts`
- * — which needs a claim {@link verdaWarmth} deliberately collapses: `starting`
+ * — which needs a claim {@link largeWarmth} deliberately collapses: `starting`
  * covers both "we have seen the box go cold" and "we have never seen it at
  * all", and only the first is evidence a cold start is actually being paid.
  * Reporting a measurement taken under the second would let "the box was warm
  * and this process had not noticed" enter the cold-start history as a
  * four-second cold start.
  */
-export function verdaLastCallCompletedAt(): number | null {
+export function largeLastCallCompletedAt(): number | null {
   return state.lastCompletedAt
 }

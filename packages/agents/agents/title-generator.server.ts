@@ -143,7 +143,7 @@ export function createTitleAgent(deps: AgentDeps) {
         // describe-tier call, and a role that is not counted drops out of the
         // preview header's on-prem denominator rather than merely losing detail.
         // The override is the other half: a title is generated FROM the user's
-        // first message, so on a verda-tier turn it belongs on the box with the
+        // first message, so on a self_deployed-tier turn it belongs on the box with the
         // rest of the describe role. The override is injected app policy
         // (`AgentDeps.clientOverride`) — the package never imports the host's
         // client map; without it the call runs on the client the BAML function

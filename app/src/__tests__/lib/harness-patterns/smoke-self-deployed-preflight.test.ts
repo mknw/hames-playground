@@ -1,5 +1,5 @@
 /**
- * `smoke-verda.ts`'s preflight — the manual live check's own reachability probe.
+ * `smoke-self-deployed.ts`'s preflight — the manual live check's own reachability probe.
  *
  * Why this is pinned: the smoke script is the documented way to answer "is the
  * self-hosted route working?", and on 2026-08-26 it could not answer. Its
@@ -30,7 +30,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServer: vi.fn(),
 }))
 
-const { servedModelIds } = await import('../../../lib/inference/scripts/smoke-verda')
+const { servedModelIds } = await import('../../../lib/inference/scripts/smoke-self-deployed')
 
 let server: Server | undefined
 const sockets = new Set<import('node:net').Socket>()
@@ -65,24 +65,24 @@ afterEach(async () => {
   sockets.clear()
   if (server) await new Promise((resolve) => server!.close(resolve))
   server = undefined
-  delete process.env.VERDA_INFERENCE_ENDPOINT
-  delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.LARGE_LLM_BASE_URL
+  delete process.env.LARGE_LLM_API_KEY
 })
 
 describe('servedModelIds', () => {
   it('returns the served ids on a healthy endpoint', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = await listen(() => [
+    process.env.LARGE_LLM_BASE_URL = await listen(() => [
       200,
       JSON.stringify({ object: 'list', data: [{ id: 'Qwen/Qwen3.8-27B-FP8' }] }),
     ])
-    process.env.VERDA_INFERENCE_API_KEY = 'k'
+    process.env.LARGE_LLM_API_KEY = 'k'
 
     await expect(servedModelIds(2_000)).resolves.toEqual(['Qwen/Qwen3.8-27B-FP8'])
   })
 
   it('gives up on an endpoint that accepts and never answers', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = await listen(null)
-    process.env.VERDA_INFERENCE_API_KEY = 'k'
+    process.env.LARGE_LLM_BASE_URL = await listen(null)
+    process.env.LARGE_LLM_API_KEY = 'k'
 
     // Without the abort signal this promise never settles on its own within
     // any interval a test can wait for — that IS the bug being pinned. The
@@ -98,11 +98,11 @@ describe('servedModelIds', () => {
     // false "unreachable". Modelled here as a first request held open past the
     // first budget and answered normally after it — the shape a cold container
     // actually has, rather than a permanently dead socket.
-    process.env.VERDA_INFERENCE_ENDPOINT = await listen(
+    process.env.LARGE_LLM_BASE_URL = await listen(
       () => [200, JSON.stringify({ data: [{ id: 'Qwen/Qwen3.8-27B-FP8' }] })],
       400,
     )
-    process.env.VERDA_INFERENCE_API_KEY = 'k'
+    process.env.LARGE_LLM_API_KEY = 'k'
 
     await expect(servedModelIds(100)).resolves.toEqual(['Qwen/Qwen3.8-27B-FP8'])
   })
@@ -111,7 +111,7 @@ describe('servedModelIds', () => {
     // The message is the whole deliverable of a failed preflight: it is what
     // the operator acts on, and `fetch failed` on its own is unactionable.
     const base = await listen(null)
-    process.env.VERDA_INFERENCE_ENDPOINT = base
+    process.env.LARGE_LLM_BASE_URL = base
 
     const error: Error = await servedModelIds(300, false).then(
       () => new Error('expected a rejection'),
@@ -129,7 +129,7 @@ describe('servedModelIds', () => {
   })
 
   it('still reports a non-OK status as itself', async () => {
-    process.env.VERDA_INFERENCE_ENDPOINT = await listen(() => [401, '{}'])
+    process.env.LARGE_LLM_BASE_URL = await listen(() => [401, '{}'])
 
     await expect(servedModelIds(2_000)).rejects.toThrow(/→ 401/)
   })

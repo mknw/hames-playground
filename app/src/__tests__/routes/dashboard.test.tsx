@@ -101,7 +101,7 @@ describe('Dashboard route', () => {
 
     // All token-priced: nothing is a floor, and the wall-clock footnote stays off.
     expect(text).not.toContain('≥')
-    expect(text).not.toContain('VERDA_EUR_PER_HOUR')
+    expect(text).not.toContain('LARGE_LLM_EUR_PER_HOUR')
   })
 
   it('marks every cost figure a floor, and explains why, once a step was time-billed', async () => {
@@ -127,9 +127,9 @@ describe('Dashboard route', () => {
     expect(text).toContain('€0.10')
     expect(text.match(/≥/g)).toHaveLength(4)
     // The caveat is stated on the page, not only in a tooltip.
-    expect(text).toContain('VERDA_EUR_PER_HOUR')
+    expect(text).toContain('LARGE_LLM_EUR_PER_HOUR')
     expect(text).toContain('SMALL_LLM_EUR_PER_HOUR')
-    expect(text).toContain('VERDA_EUR_PER_HOUR and SMALL_LLM_EUR_PER_HOUR')
+    expect(text).toContain('LARGE_LLM_EUR_PER_HOUR and SMALL_LLM_EUR_PER_HOUR')
     expect(text).toMatch(/cold start/)
     expect(text).toMatch(/floors on the bill/)
   })

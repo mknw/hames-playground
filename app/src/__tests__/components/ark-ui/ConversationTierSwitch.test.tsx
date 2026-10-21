@@ -34,7 +34,10 @@ const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
 const { createSignal } = await import('solid-js')
 const { ConversationTierSwitch } = await import('../../../components/ark-ui/ConversationTierSwitch')
 
-const state = (tier = 'verda', verdaAvailable = true) => ({ tier, verdaAvailable })
+const state = (tier = 'self_deployed', selfDeployedAvailable = true) => ({
+  tier,
+  selfDeployedAvailable,
+})
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -57,7 +60,7 @@ describe('the positions', () => {
     const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
     await mounted(container)
 
-    expect(container.textContent).toContain('Private (Verda)')
+    expect(container.textContent).toContain('Private')
     expect(container.textContent).toContain('Anthropic')
   })
 
@@ -67,7 +70,7 @@ describe('the positions', () => {
     await mounted(container)
 
     expect(radio(container, 'anthropic').checked).toBe(true)
-    expect(radio(container, 'verda').checked).toBe(false)
+    expect(radio(container, 'self_deployed').checked).toBe(false)
   })
 
   it('disables the self-hosted position instead of hiding it', async () => {
@@ -78,8 +81,8 @@ describe('the positions', () => {
     const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
     await mounted(container)
 
-    expect(container.textContent).toContain('Private (Verda)')
-    expect(radio(container, 'verda').disabled).toBe(true)
+    expect(container.textContent).toContain('Private')
+    expect(radio(container, 'self_deployed').disabled).toBe(true)
     expect(radio(container, 'anthropic').disabled).toBe(false)
   })
 })
@@ -98,7 +101,7 @@ describe('flipping', () => {
     const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
     await mounted(container)
 
-    fireEvent.click(radio(container, 'verda'))
+    fireEvent.click(radio(container, 'self_deployed'))
     await Promise.resolve()
 
     expect(setConversationTier).not.toHaveBeenCalled()
@@ -113,11 +116,11 @@ describe('flipping', () => {
     const { container } = render(() => <ConversationTierSwitch sessionId="c1" />)
     await mounted(container)
 
-    fireEvent.click(radio(container, 'verda'))
+    fireEvent.click(radio(container, 'self_deployed'))
 
     await waitFor(() => expect(setConversationTier).toHaveBeenCalled())
     await waitFor(() => expect(radio(container, 'anthropic').checked).toBe(true))
-    expect(radio(container, 'verda').checked).toBe(false)
+    expect(radio(container, 'self_deployed').checked).toBe(false)
   })
 
   it('says so when the write fails, rather than showing a tier it did not get', async () => {
@@ -128,7 +131,7 @@ describe('flipping', () => {
     fireEvent.click(radio(container, 'anthropic'))
 
     await waitFor(() => expect(container.textContent).toContain('not saved'))
-    expect(radio(container, 'verda').checked).toBe(true)
+    expect(radio(container, 'self_deployed').checked).toBe(true)
   })
 
   it('hands the in-flight write to the composer so a send cannot overtake it', async () => {
@@ -152,11 +155,11 @@ describe('flipping', () => {
 describe('switching threads', () => {
   it('re-reads, so the previous conversation’s tier is never left on screen', async () => {
     getConversationTier.mockImplementation(async (sessionId: string) =>
-      sessionId === 'c1' ? state('verda') : state('anthropic'),
+      sessionId === 'c1' ? state('self_deployed') : state('anthropic'),
     )
     const [sessionId, setSessionId] = createSignal('c1')
     const { container } = render(() => <ConversationTierSwitch sessionId={sessionId()} />)
-    await waitFor(() => expect(radio(container, 'verda').checked).toBe(true))
+    await waitFor(() => expect(radio(container, 'self_deployed').checked).toBe(true))
 
     setSessionId('c2')
 
@@ -198,7 +201,7 @@ describe('a read that fails', () => {
     // Carried by a live region so it is announced, not only drawn.
     expect(container.querySelector('[role="status"]')).not.toBeNull()
     // And it really is the no-control case: nothing claims a tier.
-    expect(container.textContent).not.toContain('Private (Verda)')
+    expect(container.textContent).not.toContain('Private')
   })
 
   it('mounts the status region before it has anything to say', async () => {
@@ -229,7 +232,7 @@ describe('private-only deployment', () => {
       /private inference only/,
     )
     expect(input.closest('[data-part="item"]')?.getAttribute('op')).toBe('50')
-    expect(radio(container, 'verda').checked).toBe(true)
+    expect(radio(container, 'self_deployed').checked).toBe(true)
     fireEvent.click(input)
     await Promise.resolve()
     expect(setConversationTier).not.toHaveBeenCalled()

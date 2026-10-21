@@ -1,7 +1,6 @@
 import { configureInferencePolicy } from '@hames-ai/harness-baml/clients.server'
 import {
-  assertPrivateTierConfigured,
-  privateInferenceOnly,
+  hostInferencePolicy,
   selfDeployedInferenceEnabled,
 } from '../../lib/inference/config.server'
 
@@ -17,8 +16,7 @@ import {
  */
 export function useFlagDrivenDefaultTier(): void {
   configureInferencePolicy({
+    ...hostInferencePolicy,
     defaultTier: () => (selfDeployedInferenceEnabled() ? 'self_deployed' : 'anthropic'),
-    privateOnly: privateInferenceOnly,
-    assertTierReachable: assertPrivateTierConfigured,
   })
 }

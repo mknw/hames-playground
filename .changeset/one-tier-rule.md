@@ -1,11 +1,12 @@
 ---
-'@hames-ai/harness-patterns': minor
-'@hames-ai/harness-baml': minor
+"@hames-ai/harness-patterns": minor
+"@hames-ai/harness-baml": minor
 ---
 
 One tier rule: a run frame's tier is the Anthropic tier only when it says exactly
-`'anthropic'`; an absent, empty or unrecognised tier takes the host's default tier,
-and routing and the guards now read that one answer.
+`'anthropic'`; an absent or empty tier takes the host's default tier, a present but
+unrecognised one is the self-deployed tier (refused when it is not reachable), and
+routing and the guards now read that one answer.
 
 `@hames-ai/harness-patterns` adds `registerEffectiveTier(read)` and
 `effectiveTier()` to `run-frame.server`. Core interprets no tier string: the tier
@@ -23,9 +24,11 @@ name, so import paths do not change. The module registers `activeInferenceTier` 
 
 Migration for consumers (pre-1.0, so a minor bump):
 
-- `onExplicitAnthropicTier()` now answers from `activeInferenceTier()`, so a frame with
-  an unrecognised tier is read as the policy's default tier rather than as "not
-  explicitly Anthropic".
+- `onExplicitAnthropicTier()` now answers from `activeInferenceTier()`: it throws on a
+  restricted deployment (it used to answer), and on a defaulted self-deployed tier
+  that is not reachable. A frame with an unrecognised tier is read as the
+  self-deployed tier, never as the Anthropic tier, so the decide tier-lock still
+  refuses it before a request is made.
 - A host whose policy's `defaultTier` is `'self_deployed'` now has that default
   reachability-checked (`assertTierReachable`) on every read of a run that named no
   tier, and the run is refused when the tier is not configured; it is never routed to
@@ -34,4 +37,9 @@ Migration for consumers (pre-1.0, so a minor bump):
   `assertInferenceTier('self_deployed')` is.
 - With no host policy registered, the package's fallback is unchanged: the Anthropic
   tier. A library user with no self-deployed tier sees no difference, except that
-  `withPseudonymisedInputs` no longer rewrites a run that names no tier.
+  `withPseudonymisedInputs` no longer rewrites a run that names no tier, and a frame
+  carrying a present but unrecognised tier is refused rather than routed.
+- The host's tier policy is now held on a `Symbol.for('hames.harness-baml.tier-policy')`
+  holder, so every loaded copy of the package reads the one policy the host
+  configured. A test that wants the process-start state (no policy) after
+  `vi.resetModules()` must clear that holder too.

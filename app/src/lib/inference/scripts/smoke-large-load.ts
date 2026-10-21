@@ -341,7 +341,7 @@ async function burst(
 async function main(): Promise<void> {
   if (!selfDeployedInferenceEnabled()) {
     throw new Error(
-      'USE_SELF_DEPLOYED_INFERENCE is not 1 — this run would measure Anthropic. See the header.',
+      'USE_SELF_DEPLOYED_INFERENCE is not 1 — this check requires the flag as its precondition. See the header.',
     )
   }
   assertLargeModelConfigured()

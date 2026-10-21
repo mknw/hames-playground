@@ -40,6 +40,7 @@ import {
   configureCostRates,
   configureInferencePolicy,
   configureModelTables,
+  type InferenceTierPolicy,
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
@@ -75,7 +76,9 @@ configureModelTables({
   contextWindows: MODEL_CONTEXT_WINDOWS,
 })
 
-configureInferencePolicy({
+/** The host's tier policy, exported so a test double can spread it and change
+ *  one field instead of copying its shape. */
+export const hostInferencePolicy: InferenceTierPolicy = {
   // The ONE tier rule (ruling E): a run that names no tier is a self-deployed-tier
   // run whatever the flag says. A deployment that has not configured the tier
   // REFUSES such a run (`assertTierReachable`, run by `activeInferenceTier()` on a
@@ -94,7 +97,8 @@ configureInferencePolicy({
     if (client === LARGE_LLM_CLIENT_NAME) noteBoxCallStarting('large')
     if (client === SELF_DEPLOYED_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
-})
+}
+configureInferencePolicy(hostInferencePolicy)
 
 configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 

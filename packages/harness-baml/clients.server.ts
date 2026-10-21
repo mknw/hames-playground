@@ -41,12 +41,16 @@
  *   decision*, not its scope: the tier rides the RUN FRAME's `inference` slot
  *   (`@hames-ai/harness-patterns/run-frame.server`), so one user's turn can run on
  *   a different tier than another's while everything inside that turn stays on
- *   one tier. `USE_SELF_DEPLOYED_INFERENCE` remains the process default for anything
- *   running outside a frame, or inside one whose slot nobody filled.
- * - **Unset changes nothing.** With no flag and no scope, `clientOverrideFor()`
+ *   one tier. The process default for anything running outside a frame, or
+ *   inside one whose slot nobody filled, is the host policy's default tier
+ *   (see `tier.server.ts`); `USE_SELF_DEPLOYED_INFERENCE` is only the
+ *   boot-time switch that the tier must be configured.
+ * - **No host policy changes nothing.** With no host policy registered and no
+ *   scope, the package's fallback tier is Anthropic: `clientOverrideFor()`
  *   returns `undefined`, no options bag gains a `client` key, and every
- *   function runs the Anthropic chain it declares. The default posture is
- *   untouched.
+ *   function runs the Anthropic chain it declares. With a host policy whose
+ *   default is the self-deployed tier, a run that names no tier is on that tier
+ *   or refused when it is not configured; it never falls through to Anthropic.
  * - **Misconfiguration fails closed, loudly.** A flag that is on with a
  *   missing or malformed endpoint throws at module load rather than falling
  *   back to Anthropic: a silent fallback would send confidential prompts to
@@ -653,8 +657,8 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
 
 /**
  * `{ client: 'LargeQwen' }` for a self-deployed role while the active tier is
- * `'self_deployed'` (the run frame's `inference.tier`, or `USE_SELF_DEPLOYED_INFERENCE=1` as the
- * deployment default), otherwise `undefined` — letting the BAML function fall
+ * `'self_deployed'` (the run frame's `inference.tier`, or the host policy's default tier when
+ * the frame names none), otherwise `undefined` — letting the BAML function fall
  * through to the Anthropic chain it declares. A per-run `clientOverride` in the
  * frame's generic inference slot pre-empts both.
  *

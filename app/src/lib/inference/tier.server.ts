@@ -101,9 +101,10 @@ export function resolveTier(
  *     instead of the deployment's env flag. Still a fall-back, and still an
  *     un-pinned one, but a nearer answer than the caller's.
  *   - **both fail** → `defaultInferenceTier()`, which is fail-closed by
- *     construction. The pre-existing fall-open ABOVE this function (a total
- *     read failure reaching `activeInferenceTier()`) is unchanged and tracked
- *     separately (#303) — it is the caller's, not this resolver's.
+ *     construction. A total read failure that reaches `activeInferenceTier()`
+ *     with no tier in the frame lands on the host's default tier (the
+ *     self-deployed tier), which is refused when it is not configured — no
+ *     longer a fall-open (#303); it is the caller's, not this resolver's.
  */
 export async function resolveConversationTier(
   sessionId: string,

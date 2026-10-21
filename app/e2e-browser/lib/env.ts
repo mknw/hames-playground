@@ -82,7 +82,7 @@ export const POISONED_ANTHROPIC_KEY = 'e2e-browser-no-real-anthropic-calls'
  *  browser suite reads it off the fake to tell the two tiers apart. */
 export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 
-/** The model id `SelfDeployedQwen` declares in `baml_src/self-deployed-client.baml`. Not
+/** The model id `LargeQwen` declares in `baml_src/large-client.baml`. Not
  *  re-derived: a scenario asserting "this call took the self-hosted route"
  *  should fail if the declaration changes under it. */
 export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'

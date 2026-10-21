@@ -309,7 +309,7 @@ describe('when the notice fires', () => {
   it('fires for a describe call bound to the small box', async () => {
     const seen = await runWithInferenceTier('self_deployed', () =>
       noticesFrom(() => {
-        expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+        expect(clientOverrideFor('describe')).toEqual({ client: 'SmallQwen' })
       }),
     )
     expect(seen).toEqual([{ estimateMs: COLD_START_FALLBACK_MS, basis: 'default', samples: 0 }])
@@ -338,7 +338,7 @@ describe('when the notice fires', () => {
         // `resolveClientForRole` is how a pattern learns the model's context
         // window before building a prompt. It may run more than once, and it
         // does not mean a call is on the wire.
-        expect(resolveClientForRole('controller')).toBe('SelfDeployedQwen')
+        expect(resolveClientForRole('controller')).toBe('LargeQwen')
         endSelfDeployedTurn()
       }),
     )

@@ -26,7 +26,7 @@
 }
 
 :8080 {
-	# Summarizer: the app's `LocalQwenSmall` client, OpenAI chat-completions.
+	# Summarizer: the app's `SmallQwen` client, OpenAI chat-completions.
 	@summarize expression `{http.request.uri.path} in ['/v1/chat/completions', '/v1/models']`
 	handle @summarize {
 		reverse_proxy 127.0.0.1:8000 {

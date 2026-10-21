@@ -4,7 +4,7 @@
  * This is what makes the hermetic mode hermetic. It speaks the same wire
  * protocol as the self-hosted vLLM deployment (`POST /v1/chat/completions`,
  * `GET /v1/models`), so the app reaches it through the SHIPPED seam — the
- * `SelfDeployedQwen` client's `base_url env.LARGE_LLM_BASE_URL` for the self_deployed
+ * `LargeQwen` client's `base_url env.LARGE_LLM_BASE_URL` for the self_deployed
  * tier, and a test-only `ClientRegistry` primary for the anthropic tier
  * (`baml-route.ts` explains why the two halves differ).
  *

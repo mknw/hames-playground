@@ -259,13 +259,13 @@ describe('what goes on the wire', () => {
   })
 
   it('pins the model id against the .baml declaration', async () => {
-    // `LARGE_LLM_MODEL_ID` is a COPY of the `model` line on `SelfDeployedQwen` — the ping is
+    // `LARGE_LLM_MODEL_ID` is a COPY of the `model` line on `LargeQwen` — the ping is
     // a hand-rolled fetch, so it has to name a model and BAML exports nothing to
     // read it from. vLLM 400s an unknown id, so drift would break the FIRST call
     // of every session and nothing else. This is the pin that makes the copy
     // safe.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')

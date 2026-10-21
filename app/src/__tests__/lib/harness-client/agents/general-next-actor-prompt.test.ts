@@ -110,7 +110,7 @@ beforeAll(async () => {
   // Render what the adapter would send (its first nine arguments; the tenth is
   // the options bag), then answer with a final action so the loop ends.
   vi.spyOn(b, 'ActorController').mockImplementation((async (...args: unknown[]) => {
-    for (const client of ['AnthropicSonnet5', 'SelfDeployedQwen']) {
+    for (const client of ['AnthropicSonnet5', 'LargeQwen']) {
       const renderArgs = args.slice(0, 9) as Parameters<typeof b.request.ActorController>
       renderArgs[9] = { client, env: ENV }
       const request = await b.request.ActorController(...renderArgs)

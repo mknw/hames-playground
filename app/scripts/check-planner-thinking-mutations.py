@@ -25,7 +25,7 @@ ADAPTER = 'packages/harness-baml/baml-adapters.server.ts'
 CLIENTS = 'packages/harness-baml/clients.server.ts'
 PLANNER = 'packages/harness-patterns/patterns/planner.server.ts'
 SETTINGS = 'app/src/lib/settings.ts'
-SELF_DEPLOYED = 'packages/harness-baml/baml_src/self-deployed-client.baml'
+SELF_DEPLOYED = 'packages/harness-baml/baml_src/large-client.baml'
 CONFIG = 'app/src/lib/inference/config.server.ts'
 RENDER = 'src/__tests__/lib/harness-baml/planner-thinking-render.test.ts'
 WIRE = 'src/__tests__/lib/harness-baml/planner-thinking.test.ts'
@@ -39,16 +39,16 @@ def add(name, file, old, new, test=WIRE, generate=False, count=1):
 # Author's 25 mutations, including the separately reported cap-hit trigger.
 add('A01-thinking-flag', SELF_DEPLOYED, 'enable_thinking true', 'enable_thinking false', RENDER, True)
 add('A02-sampling', SELF_DEPLOYED, 'temperature 1.0', 'temperature 0.2', RENDER, True)
-add('A03-endpoint', SELF_DEPLOYED, 'client<llm> SelfDeployedQwenThink {\n  provider openai-generic\n  options {\n    base_url env.LARGE_LLM_BASE_URL', 'client<llm> SelfDeployedQwenThink {\n  provider openai-generic\n  options {\n    base_url "https://example.invalid/other/v1"', RENDER, True)
-add('A04-cache-metadata', SELF_DEPLOYED, 'client<llm> SelfDeployedQwenThink {\n  provider openai-generic\n  options {', 'client<llm> SelfDeployedQwenThink {\n  provider openai-generic\n  options {\n    allowed_role_metadata ["cache_control"]', RENDER, True)
+add('A03-endpoint', SELF_DEPLOYED, 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    base_url env.LARGE_LLM_BASE_URL', 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    base_url "https://example.invalid/other/v1"', RENDER, True)
+add('A04-cache-metadata', SELF_DEPLOYED, 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {', 'client<llm> LargeQwenThink {\n  provider openai-generic\n  options {\n    allowed_role_metadata ["cache_control"]', RENDER, True)
 add('A05-prompt-drift', 'packages/harness-baml/baml_src/planner.baml', '{{ PlannerBody(user_message, intent, tools, context, false) }}', 'DRIFT {{ PlannerBody(user_message, intent, tools, context, false) }}', RENDER, True)
 add('A06-timeout', SELF_DEPLOYED, '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 180000', '// Provisional: 4096 / 26 tok/s = 158s, with ~22s prefill/queue allowance.\n      request_timeout_ms 120000', RENDER, True)
-add('A07-cap-mirror', SETTINGS, '  SelfDeployedQwenThink: 4_096,', '  SelfDeployedQwenThink: 8_192,', 'src/__tests__/lib/client-output-caps.test.ts')
+add('A07-cap-mirror', SETTINGS, '  LargeQwenThink: 4_096,', '  LargeQwenThink: 8_192,', 'src/__tests__/lib/client-output-caps.test.ts')
 add('A08-selected-leaf', ADAPTER, "if (!THINKING_CLIENTS.has(selected?.clientName ?? '')) {", 'if (false) {', 'src/__tests__/lib/harness-patterns/baml-adapters.test.ts')
 add('A09-full-trace', ADAPTER, "reasoning: trace.kind === 'trace' ? trace.text : ''", "reasoning: ''")
 add('A10-parser-policy', ADAPTER, 'if (split?.closed) {', 'if (false) {')
 add('A11-last-delimiter', 'packages/harness-baml/thinking-trace.ts', 'raw.lastIndexOf(THINK_CLOSE)', 'raw.indexOf(THINK_CLOSE)')
-add('A12-retry-thinking-again', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'SelfDeployedQwenThink'")
+add('A12-retry-thinking-again', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'LargeQwenThink'")
 add('A13-warning-type', PLANNER, "            'warning',", "            'error',")
 add('A14-private-accounting', CLIENTS, '  ...THINKING_CLIENTS,', '', 'src/__tests__/lib/metrics/usage-recorder.test.ts')
 add('A15-default-cap', PLANNER, 'DEFAULT_MAX_REASONING_CHARS = 2000', 'DEFAULT_MAX_REASONING_CHARS = 5000')
@@ -70,8 +70,8 @@ add('C1-credentials', ADAPTER, 'headers: Object.entries(request.headers)', 'head
 add('C1-model', ADAPTER, 'model: (request.body.json() as { model?: string }).model,', '')
 add('C2-terminal-trace', ADAPTER, "if (trace?.kind === 'trace') error.llmCall.parsedOutput = { reasoning: trace.text }", '// discard diagnostic trace')
 # Opus's five red mutations and the two formerly surviving live clauses.
-add('O-context-window', SETTINGS, '  SelfDeployedQwenThink: 131_072,', '  RemovedThink: 131_072,', RENDER)
-add('O-time-rate', SETTINGS, '  SelfDeployedQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', '  RemovedThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', RENDER)
+add('O-context-window', SETTINGS, '  LargeQwenThink: 131_072,', '  RemovedThink: 131_072,', RENDER)
+add('O-time-rate', SETTINGS, '  LargeQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', '  RemovedThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,', RENDER)
 add('O-reused-collector', ADAPTER, "const retryCollector = new Collector('Planner')", 'const retryCollector = collector')
 add('O-undefined-attempt', ADAPTER, 'onRetry?.(failedCall)', 'onRetry?.(undefined)')
 add('O-truncated-flag', PLANNER, '...(reasoningTruncated ? { reasoningTruncated: true } : {}),', '')
@@ -84,7 +84,7 @@ add('O1-seam-guard', CLIENTS, '    assertThinkingOverride(role,', '    // assert
 add('O1-per-run', CLIENTS, '    assertThinkingOverride(role, perRun)', '    // assertThinkingOverride(role, perRun)')
 add('O1-consumer', CLIENTS, '    assertThinkingOverride(role, consumerBag)', '    // assertThinkingOverride(role, consumerBag)')
 add('O1-resolver', CLIENTS, '    assertThinkingOverride(role, bag)', '    // assertThinkingOverride(role, bag)')
-add('O3-role-map', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'SelfDeployedQwen'")
+add('O3-role-map', ADAPTER, 'const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner', "const retryClient = 'LargeQwen'")
 add('O3-retry-selected-leaf', ADAPTER, 'if (selectedCall(retryCollector)?.clientName !== retryClient) {', 'if (false) {')
 add('O4-missing-trace-reject', ADAPTER, "if (trace.kind !== 'trace') warning = 'no thinking trace'", "if (trace.kind !== 'trace') throw new Error('no thinking trace')")
 add('O4-pattern-warning', PLANNER, '      if (warning) {', '      if (false) {')
@@ -111,7 +111,7 @@ import fs from 'node:fs'
 import {{ classifyPrompt, promptText }} from '{ROOT}/app/e2e/lib/baml-functions.ts'
 const bodies = JSON.parse(fs.readFileSync('{ROOT}/app/src/__tests__/lib/harness-patterns/fixtures/controller-prompts-625-s2.json', 'utf8'))
 for (const scenario of ['first', 'context']) {{
-  const original = bodies[`Planner/${{scenario}}/SelfDeployedQwen`]
+  const original = bodies[`Planner/${{scenario}}/LargeQwen`]
   const twin = original.replace(', and never more than a short paragraph of reasoning', '').replace('  // Why this approach was chosen\\\\n  reasoning: string,\\\\n', '')
   assert.equal(classifyPrompt(promptText(JSON.parse(original).messages)), 'Planner')
   assert.equal(classifyPrompt('CONTEXT reasoning: string\\n' + promptText(JSON.parse(twin).messages)), 'PlannerThinking')

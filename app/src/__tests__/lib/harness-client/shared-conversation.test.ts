@@ -71,7 +71,7 @@ const FULL_CONTEXT = JSON.stringify({
       type: 'error',
       ts: 14,
       patternId: 'simple-loop',
-      data: { error: 'SelfDeployedQwen did not wake', turn: 2, iteration: 1, hint: 'retry' },
+      data: { error: 'LargeQwen did not wake', turn: 2, iteration: 1, hint: 'retry' },
     },
     {
       id: 'e6',
@@ -142,7 +142,7 @@ describe('loadSharedConversation', () => {
     expect(published).not.toContain('cfo@example.com')
     expect(published).not.toContain('outlook_email_search')
     // Diagnostics name infrastructure the viewer has no business knowing about.
-    expect(published).not.toContain('SelfDeployedQwen')
+    expect(published).not.toContain('LargeQwen')
     expect(published).not.toContain('simple-loop')
     // And the intermediate router line is not an answer.
     expect(published).not.toContain('Let me look into that')

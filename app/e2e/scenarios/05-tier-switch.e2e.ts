@@ -192,7 +192,7 @@ describe('switching tier between turns', () => {
 
   it.runIf(IS_HERMETIC)('leaves those same roles on Anthropic in the other position', async () => {
     // The counterpart, and the reason the test above is not just "everything is
-    // SelfDeployedQwen": these roles have to be steerable in BOTH directions. A call
+    // LargeQwen": these roles have to be steerable in BOTH directions. A call
     // site that hardcoded the override rather than spreading
     // `clientOverrideFor` would pass the self_deployed leg and fail here.
     const sessionId = newSessionId('side-roles-anthropic')

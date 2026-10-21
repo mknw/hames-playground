@@ -33,7 +33,7 @@ describe('one-release environment migration', () => {
   it('a legacy run frame cannot silently select the public default', async () => {
     await withRunFrame({ inference: { tier: 'verda' } }, async () => {
       expect(activeInferenceTier()).toBe('self_deployed')
-      expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
+      expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
   })
   // The alias admits ONE legacy literal and nothing else: any other spelling is an
@@ -55,7 +55,7 @@ describe('one-release environment migration', () => {
     applyLegacyInferenceEnv()
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     const request = await b.request.ScreenUntrustedContent('web/fetch', 'synthetic text', {
-      client: 'SelfDeployedQwen',
+      client: 'LargeQwen',
     })
     expect(request.url).toBe('https://large.example.invalid/v1/chat/completions')
     expect(request.headers).toMatchObject({ authorization: 'Bearer synthetic-key' })

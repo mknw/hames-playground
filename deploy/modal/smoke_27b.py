@@ -6,7 +6,7 @@ Every check prints PASS or FAIL; the exit status is 0 only when all pass. A cold
 box is started the way the app's wake starts it and is left to scale down on its
 own. Synthetic inputs only.
 
-What a PASS means for the app: `SelfDeployedQwen`'s exact body (model name, thinking
+What a PASS means for the app: `LargeQwen`'s exact body (model name, thinking
 off, its output cap and temperature) is answered with a clean `content` and no
 reasoning, and the wake ping's body is answered. That is the signal the app can
 be pointed at the box (LARGE_LLM_BASE_URL = <URL>/v1); the app-side check
@@ -26,7 +26,7 @@ from smoke_probes import PROBE_URL
 
 QWEN27B_MODEL = "Qwen/Qwen3.8-27B-FP8"
 
-# The body `SelfDeployedQwen` sends (packages/harness-baml/baml_src/self-deployed-client.baml).
+# The body `LargeQwen` sends (packages/harness-baml/baml_src/large-client.baml).
 LARGE_LLM_BODY = {
     "model": QWEN27B_MODEL,
     "messages": [
@@ -96,19 +96,19 @@ def main() -> int:
     choice = (body.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     text = (message.get("content") or "").strip()
-    check("SelfDeployedQwen body: 200", status == 200, f"{seconds:.2f}s")
-    check("SelfDeployedQwen body: finished, not cut off", choice.get("finish_reason") == "stop", f"{choice.get('finish_reason')}")
+    check("LargeQwen body: 200", status == 200, f"{seconds:.2f}s")
+    check("LargeQwen body: finished, not cut off", choice.get("finish_reason") == "stop", f"{choice.get('finish_reason')}")
     # A 200 is not enough: a parser that files a tag-less answer under the
     # reasoning field returns an empty content, which the app reads as an empty
     # completion on every call.
-    check("SelfDeployedQwen body: content is non-empty", bool(text))
-    check("SelfDeployedQwen body: no thinking tags in content", "<think" not in text and "</think>" not in text)
-    check("SelfDeployedQwen body: reasoning field empty or null", not reasoning_of(message), f"{reasoning_fields(message)}")
+    check("LargeQwen body: content is non-empty", bool(text))
+    check("LargeQwen body: no thinking tags in content", "<think" not in text and "</think>" not in text)
+    check("LargeQwen body: reasoning field empty or null", not reasoning_of(message), f"{reasoning_fields(message)}")
     try:
         parsed = json.loads(text[text.index("{") : text.rindex("}") + 1])
     except ValueError:
         parsed = None
-    check("SelfDeployedQwen body: answers the JSON correctly", parsed == {"usable": 409}, json.dumps(text))
+    check("LargeQwen body: answers the JSON correctly", parsed == {"usable": 409}, json.dumps(text))
 
     status, body, seconds = call(base, token, "POST", "/v1/chat/completions", THINKING_BODY, timeout=180)
     choice = (body.get("choices") or [{}])[0]

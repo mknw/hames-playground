@@ -13,7 +13,7 @@ import { renderReport } from './report'
 const PLAN = { plan: '1. Call get_neo4j_schema.\n2. Call read_neo4j_cypher.', n_steps: 2 }
 const TRACE = 'Synthetic parser trace, distinct from content reasoning.'
 const routing: EvalRouting = {
-  client: 'SelfDeployedQwenThink',
+  client: 'LargeQwenThink',
   routed: ['planner'],
   note: 'synthetic',
 }
@@ -71,7 +71,7 @@ beforeEach(() => {
   // can dispatch to an original function's declared public chain.
   const original = b.Planner.bind(b)
   vi.spyOn(b, 'Planner').mockImplementation((...args) => {
-    expect(args[4]?.client).toBe('SelfDeployedQwen')
+    expect(args[4]?.client).toBe('LargeQwen')
     return original(...args)
   })
 })
@@ -101,7 +101,7 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
     expect(result.checks.filter((c) => !c.pass)).toEqual([])
     expect(scenarioPassed(result)).toBe(true)
     expect(registry).toHaveBeenCalledWith(
-      'SelfDeployedQwenThink',
+      'LargeQwenThink',
       'openai-generic',
       expect.objectContaining({
         max_tokens: 8192,
@@ -127,7 +127,7 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
     expect(onPrompt).not.toContain('"reasoning": string')
     expect(onPrompt).not.toContain('short paragraph of reasoning')
     expect(JSON.stringify(requests[1].body.messages)).toContain('short paragraph of reasoning')
-    expect(result.servedBy).toEqual(['SelfDeployedQwenThink', 'SelfDeployedQwen'])
+    expect(result.servedBy).toEqual(['LargeQwenThink', 'LargeQwen'])
     expect(result.calls.map((c) => c.outputTokens)).toEqual([5000, 50])
     const report = renderReport([result], {
       routing,
@@ -160,11 +160,11 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
     expect(scenarioPassed(result)).toBe(true)
     expect(result.calls).toHaveLength(6)
     expect(result.observations).toContainEqual({
-      name: 'SelfDeployedQwenThink completion tokens (trace + answer)',
+      name: 'LargeQwenThink completion tokens (trace + answer)',
       value: '[100,6000,300]',
     })
     expect(result.observations).toContainEqual({
-      name: 'SelfDeployedQwenThink token distribution',
+      name: 'LargeQwenThink token distribution',
       value: 'reported=3/3; min=100; p50=300; p95=6000; max=6000',
     })
   })
@@ -238,7 +238,7 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
       expect(result.calls).toHaveLength(2)
       expect(
         result.observations.find(
-          (o) => o.name === 'SelfDeployedQwenThink completion tokens (trace + answer)',
+          (o) => o.name === 'LargeQwenThink completion tokens (trace + answer)',
         )?.value,
       ).toBe(reply.tokens === null ? '[]' : `[${reply.tokens}]`)
     },
@@ -263,7 +263,7 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
   it('leaves an ordinary private planner run at the shipped pair with no extra calls', async () => {
     responses.push({ content: JSON.stringify({ ...PLAN, reasoning: 'written' }), tokens: 20 })
     const result = await runScenario(plannerScenario, {
-      client: 'SelfDeployedQwen',
+      client: 'LargeQwen',
       routed: ['planner'],
       note: 'synthetic',
     })
@@ -296,10 +296,10 @@ describe('planner thinking eval wiring (manual hermetic)', () => {
   })
 
   it('validates sample count before any call and resolves the documented opt-in', async () => {
-    vi.stubEnv('EVAL_CLIENT', 'SelfDeployedQwenThink')
+    vi.stubEnv('EVAL_CLIENT', 'LargeQwenThink')
     vi.stubEnv('EVAL_ROLES', 'planner')
     expect(resolveEvalRouting()).toMatchObject({
-      client: 'SelfDeployedQwenThink',
+      client: 'LargeQwenThink',
       routed: ['planner'],
     })
     vi.stubEnv('EVAL_PLANNER_N', '0')

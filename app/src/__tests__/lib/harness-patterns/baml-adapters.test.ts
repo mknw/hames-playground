@@ -293,12 +293,12 @@ describe('createPlannerAdapter', () => {
           calls: [
             {
               selected: false,
-              clientName: 'SelfDeployedQwenThink',
+              clientName: 'LargeQwenThink',
               httpResponse: {
                 body: { json: () => ({ choices: [{ message: { reasoning: 'STALE TRACE' } }] }) },
               },
             },
-            { selected: true, clientName: 'SelfDeployedQwen' },
+            { selected: true, clientName: 'LargeQwen' },
           ],
         },
       })
@@ -308,7 +308,7 @@ describe('createPlannerAdapter', () => {
       {
         inference: {
           tier: 'self_deployed',
-          clientOverride: () => ({ client: 'SelfDeployedQwenThink' }),
+          clientOverride: () => ({ client: 'LargeQwenThink' }),
         },
       },
       () => createPlannerAdapter([])('msg', 'intent'),
@@ -316,7 +316,7 @@ describe('createPlannerAdapter', () => {
     expect(failure).toBeInstanceOf(LLMCallError)
     expect(failure).toMatchObject({
       message: 'PlannerThinking did not select a known thinking client',
-      llmCall: { clientName: 'SelfDeployedQwen' },
+      llmCall: { clientName: 'LargeQwen' },
     })
     expect(mockPlannerThinking).toHaveBeenCalledTimes(1)
     expect(mockPlanner).not.toHaveBeenCalled()
@@ -814,7 +814,7 @@ describe('describeToolResultOp', () => {
     // exercises whichever describe path that turn happened to take. This is the
     // per-call-site check for the two that carry tool results.
     //
-    // `LocalQwenSmall`, not `SelfDeployedQwen` — the describe flip later the same day.
+    // `SmallQwen`, not `LargeQwen` — the describe flip later the same day.
     // Asserting the specific client rather than "some override" is what makes
     // this the test that would catch summarization being sent to the 27B (or to
     // Anthropic) on a private-tier turn.
@@ -823,7 +823,7 @@ describe('describeToolResultOp', () => {
 
     await withSelfDeployedTier(() => describeToolResultOp('search', '{}', '', 'data'))
 
-    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'SmallQwen' })
   })
 
   // #420: a failed call THROWS. It used to resolve `''`, the same value as a
@@ -889,7 +889,7 @@ describe('describeToolResultsBatchOp', () => {
 
     await withSelfDeployedTier(() => describeToolResultsBatchOp(items))
 
-    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'SmallQwen' })
   })
 
   it('omits ids the model dropped or answered blank', async () => {

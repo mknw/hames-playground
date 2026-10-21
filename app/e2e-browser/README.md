@@ -130,7 +130,7 @@ established. `expectHeld(...)` is the wait.
 
 Two halves, and only the second is new.
 
-**The self-hosted tier uses the shipped seam, unmodified.** `SelfDeployedQwen` declares
+**The self-hosted tier uses the shipped seam, unmodified.** `LargeQwen` declares
 `base_url env.LARGE_LLM_BASE_URL` and BAML resolves `env.*` at call time,
 so pointing that variable at the fake is what a developer does to run the
 deployment locally.

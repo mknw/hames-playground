@@ -24,7 +24,7 @@ const ENV = {
 }
 const CLIENTS = {
   anthropic: { client: 'AnthropicSonnet5NoThink', env: ENV },
-  self_deployed: { client: 'SelfDeployedQwen', env: ENV },
+  self_deployed: { client: 'LargeQwen', env: ENV },
 }
 const TOOLS: ToolDescription[] = [
   { name: 'search', description: 'Search', args_schema: '{"query":"string"}' },
@@ -42,7 +42,7 @@ type Body = { system?: { text?: string }[]; messages: Msg[] }
 const text = (c: Msg['content']) =>
   typeof c === 'string' ? c : c.map((p) => p.text ?? '').join('\n')
 
-/** The static head: Anthropic's top-level `system`, or SelfDeployedQwen's leading system message. */
+/** The static head: Anthropic's top-level `system`, or LargeQwen's leading system message. */
 const flat = (t: string) => t.replace(/\s+/g, ' ')
 const systemText = (b: Body) =>
   flat(b.system ? b.system.map((p) => p.text ?? '').join('\n') : text(b.messages[0].content))

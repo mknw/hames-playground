@@ -46,18 +46,18 @@ describe('smokeDescribe', () => {
     async (fn) => {
       if (fn === 'ResultDescribeBatch') {
         vi.mocked(adapters.describeToolResultsBatchOp).mockImplementation(async () => {
-          notifyLlmUsage({ functionName: fn, clientName: 'SelfDeployedQwen' })
+          notifyLlmUsage({ functionName: fn, clientName: 'LargeQwen' })
           return new Map([['a', 'Synthetic batch summary']])
         })
       } else {
         vi.mocked(adapters.describeToolResultOp).mockImplementation(async () => {
-          notifyLlmUsage({ functionName: fn, clientName: 'SelfDeployedQwen' })
+          notifyLlmUsage({ functionName: fn, clientName: 'LargeQwen' })
           return 'Synthetic single summary'
         })
       }
 
       await expect(smokeDescribe()).rejects.toThrow(
-        `${fn}: accounted against SelfDeployedQwen, expected ${SELF_DEPLOYED_CLIENT_BY_ROLE.describe}`,
+        `${fn}: accounted against LargeQwen, expected ${SELF_DEPLOYED_CLIENT_BY_ROLE.describe}`,
       )
     },
   )

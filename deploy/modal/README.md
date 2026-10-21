@@ -4,7 +4,7 @@ Two Modal apps, each one scale-to-zero GPU box: the small models (below) and [th
 
 First time? [Serving the small models on Modal](../../docs/tutorials/serving-the-small-models-on-modal.md) walks the whole setup once; this page is the reference.
 
-The private tier's two small roles on one scale-to-zero GPU container: the Qwen3.5-4B summarizer the app reaches as `LocalQwenSmall`, and the H2O-Lightning-4B decision LoRA (same base) behind H2O's `systemone` shim. One vLLM process serves both; a Caddy route list is the only public surface.
+The private tier's two small roles on one scale-to-zero GPU container: the Qwen3.5-4B summarizer the app reaches as `SmallQwen`, and the H2O-Lightning-4B decision LoRA (same base) behind H2O's `systemone` shim. One vLLM process serves both; a Caddy route list is the only public surface.
 
 ## Quick start
 
@@ -22,7 +22,7 @@ uv run --env-file deploy.local.env smoke.py                 # both models, in th
 uv run --env-file deploy.local.env measure.py --samples 3   # cold starts + warm calls, synthetic inputs
 ```
 
-`smoke.py` passing is the signal the app can be pointed at the box: the summarizer answers `LocalQwenSmall`'s exact body, every decision answer parses the way the app's systemone transport parses it, and the closed routes and the image-URL lock are checked on the live box rather than only in the file.
+`smoke.py` passing is the signal the app can be pointed at the box: the summarizer answers `SmallQwen`'s exact body, every decision answer parses the way the app's systemone transport parses it, and the closed routes and the image-URL lock are checked on the live box rather than only in the file.
 
 No `uv`? `nix run nixpkgs#uv -- …` works in place of `uv …`.
 
@@ -146,11 +146,11 @@ Billed while a container exists: boot, the snapshot creation, serving, and the s
 
 ## The 27B (`hames_private_27b.py`)
 
-Qwen3.8-27B-FP8 for the app's `SelfDeployedQwen` client, a drop-in for the Verda deployment: the same model name (vLLM enforces it), a 131072-token window and an OpenAI-compatible `/v1`. `modal-pins.test.ts` pins the name and the window against the client's own files.
+Qwen3.8-27B-FP8 for the app's `LargeQwen` client, a drop-in for the Verda deployment: the same model name (vLLM enforces it), a 131072-token window and an OpenAI-compatible `/v1`. `modal-pins.test.ts` pins the name and the window against the client's own files.
 
 ```bash
 uv run --env-file deploy.local.env modal deploy hames_private_27b.py
-uv run --env-file deploy.local.env smoke_27b.py                         # PASS/FAIL, in SelfDeployedQwen's request shape
+uv run --env-file deploy.local.env smoke_27b.py                         # PASS/FAIL, in LargeQwen's request shape
 uv run --env-file deploy.local.env measure.py --box 27b --stop --samples 3
 HAMES_MODAL_SERVER=Qwen27B uv run --env-file deploy.local.env ops.py status   # every ops.py command, for this box
 ```
@@ -173,7 +173,7 @@ Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and
 
 **What differs from the small box:**
 
-- Thinking. vLLM runs the `qwen3` reasoning parser, so the model can think and its reasoning arrives in the response's `reasoning` field (and counts in `completion_tokens`); `SelfDeployedQwen` turns it off per request with `chat_template_kwargs`. `smoke_27b.py` checks both: with thinking off, `content` is non-empty and parses and `reasoning` is empty; with it on, nothing leaks into `content`.
+- Thinking. vLLM runs the `qwen3` reasoning parser, so the model can think and its reasoning arrives in the response's `reasoning` field (and counts in `completion_tokens`); `LargeQwen` turns it off per request with `chat_template_kwargs`. `smoke_27b.py` checks both: with thinking off, `content` is non-empty and parses and `reasoning` is empty; with it on, nothing leaks into `content`.
 - Text only (`--language-model-only`): no vision tower is loaded and an image part is a 400 before anything is fetched.
 - Multi-token prediction (`HAMES_MODAL_27B_MTP_TOKENS`, 2 by default) drafts tokens with the model's own MTP head. A damaged draft head costs speed, never correctness, so the restore check reads its acceptance rate on a literal generation before the sleep and after the restore.
 - After a restore, before Caddy listens: the reference distribution (as the small box), a literal question that must parse to the exact JSON answer with thinking off, and MTP acceptance within 0.15 of its pre-sleep value.

@@ -17,7 +17,7 @@
  *     on a route whose warm p95 at 8-way concurrency is 9.9s means a genuinely
  *     hung request is indistinguishable from a working one for ten minutes. With
  *     the wait moved out in front, the BAML client's timeout can be sized for a
- *     warm call (`baml_src/self-deployed-client.baml`, and the number's justification is
+ *     warm call (`baml_src/large-client.baml`, and the number's justification is
  *     there rather than here).
  *  2. **A burst multiplied its own wait.** Three chats into a sleeping box are
  *     one replica's queue, not three parallel cold starts (measured 2026-08-26),

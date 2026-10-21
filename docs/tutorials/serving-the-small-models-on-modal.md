@@ -8,7 +8,7 @@ you do not need to know Modal.
 **What you get:** one GPU container on [Modal](https://modal.com) that serves both small
 models from one process:
 
-- the **summarizer** (Qwen3.5-4B), which the app's `describe` role calls as `LocalQwenSmall`;
+- the **summarizer** (Qwen3.5-4B), which the app's `describe` role calls as `SmallQwen`;
 - the **decision model** (H2O-Lightning-4B, a LoRA adapter on the same base), behind H2O's
   `systemone` API.
 
@@ -23,7 +23,7 @@ meanwhile).
 - **private tier**: the app's setting under which no model call goes to a public AI provider;
   its calls go to models you run yourself. Its two small models are the ones served here.
 - **summarizer**: the small model the app uses for short jobs such as summarizing a tool's
-  result or titling a conversation (the app's `describe` role, client `LocalQwenSmall`).
+  result or titling a conversation (the app's `describe` role, client `SmallQwen`).
 - **decision model**: the small model that answers multiple-choice and yes/no questions
   about a piece of text with a probability for each answer, through H2O's `systemone` API.
 - **LoRA adapter**: a small set of extra weights that turns the summarizer's base model into

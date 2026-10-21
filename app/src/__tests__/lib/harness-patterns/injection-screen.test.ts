@@ -265,7 +265,7 @@ describe('createInjectionScreen — client routing', () => {
     expect(Object.keys(opts ?? {})).toEqual(['collector'])
   })
 
-  it('ON THE SELF_DEPLOYED TIER passes `client: SelfDeployedQwen` — the screen follows the private tier', async () => {
+  it('ON THE SELF_DEPLOYED TIER passes `client: LargeQwen` — the screen follows the private tier', async () => {
     // The other half of the claim above, and the one that would have caught the
     // screen being LEFT BEHIND when every other role moved: a private-tier turn
     // that quietly sent the guarded tool result to Anthropic for screening is
@@ -286,13 +286,13 @@ describe('createInjectionScreen — client routing', () => {
     assertInferenceTier('self_deployed')
     await withRunFrame({ inference: { tier: 'self_deployed' } }, () => screen(CLEAN))
     const opts = mockScreen.mock.calls[0][2] as Record<string, unknown> | undefined
-    expect(opts?.client).toBe('SelfDeployedQwen')
-    // AND NOT THE 4B. `describe` moved to `LocalQwenSmall` on the same tier a few
+    expect(opts?.client).toBe('LargeQwen')
+    // AND NOT THE 4B. `describe` moved to `SmallQwen` on the same tier a few
     // hours after the screen moved, and the two declare the SAME chain in
     // `baml_src/` — so this is the assertion that the flip did not carry
     // prompt-injection screening onto a 4B summarizer as a side effect, which is
     // the exact hazard SA-M5 / SD-4 named years before it was available to make.
-    expect(opts?.client).not.toBe('LocalQwenSmall')
+    expect(opts?.client).not.toBe('SmallQwen')
   })
 
   it("resolveClientForRole('screen') is DescribeAnthropic, and tracks the .baml declaration (SA-M5)", async () => {

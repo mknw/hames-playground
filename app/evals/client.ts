@@ -26,10 +26,10 @@
  * `EVAL_CLIENT=tier` is the SHIPPED question — "does the private tier, as
  * configured, still work?" — and it resolves each role through production's own
  * map, which since 2026-08-26 is TWO clients: the 27B for the heavy roles and the
- * 4B `LocalQwenSmall` for `describe`. That mode exists because the single-name
+ * 4B `SmallQwen` for `describe`. That mode exists because the single-name
  * mode stopped being able to express the shipped route on the day the describe
  * flip landed, and the honest response to that was a second mode rather than a
- * comment claiming the first one still measured it. A default `EVAL_CLIENT=SelfDeployedQwen`
+ * comment claiming the first one still measured it. A default `EVAL_CLIENT=LargeQwen`
  * run now measures summarization on a model production does not use for it — which
  * is a fair question to ask, just not the same question.
  *
@@ -53,7 +53,7 @@
  * copy `spans` VERBATIM, because the guard neutralizes them by literal match)
  * are UNMEASURED on that client. A suite that refuses to point the screen at a
  * candidate client is a suite that guarantees the gap it was protecting
- * against: the refusal was what left `SelfDeployedQwen` unmeasured as a screener in
+ * against: the refusal was what left `LargeQwen` unmeasured as a screener in
  * the first place. Measuring a control before shipping it is the opposite of
  * turning a knob on it, and `scenarios/screen.ts` is where that measurement
  * lives.

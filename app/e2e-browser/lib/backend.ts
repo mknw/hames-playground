@@ -139,7 +139,7 @@ export async function startBackend(): Promise<Backend> {
  * ## Why it takes TWO turns since 2026-08-26
  *
  * It used to be one, and it asserted "at least one call arrived on a model
- * that is not `SelfDeployedQwen`" — the side roles (`router` / `describe` / `screen` /
+ * that is not `LargeQwen`" — the side roles (`router` / `describe` / `screen` /
  * `planner` / title) were held on Anthropic in both switch positions, so any
  * turn at all witnessed the redirect. The owner's tier widening put EVERY role
  * on the self-hosted deployment for a private-tier run, and the private tier is

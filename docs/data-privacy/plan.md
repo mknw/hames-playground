@@ -189,7 +189,7 @@ exists, and it now covers every role without exception.** A self_deployed tier d
 — the `USE_SELF_DEPLOYED_INFERENCE=1` deployment default or a per-conversation switch —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
-Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/self-deployed-client.baml`). Read against the paragraph above: no
+Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/large-client.baml`). Read against the paragraph above: no
 chat configuration still sends a prompt to Groq, OpenRouter or OpenAI (the
 `decide` exception above is Anthropic-tier only), and the new
 route moves prompts _off_ a third-country processor rather than onto one, so it

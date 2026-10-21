@@ -55,7 +55,7 @@ function record(over: Partial<LLMCallRecord> & { metrics?: EventMetrics } = {}):
     },
     durationMs: 3600,
     provider: 'openai-generic',
-    clientName: 'SelfDeployedQwen',
+    clientName: 'LargeQwen',
     metrics: {
       inputUncachedTokens: 1000,
       inputCacheReadTokens: 0,
@@ -105,7 +105,7 @@ describe('the guard records the screen call', () => {
     expect(modelCalls(events)).toHaveLength(1)
     expect(call.data).toEqual({ role: 'screen', source: 'fetch/fetch_content' })
     expect(call.patternId).toBe('guard')
-    expect(call.llmCall?.clientName).toBe('SelfDeployedQwen')
+    expect(call.llmCall?.clientName).toBe('LargeQwen')
     expect(call.llmCall?.functionName).toBe('ScreenUntrustedContent')
     // Lifted onto the event, which is what every cost fold reads.
     expect(call.metrics).toMatchObject({ costEur: 0.0018, basis: 'time' })
@@ -212,7 +212,7 @@ describe('compactBulkData records the describe calls', () => {
   const describeRecord = (fn = 'ResultDescribe') =>
     record({
       functionName: fn,
-      clientName: 'LocalQwenSmall',
+      clientName: 'SmallQwen',
       metrics: { ...record().metrics!, costEur: 0.0004, noCacheEur: 0.0004 },
     })
 
@@ -231,7 +231,7 @@ describe('compactBulkData records the describe calls', () => {
     const [call] = modelCalls(ctx.events)
     expect(call.data).toEqual({ role: 'describe', source: 'fetch' })
     expect(call.patternId).toBe('compactBulkData')
-    expect(call.llmCall?.clientName).toBe('LocalQwenSmall')
+    expect(call.llmCall?.clientName).toBe('SmallQwen')
     expect(call.metrics?.costEur).toBe(0.0004)
   })
 
@@ -328,7 +328,7 @@ describe('model_call event', () => {
       metrics: record().metrics,
       durationMs: 3600,
       provider: 'openai-generic',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
     })
     expect(JSON.stringify(event)).not.toContain(PAGE_TEXT)
   })
@@ -362,7 +362,7 @@ describe('model_call event', () => {
     const text = createEventView(ctx).fromAll().serialize()
     expect(text).toContain('screen call: web/x')
     expect(text).not.toContain(PAGE_TEXT)
-    expect(text).not.toContain('SelfDeployedQwen')
+    expect(text).not.toContain('LargeQwen')
   })
 
   // Mutation: remove 'model_call' from ALWAYS_COMMIT_TYPES → under 'on-success'

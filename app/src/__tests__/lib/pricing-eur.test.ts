@@ -10,7 +10,7 @@
  *     convert to EUR at a STATIC rate. A live FX lookup is not wanted; the pin
  *     here is that the conversion happens on the rates, so the `rates` audit
  *     field is the €/MTok that was really applied.
- *  2. **Time-priced clients** (`SelfDeployedQwen`) are `€/h × measured wall-clock`, and
+ *  2. **Time-priced clients** (`LargeQwen`) are `€/h × measured wall-clock`, and
  *     `undefined` — not zero — when nothing measured the call. A time bill with
  *     no time is not a free call.
  *  3. **Attribution is the client BAML SELECTED.** This is the property with
@@ -38,12 +38,14 @@ import {
   DEFAULT_EUR_PER_USD,
   DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+  LEGACY_CLIENT_NAMES,
   LOCAL_PRICED_CLIENTS,
   PROVIDER_COST_CLIENTS,
   TIME_PRICED_CLIENTS,
+  canonicalClientName,
   estimateLlmCostEur,
 } from '../../lib/settings'
-import { SELF_DEPLOYED_CLIENT_NAME } from '../../lib/inference/large-activity.server'
+import { LARGE_LLM_CLIENT_NAME } from '../../lib/inference/large-activity.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -78,9 +80,9 @@ const ONE_MTOK_EACH = {
 describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
     expect(TIME_PRICED_CLIENTS).toEqual({
-      [SELF_DEPLOYED_CLIENT_NAME]: 1.819,
-      SelfDeployedQwenThink: 1.819,
-      LocalQwenSmall: 1.54,
+      [LARGE_LLM_CLIENT_NAME]: 1.819,
+      LargeQwenThink: 1.819,
+      SmallQwen: 1.54,
       PrivateSystemOne: 1.54,
     })
   })
@@ -138,7 +140,7 @@ describe('token pricing → EUR', () => {
 })
 
 describe('time pricing → EUR', () => {
-  it.each(['LocalQwenSmall', 'PrivateSystemOne'])(
+  it.each(['SmallQwen', 'PrivateSystemOne'])(
     'prices %s at €1.54/h and accepts an explicit rate',
     (client) => {
       expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
@@ -156,13 +158,13 @@ describe('time pricing → EUR', () => {
     },
   )
 
-  it.each(['LocalQwenSmall', 'PrivateSystemOne'])('leaves unmeasured %s cost unknown', (client) => {
+  it.each(['SmallQwen', 'PrivateSystemOne'])('leaves unmeasured %s cost unknown', (client) => {
     for (const durationMs of [undefined, Number.NaN, -1])
       expect(estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs })).toBeUndefined()
   })
 
   it('is €/h × wall-clock, and tokens do not enter it', () => {
-    const oneHour = estimateLlmCostEur(NO_TOKENS, SELF_DEPLOYED_CLIENT_NAME, {
+    const oneHour = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -170,7 +172,7 @@ describe('time pricing → EUR', () => {
     expect(oneHour.costEur).toBeCloseTo(1.819, 9)
 
     // Same duration, a huge token count: identical cost. Tokens are free.
-    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, {
+    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, {
       durationMs: 3_600_000,
       eurPerHour: 1.819,
     })!
@@ -179,25 +181,25 @@ describe('time pricing → EUR', () => {
 
   it('prices a realistic call in fractions of a cent', () => {
     // The measured 4.1s single-call latency at the default rate.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: 4_100 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 4_100 })!
     expect(est.costEur).toBeCloseTo((4.1 / 3600) * DEFAULT_LARGE_LLM_EUR_PER_HOUR, 12)
     expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR, durationMs: 4_100 })
   })
 
   it('defaults to €1.819/h', () => {
     expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
-    const est = estimateLlmCostEur(NO_TOKENS, SELF_DEPLOYED_CLIENT_NAME, { durationMs: 3_600_000 })!
+    const est = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, { durationMs: 3_600_000 })!
     expect(est.costEur).toBeCloseTo(1.819, 9)
   })
 
   it('offers no caching savings — caching cannot save wall-clock', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: 5_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 5_000 })!
     expect(est.noCacheEur).toBe(est.costEur)
     expect(est.rates).toBeUndefined()
   })
 
   it('an idle box costs nothing: zero duration is zero, not a minimum charge', () => {
-    const est = estimateLlmCostEur(NO_TOKENS, SELF_DEPLOYED_CLIENT_NAME, { durationMs: 0 })!
+    const est = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, { durationMs: 0 })!
     expect(est.costEur).toBe(0)
     expect(est.basis).toBe('time')
   })
@@ -206,15 +208,15 @@ describe('time pricing → EUR', () => {
     // A time bill with no time is not a free call. BAML reports no duration when
     // it measured none, and a 0 here would render as "this call cost nothing" on
     // a box that was demonstrably awake to answer it.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME)).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME)).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: undefined }),
+      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: undefined }),
     ).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: Number.NaN }),
+      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: Number.NaN }),
     ).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: -1 }),
+      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: -1 }),
     ).toBeUndefined()
   })
 })
@@ -234,7 +236,7 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('a time-priced client never gets token pricing, however many tokens it moved', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, SELF_DEPLOYED_CLIENT_NAME, { durationMs: 1_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 1_000 })!
     expect(est.basis).toBe('time')
     expect(est.rates).toBeUndefined()
     // Nothing anywhere near a per-MTok figure.
@@ -310,6 +312,81 @@ describe('attribution: the SELECTED client decides the model', () => {
       const est = estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 60_000 })
       expect(est, name).toBeDefined()
       expect(est!.basis, name).toBe('tokens')
+    }
+  })
+})
+
+describe('persisted client names keep their pricing basis', () => {
+  // Saved conversations carry the pre-rename `llmCall.clientName`. They are read
+  // through the one alias table in settings.ts; dropping it turns every stored
+  // step on the box into "cost unknown" (mutation: `legacy-client-alias`).
+  it('maps the three legacy names to the new ones, and nothing else', () => {
+    expect(LEGACY_CLIENT_NAMES).toEqual({
+      VerdaQwen: 'LargeQwen',
+      VerdaQwenThink: 'LargeQwenThink',
+      LocalQwenSmall: 'SmallQwen',
+    })
+    expect(canonicalClientName('VerdaQwen')).toBe('LargeQwen')
+    expect(canonicalClientName('LargeQwen')).toBe('LargeQwen')
+    expect(canonicalClientName('toString')).toBe('toString')
+    expect(canonicalClientName(undefined)).toBeUndefined()
+    for (const name of Object.values(LEGACY_CLIENT_NAMES))
+      expect(name in LEGACY_CLIENT_NAMES).toBe(false)
+  })
+
+  it.each([
+    ['VerdaQwen', 'LargeQwen'],
+    ['VerdaQwenThink', 'LargeQwenThink'],
+    ['LocalQwenSmall', 'SmallQwen'],
+  ])('a stored %s step is time-priced exactly as %s is', (stored, current) => {
+    const old = estimateLlmCostEur(ONE_MTOK_EACH, stored, { durationMs: 4_000 })
+    expect(old, stored).toBeDefined()
+    expect(old!.basis).toBe('time')
+    expect(old).toEqual(estimateLlmCostEur(ONE_MTOK_EACH, current, { durationMs: 4_000 }))
+  })
+
+  it('a stored VerdaQwenThink keeps the 27B rate, a stored LocalQwenSmall the small rate', () => {
+    expect(
+      estimateLlmCostEur(NO_TOKENS, 'VerdaQwenThink', { durationMs: 3_600_000 })!.costEur,
+    ).toBeCloseTo(DEFAULT_LARGE_LLM_EUR_PER_HOUR, 9)
+    expect(
+      estimateLlmCostEur(NO_TOKENS, 'LocalQwenSmall', { durationMs: 3_600_000 })!.costEur,
+    ).toBeCloseTo(DEFAULT_SMALL_LLM_EUR_PER_HOUR, 9)
+  })
+
+  it('a stored unmeasured step stays unknown, never free', () => {
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwen')).toBeUndefined()
+  })
+
+  it('the local basis is LocalGLM alone and is untouched by the alias', () => {
+    expect([...LOCAL_PRICED_CLIENTS]).toEqual(['LocalGLM'])
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LocalGLM')).toMatchObject({
+      basis: 'local',
+      costEur: 0,
+    })
+  })
+
+  it('the observability panel shows the current name for a stored one', () => {
+    const tabs = readFileSync(
+      join(__dirname, '../../components/ark-ui/observability/LLMCallTabs.tsx'),
+      'utf8',
+    )
+    expect(tabs).toContain('{canonicalClientName(props.llmCall.clientName)}')
+  })
+
+  it('the three pricing sets stay disjoint under the new names', () => {
+    const token = new Set(Object.keys(CLIENT_PRICING))
+    const time = new Set(Object.keys(TIME_PRICED_CLIENTS))
+    for (const name of [...LOCAL_PRICED_CLIENTS, ...PROVIDER_COST_CLIENTS, ...time, ...token]) {
+      const homes = [
+        token.has(name),
+        time.has(name),
+        LOCAL_PRICED_CLIENTS.has(name),
+        PROVIDER_COST_CLIENTS.has(name),
+      ].filter(Boolean)
+      expect(homes.length, name).toBe(1)
+      // A legacy spelling is an alias, never a second entry in any table.
+      expect(name in LEGACY_CLIENT_NAMES, name).toBe(false)
     }
   })
 })

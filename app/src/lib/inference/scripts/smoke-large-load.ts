@@ -1,5 +1,5 @@
 /**
- * Live LOAD measurement for the self-deployed 27B deployment (`SelfDeployedQwen`).
+ * Live LOAD measurement for the self-deployed 27B deployment (`LargeQwen`).
  *
  * Sibling of `smoke-self-deployed.ts`, which answers "does the route work". This one
  * answers "what does it do under the preview's load", and it exists because
@@ -57,7 +57,7 @@ import '../config.server'
 import { assertLargeModelConfigured, selfDeployedInferenceEnabled } from '../config.server'
 import { clientOverrideFor } from '@hames-ai/harness-baml/clients.server'
 
-const EXPECTED_CLIENT = 'SelfDeployedQwen'
+const EXPECTED_CLIENT = 'LargeQwen'
 
 /** Phase sizes. Small on purpose: this is a measurement, not a soak, and the
  *  box is billed per GPU-second while awake. */

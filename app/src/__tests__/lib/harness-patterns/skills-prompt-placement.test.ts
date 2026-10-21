@@ -16,7 +16,7 @@
  * that on the REAL prompt, end to end: the real `withSandbox` mounts the skills
  * on a fake transport, the real adapters run inside it, and the arguments they
  * hand BAML are rendered offline through the real client (`b.request.*`), on
- * the OpenAI-generic wire (`SelfDeployedQwen`, where `system` is a message of its own)
+ * the OpenAI-generic wire (`LargeQwen`, where `system` is a message of its own)
  * and on Anthropic's (where it is the top-level `system` field). No socket is
  * opened. The same render with no skills is the control: the system message
  * and the tool catalog must be byte-identical to it.
@@ -50,7 +50,7 @@ const ENV = {
   SMALL_LLM_API_KEY: 'offline-render-test',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
 }
-const OPENAI = { client: 'SelfDeployedQwen', env: ENV }
+const OPENAI = { client: 'LargeQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
 /** Another user's description, written to break out of anything it is put in. */
@@ -192,7 +192,7 @@ beforeAll(async () => {
 
 describe('the skills index in the actor’s prompt', () => {
   for (const [wire, o] of [
-    ['OpenAI-generic (SelfDeployedQwen)', OPENAI],
+    ['OpenAI-generic (LargeQwen)', OPENAI],
     ['Anthropic', ANTHROPIC],
   ] as const) {
     it(`never reaches the system position — ${wire}`, async () => {

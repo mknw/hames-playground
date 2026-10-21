@@ -324,7 +324,7 @@ function fakeExtract(out: MemoryExtractedCandidate[] = [cand()]) {
         usage: { inputTokens: 40, outputTokens: 12, cachedInputTokens: 0, totalTokens: 52 },
         durationMs: 321,
         provider: 'openai-generic',
-        clientName: 'LocalQwenSmall',
+        clientName: 'SmallQwen',
       },
     }
   })
@@ -1605,7 +1605,7 @@ describe('memory-written-persisted', () => {
       usage: { totalTokens: 52 },
       durationMs: 321,
       provider: 'openai-generic',
-      clientName: 'LocalQwenSmall',
+      clientName: 'SmallQwen',
       variables: {},
     })
     expect(events[0].llmCall).not.toHaveProperty('rawOutput')

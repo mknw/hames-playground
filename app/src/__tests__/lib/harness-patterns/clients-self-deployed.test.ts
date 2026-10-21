@@ -51,7 +51,7 @@ const ENV_KEYS = [
   'LARGE_LLM_BASE_URL',
   'LARGE_LLM_API_KEY',
   // Part of the tier's configuration since 2026-08-26: `describe` runs on the
-  // 4B `LocalQwenSmall`, which is reached through this variable, and a private
+  // 4B `SmallQwen`, which is reached through this variable, and a private
   // tier without it is refused rather than descaled (see the fail-closed block).
   'SMALL_LLM_BASE_URL',
   'SMALL_LLM_DECISIONS_URL',
@@ -78,22 +78,22 @@ const ALL_ROLES: BamlRole[] = [
  *  keep passing with the flip reverted — and `two clients, not one` below pins
  *  that the column really does hold two values. */
 const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
-  controller: { from: 'ControllerAnthropic', to: 'SelfDeployedQwen' },
-  critic: { from: 'CriticAnthropic', to: 'SelfDeployedQwen' },
-  compactExecution: { from: 'SynthesizerAnthropic', to: 'SelfDeployedQwen' },
-  router: { from: 'RouterAnthropic', to: 'SelfDeployedQwen' },
-  planner: { from: 'PlannerAnthropic', to: 'SelfDeployedQwen' },
+  controller: { from: 'ControllerAnthropic', to: 'LargeQwen' },
+  critic: { from: 'CriticAnthropic', to: 'LargeQwen' },
+  compactExecution: { from: 'SynthesizerAnthropic', to: 'LargeQwen' },
+  router: { from: 'RouterAnthropic', to: 'LargeQwen' },
+  planner: { from: 'PlannerAnthropic', to: 'LargeQwen' },
   // THE FLIP. Summarization is the tier's highest-frequency role and the one
   // handed tool results verbatim (SD-10); it moved off the scale-to-zero 27B
   // onto the 4B the role was designed around, on infrastructure the company
   // still runs, so the private posture is unchanged and the latency is not.
-  describe: { from: 'DescribeAnthropic', to: 'LocalQwenSmall' },
+  describe: { from: 'DescribeAnthropic', to: 'SmallQwen' },
   // `screen` is a security control's client (SD-4 / SA-M5), which is why it was
   // the last role to move and why it moved by a named owner decision rather
   // than with the widening. It is in this map now, and listed LAST so the diff
   // that added it is readable as what it is. Note what it did NOT do: it shares
   // `describe`'s BAML chain and did not follow it onto the 4B.
-  screen: { from: 'DescribeAnthropic', to: 'SelfDeployedQwen' },
+  screen: { from: 'DescribeAnthropic', to: 'LargeQwen' },
   // The public and private systemone clients.
   decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
 }
@@ -188,11 +188,11 @@ describe('USE_SELF_DEPLOYED_INFERENCE=1 — exactly the mapped roles move', () =
     // reverted. This is the line that cannot.
     const { resolveClientForRole } = await load()
     const clients = new Set(roles(ROUTED).map(([role]) => resolveClientForRole(role)))
-    expect([...clients].sort()).toEqual(['LocalQwenSmall', 'PrivateSystemOne', 'SelfDeployedQwen'])
+    expect([...clients].sort()).toEqual(['LargeQwen', 'PrivateSystemOne', 'SmallQwen'])
     // And which side each of the two BAML-chain siblings landed on. Neither
     // value is interesting alone; the pair is the SA-M5 / SD-4 property.
-    expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
-    expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
+    expect(resolveClientForRole('describe')).toBe('SmallQwen')
+    expect(resolveClientForRole('screen')).toBe('LargeQwen')
   })
 
   it('moves the injection screen too, and leaves nothing behind', async () => {
@@ -203,8 +203,8 @@ describe('USE_SELF_DEPLOYED_INFERENCE=1 — exactly the mapped roles move', () =
     // decision — "no call made under the private tier may be sent to any
     // public AI provider" — not on a widening, so it is pinned as its own
     // claim rather than folded into the loop above.
-    expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
-    expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
+    expect(clientOverrideFor('screen')).toEqual({ client: 'LargeQwen' })
+    expect(resolveClientForRole('screen')).toBe('LargeQwen')
 
     // Nothing is held back. Asserted over ALL_ROLES rather than over ROUTED,
     // so a role added to `BamlRole` and forgotten in the map is red here
@@ -295,19 +295,19 @@ describe('misconfiguration fails closed', () => {
   })
 })
 
-describe('settings and baml_src agree about SelfDeployedQwen', () => {
+describe('settings and baml_src agree about LargeQwen', () => {
   it('the client is declared, capped at 4096, and asks for no caching', async () => {
     // Comments stripped the way client-output-caps.test.ts does it: the file
     // DISCUSSES caching at length, and a test that reads prose cannot tell a
     // declaration from an explanation of why there isn't one.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
-    expect(declared).toMatch(/client<llm>\s+SelfDeployedQwen/)
+    expect(declared).toMatch(/client<llm>\s+LargeQwen/)
     expect(declared).toMatch(/provider\s+openai-generic/)
     expect(declared).toMatch(/max_tokens\s+4096/)
     expect(declared).toMatch(/base_url\s+env\.LARGE_LLM_BASE_URL/)
@@ -360,7 +360,7 @@ describe('settings and baml_src agree about SelfDeployedQwen', () => {
     // `smoke-large-load.ts`) is 26 tok/s per stream. Single-stream measured
     // 64 tok/s; the slower figure is the one a bound has to survive.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')
@@ -381,11 +381,11 @@ describe('settings and baml_src agree about SelfDeployedQwen', () => {
   it('settings mirrors the cap and the --max-model-len window', async () => {
     const { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, CLIENT_PRICING } =
       await import('../../../lib/settings')
-    expect(CLIENT_MAX_OUTPUT_TOKENS.SelfDeployedQwen).toBe(4_096)
-    expect(MODEL_CONTEXT_WINDOWS.SelfDeployedQwen).toBe(131_072)
+    expect(CLIENT_MAX_OUTPUT_TOKENS.LargeQwen).toBe(4_096)
+    expect(MODEL_CONTEXT_WINDOWS.LargeQwen).toBe(131_072)
     // Billed per GPU-second, not per token — an invented rate here would
     // render as a confident dollar figure. "Unknown" is the honest reading.
-    expect(CLIENT_PRICING.SelfDeployedQwen).toBeUndefined()
+    expect(CLIENT_PRICING.LargeQwen).toBeUndefined()
   })
 })
 
@@ -655,9 +655,9 @@ describe('every routed role has a wired call site', () => {
     // Half one: the map. Not folded into the ROUTED loop above — that loop
     // would keep passing if `screen` were quietly dropped from BOTH the map and
     // that fixture, which is precisely the two-line edit this guards.
-    expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(clientOverrideFor('screen')).toEqual({ client: 'LargeQwen' })
     // …and specifically NOT the 4B its BAML chain-mate moved to.
-    expect(clientOverrideFor('screen')).not.toEqual({ client: 'LocalQwenSmall' })
+    expect(clientOverrideFor('screen')).not.toEqual({ client: 'SmallQwen' })
 
     // Half two: the call site, pinned ON the call rather than merely in its
     // file. The per-file scan above cannot separate the screen from the two
@@ -709,7 +709,7 @@ describe('every routed role has a wired call site', () => {
     // parens, and exactly one call site each.
     enable()
     const { clientOverrideFor } = await load()
-    expect(clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+    expect(clientOverrideFor('describe')).toEqual({ client: 'SmallQwen' })
 
     const code = corpus()
     for (const fn of ['ExtractMemory', 'CompactMemories']) {

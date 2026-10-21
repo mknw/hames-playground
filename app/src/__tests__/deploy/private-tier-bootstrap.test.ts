@@ -428,7 +428,7 @@ describe('operator docs agree with the private-tier contract', () => {
 
   it('models guidance records describe as active and its key as required', () => {
     expect(models).toContain('**The private tier requires `SMALL_LLM_API_KEY`.**')
-    expect(models).toContain("`LocalQwenSmall` already serves the private tier's `describe` role")
+    expect(models).toContain("`SmallQwen` already serves the private tier's `describe` role")
     expect(models).not.toMatch(/not present yet|inert today|keys are optional/)
   })
 

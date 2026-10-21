@@ -103,11 +103,11 @@ describe('the configuration the host registers is the configuration the resoluti
 
     await clients.runWithInferenceTier('self_deployed', async () => {
       // The override names the client the host's tables know.
-      expect(clients.clientOverrideFor('planner')).toEqual({ client: 'SelfDeployedQwen' })
-      // The host's model tables: 131 072 window and 4 096 cap for SelfDeployedQwen —
+      expect(clients.clientOverrideFor('planner')).toEqual({ client: 'LargeQwen' })
+      // The host's model tables: 131 072 window and 4 096 cap for LargeQwen —
       // impossible from the package-side defaults (16 384 / undefined), so
       // these two numbers are a direct readout of which store answered.
-      expect(clients.getContextWindow('SelfDeployedQwen')).toBe(131_072)
+      expect(clients.getContextWindow('LargeQwen')).toBe(131_072)
       expect(clients.limitsFor('planner')).toEqual({
         contextWindow: 131_072,
         maxOutputTokens: 4_096,
@@ -135,7 +135,7 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(clients.activeInferenceTier()).toBe('anthropic')
     await clients.runWithInferenceTier('self_deployed', async () => {
       expect(clients.activeInferenceTier()).toBe('self_deployed')
-      expect(clients.clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
+      expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
     expect(clients.activeInferenceTier()).toBe('anthropic')
   })
@@ -145,7 +145,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const clients = await loadWired()
 
     await clients.runWithInferenceTier('self_deployed', async () => {
-      expect(clients.clientOverrideFor('describe')).toEqual({ client: 'LocalQwenSmall' })
+      expect(clients.clientOverrideFor('describe')).toEqual({ client: 'SmallQwen' })
       expect(noteBoxCallStarting).toHaveBeenCalledWith('small')
     })
   })
@@ -155,7 +155,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const clients = await loadWired()
 
     expect(clients.activeInferenceTier()).toBe('self_deployed')
-    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
   })
 
   it('a self_deployed scope is checked through the registered assert, not opened blind', async () => {
@@ -193,7 +193,7 @@ describe('the configuration the host registers is the configuration the resoluti
         {
           calls: [
             {
-              clientName: 'LocalQwenSmall',
+              clientName: 'SmallQwen',
               timing: { durationMs },
             },
           ],
@@ -235,7 +235,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const collector = {
       logs: [
         {
-          calls: ['SelfDeployedQwen', 'LocalQwenSmall'].map((clientName) => ({
+          calls: ['LargeQwen', 'SmallQwen'].map((clientName) => ({
             clientName,
             timing: { durationMs: 2_000 },
           })),
@@ -253,7 +253,7 @@ describe('the configuration the host registers is the configuration the resoluti
     const { estimateLlmCostEur } = await import(SETTINGS)
     clients.configureCostPricing({
       estimate: estimateLlmCostEur,
-      timePricedClient: 'SelfDeployedQwen',
+      timePricedClient: 'LargeQwen',
     })
     process.env.LARGE_LLM_EUR_PER_HOUR = '4'
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
@@ -262,7 +262,7 @@ describe('the configuration the host registers is the configuration the resoluti
         {
           calls: [
             {
-              clientName: 'SelfDeployedQwen',
+              clientName: 'LargeQwen',
               timing: { durationMs: 2_000 },
             },
           ],
@@ -302,7 +302,7 @@ describe('unregistered — the package-side defaults are safe', () => {
 
   it('unknown clients keep the documented fallbacks with no tables registered', async () => {
     const clients = await import(CLIENTS)
-    expect(clients.getContextWindow('SelfDeployedQwen')).toBe(16_384)
+    expect(clients.getContextWindow('LargeQwen')).toBe(16_384)
     expect(clients.limitsFor('controller')).toEqual({
       contextWindow: 16_384,
       maxOutputTokens: undefined,
@@ -335,7 +335,7 @@ describe('unregistered — the package-side defaults are safe', () => {
     expect(clients.getContextWindow('X')).toBe(99)
     expect(clients.activeInferenceTier()).toBe('self_deployed')
     expect(clients.activeCostRates().eurPerUsd()).toBe(3)
-    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
-    expect(seen).toEqual(['SelfDeployedQwen'])
+    expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(seen).toEqual(['LargeQwen'])
   })
 })

@@ -1,5 +1,5 @@
 /**
- * Live smoke test for the self-deployed inference tier (`SelfDeployedQwen`).
+ * Live smoke test for the self-deployed inference tier (`LargeQwen`).
  *
  * CI cannot run this — the endpoint is company-internal and reachable only
  * from a machine holding `LARGE_LLM_API_KEY`. The hermetic half of the
@@ -25,7 +25,7 @@
  *
  * SCALE-TO-ZERO: the deployment sleeps when idle and bills only while awake,
  * so the FIRST call here pays a cold start (container pull + weight load) and
- * can take minutes. That is why `self-deployed-client.baml` sets a long
+ * can take minutes. That is why `large-client.baml` sets a long
  * `request_timeout_ms`, and why this script makes both of its calls
  * back-to-back rather than being run repeatedly — each separate session risks
  * paying another cold start.
@@ -53,7 +53,7 @@
  *      that goes through a production op rather than a BAML function directly.
  *   5. `describeToolResultsBatchOp` and `describeToolResultOp` — the DESCRIBE
  *      role, which joined on the same day and is handed tool results VERBATIM.
- *      It runs on `LocalQwenSmall`, the private tier's 4B summarizer; the
+ *      It runs on `SmallQwen`, the private tier's 4B summarizer; the
  *      expected client is read from `SELF_DEPLOYED_CLIENT_BY_ROLE.describe`.
  *      Neither takes a collector: they own one internally for accounting, so
  *      the client they were served by is read off the usage observer — the same
@@ -109,7 +109,7 @@ import {
 import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
 
-const EXPECTED_CLIENT = 'SelfDeployedQwen'
+const EXPECTED_CLIENT = 'LargeQwen'
 
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
@@ -234,14 +234,14 @@ async function preflight(): Promise<void> {
   // a `--served-model-name`, turns every call into a 400 that reads like a
   // client bug. Cheap, and it runs before anything is billed.
   const client = readFileSync(
-    path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
+    path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
     'utf8',
   )
   const pinned = /model "([^"]+)"/.exec(client)?.[1]
   const served = await servedModelIds()
   if (!pinned || !served.includes(pinned)) {
     throw new Error(
-      `baml_src/self-deployed-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
+      `baml_src/large-client.baml pins model ${JSON.stringify(pinned)}, but the endpoint ` +
         `serves ${served.map((m) => JSON.stringify(m)).join(', ') || '(nothing)'}. ` +
         'Put the served id in the client, regenerate from packages/harness-baml, and re-run this.',
     )
@@ -260,7 +260,7 @@ function servedBy(collector: Collector): string | undefined {
   return (calls.find((c) => c.selected) ?? calls[0])?.clientName
 }
 
-function assertServedBySelfDeployed(label: string, collector: Collector): void {
+function assertServedByLarge(label: string, collector: Collector): void {
   const client = servedBy(collector)
   if (client !== EXPECTED_CLIENT) {
     throw new Error(
@@ -285,7 +285,7 @@ async function critic(): Promise<void> {
     collector,
   )
   console.log(`   ${Date.now() - t0}ms · served by ${servedBy(collector)}`)
-  assertServedBySelfDeployed('Critic', collector)
+  assertServedByLarge('Critic', collector)
   console.log(
     `   verdict: is_sufficient=${result.is_sufficient} explanation=${JSON.stringify(result.explanation)}`,
   )
@@ -322,7 +322,7 @@ async function controller(): Promise<void> {
   )
   if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
   console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
-  assertServedBySelfDeployed('LoopController', collector)
+  assertServedByLarge('LoopController', collector)
   console.log(
     `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
   )
@@ -392,7 +392,7 @@ async function actorRetry(): Promise<void> {
   const llmCall = extractLLMCallData(collector, 'ActorController', {}, t0, action)
   if (!llmCall) throw new Error('the collector captured nothing — is baml_client stale? (#154)')
   console.log(`   ${Date.now() - t0}ms · served by ${llmCall.clientName} (${llmCall.provider})`)
-  assertServedBySelfDeployed('ActorController', collector)
+  assertServedByLarge('ActorController', collector)
   console.log(
     `   action: tool=${action.tool_name} status=${action.status} is_final=${action.is_final}`,
   )
@@ -416,7 +416,7 @@ async function router(): Promise<void> {
     collector,
   )
   console.log(`   ${Date.now() - t0}ms · served by ${servedBy(collector)}`)
-  assertServedBySelfDeployed('Router', collector)
+  assertServedByLarge('Router', collector)
   console.log(
     `   route=${result.tool_name} needs_tool=${result.tool_call_needed} ` +
       `intent=${JSON.stringify(result.intent).slice(0, 120)}`,
@@ -431,7 +431,7 @@ async function router(): Promise<void> {
 }
 
 /**
- * The describe role on LocalQwenSmall, through accounting rather than a collector.
+ * The describe role on SmallQwen, through accounting rather than a collector.
  *
  * Neither describe op exposes its collector — both wrap `withUsageAccounting`,
  * which creates one, hands it to the call and reads it in a `finally`. So the
@@ -616,7 +616,7 @@ export async function smokeDecide(): Promise<void> {
 async function main(): Promise<void> {
   console.log('🔒 self-deployed (self-hosted) smoke — confidential-compute route')
   await preflight()
-  console.log('   flag on, env configured, controller role → SelfDeployedQwen')
+  console.log('   flag on, env configured, controller role → LargeQwen')
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()
   await controller()

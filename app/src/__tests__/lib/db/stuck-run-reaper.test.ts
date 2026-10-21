@@ -282,7 +282,7 @@ describe('the reap statement', () => {
     expect(TURN_CLAIM_TTL_SECONDS / 60).toBeLessThan(HUNG_TURN_BACKSTOP_MINUTES / 10)
   })
 
-  it('mirrors the per-call ceiling declared on SelfDeployedQwen', () => {
+  it('mirrors the per-call ceiling declared on LargeQwen', () => {
     // `PER_CALL_TIMEOUT_MINUTES` is the term that dominates the derivation, and
     // it is a COPY: `request_timeout_ms` lives in BAML, which exports nothing a
     // module can read it from (same situation as `LARGE_LLM_MODEL_ID`, pinned the
@@ -290,14 +290,14 @@ describe('the reap statement', () => {
     // without it, the one number that moves the threshold could drift from its
     // declaration with every other test still green.
     const declared = readFileSync(
-      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/self-deployed-client.baml'),
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
     )
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
     const match = /request_timeout_ms\s+(\d+)/.exec(declared)
-    expect(match, 'SelfDeployedQwen no longer declares a request_timeout_ms').not.toBeNull()
+    expect(match, 'LargeQwen no longer declares a request_timeout_ms').not.toBeNull()
     expect(
       PER_CALL_TIMEOUT_MINUTES * 60_000,
       'the reaper threshold is derived from a per-call ceiling the client no longer has',

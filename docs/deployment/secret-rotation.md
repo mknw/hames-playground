@@ -163,7 +163,7 @@ replacement before revocation; otherwise keep ingress closed throughout cutover.
 Check a synthetic private-tier turn in an authorized live window, with no public
 fallback. Rollback coordinates endpoint and consumers together. **Verda is
 paused: never wake or probe it.** Deferred verification means the rotation is
-unverified, not passed. Source: packages/harness-baml/baml_src/self-deployed-client.baml:178.
+unverified, not passed. Source: packages/harness-baml/baml_src/large-client.baml:178.
 
 ## SMALL_LLM_API_KEY
 

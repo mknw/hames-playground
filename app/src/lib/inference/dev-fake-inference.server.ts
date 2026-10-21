@@ -13,7 +13,7 @@
  * `app/e2e-browser/` cannot do that. The app runs in its own process, behind a
  * real dev server, driven by a real browser; the suite has no handle on the
  * `b` that process constructed. And it cannot simply run every turn on the
- * self-hosted tier and reach the fake through `SelfDeployedQwen`'s shipped
+ * self-hosted tier and reach the fake through `LargeQwen`'s shipped
  * `base_url env.LARGE_LLM_BASE_URL` seam either, because the tier switch
  * moves exactly the roles in `SELF_DEPLOYED_CLIENT_BY_ROLE` — a self_deployed-tier turn still
  * makes its `router` / `describe` / `screen` / `planner` and title calls on the
@@ -52,14 +52,14 @@
  *
  *   - no override (the anthropic tier, and every role the switch never moves)
  *     → the registry's primary → the fake, reporting `FAKE_ANTHROPIC_TIER_MODEL`
- *   - `clientOverrideFor('controller')` → `setPrimary('SelfDeployedQwen')` → the
- *     declaration in `baml_src/self-deployed-client.baml` → the fake, reporting the
+ *   - `clientOverrideFor('controller')` → `setPrimary('LargeQwen')` → the
+ *     declaration in `baml_src/large-client.baml` → the fake, reporting the
  *     self-hosted model id
  *
  * which is the split the browser suite's routing assertions read.
  *
  * The registry is rebuilt PER CALL, through a getter, because `setPrimary` is a
- * mutation: one shared instance would keep `SelfDeployedQwen` as primary after the
+ * mutation: one shared instance would keep `LargeQwen` as primary after the
  * first self_deployed-routed call and every later anthropic-tier call would silently be
  * attributed to the wrong tier — a green tier-switch scenario proving nothing.
  */

@@ -506,8 +506,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // rates come through the host seam (PR-1a) — `configureCostRates` at the
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
-  const { eurPerUsd: eurPerUsdRate, largeEurPerHour: largeEurPerHour } =
-    activeCostRates()
+  const { eurPerUsd: eurPerUsdRate, largeEurPerHour: largeEurPerHour } = activeCostRates()
   const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
   const timeRates = Object.fromEntries(
@@ -1972,7 +1971,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // asked to keep on the box.
     //
     // WHAT MOVING IT COSTS is on `SELF_DEPLOYED_CLIENT_BY_ROLE` and is not restated
-    // here: `SelfDeployedQwen` is unmeasured on the two properties a screener needs,
+    // here: `LargeQwen` is unmeasured on the two properties a screener needs,
     // and the eval suite's `screen-on-the-tier` scenario is what measures them.
     //
     // POSITIONALLY SAFE (#154) without a `hasOpts` branch, unlike the Router

@@ -96,7 +96,7 @@ export function assertSmallModelConfigured(): void {
   const base = process.env.SMALL_LLM_BASE_URL
   if (!base) {
     throw new Error(
-      'The private inference tier routes the `describe` role to LocalQwenSmall, but ' +
+      'The private inference tier routes the `describe` role to SmallQwen, but ' +
         'SMALL_LLM_BASE_URL is not set. Set it (see app/.env.example — `make llm-small` serves ' +
         'http://localhost:8095/v1) or use the anthropic tier. This build refuses to quietly ' +
         'descale summarization back onto the 27B: that would re-route the role handed tool ' +

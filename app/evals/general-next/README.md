@@ -36,7 +36,7 @@ usage observer checkpoints an interrupted scenario and prevents retries or a fin
 synthesis after the stop condition; throwing from an observer would be swallowed
 by the shared notifier. A timer also stops private wall-clock spend during long
 requests. Missing or unknown observed cost stops the run, as does any serving
-client outside `SelfDeployedQwen`, `LocalQwenSmall` and `PrivateSystemOne`.
+client outside `LargeQwen`, `SmallQwen` and `PrivateSystemOne`.
 
 The observer prices completed calls, so the final in-flight call can overshoot the
 80% threshold and even the configured cap. The report adds a separate conservative

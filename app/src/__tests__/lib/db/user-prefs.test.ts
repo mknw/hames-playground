@@ -108,7 +108,7 @@ describe('defaultInferenceTier — the owner’s preview decision', () => {
 
   it('is anthropic when the 4B summarizer has no endpoint', () => {
     // The private tier is TWO models (2026-08-26): the heavy roles on the 27B
-    // and `describe` on LocalQwenSmall. A deployment with only the 27B
+    // and `describe` on SmallQwen. A deployment with only the 27B
     // configured cannot serve a private turn's first tool-result summary, and
     // must not silently descale it back onto the 27B — so it is not offered at
     // all. This is the half a one-endpoint fixture used to hide.

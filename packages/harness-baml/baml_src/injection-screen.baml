@@ -15,7 +15,7 @@
 // IMPLICITLY (SA-M5).
 //
 // "Implicitly" is the whole of it, and 2026-08-26 is why the word is there.
-// The private tier now routes this function to SelfDeployedQwen — a DELIBERATE owner
+// The private tier now routes this function to LargeQwen — a DELIBERATE owner
 // decision on the rule that no call made under that tier may be sent to any
 // public AI provider, with its own line in SELF_DEPLOYED_CLIENT_BY_ROLE and its own
 // eval scenario (`screen-on-the-tier`), which is exactly what the role split

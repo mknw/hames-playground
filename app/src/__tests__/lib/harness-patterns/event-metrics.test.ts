@@ -2,7 +2,7 @@
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
-import { SELF_DEPLOYED_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
+import { LARGE_LLM_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
 /**
  * Event-level token/cost accounting (#122).
  *
@@ -164,7 +164,7 @@ describe('computeEventMetrics', () => {
       {
         calls: [
           {
-            ...apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -195,7 +195,7 @@ describe('computeEventMetrics', () => {
       {
         calls: [
           {
-            ...apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
             timing: { durationMs: 3_600_000 },
           },
           {
@@ -242,12 +242,12 @@ describe('computeEventMetrics', () => {
           // Usage-less: no httpResponse to read, no Collector usage either.
           {
             selected: false,
-            clientName: SELF_DEPLOYED_CLIENT_NAME,
+            clientName: LARGE_LLM_CLIENT_NAME,
             provider: 'openai-generic',
             timing: { durationMs: 900_000 },
           },
           {
-            ...apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -275,9 +275,9 @@ describe('computeEventMetrics', () => {
     const collector = fakeCollector([
       {
         calls: [
-          { selected: false, clientName: SELF_DEPLOYED_CLIENT_NAME, provider: 'openai-generic' },
+          { selected: false, clientName: LARGE_LLM_CLIENT_NAME, provider: 'openai-generic' },
           {
-            ...apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -323,7 +323,7 @@ describe('computeEventMetrics', () => {
     // cannot stand in for it: the honest reading is unknown.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
+      { calls: [apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
     ])
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(1)
@@ -341,7 +341,7 @@ describe('computeEventMetrics', () => {
         {
           calls: [
             {
-              ...apiCall(SELF_DEPLOYED_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
+              ...apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
               timing: { durationMs: 3_600_000 },
             },
           ],

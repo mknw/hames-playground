@@ -71,7 +71,7 @@ it('keeps the shared ControllerAction.tool_args description free of Return', () 
   expect(description).not.toContain('Return')
 })
 
-describe.each(['AnthropicSonnet5', 'SelfDeployedQwen'])('Return contract (%s wire)', (client) => {
+describe.each(['AnthropicSonnet5', 'LargeQwen'])('Return contract (%s wire)', (client) => {
   it('puts the plain-prose instruction only in the loop prompt', async () => {
     const options = { client, env: ENV }
     const actor = (

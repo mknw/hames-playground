@@ -36,7 +36,7 @@
  *
  * The 27B (`hames_private_27b.py`, its own Modal app, `Caddyfile.27b`) gets the
  * same five, plus the one thing that makes it a drop-in for the app's
- * `SelfDeployedQwen` client: the name it serves and the window it allows equal what that
+ * `LargeQwen` client: the name it serves and the window it allows equal what that
  * client sends and assumes. What both apps share (the vLLM pin, Caddy, the
  * image env, the restore check) lives in `vllm_box.py`, and neither app file
  * imports the other, so a change to one never discards the other's snapshots.
@@ -52,9 +52,7 @@ const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
 const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
-const selfDeployedClient = read(
-  '../../../../packages/harness-baml/baml_src/self-deployed-client.baml',
-)
+const selfDeployedClient = read('../../../../packages/harness-baml/baml_src/large-client.baml')
 const settings = read('../../lib/settings.ts')
 const largeActivity = read('../../lib/inference/large-activity.server.ts')
 const coldStart = read('../../lib/inference/cold-start.server.ts')
@@ -316,12 +314,12 @@ const bigDownload =
   bigApp.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
 
 describe('deploy/modal: the 27B box (Qwen27B)', () => {
-  it('serves the exact model name and window the SelfDeployedQwen client sends and assumes', () => {
+  it('serves the exact model name and window the LargeQwen client sends and assumes', () => {
     expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
     const clientModel = selfDeployedClient.match(/^\s*model "([^"]+)"$/m)?.[1]
     expect(clientModel).toBeTruthy()
     expect(bigApp).toContain(`QWEN27B_MODEL = "${clientModel}"`)
-    const window = settings.match(/^\s*SelfDeployedQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
+    const window = settings.match(/^\s*LargeQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
     expect(bigApp).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
     expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')
     expect(bigArgv).toContain('"--max-model-len", str(QWEN27B_MAX_MODEL_LEN)')

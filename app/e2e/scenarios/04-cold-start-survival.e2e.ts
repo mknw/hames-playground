@@ -7,7 +7,7 @@
  * into a poll with its own 600s budget (30s per attempt, hermetically raised
  * above this scenario's delay — see `lib/mode.ts`), and the BAML client's budget
  * became a WARM-call one (180s, derived from its own output cap — see
- * `baml_src/self-deployed-client.baml`). Two separate budgets, and this scenario used to
+ * `baml_src/large-client.baml`). Two separate budgets, and this scenario used to
  * cover neither cleanly: armed `times: 1`, its delay landed on the wake ping,
  * which meant it exercised `LARGE_LLM_WAKE_TIMEOUT_MS` and passed — while nothing at
  * any layer exercised the 180s the client's own calls live under (#279 review,

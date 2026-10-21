@@ -201,14 +201,14 @@ describe('the plug — unmapped roles (P2)', () => {
     // self-deployed default: only the MAPPED role moves; the built-in tier applies to
     // every other role unchanged.
     policy('self_deployed')
-    expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
-    expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(clientOverrideFor('screen')).toEqual({ client: 'LargeQwen' })
     expect(clientOverrideFor('describe')).toEqual({
       client: BYO_DESCRIBE,
       clientRegistry: expect.any(ClientRegistry),
     })
     // ...and budgeting follows the client the call actually takes.
-    expect(resolveClientForRole('controller')).toBe('SelfDeployedQwen')
+    expect(resolveClientForRole('controller')).toBe('LargeQwen')
     expect(resolveClientForRole('describe')).toBe(BYO_DESCRIBE)
   })
 })
@@ -227,8 +227,8 @@ describe('the composition seam — consumer over the built-in tier', () => {
     // The built-in tier applies unchanged to every unmapped role — and the
     // private-call hook fires only for those (the consumer's client is not
     // the private tier and owes nobody a wake).
-    expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
-    expect(privateCalls).toEqual(['SelfDeployedQwen'])
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(privateCalls).toEqual(['LargeQwen'])
     expect(privateCalls).not.toContain(BYO_ROUTER)
   })
 
@@ -236,8 +236,8 @@ describe('the composition seam — consumer over the built-in tier', () => {
     const privateCalls: string[] = []
     policy('self_deployed', (client) => privateCalls.push(client))
     expect(activeConsumerClients()).toBeUndefined()
-    expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
-    expect(privateCalls).toEqual(['SelfDeployedQwen'])
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(privateCalls).toEqual(['LargeQwen'])
   })
 
   it('clearing the layer returns the seam to the built-in tier', () => {
@@ -245,8 +245,8 @@ describe('the composition seam — consumer over the built-in tier', () => {
     configureConsumerClients(plugRouter())
     expect(resolveClientForRole('router')).toBe(BYO_ROUTER)
     configureConsumerClients(undefined)
-    expect(resolveClientForRole('router')).toBe('SelfDeployedQwen')
-    expect(clientOverrideFor('router')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(resolveClientForRole('router')).toBe('LargeQwen')
+    expect(clientOverrideFor('router')).toEqual({ client: 'LargeQwen' })
   })
 
   it('activateConsumerClients registers the layer (the one-subpath convenience)', () => {

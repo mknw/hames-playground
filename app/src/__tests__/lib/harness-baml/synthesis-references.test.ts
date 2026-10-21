@@ -36,7 +36,7 @@ const REFERENCE = {
 const RECORD =
   '- sample-notes.md [doc synthetic-document, chars 0-80]: The launch date is 2030-04-12.'
 const FACT = 'The launch date is 2030-04-12.'
-const CLIENTS = ['AnthropicSonnet5', 'AnthropicHaiku45', 'SelfDeployedQwen']
+const CLIENTS = ['AnthropicSonnet5', 'AnthropicHaiku45', 'LargeQwen']
 const BEFORE = JSON.parse(
   readFileSync(
     resolve(process.cwd(), 'src/__tests__/lib/harness-baml/fixtures/synthesis-before-507.json'),
@@ -243,7 +243,7 @@ describe('defaultSynthesize reference projection', () => {
     await defaultSynthesize(input({ references: [REFERENCE, REFERENCE, second] }, 'retriever'))
     expect(synth.mock.calls[0][6]).toEqual([REFERENCE, second])
     const body = (
-      await render('SelfDeployedQwen', { references: [REFERENCE, second] }, synth.mock.calls[0][6]!)
+      await render('LargeQwen', { references: [REFERENCE, second] }, synth.mock.calls[0][6]!)
     ).body.text()
     expect(body).toContain('[1]')
     expect(body).toContain('[2]')
@@ -309,7 +309,7 @@ describe('defaultSynthesize reference projection', () => {
       expect(args[5]).toBe('Remember metric units')
       expect(args[6]).toEqual([REFERENCE])
       expect(args[7]?.collector).toBeDefined()
-      expect(args[7]?.client).toBe(tier === 'self_deployed' ? 'SelfDeployedQwen' : undefined)
+      expect(args[7]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
       // Render exactly those arguments, with synthetic env values only.
       const body = (
         await b.request.Synthesize(args[0], args[1], args[2], args[3], args[4], args[5], args[6], {

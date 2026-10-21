@@ -16,7 +16,7 @@
 //     --gpu-memory-utilization 0.90 --language-model-only
 //     --speculative-config {method:mtp,num_speculative_tokens:3}
 // `--max-model-len 131072` is the server's hard ceiling on prompt+completion
-// and is mirrored as SelfDeployedQwen in MODEL_CONTEXT_WINDOWS (settings.ts); an
+// and is mirrored as LargeQwen in MODEL_CONTEXT_WINDOWS (settings.ts); an
 // earlier plan for this client assumed a 250k window, and the deployment wins.
 //
 // NO CACHING, DELIBERATELY. This client declares no `allowed_role_metadata`,
@@ -167,7 +167,7 @@
 // shorter than the deployment's own. Deriving it from the fallback broke the
 // moment the fallback rose: a quarter of 360s is 90s, which would have rejected
 // the genuine 71.7s cold start above.
-client<llm> SelfDeployedQwen {
+client<llm> LargeQwen {
   provider openai-generic
   options {
     // The OpenAI-COMPATIBLE BASE — the deployment root plus `/v1`. Passed to
@@ -251,7 +251,7 @@ client<llm> SelfDeployedQwen {
 // Sampling is the Qwen3.8 model card's thinking preset, not the original's 0.2:
 // https://huggingface.co/Qwen/Qwen3.8-27B-FP8#best-practices
 // No allowed_role_metadata: cache_control must never reach this box.
-client<llm> SelfDeployedQwenThink {
+client<llm> LargeQwenThink {
   provider openai-generic
   options {
     base_url env.LARGE_LLM_BASE_URL

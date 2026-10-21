@@ -1105,9 +1105,9 @@ describe('wrapAsLLMCallError marks only a parse failure recoverable', () => {
       kind === 'BamlValidationError'
         ? new baml.BamlValidationError('prompt', RAW, 'missing tool_args', 'missing tool_args')
         : kind === 'BamlClientHttpError'
-          ? new baml.BamlClientHttpError('SelfDeployedQwen', '401', 401, '401')
+          ? new baml.BamlClientHttpError('LargeQwen', '401', 401, '401')
           : kind === 'BamlTimeoutError'
-            ? new baml.BamlTimeoutError('SelfDeployedQwen', 'timed out')
+            ? new baml.BamlTimeoutError('LargeQwen', 'timed out')
             : kind === 'BamlAbortError'
               ? new baml.BamlAbortError('aborted')
               : new Error('fetch failed')

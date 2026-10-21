@@ -214,12 +214,12 @@ async function boot(): Promise<AppHandles> {
 
   const fakeLlm = await startFakeLlm()
   if (IS_HERMETIC) {
-    // The shipped seam: `SelfDeployedQwen` reads this per call. The `/v1` suffix is
+    // The shipped seam: `LargeQwen` reads this per call. The `/v1` suffix is
     // required by `assertLargeModelConfigured()`, which still runs.
     process.env.LARGE_LLM_BASE_URL = fakeLlm.baseUrl
     process.env.LARGE_LLM_API_KEY = 'e2e-fake-key'
     // The private tier's SECOND model since 2026-08-26: `describe` runs on the 4B
-    // `LocalQwenSmall`, and the tier is refused outright without this. Pointed at
+    // `SmallQwen`, and the tier is refused outright without this. Pointed at
     // the SAME fake, which is what lets a scenario tell the two apart — the fake
     // records the `model` field, so a describe call arrives as the 4B's id and a
     // controller call as the 27B's.

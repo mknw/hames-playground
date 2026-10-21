@@ -70,8 +70,8 @@ function written(tier: string): Record<string, unknown> | undefined {
 }
 
 describe('tierOfSample — the selected client is the evidence', () => {
-  it('attributes a SelfDeployedQwen call to the self-hosted tier', () => {
-    expect(tierOfSample({ functionName: 'LoopController', clientName: 'SelfDeployedQwen' })).toBe(
+  it('attributes a LargeQwen call to the self-hosted tier', () => {
+    expect(tierOfSample({ functionName: 'LoopController', clientName: 'LargeQwen' })).toBe(
       'self_deployed',
     )
   })
@@ -81,15 +81,15 @@ describe('tierOfSample — the selected client is the evidence', () => {
     recordSample(
       {
         functionName: 'PlannerThinking',
-        clientName: 'SelfDeployedQwenThink',
+        clientName: 'LargeQwenThink',
         metrics: metrics(),
         durationMs: 5000,
       },
       now,
     )
-    expect(
-      tierOfSample({ functionName: 'PlannerThinking', clientName: 'SelfDeployedQwenThink' }),
-    ).toBe('self_deployed')
+    expect(tierOfSample({ functionName: 'PlannerThinking', clientName: 'LargeQwenThink' })).toBe(
+      'self_deployed',
+    )
     expect(largeWarmth(now).state).toBe('warm')
     expect(tierLatency('self_deployed')).toEqual({ p50Ms: 5000, samples: 1 })
     await flushUsage()
@@ -97,17 +97,17 @@ describe('tierOfSample — the selected client is the evidence', () => {
     expect(written('anthropic')).toBeUndefined()
   })
 
-  it('attributes a LocalQwenSmall call to the private tier too', () => {
+  it('attributes a SmallQwen call to the private tier too', () => {
     // THE DESCRIBE FLIP'S ACCOUNTING HALF (2026-08-26). The private tier became
     // TWO models — the heavy roles on the 27B, summarization on the 4B — and a
-    // hardcoded `=== 'SelfDeployedQwen'` would have counted every private-tier describe
+    // hardcoded `=== 'LargeQwen'` would have counted every private-tier describe
     // call as an ANTHROPIC call. That is six of the twelve routed functions, and
     // the highest-frequency ones, so the header's "private share" would have
     // understated itself on exactly the tier the number exists to report, while
     // the routing was perfectly correct. Nothing would have looked wrong.
-    expect(
-      tierOfSample({ functionName: 'ResultDescribeBatch', clientName: 'LocalQwenSmall' }),
-    ).toBe('self_deployed')
+    expect(tierOfSample({ functionName: 'ResultDescribeBatch', clientName: 'SmallQwen' })).toBe(
+      'self_deployed',
+    )
   })
 
   it('derives the set from the tier map rather than listing names', () => {
@@ -134,10 +134,8 @@ describe('tierOfSample — the selected client is the evidence', () => {
     )
     expect(tierOfSample({ functionName: 'Router' })).toBe('anthropic')
     // Near-misses are not the self-hosted box. A prefix match would let a
-    // future `SelfDeployedQwenSomethingElse` silently join the confidential tier.
-    expect(tierOfSample({ functionName: 'X', clientName: 'SelfDeployedQwenPreview' })).toBe(
-      'anthropic',
-    )
+    // future `LargeQwenSomethingElse` silently join the confidential tier.
+    expect(tierOfSample({ functionName: 'X', clientName: 'LargeQwenPreview' })).toBe('anthropic')
     // `LocalGLM` is the OTHER local client and is in no chain and no tier map.
     // "Local" is not the criterion; being in the tier map is.
     expect(tierOfSample({ functionName: 'X', clientName: 'LocalGLM' })).toBe('anthropic')
@@ -153,13 +151,13 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     // asleep, which is exactly the wrong direction: the whole module errs
     // pessimistic so a user is never told the box is up when it is not.
     const NOW = 1_700_000_000_000
-    recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
+    recordSample({ functionName: 'ResultDescribe', clientName: 'SmallQwen' }, NOW)
     expect(largeWarmth(NOW).state).toBe('unknown')
     // The decide readout is the same 4B on the same server: also not evidence.
     recordSample({ functionName: 'Decide', clientName: 'PrivateSystemOne' }, NOW)
     expect(largeWarmth(NOW).state).toBe('unknown')
 
-    recordSample({ functionName: 'LoopController', clientName: 'SelfDeployedQwen' }, NOW)
+    recordSample({ functionName: 'LoopController', clientName: 'LargeQwen' }, NOW)
     expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
@@ -172,7 +170,7 @@ describe('the small warm clock requires metrics', () => {
     recordSample(
       {
         functionName: 'DescribeToolResult',
-        clientName: 'LocalQwenSmall',
+        clientName: 'SmallQwen',
         metrics: metrics(),
       },
       now,
@@ -183,7 +181,7 @@ describe('the small warm clock requires metrics', () => {
   it('leaves an expired clock cold when the sample has no metrics', () => {
     const now = Date.now()
     noteSmallCallCompleted(now - 400_000)
-    recordSample({ functionName: 'DescribeToolResult', clientName: 'LocalQwenSmall' }, now)
+    recordSample({ functionName: 'DescribeToolResult', clientName: 'SmallQwen' }, now)
     expect(smallProvenWarm(now)).toBe(false)
   })
 })
@@ -211,7 +209,7 @@ describe('recordSample', () => {
     for (let i = 0; i < 3; i++) {
       recordSample({
         functionName: 'LoopController',
-        clientName: 'SelfDeployedQwen',
+        clientName: 'LargeQwen',
         metrics: metrics(),
       })
     }
@@ -226,7 +224,7 @@ describe('recordSample', () => {
   })
 
   it('keeps the two tiers in separate rows', async () => {
-    recordSample({ functionName: 'A', clientName: 'SelfDeployedQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
     recordSample({ functionName: 'B', clientName: 'DescribeAnthropic', metrics: metrics() })
     await flushUsage()
 
@@ -238,7 +236,7 @@ describe('recordSample', () => {
   it('counts a call that spent nothing as no call at all', async () => {
     // A pre-flight throw never reached a model; counting it would inflate both
     // the call count and the denominator of the self-hosted share.
-    recordSample({ functionName: 'LoopController', clientName: 'SelfDeployedQwen' })
+    recordSample({ functionName: 'LoopController', clientName: 'LargeQwen' })
     await flushUsage()
     expect(addUsage).not.toHaveBeenCalled()
   })
@@ -248,7 +246,7 @@ describe('recordSample', () => {
     recordSample({ functionName: 'A', clientName: 'AnthropicSonnet5', metrics: metrics() }, NOW)
     expect(largeWarmth(NOW).state).toBe('unknown')
 
-    recordSample({ functionName: 'B', clientName: 'SelfDeployedQwen', metrics: metrics() }, NOW)
+    recordSample({ functionName: 'B', clientName: 'LargeQwen', metrics: metrics() }, NOW)
     expect(largeWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
   })
 
@@ -257,7 +255,7 @@ describe('recordSample', () => {
     // failure path (`extractFailureLLMCallData`) notifies too. Reporting cold
     // here would send the next user into a cold start that will not happen.
     const NOW = 1_700_000_000_000
-    recordSample({ functionName: 'B', clientName: 'SelfDeployedQwen' }, NOW)
+    recordSample({ functionName: 'B', clientName: 'LargeQwen' }, NOW)
     expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
@@ -266,7 +264,7 @@ describe('recordSample — the latency window', () => {
   it('records the call duration against the tier the client proves', () => {
     recordSample({
       functionName: 'LoopController',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       durationMs: 4100,
     })
     recordSample({ functionName: 'Critic', clientName: 'AnthropicSonnet5', durationMs: 900 })
@@ -327,7 +325,7 @@ describe('recordSample — the latency window', () => {
     // the calls that went well would bias the median towards the good ones.
     recordSample({
       functionName: 'LoopController',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       durationMs: 30_000,
     })
     expect(tierLatency('self_deployed')).toEqual({ p50Ms: 30_000, samples: 1 })
@@ -338,7 +336,7 @@ describe('recordSample — the latency window', () => {
     // read as an instant call.
     recordSample({
       functionName: 'LoopController',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       metrics: metrics(),
     })
     expect(tierLatency('self_deployed')).toEqual({ p50Ms: null, samples: 0 })
@@ -360,7 +358,7 @@ describe('flushUsage', () => {
   })
 
   it('clears the pending deltas, so a second flush does not double-count', async () => {
-    recordSample({ functionName: 'A', clientName: 'SelfDeployedQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
     await flushUsage()
     addUsage.mockClear()
 
@@ -373,7 +371,7 @@ describe('flushUsage', () => {
     // are documented as "at most what was spent" for exactly this.
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     addUsage.mockRejectedValueOnce(new Error('postgres is down'))
-    recordSample({ functionName: 'A', clientName: 'SelfDeployedQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
 
     await expect(flushUsage()).resolves.toBeUndefined()
     expect(error).toHaveBeenCalled()
@@ -402,7 +400,7 @@ describe('installUsageRecorder', () => {
 
     notifyLlmUsage({
       functionName: 'LoopController',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       metrics: metrics({
         inputUncachedTokens: 100,
         inputCacheReadTokens: 0,
@@ -425,7 +423,7 @@ describe('installUsageRecorder', () => {
     // The registration itself is production's only wiring; every other test in
     // this file calls `recordSample` directly and would pass without it.
     installUsageRecorder(60_000)
-    notifyLlmUsage({ functionName: 'X', clientName: 'SelfDeployedQwen', metrics: metrics() })
+    notifyLlmUsage({ functionName: 'X', clientName: 'LargeQwen', metrics: metrics() })
     expect(largeWarmth().state).not.toBe('unknown')
   })
 })

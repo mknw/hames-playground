@@ -788,8 +788,8 @@ export async function backfillConversationInferenceTier(run: QueryRunner): Promi
 }
 
 /**
- * The per-LLM-call ceiling in force: `SelfDeployedQwen`'s `request_timeout_ms` of
- * 180_000 (`baml_src/self-deployed-client.baml`), which is the only declared one and
+ * The per-LLM-call ceiling in force: `LargeQwen`'s `request_timeout_ms` of
+ * 180_000 (`baml_src/large-client.baml`), which is the only declared one and
  * belongs to the DEPLOYMENT DEFAULT tier. It is the single term below that
  * dominates everything else, so it is the number that moves the threshold.
  *

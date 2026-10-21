@@ -183,10 +183,10 @@ const CLIENTS: Record<string, string[]> = {
     'ControllerAnthropic',
     'AnthropicSonnet5NoThink',
     'AnthropicSonnet46NoThink',
-    'SelfDeployedQwen',
+    'LargeQwen',
   ],
-  ActorController: ['ActorAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'SelfDeployedQwen'],
-  Planner: ['PlannerAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'SelfDeployedQwen'],
+  ActorController: ['ActorAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'LargeQwen'],
+  Planner: ['PlannerAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'LargeQwen'],
 }
 
 const GOLDENS = JSON.parse(
@@ -240,7 +240,7 @@ describe('#625 shared bodies can omit content-side reasoning', () => {
     RENDERS.filter(
       ({ scenario, client }) =>
         ['parallel', 'sequential', 'context'].includes(scenario) &&
-        ['AnthropicSonnet5NoThink', 'AnthropicSonnet5', 'SelfDeployedQwen'].includes(client),
+        ['AnthropicSonnet5NoThink', 'AnthropicSonnet5', 'LargeQwen'].includes(client),
     ),
   )(
     '$name omits only reasoning demonstrations and guidance',

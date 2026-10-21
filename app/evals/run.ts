@@ -21,7 +21,7 @@
  * USAGE (always from `app/`):
  *
  *   pnpm eval:harness                          # baseline: the declared Anthropic chains
- *   EVAL_CLIENT=SelfDeployedQwen pnpm eval:harness    # the self-hosted deployment
+ *   EVAL_CLIENT=LargeQwen pnpm eval:harness    # the self-hosted deployment
  *   EVAL_RELIABILITY_N=5 pnpm eval:harness     # shorter reliability sample
  *   EVAL_ROLES=screen pnpm eval:harness        # narrow to one role while bisecting
  *
@@ -136,7 +136,7 @@ async function main(): Promise<void> {
   console.log(`   client under test : ${routing.client ?? 'default (declared Anthropic chains)'}`)
   console.log(`   routing           : ${routing.note}`)
   console.log(`   scenarios         : ${scenarios.length}`)
-  if (routing.client === 'SelfDeployedQwen') {
+  if (routing.client === 'LargeQwen') {
     console.log('   NOTE: the large-model box scales to zero — a cold start can take minutes.')
   }
   console.log('')

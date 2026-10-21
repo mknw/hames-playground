@@ -637,9 +637,9 @@ describe('compactBulkData', () => {
     // makes the mirror reporting the override load-bearing rather than tidy.
     //
     // THE NUMBERS CHANGED ON 2026-08-26, TWICE. The widening put `describe` on
-    // `SelfDeployedQwen`, where the cap happened to be identical to Haiku's (16 384, so
+    // `LargeQwen`, where the cap happened to be identical to Haiku's (16 384, so
     // the 8-item ceiling held) and only the window shrank. The describe flip
-    // later the same day moved it to the 4B `LocalQwenSmall`, and now BOTH
+    // later the same day moved it to the 4B `SmallQwen`, and now BOTH
     // shrink: the cap to 2 048 and the window to 32 768.
     //
     // The cap is the one with a behavioural consequence, and it is a cost the
@@ -683,8 +683,8 @@ describe('compactBulkData', () => {
       const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
       clients.assertInferenceTier('self_deployed')
       await withRunFrame({ inference: { tier: 'self_deployed' } }, async () => {
-        expect(clients.resolveClientForRole('describe')).toBe('LocalQwenSmall')
-        expect(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall).toBeLessThan(
+        expect(clients.resolveClientForRole('describe')).toBe('SmallQwen')
+        expect(CLIENT_MAX_OUTPUT_TOKENS.SmallQwen).toBeLessThan(
           CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic,
         )
         // The batch floor, not the ceiling — stated as both, because the exact

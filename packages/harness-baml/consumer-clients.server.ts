@@ -40,7 +40,7 @@
  *
  * - **Prompts.** The registry re-points which CLIENT a declared function calls;
  *   it cannot add, edit or reorder one (owner ruling a).
- * - **Provider-specific definitions.** `SelfDeployedQwen`, `self-deployed-client.baml`,
+ * - **Provider-specific definitions.** `LargeQwen`, `large-client.baml`,
  *   `SELF_DEPLOYED_CLIENT_BY_ROLE`, `assertPrivateTierConfigured` and `InferenceTier`
  *   are the built-in tier's, untouched here (owner ruling b).
  * - **Prompt budgeting tables.** `resolveClientForRole` DOES report a mapped

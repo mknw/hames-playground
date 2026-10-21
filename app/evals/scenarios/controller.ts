@@ -88,7 +88,7 @@ function argsParseAsObject(toolName: string, args: string): Check {
 /** A thinking model served with thinking left ON puts its reasoning in
  *  `content` ahead of the envelope, with a stray `</think>` between them — a
  *  degraded PARSE rather than an error, so nothing throws and nothing logs.
- *  Reported as a check because for SelfDeployedQwen it is pinned off deliberately
+ *  Reported as a check because for LargeQwen it is pinned off deliberately
  *  (`chat_template_kwargs { enable_thinking false }`) and a redeploy is what
  *  would turn it back on. */
 function noThinkingLeak(collector: Collector): Check {
@@ -133,7 +133,7 @@ function parseBamlClients(): Map<string, string[] | undefined> {
 }
 
 /** Every leaf client `name` can resolve to, following `strategy` chains. A
- *  direct client (`SelfDeployedQwen`) is its own only leaf. `seen` stops a malformed
+ *  direct client (`LargeQwen`) is its own only leaf. `seen` stops a malformed
  *  self-referencing chain from spinning. */
 function resolveLeaves(
   name: string,

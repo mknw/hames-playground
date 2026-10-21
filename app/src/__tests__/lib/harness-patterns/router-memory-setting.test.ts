@@ -27,7 +27,7 @@ const MESSAGE = 'help with my usual units'
 const BLOCK = '- [preference] MEMTOKEN-7731 prefers metric units'
 const ROUTES = [{ name: 'search', description: 'web search' }]
 const OFFLINE = {
-  client: 'SelfDeployedQwen',
+  client: 'LargeQwen',
   env: {
     LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
     LARGE_LLM_API_KEY: 'offline-test',

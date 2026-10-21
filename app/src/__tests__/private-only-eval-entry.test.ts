@@ -35,11 +35,11 @@ afterEach(() => {
 })
 
 it.each([
-  ['private', '', 'SelfDeployedQwen', 'SelfDeployedQwen', true],
-  ['private', 'screen', 'SelfDeployedQwen', 'SelfDeployedQwen', true],
-  ['', '', undefined, 'SelfDeployedQwen', true],
-  ['', 'screen', undefined, 'SelfDeployedQwen', true],
-  ['private', 'screen', 'SelfDeployedQwen', 'WrongClient', false],
+  ['private', '', 'LargeQwen', 'LargeQwen', true],
+  ['private', 'screen', 'LargeQwen', 'LargeQwen', true],
+  ['', '', undefined, 'LargeQwen', true],
+  ['', 'screen', undefined, 'LargeQwen', true],
+  ['private', 'screen', 'LargeQwen', 'WrongClient', false],
 ] as const)(
   'preflights the real eval entry: restriction=%s roles=%s',
   async (restriction, roles, client, served, shouldPass) => {

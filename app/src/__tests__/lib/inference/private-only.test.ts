@@ -71,8 +71,8 @@ describe('private-only call guards', () => {
   })
   it('refuses registry and env overrides that could redefine a private name', () => {
     for (const options of [
-      { client: 'LocalQwenSmall', clientRegistry: {} },
-      { client: 'LocalQwenSmall', env: {} },
+      { client: 'SmallQwen', clientRegistry: {} },
+      { client: 'SmallQwen', env: {} },
     ]) {
       expect(() => assertBamlCallAllowed('GenerateConversationTitle', options)).toThrow(
         /before any request/,
@@ -102,13 +102,13 @@ describe('private-only call guards', () => {
       /before any request/,
     )
     // A bag shifted into an input position is not the positional options bag.
-    expect(() => b.GenerateConversationTitle({ client: 'LocalQwenSmall' } as never)).toThrow(
+    expect(() => b.GenerateConversationTitle({ client: 'SmallQwen' } as never)).toThrow(
       /before any request/,
     )
     expect(native).not.toHaveBeenCalled()
-    await expect(
-      b.GenerateConversationTitle('synthetic', { client: 'LocalQwenSmall' }),
-    ).resolves.toBe('Synthetic title')
+    await expect(b.GenerateConversationTitle('synthetic', { client: 'SmallQwen' })).resolves.toBe(
+      'Synthetic title',
+    )
     expect(native).toHaveBeenCalledOnce()
     expect(() => b.withOptions({ client: 'DescribeAnthropic' })).toThrow(/unrecognised/)
     expect(() => b.stream).toThrow(/unguarded/)

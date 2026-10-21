@@ -109,6 +109,20 @@ add('bootstrap-test-names-a-missing-key', 'scripts/bootstrap-vps.test.sh',
     "\\nLARGE_LLM_API_KEY='k'\\n\\\" >>'$good'\"",
     "\\nSELF_DEPLOYED_INFERENCE_API_KEY='k'\\n\\\" >>'$good'\"", [BOOTSTRAP], 'shell suite')
 
+PRICING = 'src/__tests__/lib/pricing-eur.test.ts'
+add('legacy-client-alias', 'app/src/lib/settings.ts',
+    'const clientName = canonicalClientName(storedClientName)',
+    'const clientName = storedClientName', [PRICING])
+add('legacy-client-alias-table', 'app/src/lib/settings.ts',
+    "  VerdaQwenThink: 'LargeQwenThink',\n", '', [PRICING])
+add('legacy-client-display', 'app/src/components/ark-ui/observability/LLMCallTabs.tsx',
+    '{canonicalClientName(props.llmCall.clientName)}', '{props.llmCall.clientName}', [PRICING])
+
+add('probe-never-reads-inference-endpoint', 'app/src/lib/inference/verda-control-plane.server.ts',
+    "process.env.VERDA_CONTROL_PLANE_BASE ?? 'https://api.verda.com'",
+    "(void process.env.LARGE_LLM_BASE_URL, void process.env.LARGE_LLM_API_KEY, process.env.VERDA_CONTROL_PLANE_BASE ?? 'https://api.verda.com')",
+    ['src/__tests__/lib/inference/verda-control-plane.test.ts'])
+
 if '--database' in sys.argv:
     database = os.environ.get('TEST_DATABASE_URL')
     if not database or database == ENV['TEST_DATABASE_URL']:

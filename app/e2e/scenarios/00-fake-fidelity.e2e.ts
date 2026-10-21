@@ -33,7 +33,7 @@
  *     from — which also makes a stale COMMITTED client red here, and that
  *     client is committed precisely so nothing regenerates it on the way in.
  *
- * The renders go through `SelfDeployedQwen` because it is the repo's only
+ * The renders go through `LargeQwen` because it is the repo's only
  * `openai-generic` client, and the openai-generic body is what the fake sees.
  * The Anthropic providers lift the leading system block into a top-level
  * `system` field instead of leaving it in `messages`, so rendering through them
@@ -80,7 +80,7 @@ function bamlSourceFunctionNames(): string[] {
 }
 
 beforeAll(async () => {
-  // Boots only for its env side effects — `SelfDeployedQwen` refuses to resolve
+  // Boots only for its env side effects — `LargeQwen` refuses to resolve
   // without a `/v1` endpoint, and `bootApp` is the one place that is set.
   await bootApp()
   // ONE corpus: this is the client the package's adapters, defaults, routing
@@ -97,7 +97,7 @@ beforeAll(async () => {
     (fn: string) =>
     (...args: unknown[]) =>
       req[fn](...args)
-  const via = { client: 'SelfDeployedQwen' }
+  const via = { client: 'LargeQwen' }
   const tools = [{ name: 'search', description: 'Search', args_schema: '{}' }]
   const attempt = {
     n: 1,
@@ -228,7 +228,7 @@ describe('the fake recognises every BAML function', () => {
       // Anthropic render lifts the leading system block into a top-level
       // `system` field, so `messages` would not contain the marker at all and
       // the classifier would be checked against a shape the fake never sees.
-      expect(body.model, `${name} did not render through SelfDeployedQwen`).toBe(LARGE_LLM_MODEL)
+      expect(body.model, `${name} did not render through LargeQwen`).toBe(LARGE_LLM_MODEL)
       const text = promptText(body.messages ?? [])
       expect(text.length, `${name} rendered an empty prompt`).toBeGreaterThan(0)
       expect(classifyPrompt(text)).toBe(name)
@@ -410,14 +410,14 @@ describe.runIf(IS_HERMETIC)('hermetic transport backstop', () => {
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     await recordedRefusal(() =>
       b.GenerateConversationTitle('x', {
-        client: 'LocalQwenSmall',
+        client: 'SmallQwen',
         env: { SMALL_LLM_BASE_URL: 'https://hermetic-backstop.invalid/v1' },
       }),
     )
   })
   it.each([
-    ['LocalQwenSmall', 'SMALL_LLM_BASE_URL'],
-    ['SelfDeployedQwen', 'LARGE_LLM_BASE_URL'],
+    ['SmallQwen', 'SMALL_LLM_BASE_URL'],
+    ['LargeQwen', 'LARGE_LLM_BASE_URL'],
   ])('refuses %s when its process endpoint differs from the fake', async (client, variable) => {
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     const original = process.env[variable]

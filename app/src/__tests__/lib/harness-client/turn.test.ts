@@ -207,7 +207,7 @@ vi.mock('../../../lib/inference/large-activity.server', () => ({
   largeScaledownSeconds: () => 300,
   // The name `clientOverrideFor` compares against to decide whether a bag is
   // about to wait on the scale-to-zero box.
-  SELF_DEPLOYED_CLIENT_NAME: 'SelfDeployedQwen',
+  LARGE_LLM_CLIENT_NAME: 'LargeQwen',
 }))
 
 // The wake ping is MOCKED here, and the split is deliberate: what this file owns
@@ -1237,7 +1237,7 @@ describe('what the header learns from a turn', () => {
 
     // Not vacuous: the private turn really was on the self-hosted route and
     // really did announce its wait, from the same seam.
-    expect(overrides['sess-private']).toEqual({ client: 'SelfDeployedQwen' })
+    expect(overrides['sess-private']).toEqual({ client: 'LargeQwen' })
     expect(privateWarming).toHaveBeenCalled()
   })
 

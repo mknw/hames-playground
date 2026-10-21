@@ -183,7 +183,7 @@ describe('largeWarmth', () => {
   })
 
   it('does NOT invent warmth when a turn ends without a Verda call', () => {
-    // Only a sample naming SelfDeployedQwen stamps the clock. An approval that
+    // Only a sample naming LargeQwen stamps the clock. An approval that
     // resolved with no LLM step must not leave the header claiming the box is
     // up for three minutes.
     beginSelfDeployedTurn()

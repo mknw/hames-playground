@@ -28,8 +28,8 @@
  * **`USE_SELF_DEPLOYED_INFERENCE=1`** takes the other seam — a per-call `client`
  * override, so no `client` line moves and the default posture is one env var
  * away in both directions. It re-points the roles in
- * `SELF_DEPLOYED_CLIENT_BY_ROLE` at `SelfDeployedQwen`, the
- * company-hosted vLLM deployment declared in `baml_src/self-deployed-client.baml`.
+ * `SELF_DEPLOYED_CLIENT_BY_ROLE` at `LargeQwen`, the
+ * company-hosted vLLM deployment declared in `baml_src/large-client.baml`.
  * Confidential compute is the point — those prompts stay on infrastructure the
  * company controls. Three properties are deliberate:
  *
@@ -69,14 +69,14 @@
  *   (`docs/DATA_STASH.md`) has its own route and its `openrouter` setting would
  *   send the user's query text to a third party; the default is `local`, so the
  *   claim holds as shipped, but it is a different seam.
- * - The screen's move buys the posture and costs a MEASUREMENT: `SelfDeployedQwen` is
+ * - The screen's move buys the posture and costs a MEASUREMENT: `LargeQwen` is
  *   unmeasured on the two properties a screener needs (see the map entry). The
  *   trade was made knowingly, so the honest record is "accepted, unmeasured,
  *   measurable" — the eval suite's `screen-on-the-tier` scenario is where the
  *   measurement lands, not a promise in a comment.
  *
  * **The private tier is TWO models, not one** (owner decision 2026-08-26). The
- * heavy roles take `SelfDeployedQwen`, the 27B; `describe` takes `LocalQwenSmall`, the
+ * heavy roles take `LargeQwen`, the 27B; `describe` takes `SmallQwen`, the
  * 4B summarizer reached over `SMALL_LLM_BASE_URL` (the #256 env-vars-only
  * contract — "local" names the wire format, not the machine). Summarization is
  * the highest-frequency, lowest-value call in the repo and it was making a
@@ -390,10 +390,10 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   // record, rather than one edit having moved both.
   //
   // AND THEN THE HYPOTHETICAL HAPPENED. On 2026-08-26 `describe` was re-pointed
-  // at `LocalQwenSmall` — a 4B summarizer — on the private tier, which is
+  // at `SmallQwen` — a 4B summarizer — on the private tier, which is
   // literally the "re-pointed at a cheap summarization model" this comment had
   // been describing in the abstract since SA-M5. The screen did not move: it is
-  // its own line naming `SelfDeployedQwen`, a 27B. This is the role separation paying
+  // its own line naming `LargeQwen`, a 27B. This is the role separation paying
   // for itself once, in production, and it is worth noting that the mechanism
   // that saved it was two map lines rather than any test — the tests pin the
   // outcome, the separation is what made the outcome possible to get right.
@@ -410,7 +410,7 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
 
 /**
  * The roles a self_deployed tier decision re-points at the self-hosted deployment
- * (`baml_src/self-deployed-client.baml`).
+ * (`baml_src/large-client.baml`).
  *
  * EVERY role is here. That is the 2026-08-26 owner decision and
  * it replaced a narrower map: `router`, `planner` and `describe` were held out
@@ -425,7 +425,7 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  *
  * `screen` — the injection screen — was the last exception, and it is one no
  * longer. It was held back on the SA-M5 / SD-4 grounds recorded on
- * `CLIENT_BY_ROLE` above: `SelfDeployedQwen` is unmeasured both on refusing to be
+ * `CLIENT_BY_ROLE` above: `LargeQwen` is unmeasured both on refusing to be
  * talked out of reporting by the content it reviews and on copying matched
  * spans VERBATIM, and a paraphrased span is a missed injection. The owner
  * settled it on 2026-08-26 (answer 7) on a rule that outranks the measurement
@@ -441,7 +441,7 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * summarization. See `CLIENT_BY_ROLE` above.
  *
  * NOT EVERY ROLE HERE NAMES THE SAME CLIENT, since 2026-08-26. `describe` names
- * `LocalQwenSmall`. Read the values, never the key set, when you want to know
+ * `SmallQwen`. Read the values, never the key set, when you want to know
  * where a role's calls land — `Object.keys(SELF_DEPLOYED_CLIENT_BY_ROLE)` answers "does
  * the tier move this role", which is a different question and the one
  * `TIER_SWITCHED_FUNCTIONS` asks.
@@ -465,25 +465,25 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
  * thing that routes, because it is the only thing that consults the active tier.
  */
 export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, string>>> = {
-  controller: 'SelfDeployedQwen', // LoopController + ActorController
-  critic: 'SelfDeployedQwen',
-  compactExecution: 'SelfDeployedQwen', // Synthesize
-  router: 'SelfDeployedQwen',
+  controller: 'LargeQwen', // LoopController + ActorController
+  critic: 'LargeQwen',
+  compactExecution: 'LargeQwen', // Synthesize
+  router: 'LargeQwen',
   // THE COMPOSITE CONSEQUENCE OF THIS ONE LINE, stated whole because each piece
   // is individually mild and the set is not. This is the authoritative
   // statement; `CLAUDE.md`, `evals/client.ts` and `createPlannerAdapter` point
   // here rather than restating it.
   //
   //  1. `PlannerAnthropic`'s documented justification is "thinking left ON —
-  //     the reasoning IS the deliverable". `SelfDeployedQwen` declares
+  //     the reasoning IS the deliverable". `LargeQwen` declares
   //     `chat_template_kwargs { enable_thinking false }`, so on this tier that
   //     justification does not hold: the planner reasons without a thinking
   //     budget, in the same tokens as its output.
   //  2. Its output ceiling drops EIGHTFOLD — `AnthropicSonnet5`'s 32 768 to
-  //     `SelfDeployedQwen`'s 4 096 (the F2 timeout derivation on PR #279) — on
+  //     `LargeQwen`'s 4 096 (the F2 timeout derivation on PR #279) — on
   //     the role whose output is longest, over the largest tool catalog in the
   //     repo (~134 tools in the preview deployment).
-  //  3. Cap-hits are detected (`SelfDeployedQwen` is in `CLIENT_MAX_OUTPUT_TOKENS`, so
+  //  3. Cap-hits are detected (`LargeQwen` is in `CLIENT_MAX_OUTPUT_TOKENS`, so
   //     `planParseRetry` fires), but the recovery is ONE retry of the same
   //     prompt with guidance appended. A plan that truncated once on a halved
   //     ceiling truncates again, and then the adapter throws.
@@ -505,7 +505,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   // to a visible failure, and until the eval suite's `planner-plan-shape`
   // scenario is run against a client, nothing measures 1–3. That scenario
   // exists precisely so this stops being four flags in four files.
-  planner: 'SelfDeployedQwen',
+  planner: 'LargeQwen',
   // THE ONE ROLE ON THIS TIER THAT IS NOT THE 27B. Owner decision 2026-08-26,
   // and the composite consequence stated whole in the style of `planner:` above,
   // because three of the four pieces are improvements and the fourth is not.
@@ -532,11 +532,11 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.54/h) times measured
   //     per-attempt duration. Missing duration reads as unknown; measured
   //     calls carry the same floor marker as the larger GPU. Attribution
-  //     follows LocalQwenSmall, never the endpoint URL.
+  //     follows SmallQwen, never the endpoint URL.
   //
   // If `SMALL_LLM_BASE_URL` is unset the tier is REFUSED, not descaled — see
   // `assertPrivateTierConfigured` in lib/inference/config.server.ts.
-  describe: 'LocalQwenSmall', // the eight summarization functions
+  describe: 'SmallQwen', // the eight summarization functions
   // The composite consequence of THIS line, in the style the `planner:` entry
   // above sets: the screen now inherits the scale-to-zero LATENCY profile as
   // well as the routing. A guarded tool result can wait a 146s cold start — or
@@ -546,7 +546,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   // "recorded rather than hidden" still holds and the guard's own regex layer is
   // untouched by it; what the tier buys back is that no such payload leaves the
   // box. Blast radius is zero today because no agent enables the LLM screen.
-  screen: 'SelfDeployedQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
+  screen: 'LargeQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
   // Private systemone URL; never the public endpoint or its key.
   decide: 'PrivateSystemOne',
 }
@@ -554,7 +554,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
 /** The only functions designated to consume each trace-exposing leaf (#637).
  * Loop/actor counterparts still require G19 Q2's live measurement. */
 export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
-  SelfDeployedQwenThink: ['PlannerThinking'],
+  LargeQwenThink: ['PlannerThinking'],
 }
 
 /** Trace-exposing leaves, never chains: mode is verified against the collector's
@@ -760,7 +760,7 @@ export function activeInferenceTier(): InferenceTier {
 }
 
 /**
- * `{ client: 'SelfDeployedQwen' }` for a self-deployed role while the active tier is
+ * `{ client: 'LargeQwen' }` for a self-deployed role while the active tier is
  * `'self_deployed'` (the run frame's `inference.tier`, or `USE_SELF_DEPLOYED_INFERENCE=1` as the
  * deployment default), otherwise `undefined` — letting the BAML function fall
  * through to the Anthropic chain it declares. A per-run `clientOverride` in the
@@ -847,7 +847,7 @@ function selfDeployedClientFor(role: BamlRole): string | undefined {
  * and default to 16K.
  *
  * It reports the OVERRIDE when one is active, so a self-deployed role trims
- * against SelfDeployedQwen's 131K window instead of Anthropic's 200K — over-trimming
+ * against LargeQwen's 131K window instead of Anthropic's 200K — over-trimming
  * costs context, under-trimming costs the whole call.
  */
 export function resolveClientForRole(role: BamlRole): string {

@@ -104,7 +104,7 @@ client<llm> SynthesizerAnthropic {
 // and this block is what the Anthropic tier still runs. To move the describe
 // tier, rewrite its EIGHT `client DescribeAnthropic` lines individually, or
 // declare a separate chain (e.g. `DescribeLocal`) and point those eight at it.
-// The owned-inference flip is documented on LocalQwenSmall in local-client.baml.
+// The owned-inference flip is documented on SmallQwen in local-client.baml.
 client<llm> DescribeAnthropic {
   provider fallback
   options {

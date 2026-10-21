@@ -78,7 +78,7 @@ function goCold(app: AppHandles): void {
 function firstLargeAnswer(frames: SseFrame[]): number {
   return frames.findIndex((f) => {
     const call = (f.data as { llmCall?: { clientName?: string } }).llmCall
-    return call?.clientName === 'SelfDeployedQwen'
+    return call?.clientName === 'LargeQwen'
   })
 }
 
@@ -163,7 +163,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     // And the ordering: nothing from the self-hosted model precedes the notice.
     const answerIdx = firstLargeAnswer(frames)
     const warmingIdx = frames.indexOf(warming[0])
-    expect(answerIdx, 'no frame carried a SelfDeployedQwen call').toBeGreaterThan(-1)
+    expect(answerIdx, 'no frame carried a LargeQwen call').toBeGreaterThan(-1)
     expect(warmingIdx).toBeLessThan(answerIdx)
     // Something follows it, which is what the client clears the spinner on —
     // there is no dedicated clear frame by design.

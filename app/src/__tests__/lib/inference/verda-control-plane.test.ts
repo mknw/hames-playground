@@ -381,7 +381,10 @@ describe('probing never wakes the box', () => {
     // the inference endpoint in order to say it does not use it — what must
     // never appear is code that reads it.
     const source = readFileSync(MODULE_PATH, 'utf8')
-    expect(source).not.toContain('process.env.SELF_DEPLOYED_INFERENCE')
+    // Both spellings: the current `LARGE_LLM_*` names and the one-release legacy
+    // `VERDA_INFERENCE_*` ones — each a prefix of the endpoint AND the key.
+    expect(source).not.toContain('process.env.LARGE_LLM')
+    expect(source).not.toContain('process.env.VERDA_INFERENCE')
   })
 
   it('sends every fetch to the control plane, never to the inference endpoint', async () => {

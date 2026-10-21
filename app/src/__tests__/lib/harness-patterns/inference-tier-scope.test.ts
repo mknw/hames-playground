@@ -34,7 +34,7 @@ const ENV_KEYS = [
   'LARGE_LLM_BASE_URL',
   'LARGE_LLM_API_KEY',
   // The private tier is TWO models since 2026-08-26 — `describe` runs on the 4B
-  // `LocalQwenSmall`, reached through this — so it is part of the tier's
+  // `SmallQwen`, reached through this — so it is part of the tier's
   // configuration and a scope naming `self_deployed` without it is refused. The KEY is
   // saved/restored too: systemone requires it, and one test deletes it to pin
   // refusal before tier entry and boot.
@@ -77,13 +77,13 @@ function configureEndpointOnly(): void {
  *  and a test that asserted one client for all of them would pass with the
  *  describe flip reverted. */
 const PRIVATE_CLIENT: Record<string, string> = {
-  controller: 'SelfDeployedQwen',
-  critic: 'SelfDeployedQwen',
-  compactExecution: 'SelfDeployedQwen',
-  router: 'SelfDeployedQwen',
-  planner: 'SelfDeployedQwen',
-  describe: 'LocalQwenSmall',
-  screen: 'SelfDeployedQwen',
+  controller: 'LargeQwen',
+  critic: 'LargeQwen',
+  compactExecution: 'LargeQwen',
+  router: 'LargeQwen',
+  planner: 'LargeQwen',
+  describe: 'SmallQwen',
+  screen: 'LargeQwen',
 }
 
 async function load() {
@@ -167,15 +167,15 @@ describe('runWithInferenceTier — both positions reach the right override', () 
       // asserted as `DescribeAnthropic` here; the owner moved it on 2026-08-26
       // and a user-facing control is exactly where that has to be visible, in
       // both directions, rather than inferred from the map.
-      expect(clientOverrideFor('screen')).toEqual({ client: 'SelfDeployedQwen' })
-      expect(resolveClientForRole('screen')).toBe('SelfDeployedQwen')
+      expect(clientOverrideFor('screen')).toEqual({ client: 'LargeQwen' })
+      expect(resolveClientForRole('screen')).toBe('LargeQwen')
       // AND ITS NEIGHBOUR ON THE SAME BAML CHAIN GOES SOMEWHERE ELSE. `describe`
       // and `screen` both declare `DescribeAnthropic` in `baml_src/`, so a chain
       // edit could only ever move them together; the tier map moves them apart,
       // which is the whole reason `screen` is a role of its own (SA-M5 / SD-4).
       // Asserted as an inequality as well as two values, because "the screen
-      // stayed off the 4B" is the property, not "the screen is on SelfDeployedQwen".
-      expect(resolveClientForRole('describe')).toBe('LocalQwenSmall')
+      // stayed off the 4B" is the property, not "the screen is on LargeQwen".
+      expect(resolveClientForRole('describe')).toBe('SmallQwen')
       expect(resolveClientForRole('screen')).not.toBe(resolveClientForRole('describe'))
     })
   })
@@ -197,7 +197,7 @@ describe('runWithInferenceTier — both positions reach the right override', () 
     const { runWithInferenceTier, clientOverrideFor, activeInferenceTier } = await load()
 
     expect(activeInferenceTier()).toBe('self_deployed')
-    expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
 
     await runWithInferenceTier('anthropic', async () => {
       expect(activeInferenceTier()).toBe('anthropic')
@@ -235,7 +235,7 @@ describe('scope isolation — one user’s choice is not another’s routing', (
     const { runWithInferenceTier, clientOverrideFor } = await load()
 
     await runWithInferenceTier('self_deployed', async () => {
-      expect(clientOverrideFor('controller')).toEqual({ client: 'SelfDeployedQwen' })
+      expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
     expect(clientOverrideFor('controller')).toBeUndefined()
   })
@@ -258,7 +258,7 @@ describe('scope isolation — one user’s choice is not another’s routing', (
       }),
     ])
 
-    expect(seen.self_deployed).toEqual({ client: 'SelfDeployedQwen' })
+    expect(seen.self_deployed).toEqual({ client: 'LargeQwen' })
     expect(seen.anthropic).toBeUndefined()
   })
 
@@ -299,7 +299,7 @@ describe('the self_deployed position fails closed when the endpoint is unset', (
 
   it('throws, rather than descaling describe, when the 4B endpoint is unset', async () => {
     // THE FAILURE POLICY, named (SD-4's "an unexamined one is the defect"). The
-    // private tier routes `describe` to LocalQwenSmall; with no
+    // private tier routes `describe` to SmallQwen; with no
     // SMALL_LLM_BASE_URL there are three options and only one is honest:
     //   - fall back to Anthropic — the one thing the whole route exists to
     //     prevent, and worse here than anywhere because `describe` is handed tool
@@ -481,7 +481,7 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
 
     expect(seen.describe).toEqual({ client: 'SomeCheapModel' })
     // The screen stayed on the tier's own client — it did not follow.
-    expect(seen.screen).toEqual({ client: 'SelfDeployedQwen' })
+    expect(seen.screen).toEqual({ client: 'LargeQwen' })
   })
 
   it("a per-run clientOverride in the generic slot pre-empts this package's tier map", async () => {
@@ -503,6 +503,6 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     const mapped = await withRunFrame({ inference: { tier: 'self_deployed' } }, async () =>
       clients.clientOverrideFor('controller'),
     )
-    expect(mapped).toEqual({ client: 'SelfDeployedQwen' })
+    expect(mapped).toEqual({ client: 'LargeQwen' })
   })
 })

@@ -3,7 +3,7 @@
  *
  * The self-hosted deployment scales to zero: after `LARGE_LLM_SCALEDOWN_SECONDS`
  * with no traffic the GPU is released, and the next call pays a cold start
- * measured in minutes (see `baml_src/self-deployed-client.baml`'s deliberately generous
+ * measured in minutes (see `baml_src/large-client.baml`'s deliberately generous
  * `request_timeout_ms`). This module is the one place that knows whether the
  * box is currently up, so the header can say so before a user sends a message
  * into a multi-minute wait.
@@ -11,7 +11,7 @@
  * ## What is measured, precisely
  *
  * `lastCompletedAt` is stamped from an `LlmUsageSample` whose **`clientName` is
- * `SelfDeployedQwen`** — the client BAML actually selected, not the tier anyone
+ * `LargeQwen`** — the client BAML actually selected, not the tier anyone
  * intended. A routing change that reads like it moved traffic but did not
  * cannot make this clock tick.
  *
@@ -45,11 +45,11 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 assertServerOnImport()
 
 /** BAML client name that means "this call reached the self-hosted box". */
-export const SELF_DEPLOYED_CLIENT_NAME = 'SelfDeployedQwen'
+export const LARGE_LLM_CLIENT_NAME = 'LargeQwen'
 
 /**
  * The model id the deployment serves, copied from the `model` line on
- * `SelfDeployedQwen` in `baml_src/self-deployed-client.baml`.
+ * `LargeQwen` in `baml_src/large-client.baml`.
  *
  * A COPY, and the copy is the smaller evil. It exists for the wake ping
  * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
@@ -112,7 +112,7 @@ const state: LargeState = ((globalThis as LargeGlobal)[STATE_KEY] ??= {
 
 /** Record that a call to the self-hosted box just finished. Two callers, both
  *  holding the same evidence — an answered completion on the deployment:
- *  the LLM-usage observer, for every sample naming `SelfDeployedQwen` (success or
+ *  the LLM-usage observer, for every sample naming `LargeQwen` (success or
  *  failure, because a failed call woke the box exactly as much as a successful
  *  one), and the wake ping, which is not a BAML call and so has no sample. The
  *  ping stamps only on success, and `wake.server.ts` says why that is not the
@@ -129,7 +129,7 @@ export function beginSelfDeployedTurn(): void {
 }
 
 /** A turn on the self-deployed tier finished. Deliberately does NOT stamp the clock:
- *  only a sample naming `SelfDeployedQwen` may do that, so a turn that happened to
+ *  only a sample naming `LargeQwen` may do that, so a turn that happened to
  *  make no self-deployed call (an approval that resolved without an LLM step)
  *  cannot invent warmth the box never had. Never lets the gauge go negative —
  *  a mispaired decrement would otherwise pin the header to "running". */

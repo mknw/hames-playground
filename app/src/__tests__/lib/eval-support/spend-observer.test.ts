@@ -22,7 +22,7 @@ describe('runner synchronous spend stop', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
     observer.activate(undefined)
-    observer.observe({ clientName: 'SelfDeployedQwen', metrics: { costEur: 0 } })
+    observer.observe({ clientName: 'LargeQwen', metrics: { costEur: 0 } })
     expect(budget.reason).toBe('Usage outside a scenario')
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.rows).toHaveLength(0)
@@ -30,7 +30,7 @@ describe('runner synchronous spend stop', () => {
   it('calls onStop synchronously at the 80% boundary', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
-    observer.observe({ clientName: 'SelfDeployedQwen', metrics: { costEur: 12.8 } })
+    observer.observe({ clientName: 'LargeQwen', metrics: { costEur: 12.8 } })
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.totalUsd).toBe(16)
   })
@@ -41,7 +41,7 @@ describe('runner synchronous spend stop', () => {
     expect(live.onStop).toHaveBeenCalledOnce()
     const hermetic = setup(false)
     hermetic.observer.activate(key)
-    hermetic.observer.observe({ clientName: 'LocalQwenSmall' })
+    hermetic.observer.observe({ clientName: 'SmallQwen' })
     expect(hermetic.budget.totalUsd).toBe(0)
     expect(hermetic.onStop).not.toHaveBeenCalled()
   })
@@ -50,12 +50,12 @@ describe('runner synchronous spend stop', () => {
     observer.activate(key)
     observer.observe({
       functionName: 'ScreenUntrustedContent',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       metrics: { costEur: 0.2 },
     })
     observer.observe({
       functionName: 'Synthesize',
-      clientName: 'SelfDeployedQwen',
+      clientName: 'LargeQwen',
       metrics: { costEur: 0.4 },
     })
     expect(budget.row(key).functions.ScreenUntrustedContent.calls).toBe(1)

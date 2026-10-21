@@ -26,11 +26,11 @@ client<llm> LocalGLM {
 //     canonical per-function list is the block on that chain in
 //     anthropic-only.baml. Nothing in this file is read on that tier.
 //
-//   * PRIVATE TIER — `describe: 'LocalQwenSmall'` in `SELF_DEPLOYED_CLIENT_BY_ROLE`
-//     (harness-patterns/clients.server.ts) spreads `{ client: 'LocalQwenSmall' }`
+//   * PRIVATE TIER — `describe: 'SmallQwen'` in `SELF_DEPLOYED_CLIENT_BY_ROLE`
+//     (harness-patterns/clients.server.ts) spreads `{ client: 'SmallQwen' }`
 //     into every describe call's options bag. That is the SAME seam the 27B
 //     roles take; the private tier is now two models, not one — the heavy roles
-//     on SelfDeployedQwen and summarization here.
+//     on LargeQwen and summarization here.
 //
 //   * WHY NOT the obvious lever. Rewriting the eight `client DescribeAnthropic`
 //     lines (or pointing them at a new `DescribeLocal` chain) would move
@@ -52,7 +52,7 @@ client<llm> LocalGLM {
 //     content it reviews, and must copy spans VERBATIM so the guard can locate
 //     and neutralize them character-for-character. Both are what a small
 //     summarization model is worst at. On the private tier the screen stays on
-//     SelfDeployedQwen — a 27B — by owner decision (2026-08-26), and that decision is
+//     LargeQwen — a 27B — by owner decision (2026-08-26), and that decision is
 //     the whole reason the two roles are separate: re-pointing the shared
 //     DescribeAnthropic CHAIN, the one-line edit that reads like "switch the
 //     describe tier on", would have dragged prompt-injection screening onto
@@ -69,7 +69,7 @@ client<llm> LocalGLM {
 //
 // ── WHERE IT RUNS ───────────────────────────────────────────────────────────
 //
-// `base_url` and `api_key` are env references (same form as SelfDeployedQwen), so
+// `base_url` and `api_key` are env references (same form as LargeQwen), so
 // moving this model to a remote endpoint is env-vars-only, no code change:
 //
 //   SMALL_LLM_BASE_URL   OpenAI-compatible base, INCLUDING the `/v1` suffix.
@@ -102,20 +102,20 @@ client<llm> LocalGLM {
 // private-tier turn's tool results cost more describe calls than the same turn
 // on Haiku's 16384. That is the cost of the flip and it is paid per turn.
 //
-// No CLIENT_PRICING entry, deliberately, and it is not the SelfDeployedQwen case: this
+// No CLIENT_PRICING entry, deliberately, and it is not the LargeQwen case: this
 // box is neither billed per token by a vendor nor per GPU-hour by this repo's
 // own rate, so an invented figure would render as a confident price for a
 // machine whose bill nobody here can see. Consequence, stated rather than
 // discovered: a private-tier step that made a describe call reads as
 // cost-unknown. Pricing it is an owner call (see the PR that landed the flip).
-client<llm> LocalQwenSmall {
+client<llm> SmallQwen {
   provider openai-generic
   options {
     base_url env.SMALL_LLM_BASE_URL
     api_key env.SMALL_LLM_API_KEY
     model "qwen3.5-4b-instruct"
     max_tokens 2048
-    // THINKING OFF, REQUEST-SIDE, for SelfDeployedQwen's reason and one more.
+    // THINKING OFF, REQUEST-SIDE, for LargeQwen's reason and one more.
     //
     // Qwen3.5 is a thinking model: with the chat template left to itself the
     // reasoning lands in `content` ahead of the answer (no reasoning parser is

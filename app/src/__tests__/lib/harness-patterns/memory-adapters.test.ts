@@ -109,7 +109,7 @@ describe('createMemoryExtractAdapter', () => {
     await createMemoryExtractAdapter()({ kindHint: 'k', window: 'w', latestUser: 'u' })
     const bag = extract.mock.calls[0][3] as { collector?: unknown; client?: string }
     expect(bag.collector).toBeDefined()
-    expect(bag.client).toBe('LocalQwenSmall')
+    expect(bag.client).toBe('SmallQwen')
   })
 
   it('leaves the Anthropic tier on its declared chain (no client override)', async () => {
@@ -150,7 +150,7 @@ describe('createMemoryCompactAdapter', () => {
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const { createMemoryCompactAdapter } = await load()
     await createMemoryCompactAdapter()({ kind: 'preference', members: MEMBERS })
-    expect((compact.mock.calls[0][2] as { client?: string }).client).toBe('LocalQwenSmall')
+    expect((compact.mock.calls[0][2] as { client?: string }).client).toBe('SmallQwen')
   })
 
   it('throws LLMCallError on a failure', async () => {

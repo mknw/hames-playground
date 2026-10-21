@@ -4,7 +4,7 @@
  *
  * ## The self_deployed tier: the shipped seam, unmodified
  *
- * `SelfDeployedQwen` declares `base_url env.LARGE_LLM_BASE_URL`, and BAML
+ * `LargeQwen` declares `base_url env.LARGE_LLM_BASE_URL`, and BAML
  * resolves `env.*` references from `process.env` at CALL time (see the generated
  * `async_client.ts`: `{ ...process.env, ...options.env }`). Setting that
  * variable to the fake's base is therefore not a trick — it is what a developer
@@ -34,11 +34,11 @@
  *
  *   - no override (the anthropic tier, and every role the switch never moves)
  *     → the registry's primary → the fake, reporting `FAKE_ANTHROPIC_TIER_MODEL`
- *   - `clientOverrideFor('controller')` → `setPrimary('SelfDeployedQwen')` → the
+ *   - `clientOverrideFor('controller')` → `setPrimary('LargeQwen')` → the
  *     declaration in `baml_src/` → the fake, reporting `LARGE_LLM_MODEL`
  *
  * The registry is rebuilt PER CALL, through a getter, because `setPrimary` is a
- * mutation: one shared instance would keep `SelfDeployedQwen` as primary after the
+ * mutation: one shared instance would keep `LargeQwen` as primary after the
  * first self_deployed-routed call, and every later anthropic-tier call would silently
  * be attributed to the wrong tier. That would not fail — it would produce a
  * green tier-switch scenario that proves nothing.
@@ -99,9 +99,9 @@ export function installHermeticRouting(b: unknown, baseUrl: string): void {
       // transport backstop catches those calls and per-call env overrides.
       if (!registered.has(client)) {
         const endpoint =
-          client === 'SelfDeployedQwen'
+          client === 'LargeQwen'
             ? process.env.LARGE_LLM_BASE_URL
-            : client === 'LocalQwenSmall'
+            : client === 'SmallQwen'
               ? process.env.SMALL_LLM_BASE_URL
               : undefined
         if (endpoint !== baseUrl) {

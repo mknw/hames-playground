@@ -92,7 +92,7 @@ function PlannerThinking(
   tools: ToolDescription[],
   context: string?
 ) -> PlanResultThinking {
-  client SelfDeployedQwenThink
+  client LargeQwenThink
   prompt #"
     {{ PlannerBody(user_message, intent, tools, context, false) }}
 

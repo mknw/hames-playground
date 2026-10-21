@@ -169,7 +169,7 @@ export function browserServerEnv(
     NO_PROXY: '127.0.0.1,localhost,::1',
     no_proxy: '127.0.0.1,localhost,::1',
     NODE_USE_ENV_PROXY: '1',
-    // The SHIPPED seam: `SelfDeployedQwen` declares `base_url env.LARGE_LLM_BASE_URL`
+    // The SHIPPED seam: `LargeQwen` declares `base_url env.LARGE_LLM_BASE_URL`
     // and BAML resolves `env.*` at call time. Pointing it at the fake is what a
     // developer does to run the deployment locally; `assertLargeModelConfigured()`
     // still runs its `/v1` check. Setting it also makes the self-hosted tier
@@ -178,7 +178,7 @@ export function browserServerEnv(
     LARGE_LLM_BASE_URL: backend.llm.baseUrl,
     LARGE_LLM_API_KEY: 'e2e-browser-fake-key',
     // The private tier's SECOND model (2026-08-26): `describe` runs on the 4B
-    // `LocalQwenSmall` over this var, and `selfDeployedConfigured()` asks about BOTH
+    // `SmallQwen` over this var, and `selfDeployedConfigured()` asks about BOTH
     // endpoints — so without this line the switch renders its private
     // position DISABLED and every scenario that clicks it fails on the click,
     // not on anything it was written to test. Same fake as above: it records

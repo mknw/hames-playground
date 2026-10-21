@@ -31,7 +31,7 @@ export {
   assertSmallModelConfigured,
   assertPrivateTierConfigured,
 } from './tier-config.server'
-import { SELF_DEPLOYED_CLIENT_NAME } from './large-activity.server'
+import { LARGE_LLM_CLIENT_NAME } from './large-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
   SELF_DEPLOYED_CLIENT_BY_ROLE,
@@ -81,10 +81,10 @@ configureInferencePolicy({
     // describe client now scales to zero too, so it owes a notice just like the
     // 27B; use the role map so a rename cannot silently drop that notice. This
     // hook only announces inside a turn's watch; it does not wake either box.
-    // LocalQwenSmallDecide keeps its separate readout and existing notice
+    // PrivateSystemOne keeps its separate readout and existing notice
     // policy: this change enrolls describe, not every client sharing its host.
     // Changing the decide transport or its failure policy is a separate change.
-    if (client === SELF_DEPLOYED_CLIENT_NAME) noteBoxCallStarting('large')
+    if (client === LARGE_LLM_CLIENT_NAME) noteBoxCallStarting('large')
     if (client === SELF_DEPLOYED_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 })
@@ -99,9 +99,9 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
-    [SELF_DEPLOYED_CLIENT_NAME]: largeEurPerHour,
+    [LARGE_LLM_CLIENT_NAME]: largeEurPerHour,
     ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, largeEurPerHour])),
-    LocalQwenSmall: smallLlmEurPerHour,
+    SmallQwen: smallLlmEurPerHour,
     PrivateSystemOne: smallLlmEurPerHour,
   },
 })

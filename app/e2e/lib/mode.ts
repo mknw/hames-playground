@@ -94,13 +94,13 @@ export const HERMETIC_ANTHROPIC_KEY = 'e2e-hermetic-no-real-anthropic-calls'
  *  off the fake's recorded calls to tell the two tiers apart. */
 export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 
-/** The model id `SelfDeployedQwen` declares in `baml_src/self-deployed-client.baml`. Not
+/** The model id `LargeQwen` declares in `baml_src/large-client.baml`. Not
  *  re-derived here on purpose: a scenario asserting "this call took the
  *  self-hosted route" should fail if the declaration changes under it. */
 export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
- * The model id `LocalQwenSmall` declares in `baml_src/local-client.baml` — the
+ * The model id `SmallQwen` declares in `baml_src/local-client.baml` — the
  * 4B the private tier routes the `describe` role to since 2026-08-26.
  *
  * Hardcoded for LARGE_LLM_MODEL's reason, and it buys something extra here: the fake
@@ -117,7 +117,7 @@ export const SMALL_MODEL = 'qwen3.5-4b-instruct'
  * NOT deliberately sized for a slow model call, which is what those scenarios
  * are there to find.
  *
- * IT HAS A CEILING NOW, and it is 180s — `SelfDeployedQwen`'s `request_timeout_ms`.
+ * IT HAS A CEILING NOW, and it is 180s — `LargeQwen`'s `request_timeout_ms`.
  * Since wake-then-run the cold start is paid by the wake poll (bounded
  * separately, at `LARGE_LLM_WAKE_TIMEOUT_MS` = 600s overall) and scenario 4 aims its
  * delay PAST the wake, at a real BAML call. So a value at or above 180 000 no longer

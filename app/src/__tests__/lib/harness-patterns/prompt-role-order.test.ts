@@ -12,7 +12,7 @@
  * two places after the conversation had started — the CONTEXT block in
  * `ActorTaskFrame` and every result block in `ActorAttemptLog` — and it went
  * unnoticed until the harness evals ran the actor against the self-hosted
- * deployment (`USE_SELF_DEPLOYED_INFERENCE=1`, `baml_src/self-deployed-client.baml`). There the
+ * deployment (`USE_SELF_DEPLOYED_INFERENCE=1`, `baml_src/large-client.baml`). There the
  * first attempt passed and every RETRY 400d, which kills actorCritic's whole
  * reason for existing on that route, silently: nothing fails until a critic
  * first rejects something.
@@ -46,7 +46,7 @@
  *    `--- CONTEXT:`) — `LoopController`'s two cached user tiers have always
  *    merged that way. A block carrying a #122 `cache_control` marker is NOT
  *    merged like that: it stays its own entry in a content-part ARRAY, even
- *    on `SelfDeployedQwen`, which declares no `allowed_role_metadata` and so drops
+ *    on `LargeQwen`, which declares no `allowed_role_metadata` and so drops
  *    the marker itself from the body. That array boundary is the one at the
  *    end of every controller prompt — the newest tool result carries the
  *    rolling marker and the volatile tail follows it — so nothing in this
@@ -106,7 +106,7 @@ const ENV = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
 }
 /** An OpenAI-generic client: the wire format that enforces the ordering. */
-const OPENAI = { client: 'SelfDeployedQwen', env: ENV }
+const OPENAI = { client: 'LargeQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
 type BamlRequest = (typeof import('@hames-ai/harness-baml/baml_client').b)['request']
@@ -226,7 +226,7 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
     (o) => () =>
       b.request.PlannerThinking('q', 'i', TOOLS, 'CONTEXT BLOCK', {
         ...o,
-        client: 'SelfDeployedQwenThink',
+        client: 'LargeQwenThink',
       }),
   ],
   ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],

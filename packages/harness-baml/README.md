@@ -319,7 +319,7 @@ repository runs for its own deployment. It is off by default and you do not need
 it; to use your own model, see
 [Bring your own provider or model](#bring-your-own-provider-or-model). How it is
 switched on is documented beside its clients, in
-[baml_src/self-deployed-client.baml](https://github.com/mknw/hames-playground/blob/main/packages/harness-baml/baml_src/self-deployed-client.baml).
+[baml_src/large-client.baml](https://github.com/mknw/hames-playground/blob/main/packages/harness-baml/baml_src/large-client.baml).
 
 A host can restrict the built-in inference tier with
 `configureInferencePolicy({ defaultTier: () => 'self_deployed', privateOnly: () => true,

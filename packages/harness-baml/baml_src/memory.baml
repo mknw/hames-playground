@@ -1,7 +1,7 @@
 // memory.baml — the two LLM calls behind `withMemory` (#419, slice M9).
 //
 // Both are SUMMARIZATION-SHAPED and ride the `describe` role: on the Anthropic
-// tier `DescribeAnthropic` (Haiku 4.5), on the private tier `LocalQwenSmall`
+// tier `DescribeAnthropic` (Haiku 4.5), on the private tier `SmallQwen`
 // through the per-call `clientOverrideFor('describe')` spread. The role is the
 // owner's: memory runs on BOTH tiers (D19), and a self_deployed-tier turn must not send
 // the user's words to a public provider (no call made under the private tier

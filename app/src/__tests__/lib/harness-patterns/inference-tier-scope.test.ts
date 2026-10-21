@@ -28,6 +28,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 const ENV_KEYS = [
   'USE_SELF_DEPLOYED_INFERENCE',
@@ -89,6 +90,7 @@ const PRIVATE_CLIENT: Record<string, string> = {
 
 async function load() {
   vi.resetModules()
+  resetTierPolicy()
   // The composition root registers the seam (tier policy, model tables, cost
   // rates) and its defaultTier reads USE_SELF_DEPLOYED_INFERENCE — the wiring every
   // production path takes.
@@ -122,6 +124,7 @@ async function load() {
  *  against it. */
 async function loadTierConfig() {
   vi.resetModules()
+  resetTierPolicy()
   return await import('../../../lib/inference/config.server')
 }
 
@@ -493,6 +496,7 @@ describe('the one tier rule — every reader names the same tier', () => {
     // tier applies rather than its `default`. Mutation: have the package answer
     // nothing (or the self-deployed tier) when no policy is registered.
     vi.resetModules()
+    resetTierPolicy()
     const clients = await import('@hames-ai/harness-baml/clients.server')
     const core = await import('@hames-ai/harness-patterns/run-frame.server')
     for (const frame of [undefined, ''] as const) {
@@ -512,6 +516,7 @@ describe('the one tier rule — every reader names the same tier', () => {
     // Mutation: `named ?? tierPolicy.defaultTier()` for a non-empty unknown
     // string (the pre-fix line): every reader answers 'anthropic' and these go red.
     vi.resetModules()
+    resetTierPolicy()
     const clients = await import('@hames-ai/harness-baml/clients.server')
     const core = await import('@hames-ai/harness-patterns/run-frame.server')
     await core.withRunFrame({ inference: { tier: 'future' } }, async () => {
@@ -519,6 +524,31 @@ describe('the one tier rule — every reader names the same tier', () => {
       expect(() => clients.onExplicitAnthropicTier()).toThrow(/no inference policy/)
       expect(() => core.effectiveTier()).toThrow(/no inference policy/)
       expect(() => clients.clientOverrideFor('controller')).toThrow(/no inference policy/)
+    })
+  })
+})
+
+describe('the host policy is shared by every loaded copy of the package (SD-9)', () => {
+  it('a copy loaded after the host configured copy A answers the guards from the host policy, not the package fallback', async () => {
+    // The policy sits on a `Symbol.for` holder, like core's frame and tier reader.
+    // Mutation: hold it in a module-level `let` again — copy B registers its own
+    // reader (last wins) over the package fallback, so `effectiveTier()` answers
+    // 'anthropic' while copy A's routing said 'self_deployed', and this goes red.
+    vi.resetModules()
+    resetTierPolicy()
+    const a = await import('@hames-ai/harness-baml/clients.server')
+    a.configureInferencePolicy({
+      defaultTier: () => 'self_deployed',
+      assertTierReachable: () => {},
+    })
+    vi.resetModules()
+    const b = await import('@hames-ai/harness-baml/clients.server')
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    expect(b).not.toBe(a)
+    await core.withRunFrame({ inference: {} }, async () => {
+      expect(b.activeInferenceTier()).toBe('self_deployed')
+      expect(core.effectiveTier()).toBe('self_deployed')
+      expect(b.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
     })
   })
 })

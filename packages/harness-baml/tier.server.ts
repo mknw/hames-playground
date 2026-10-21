@@ -77,21 +77,33 @@ export interface InferenceTierPolicy {
   onPrivateCallStart?: (client: string) => void
 }
 
-let tierPolicy: InferenceTierPolicy = { defaultTier: () => 'anthropic' }
+/**
+ * The policy lives on a `globalThis` symbol, the way core keeps the run frame
+ * and the registered tier reader: every copy of this module registers its own
+ * reader at load (last wins), so a policy held per copy would let a second copy
+ * answer the guards from the package fallback while routing reads the host's.
+ * One holder means every loaded copy reads the one policy the host configured.
+ */
+const POLICY_KEY: unique symbol = Symbol.for('hames.harness-baml.tier-policy') as never
+type PolicyHolder = { policy: InferenceTierPolicy }
+const policyGlobal = globalThis as unknown as Record<symbol, PolicyHolder | undefined>
+const policyHolder: PolicyHolder = (policyGlobal[POLICY_KEY] ??= {
+  policy: { defaultTier: () => 'anthropic' },
+})
 
 /** Feed the host's tier policy in. Called once at the composition root. */
 export function configureInferencePolicy(policy: InferenceTierPolicy): void {
-  tierPolicy = policy
+  policyHolder.policy = policy
 }
 
 /** The policy in force, for the routing seam's private-call hook. */
 export function notePrivateCallStart(client: string): void {
-  tierPolicy.onPrivateCallStart?.(client)
+  policyHolder.policy.onPrivateCallStart?.(client)
 }
 
 /** Whether the host restricts this deployment to the built-in private tier. */
 export function privateInferenceOnly(): boolean {
-  return tierPolicy.privateOnly?.() === true
+  return policyHolder.policy.privateOnly?.() === true
 }
 
 /**
@@ -123,7 +135,7 @@ export function assertInferenceTier(tier: InferenceTier): void {
     )
   }
   if (tier !== 'self_deployed') return
-  const assertReachable = tierPolicy.assertTierReachable
+  const assertReachable = policyHolder.policy.assertTierReachable
   if (!assertReachable) {
     throw new Error(
       "The 'self_deployed' inference tier was requested but no inference policy is registered. " +
@@ -165,7 +177,7 @@ export function activeInferenceTier(): InferenceTier {
   // unrecognised is never the Anthropic tier (ruling E) — it is the self-deployed
   // tier, so an unreachable one is refused below instead of reaching a public
   // provider on a host whose default is Anthropic.
-  const active = named ?? (tier ? 'self_deployed' : tierPolicy.defaultTier())
+  const active = named ?? (tier ? 'self_deployed' : policyHolder.policy.defaultTier())
   // A tier a frame names was asserted by the host before the slot was filled;
   // one taken by default has not been, so the assertion happens here, per read.
   if (privateInferenceOnly() || (!named && active === 'self_deployed')) {

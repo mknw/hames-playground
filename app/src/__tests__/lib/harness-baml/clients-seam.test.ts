@@ -22,6 +22,7 @@
  * recorded in the PR (verified by mutation, not by reading).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -66,6 +67,7 @@ beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
   vi.resetModules()
+  resetTierPolicy()
   noteBoxCallStarting.mockClear()
 })
 

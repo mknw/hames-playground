@@ -289,11 +289,13 @@ Everything below is optional; the defaults are the strict reading.
 
 Two composition rules are worth knowing before you nest anything:
 
-- **Nested guards union, they never shadow.** An inner
+- **Nested guards widen coverage, and each tool keeps its own guard's options.** An inner
   `withInjectionGuard({ namespaces: ['graph'] })` inside an outer one covering `'web'`
-  covers both, and the sanitizer options take the strictest of each: `disableRules`
-  intersects, `rules` union, `spotlight` takes the strictest mode, and a `screen` set by
-  either guard is kept. There is deliberately no way to ask for narrowing.
+  covers both, and there is deliberately no way to ask for narrowing. The sanitizer
+  options do not merge: a tool is sanitized with the `spotlight`, `rules`, `disableRules`
+  and `screen` of the guard that declares it, so an inner guard can neither weaken the
+  outer guard's `'web'` tools nor inherit its screen. A guard that wants a fence or a
+  screen on a tool declares it itself.
 - **The screen fails open; the deterministic layer does not.** A screen that throws (rate
   limit, timeout) leaves the deterministic verdict standing and records the reason on the
   event, because an outage must not turn a working tool call into a failed turn. If your

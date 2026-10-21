@@ -113,13 +113,15 @@ changeset or core SPEC/GUIDE update.
 
 Every result row carries a `screen` block beside `spend`: the injection screen
 (`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
-screen's share of each. The orchestrator's screen covers every guarded tool result (inherited
-by the nested guards) and both fields of non-planner route outputs. Only
-`think` opts out of model screening on its successful plan record; failed records remain screened, and deterministic checks and
-fencing remain. `screenDespiteFindings` adds
-only results with deterministic findings, which hermetic fixtures never produce, so switching
-it off would not change these counts. The levers that move cost are the screen's scope and
-whether the reasoning field is screened. On the private tier each call is large-model time.
+screen's share of each. Each guard declares its own options and none is inherited: the
+office and info route guards carry the screen, so it covers their tool results (mail, files,
+sandbox results, web, library docs, graph and memory reads); the documents route's guard
+declares none, so retrieved hits are never screened, and the orchestrator's guard declares
+none, so no route-output record is screened either. `screenDespiteFindings` is declared on
+the two route guards and adds only results with deterministic findings, which hermetic
+fixtures never produce, so switching it off would not change these counts. The levers that
+move cost are the screen's scope and the guards that declare it. On the private tier each
+call is large-model time.
 Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
 the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).
 

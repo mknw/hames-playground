@@ -603,12 +603,16 @@ Two properties are the design, not accidents:
   transport is dispatched there before any process-registered transport and
   before the gateway — there is deliberately **no `priority` field**, so
   containment cannot be inverted by a value or an import order.
-- **Nested transports shadow; the injection guard unions.** Two nested
+- **Nested transports shadow; the injection guard widens coverage.** Two nested
   transport scopes resolve a name they both own to the inner one — two
   sandboxes are two machines, and only an order answers "which machine". Two
-  nested `withInjectionGuard`s union instead, because a nested guard is a second
-  reviewer of the same content and the strictest reading must win. The
-  inconsistency is deliberate; do not "fix" it, and both rules are stated in one
+  nested `withInjectionGuard`s union what they cover instead, because a nested
+  guard may only add to the content that is guarded, never remove it. Their
+  options do not union: a tool is sanitized with the `spotlight`, `screen`,
+  `rules` and `disableRules` of the guard that declares it, so an inner guard
+  can neither weaken an outer guard's tools nor inherit its screen. A guard that
+  wants a fence or a screen on a tool declares it itself. The inconsistency with
+  transports is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.
 
 **Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's

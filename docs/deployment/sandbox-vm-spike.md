@@ -536,6 +536,14 @@ host**. Record live operator, commit, pass/fail and any unmeasured legs without
 publishing a deployment's identifiers. Never attach survey, firewall backups,
 private command logs, VM disks or client credential directories.
 
+## Off-host rehearsal
+
+Before any further operator-run leg, the whole track (image pipeline, upstream
+Incus source, this spike) is rehearsed on a disposable GitHub-hosted KVM runner
+by `.github/workflows/vm-rehearsal.yml`; see "Off-host rehearsal" in the
+[image pipeline README](../../packages/sandbox/scripts/vm-image/README.md). Its
+runner substitutions mean a green rehearsal says nothing about the target host.
+
 ## Offline gate and mutations
 
 These checks need no daemon, SSH or provider calls:

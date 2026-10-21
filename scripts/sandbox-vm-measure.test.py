@@ -449,6 +449,9 @@ class Measurement(unittest.TestCase):
         spawn = json.loads(self.spawned.read_text())
         self.assertEqual(spawn["env"], {}, "PTY child inherited Docker endpoint overrides")
         self.assertEqual(spawn["argv"][:4], ["--config", str(self.spike.state / "client0/.docker"), "exec", "-it"])
+        script = spawn["argv"][-1]
+        self.assertNotIn("sleep 3", script)  # waits for the resize instead of racing it
+        self.assertIn('while [ "$(stty size)" = "24 80" ] && [ "$i" -lt 150 ]', script)
         self.assertTrue(self.spike.metrics["pty_resize"] and self.spike.metrics["stream_teardown"])
         # The ten-minute hold is health-checked throughout, not only at box creation.
         self.assertGreaterEqual(self.world.timeline.count(("checkpoint",)), 60)

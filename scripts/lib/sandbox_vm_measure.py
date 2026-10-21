@@ -251,6 +251,12 @@ def workloads(spike, nested):
         spike.metrics[f"{kind}_{work}_p95_ms"] = p95
 
 
+# Print the size, then WAIT for the resize to arrive (bounded at 30 s) before printing it
+# again: a fixed sleep raced the resize's trip through the CLI, TLS and the nested daemon.
+PTY_SCRIPT = ('stty size; i=0; while [ "$(stty size)" = "24 80" ] && [ "$i" -lt 150 ]; '
+              'do sleep 0.2; i=$((i + 1)); done; stty size')
+
+
 def attach(spike):
     target = endpoint(spike, True)
     cid = start_box(spike, target, spike.args.base_image, "attach", ttl=750)
@@ -279,7 +285,7 @@ def attach(spike):
         try:
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             process = subprocess.Popen(exec_argv(spike, True, ("-it",), cid,
-                                                 "sh", "-c", "stty size; sleep 3; stty size"),
+                                                 "sh", "-c", PTY_SCRIPT),
                                        stdin=slave, stdout=slave, stderr=slave, env=docker_env())
             os.close(slave)
             slave = None

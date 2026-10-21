@@ -633,8 +633,10 @@ def saved_config_id(argv):
 
 def image_config_id(spike, image, index=None, config_ids=None):
     target = host_docker if index is None else lambda *args: spike.remote(index, *args)
+    # `index` yields null for a key the store omits (containerd has no GraphDriver,
+    # classic no Descriptor); `.Key` on a missing map key is a template error.
     inspected = json.loads(target("inspect", "--type", "image", "--format",
-        '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}', image).stdout)
+        '{"Id":{{json (index . "Id")}},"Descriptor":{{json (index . "Descriptor")}},"GraphDriver":{{json (index . "GraphDriver")}}}', image).stdout)
     require(isinstance(inspected, dict), "image inspect object required")
     identity = inspected.get("Id")
     require(isinstance(identity, str) and re.fullmatch(r"sha256:[a-f0-9]{64}", identity),

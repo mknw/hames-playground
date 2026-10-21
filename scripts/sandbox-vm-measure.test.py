@@ -618,7 +618,7 @@ class Measurement(unittest.TestCase):
                 'Id': 'sha256:' + 'b' * 64, 'GraphDriver': {'Name': 'overlay2'}}))) as inspect:
             measure.image_config_id(self.spike, IMAGE)
         self.assertEqual(inspect.call_args.args[-2],
-            '{"Id":{{json .Id}},"Descriptor":{{json .Descriptor}},"GraphDriver":{{json .GraphDriver}}}')
+            '{"Id":{{json (index . "Id")}},"Descriptor":{{json (index . "Descriptor")}},"GraphDriver":{{json (index . "GraphDriver")}}}')
 
     def test_config_identity_fake_docker_store_table(self):
         pin, shape, target = self.config_fixture()

@@ -1097,6 +1097,15 @@ describe('decisionLoop — a quoted tool body keeps its ingress label', () => {
     expect(states[1]).not.toContain('⟦')
   })
 
+  // MUTATION: drop the `if (!quoted.body) return ''` guard in `carry`.
+  it('an empty body stays empty: no empty fence is invented around nothing', async () => {
+    const { decide } = scriptedDecide(['act', 'answer'])
+    const ctx = await run([
+      build({ act: route(actorOf('act-p', [{ tool: 'read_mail', result: fenced('') }])) }, decide),
+    ])
+    expect(recordOf(ctx).result).toBe('')
+  })
+
   // MUTATION: cap AFTER the re-wrap: the closing fence line is cut off a long body.
   it('a long body is capped inside its fence: the closing line survives the cap', async () => {
     const { decide } = scriptedDecide(['act', 'answer'])

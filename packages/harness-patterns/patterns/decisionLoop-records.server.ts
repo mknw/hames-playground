@@ -192,6 +192,7 @@ function unfence(value: unknown): Unfenced {
 /** Cap a quoted body, THEN put back the fence it came in. Nothing quoted means
  *  nothing to label, and a body that arrived unfenced stays unfenced. */
 function carry(quoted: Unfenced, max: number): string {
+  if (!quoted.body) return ''
   const body = capText(quoted.body, max)
   return quoted.label ? spotlight(body, quoted.label.tool, quoted.label.namespace) : body
 }

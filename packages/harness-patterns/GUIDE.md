@@ -160,7 +160,7 @@ on its successful plan record (failed records remain screened):
 imperative model-authored plans can otherwise be mistaken for instructions.
 The option is refused on non-planner routes and defaults to screened, including
 for planners. It preserves deterministic sanitization, provenance fencing and
-findings on the plan; child tool results and retrieved text stay screened. A child sees only
+findings on the plan; child tool results stay screened where their guard declares a screen. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
@@ -218,8 +218,9 @@ beside `general` (#507 S3), built in `packages/agents/agents/general-next.server
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
 lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
-configuration withholds earlier content and refuses web calls. The outer
-injection guard always fences route outputs and enables the screen. Only its
+configuration withholds earlier content and refuses web calls. The
+orchestrator's guard fences route outputs and declares no screen; the office and
+info route guards declare it, and the documents route's guard none. Only its
 `think` planner sets `screenOutput: false`, keeping deterministic checks and
 fencing while avoiding a model-screen call on its own plan. Memory
 is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
@@ -610,7 +611,8 @@ Two properties are the design, not accidents:
   guard may only add to the content that is guarded, never remove it. Their
   options do not union: a tool is sanitized with the `spotlight`, `screen`,
   `rules` and `disableRules` of the guard that declares it, so an inner guard
-  can neither weaken an outer guard's tools nor inherit its screen. A guard that
+  can neither weaken an outer guard's tools that it does not itself declare nor inherit
+  its screen. A tool declared by two guards takes the inner guard's options. A guard that
   wants a fence or a screen on a tool declares it itself. The inconsistency with
   transports is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.

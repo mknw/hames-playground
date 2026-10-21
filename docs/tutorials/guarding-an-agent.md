@@ -294,7 +294,8 @@ Two composition rules are worth knowing before you nest anything:
   covers both, and there is deliberately no way to ask for narrowing. The sanitizer
   options do not merge: a tool is sanitized with the `spotlight`, `rules`, `disableRules`
   and `screen` of the guard that declares it, so an inner guard can neither weaken the
-  outer guard's `'web'` tools nor inherit its screen. A guard that wants a fence or a
+  outer guard's `'web'` tools (that it does not itself declare) nor inherit its screen. A tool
+  declared by two guards takes the inner guard's options. A guard that wants a fence or a
   screen on a tool declares it itself.
 - **The screen fails open; the deterministic layer does not.** A screen that throws (rate
   limit, timeout) leaves the deterministic verdict standing and records the reason on the

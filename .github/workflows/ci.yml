@@ -21,7 +21,7 @@ jobs:
   check:
     name: typecheck · lint · test · build
     runs-on: ubuntu-latest
-    # The expanded clone mutation corpus precedes full coverage and the build.
+    # The clone mutation corpus runs in its own job (`clone-mutations`, below).
     timeout-minutes: 25
 
     steps:
@@ -83,7 +83,6 @@ jobs:
         run: |
           shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
           scripts/bootstrap-vps.test.sh
-          scripts/bootstrap-vps.test.sh --clone-mutations
           scripts/check-docker.test.sh
           python3 scripts/check-vps.test.py
           python3 scripts/check-vps.test.py --mutations
@@ -414,6 +413,36 @@ jobs:
       - name: Run the pack smoke
         id: pack_smoke
         run: scripts/pack-smoke.sh
+
+  # The clone mutation corpus (bootstrap preflight and clone validator) on its
+  # own runner, beside `check`: with the dev environment VM corpus, `check`'s
+  # shell step went from 552s (main) to 1110s and the job past its cap. Each
+  # bootstrap mutant re-runs `bootstrap-vps.test.sh --clones-only` (bash,
+  # python3, openssl, git, node, all on ubuntu-latest); each validator mutant
+  # runs one vitest file from app/, hence the workspace install.
+  clone-mutations:
+    name: shell · clone mutations
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Clone mutations (bootstrap preflight + clone validator)
+        run: scripts/bootstrap-vps.test.sh --clone-mutations
 
   changeset:
     name: changeset · version intent

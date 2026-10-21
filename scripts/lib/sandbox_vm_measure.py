@@ -413,6 +413,14 @@ def qemu_pid(spike):
     return int(json.loads(raw.stdout)["pid"])
 
 
+def incus_qemu_version(spike):
+    environment = json.loads(spike.incus("query", "/1.0").stdout).get("environment", {})
+    drivers = str(environment.get("driver", "")).split(" | ")
+    versions = str(environment.get("driver_version", "")).split(" | ")
+    require(len(drivers) == len(versions) and "qemu" in drivers, "Incus QEMU driver version unavailable")
+    return versions[drivers.index("qemu")]
+
+
 def qemu_pss(spike):
     pid = qemu_pid(spike)
     pss = re.search(r"^Pss:\s+(\d+)", (PROC / str(pid) / "smaps_rollup").read_text(), re.M)
@@ -701,8 +709,8 @@ def measure(spike):
         for nested in (False, True):
             concurrency(spike, count, nested)
     for prefix, output in (("kernel", spike.guest(0, "uname", "-r").stdout),
-                           # The binary Incus actually runs (upstream bundles its own), not PATH's.
-                           ("qemu", command(os.readlink(PROC / str(qemu_pid(spike)) / "exe"), "--version").stdout)):
+                           # The QEMU Incus actually runs (upstream bundles its own), as Incus reports it.
+                           ("qemu", incus_qemu_version(spike))):
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", output)
         require(match, "version unreadable")
         for part, value in zip(("major", "minor", "patch"), match.groups()):

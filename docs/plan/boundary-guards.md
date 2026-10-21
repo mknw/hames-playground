@@ -407,7 +407,7 @@ flowchart LR
   PR -->|no| P2{"person can be asked?"}
   P2 -->|yes| HE
   P2 -->|no| FB4["refused: the D5 text (closing or open); counts toward N"]
-  M -->|unreadable| FB
+  M -->|unreadable| FB4
   LOCAL["local call: neo4j, memory, graph, sandbox (mcp-only)"] --> GO2["dispatched; result extends the roster"]
 ```
 

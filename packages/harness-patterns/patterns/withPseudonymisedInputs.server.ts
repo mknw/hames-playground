@@ -67,7 +67,8 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       let rewritten: UnifiedContext | undefined
       let filter: WebPseudonymisation | undefined
       // The ONE tier rule: the registered tier module's answer (an absent or
-      // unknown frame tier is the host's default, which routing reads too); the
+      // empty frame tier is the host's default, a present but unrecognised one is
+      // the self-deployed tier, refused when unreachable; routing reads the same); the
       // raw slot only when core runs with no tier interpreter registered.
       const explicitAnthropic =
         (effectiveTier() ?? currentRunFrame()?.inference?.tier) === 'anthropic'

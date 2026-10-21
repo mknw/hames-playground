@@ -193,8 +193,9 @@ export function createJevTransport(options: JevTransportOptions = {}): {
 
     // The tier lock is `privateTier` checked against the client's name: a private
     // run must resolve to its own client, any other to Jev, before any URL/key is
-    // read. An unrecognised frame tier is refused upstream, by
-    // `activeInferenceTier()` above, so no separate Anthropic check is needed.
+    // read. An unrecognised frame tier is the private tier, refused
+    // upstream by `activeInferenceTier()` above when that tier is unreachable, so
+    // no separate Anthropic check is needed.
     if ((privateTier && !privateClient) || (!privateTier && clientName !== JEV_CLIENT_NAME)) {
       throw jevFailure(
         'Refusing systemone client for this inference tier; no request was made.',

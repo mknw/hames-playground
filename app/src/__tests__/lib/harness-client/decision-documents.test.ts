@@ -104,7 +104,7 @@ describe('createDecisionDocuments — the tier line', () => {
 
   // Mutation: read `activeInferenceTier()` instead of the raw frame slot.
   it('a frame with no tier slot gets the count, even on a deployment whose default tier is self_deployed', async () => {
-    // The deployment default is the host's policy (`USE_SELF_DEPLOYED_INFERENCE`), read
+    // The default tier is the host's policy (self_deployed on the reference host), read
     // by `activeInferenceTier()`. The source must not ask it.
     const { configureInferencePolicy } = await import('@hames-ai/harness-baml/clients.server')
     configureInferencePolicy({ defaultTier: () => 'self_deployed' })

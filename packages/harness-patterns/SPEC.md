@@ -1222,9 +1222,10 @@ definition, deliberately not in a shared default):
 
 Wrap the web route's `withReferences` with this config-transparent input/egress
 boundary. It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
-the answer the tier module registered into the run frame, so an absent or unknown
+the answer the tier module registered into the run frame, so an absent or empty
 tier is whatever the host's policy defaults to (the self-deployed tier on the
-reference host, which is protected). With no tier module registered, core reads the
+reference host, which is protected) and a present but unrecognised tier is the
+self-deployed tier, refused when unreachable. With no tier module registered, core reads the
 raw `inference.tier`. Core imports no host
 privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
 `(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning

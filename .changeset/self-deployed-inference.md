@@ -24,7 +24,7 @@ The reference host reads historical tier values, and stored `VerdaQwen` /
 `VerdaQwenThink` / `LocalQwenSmall` client names, without rewriting rows. Migrate
 27B settings to `LARGE_LLM_BASE_URL`, `LARGE_LLM_API_KEY`, `LARGE_LLM_EUR_PER_HOUR`,
 `LARGE_LLM_SCALEDOWN_SECONDS` and `LARGE_LLM_WAKE_*`; use
-`USE_SELF_DEPLOYED_INFERENCE=1` for the default and
+`USE_SELF_DEPLOYED_INFERENCE=1` for the boot-time check that the tier is configured and
 `INFERENCE_TIERS=self_deployed` for the restriction. Old environment names and
 `INFERENCE_TIERS=private` remain accepted for one release with a boot warning; the
 list of what is removed afterwards is in the migration doc. Verda control-plane

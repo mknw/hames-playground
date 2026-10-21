@@ -31,8 +31,8 @@
  *
  * ## A default that cannot be taken is refused
  *
- * When the tier came from the DEFAULT (no recognised frame value, or an unrecognised one) and is the
- * self-deployed tier, reachability is asserted on every read. An unconfigured
+ * When the tier came from the DEFAULT (an absent or empty frame value, or a present but unrecognised one that
+ * this module reads as the self-deployed tier), reachability is asserted on every read. An unconfigured
  * host therefore refuses the call before any request — it never routes to the
  * Anthropic tier, which is the one outcome the self-deployed tier exists to
  * prevent. A frame that NAMES the tier was already asserted by the host before
@@ -59,8 +59,9 @@ export type InferenceTier = 'self_deployed' | 'anthropic'
  *  when a private-tier client is about to take a call. */
 export interface InferenceTierPolicy {
   /** The tier of a run that names none: no frame, or a frame whose `inference`
-   *  slot nobody filled or filled with an unrecognised value (a script, a
-   *  background job). The reference host answers `'self_deployed'`; the
+   *  slot nobody filled or filled with an empty value (a script, a
+   *  background job). A present but unrecognised value is not this: it is the
+   *  self-deployed tier, refused when unreachable. The reference host answers `'self_deployed'`; the
    *  package-side default, with no host policy, is `'anthropic'`. */
   defaultTier: () => InferenceTier
   /** Restrict this deployment to the built-in private clients. Unset preserves all routing. */
@@ -148,8 +149,9 @@ export function assertInferenceTier(tier: InferenceTier): void {
 
 /**
  * The tier in force right now: the open run frame's `inference.tier` when it
- * names a tier this module knows, else the policy's default (see the module
- * header — the ONE rule).
+ * names a tier this module knows; a present but unrecognised one is the
+ * self-deployed tier (refused when unreachable); an absent or empty one is the
+ * policy's default (see the module header — the ONE rule).
  *
  * THE ONE IMPORT THIS PACKAGE TAKES FROM CORE'S FRAME for the tier. A tier is a
  * property of the RUN, not of a call site; it is a slot of the single run frame

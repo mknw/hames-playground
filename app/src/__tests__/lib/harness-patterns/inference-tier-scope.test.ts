@@ -92,7 +92,7 @@ async function load() {
   vi.resetModules()
   resetTierPolicy()
   // The composition root registers the seam (tier policy, model tables, cost
-  // rates) and its defaultTier reads USE_SELF_DEPLOYED_INFERENCE — the wiring every
+  // rates) and its defaultTier is the self-deployed tier — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')

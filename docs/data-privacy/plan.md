@@ -186,7 +186,7 @@ Two things follow that _are_ in our control:
 
 **Update (2026-08-25, widened twice on 2026-08-26) — a self-hosted route now
 exists, and it now covers every role without exception.** A self_deployed tier decision
-— the `USE_SELF_DEPLOYED_INFERENCE=1` deployment default or a per-conversation switch —
+— a run that names no tier, or a per-conversation switch (`USE_SELF_DEPLOYED_INFERENCE=1` is only the boot-time check that the tier is configured) —
 re-points controller / actor / critic / synthesizer / router / planner /
 describe **and the injection screen** at the company's own Qwen deployment on a
 Verda (DataCrunch) GPU (`packages/harness-baml/baml_src/large-client.baml`). Read against the paragraph above: no

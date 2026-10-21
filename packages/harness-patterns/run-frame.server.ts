@@ -220,7 +220,8 @@ const store = holder.store
  * The ONE TIER RULE's seam (boundary guards, slice 9).
  *
  * "Which tier is this run on" has two readers that used to disagree: routing
- * (an absent or unrecognised frame tier takes the host's default) and the
+ * (an absent or empty frame tier takes the host's default; a present but
+ * unrecognised one is the self-deployed tier, refused when unreachable) and the
  * guards (the raw string). Core cannot settle it, because core interprets no
  * tier string — so the companion that does, `@hames-ai/harness-baml`'s tier
  * module, REGISTERS its answer here and every core reader asks

@@ -102,7 +102,7 @@
  * This module is package-shaped: it ships in v1 and must not import host-app
  * code — an installed tarball cannot resolve it (the same exit criterion
  * #342/#346 gave `harness-patterns`). So everything APP-side it used to reach
- * for directly — the model tables, the `USE_SELF_DEPLOYED_INFERENCE` env default, the
+ * for directly — the model tables, the `USE_SELF_DEPLOYED_INFERENCE` boot-time check, the
  * endpoint asserts, the cold-start wake hook, the EUR rates — is FED IN instead:
  * the host calls the three `configure*` accessors below at its composition root
  * (`lib/inference/config.server.ts`), and this module reads them through

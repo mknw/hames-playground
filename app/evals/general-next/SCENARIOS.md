@@ -2,19 +2,19 @@
 
 All names, documents, people and results below are synthetic. This catalogue is the acceptance contract; assistant lines describe required outcomes, not preloaded successful answers. `RUNNABLE NOW` describes the P4 boundary, not permission to spend: candidate execution waits for S3 registration, and live execution waits for the coordinator message **S3 merged: go**.
 
-The PRIVATE tier (`self_deployed`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. Baseline cases run unchanged against `general` on the private tier too; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
+The PRIVATE tier (`self_deployed`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. The baseline cases (01–07) were run against `general` on the private tier; since its removal on 2026-10-21 they run on the candidate only and are compared with `general`'s last live results, recorded in `src/lib/eval-support/general-baseline.ts`; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
 
 The built-in dependency driver uses an in-memory stash and scripted sandbox effects. It proves routing, ordering, handoff and artifact/index contracts; it does not certify Office rendering or the HTTP upload path. The future app-path evidence must seed synthetic documents through the app upload route before claiming that integration. No real Graph, Redis, Neo4j, sandbox container or company data is required.
 
 Live preconditions: this worktree’s `app/.env` must contain remote `SMALL_LLM_BASE_URL` and `SMALL_LLM_DECISIONS_URL` (full `/v1/systemone` URL), the shared key and the configured large-model endpoint/key. Refresh a stale worktree copy without printing secrets; if values are missing, remain hermetic and escalate. The owner local embedder on `127.0.0.1:8090` must already be running; never start a second one. The whole shared budget is private GPU time: USD 20 by default, values above 25 refused, synchronous stop at 80% (USD 16 by default), with observer costs and a separate wall-clock floor for both boxes reported per scenario. A final in-flight call and unobserved infrastructure can overshoot that threshold; the report states the limit.
 
-The eventual flip requires no regression on the unchanged `general` baseline plus all `must` cases green on the private tier. Scripted wiring evidence alone cannot satisfy it. The final S7 injected-field/factory wiring is assigned to S3; the candidate has not run on this base.
+The eventual flip requires no regression on the recorded `general` baseline plus all `must` cases green on the private tier. Scripted wiring evidence alone cannot satisfy it. The final S7 injected-field/factory wiring is assigned to S3; the candidate has not run on this base.
 
 ## Scenario matrix
 
 ### 01-greeting — A short answer without tools
 
-**RUNNABLE NOW · must** · current `general` baseline
+**RUNNABLE NOW · must** · recorded `general` baseline
 
 User: “Hi! What can you help me with?”
 
@@ -28,7 +28,7 @@ A live pass proves: the model responds without using external tools; candidate t
 
 ### 02-graph-count — Read the knowledge graph
 
-**RUNNABLE NOW · must** · current `general` baseline
+**RUNNABLE NOW · must** · recorded `general` baseline
 
 User: “How many Project nodes are in the knowledge graph?”
 
@@ -42,7 +42,7 @@ A live pass proves: the model requests a Project count with a valid Cypher query
 
 ### 03-web-read — Search, then read a source
 
-**RUNNABLE NOW · must** · current `general` baseline
+**RUNNABLE NOW · must** · recorded `general` baseline
 
 User: “Find the Lantern release notes and read the page. What changed in version 2?”
 
@@ -56,7 +56,7 @@ A live pass proves: the model searches for Lantern, fetches the matching URL and
 
 ### 04-library-docs — Resolve a library before reading its docs
 
-**RUNNABLE NOW · should** · current `general` baseline
+**RUNNABLE NOW · should** · recorded `general` baseline
 
 User: “Find the SolidJS createSignal docs and show me a tiny counter example.”
 
@@ -70,7 +70,7 @@ A live pass proves: the model resolves SolidJS before requesting its documentati
 
 ### 05-memory-lookup — Read a named memory entity
 
-**RUNNABLE NOW · should** · current `general` baseline
+**RUNNABLE NOW · should** · recorded `general` baseline
 
 User: “Look up the Lantern project in the memory graph. What is its release tag?”
 
@@ -84,7 +84,7 @@ A live pass proves: the model queries the named memory entity and reports its re
 
 ### 06-read-only — Explain a missing write capability
 
-**RUNNABLE NOW · must** · current `general` baseline
+**RUNNABLE NOW · must** · recorded `general` baseline
 
 User: “Create a Project node named Lantern in the knowledge graph.”
 
@@ -98,7 +98,7 @@ A live pass proves: the model refuses the requested graph write without attempti
 
 ### 07-follow-up-success — Refer back to a successful turn
 
-**RUNNABLE NOW · must** · current `general` baseline
+**RUNNABLE NOW · must** · recorded `general` baseline
 
 User: “How many Project nodes are in the knowledge graph?”
 
@@ -319,14 +319,14 @@ remains private-only; this scenario does not certify a tier flip or enable one.
 
 | Design-doc criterion                     | Scenario / evidence                                                                                                                                                                                                    |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1: no baseline regression                | 01–07, paired general/candidate; candidate-only decision checks are labelled above                                                                                                                                     |
+| 1: no baseline regression                | 01–07, candidate vs the recorded `general` baseline; candidate-only decision checks are labelled above                                                                                                                 |
 | 2: synthetic fetch → read back → compute | **proposed — owner to rule:** 17: mailbox fetch → uploaded notes/sales → analysis → indexed markdown → cited retrieval follow-up; 14 covers the upload-only variant. The Graph-file variant 15/16 remains gated on P4. |
 | 3: P2/P3/P5                              | 09/10/11/14/17 exercise routes; shipped S3 structural pins and its independent review supply the dependency-boundary evidence                                                                                          |
 | 4: P1 or no route gates                  | S3 structural pins; runtime termination checks in every candidate scenario                                                                                                                                             |
 | 5: M7 memory opt-in                      | S3 wiring pins; 05 covers named memory lookup only                                                                                                                                                                     |
 | 6: P4 file path                          | 18 is the written must-scenario; 15/16 remain driver-gated. Layer-1 pins cover guarded ingestion and the outgoing web exit; turn-results materialisation remains absent                                                |
 
-Reports compute `flipGate: { eligible, reasons[] }`. Eligibility requires a live, complete selection, every candidate `must` pass, and no regression on any passing `general` baseline (including `should` cases). P4-gated `should`/`nice` rows stay visible. The gate certifies this Eval’s synthetic-edge contract; the structural and integration evidence in the map is still required before changing the default.
+Reports compute `flipGate: { eligible, reasons[] }`. Eligibility requires a live, complete selection, every candidate `must` pass, and no regression on any scenario the recorded `general` baseline passed (including `should` cases). P4-gated `should`/`nice` rows stay visible. The gate certifies this Eval’s synthetic-edge contract; the structural and integration evidence in the map is still required before changing the default.
 
 ## Question space and true negatives (draft for owner review)
 

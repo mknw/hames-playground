@@ -125,7 +125,6 @@ const AGENTS_DIR = join(process.cwd(), '../packages/agents/agents')
 /** Every agent module and the `AgentDefinition` it exports. */
 const AGENT_MODULES = [
   { file: 'search.server.ts', exportName: 'searchAgent' },
-  { file: 'general.server.ts', exportName: 'generalAgent' },
   { file: 'general-next.server.ts', exportName: 'generalNextAgent' },
   { file: 'sandbox.server.ts', exportName: 'sandboxAgent' },
   { file: 'retriever-agent.server.ts', exportName: 'retrieverAgent' },
@@ -136,7 +135,6 @@ const AGENT_MODULES = [
  *  Vite, so the modules are named explicitly. */
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
   'search.server.ts': () => import('@hames-ai/agents/agents/search.server'),
-  'general.server.ts': () => import('@hames-ai/agents/agents/general.server'),
   'general-next.server.ts': () => import('@hames-ai/agents/agents/general-next.server'),
   'sandbox.server.ts': () => import('@hames-ai/agents/agents/sandbox.server'),
   'retriever-agent.server.ts': () => import('@hames-ai/agents/agents/retriever-agent.server'),
@@ -202,7 +200,6 @@ describe('the inventory is complete', () => {
     expect(registered).toEqual(
       [
         'searchAgent',
-        'generalAgent',
         'generalNextAgent',
         'sandboxAgent',
         'retrieverAgent',
@@ -269,24 +266,6 @@ describe('per-agent guard coverage (pinned — a wiring change must update this)
 })
 
 describe('agents with NO guard anywhere (pinned gaps)', () => {
-  it('documents current behavior: general has no guard, and its loop holds tools.all', async () => {
-    // The largest gap in the repo, and a known one (#206 is the seam). The
-    // `execute` loop is handed `tools.all` — web fetch, filesystem reads,
-    // context7 docs, the memory graph — so every untrusted source the other
-    // agents guard individually reaches this controller raw. Left unwired
-    // deliberately (a sibling lane owns the seam), not by oversight.
-    const rows = inventory(await patternsOf('general.server.ts', 'generalAgent'))
-    expect(rows).toEqual([
-      'plan [planner] UNGUARDED',
-      'execute [simpleLoop] UNGUARDED',
-      'response-synth [compactExecution] UNGUARDED',
-    ])
-    expect(rows.every((r) => r.endsWith('UNGUARDED'))).toBe(true)
-    // …and the tool list it is built from spans every namespace we treat as
-    // untrusted elsewhere.
-    expect(toolSets.all).toEqual(expect.arrayContaining(['fetch', 'read_text_file']))
-  })
-
   it('documents current behavior: the sandbox agent has no guard on any of its three routes', async () => {
     // The SPEC states the chokepoint covers "all three transports (gateway,
     // app-side, sandbox in-VM)". So a sandbox turn that fetches a page and
@@ -321,7 +300,7 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
 // ============================================================================
 
 describe('roll-up across every agent', () => {
-  it('pins the guarded / unguarded split (4 of 6 agents carry a guard)', async () => {
+  it('pins the guarded / unguarded split (4 of 5 agents carry a guard)', async () => {
     const guarded: string[] = []
     const unguarded: string[] = []
     for (const { file, exportName } of AGENT_MODULES) {
@@ -336,7 +315,9 @@ describe('roll-up across every agent', () => {
         'microsoft-365.server.ts',
       ].sort(),
     )
-    expect(unguarded.sort()).toEqual(['general.server.ts', 'sandbox.server.ts'].sort())
+    // The unguarded `general` agent (planner → loop over `tools.all`) was
+    // removed 2026-10-21; the sandbox agent is the one gap left, pinned above.
+    expect(unguarded).toEqual(['sandbox.server.ts'])
   })
 
   it('only general-next enables the optional LLM screen', async () => {

@@ -5,9 +5,9 @@ export interface SpendKey {
   tier: 'self_deployed'
 }
 
-/** The injection screen's BAML function. general-next's orchestrator screens every guarded
- * tool result and both fields of every route output (`screenDespiteFindings` adds only
- * results with deterministic findings), so its private-tier time is its own report line. */
+/** The injection screen's BAML function. general-next's office and info route guards screen
+ * their tool results (`screenDespiteFindings` adds results with deterministic findings);
+ * retriever hits and route-output records are not model-screened, so its private-tier time is its own report line. */
 export const SCREEN_FUNCTION = 'ScreenUntrustedContent'
 
 export interface FunctionSpend {

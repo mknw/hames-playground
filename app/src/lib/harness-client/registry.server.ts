@@ -238,7 +238,6 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
  * marker is load-bearing (see the uno.config comment).
  */
 import { searchAgent } from '@hames-ai/agents/agents/search.server'
-import { generalAgent } from '@hames-ai/agents/agents/general.server'
 import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
 import { sandboxAgent } from '@hames-ai/agents/agents/sandbox.server'
 import { retrieverAgent } from '@hames-ai/agents/agents/retriever-agent.server'
@@ -257,7 +256,6 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): Agent
 
 // Register all agents — one overlay site per agent, beside the palette.
 registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
-registerAgent(overlay(generalAgent, 'i-material-symbols-robot-2-outline', 'indigo'))
 registerAgent(overlay(generalNextAgent, 'i-material-symbols-route', 'indigo'))
 registerAgent(overlay(sandboxAgent, 'i-material-symbols-castle-outline', 'orange'))
 registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))

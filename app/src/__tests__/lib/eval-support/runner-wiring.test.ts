@@ -94,6 +94,11 @@ it('connects the observer stop to synchronous exit, and checks wall-clock spend 
     /setInterval\(\(\) => \{\s*tick\(\)\s*if \(budget.stopped\) stop\(\)\s*\}, 100\)/,
   )
 })
+// The report is what the flip gate reads: the frozen general baseline has to ride in it.
+// MUTATION: `generalBaselineRecorded: undefined` in run.ts reddens this.
+it('carries the recorded general baseline in the report', () => {
+  expect(run()).toContain('generalBaselineRecorded: GENERAL_BASELINE')
+})
 it('uses live production metadata, records refusing writes, and never returns a precalculated total', () => {
   const driver = read('evals/general-next/driver.ts')
   expect(run()).toContain('productionCatalog(')

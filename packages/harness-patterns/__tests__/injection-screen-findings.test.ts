@@ -100,23 +100,28 @@ describe('screenDespiteFindings', () => {
     expect(data).toContain(residual)
   })
 
-  it.each([true, false])('monotonically unions the option (outer=%s)', async (outerEnabled) => {
-    const screen = vi.fn(async () => clean)
-    await withRunFrame({}, async () => {
-      const outer = createInjectionGuard(
-        { tools: ['mail'], screen, screenDespiteFindings: outerEnabled },
-        () => {},
-        'outer',
-      )
-      await amendRunFrame({ guard: outer }, async () => {
-        const inner = createInjectionGuard(
-          { tools: ['other'], screenDespiteFindings: !outerEnabled },
+  it.each([true, false])(
+    'is decided by the guard that declares the tool (outer=%s)',
+    async (outerEnabled) => {
+      const screen = vi.fn(async () => clean)
+      await withRunFrame({}, async () => {
+        const outer = createInjectionGuard(
+          { tools: ['mail'], screen, screenDespiteFindings: outerEnabled },
           () => {},
-          'inner',
+          'outer',
         )
-        await inner.sanitize('mail', input)
+        await amendRunFrame({ guard: outer }, async () => {
+          const inner = createInjectionGuard(
+            { tools: ['other'], screenDespiteFindings: !outerEnabled },
+            () => {},
+            'inner',
+          )
+          // `mail` is the OUTER guard's tool: the inner guard's opposite setting
+          // neither adds nor removes the post-finding screen.
+          await inner.sanitize('mail', input)
+        })
       })
-    })
-    expect(screen).toHaveBeenCalledTimes(1)
-  })
+      expect(screen).toHaveBeenCalledTimes(outerEnabled ? 1 : 0)
+    },
+  )
 })

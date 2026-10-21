@@ -188,7 +188,7 @@ describe('toolSurfaceOutage', () => {
     // F1 on #278, at unit scale. `listTools` returns the app-side tools on its
     // failure path, so `tools.all` under a dead gateway is the nine `graph_*`
     // tools rather than `[]` — and while this guard opened with
-    // `tools.length > 0`, the `general` agent (which passes `tools.all` to a
+    // `tools.length > 0`, the `general` agent (since removed; it passed `tools.all` to a
     // planner and a `simpleLoop`) sailed straight past it and answered `done`.
     const health = await import('@hames-ai/harness-patterns/gateway-health.server')
     health.__resetGatewayHealth()
@@ -205,7 +205,7 @@ describe('toolSurfaceOutage', () => {
   it('leaves an agent that composed an app-side list alone', async () => {
     // The same three names, and the reason a name-based test would be wrong:
     // every app-side tool registered today is in the `graph` namespace, so a
-    // `general` agent robbed of the gateway holds exactly the list
+    // agent robbed of the gateway (as `general` was) holds exactly the list
     // `microsoft-365` builds on purpose out of `tools.graph`. That agent needs
     // no gateway, so refusing it would break a working agent over an outage
     // that costs it nothing. Only provenance separates the two.

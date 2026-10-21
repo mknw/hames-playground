@@ -12,6 +12,7 @@ import {
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
 import { flipGate } from '../../src/lib/eval-support/flip-gate'
+import { GENERAL_BASELINE } from '../../src/lib/eval-support/general-baseline'
 import { describeWakeFailure, wakeFailureReason } from '../../src/lib/eval-support/wake-failure'
 import {
   assertProxyNode,
@@ -45,13 +46,13 @@ async function main() {
   if (process.argv.includes('--list')) {
     for (const s of picked)
       console.log(
-        `${s.id}\t${s.priority}\t${s.p4 ? 'GATED ON P4' : 'RUNNABLE NOW'}\t${s.baseline ? 'general baseline + candidate' : 'candidate'}`,
+        `${s.id}\t${s.priority}\t${s.p4 ? 'GATED ON P4' : 'RUNNABLE NOW'}\t${s.baseline ? 'recorded general baseline + candidate' : 'candidate'}`,
       )
     return
   }
   // Before the proxy child, the fixture server or any wake: nothing below may start on a
   // checkout that cannot load its agents.
-  const agents = [...new Set(['general', candidate])]
+  const agents = [candidate]
   assertPackageLayout(agents)
   let fake: Awaited<ReturnType<typeof import('./fixture-inference').fixtureInference>> | undefined
   if (!live && process.env.GENERAL_EVAL_CHILD !== '1') {
@@ -119,12 +120,10 @@ async function main() {
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
   let wakeDetail: string | undefined
-  const jobs = picked.flatMap((s) =>
-    (s.baseline && candidate !== 'general' ? ['general', candidate] : [candidate]).map((agent) => ({
-      scenario: s,
-      key: { agent, scenario: s.id, tier: 'self_deployed' as const },
-    })),
-  )
+  const jobs = picked.map((s) => ({
+    scenario: s,
+    key: { agent: candidate, scenario: s.id, tier: 'self_deployed' as const },
+  }))
   const file = resolve(
     'evals/reports',
     `${new Date().toISOString().replace(/[:.]/g, '-')}-general-next.json`,
@@ -162,6 +161,8 @@ async function main() {
             scenarios,
             rows as ConversationResult[],
           ),
+          // RECORDED, not run: `general` was removed, so these are its last live results.
+          generalBaselineRecorded: GENERAL_BASELINE,
           hermeticCaveat: live
             ? undefined
             : 'Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. No G14 substitution is exercised (no fixture identity, directory off).',
@@ -255,7 +256,7 @@ async function main() {
             }
           }
           const trace = await driver.run(job.scenario, active)
-          const checks = grade(job.scenario, trace, active.agent === 'general')
+          const checks = grade(job.scenario, trace, false)
           if ((await takeEgressAttempts?.())?.length)
             checks.push({
               name: 'no unexpected egress',

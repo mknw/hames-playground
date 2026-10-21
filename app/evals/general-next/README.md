@@ -7,8 +7,10 @@ existing role-level compatibility evals with whole conversations: run the shippe
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.
 
-**Private tier only**, per the owner amendment of 2026-10-15. `general` runs the
-baseline cases beside the selected candidate. The default agent is unchanged.
+**Private tier only**, per the owner amendment of 2026-10-15. The
+baseline cases run on the selected candidate only: `general` was removed on
+2026-10-21 and its last live results are a **recorded** baseline
+(`src/lib/eval-support/general-baseline.ts`), not a run. The default agent is unchanged.
 No live run or default-flip evidence was produced in this PR.
 
 ```bash
@@ -102,8 +104,8 @@ leg is off: `directory: 'none'`). Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
 Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
 
-The acceptance gate after S3 is: all `must` scenarios and the unchanged `general`
-baseline pass on the **private tier**, with all expected scenarios present and live
+The acceptance gate after S3 is: all `must` scenarios pass and no recorded `general`
+baseline result regresses (the candidate passes every scenario `general` last passed) on the **private tier**, with all expected scenarios present and live
 model evidence. `should` / `nice` outcomes remain visible. No scenario can pass
 with zero checks. A separate default-flip draft is prepared only after that evidence.
 
@@ -115,13 +117,15 @@ changeset or core SPEC/GUIDE update.
 
 Every result row carries a `screen` block beside `spend`: the injection screen
 (`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
-screen's share of each. The orchestrator's screen covers every guarded tool result (inherited
-by the nested guards) and both fields of non-planner route outputs. Only
-`think` opts out of model screening on its successful plan record; failed records remain screened, and deterministic checks and
-fencing remain. `screenDespiteFindings` adds
-only results with deterministic findings, which hermetic fixtures never produce, so switching
-it off would not change these counts. The levers that move cost are the screen's scope and
-whether the reasoning field is screened. On the private tier each call is large-model time.
+screen's share of each. Each guard declares its own options and none is inherited: the
+office and info route guards carry the screen, so it covers their tool results (mail, files,
+sandbox results, web, library docs, graph and memory reads); the documents route's guard
+declares none, so retrieved hits are never screened, and the orchestrator's guard declares
+none, so no route-output record is screened either. `screenDespiteFindings` is declared on
+the two route guards and adds only results with deterministic findings, which hermetic
+fixtures never produce, so switching it off would not change these counts. The levers that
+move cost are the screen's scope and the guards that declare it. On the private tier each
+call is large-model time.
 Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
 the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).
 

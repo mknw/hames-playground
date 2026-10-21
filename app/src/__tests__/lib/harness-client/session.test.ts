@@ -113,7 +113,7 @@ describe('pattern cache', () => {
   })
 
   it('skips the cache when the build called doNotCachePatterns', async () => {
-    // A degraded build (e.g. the general agent's graph-schema fetch failing)
+    // A degraded build (e.g. an agent's graph-schema fetch failing)
     // is usable now but must not be frozen into the session — an eviction from
     // inside createPatterns would be overwritten by the write that follows it.
     createPatterns.mockImplementationOnce(async (sessionId: string) => {

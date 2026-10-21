@@ -224,8 +224,10 @@ uniform**:
 - `transports` **prepend**: innermost first, outer scopes still reachable. Two
   nested sandboxes both own `sandbox_bash`, and only an order answers "which
   machine".
-- `guard` **widens**: an inner guard is unioned with the enclosing one at
-  construction, so it can add coverage and never remove it.
+- `guard` **widens**: an inner guard's coverage is unioned with the enclosing
+  one's at construction, so it can add coverage and never remove it. Its options
+  stay its own: each tool is sanitized with the options of the guard that
+  declares it.
 - everything else **replaces** for the duration.
 
 `amendRunFrame` refuses outside a frame: something that scopes below a run needs

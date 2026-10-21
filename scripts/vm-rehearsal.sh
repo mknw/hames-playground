@@ -7,16 +7,26 @@
 # Refuses anywhere else: it installs packages, changes the firewall and starts
 # VMs with none of the live host's safeguards (its witness always passes, it
 # allow-lists the package plan it finds, and it moves /var/lib/incus to /mnt).
-# Everything it pins is public; nothing it uses is secret.
+# Everything it pins is public; nothing it uses is secret. The pinned cloud-image
+# release directory is public but not eternal: a removed one fails loudly at the
+# first download (curl -f), never silently.
 set -euo pipefail
 
 if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
   echo "refused: this rehearsal runs only on a disposable GitHub-hosted runner" >&2
   exit 2
 fi
-[[ $EUID == 0 ]] || exec sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,REHEARSAL_STOP_AFTER "$0" "$@"
+[[ $EUID == 0 ]] || exec sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,GITHUB_WORKSPACE,REHEARSAL_STOP_AFTER "$0" "$@"
 
-REPO=$(cd "$(dirname "$0")/.." && pwd)
+REPO=$(cd "$(dirname "$0")/.." && pwd -P)
+# The two variables above are plain environment: also require the checkout to be this runner's
+# workspace, and a host with no Incus and no Incus state (the runner image has none), before
+# anything is mounted over or written outside the checkout.
+if [[ $(cd "${GITHUB_WORKSPACE:-/nonexistent}" 2>/dev/null && pwd -P) != "$REPO" ]] \
+  || command -v incus >/dev/null 2>&1 || [[ -n $(ls -A /var/lib/incus 2>/dev/null) ]]; then
+  echo "refused: not this runner's own checkout, or Incus (or its state) already present" >&2
+  exit 2
+fi
 PIPE=$REPO/packages/sandbox/scripts/vm-image
 W=/mnt/rehearsal
 STATE=$REPO/.sandbox-vm-spike
@@ -52,7 +62,7 @@ group "1. base image: signed checksums, pinned sha256"
 apt-get install -y -qq ubuntu-cloudimage-keyring gpgv >/dev/null
 mkdir -p "$W/inputs"
 for file in "$BASE.img" "$BASE.manifest" SHA256SUMS SHA256SUMS.gpg; do
-  curl -fsSL --retry 3 -o "$W/inputs/$file" "$IMAGES/$file"
+  curl -fsSL --retry 3 --connect-timeout 30 --max-time 1200 -o "$W/inputs/$file" "$IMAGES/$file"
 done
 gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg "$W/inputs/SHA256SUMS.gpg" "$W/inputs/SHA256SUMS"
 grep -F "$BASE_SHA *$BASE.img" "$W/inputs/SHA256SUMS"
@@ -100,8 +110,9 @@ python3 "$PIPE/build.py" save --apply --docker "$(command -v docker)" --docker-h
 endgroup
 
 group "6. lock (tool hashes and versions read inside the builder)"
-builder python3 - <<'PY'
-import hashlib, json, os, subprocess
+builder python3 - "$GROW" "$SERIAL" <<'PY'
+import hashlib, json, os, subprocess, sys
+grow, serial = sys.argv[1:3]
 def sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 provenance = json.load(open("/w/derived/provenance.json"))
@@ -113,8 +124,8 @@ for name in ("qemu-img", "virt-customize", "guestfish"):
     version = subprocess.run([path, "--version"], capture_output=True, text=True, check=True).stdout.strip()
     tools[name] = {"path": path, "sha256": sha(path), "version": version}
 lock = {"schema": 1, "architecture": "x86_64", "epoch": 1760000000,
-        "max_virtual_bytes": 10 * 1024 ** 3,
-        "base": {"name": "ubuntu-resolute-cloudimg-amd64-grown", "version": "20260927+grow-10G",
+        "max_virtual_bytes": int(grow.removesuffix("G")) * 1024 ** 3,
+        "base": {"name": "ubuntu-resolute-cloudimg-amd64-grown", "version": serial + "+grow-" + grow,
                  "path": "derived/base.qcow2", "sha256": provenance["derived_sha256"]},
         "packages": [{**p, "path": "debs/" + p["path"]} for p in debs],
         "flavours": {k: {**v, "path": "save/" + v["path"]} for k, v in flavours.items()},
@@ -142,8 +153,9 @@ docker image rm "$BUILDER" >/dev/null
 rm -rf "$W/derived" "$W/debs" "$W/inputs"
 mkdir -p /mnt/incus /var/lib/incus && mount --bind /mnt/incus /var/lib/incus  # runner-only: disk lives on /mnt
 mkdir -p "$STATE" && chmod 0700 "$STATE"
-curl -fsSL -o "$STATE/upstream-key.asc" https://pkgs.zabbly.com/key.asc
+curl -fsSL --connect-timeout 30 --max-time 300 -o "$STATE/upstream-key.asc" https://pkgs.zabbly.com/key.asc
 python3 "$REPO/scripts/lib/sandbox_vm.py" source --apply --key "$STATE/upstream-key.asc"
+# The newest stable build at run time: the harness requires 7.3 or newer, and the run records which one it got.
 INCUS_VERSION=$(apt-cache madison incus | awk -F'|' 'NR == 1 { gsub(/ /, "", $2); print $2 }')
 DNSMASQ_VERSION=$(dpkg-query -W -f='${Version}' dnsmasq-base 2>/dev/null \
   || apt-cache policy dnsmasq-base | awk '/Candidate:/ { print $2 }')
@@ -159,8 +171,9 @@ group "9. site inputs a live host would supply"
 command -v ufw >/dev/null || apt-get install -y -qq ufw >/dev/null  # installed inactive, as preflight reads it
 apt-get install -y -qq qemu-utils >/dev/null  # host qemu-img: preflight reads the image (live host: change A)
 id sbxs-kvm >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin -G kvm sbxs-kvm
-printf '#!/bin/sh\n# Rehearsal only: a runner has no independent SSH path to witness.\nexit 0\n' > /usr/local/sbin/sbxs-witness
-chmod 0755 /usr/local/sbin/sbxs-witness
+WITNESS=$W/sbxs-witness  # inside the rehearsal's own directory, never a system path
+printf '#!/bin/sh\n# Rehearsal only: a runner has no independent SSH path to witness.\nexit 0\n' > "$WITNESS"
+chmod 0755 "$WITNESS"
 docker network create -o com.docker.network.bridge.name=sbxsapp0 sbxs-app >/dev/null
 docker network create sbxs-probe >/dev/null
 docker pull -q "$NODE" >/dev/null
@@ -174,7 +187,7 @@ group "10. spike: install, provision, TLS, measure, cleanup"
 UNIT=sbxs-run-$(openssl rand -hex 6)
 ARGS=(--install --provision --tls --measure --cleanup
   --survey "$STATE/survey" --state "$STATE/run"
-  --ssh-probe /usr/local/sbin/sbxs-witness --kvm-user sbxs-kvm
+  --ssh-probe "$WITNESS" --kvm-user sbxs-kvm
   --incus-version "$INCUS_VERSION" --dnsmasq-version "$DNSMASQ_VERSION" "${ALLOW[@]}"
   --image-metadata "$W/build/metadata.tar" --image-rootfs "$W/build/disk.qcow2"
   --network 10.231.0.1/24 --network 10.232.0.1/24

@@ -57,21 +57,42 @@ def digest(path):
     return value.hexdigest()
 
 
-def download(status, out, codename):
+def fresh_output(out):
     require(out.is_dir() and not any(out.iterdir()), "fresh empty output directory required")
+
+
+def apt_options(state):
+    """apt confined to `state`: the base image's own status, the signed archive, nothing of the host's."""
+    return [
+        "-o", "Dir::State::status=" + str(state / "status"),
+        "-o", "Dir::State::Lists=" + str(state / "lists"),
+        "-o", "Dir::Cache::archives=" + str(state / "archives"),
+        "-o", "Dir::Etc::sourcelist=" + str(state / "archive.sources"),
+        "-o", "Dir::Etc::sourceparts=-",
+        "-o", "APT::Get::List-Cleanup=0",
+    ]
+
+
+def apt_commands(state):
+    options = apt_options(state)
+    return [["apt-get", *options, "update"],
+            ["apt-get", *options, "install", "--download-only", "--reinstall", "-y",
+             "--no-install-recommends", *REQUIRED]]
+
+
+def complete(names):
+    require(set(REQUIRED) <= set(names) and len(names) == len(set(names)), "closure incomplete or duplicated")
+
+
+def download(status, out, codename):
+    fresh_output(out)
     state = Path("/tmp/closure-apt")
     (state / "lists/partial").mkdir(parents=True)
     (state / "archives/partial").mkdir(parents=True)
     (state / "status").write_text(checked_status(status.read_text()))
     (state / "archive.sources").write_text(sources(codename))
-    options = ["-o", "Dir::State::status=" + str(state / "status"),
-               "-o", "Dir::State::Lists=" + str(state / "lists"),
-               "-o", "Dir::Cache::archives=" + str(state / "archives"),
-               "-o", "Dir::Etc::sourcelist=" + str(state / "archive.sources"),
-               "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0"]
-    subprocess.run(["apt-get", *options, "update"], check=True)
-    subprocess.run(["apt-get", *options, "install", "--download-only", "--reinstall", "-y",
-                    "--no-install-recommends", *REQUIRED], check=True)
+    for command in apt_commands(state):
+        subprocess.run(command, check=True)
     records = []
     for deb in sorted((state / "archives").glob("*.deb")):
         target = out / deb.name
@@ -79,7 +100,7 @@ def download(status, out, codename):
         records.append({"name": deb_field(target, "Package"), "version": deb_field(target, "Version"),
                         "path": target.name, "sha256": digest(target)})
     names = [record["name"] for record in records]
-    require(set(REQUIRED) <= set(names) and len(names) == len(set(names)), "closure incomplete or duplicated")
+    complete(names)
     (out / "packages.json").write_text(json.dumps({"packages": records}, indent=2) + "\n")
     return {"packages": len(records), "bytes": sum((out / r["path"]).stat().st_size for r in records)}
 

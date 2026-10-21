@@ -2,18 +2,19 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const scripts = ['build.test.py', 'helpers.test.py'].map((name) =>
-  fileURLToPath(new URL('../../scripts/vm-image/' + name, import.meta.url)),
-)
+const scripts = ['build.test.py', 'helpers.test.py'].map((name) => ({
+  name,
+  script: fileURLToPath(new URL('../../scripts/vm-image/' + name, import.meta.url)),
+}))
 
 describe('VM image offline stages', () => {
   it.each(
-    scripts.flatMap((script) => [
-      { script, args: [] },
-      { script, args: ['--mutations'] },
+    scripts.flatMap(({ name, script }) => [
+      { name, script, args: [] },
+      { name, script, args: ['--mutations'] },
     ]),
   )(
-    'runs hermetic Python checks $script $args',
+    'runs hermetic Python checks $name $args',
     ({ script, args }) => {
       const result = spawnSync('python3', [script, ...args], {
         encoding: 'utf8',

@@ -54,12 +54,16 @@ def qemu_img(*args):
     return subprocess.run(["qemu-img", *args], check=True, capture_output=True, text=True).stdout
 
 
-def standalone_qcow2(path):
-    info = json.loads(qemu_img("info", "-f", "qcow2", "--output=json", str(path)))
+def standalone_size(info):
+    """The virtual size of a standalone qcow2 (qemu-img's JSON), else a refusal."""
     require(info.get("format") == "qcow2" and not info.get("backing-filename")
             and not info.get("encrypted") and not info.get("format-specific", {}).get("data", {}).get("data-file"),
             "standalone qcow2 required")
     return info["virtual-size"]
+
+
+def standalone_qcow2(path):
+    return standalone_size(json.loads(qemu_img("info", "-f", "qcow2", "--output=json", str(path))))
 
 
 def handle(path, readonly):
@@ -84,6 +88,13 @@ def root_partition(parts):
     require(len(root) == 1 and max(p["start"] for p in parts) == root[0]["start"],
             "root partition 1 must be the last partition")
     return root[0]
+
+
+def grow_end(total_sectors, root_end_bytes):
+    """The new last sector of root; it must lie beyond where root ends now."""
+    end = aligned_end(total_sectors)
+    require(end > root_end_bytes // 512, "nothing to grow")
+    return end
 
 
 def inventory(path):
@@ -124,9 +135,8 @@ def grow(stock, output, size):
     g = handle(output, readonly=False)
     try:
         g.part_expand_gpt(DEVICE)
-        end = aligned_end(g.blockdev_getsz(DEVICE))
         root = root_partition(layout(g))
-        require(end > root["end"] // 512, "nothing to grow")
+        end = grow_end(g.blockdev_getsz(DEVICE), root["end"])
         g.part_resize(DEVICE, root["num"], end)
         device = DEVICE + str(root["num"])
         g.e2fsck(device, forceall=True)  # libguestfs allows one of correct/forceall; forceall is -y

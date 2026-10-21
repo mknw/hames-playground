@@ -552,6 +552,16 @@ class Safety(unittest.TestCase):
         with patch.object(vm, "command", return_value=result('-A DOCKER-USER -j RETURN\n' + first)), self.assertRaises(RuntimeError):
             self.spike.bridge_insert_position()
 
+    def test_bridge_allows_go_below_inline_metadata_drops(self):
+        drops = "\n".join("-A DOCKER-USER -d 192.0.2.%d/32 -m comment --comment vps-metadata-forward-v1 -j DROP" % i
+                          for i in range(5))
+        for listing, position in ((drops + "\n-A DOCKER-USER -j RETURN\n", "6"), ("-A DOCKER-USER -j RETURN\n", "1"), ("", "1")):
+            with self.subTest(position=position), patch.object(vm, "command", return_value=result("-N DOCKER-USER\n" + listing)):
+                self.assertEqual(self.spike.bridge_insert_position(), position)
+        gapped = drops.replace("\n", "\n-A DOCKER-USER -j RETURN\n", 1)
+        with patch.object(vm, "command", return_value=result(gapped)), self.assertRaisesRegex(RuntimeError, "first and contiguous"):
+            self.spike.bridge_insert_position()
+
     def test_surgical_firewall_recovery_attempts_every_entry_and_resumes(self):
         entries = [{"kind": "nft", "table": self.spike.prefix.replace("-", "_") + str(i)} for i in range(2)]
         entries += [{"kind": "iptables", "rule": self.spike.bridge_rules(0)[0]}]
@@ -1777,6 +1787,9 @@ def mutations():
         ('runbook sole-origin rule omitted', 'runbook', '**only** from the pinned repository URI', 'from any source', 'test_runbook_upstream_incus_source'),
         ('runbook incus-base pin omitted', 'runbook', ' incus-base="$INCUS_PACKAGE_VERSION"', '', 'test_runbook_upstream_incus_source'),
         ("image volume left out of the project disk cap", "core", '2 * size_bytes(args.vm_disk) + virtual <= size_bytes(args.disk_cap)', '2 * size_bytes(args.vm_disk) <= size_bytes(args.disk_cap)', "test_project_disk_cap_holds_both_disks_and_the_image"),
+        ("inline metadata drops ignored", "core", ' or re.fullmatch(r"vps-metadata-forward-v[0-9]+", comment) is not None', '', "test_bridge_allows_go_below_inline_metadata_drops"),
+        ("metadata block may be split", "core", 'require(hooks == list(range(len(hooks))), "metadata policy must remain first and contiguous")', 'pass', "test_bridge_allows_go_below_inline_metadata_drops"),
+        ("allows inserted above the metadata block", "core", 'return str(len(hooks) + 1)', 'return "1"', "test_bridge_allows_go_below_inline_metadata_drops"),
         ("measure imports a second harness copy", "core", 'sys.modules.setdefault("sandbox_vm", sys.modules[__name__])', 'pass', "test_measure_shares_the_running_module"),
         ("spike certificates valid only from now", "core", 'time.gmtime(time.time() - 3600)', 'time.gmtime(time.time())', "test_spike_certificates_are_backdated_for_guest_clock_lag"),
         ("server and client leaves not backdated", "core", '"x509", "-req", "-not_before", start, "-days"', '"x509", "-req", "-days"', "test_spike_certificates_are_backdated_for_guest_clock_lag"),
@@ -1832,7 +1845,7 @@ def mutations():
         ("image expansion guard removed", "core", 'image.get("format") == "qcow2"', 'True', "test_image_expansion_unknown_or_backing_chain_refused"),
         ("Opus 14 nested default state folder", "core", 'DEFAULT_STATE / (("survey-" if args.mode == "survey" else "run-") + uuid.uuid4().hex)', 'DEFAULT_STATE / ("survey-" if args.mode == "survey" else "run-") / uuid.uuid4().hex', "test_default_state_has_one_directory_component"),
         ("Opus 11 survey limit flag removed", "core", 're.search(r"\\blimit\\b", content, re.I)', 'False', "test_survey_flags_connection_limit_rules"),
-        ("metadata first hook bypassed", "core", 'return "2" if hooks else "1"', 'return "1"', "test_metadata_jump_stays_first_with_marked_rule"),
+        ("metadata first hook bypassed", "core", 'return str(len(hooks) + 1)', 'return "1"', "test_metadata_jump_stays_first_with_marked_rule"),
         ("UFW preflight opt-in removed", "core", 'args.allow_ufw_route or not re.search', 'True or not re.search', "test_real_preflight_active_ufw_requires_explicit_opt_in"),
         ("distinct probe network admission removed", "core", 'args.probe_network != args.app_network', 'True', "test_real_preflight_requires_reviewed_measure_probe_inputs"),
         ("paired concurrency schema collapsed", "core", '"baseline_concurrency4", "baseline_concurrency8", ', '', "test_concurrency_schema_distinguishes_baseline_and_nested"),

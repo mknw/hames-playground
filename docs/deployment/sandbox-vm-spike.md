@@ -23,7 +23,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
 1. **Q5.** Record the owner's authorisation on #648 itself: the target host, SSH and Incus install, this spike only. It is currently only on the PR.
 2. **Firewall evidence, from a fresh survey.**
    - FORWARD's first rule is `-j DOCKER-USER`.
-   - DOCKER-USER rule 1 is the `VPS-METADATA` jump, or there is no jump.
+   - DOCKER-USER starts with the metadata policy: the `VPS-METADATA` jump, or #677's inline `vps-metadata-forward-v1` drops (contiguous, at the top), or there is none. The spike's allowances are inserted directly below it; a split block is refused.
    - UFW `limit` rules have been reviewed.
    - Pass `--allow-ufw-route`. With UFW active, the default refuses (`sandbox_vm.py:733`).
 3. **Snapshot parse check.** Run `nft list ruleset > f && nft --check -f f`, and it must exit 0. If it does not, the run stops harmlessly at `:326` (R1). Do not patch the code on the host to get past it.

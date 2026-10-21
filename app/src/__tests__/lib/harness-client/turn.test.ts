@@ -1137,7 +1137,9 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
     const result = await runTurnAndPersist(interactive())
 
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(tierScopes.value).toEqual(['anthropic']) // the deployment default
+    // the host default of a run that names no tier — the self-deployed tier (the one
+    // tier rule); `assertInferenceTier` is mocked here, so reachability is not at issue
+    expect(tierScopes.value).toEqual(['self_deployed'])
     expect(logged).toHaveBeenCalled()
   })
 })

@@ -87,11 +87,12 @@ export function resolveTier(
  * the seed first awaits `ensureSchema()` (`db/user-prefs.server.ts`), which has
  * its own persistent failure mode — and under `Promise.all` either rejection
  * discarded both. A conversation the user had PINNED to the private tier then
- * resolved through the caller's fail-open, which is `activeInferenceTier()`, the
- * env flag: on the deployment shape `docs/PREVIEW.md` explicitly allows
- * (endpoints configured, `USE_SELF_DEPLOYED_INFERENCE` unset) that is Anthropic, so a
- * seed lookup failing sent a private thread to the public provider while its
- * sidebar glyph still said otherwise.
+ * resolved through the caller's fail-open, which is `activeInferenceTier()`. That
+ * used to follow the env flag: on the deployment shape `docs/PREVIEW.md` explicitly
+ * allows (endpoints configured, `USE_SELF_DEPLOYED_INFERENCE` unset) it was Anthropic,
+ * so a seed lookup failing sent a private thread to the public provider while its
+ * sidebar glyph still said otherwise. Under the one tier rule that fall-open
+ * lands on the self-deployed tier (refused when unconfigured), never on Anthropic.
  *
  * The failure policy of each half, named rather than inherited:
  *   - **seed read fails** → the column decides alone; a recorded tier is the

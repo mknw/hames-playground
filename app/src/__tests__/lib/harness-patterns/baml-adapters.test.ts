@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * BAML Adapters Tests
  *
@@ -10,6 +10,8 @@ import '../../../lib/inference/config.server'
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
+
+useFlagDrivenDefaultTier()
 
 // Mock server-only imports
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({

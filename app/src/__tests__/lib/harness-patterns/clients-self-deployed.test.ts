@@ -148,16 +148,23 @@ afterEach(() => {
   }
 })
 
-describe('USE_SELF_DEPLOYED_INFERENCE unset — the default posture is untouched', () => {
+describe('USE_SELF_DEPLOYED_INFERENCE unset — a run that names the Anthropic tier is untouched', () => {
   it('every role resolves to its Anthropic chain and no call gets a client override', async () => {
     const { resolveClientForRole, clientOverrideFor } = await load()
     const { selfDeployedInferenceEnabled } = await loadPolicy()
 
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
     expect(selfDeployedInferenceEnabled()).toBe(false)
-    for (const [role, move] of roles({ ...ROUTED, ...UNROUTED })) {
-      expect(resolveClientForRole(role)).toBe(move.from)
-      expect(clientOverrideFor(role)).toBeUndefined()
-    }
+    // The flag is the boot-time switch, not the tier of a run that names none
+    // (that is the self-deployed tier, pinned in inference-tier-scope.test.ts),
+    // so the Anthropic posture is what a run that NAMES the tier gets.
+    await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      for (const [role, move] of roles({ ...ROUTED, ...UNROUTED })) {
+        expect(resolveClientForRole(role)).toBe(move.from)
+        expect(clientOverrideFor(role)).toBeUndefined()
+      }
+    })
   })
 
   it('an unconfigured endpoint is not an error while the flag is off', async () => {
@@ -250,11 +257,12 @@ describe('USE_SELF_DEPLOYED_INFERENCE=1 — exactly the mapped roles move', () =
 describe('the flag is `1`, not truthiness', () => {
   it.each(['0', 'false', 'true', 'yes', ''])('%o does not enable it', async (value) => {
     process.env.USE_SELF_DEPLOYED_INFERENCE = value
-    const { clientOverrideFor } = await load()
+    // `load()` is the discriminating call: a truthy reading of the flag would
+    // run the boot-time endpoint assert and reject here (no endpoint is set).
+    await load()
     const { selfDeployedInferenceEnabled } = await loadPolicy()
 
     expect(selfDeployedInferenceEnabled()).toBe(false)
-    expect(clientOverrideFor('controller')).toBeUndefined()
   })
 })
 

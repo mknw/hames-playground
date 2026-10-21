@@ -19,7 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 import {
   evaluateDecision,
   typedDecision,
@@ -34,6 +34,8 @@ import {
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import type { DecisionSetSpec, DecisionSpec } from '@hames-ai/harness-patterns/types'
 import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -428,6 +430,10 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
   it.each(['self_deployed', 'unknown', 'future'])(
     'refuses tier %s before reading the key',
     async (tier) => {
+      // An unrecognised tier takes the host's DEFAULT (the one tier rule), so on
+      // a deployment whose default is the private tier it is the private tier:
+      // the flag makes this file's flag-driven default say so.
+      if (tier !== 'self_deployed') vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       const { decideAll } = await transport()
       const real = process.env
       let keyReads = 0
@@ -445,6 +451,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
         expect(requests).toHaveLength(0)
       } finally {
         process.env = real
+        vi.unstubAllEnvs()
       }
     },
   )
@@ -917,6 +924,7 @@ describe('jev-tier-lock score/noul', () => {
           return base.question
         },
       }
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       try {
         for (const tier of ['self_deployed', 'unknown', 'future']) {
           const err = await withRunFrame({ inference: { tier } }, () =>
@@ -933,6 +941,7 @@ describe('jev-tier-lock score/noul', () => {
         expect(requests).toHaveLength(0)
       } finally {
         process.env = real
+        vi.unstubAllEnvs()
       }
     },
   )

@@ -117,6 +117,16 @@
 import { applyLegacyInferenceEnv } from './inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import {
+  activeInferenceTier,
+  assertInferenceTier,
+  configureInferencePolicy,
+  notePrivateCallStart,
+  onExplicitAnthropicTier,
+  privateInferenceOnly,
+  type InferenceTier,
+  type InferenceTierPolicy,
+} from './tier.server'
 import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
 // TYPE-ONLY by design: this module owns the routing seam and reads the
 // consumer layer's SHAPE, while `consumer-clients.server.ts` imports the seam
@@ -128,22 +138,18 @@ import type { BamlClientOverride, ClientOverride } from './consumer-clients.serv
 assertServerOnImport()
 applyLegacyInferenceEnv()
 
-/**
- * Which inference tier a run is on.
- *
- * MOVED here from `lib/inference/config.server.ts` (PR-1a): the tier scope
- * below is this module's seam, so its vocabulary is package-side — the union
- * cannot stay host-side without a host import, which is the one direction the
- * extraction forbids. `config.server.ts` re-exports it, so every existing
- * importer keeps its import path.
- *
- * `'self_deployed'` is the self-hosted deployment (`SELF_DEPLOYED_CLIENT_BY_ROLE` below);
- * `'anthropic'` is "no override at all", i.e. every function runs the chain it
- * declares. Named rather than boolean because it reaches the browser — a
- * header control shows the user which one their chats are on, and a label is
- * what a preview user can act on.
- */
-export type InferenceTier = 'self_deployed' | 'anthropic'
+// The tier vocabulary and its readers live in `tier.server.ts` (the ONE tier
+// rule, which also registers `effectiveTier()` into core's run frame); they are
+// re-exported so every existing import path keeps working.
+export {
+  activeInferenceTier,
+  assertInferenceTier,
+  configureInferencePolicy,
+  onExplicitAnthropicTier,
+  privateInferenceOnly,
+  type InferenceTier,
+  type InferenceTierPolicy,
+}
 
 // ============================================================================
 // THE HOST SEAM — where the app's configuration is FED IN (PR-1a)
@@ -181,36 +187,6 @@ let modelTables: ModelTables = { maxOutputTokens: {}, contextWindows: {} }
 /** Feed the host's model tables in. Called once at the composition root. */
 export function configureModelTables(tables: ModelTables): void {
   modelTables = tables
-}
-
-/** The app-policy half of the tier seam: what a run takes outside any scope,
- *  whether a 'self_deployed' scope is reachable, and what to announce when a
- *  private-tier client is about to take a call. */
-export interface InferenceTierPolicy {
-  /** The tier outside any run frame, or inside one whose `inference` slot
-   *  nobody filled (a script, a background job). The host reads
-   *  `USE_SELF_DEPLOYED_INFERENCE` here; the package-side default is 'anthropic' — the
-   *  safe direction, never confidential traffic. */
-  defaultTier: () => InferenceTier
-  /** Restrict this deployment to the built-in private clients. Unset preserves all routing. */
-  privateOnly?: () => boolean
-  /** Fail-closed reachability check, run by {@link assertInferenceTier} before
-   *  a host puts 'self_deployed' in a run frame (the host's
-   *  `assertPrivateTierConfigured`).
-   *  Unregistered → the tier is REFUSED, not opened. */
-  assertTierReachable?: (tier: InferenceTier) => void
-  /** A private-tier client (`SELF_DEPLOYED_CLIENT_BY_ROLE`'s values) is about to take
-   *  a call. The host decides what that means — the wake/cold-start notice
-   *  filters on its own scale-to-zero client name here, keeping the "which
-   *  client scales to zero" knowledge host-side. */
-  onPrivateCallStart?: (client: string) => void
-}
-
-let tierPolicy: InferenceTierPolicy = { defaultTier: () => 'anthropic' }
-
-/** Feed the host's tier policy in. Called once at the composition root. */
-export function configureInferencePolicy(policy: InferenceTierPolicy): void {
-  tierPolicy = policy
 }
 
 /** EUR rates the host bills under, read per call by `computeEventMetrics`
@@ -634,14 +610,6 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
   decide: ['Decide'],
 }
 
-/** True only when the run is EXPLICITLY on the Anthropic tier — the
- *  frame's RAW tier when one is set (an unrecognised value is not the Anthropic tier,
- *  although `activeInferenceTier()` narrows it to the default), else the default. */
-export function onExplicitAnthropicTier(): boolean {
-  const framed = currentRunFrame()?.inference?.tier
-  return (framed ?? tierPolicy.defaultTier()) === 'anthropic'
-}
-
 /**
  * BAML function names a tier decision re-points, and therefore the only calls
  * whose duration means the same thing in both switch positions.
@@ -682,82 +650,6 @@ export const TIER_SWITCHED_FUNCTIONS: ReadonlySet<string> = new Set(
     (role) => SWITCHED_FUNCTIONS_BY_ROLE[role] ?? [],
   ),
 )
-
-/** Whether the host restricts this deployment to the built-in private tier. */
-export function privateInferenceOnly(): boolean {
-  return tierPolicy.privateOnly?.() === true
-}
-
-/**
- * Refuse a tier this deployment cannot actually take — the check that used to
- * live inside `runWithInferenceTier` before the run frame replaced it.
- *
- * The scope moved to core and core is GENERIC: the frame's `inference.tier` is
- * an opaque string, and core neither knows what `'self_deployed'` means nor what would
- * make it unreachable (ruling D1, issue #374 — provider specifics stay in this
- * companion). So the fail-closed gate moved here, and the HOST calls it before
- * it puts a tier in a frame.
- *
- * FAIL CLOSED on `'self_deployed'`: checked through the host-registered
- * `assertTierReachable`, and refused outright when NO policy is registered —
- * matching every other gate on this tier. The alternative — shrug and let BAML
- * fall through to the declared Anthropic chain — is the one failure this whole
- * route exists to prevent, and it is no less dangerous for having come from a
- * user's preference row than from an env var.
- *
- * Throws synchronously. Its predecessor rejected instead, because its contract
- * was "hand me a callback, get a promise" and a caller that only wrote
- * `.catch()` would otherwise have taken the throw on the stack. This one takes
- * no callback, so there is no such caller to protect.
- */
-export function assertInferenceTier(tier: InferenceTier): void {
-  if (privateInferenceOnly() && tier !== 'self_deployed') {
-    throw new Error(
-      'Private-only inference: the Anthropic tier is disabled on this deployment; no request was made.',
-    )
-  }
-  if (tier !== 'self_deployed') return
-  const assertReachable = tierPolicy.assertTierReachable
-  if (!assertReachable) {
-    throw new Error(
-      "The 'self_deployed' inference tier was requested but no inference policy is registered. " +
-        'The host registers one at its composition root (lib/inference/config.server.ts, ' +
-        'via configureInferencePolicy); refusing rather than guessing is the fail-closed default.',
-    )
-  }
-  assertReachable(tier)
-}
-
-/**
- * The tier in force right now: the open run frame's `inference.tier`, or the
- * deployment default when there is no frame or the slot is empty (a script, a
- * background job, anything off the turn path).
- *
- * THE ONE NEW IMPORT THIS PACKAGE TAKES FROM CORE'S FRAME. A tier is a property
- * of the RUN, not of a call site, and it used to ride an `AsyncLocalStorage` of
- * this module's own — one of five such stores, each with its own opener and its
- * own chance of being skipped. It is now a slot of the single run frame the
- * harness entry points open, read here at CALL time, which is what makes one
- * turn's tier cover every adapter inside it without threading a parameter
- * anywhere.
- *
- * The frame carries the tier as an OPAQUE STRING, because core must not know
- * provider vocabulary. The narrowing back to this module's union happens here,
- * and an unrecognised value falls back to the deployment default rather than
- * being trusted: a host that writes a typo into the slot gets the safe tier,
- * not an unrouted one.
- */
-export function activeInferenceTier(): InferenceTier {
-  const tier = currentRunFrame()?.inference?.tier
-  const active =
-    tier === 'verda'
-      ? 'self_deployed'
-      : tier === 'self_deployed' || tier === 'anthropic'
-        ? tier
-        : tierPolicy.defaultTier()
-  if (privateInferenceOnly()) assertInferenceTier(active)
-  return active
-}
 
 /**
  * `{ client: 'LargeQwen' }` for a self-deployed role while the active tier is
@@ -826,7 +718,7 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
   // asked the same question for prompt budgeting, potentially more than once and
   // without a call following, and a notice fired from a budgeting lookup would
   // announce a wait nobody is paying either.
-  tierPolicy.onPrivateCallStart?.(client)
+  notePrivateCallStart(client)
   return { client }
 }
 

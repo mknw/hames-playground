@@ -51,13 +51,13 @@ export function assertLargeModelConfigured(): void {
     .filter(([, value]) => !value)
     .map(([name]) => name)
   if (missing.length > 0) {
-    const setting = privateInferenceOnly()
+    const cause = privateInferenceOnly()
       ? 'INFERENCE_TIERS=self_deployed'
-      : 'USE_SELF_DEPLOYED_INFERENCE=1'
+      : 'the self-deployed tier is in use (it is the tier of a run that names none)'
     throw new Error(
-      `${setting} but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
-        `Set them (see app/.env.example) or unset ${privateInferenceOnly() ? 'INFERENCE_TIERS' : 'USE_SELF_DEPLOYED_INFERENCE'} — this build refuses to ` +
-        'quietly send the flagged roles to Anthropic instead.',
+      `${cause}, but ${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} not set. ` +
+        'Set them (see app/.env.example) — this build refuses to quietly send the flagged ' +
+        'roles to Anthropic instead, so no request was made.',
     )
   }
   if (!/\/v1\/?$/.test(endpoint as string)) {

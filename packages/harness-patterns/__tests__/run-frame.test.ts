@@ -351,3 +351,60 @@ describe('(e) two loaded copies of the package share one frame', () => {
     })
   })
 })
+
+// ============================================================================
+// (f) THE ONE TIER RULE'S SEAM — effectiveTier() / registerEffectiveTier()
+// ============================================================================
+
+describe('(f) effectiveTier answers what the tier module registered', () => {
+  afterEach(async () => {
+    const { registerEffectiveTier } = await import('../run-frame.server')
+    registerEffectiveTier(undefined)
+  })
+
+  it('answers undefined when nothing is registered, and never reads the raw frame slot', async () => {
+    // Core interprets no tier string, so with no tier module there is no tier to
+    // name. Mutation: return `currentRunFrame()?.inference?.tier` as the fallback
+    // → the framed case below answers 'anthropic' and goes red.
+    const { effectiveTier, withRunFrame } = await import('../run-frame.server')
+    expect(effectiveTier()).toBeUndefined()
+    await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      expect(effectiveTier()).toBeUndefined()
+    })
+  })
+
+  it('calls the registered reader at call time, inside whatever frame is open', async () => {
+    // Mutation: cache the first answer at registration → the second read inside
+    // the frame is stale and goes red.
+    const { effectiveTier, registerEffectiveTier, withRunFrame, currentRunFrame } =
+      await import('../run-frame.server')
+    registerEffectiveTier(() => currentRunFrame()?.inference?.tier ?? 'default-tier')
+    expect(effectiveTier()).toBe('default-tier')
+    await withRunFrame({ inference: { tier: 'framed' } }, async () => {
+      expect(effectiveTier()).toBe('framed')
+    })
+  })
+
+  it('lets a refusing reader throw through, so a guard never guesses the tier', async () => {
+    // Mutation: swallow the reader's throw and answer undefined.
+    const { effectiveTier, registerEffectiveTier } = await import('../run-frame.server')
+    registerEffectiveTier(() => {
+      throw new Error('restricted deployment')
+    })
+    expect(() => effectiveTier()).toThrow('restricted deployment')
+  })
+
+  it('a registration made through copy A is answered by copy B', async () => {
+    // The two-copies rule of (e), for the registration: the tier module loads
+    // against one copy of this package and a guard may read through another.
+    // Mutation: hold the reader in a module-level `let` instead of the
+    // `globalThis` symbol holder → copy B answers undefined and goes red.
+    const copyA = await import('../run-frame.server')
+    vi.resetModules()
+    const copyB = await import('../run-frame.server')
+    expect(copyB).not.toBe(copyA)
+
+    copyA.registerEffectiveTier(() => 'registered-by-A')
+    expect(copyB.effectiveTier()).toBe('registered-by-A')
+  })
+})

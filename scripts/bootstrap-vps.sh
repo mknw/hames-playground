@@ -514,6 +514,20 @@ clone_preflight() {
   for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev; do
     [[ -r $APP_DIR/$path && -f $APP_DIR/$path ]] || { printf '%s\n' "Clone configuration is missing a required overlay, validator or Caddy file" >&2; return 1; }
   done
+  # Only the operator can prove the VM's Docker port is reachable from the app
+  # network alone (§12); the overlay waits for that record. Its content is not read.
+  if [[ $files == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)
+    [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The dev environment VM overlay requires DEV_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+  fi
+  # The render leaves out services of any other profile, so the validator could
+  # never see them: the pinned files may declare only the app profile.
+  for path in "${parts[@]}"; do
+    if grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" | grep -Evq '^[[:space:]]*profiles:[[:space:]]*\["app"\][[:space:]]*$'; then
+      printf '%s\n' "Clone Compose files may declare only the app profile" >&2
+      return 1
+    fi
+  done
   command -v node >/dev/null 2>&1 || { printf '%s\n' "Clone preflight requires Node.js on the host" >&2; return 1; }
   (set -o pipefail; cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose config --format json 2>/dev/null |
     node scripts/validate-clones.mjs >/dev/null) || { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }

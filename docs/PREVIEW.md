@@ -1340,12 +1340,17 @@ answer on #648.
 2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
    values:
 
-   | Input                         | Meaning                                         |
-   | ----------------------------- | ----------------------------------------------- |
-   | `DEV_SANDBOX_DOCKER_HOST`     | `tcp://<dev VM guest IPv4>:<port>`              |
-   | `DEV_SANDBOX_DOCKER_TLS_CA`   | Absolute path to dev's delivered CA certificate |
-   | `DEV_SANDBOX_DOCKER_TLS_CERT` | Absolute path to dev's client certificate       |
-   | `DEV_SANDBOX_DOCKER_TLS_KEY`  | Absolute path to dev's client key               |
+   | Input                           | Meaning                                                  |
+   | ------------------------------- | -------------------------------------------------------- |
+   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                       |
+   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate          |
+   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                |
+   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                        |
+   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record |
+
+   The evidence record is the operator's proof that only the app network
+   reaches the VM's Docker port. The preflight refuses the overlay until that
+   file exists and is not empty. It never reads what the file says.
 
 3. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
    It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
@@ -1362,20 +1367,26 @@ For a clone declared `per-env`, the validator refuses:
 - an endpoint that is not `tcp://` to a unicast IPv4 guest address (loopback,
   link-local, unspecified and multicast addresses are refused), or TLS settings
   that do not name the mounted files;
+- any `DOCKER_*` variable, which the terminal path would inherit as a second
+  endpoint;
 - a CA or certificate file that holds a private key or more than one
-  certificate, a client certificate that is a CA, is not signed by its own CA
-  or does not match its key, a key file with any group or other permission, and
-  TLS files inside either checkout;
-- with both clones `per-env`, a shared guest address, or a client certificate
-  that verifies under the other clone's CA;
+  certificate, a CA file that is not a CA, a client certificate that is a CA,
+  is not signed by its own CA or does not match its key, a CA or client
+  certificate outside its validity period, a key file with any group or other
+  permission, and TLS files inside either checkout;
+- with both clones `per-env`, a shared guest address, or either clone's client
+  certificate verifying under the other clone's CA;
 - another service built from, tagged as, or sharing a namespace or mounts with
-  the VM clone.
+  the VM clone, joining any container by id, or mounting the VM clone's TLS
+  files or a directory that holds them.
 
 For both apps, whatever their mode, it refuses `privileged`, `devices`,
 `cap_add`, `volumes_from` and shared `pid`, `ipc`, `network_mode`,
 `userns_mode` or `cgroup` namespaces. Each reaches host or sibling resources
 around the mount rules; the MCP gateway, for one, holds the host socket. A clone
-declared `socket` must not carry any `SANDBOX_DOCKER_*` setting. Smoke compares
+declared `socket` must not carry any `SANDBOX_DOCKER_*` setting. The render
+leaves out services of any other profile, so the preflight also refuses a
+`profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
 both running apps' endpoint settings and TLS mounts with the render, and refuses
 any mount on a VM clone that the render does not list.
 

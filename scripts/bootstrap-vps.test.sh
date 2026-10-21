@@ -272,6 +272,8 @@ clone_tests() {
       openssl x509 -req -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile client.ext -out cert.pem &&
       chmod 600 key.pem ca-key.pem
   ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
+  echo 'synthetic firewall evidence record' >"$dir/firewall-evidence.txt"
+  : >"$dir/firewall-empty.txt"
 
   for file in release dev; do
     cat >"$dir/$file-runtime.env" <<ENV
@@ -365,11 +367,12 @@ p.write_text(json.dumps(c))
 PY
     fi
     if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+      printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${2-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
       python3 - "$dir/render.json" "$dir/tls" <<'PY'
 import json, pathlib, sys
 p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); dev=c['services']['app-dev']
 c['x-clone-dev-sandbox']='per-env'
-dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://10.77.2.2:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
+dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://198.51.100.2:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
 dev['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
 p.write_text(json.dumps(c))
 PY
@@ -408,6 +411,22 @@ PY
     printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
     clone_refused 'a combined or clone-less dev sandbox overlay'
   done
+  for evidence in '' "$dir/firewall-empty.txt" firewall-evidence.txt "$dir/absent.txt"; do
+    clone_reset
+    clone_select "$clones:docker-compose.dev-sandbox-vm.yaml" "$evidence"
+    clone_refused "the dev VM overlay without its firewall evidence file (${evidence:-unset})"
+  done
+  # A service of another profile is absent from the render the validator reads.
+  for profile in '    profiles: ["debug"]' '    profiles:' '    profiles: [app, debug]'; do
+    clone_reset
+    printf '%s\n' "$profile" >"$dir/release/docker-compose.clones.yaml"
+    clone_refused "a Compose profile other than app ($profile)"
+  done
+  clone_reset
+  printf '%s\n' '    profiles: ["app"]' >"$dir/release/docker-compose.clones.yaml"
+  out=$(clone_boot 2>&1); rc=$?
+  : >"$dir/release/docker-compose.clones.yaml"
+  if ((rc == 0)); then pass "clones accepts services of the app profile"; else flunk "clones app profile (rc=$rc)" "$out"; fi
   # Compare every box-changing command byte-for-byte, excluding only the two
   # exact read-only commands added by the coordinator-approved box-state guard.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
@@ -661,6 +680,10 @@ mutants = [
     ('dev-ref-head', '[[ $head == "$ref" && -z $dirty ]]', '[[ -z $dirty ]]'),
     ('dev-checkout-clean', '[[ $head == "$ref" && -z $dirty ]]', '[[ $head == "$ref" ]]'),
     ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
+    ('dev-vm-firewall-evidence', '[[ $path == /* && -f $path && -s $path ]] ||', 'true ||'),
+    ('dev-vm-firewall-evidence-empty', ' && -f $path && -s $path ]]', ' && -f $path ]]'),
+    ('clone-profiles-app-only', "if grep -E '^[[:space:]]*profiles:'", "if false && grep -E '^[[:space:]]*profiles:'"),
+    ('clone-profiles-allow-app', r'''profiles:[[:space:]]*\["app"\]''', r'''profiles:[[:space:]]*\["none"\]'''),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
@@ -709,10 +732,25 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-key-matches', 'certificate.checkPrivateKey(\n        createPrivateKey(files.SANDBOX_DOCKER_TLS_KEY.pem),\n      )', 'true'),
         ('vm-one-service', 'other === name ||', 'true ||'),
         ('vm-own-host', 'own.host !== other.host', 'true'),
-        ('vm-cross-identity', '!other.certificate.verify(own.authority.publicKey)', 'true'),
+        ('vm-cross-identity', '!own.certificate.verify(other.authority.publicKey) &&\n        !other.certificate.verify(own.authority.publicKey)', 'true'),
         ('socket-clone-no-vm-settings', '!Object.keys(envs[i]).some((key) => key.startsWith("SANDBOX_DOCKER_"))', 'true'),
         ('dev-socket-beside-vm', '!(devDockerSocket && modes[1] === "per-env")', 'true'),
         ('root-only-vm-inputs', '|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+', ''),
+        # #731 review round 1.
+        ('vm-certificate-not-before', 'new Date(x.validFrom) <= now && ', ''),
+        ('vm-certificate-not-after', ' && now <= new Date(x.validTo)', ''),
+        ('vm-ca-dates', '[authority, certificate].every(', '[certificate].every('),
+        ('vm-leaf-dates', '[authority, certificate].every(', '[authority].every('),
+        ('vm-no-docker-client-env', 'Object.keys(env).every((key) => !key.startsWith("DOCKER_"))', 'true'),
+        ('vm-endpoint-start-anchor', '/^tcp:', '/tcp:'),
+        ('vm-endpoint-end-anchor', '{1,5})$/.exec', '{1,5})/.exec'),
+        ('vm-ca-is-ca', 'authority.ca &&\n      ', ''),
+        ('vm-container-id-join', 'String(service[key] ?? "").startsWith("container:") &&', 'false &&'),
+        ('vm-container-other-app', 'service[key] !== `container:${apps[1 - i].container_name}`', 'true'),
+        ('vm-tls-mount-elsewhere', 'vm.sources.some((file) => within(file, resolved(v.source)))', 'false'),
+        ('vm-tls-directory-mount', 'within(file, resolved(v.source))', 'file === resolved(v.source)'),
+        ('vm-tls-root-mount', 'directory === sep ? directory : directory + sep', 'directory + sep'),
+        ('vm-missing-bind-source', 'return resolve(source); // A missing source cannot hold a TLS file.', 'throw new Error("missing");'),
     ]:
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)

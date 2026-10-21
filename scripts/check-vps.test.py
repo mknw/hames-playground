@@ -394,7 +394,7 @@ class CloneProbes(unittest.TestCase):
     def vm_fixture(self):
         config, apps = self.fixture()
         config["x-clone-dev-sandbox"] = "per-env"
-        endpoint = {"SANDBOX_DOCKER_HOST": "tcp://10.77.2.2:2376", **{"SANDBOX_DOCKER_TLS_" + k: "/run/sandbox-tls/" + f for k, f in (("CA", "ca.pem"), ("CERT", "cert.pem"), ("KEY", "key.pem"))}}
+        endpoint = {"SANDBOX_DOCKER_HOST": "tcp://198.51.100.2:2376", **{"SANDBOX_DOCKER_TLS_" + k: "/run/sandbox-tls/" + f for k, f in (("CA", "ca.pem"), ("CERT", "cert.pem"), ("KEY", "key.pem"))}}
         config["services"]["app-dev"]["environment"].update(endpoint)
         apps["app-dev"]["Config"]["Env"] += [k + "=" + v for k, v in endpoint.items()]
         for name in ("ca.pem", "cert.pem", "key.pem"):
@@ -406,7 +406,7 @@ class CloneProbes(unittest.TestCase):
         config, apps = self.vm_fixture()
         with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"):
             probe.clones()
-        for change in (lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://10.77.1.2:2376"),
+        for change in (lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376"),
                        lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_TLS_KEY=/run/other/key.pem"),
                        lambda a: a["Mounts"][-1].update(Source="/synthetic/release-tls/key.pem"),
                        lambda a: a["Mounts"][-1].update(RW=True),
@@ -416,7 +416,7 @@ class CloneProbes(unittest.TestCase):
             with self.subTest(change=change), patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
                 probe.clones()
         config, apps = self.fixture()
-        apps["app"]["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://10.77.1.2:2376")
+        apps["app"]["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376")
         with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
             probe.clones()
 

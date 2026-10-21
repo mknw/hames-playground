@@ -35,6 +35,9 @@ const HOST_REACH = [
 const check = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+const within = (path, directory) =>
+  path === directory ||
+  path.startsWith(directory === sep ? directory : directory + sep);
 
 // A VM clone reaches Docker only through its own environment VM: a tcp endpoint
 // with verified TLS and three read-only files outside both checkouts, and no
@@ -61,6 +64,12 @@ function environmentVm(app, roots) {
       Object.entries(TLS_FILES).every(([key, target]) => env[key] === target),
     "A VM clone reaches Docker only with its mounted TLS files",
   );
+  // The backend passes the endpoint as flags, but the terminal path inherits
+  // the app's environment: a DOCKER_* variable would be a second endpoint.
+  check(
+    Object.keys(env).every((key) => !key.startsWith("DOCKER_")),
+    "A VM clone must not carry Docker client variables",
+  );
   const endpoint = /^tcp:\/\/([0-9.]+):([0-9]{1,5})$/.exec(
     env.SANDBOX_DOCKER_HOST,
   );
@@ -83,7 +92,7 @@ function environmentVm(app, roots) {
       !roots.some((root) => path.startsWith(root + sep)),
       "TLS files must live outside both checkouts",
     );
-    files[key] = { stat, pem: readFileSync(path, "utf8") };
+    files[key] = { path, stat, pem: readFileSync(path, "utf8") };
   }
   check(
     (files.SANDBOX_DOCKER_TLS_KEY.stat.mode & 0o077) === 0,
@@ -104,14 +113,25 @@ function environmentVm(app, roots) {
   const authority = new X509Certificate(ca);
   const certificate = new X509Certificate(leaf);
   check(
-    !certificate.ca &&
+    authority.ca &&
+      !certificate.ca &&
       certificate.verify(authority.publicKey) &&
       certificate.checkPrivateKey(
         createPrivateKey(files.SANDBOX_DOCKER_TLS_KEY.pem),
       ),
     "The client certificate must chain to its own VM's CA and match its key",
   );
-  return { host: endpoint[1], authority, certificate };
+  // Neither check above reads the dates: an expired CA or leaf would pass the
+  // preflight and then fail every sandbox call.
+  const now = Date.now();
+  check(
+    [authority, certificate].every(
+      (x) => new Date(x.validFrom) <= now && now <= new Date(x.validTo),
+    ),
+    "TLS CA and client certificates must be within their validity period",
+  );
+  const sources = Object.values(files).map((file) => file.path);
+  return { host: endpoint[1], authority, certificate, sources };
 }
 
 export function validateClones(config) {
@@ -199,14 +219,25 @@ export function validateClones(config) {
       );
       continue;
     }
-    vms.push(environmentVm(apps[i], roots));
+    const vm = environmentVm(apps[i], roots);
+    vms.push(vm);
     // Another service built from, tagged as or joined to a VM clone would run
-    // that clone's code beside whatever it mounts: a VM clone is one service.
+    // that clone's code beside whatever it mounts, and one that mounts its TLS
+    // files, or a directory holding them, would reach its VM: a VM clone is
+    // one service. A container id cannot be told apart from the clone's, so
+    // only the other app's container name may be joined.
     const joins = [
       name,
       `service:${name}`,
       `container:${apps[i].container_name}`,
     ];
+    const resolved = (source) => {
+      try {
+        return realpathSync(source);
+      } catch {
+        return resolve(source); // A missing source cannot hold a TLS file.
+      }
+    };
     for (const [other, service] of Object.entries(config.services)) {
       check(
         other === name ||
@@ -214,12 +245,20 @@ export function validateClones(config) {
             service.image === apps[i].image ||
             (service.build?.context &&
               realpathSync(service.build.context) === contexts[i]) ||
-            ["network_mode", "pid", "ipc"].some((key) =>
-              joins.includes(service[key]),
+            ["network_mode", "pid", "ipc"].some(
+              (key) =>
+                joins.includes(service[key]) ||
+                (String(service[key] ?? "").startsWith("container:") &&
+                  service[key] !== `container:${apps[1 - i].container_name}`),
             ) ||
             [service.volumes_from ?? []]
               .flat()
-              .some((v) => joins.includes(String(v).replace(/:r[ow]$/, "")))
+              .some((v) => joins.includes(String(v).replace(/:r[ow]$/, ""))) ||
+            (service.volumes ?? []).some(
+              (v) =>
+                v.type === "bind" &&
+                vm.sources.some((file) => within(file, resolved(v.source))),
+            )
           ),
         "A VM clone runs as one service",
       );
@@ -228,9 +267,10 @@ export function validateClones(config) {
   if (vms.length === 2) {
     const [own, other] = vms;
     check(own.host !== other.host, "Each clone needs its own environment VM");
-    // Symmetric: a shared CA key verifies both leaves, distinct keys neither.
+    // Checked both ways, so neither clone's leaf is valid on the other's VM.
     check(
-      !other.certificate.verify(own.authority.publicKey),
+      !own.certificate.verify(other.authority.publicKey) &&
+        !other.certificate.verify(own.authority.publicKey),
       "A clone's TLS identity must not reach the other clone's VM",
     );
   }

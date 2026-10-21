@@ -455,9 +455,9 @@ runtime value any registrant could set. Adding one is a containment change, not
 a refactor. `transport-precedence.test.ts` pins the order on colliding names.
 
 Nesting **shadows** — a name two scopes own goes to the inner one — which is the
-opposite of `withInjectionGuard`, which unions. Both are right: two nested
-sandboxes both own `sandbox_bash` and a union has no answer, while a nested
-guard is a second reviewer whose strictness must survive.
+opposite of `withInjectionGuard`, whose coverage unions. Both are right: two
+nested sandboxes both own `sandbox_bash` and a union has no answer, while a
+nested guard may only widen what is covered.
 
 A transport may also carry `promptContext` — text it asks the model to be shown
 beside the request (today the sandbox's skills index). Like `namespaceFor` it is
@@ -991,9 +991,11 @@ field can carry fetched page content — and it reaches an LLM via the controlle
 turn log, `formatEventData`'s `"<tool> ERROR: …"` and `view.lastError()`.
 
 Nothing in between (`chain`, `router`, `routes`, `parallel`, `withReferences`)
-needs to be guard-aware. Nesting **unions**: an inner wrapper ORs the enclosing
-guard's `isUntrusted`, so it can only widen coverage — shadowing would let a
-narrow inner wrapper silently remove an outer one's protection.
+needs to be guard-aware. Nesting widens **coverage**: an inner wrapper ORs the
+enclosing guard's `isUntrusted`, so it can only add to what is covered —
+shadowing would let a narrow inner wrapper silently remove an outer one's
+protection. It does not merge **options**: a tool is sanitized with the options of
+the guard that declares it ([Nesting](#nesting-widens-coverage-options-stay-with-the-declaring-guard)).
 
 **Event ordering caveat.** The guard emits into the wrapper's own scope, so when
 it wraps a scope-forking pattern (`routes`, `parallel` — 2 of the 4 wired
@@ -1101,8 +1103,8 @@ screens the deterministically sanitized projection after findings; applying the
 verdict preserves the original rule findings and neutralizations, with exactly
 one fence per string leaf and the original provenance label retained. The
 reference host unfences repeated wrappers to a fixed point before harvesting
-identity fields as defence in depth for older payloads. This option
-unions monotonically across nested guards. Regexes catch known phrasings and
+identity fields as defence in depth for older payloads. Like every option it
+governs the tools its declaring guard declares and no others. Regexes catch known phrasings and
 the screen catches novel ones. A verbatim span it quotes is neutralized like a
 regex match; a span it paraphrased (matching nothing) still forces the fence, so
 a verdict never degrades to silence. A screen that throws is non-fatal — the
@@ -1173,27 +1175,39 @@ broke transparency for exactly the agents that use durable workspaces. It now
 declares `capabilities.workspaceSync` beside `children`, and the inner
 `config` is passed through by identity.
 
-**Nesting only ever tightens.** Guards nest through AsyncLocalStorage, and
-`createInjectionGuard` reads the enclosing guard at construction to take the
-**strictest** of every dimension — never to shadow it. Unioning the namespaces
-alone was not enough: once an inner guard widens the boundary, it is the inner
-guard's config that sanitizes the outer guard's namespaces too, so an inner
-`disableRules` re-opened a hole for tools the inner wrapper never mentioned.
+#### Nesting widens coverage; options stay with the declaring guard
 
-| Dimension               | Nesting rule                                  | Why                                                                                      |
-| ----------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools`    | union (OR of `isUntrusted`)                   | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`          | **intersection** — off only if _both_ agreed  | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`                 | union, deduped by id                          | extra detection is always safe to inherit                                                |
-| `spotlight`             | strictest (`always` > `on-detection` > `off`) | an inner default must not remove a fence the outer wrapper asked for                     |
-| `screenDespiteFindings` | true if _either_ requests it                  | an inner guard cannot skip an outer guard’s post-finding screen                          |
-| `screen`                | kept if _either_ has one (inner wins if both) | a nested guard cannot remove a paid-for second layer                                     |
+Guards nest through AsyncLocalStorage. `createInjectionGuard` reads the enclosing
+guard at construction and ORs its `isUntrusted` into its own, so an inner guard
+can never un-guard a namespace an outer guard declared. It does **not** merge
+options. A tool is sanitized with the options of the **innermost guard that
+declares it**; a guard that does not declare a tool hands it to the enclosing
+guard (`ActiveInjectionGuard.optionsFor`), which applies its own options, and so
+on outward. A declaration is therefore readable where the guard is written:
+nothing a nested guard says can weaken a tool it did not declare, and nothing an
+enclosing guard says is inherited by a tool the nested guard declares. A tool
+two guards both declare takes the inner guard's options. The `content_sanitized`
+event and the screen's `model_call` event go to the innermost guard's scope
+either way.
+
+| Dimension               | Nesting rule                                       | Why                                                                                      |
+| ----------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `namespaces`/`tools`    | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
+| `disableRules`          | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
+| `rules`                 | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared               |
+| `spotlight`             | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself   |
+| `screenDespiteFindings` | the declaring guard's own                          | an enclosing guard's post-finding screen is not inherited                                |
+| `screen`                | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen |
+
+A guard that wants a screen, a fence or an extra rule on a tool declares it
+itself. Declaring one on an enclosing guard no longer reaches the guards inside
+it.
 
 Per-**call** `overrides` still win, because they are a local decision by a known
 call site (the retriever passes `spotlight: 'off'` for a filename, where a
 multi-line fence would break the citation label and the docId match) rather than
 an agent-level config that could silently weaken a boundary it does not own.
-There is deliberately no way to ask for narrowing.
+There is deliberately no way to ask for narrowing of coverage.
 
 **Wired agents** (their untrusted namespaces are declared at each agent
 definition, deliberately not in a shared default):
@@ -1934,15 +1948,17 @@ The reference host's `general-next` composition (#507 S3) uses this loop beside
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
 route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
-from references and expansions, and disables independent prior-turn results. The orchestrator declares `decision_loop_output`, `spotlight: 'always'`
-and a role-resolved screen with `screenDespiteFindings: true`. Only `think` sets
-`screenOutput: false`; its model-authored plan retains deterministic sanitization
-and fencing without a model-screen call. For other outputs, deterministic
-findings remain neutralized while the screen reviews the sanitized projection.
-Union semantics carry that screen and unconditional
-fencing into every route's tool results, costing a screen call per result. A
-screen failure inside a route is recorded and fails open; at the route-output
-boundary it follows the marker-only policy above. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`; they are the already-sanitized, fenced records, and a withheld one stays marker-only), the user's message, and only this turn's errors: an earlier turn's failed or withheld record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
+from references and expansions, and disables independent prior-turn results. Each guard declares its own options
+and none is inherited. The office and info route guards declare `spotlight: 'always'`
+and a role-resolved screen with `screenDespiteFindings: true`, so a screen call per
+mail, file, web, library or graph result; the documents route's guard declares the
+fence and no screen, so the retriever's hits get the deterministic pass and the
+fence only. The orchestrator's guard declares `decision_loop_output` and
+`spotlight: 'always'` and no screen, so a route record is capped, sanitized
+deterministically and fenced, and no model screen reads it: `screenOutput: false`
+on `think` is now a no-op, and the screen-outage withholding described above can no
+longer fire for `general-next`. A screen failure inside a route is recorded and fails
+open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`; they are the already-sanitized, fenced records, and a withheld one stays marker-only), the user's message, and only this turn's errors: an earlier turn's failed or withheld record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
 
 `general-next` also opts into M7's optional `withMemory`; `general` keeps its
 opt-in until the default-agent flip. Only the candidate's synthesis receives
@@ -3615,7 +3631,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
-│                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — it UNIONS, see SD-5; read by callTool + retriever)
+│                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — its COVERAGE unions and its options stay with the declaring guard, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards
 └── patterns/               # The pattern factories — a directory OF THIS package, exported as @hames-ai/harness-patterns/patterns

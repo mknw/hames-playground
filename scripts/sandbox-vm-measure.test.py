@@ -444,6 +444,28 @@ class Measurement(unittest.TestCase):
                 self.world.boxes.clear()
                 self.world.timeline.clear()
 
+    def test_pty_wait_resends_the_resize_until_it_lands(self):
+        import pty as pty_module
+        master, slave = pty_module.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        nudges = []
+        def nudge():
+            nudges.append(time.monotonic())
+            if len(nudges) == 2:  # the resize "arrives" only after a re-send
+                os.write(slave, b"37 91\r\n")
+        with patch.object(measure, "time", time):
+            measure.pty_output(master, b"37 91", nudge=nudge, deadline=30)
+        self.assertEqual(len(nudges), 2)
+        started, quiet = time.monotonic(), []
+        def counted():
+            quiet.append(1)
+            self.assertLess(len(quiet), 6, "resize wait ignores its deadline")
+        with patch.object(measure, "time", time), self.assertRaisesRegex(RuntimeError, "PTY output timed out"):
+            measure.pty_output(master, b"never", nudge=counted, deadline=2)
+        self.assertGreaterEqual(len(quiet), 1)
+        self.assertLess(time.monotonic() - started, 6)
+
     def test_attach_pty_child_gets_sanitized_env_and_guest_context(self):
         measure.attach(self.spike)
         spawn = json.loads(self.spawned.read_text())

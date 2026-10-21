@@ -1774,6 +1774,7 @@ def mutations():
         ("inline metadata drops ignored", "core", ' or re.fullmatch(r"vps-metadata-forward-v[0-9]+", comment) is not None', '', "test_bridge_allows_go_below_inline_metadata_drops"),
         ("metadata block may be split", "core", 'require(hooks == list(range(len(hooks))), "metadata policy must remain first and contiguous")', 'pass', "test_bridge_allows_go_below_inline_metadata_drops"),
         ("allows inserted above the metadata block", "core", 'return str(len(hooks) + 1)', 'return "1"', "test_bridge_allows_go_below_inline_metadata_drops"),
+        ("PTY resize raced by a fixed sleep", "measure", 'PTY_SCRIPT = (\'stty size; i=0; while [ "$(stty size)" = "24 80" ] && [ "$i" -lt 150 ]; \'\n              \'do sleep 0.2; i=$((i + 1)); done; stty size\')', "PTY_SCRIPT = 'stty size; sleep 3; stty size'", "test_attach_pty_child_gets_sanitized_env_and_guest_context"),
         ("measure imports a second harness copy", "core", 'sys.modules.setdefault("sandbox_vm", sys.modules[__name__])', 'pass', "test_measure_shares_the_running_module"),
         ("spike certificates valid only from now", "core", 'time.gmtime(time.time() - 3600)', 'time.gmtime(time.time())', "test_spike_certificates_are_backdated_for_guest_clock_lag"),
         ("server and client leaves not backdated", "core", '"x509", "-req", "-not_before", start, "-days"', '"x509", "-req", "-days"', "test_spike_certificates_are_backdated_for_guest_clock_lag"),

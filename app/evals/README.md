@@ -237,7 +237,7 @@ structural checks first). Two rules:
 ## Conversation acceptance scenarios
 
 [#507's general-next Eval](general-next/README.md) is a separate opt-in runner in
-this suite. It adds a 16-scenario catalogue, the current `general` baseline,
+this suite. It adds a 16-scenario catalogue, the removed `general` agent's recorded baseline,
 conversation-level checks and a shared spend ledger. The owner amended this eval
 to the **private tier only**; the role compatibility scenarios above retain their
 existing routing. Its default inference is hermetic, so its free scripted results

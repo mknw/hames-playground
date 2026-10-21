@@ -59,8 +59,8 @@ function buildSynthesisInputFromView(
   // is not a turn scope: a loop keeps the same patternId every turn and
   // `ctx.events` persist across `continueSession`, so one failed turn had
   // `Synthesize` apologise on turn 2, 3, 4… for work that all succeeded
-  // (`general.server.ts` documents the correct shape — `fromPatterns` +
-  // `fromLastNTurns: 1` — and was the only agent of the seven that had it).
+  // (`general-next.server.ts`'s `response-synth` shows the correct shape —
+  // `fromPatterns` + `fromLastNTurns: 1`).
   // The default is one turn; a caller that asked for a wider window in its own
   // `viewConfig` keeps it.
   const errorView = view.fromLastNTurns(errorTurnWindow)

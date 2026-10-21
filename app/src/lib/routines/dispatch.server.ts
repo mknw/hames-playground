@@ -29,6 +29,7 @@
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { newSessionId } from '../session-id'
+import { unattendedIdAccepted } from '../harness-client/agent-ids'
 import {
   claimRoutineRunAt,
   releaseRoutineClaim,
@@ -74,7 +75,7 @@ export async function fireRoutine(routine: RoutineRow): Promise<string | null> {
   // renamed or removed should be a loud no-op, not an action row that can
   // never complete.
   const { getAgent } = await import('../harness-client/registry.server')
-  if (!getAgent(routine.agentId)) {
+  if (!unattendedIdAccepted(routine.agentId) || !getAgent(routine.agentId)) {
     console.warn(
       `[routines] routine ${routine.id} references unknown agent '${routine.agentId}' — skipping`,
     )

@@ -175,8 +175,8 @@ describe('gateway management tools', () => {
 
     const tools = await Tools({ namespaces: mcpNamespace })
 
-    // `tools.all` is what `general` hands its planner and its loop; a
-    // namespace is what a routed agent hands one loop. Every one is checked.
+    // `tools.all` is what the removed `general` agent handed its planner and its
+    // loop; a namespace is what a routed agent hands one loop. Every one is checked.
     const lists = Object.entries(tools) as [string, string[]][]
     expect(lists.length).toBeGreaterThan(1)
     for (const [namespace, list] of lists) {
@@ -194,7 +194,7 @@ describe('gateway management tools', () => {
     const { createPlannerAdapter } = await import('@hames-ai/harness-baml/baml-adapters.server')
 
     const tools = await Tools({ namespaces: mcpNamespace })
-    // `general` builds its planner from `tools.all` (general.server.ts). The
+    // The removed `general` agent built its planner from `tools.all`. The
     // second call names the tools outright: the catalog still has no entry
     // for them, so the planner cannot be shown one.
     const asGeneral = await createPlannerAdapter(tools.all)('convert my file', 'convert')

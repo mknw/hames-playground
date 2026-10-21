@@ -176,7 +176,7 @@ describe('compactExecution thread mode — fromPatterns', () => {
     expect(tools(seen[0])).toEqual(['turn2_call'])
   })
 
-  // Review finding 2: `general`'s own viewConfig (packages/agents/agents/general.server.ts).
+  // Review finding 2: the removed `general` agent's viewConfig, kept as a fixture.
   // A HITL resume re-enters the paused pattern with NO new user_message, so
   // `execute` runs twice in one turn; the thread now reads BOTH executions
   // (pre-fix: only the last). Mutation 1 (`view.fromLastPattern()`) → only

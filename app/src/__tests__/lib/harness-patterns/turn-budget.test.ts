@@ -113,8 +113,8 @@ describe('resolveTurnBudget', () => {
   it("a pattern's own declaration wins over the setting, in BOTH directions", async () => {
     const { resolveTurnBudget } = await import('../../../lib/settings')
 
-    // Larger — the `general` agent's case: it needs more rounds than the
-    // default gives, and gets them without the user touching anything.
+    // Larger — the removed `general` agent's case: it needed more rounds than the
+    // default gives, and got them without the user touching anything.
     expect(resolveTurnBudget('maxToolTurns', 12, 8)).toBe(12)
     // Smaller — the case a blanket `Math.max` would break: a loop pinning a
     // deliberately short budget (a classifier, a single-shot lookup) means it,
@@ -169,14 +169,15 @@ describe('resolveTurnBudget', () => {
 })
 
 describe('the default round budget', () => {
-  it('is 8, and the general agent pins 12 above it (#269 evidence)', async () => {
+  it('is 8, and the bound still reaches the 12 the removed general agent pinned (#269 evidence)', async () => {
     const { DEFAULT_SETTINGS, SETTINGS_BOUNDS } = await import('../../../lib/settings')
 
     // Pinned as a value, not just as a relation, because "the default" is the
     // number the issue was about: raised 5 → 8 after two live runs hit a cap.
     expect(DEFAULT_SETTINGS.maxToolTurns).toBe(8)
-    // The `general` executor's 12 has to remain reachable — a bound below it
-    // would clamp the very budget the captured run showed was needed.
+    // The `general` executor's 12 (the agent is gone, the evidence is not) has to
+    // remain reachable — a bound below it would clamp the very budget the captured
+    // run showed was needed.
     expect(SETTINGS_BOUNDS.maxToolTurns[1]).toBeGreaterThanOrEqual(12)
   })
 })

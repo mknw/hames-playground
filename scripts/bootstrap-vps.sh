@@ -483,7 +483,7 @@ compose_files() {
 # errors (which can contain interpolated values). This runs before any clone
 # command other than config, including build/up/exec and read-only smoke probes.
 clone_preflight() {
-  local files=$1 key path mode dev_path ref head dirty
+  local files=$1 key path mode dev_path ref head dirty profiles
   [[ $files != "$COMPOSE_FILES" ]] || return 0
   for key in "${CLONE_INPUTS[@]}"; do
     [[ -n "$(env_get "$key")" ]] || { printf '%s\n' "Clone configuration requires $key (value not shown)" >&2; return 1; }
@@ -523,7 +523,8 @@ clone_preflight() {
   # The render leaves out services of any other profile, so the validator could
   # never see them: the pinned files may declare only the app profile.
   for path in "${parts[@]}"; do
-    if grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" | grep -Evq '^[[:space:]]*profiles:[[:space:]]*\["app"\][[:space:]]*$'; then
+    profiles=$(grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" || true)
+    if [[ -n $profiles ]] && grep -Evq '^[[:space:]]*profiles:[[:space:]]*\["app"\][[:space:]]*$' <<<"$profiles"; then
       printf '%s\n' "Clone Compose files may declare only the app profile" >&2
       return 1
     fi

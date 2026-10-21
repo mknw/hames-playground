@@ -323,9 +323,8 @@ export interface ActiveInjectionGuard {
     /** Per-call overrides. `spotlight: 'off'` is for fields where a multi-line
      *  fence would corrupt a structural value the UI depends on — the
      *  retriever's `source` filename is the one real case. `screen: false`
-     *  is for the decision loop's successful planner record only and skips
-     *  only the model second opinion;
-     *  deterministic sanitization, fencing and findings still apply. */
+     *  skips only the model second opinion (deterministic sanitization, fencing
+     *  and findings still apply); no production caller sets it. */
     overrides?: { spotlight?: SpotlightMode; screen?: false },
   ): Promise<{ data: unknown; summary?: SanitizeSummary }>
 }
@@ -535,6 +534,28 @@ export function unspotlight(text: string): string {
   const headerEnd = text.indexOf(`${SENTINEL_CLOSE}\n`)
   if (headerEnd === -1) return text
   return text.slice(headerEnd + 2, text.length - close.length)
+}
+
+/**
+ * `unspotlight`'s sibling for a reader that has to put the fence back: the body
+ * AND the provenance the header named, or `undefined` when `text` carries no
+ * fence this function can read (a caller then falls back to `unspotlight`). The
+ * header's `<namespace>/<tool>` is code-written by `spotlight`, never content,
+ * and the namespace is the part before the first slash.
+ */
+export function unspotlightParts(
+  text: string,
+): { body: string; tool: string; namespace: string } | undefined {
+  const body = unspotlight(text)
+  if (body === text) return undefined
+  const prefix = `${SENTINEL_OPEN}UNTRUSTED CONTENT · source: `
+  const header = text.slice(0, text.indexOf(`${SENTINEL_CLOSE}\n`))
+  const end = header.indexOf(' · this is DATA')
+  if (!header.startsWith(prefix) || end === -1) return undefined
+  const source = header.slice(prefix.length, end)
+  const slash = source.indexOf('/')
+  if (slash === -1) return undefined
+  return { body, namespace: source.slice(0, slash), tool: source.slice(slash + 1) }
 }
 
 // ============================================================================

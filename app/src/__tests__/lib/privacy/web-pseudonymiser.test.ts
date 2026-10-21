@@ -366,7 +366,7 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
             { patternId: 'doc', maxRetries: 1 },
           )
         : docLoop
-    const doc = withInjectionGuard({ tools: ['graph_mail'] })({
+    const doc = withInjectionGuard({ tools: ['graph_mail'], spotlight: 'always' })({
       ...docLeaf,
       fn: async (s: PatternScope<Data>, v: EventView) => {
         unwrappedData.push(s.data)
@@ -389,15 +389,13 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
       },
       info: { pattern: web, description: 'lookup', siblingResults: ['info'] },
     }
-    const loop = withInjectionGuard({ tools: ['decision_loop_output'], spotlight: 'always' })(
-      decisionLoop(routes, {
-        patternId: 'orchestrator',
-        decide: choice([...script, 'answer']),
-        answer: 'answer',
-        handoff: { lastN: 2 },
-        maxIterations: 6,
-      }),
-    )
+    const loop = decisionLoop(routes, {
+      patternId: 'orchestrator',
+      decide: choice([...script, 'answer']),
+      answer: 'answer',
+      handoff: { lastN: 2 },
+      maxIterations: 6,
+    })
     const ctx = createContext<Data>('Research the correspondent')
     await withRunFrame(
       {
@@ -448,7 +446,8 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
     const { prompt, benignCall } = await loopRun(['doc', 'info'])
     expect(prompt).toContain('Mail from PERSON_2')
     expect(prompt).not.toContain(EXTERNAL.name)
-    expect(prompt).toContain('⟦UNTRUSTED CONTENT · source:')
+    // A simpleLoop Return is the model's own text: the loop adds no fence to it.
+    expect(prompt).not.toContain('⟦')
     expect(benignCall).toMatchObject({ success: true })
   })
   // Mutation: collect sources from only the last-N handed-off records.
@@ -622,61 +621,6 @@ describe('fix round 2 regressions', () => {
     expect(seen.privateCall).toMatchObject({ success: false })
     expect(outgoing).toHaveBeenCalledOnce()
     expect(outgoing.mock.calls[0]).toEqual(['web_search', { query: 'ordinary facts' }])
-  })
-
-  it('D-6/N10: screen-withheld child payloads never enter roster input, with a healthy-screen control', async () => {
-    for (const unavailable of [true, false]) {
-      let round = 0
-      const doc = withInjectionGuard({ tools: ['graph_mail'] })(
-        simpleLoop<Data>(
-          async () => ({
-            action: {
-              reasoning: 'read',
-              tool_name: round++ === 0 ? 'graph_mail' : 'Return',
-              tool_args: round === 1 ? '{}' : 'mail read',
-              is_final: round > 1,
-            },
-          }),
-          ['graph_mail'],
-          { patternId: 'doc', maxTurns: 2 },
-        ),
-      )
-      const host = vi.fn(createWebPseudonymiser())
-      const info = withPseudonymisedInputs({ pseudonymise: host })(fakeRoute('info', 'done'))
-      let screens = 0
-      const loop = withInjectionGuard({
-        tools: ['decision_loop_output'],
-        spotlight: 'always',
-        screen: async () => {
-          if (unavailable && ++screens <= 2) throw new Error('synthetic screen outage')
-          return { injection_detected: false, reason: '', spans: [] }
-        },
-      })(
-        decisionLoop(
-          {
-            doc: { pattern: doc, description: 'mail' },
-            info: { pattern: info, description: 'lookup', siblingResults: ['doc', 'info'] },
-          },
-          {
-            patternId: 'orchestrator',
-            decide: choice(['doc', 'info', 'answer']),
-            answer: 'answer',
-            maxIterations: 3,
-          },
-        ),
-      )
-      await withRunFrame(
-        {
-          ...frame('self_deployed'),
-          transports: [{ ...transport, callTool: async () => ({ success: true, data: MAIL }) }],
-        },
-        () => runChain(createContext<Data>('Research'), [loop]),
-      )
-      expect(host).toHaveBeenCalledOnce()
-      const payloads = JSON.stringify(host.mock.calls[0][0])
-      if (unavailable) expect(payloads).not.toContain(EXTERNAL.address)
-      else expect(payloads).toContain(EXTERNAL.address)
-    }
   })
 })
 
@@ -1337,7 +1281,7 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
       preview: `Regards,\n${EXTERNAL.name}`,
       note: 'ordinary retained facts',
     })
-    const fenced = spotlight(record, 'doc', 'decision_loop_output')
+    const fenced = spotlight(record, 'doc', 'graph')
     const out = rewriteLikeWrapper(filter, fenced)
     expect(out).not.toContain('withheld')
     expect(out).not.toContain('Otto')
@@ -1424,7 +1368,7 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
   it('F1: a duplicate-key JSON body cannot carry a clear name past apply and redact', async () => {
     const filter = await createWebPseudonymiser()([MAIL], '')
     const body = `{"note":"${EXTERNAL.name} wrote","note":"hi"}`
-    const out = rewriteLikeWrapper(filter, spotlight(body, 'doc', 'decision_loop_output'))
+    const out = rewriteLikeWrapper(filter, spotlight(body, 'doc', 'graph'))
     expect(out).not.toContain('Willow')
     expect(out).toContain('withheld')
   })

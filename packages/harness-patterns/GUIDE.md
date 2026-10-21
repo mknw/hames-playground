@@ -119,7 +119,6 @@ import {
   simpleLoop,
   planner,
   withInjectionGuard,
-  DECISION_LOOP_OUTPUT_KEY,
   type DecideFn,
   type PlanCallResult,
 } from '@hames-ai/harness-patterns'
@@ -130,37 +129,34 @@ declare const decide: DecideFn
 declare const controller: ControllerFn
 declare const planFn: (user: string, intent: string, context?: string) => Promise<PlanCallResult>
 
-const orchestrator = withInjectionGuard({
-  tools: [DECISION_LOOP_OUTPUT_KEY],
-  spotlight: 'always',
-})(
-  decisionLoop<Data>(
-    {
-      lookup: {
-        pattern: simpleLoop(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
-        description: 'Look things up',
-      },
-      think: {
-        pattern: planner(planFn, ['search'], { patternId: 'think' }),
-        description: 'Decide the steps before acting',
-      },
+// The guard sits on the route that reads outside content, not around the loop.
+const lookup = withInjectionGuard({ tools: ['search'], spotlight: 'always' })(
+  simpleLoop<Data>(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
+)
+
+const orchestrator = decisionLoop<Data>(
+  {
+    lookup: { pattern: lookup, description: 'Look things up' },
+    think: {
+      pattern: planner(planFn, ['search'], { patternId: 'think' }),
+      description: 'Decide the steps before acting',
     },
-    { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
-  ),
+  },
+  { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
 )
 ```
 
 Three things to know. A route's result is built by code from its committed
-events and is **untrusted**: it is capped, then passed through the enclosing
-guard under the fixed key `decision_loop_output`, so declare that key in the
-guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
-cannot run withholds the output instead of waving it through. A planner route
-may explicitly set `screenOutput: false` to skip that model second opinion only
-on its successful plan record (failed records remain screened):
-imperative model-authored plans can otherwise be mistaken for instructions.
-The option is refused on non-planner routes and defaults to screened, including
-for planners. It preserves deterministic sanitization, provenance fencing and
-findings on the plan; child tool results stay screened where their guard declares a screen. A child sees only
+events and capped; the loop does not sanitise or screen it. Guards run where
+content crosses the environment's edge, and a record is neither crossing: its
+text is the model's own (a plan, a `simpleLoop` Return), built by code (the
+stats), or a tool-result body that already passed its route's guard. The
+`actorCritic` and `retriever` routes quote such bodies, and put each one back
+under the provenance fence it arrived in, so declare the guard on the routes
+that read outside content (with `spotlight: 'always'` if the fence should
+always be there) rather than around the loop. A conversation saved by an older
+version may carry `withheldEventIds` on a record; they are still honoured,
+and nothing writes new ones. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
@@ -218,11 +214,10 @@ beside `general` (#507 S3), built in `packages/agents/agents/general-next.server
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
 lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
-configuration withholds earlier content and refuses web calls. The
-orchestrator's guard fences route outputs and declares no screen; the office and
-info route guards declare it, and the documents route's guard none. Only its
-`think` planner sets `screenOutput: false`, keeping deterministic checks and
-fencing while avoiding a model-screen call on its own plan. Memory
+configuration withholds earlier content and refuses web calls. The loop itself
+sanitises and screens nothing: the office and info route guards declare the
+screen, the documents route's guard none, and a route record carries the
+fence its tool results arrived in. Memory
 is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
 acceptance evidence; registration does not change the default agent.
 

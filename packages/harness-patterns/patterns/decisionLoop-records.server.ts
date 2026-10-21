@@ -14,14 +14,18 @@
  *   2. the stats, counted from those same events.
  *   3. the rendering of the decision state and the child handoff from records.
  *
- * The extractors' output is RAW with respect to the loop's own guard: the loop
- * caps it and passes it through `decision_loop_output` before it becomes a
- * record (see `decisionLoop.server.ts`). Nothing in this file sanitizes.
+ * Nothing in this file sanitizes or screens: a record is not an ingress (the
+ * loop's own text is the model's, or built by code). Two extractors quote
+ * TOOL-RESULT bodies, which passed ingress already; they strip the ingress fence
+ * to excerpt and put the SAME provenance fence back around what they quoted
+ * (`carry`) — no regex pass, no screen, no finding of their own. Every field an
+ * extractor returns is already capped, and the cap runs before the fence goes on
+ * so a long body can never cut its own closing line.
  */
 
 import { assertServerOnImport } from '../assert.server'
 import { EXPAND_TOOL_NAME } from '../types'
-import { unspotlight } from '../injection-guard'
+import { spotlight, unspotlight, unspotlightParts } from '../injection-guard'
 import type {
   ContextEvent,
   ControllerActionEventData,
@@ -60,9 +64,9 @@ export interface RouteStats {
   readonly planSteps?: number
 }
 
-/** What an extractor found. `failure` is a short, CODE-GENERATED reason (never
- *  model or tool text) for the one-line step list; `text` is the raw, unsanitized
- *  material the loop will cap and sanitize. */
+/** What an extractor found, every text field already capped. `failure` is a
+ *  short, CODE-GENERATED reason (never model or tool text) for the one-line step
+ *  list; `text` is the failure's own text. */
 export type Extracted =
   | { ok: true; result: string; reasoning: string; planSteps?: number }
   | { ok: false; failure: string; text: string }
@@ -73,15 +77,13 @@ export interface RouteOutput {
   readonly route: string
   readonly status: 'succeeded' | 'failed'
   readonly stats: RouteStats
-  /** Capped and sanitized. For a failed route: the (sanitized) failure text. */
+  /** Capped. For a failed route: the failure text. A quoted tool-result body
+   *  keeps its ingress fence; nothing else in a record is fenced. */
   readonly result: string
-  /** Capped and sanitized; `''` when the route has none. */
+  /** Capped; `''` when the route has none. */
   readonly reasoning: string
   /** A short code-generated reason; present only when `status` is `failed`. */
   readonly failure?: string
-  /** Ids of the child's events a screen outage withheld (ids only, no content):
-   *  persisted on the record so later turns skip them too. */
-  readonly withheldEventIds?: readonly string[]
   /** The plan, for a succeeded planner route: the ONLY thing later children
    *  render under their PLAN heading. */
   readonly plan?: { readonly text: string; readonly steps: number }
@@ -142,8 +144,8 @@ export function collectToolNames<T>(pattern: ConfiguredPattern<T>): string[] {
 const asText = (value: unknown): string =>
   typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
 
-/** Extract content before JSON can turn the guard's fence newlines into
- * literal escape sequences. decisionLoop re-fences the resulting record. */
+/** Strip the fences from every string leaf BEFORE the value is turned into JSON,
+ * which would make the fence newlines literal escape sequences. */
 function mapStrings(value: unknown, fn: (text: string) => string): unknown {
   if (typeof value === 'string') return fn(value)
   if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn))
@@ -164,7 +166,37 @@ function lastErrorText(events: ContextEvent[], fallback: string): string {
   return text && text.trim() ? text : fallback
 }
 
-function extractSimpleLoop(events: ContextEvent[]): Extracted {
+/** The provenance an ingress fence named. */
+interface FenceLabel {
+  readonly tool: string
+  readonly namespace: string
+}
+
+/** A quoted body, its fences stripped, and the label of the first fence it carried. */
+interface Unfenced {
+  readonly body: string
+  readonly label?: FenceLabel
+}
+
+function unfence(value: unknown): Unfenced {
+  let label: FenceLabel | undefined
+  const stripped = mapStrings(value, (text) => {
+    const parts = unspotlightParts(text)
+    if (!parts) return unspotlight(text)
+    label ??= { tool: parts.tool, namespace: parts.namespace }
+    return parts.body
+  })
+  return { body: asText(stripped), label }
+}
+
+/** Cap a quoted body, THEN put back the fence it came in. Nothing quoted means
+ *  nothing to label, and a body that arrived unfenced stays unfenced. */
+function carry(quoted: Unfenced, max: number): string {
+  const body = capText(quoted.body, max)
+  return quoted.label ? spotlight(body, quoted.label.tool, quoted.label.namespace) : body
+}
+
+function extractSimpleLoop(events: ContextEvent[], max: number): Extracted {
   const actions = events.filter((e) => e.type === 'controller_action')
   const ret = [...actions].reverse().find((e) => {
     const a = (e.data as ControllerActionEventData).action
@@ -186,10 +218,10 @@ function extractSimpleLoop(events: ContextEvent[]): Extracted {
       text: lastErrorText(events, 'the loop returned no text'),
     }
   }
-  return { ok: true, result: text, reasoning: action.reasoning ?? '' }
+  return { ok: true, result: capText(text, max), reasoning: action.reasoning ?? '' }
 }
 
-function extractActorCritic(events: ContextEvent[]): Extracted {
+function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   let action: ControllerActionEventData['action'] | undefined
   let results: ToolResultEventData[] = []
   let accepted:
@@ -215,25 +247,29 @@ function extractActorCritic(events: ContextEvent[]): Extracted {
       text: lastErrorText(events, 'no attempt was accepted by the critic'),
     }
   }
-  const result =
-    accepted.results.length === 1
-      ? accepted.results[0].success
-        ? accepted.results[0].result
-        : accepted.results[0].error
-      : accepted.results.map((r) =>
-          r.success ? { tool: r.tool, result: r.result } : { tool: r.tool, error: r.error },
+  // One block per accepted result, each under the fence ITS result arrived in:
+  // a batch can mix tools, and one label over all of them would name the wrong
+  // source for all but one. The cap is split so the record stays near `max`.
+  const share = Math.max(1, Math.floor(max / accepted.results.length))
+  const blocks = accepted.results.map((r) => {
+    const value = r.success ? r.result : r.error
+    return accepted.results.length === 1
+      ? carry(unfence(value), share)
+      : carry(
+          unfence(r.success ? { tool: r.tool, result: value } : { tool: r.tool, error: value }),
+          share,
         )
-  const body = asText(mapStrings(result, unspotlight))
+  })
   const reasoning = [accepted.action.reasoning ?? '', accepted.why ? `Critic: ${accepted.why}` : '']
     .filter(Boolean)
     .join('\n')
-  return { ok: true, result: body, reasoning }
+  return { ok: true, result: blocks.join('\n'), reasoning }
 }
 
 /** Short excerpt of one match: its first characters, one line. */
 const EXCERPT_CHARS = 200
 
-function extractRetriever(events: ContextEvent[]): Extracted {
+function extractRetriever(events: ContextEvent[], max: number): Extracted {
   const found = events.find(
     (e) => e.type === 'tool_result' && (e.data as ToolResultEventData).tool === 'retriever',
   )
@@ -248,23 +284,32 @@ function extractRetriever(events: ContextEvent[]): Extracted {
       text: errored ? lastErrorText(events, 'retrieval failed') : 'no documents matched',
     }
   }
+  // The excerpts are unfenced one by one (a capped excerpt of a fenced chunk is
+  // the header, not the chunk); the block goes back under the fence the hits came
+  // in, once, so the filename in each line is inside it too.
+  let label: FenceLabel | undefined
   const lines = matches.map((m) => {
     const where =
       m.docId !== undefined && m.startOffset !== undefined && m.endOffset !== undefined
         ? ` [doc ${m.docId}, chars ${m.startOffset}-${m.endOffset}]`
         : ''
-    const excerpt = unspotlight(m.content).replace(/\s+/g, ' ').trim().slice(0, EXCERPT_CHARS)
+    const parts = unspotlightParts(m.content)
+    if (parts) label ??= { tool: parts.tool, namespace: parts.namespace }
+    const excerpt = (parts?.body ?? unspotlight(m.content))
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, EXCERPT_CHARS)
     return `- ${m.source ?? m.id}${where}: ${excerpt}`
   })
   const docs = new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size
   return {
     ok: true,
-    result: lines.join('\n'),
+    result: carry({ body: lines.join('\n'), label }, max),
     reasoning: `${matches.length} match(es) across ${docs} document(s) from ${(result?.backends ?? []).join(', ') || 'no backends'}`,
   }
 }
 
-function extractPlanner(events: ContextEvent[]): Extracted {
+function extractPlanner(events: ContextEvent[], max: number): Extracted {
   const created = [...events]
     .reverse()
     .find((e) => e.type === 'plan_created' && (e.data as PlanCreatedEventData).plan !== undefined)
@@ -276,22 +321,27 @@ function extractPlanner(events: ContextEvent[]): Extracted {
       text: lastErrorText(events, 'no plan was produced'),
     }
   }
-  return { ok: true, result: plan.plan, reasoning: '', planSteps: plan.n_steps }
+  return { ok: true, result: capText(plan.plan, max), reasoning: '', planSteps: plan.n_steps }
 }
 
 /** Default extractor for a kind, over the committed events of the route's own
- *  (leaf) pattern. */
-export function extract(kind: RouteKind, events: ContextEvent[]): Extracted {
-  switch (kind) {
-    case 'simpleLoop':
-      return extractSimpleLoop(events)
-    case 'actorCritic':
-      return extractActorCritic(events)
-    case 'retriever':
-      return extractRetriever(events)
-    case 'planner':
-      return extractPlanner(events)
-  }
+ *  (leaf) pattern. Every text field it returns is capped at `max` characters. */
+export function extract(kind: RouteKind, events: ContextEvent[], max: number): Extracted {
+  const found = ((): Extracted => {
+    switch (kind) {
+      case 'simpleLoop':
+        return extractSimpleLoop(events, max)
+      case 'actorCritic':
+        return extractActorCritic(events, max)
+      case 'retriever':
+        return extractRetriever(events, max)
+      case 'planner':
+        return extractPlanner(events, max)
+    }
+  })()
+  return found.ok
+    ? { ...found, reasoning: capText(found.reasoning, max) }
+    : { ...found, text: capText(found.text, max) }
 }
 
 // ============================================================================

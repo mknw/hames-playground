@@ -509,6 +509,22 @@ describe('one-release bootstrap compatibility', () => {
       }),
     ).toBe('')
   })
+  // The endpoint and its key are one deployment: a half-migrated pair is not five of five.
+  it.each([
+    ['a new endpoint with an old key', 'LARGE_LLM_BASE_URL', 'VERDA_INFERENCE_API_KEY'],
+    ['an old endpoint with a new key', 'VERDA_INFERENCE_ENDPOINT', 'LARGE_LLM_API_KEY'],
+  ])('%s is not counted as a complete private tier', (_label, first, second) => {
+    const { LARGE_LLM_BASE_URL, LARGE_LLM_API_KEY, ...small } = REQUIRED
+    expect(
+      problems({
+        ...small,
+        [first]: LARGE_LLM_BASE_URL,
+        [second]: LARGE_LLM_API_KEY,
+        INFERENCE_TIERS: 'self_deployed',
+        ANTHROPIC_API_KEY: '',
+      }),
+    ).toContain('INFERENCE_TIERS=self_deployed requires all')
+  })
   it('an explicit empty canonical endpoint refuses even with the legacy name set', () => {
     expect(
       problems({

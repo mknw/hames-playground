@@ -17,27 +17,42 @@ export const LEGACY_INFERENCE_ENV = {
 } as const
 
 const warned = new Set<string>()
-function warn(oldName: string, newName: string): void {
+function warn(oldName: string, newName: string, ignored: boolean): void {
   if (warned.has(oldName)) return
   warned.add(oldName)
   console.warn(
-    `[inference] ${oldName} is deprecated; use ${newName}. The old name is accepted for one release.`,
+    ignored
+      ? `[inference] ${oldName} is deprecated and IGNORED because ${newName} (or its pair) is set; remove it.`
+      : `[inference] ${oldName} is deprecated; use ${newName}. The old name is accepted for one release.`,
   )
 }
 
+/** The endpoint and its bearer key name ONE deployment, so they migrate together: once either
+ * canonical name is defined (even empty) neither falls back, and a missing half stays undefined
+ * for the boot assert to refuse by name. Resolving them apart would send one deployment's key to
+ * the other's endpoint during a rename done one variable at a time.
+ */
+const PAIR: readonly string[] = ['LARGE_LLM_BASE_URL', 'LARGE_LLM_API_KEY']
+
 export function inferenceEnv(name: string): string | undefined {
   const oldName = LEGACY_INFERENCE_ENV[name as keyof typeof LEGACY_INFERENCE_ENV]
-  if (oldName && process.env[oldName] !== undefined) warn(oldName, name)
-  return process.env[name] ?? (oldName ? process.env[oldName] : undefined)
+  const canonical = process.env[name]
+  const pairMigrated = PAIR.includes(name) && PAIR.some((n) => process.env[n] !== undefined)
+  const useLegacy = oldName !== undefined && canonical === undefined && !pairMigrated
+  if (oldName && process.env[oldName] !== undefined) warn(oldName, name, !useLegacy)
+  return useLegacy ? process.env[oldName] : canonical
 }
 
 /** Boot normalization also feeds generated BAML's env.* references. No I/O. */
 export function applyLegacyInferenceEnv(): void {
-  for (const name of Object.keys(LEGACY_INFERENCE_ENV)) {
-    const value = inferenceEnv(name)
+  // Resolve every name before assigning any: an assignment would make the pair look migrated.
+  const resolved = Object.keys(LEGACY_INFERENCE_ENV).map(
+    (name) => [name, inferenceEnv(name)] as const,
+  )
+  for (const [name, value] of resolved) {
     if (process.env[name] === undefined && value !== undefined) process.env[name] = value
   }
   if (process.env.INFERENCE_TIERS === 'private') {
-    warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed')
+    warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed', false)
   }
 }

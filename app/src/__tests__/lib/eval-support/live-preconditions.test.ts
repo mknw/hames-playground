@@ -103,3 +103,12 @@ it('accepts old endpoint/key names in a live env-file snapshot without mutating 
     'LARGE_LLM_BASE_URL',
   )
 })
+
+it('does not pair a new endpoint with an old key in a live env-file snapshot', () => {
+  const mixed = {
+    ...env,
+    LARGE_LLM_API_KEY: undefined,
+    VERDA_INFERENCE_API_KEY: env.LARGE_LLM_API_KEY,
+  }
+  expect(() => assertLivePreconditions(mixed)).toThrow('LARGE_LLM_API_KEY')
+})

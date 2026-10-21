@@ -33,11 +33,17 @@ def add(name, file, old, new, tests, pattern=None):
 
 
 add('alias-fallback', ALIASES,
-    'return process.env[name] ?? (oldName ? process.env[oldName] : undefined)',
-    'return process.env[name]', [COMPAT])
+    'return useLegacy ? process.env[oldName] : canonical', 'return canonical', [COMPAT])
 add('canonical-precedence', ALIASES,
-    'return process.env[name] ?? (oldName ? process.env[oldName] : undefined)',
-    'return (oldName ? process.env[oldName] : undefined) ?? process.env[name]', [COMPAT])
+    'return useLegacy ? process.env[oldName] : canonical',
+    'return process.env[oldName!] ?? canonical', [COMPAT])
+add('drop-the-pair-check', ALIASES,
+    'oldName !== undefined && canonical === undefined && !pairMigrated',
+    'oldName !== undefined && canonical === undefined', [COMPAT])
+add('drop-the-pair-check-bootstrap', 'scripts/bootstrap-vps.sh',
+    "if ! grep -qE '^LARGE_LLM_(BASE_URL|API_KEY)=' \"${2:-$ENV_FILE}\" 2>/dev/null; then",
+    'if true; then', [BOOTSTRAP], 'is not counted as a complete private tier')
+add('legacy-ignored-warning', ALIASES, 'ignored\n      ?', 'false\n      ?', [COMPAT])
 add('boot-warning', ALIASES, 'console.warn(', 'String(', [COMPAT])
 add('baml-env-propagation', ALIASES,
     'if (process.env[name] === undefined && value !== undefined) process.env[name] = value',
@@ -70,7 +76,7 @@ add('proposal-translation', 'app/src/lib/memory/proposals.server.ts',
     'return payload && tier ? { ...payload, tier } : null',
     'return payload && tier ? payload : null', ['src/__tests__/lib/memory/proposals.test.ts'])
 add('live-preflight-alias', 'app/src/lib/eval-support/live-preconditions.ts',
-    'env.LARGE_LLM_BASE_URL ?? env.VERDA_INFERENCE_ENDPOINT', 'env.LARGE_LLM_BASE_URL',
+    'LARGE_LLM_BASE_URL: env.VERDA_INFERENCE_ENDPOINT', 'LARGE_LLM_BASE_URL: env.LARGE_LLM_BASE_URL',
     ['src/__tests__/lib/eval-support/live-preconditions.test.ts'])
 # Leave the old CHECK in place. The same mutation turns the isolated Postgres
 # write red when --database is explicitly authorized; locally the SQL pin is red.
@@ -79,13 +85,13 @@ a = s.index('  -- Widen the old check under the schema transaction;')
 b = s.index('  CREATE INDEX IF NOT EXISTS memories_user_idx', a)
 add('old-check-retained', MEMORIES, s[a:b], '', [SQL])
 add('bootstrap-alias', 'scripts/bootstrap-vps.sh',
-    'LARGE_LLM_BASE_URL) legacy=VERDA_INFERENCE_ENDPOINT',
-    'LARGE_LLM_BASE_URL) legacy=REMOVED_LEGACY_ENDPOINT', [BOOTSTRAP], 'one-release bootstrap')
+    '[[ $1 == LARGE_LLM_BASE_URL ]] && legacy=VERDA_INFERENCE_ENDPOINT',
+    '[[ $1 == LARGE_LLM_BASE_URL ]] && legacy=REMOVED_LEGACY_ENDPOINT', [BOOTSTRAP], 'one-release bootstrap')
 
 add('legacy-frame-widened', 'packages/harness-baml/clients.server.ts',
     "tier === 'verda'", "(tier === 'verda' || tier === 'private' || tier === 'Verda')", [COMPAT])
 add('private-restriction-warning', ALIASES,
-    "    warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed')\n", '', [COMPAT])
+    "    warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed', false)\n", '', [COMPAT])
 TIER_SERVER = 'app/src/lib/inference/tier.server.ts'
 add('stale-tab-literal-refused', TIER_SERVER,
     'normalizeStoredInferenceTier(requested)',

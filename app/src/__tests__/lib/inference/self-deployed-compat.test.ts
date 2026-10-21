@@ -133,6 +133,44 @@ describe('one-release environment migration', () => {
       expect(() => assertInferenceDeploymentConfigured()).toThrow(/LARGE_LLM_API_KEY/)
     },
   )
+  // The endpoint and its key name one deployment: a half-migrated pair must refuse, never
+  // send one deployment's bearer key to the other's endpoint.
+  it.each([
+    [
+      'a new endpoint with an old key',
+      'LARGE_LLM_BASE_URL',
+      'VERDA_INFERENCE_API_KEY',
+      'LARGE_LLM_API_KEY',
+    ],
+    [
+      'an old endpoint with a new key',
+      'VERDA_INFERENCE_ENDPOINT',
+      'LARGE_LLM_API_KEY',
+      'LARGE_LLM_BASE_URL',
+    ],
+  ])('%s is refused naming the canonical variable', (_label, first, second, missing) => {
+    vi.stubEnv(
+      first,
+      first.startsWith('LARGE')
+        ? 'https://large.example.invalid/v1'
+        : 'https://old.example.invalid/v1',
+    )
+    vi.stubEnv(second, 'synthetic-key')
+    expect(() => assertInferenceDeploymentConfigured()).toThrow(new RegExp(missing))
+    applyLegacyInferenceEnv()
+    expect(process.env[missing]).toBeUndefined()
+  })
+  it('an old value is reported as ignored, not accepted, when its canonical pair is set', async () => {
+    vi.resetModules()
+    const fresh = await import('@hames-ai/harness-baml/inference-env.server')
+    vi.stubEnv('LARGE_LLM_BASE_URL', 'https://large.example.invalid/v1')
+    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')
+    fresh.applyLegacyInferenceEnv()
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringMatching(/VERDA_INFERENCE_API_KEY.*IGNORED/),
+    )
+    expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('accepted')
+  })
   it('an explicitly empty canonical endpoint refuses even with a legacy endpoint', () => {
     vi.stubEnv('LARGE_LLM_BASE_URL', '')
     vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://large.example.invalid/v1')

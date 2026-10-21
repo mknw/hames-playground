@@ -218,11 +218,15 @@ reserved_name() {
 env_get() {
   local line legacy=''
   line=$(grep -E "^$1=" "${2:-$ENV_FILE}" 2>/dev/null | tail -n1) || true
-  # One-release aliases; an explicit canonical value (including empty) wins.
+  # One-release aliases; an explicit canonical value (including empty) wins. The URL and its key
+  # are one deployment: they fall back only when NEITHER canonical line exists.
   if [[ -z $line ]]; then
     case $1 in
-      LARGE_LLM_BASE_URL) legacy=VERDA_INFERENCE_ENDPOINT ;;
-      LARGE_LLM_API_KEY) legacy=VERDA_INFERENCE_API_KEY ;;
+      LARGE_LLM_BASE_URL | LARGE_LLM_API_KEY)
+        if ! grep -qE '^LARGE_LLM_(BASE_URL|API_KEY)=' "${2:-$ENV_FILE}" 2>/dev/null; then
+          [[ $1 == LARGE_LLM_BASE_URL ]] && legacy=VERDA_INFERENCE_ENDPOINT || legacy=VERDA_INFERENCE_API_KEY
+        fi
+        ;;
       LARGE_LLM_EUR_PER_HOUR) legacy=VERDA_EUR_PER_HOUR ;;
       LARGE_LLM_SCALEDOWN_SECONDS) legacy=VERDA_SCALEDOWN_SECONDS ;;
       LARGE_LLM_WAKE_*) legacy=VERDA_WAKE_${1#LARGE_LLM_WAKE_} ;;

@@ -4,10 +4,13 @@ export function assertLivePreconditions(env: Record<string, string | undefined>)
     throw new Error('Live eval is disabled: coordinator S3 merged: go is required')
   // Validate an env-file snapshot before it is installed into the process.
   // The process boot warns about these one-release aliases after validation.
-  env = {
-    ...env,
-    LARGE_LLM_BASE_URL: env.LARGE_LLM_BASE_URL ?? env.VERDA_INFERENCE_ENDPOINT,
-    LARGE_LLM_API_KEY: env.LARGE_LLM_API_KEY ?? env.VERDA_INFERENCE_API_KEY,
+  // The endpoint and its key are one deployment: the old names apply only when neither new one is set.
+  if (env.LARGE_LLM_BASE_URL === undefined && env.LARGE_LLM_API_KEY === undefined) {
+    env = {
+      ...env,
+      LARGE_LLM_BASE_URL: env.VERDA_INFERENCE_ENDPOINT,
+      LARGE_LLM_API_KEY: env.VERDA_INFERENCE_API_KEY,
+    }
   }
   for (const name of ['LARGE_LLM_BASE_URL', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL']) {
     const raw = env[name]

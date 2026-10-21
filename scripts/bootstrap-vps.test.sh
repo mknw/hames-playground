@@ -975,6 +975,9 @@ expect_problem "example.com left in" sed -i "s/^APP_DOMAIN=.*/APP_DOMAIN='previe
 expect_problem_like "two of five private-tier values" 'private tier: 2 of' bash -c "printf \"LARGE_LLM_BASE_URL='https://h/v1'\nLARGE_LLM_API_KEY='k'\n\" >>'$good'"
 # A COMPLETE five-value set, so the partial-tier rule cannot fire and the /v1 rule is the only one left.
 expect_problem_like "endpoint without /v1, tier otherwise complete" '^LARGE_LLM_BASE_URL must end in /v1$' bash -c "printf \"LARGE_LLM_BASE_URL='https://h'\nLARGE_LLM_API_KEY='k'\nSMALL_LLM_BASE_URL='https://s/v1'\nSMALL_LLM_DECISIONS_URL='https://s/v1/systemone'\nSMALL_LLM_API_KEY='k'\n\" >>'$good'"
+# The 27B endpoint and its key are one deployment: a half-migrated pair is NOT five of five.
+expect_problem_like "new large endpoint with an old key" 'private tier: 4 of' bash -c "printf \"LARGE_LLM_BASE_URL='https://h/v1'\nVERDA_INFERENCE_API_KEY='k'\nSMALL_LLM_BASE_URL='https://s/v1'\nSMALL_LLM_DECISIONS_URL='https://s/v1/systemone'\nSMALL_LLM_API_KEY='k'\n\" >>'$good'"
+expect_problem_like "old large endpoint with a new key" 'private tier: 4 of' bash -c "printf \"VERDA_INFERENCE_ENDPOINT='https://h/v1'\nLARGE_LLM_API_KEY='k'\nSMALL_LLM_BASE_URL='https://s/v1'\nSMALL_LLM_DECISIONS_URL='https://s/v1/systemone'\nSMALL_LLM_API_KEY='k'\n\" >>'$good'"
 expect_problem "VITE_DEV_BYPASS_AUTH present" bash -c "echo \"VITE_DEV_BYPASS_AUTH='false'\" >>'$good'"
 expect_problem "STASH_DIRECT_REDIS unset" sed -i "/^STASH_DIRECT_REDIS=/d" "$good"
 expect_problem "laptop compose file" sed -i "s/^COMPOSE_FILE=.*/COMPOSE_FILE=docker-compose.yaml/" "$good"

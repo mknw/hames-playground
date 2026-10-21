@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Download the offline guest .deb closure for build.py's lock. Network: the archive only.
+
+Runs inside a disposable container of the SAME distribution release as the base
+image (never on a live host's apt state). apt resolves against the base image's
+OWN dpkg status (read from the sha256-pinned disk), so it downloads exactly what
+installing the six lock packages (`--reinstall`) needs on that base, co-upgrades
+included, and nothing the guest's apt would then refuse to fetch, from the signed release,
+-updates and -security pockets. Writes the debs and `packages.json` (name,
+version, sha256 of each), the lock's `packages` fragment; that record, not the
+archive's state on the day, is the pin.
+
+Pure dry-run without --apply.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+REQUIRED = ("incus-agent", "docker.io", "systemd", "python3", "iproute2", "cloud-init")
+
+
+def require(ok, message):
+    if not ok:
+        raise RuntimeError(message)
+
+
+def checked_status(text):
+    """A dpkg status file: stanzas each naming a Package and a Status."""
+    stanzas = [stanza for stanza in text.split("\n\n") if stanza.strip()]
+    require(stanzas and all(re.search(r"^Package: [a-z0-9][a-z0-9+.-]*$", stanza, re.M)
+                            and re.search(r"^Status: ", stanza, re.M) for stanza in stanzas),
+            "dpkg status file required")
+    return text
+
+
+def sources(codename):
+    require(re.fullmatch(r"[a-z]+", codename), "codename required")
+    return ("Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\n"
+            f"Suites: {codename} {codename}-updates {codename}-security\nComponents: main universe\n"
+            "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n")
+
+
+def deb_field(path, field):
+    return subprocess.run(["dpkg-deb", "-f", str(path), field], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def digest(path):
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+
+def fresh_output(out):
+    require(out.is_dir() and not any(out.iterdir()), "fresh empty output directory required")
+
+
+def apt_options(state):
+    """apt confined to `state`: the base image's own status, the signed archive, nothing of the host's."""
+    return [
+        "-o", "Dir::State::status=" + str(state / "status"),
+        "-o", "Dir::State::Lists=" + str(state / "lists"),
+        "-o", "Dir::Cache::archives=" + str(state / "archives"),
+        "-o", "Dir::Etc::sourcelist=" + str(state / "archive.sources"),
+        "-o", "Dir::Etc::sourceparts=-",
+        "-o", "APT::Get::List-Cleanup=0",
+    ]
+
+
+def apt_commands(state):
+    options = apt_options(state)
+    return [["apt-get", *options, "update"],
+            ["apt-get", *options, "install", "--download-only", "--reinstall", "-y",
+             "--no-install-recommends", *REQUIRED]]
+
+
+def complete(names):
+    require(set(REQUIRED) <= set(names) and len(names) == len(set(names)), "closure incomplete or duplicated")
+
+
+def download(status, out, codename):
+    fresh_output(out)
+    state = Path("/tmp/closure-apt")
+    (state / "lists/partial").mkdir(parents=True)
+    (state / "archives/partial").mkdir(parents=True)
+    (state / "status").write_text(checked_status(status.read_text()))
+    (state / "archive.sources").write_text(sources(codename))
+    for command in apt_commands(state):
+        subprocess.run(command, check=True)
+    records = []
+    for deb in sorted((state / "archives").glob("*.deb")):
+        target = out / deb.name
+        shutil.move(deb, target)  # the output is a bind mount: another device
+        records.append({"name": deb_field(target, "Package"), "version": deb_field(target, "Version"),
+                        "path": target.name, "sha256": digest(target)})
+    names = [record["name"] for record in records]
+    complete(names)
+    (out / "packages.json").write_text(json.dumps({"packages": records}, indent=2) + "\n")
+    return {"packages": len(records), "bytes": sum((out / r["path"]).stat().st_size for r in records)}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--status", type=Path, required=True)  # the base image's /var/lib/dpkg/status
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--codename", required=True)
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args(argv)
+    sources(args.codename)
+    if not args.apply:
+        print(json.dumps({"mode": "dry-run", "required": REQUIRED, "archive": "signed release, -updates, -security"}))
+        return
+    print(json.dumps(download(args.status, args.out, args.codename)))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
+        sys.exit("Closure refused or failed: " + str(error))

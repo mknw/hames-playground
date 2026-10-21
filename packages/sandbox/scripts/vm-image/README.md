@@ -7,8 +7,11 @@ and TypeScript API. They produce a split Incus VM image (`metadata.tar` and
 `ip`, and the same three sandbox image configs as the input archives. SD-19,
 SD-20 and SD-21 apply; an assembled disk is not isolation evidence.
 
-Every invocation is a pure dry-run unless `--apply` is present. There is no
-download, registry login/push, server connection, Incus operation, host package
+Every invocation is a pure dry-run unless `--apply` is present. `build.py` does
+not download anything, and neither does any script here except the two input
+helpers described under "Off-host rehearsal" (the closure helper fetches from
+the signed archive; the grow helper is offline). There is no
+registry login/push, server connection, Incus operation, host package
 installation or cloud operation. Values, input locks, private images and output
 manifests belong outside Git, per [ADR-0008](../../../../docs/adr/0008-deployment-guidance-is-provider-neutral.md).
 Run against synthetic/public inputs only. The operator reviews the base and
@@ -74,6 +77,32 @@ The guest provides `/usr/bin/dockerd` for both consumers, adding a symlink to
 the distro's `/usr/sbin/dockerd` when necessary.
 Local `kg-sandbox:base`, `:data` and `:office` tags are also restored inside the
 disk for the runtime's existing defaults; measurements use immutable IDs.
+
+## Off-host rehearsal
+
+`.github/workflows/vm-rehearsal.yml` (script: `scripts/vm-rehearsal.sh`) runs the
+whole pipeline and then the spike on a disposable GitHub-hosted runner with KVM,
+so the pipeline is proven end to end before it touches a real host. It is a
+maintainer tool: it starts on manual dispatch, or on a pull request from this
+repository that changes a file it executes (the workflow's path filter; fork
+pull requests are skipped), and it takes about 50 minutes. Two helpers run inside
+the offline builder image (`builder.Dockerfile`) to produce the inputs the lock
+needs from a stock cloud image:
+
+- `grow_base.py` (R0) grows the base disk's root partition in place with
+  libguestfs, offline, and refuses unless partition identities, every other
+  partition and the file list are unchanged. Its sha256 becomes the lock's `base`.
+- `closure.py` resolves the six lock packages against the base image's own
+  `/var/lib/dpkg/status` from the signed archive and records each package's name,
+  version and sha256 (the lock's `packages`).
+
+The rehearsal makes three runner substitutions, each stated in the script: the
+SSH witness always passes (a runner has no independent path to witness), the
+package plan it finds is allow-listed, and the site inputs (canary, application
+and probe networks, application image) are synthetic. It therefore proves the
+pipeline and the harness's mechanics on a clean machine, not behaviour on a real
+host. `helpers.test.py` pins the two helpers' decisions hermetically, with a
+recording fake for the libguestfs calls.
 
 ## Prepare pinned inputs outside the build
 

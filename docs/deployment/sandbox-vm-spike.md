@@ -33,6 +33,7 @@ Current round-2 status: Q5 is recorded on [#648](https://github.com/mknw/hames-p
    - Review `apt-get --simulate install --no-install-recommends incus="$INCUS_PACKAGE_VERSION" incus-base="$INCUS_PACKAGE_VERSION" incus-client="$INCUS_PACKAGE_VERSION" dnsmasq-base="$DNSMASQ_PACKAGE_VERSION"`, and pass every `Inst` name with `--allow-package`.
    - The simulation shows no upgrades and no `Remv` lines.
    - `dpkg --audit` prints nothing, and no apt or unattended-upgrades process is running.
+   - `dpkg -l 'incus*'` shows no `rc` rows. Leftover conffiles can make dpkg ask a conffile question, and the unit's stdin is `/dev/null`, so the install fails and rolls back. Purge that residue first, after checking that no retained Incus state is still needed.
    - Host `qemu-img` is already present (preflight reads the image with it). The upstream package bundles the QEMU, OVMF and virtiofsd that Incus runs; a distro QEMU on `PATH` is not the one measured (the version comes from Incus's `GET /1.0`).
 5. **Launch.** Use only the runbook's `systemd-run` block (`:122`). Never run it in the foreground or inside a tool call. Do not stop the unit while the install step is running (R2).
 6. **SSH access.**
@@ -194,8 +195,11 @@ sudo python3 scripts/lib/sandbox_vm.py source --apply --key "$KEY"
 ```
 
 `source --apply` refuses any key file whose primary keys are not exactly the
-pinned one. A re-run with the identical three files in place (for example after
-a failed index refresh) only refreshes again; any other existing file is refused. It writes three files
+pinned one, and any key file holding a packet that does not belong in a public
+key (a secret-key or compressed packet is refused, not skipped, because one of
+apt's verifiers would trust a key inside it); the dry run refuses the same
+files. A re-run with the identical three files in place (for example after
+a failed index refresh) only rewrites the journal and refreshes again; any other existing file, or a symlink, is refused. It writes three files
 (0644): the keyring under `/etc/apt/keyrings/`, a deb822 source for this host's
 codename with `Signed-By` set to that keyring, and an apt preferences file that
 admits only `incus`, `incus-base` and `incus-client` from that origin
@@ -208,8 +212,10 @@ the private `.sandbox-vm-spike/incus-source.private.json`, then runs
 unless every Incus package is absent or removed (a dpkg query error or any
 partial state refuses, too), verifies every file against its recorded
 hash before deleting any, and treats a missing file as already removed. If the
-private journal is lost (for example a cleaned checkout), it refuses by name;
-remove the three files by hand after inspecting them:
+private journal is lost (for example a cleaned checkout), it refuses by name.
+While the three files are unchanged, re-running `source --apply` with the same
+key restores the journal; otherwise remove the three files by hand after
+inspecting them:
 `/etc/apt/keyrings/sbxs-incus-upstream.asc`,
 `/etc/apt/sources.list.d/sbxs-incus-upstream.sources` and
 `/etc/apt/preferences.d/sbxs-incus-upstream`. It is

@@ -881,6 +881,17 @@ class Safety(unittest.TestCase):
         self.assertEqual(vm.primary_key_fingerprints(self.armored(old_format, user_id, subkey)), [expected])
         self.assertEqual(vm.primary_key_fingerprints(self.armored(new_format)), [expected])
         self.assertEqual(len(vm.primary_key_fingerprints(self.armored(old_format, bytes([0xC6, len(other)]) + other))), 2)
+        # Packets outside a transferable public key are refused, not skipped: one
+        # verifier trusts a secret-key primary (tag 5) carried beside the pinned key.
+        for label, extra in (("secret key, new format", bytes([0xC5, len(other)]) + other),
+                             ("secret key, old format", bytes([0x95]) + len(other).to_bytes(2, "big") + other),
+                             ("secret subkey", bytes([0xC7, len(other)]) + other),
+                             ("compressed", bytes([0xC8, 2]) + b"\x00\x00")):
+            with self.subTest(label), self.assertRaisesRegex(RuntimeError, "public key packets only"):
+                vm.primary_key_fingerprints(self.armored(new_format, extra))
+        for label, packets in (("user ID first", (user_id, new_format)), ("subkey first", (subkey, new_format))):
+            with self.subTest(label), self.assertRaisesRegex(RuntimeError, "must begin with a primary public key"):
+                vm.primary_key_fingerprints(self.armored(*packets))
         for broken in (self.armored(old_format)[:-40], self.armored(bytes([0xC6, len(key) + 40]) + key),  # length beyond the data
                        self.armored(bytes([0x9B]) + key), self.armored(bytes([0xC6, len(key)]) + b"\x05" + key[1:]),
                        self.armored(b"\x01" + key), self.armored(bytes([0xC6, 0xE0]) + len(key).to_bytes(4, "big") + key)):  # partial length: refused even when the bytes fit
@@ -940,12 +951,38 @@ class Safety(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "already present"), contextlib.redirect_stdout(io.StringIO()):
             vm.main(["source", "--apply", "--key", str(self.key_file)])
 
+    def test_source_reapply_refuses_a_symlink_and_restores_a_lost_journal(self):
+        files = self.source_fixture()
+        journal = self.root / "incus-source.private.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        recorded = journal.read_text()
+        journal.unlink()  # lost, e.g. a cleaned checkout; the three files are unchanged
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertEqual(json.loads(out.getvalue())["unchanged"], ["keyring", "preferences", "sources"])
+        self.assertEqual(journal.read_text(), recorded)
+        target = self.root / "identical-preferences"
+        target.write_text(files["preferences"].read_text())
+        files["preferences"].unlink()
+        files["preferences"].symlink_to(target)  # identical bytes, behind a link
+        self.calls.clear()
+        with self.assertRaisesRegex(RuntimeError, "already present"), contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--key", str(self.key_file)])
+        self.assertEqual(self.calls, [])
+        files["preferences"].unlink()
+        files["preferences"].write_text(target.read_text())
+        with contextlib.redirect_stdout(io.StringIO()):
+            vm.main(["source", "--apply", "--remove"])
+        self.assertFalse(any(path.exists() for path in files.values()))
+
     def test_source_refuses_a_foreign_key_before_writing(self):
         files = self.source_fixture()
         other = b"\x04" + b"foreign key" * 8
         foreign = bytes([0xC6, len(other)]) + other
+        secret = bytes([0xC5, len(other)]) + other  # the pinned key plus an unpinned secret-key primary
         for armored in (self.armored(foreign), self.armored(self.pinned_packet, foreign),
-                        self.key_file.read_text() + self.armored(foreign)):
+                        self.key_file.read_text() + self.armored(foreign), self.armored(self.pinned_packet, secret)):
             self.key_file.write_text(armored)
             with self.subTest(armored=armored[-80:]), self.assertRaises(RuntimeError), contextlib.redirect_stdout(io.StringIO()):
                 vm.main(["source", "--apply", "--key", str(self.key_file)])
@@ -1019,6 +1056,23 @@ class Safety(unittest.TestCase):
             vm.main(["source", "--remove"])
         self.assertEqual(json.loads(out.getvalue())["steps"], ["remove-source"])
 
+    def test_source_dry_run_refuses_a_key_carrying_other_packets(self):
+        self.source_fixture()
+        other = b"\x04" + b"unpinned key" * 8
+        user_id, subkey = bytes([0xCD, 9]) + b"synthetic", bytes([0xCE, len(other)]) + other
+        self.key_file.write_text(self.armored(self.pinned_packet, user_id, subkey))  # clean control
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            vm.main(["source", "--key", str(self.key_file)])
+        self.assertIs(json.loads(out.getvalue())["matches_pin"], True)
+        for label, extra in (("second primary", bytes([0xC6, len(other)]) + other),
+                             ("secret key, new format", bytes([0xC5, len(other)]) + other),
+                             ("secret key, old format", bytes([0x95]) + len(other).to_bytes(2, "big") + other)):
+            self.key_file.write_text(self.armored(self.pinned_packet, extra))
+            with self.subTest(label), contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(RuntimeError):
+                vm.main(["source", "--key", str(self.key_file)])
+            self.assertNotIn('"matches_pin": true', out.getvalue(), label)
+        self.assertEqual(self.calls, [])
+
     def test_package_sysctls_captured_before_install(self):
         order = []
         def boundary(*args, **kw):
@@ -1031,8 +1085,12 @@ class Safety(unittest.TestCase):
         with patch.object(vm, "command", side_effect=boundary):
             self.spike.install()
         captured = json.loads((self.state / "sysctl.before.private.json").read_text())
-        self.assertEqual(set(captured), set(vm.PACKAGE_SYSCTLS))
-        self.assertIn("kernel.apparmor_restrict_unprivileged_unconfined", captured)
+        # The keys the upstream incus-base postinst sets, written out independently of the module.
+        self.assertEqual(set(captured), {"fs.aio-max-nr", "fs.inotify.max_queued_events", "fs.inotify.max_user_instances",
+                                         "fs.inotify.max_user_watches", "kernel.keys.maxbytes", "kernel.keys.maxkeys",
+                                         "net.ipv4.fib_sync_mem", "net.ipv4.neigh.default.gc_thresh3",
+                                         "net.ipv6.neigh.default.gc_thresh3", "vm.max_map_count",
+                                         "kernel.apparmor_restrict_unprivileged_unconfined"})
         self.assertEqual(captured["vm.max_map_count"], "value-of-vm.max_map_count")
         self.assertLess(max(i for i, o in enumerate(order) if o[0] == "sysctl"), order.index(("install",)))
 
@@ -1768,7 +1826,10 @@ class Safety(unittest.TestCase):
                          "The owner's approval of the upstream apt trust root is recorded on #648",
                          "immediately before **and** after `source --apply`",
                          "**`kernel.apparmor_restrict_unprivileged_unconfined=0`**", "`sysctl.before.private.json`",
-                         "`apt-mark hold incus incus-base incus-client`", "remove the three files by hand"):
+                         "`apt-mark hold incus incus-base incus-client`", "remove the three files by hand",
+                         "a secret-key or compressed packet is refused, not skipped", "the dry run refuses the same files",
+                         "re-running `source --apply` with the same key restores the journal",
+                         "`dpkg -l 'incus*'` shows no `rc` rows"):
             self.assertIn(required, prose)
         self.assertNotIn('curl -fsSLo "$PWD/.sandbox-vm-spike', runbook)
         self.assertNotIn("QEMU_MODULES_PACKAGE_VERSION", runbook)
@@ -1898,6 +1959,18 @@ def mutations():
         ('AppArmor sysctl not captured', 'core', '"vm.max_map_count",\n                   "kernel.apparmor_restrict_unprivileged_unconfined")', '"vm.max_map_count")', 'test_package_sysctls_captured_before_install'),
         ('default allow-list widened', 'core', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base"])', 'default=["incus", "incus-base", "incus-client", "dnsmasq-base", "qemu-system-modules-spice"])', 'test_default_allow_list_is_exactly_the_reviewed_set'),
         ('partial-length key packet admitted', 'core', 'require(first < 224 or first == 255, "partial OpenPGP packet refused")', 'pass', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('secret-key packet admitted (parser)', 'core', 'require(tag in (2, 6, 13, 14, 17)', 'require(tag in (2, 5, 6, 13, 14, 17)', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('packet allow-list dropped (parser)', 'core', 'require(tag in (2, 6, 13, 14, 17), "public key packets only")', 'pass', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('secret-key packet admitted (apply pin)', 'core', 'require(tag in (2, 6, 13, 14, 17)', 'require(tag in (2, 5, 6, 13, 14, 17)', 'test_source_refuses_a_foreign_key_before_writing'),
+        ('packet allow-list dropped (apply pin)', 'core', 'require(tag in (2, 6, 13, 14, 17), "public key packets only")', 'pass', 'test_source_refuses_a_foreign_key_before_writing'),
+        ('secret-key packet admitted (dry run)', 'core', 'require(tag in (2, 6, 13, 14, 17)', 'require(tag in (2, 5, 6, 13, 14, 17)', 'test_source_dry_run_refuses_a_key_carrying_other_packets'),
+        ('packet allow-list dropped (dry run)', 'core', 'require(tag in (2, 6, 13, 14, 17), "public key packets only")', 'pass', 'test_source_dry_run_refuses_a_key_carrying_other_packets'),
+        ('leading packet not checked', 'core', 'require(tag == 6 or found, "key block must begin with a primary public key")', 'pass', 'test_primary_key_fingerprints_cover_every_primary_key'),
+        ('unchanged branch admits symlinks', 'core', 'all(not path.is_symlink() and path.read_text() == contents[name]', 'all(path.read_text() == contents[name]', 'test_source_reapply_refuses_a_symlink_and_restores_a_lost_journal'),
+        ('lost journal not restored on re-apply', 'core', '        # Rewrite the journal from them, so a lost one does not block --remove.\n        DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)\n        private_file(record, journal)\n', '', 'test_source_reapply_refuses_a_symlink_and_restores_a_lost_journal'),
+        ('non-AppArmor package sysctl dropped', 'core', 'PACKAGE_SYSCTLS = ("fs.aio-max-nr", ', 'PACKAGE_SYSCTLS = (', 'test_package_sysctls_captured_before_install'),
+        ('runbook secret-key refusal omitted', 'runbook', 'a secret-key or compressed packet is refused, not skipped', 'other packets are ignored', 'test_runbook_upstream_incus_source'),
+        ('runbook rc residue check omitted', 'runbook', "`dpkg -l 'incus*'` shows no `rc` rows", 'nothing', 'test_runbook_upstream_incus_source'),
         ("download may remove packages", "core", '                "--no-remove", "--no-upgrade", *packages, timeout=180)', '                "--no-upgrade", *packages, timeout=180)', "test_dnsmasq_pinned_in_simulation_download_and_install"),
         ("install may upgrade packages", "core", '"--no-install-recommends", "--no-remove", "--no-upgrade", *packages,', '"--no-install-recommends", "--no-remove", *packages,', "test_dnsmasq_pinned_in_simulation_download_and_install"),
         ("runbook AppArmor side effect omitted", "runbook", "**`kernel.apparmor_restrict_unprivileged_unconfined=0`**", "a sysctl", "test_runbook_upstream_incus_source"),

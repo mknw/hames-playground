@@ -181,7 +181,7 @@ def upstream_version(value):
 
 
 def primary_key_fingerprints(armored):
-    """v4 fingerprints of every primary key (tag 6) in an armored key block."""
+    """v4 fingerprints of every primary key (tag 6) in an armored transferable public key block."""
     lines = armored.strip().splitlines()
     require(armored.count("-----BEGIN ") == 1 and lines[:1] == ["-----BEGIN PGP PUBLIC KEY BLOCK-----"]
             and lines[-1:] == ["-----END PGP PUBLIC KEY BLOCK-----"] and "" in lines,
@@ -209,6 +209,11 @@ def primary_key_fingerprints(armored):
             position += 1 + size
         packet = data[position:position + length]
         require(len(packet) == length, "truncated OpenPGP packet")
+        # Public key, user ID, subkey, signature and user attribute only: a secret
+        # key (5, 7) or compressed (8) packet is invisible to this parser but one
+        # verifier would still trust the key inside it.
+        require(tag in (2, 6, 13, 14, 17), "public key packets only")
+        require(tag == 6 or found, "key block must begin with a primary public key")
         if tag == 6:
             require(packet[:1] == b"\x04", "v4 primary key required")
             found.append(hashlib.sha1(b"\x99" + length.to_bytes(2, "big") + packet).hexdigest().upper())
@@ -251,10 +256,14 @@ def upstream_source(args):
     codename = release.get("VERSION_CODENAME", "").strip('"')
     require(re.fullmatch(r"[a-z]+", codename), "distribution codename required")
     contents = upstream_contents(key, codename)
+    journal = json.dumps({name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()})
     present = [path for path in UPSTREAM_FILES.values() if path.exists() or path.is_symlink()]
     if len(present) == len(UPSTREAM_FILES) and all(not path.is_symlink() and path.read_text() == contents[name]
                                                    for name, path in UPSTREAM_FILES.items()):
         # A retry after a failed index refresh: the exact files are already in place.
+        # Rewrite the journal from them, so a lost one does not block --remove.
+        DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
+        private_file(record, journal)
         apt_transaction("update", "-o", "Dir::Etc::sourcelist=" + str(UPSTREAM_FILES["sources"]),
                         "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0")
         return {"unchanged": sorted(UPSTREAM_FILES), "suite": codename}
@@ -262,7 +271,7 @@ def upstream_source(args):
     require(all(path.parent.is_dir() and not path.parent.is_symlink() for path in UPSTREAM_FILES.values()),
             "apt configuration directories required")
     DEFAULT_STATE.mkdir(mode=0o700, exist_ok=True)
-    private_file(record, json.dumps({name: hashlib.sha256(text.encode()).hexdigest() for name, text in contents.items()}))
+    private_file(record, journal)
     for name, path in UPSTREAM_FILES.items():
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
         os.fchmod(fd, 0o644)  # apt reads the keyring as its unprivileged _apt user

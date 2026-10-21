@@ -55,9 +55,12 @@ export interface IncusEnvironment {
 }
 
 /** What one Docker readiness probe found. Only `untrusted-server` is final: the
- * daemon did not present this environment's certificate, so waiting cannot help.
- * `refused` means TLS completed and the daemon then dropped the connection before
- * answering, which is how a refused client certificate looks under TLS 1.3. */
+ * daemon's certificate failed verification against this environment's CA (a
+ * foreign, self-signed, misnamed, expired or not-yet-valid one), so waiting
+ * cannot help.
+ * `refused` means TLS completed and no answer followed: the daemon dropped the
+ * connection, which is how a refused client certificate looks under TLS 1.3, or
+ * stayed silent past the timeout. */
 export type DockerProbe =
   | { ready: true; clientCertificateValidTo: string }
   | { ready: false; reason: 'unreachable' | 'refused' | 'untrusted-server' | 'not-ready' }
@@ -175,22 +178,26 @@ function ipv4(value: string): number {
   return value.split('.').reduce((n, octet) => (n * 256 + Number(octet)) >>> 0, 0)
 }
 
-// node:tls codes for a server certificate this client refused to trust.
-const UNTRUSTED_SERVER = new Set([
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'CERT_SIGNATURE_FAILURE',
-  'CERT_HAS_EXPIRED',
-  'ERR_TLS_CERT_ALTNAME_INVALID',
-])
+/** A daemon that accepts and then stays silent must not hold a wait past its deadline. */
+const PROBE_TIMEOUT_MS = 10_000
 
-/** One mutual-TLS `GET /_ping` with exactly the four settings an app receives.
- * Both sides are verified and nothing falls back to plaintext. Docker must answer
- * `OK`. Results and errors never carry file contents or TLS error text. */
+// A server certificate this client refused to trust, classified by category so
+// that every verification failure is final. Transport errors, timeouts and peer
+// alerts (`ERR_SSL_*`) stay retryable.
+const untrustedServer = (code: string) =>
+  code.startsWith('CERT_') ||
+  code.startsWith('UNABLE_TO_') ||
+  code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+  code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+  code === 'ERR_TLS_CERT_ALTNAME_INVALID'
+
+/** One mutual-TLS `GET /_ping` with exactly the four settings an app receives,
+ * bounded by `timeoutMs`. Both sides are verified and nothing falls back to
+ * plaintext. Docker must answer `OK`. Results and errors never carry file
+ * contents or TLS error text. */
 export async function probeDockerEndpoint(
   dockerEnv: IncusEnvironmentConnection['dockerEnv'],
+  { timeoutMs = PROBE_TIMEOUT_MS }: { timeoutMs?: number } = {},
 ): Promise<DockerProbe> {
   if (!dockerConnectionFromEnv(dockerEnv).includes('--tlsverify'))
     throw new EnvironmentError('Docker probes require a TLS tcp endpoint')
@@ -212,7 +219,8 @@ export async function probeDockerEndpoint(
     (resolve) => {
       const req = request(
         url,
-        { ...tls, rejectUnauthorized: true, agent: false, signal: AbortSignal.timeout(10_000) },
+        // A fresh connection every time: each probe is its own handshake.
+        { ...tls, rejectUnauthorized: true, agent: false, signal: AbortSignal.timeout(timeoutMs) },
         (res) => {
           let body = ''
           res.setEncoding('utf8')
@@ -220,7 +228,6 @@ export async function probeDockerEndpoint(
             body += chunk
             if (body.length > 64) req.destroy()
           })
-          res.on('error', () => resolve('not-ready'))
           res.on('end', () =>
             resolve(res.statusCode === 200 && body === 'OK' ? 'ready' : 'not-ready'),
           )
@@ -231,7 +238,7 @@ export async function probeDockerEndpoint(
       let secured = false
       req.on('socket', (socket) => socket.once('secureConnect', () => (secured = true)))
       req.on('error', (error: NodeJS.ErrnoException) => {
-        if (UNTRUSTED_SERVER.has(error.code ?? '')) resolve('untrusted-server')
+        if (untrustedServer(error.code ?? '')) resolve('untrusted-server')
         else resolve(secured ? 'refused' : 'unreachable')
       })
       req.on('close', () => resolve('not-ready'))

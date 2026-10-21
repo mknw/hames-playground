@@ -1328,14 +1328,14 @@ answer on #648.
      preflight reads the files. Keep the directory outside both checkouts.
      Unchanged files keep their inode, so a running app's binds stay valid. The
      provisioner's state directory, which holds the CA key, is never delivered.
-     `reconcile` prints the four inputs for step 2.
+     `reconcile` prints the four Docker inputs for step 2.
    - **`health`** probes Docker over mutual TLS with the delivered files,
      exactly as the app will. It stops at once if the daemon is not this
      environment's.
 
    Before routing an app to the VM, prove separately that only the app network
-   reaches the VM's Docker port. Neither the provisioner nor the entry point
-   sets firewall rules.
+   reaches the VM's Docker port, and record that proof for step 2. Neither the
+   provisioner nor the entry point sets firewall rules.
 
 2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
    values:
@@ -1394,17 +1394,24 @@ any mount on a VM clone that the render does not list.
 
 - **Reboots.** The state directory and the delivery directory must be on
   persistent storage. The entry point refuses `/tmp`, `/var/tmp`, `/run`,
-  `/dev` and similar mounts, also behind a link. After a host reboot, Incus
+  `/dev` and similar mounts, also behind a link and under their macOS
+  `/private` names. After a host reboot, Incus
   restores each VM's last power state. Re-run `health --wait 600`, and run
   `reconcile` if the VM was stopped: it starts the VM and never generates new
   keys for an existing state.
-- **Rotation.** The client certificate is valid for 365 days, and `health`
-  warns 30 days before expiry. To rotate, run `teardown`, then `reconcile`, then
-  recreate app-dev: the paths are unchanged, but the files are new inodes. A
-  failed teardown keeps the state and the delivered files for recovery.
+- **Rotation.** The client certificate is valid for 365 days. `health` warns
+  30 days before expiry, and once it has expired says so at once, instead of
+  waiting on a daemon that keeps refusing it. To rotate, run `teardown`, then
+  `reconcile`, then recreate app-dev: the paths are unchanged, but the files are
+  new inodes. A failed teardown keeps the state and the delivered files for
+  recovery.
 - **One operation per state directory.** A `<stateDirectory>.lock` beside the
-  directory refuses a second operation. Remove it by hand only after
-  confirming that no operation is running.
+  directory records the holder's pid and boot, and refuses a second operation
+  while that holder runs. A lock whose holder is gone, after Ctrl-C, a kill or
+  a reboot, is reclaimed, and the entry point says so. A refused lock with no
+  operation running means its pid now belongs to another process: remove it
+  by hand. `teardown` keeps a delivery directory that holds other files, and
+  says so.
 
 **What this does not establish.** The checks are offline and see
 configuration only. They do not prove network isolation between the clones'

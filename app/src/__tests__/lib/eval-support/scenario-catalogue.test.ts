@@ -178,10 +178,21 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
     case 'artifact':
     case 'writtenArtifact':
       return nonEmpty(item.files) ? [] : bad('needs files')
-    case 'artifactContains':
-      return reasoned(item.file) && (nonEmpty(item.contains) || nonEmpty(item.parts))
-        ? []
-        : bad('needs a file and contains or parts')
+    case 'artifactContains': {
+      if (
+        !reasoned(item.file) ||
+        !(nonEmpty(item.contains) || nonEmpty(item.parts) || nonEmpty(item.matches))
+      )
+        return bad('needs a file and contains, parts or matches')
+      const broken = flat(item.matches).filter((p) => {
+        try {
+          return !new RegExp(p, 'i')
+        } catch {
+          return true
+        }
+      })
+      return broken.length ? bad('matches has a pattern that does not compile') : []
+    }
     case 'citationLocator':
       return reasoned(item.source) ? [] : bad('needs a source')
     case 'indexedAndRetrieved':

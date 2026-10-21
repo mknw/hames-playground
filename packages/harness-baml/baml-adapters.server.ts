@@ -65,6 +65,7 @@ import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type { DecideFn, DecideAllFn } from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
+  CallRecordSink,
   ControllerFn,
   ActorFn,
   ControllerCallResult,
@@ -218,7 +219,9 @@ export function extractLLMCallData(
  *
  * It is separate from `extractLLMCallData` because accounting coverage and
  * *observability* coverage are not the same set. A call that produces no
- * `LLMCallData` event — every describe-tier call, the injection screen — still
+ * `LLMCallData` event of its own — every describe-tier summary, the injection
+ * screen (which `withUsageAccounting`'s `onCall` hands to the caller to record
+ * as a `model_call` event) — still
  * spent tokens on a client, and leaving those out does not merely lose detail:
  * it biases the header's "on-prem %" in whichever direction the missing calls
  * would have counted. When those two roles were both Anthropic-only that bias
@@ -318,6 +321,14 @@ function measuredDurationMs(source: {
  *     b.ResultDescribe(tool, toolArgs, reasoning, result, opts),
  *   )
  *
+ * `onCall`, when the caller passes one, also receives the call's record — built
+ * from the same collector, with the metrics priced on the client BAML actually
+ * SELECTED — so a call whose value is all its caller gets back (a summary, a
+ * screen verdict) can still become an event in the run's observability. It is
+ * handed the record before accounting runs, so a call that is then refused by
+ * the thinking-leaf policy is still recorded. A sink that throws is logged and
+ * does not replace the call's own outcome: recording is not worth a verdict.
+ *
  * The options bag is passed positionally to a generated function, so a stale
  * `baml_client` drops it (#154) — the consequence here is an uncounted call,
  * not a wrong answer, which is why this site does not also warn.
@@ -325,12 +336,42 @@ function measuredDurationMs(source: {
 export async function withUsageAccounting<T>(
   functionName: string,
   run: (opts: { collector: Collector }) => Promise<T>,
+  onCall?: CallRecordSink,
 ): Promise<T> {
   const collector = new Collector(functionName)
+  const startTime = Date.now()
   try {
     return await run({ collector })
   } finally {
-    accountBamlCall(collector, functionName)
+    const record = onCall ? reportCallRecord(collector, functionName, startTime, onCall) : undefined
+    accountBamlCall(collector, functionName, record?.metrics)
+  }
+}
+
+/** Hand one finished call's record to a sink; the record, when there was one.
+ *  Nothing is reported for a collector that never saw a call (a pre-flight
+ *  failure spent nothing), and nothing thrown here may escape: this runs in a
+ *  `finally`, where a throw would replace the call's own result or error. */
+function reportCallRecord(
+  collector: Collector,
+  functionName: string,
+  startTime: number,
+  onCall: CallRecordSink,
+): LLMCallRecord | undefined {
+  const last = collector.last
+  if (!last) return undefined
+  try {
+    const llmCall = buildLLMCallDataFromLog(last, functionName, {}, startTime)
+    llmCall.metrics = computeEventMetrics(collector)
+    const record: LLMCallRecord = { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
+    onCall(record)
+    return record
+  } catch (err) {
+    console.error(
+      `[baml] ${functionName}: recording the call failed; it is accounted but not recorded:`,
+      err,
+    )
+    return undefined
   }
 }
 
@@ -1774,24 +1815,30 @@ export function createCriticAdapter(): CriticAdapterFn {
  * made a summarizer outage indistinguishable from a blank answer, so nothing
  * anywhere said the summarizer was down.
  *
- * The collector exists only for accounting — nothing here reads it, and this
- * call emits no `LLMCallData` event. See {@link withUsageAccounting}: describe
- * is the repo's highest-frequency role, so an uncounted describe call biases
- * the header's on-prem share by more than any other single role. Since
- * 2026-08-26 it is also a role a tier decision MOVES, hence the override.
+ * The collector exists for accounting, and for the call's record when the
+ * caller passes `onCall`: this call returns a bare string, so `compactBulkData`
+ * is what turns the record into a `model_call` event. See
+ * {@link withUsageAccounting}: describe is the repo's highest-frequency role,
+ * so an uncounted describe call biases the header's on-prem share by more than
+ * any other single role. Since 2026-08-26 it is also a role a tier decision
+ * MOVES, hence the override.
  */
 export async function describeToolResultOp(
   tool: string,
   toolArgs: string,
   reasoning: string,
   result: string,
+  onCall?: CallRecordSink,
 ): Promise<string> {
   const { b } = await import('./guarded-client.server')
-  return withUsageAccounting('ResultDescribe', (opts) =>
-    b.ResultDescribe(tool, toolArgs, reasoning, result, {
-      ...clientOverrideFor('describe'),
-      ...opts,
-    }),
+  return withUsageAccounting(
+    'ResultDescribe',
+    (opts) =>
+      b.ResultDescribe(tool, toolArgs, reasoning, result, {
+        ...clientOverrideFor('describe'),
+        ...opts,
+      }),
+    onCall,
   )
 }
 
@@ -1815,6 +1862,7 @@ export type { DescribeBatchItem } from '@hames-ai/harness-patterns/types'
  */
 export async function describeToolResultsBatchOp(
   items: DescribeBatchItem[],
+  onCall?: CallRecordSink,
 ): Promise<Map<string, string>> {
   const byId = new Map<string, string>()
   if (items.length === 0) return byId
@@ -1827,13 +1875,17 @@ export async function describeToolResultsBatchOp(
     reasoning: i.reasoning,
     result: i.result,
   }))
-  // Collector for accounting only — see `describeToolResultOp`. A failed call
-  // throws to the caller, which logs the N+1 fallback it then pays for.
-  const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
-    b.ResultDescribeBatch(targets, {
-      ...clientOverrideFor('describe'),
-      ...opts,
-    }),
+  // Collector for accounting and, through `onCall`, for the call's record — see
+  // `describeToolResultOp`. A failed call throws to the caller, which logs the
+  // N+1 fallback it then pays for.
+  const batch = await withUsageAccounting(
+    'ResultDescribeBatch',
+    (opts) =>
+      b.ResultDescribeBatch(targets, {
+        ...clientOverrideFor('describe'),
+        ...opts,
+      }),
+    onCall,
   )
   for (const entry of batch?.summaries ?? []) {
     const summary = entry?.summary?.trim()
@@ -1880,7 +1932,7 @@ describeToolResultsBatchOp.limits = () => limitsFor('describe')
 export function createInjectionScreen(options?: { maxChars?: number }): InjectionScreen {
   const maxChars = options?.maxChars ?? 20_000
 
-  return async ({ tool, namespace, content }) => {
+  return async ({ tool, namespace, content, onCall }) => {
     const truncated = content.length > maxChars
     // TRUNCATE FIRST, then de-fence. The de-fencing regex must never run over
     // the full payload: only `maxChars` of it are ever interpolated into the
@@ -1929,11 +1981,14 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // `ScreenUntrustedContent(source, content, __baml_options__?)` reads
     // `__options__.client` into a `ClientRegistry` primary, which is the same
     // seam every other routed call uses.
-    const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
-      b.ScreenUntrustedContent(source, body, {
-        ...clientOverrideFor('screen'),
-        ...opts,
-      }),
+    const verdict = await withUsageAccounting(
+      'ScreenUntrustedContent',
+      (opts) =>
+        b.ScreenUntrustedContent(source, body, {
+          ...clientOverrideFor('screen'),
+          ...opts,
+        }),
+      onCall,
     )
 
     return {

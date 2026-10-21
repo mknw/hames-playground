@@ -297,16 +297,19 @@ export function withReferences<T>(
 
       // 5. Dispatch to inner pattern with a child scope so its events are
       //    surrounded by pattern_enter/exit. Mirrors `chain`'s per-step wrapping.
-      const childScope = createScope<T>(
-        wrappedPattern.config.patternId ?? wrappedPattern.name,
-        scope.data,
-      )
+      const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
+      const childScope = createScope<T>(innerPatternId, scope.data)
+      // The boundary is stamped when the inner pattern STARTS. The events are
+      // pushed after it finishes (so a throw leaves none behind), but an event
+      // stamped there reads as "entered after everything it contains" — the
+      // panel sorts by `ts`, so the enter row landed below the inner pattern's
+      // own events.
+      const enterEvent = createEvent('pattern_enter', innerPatternId, {
+        pattern: wrappedPattern.name,
+      })
       const result = await wrappedPattern.fn(childScope, view)
 
-      const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
-      scope.events.push(
-        createEvent('pattern_enter', innerPatternId, { pattern: wrappedPattern.name }),
-      )
+      scope.events.push(enterEvent)
       scope.events.push(...result.events)
       scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
       scope.data = result.data

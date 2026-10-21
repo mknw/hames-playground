@@ -27,7 +27,7 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { createEvent, enrichToolResult } from './context.server'
+import { createEvent, createModelCallEvent, enrichToolResult } from './context.server'
 import { isHeldResult } from './hitl.server'
 import type {
   UnifiedContext,
@@ -35,7 +35,9 @@ import type {
   ToolCallEventData,
   ControllerActionEventData,
   BulkDescribeFns,
+  CallRecordSink,
   DescribeBatchItem,
+  ModelCallEventData,
   WarningEventData,
 } from './types'
 import { runtimeConfig } from './runtime-config.server'
@@ -218,10 +220,25 @@ export async function compactBulkData(
     firstFailure ??= err instanceof Error ? err.message : String(err)
   }
 
+  // Each describe call is recorded as a `model_call` event as it finishes —
+  // failed ones too, and the per-item retries after a failed batch — so the
+  // summaries' spend shows in the run's observability with the client each call
+  // actually ran on. Pushed on `ctx` before `onPersist`, so they ride the save.
+  const recordCall =
+    (data: ModelCallEventData): CallRecordSink =>
+    (call) =>
+      void ctx.events.push(createModelCallEvent('compactBulkData', data, call))
+
   const summarizeOne = async (target: CompactionTarget): Promise<void> => {
     let summary: string
     try {
-      summary = await describeFn(target.tool, target.toolArgs, target.reasoning, target.result)
+      summary = await describeFn(
+        target.tool,
+        target.toolArgs,
+        target.reasoning,
+        target.result,
+        recordCall({ role: 'describe', source: target.tool }),
+      )
     } catch (err) {
       noteFailure(err)
       return
@@ -239,7 +256,7 @@ export async function compactBulkData(
     // swallowed it — so a failed batch skipped its per-item retry entirely.
     let byId: Map<string, string>
     try {
-      byId = await describeBatchFn(batch)
+      byId = await describeBatchFn(batch, recordCall({ role: 'describe', items: batch.length }))
     } catch (err) {
       noteFailure(err)
       console.warn(

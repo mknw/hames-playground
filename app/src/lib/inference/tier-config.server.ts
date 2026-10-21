@@ -154,3 +154,12 @@ export function assertPrivateTierConfigured(): void {
 export function assertInferenceDeploymentConfigured(): void {
   if (privateInferenceOnly()) assertPrivateTierConfigured()
 }
+
+/** P4 capability and executor share the deployment rule; invalid config refuses. */
+export function graphFileIngestEnabled(): boolean {
+  try {
+    return privateInferenceOnly() && process.env.EMBEDDINGS_PROVIDER !== 'openrouter'
+  } catch {
+    return false
+  }
+}

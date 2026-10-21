@@ -1,6 +1,8 @@
 # general-next conversation Eval (#507 W4)
 
-[SCENARIOS.md](SCENARIOS.md) records the 18 acceptance scenarios. This extends the
+[SCENARIOS.md](SCENARIOS.md) records the 18 acceptance scenarios and, as a draft for
+the owner's review, the question space and the proposed rows
+([scenarios.catalogue.json](scenarios.catalogue.json)). This extends the
 existing role-level compatibility evals with whole conversations: run the shipped
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.

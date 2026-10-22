@@ -273,9 +273,11 @@ property (`LastModifiedTime>=a LastModifiedTime<=b`) are **silently ignored**
 by Microsoft Search — the query behaves as if neither were there. Both bounds
 therefore compose as the single range clause `LastModifiedTime:a..b`.
 
-The composed KQL is returned to the model as the result's `query`, so a filter
-that didn't bite is visible rather than guessed at. Terms first, restrictions
-after: KQL's default operator is AND.
+The composed KQL is **not** returned to the model: it would carry the
+controller's own `site` / `author` text, URLs kept whole, back as a Graph
+result, and `graph` is an address source for the egress gate. No Graph result
+may echo a string the controller wrote. Terms first, restrictions after: KQL's
+default operator is AND.
 
 There is no `site:` operator in Graph KQL (that one is Purview eDiscovery only);
 `path:` is the documented way to scope to a site. `listItem` and `site` are

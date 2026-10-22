@@ -299,6 +299,12 @@ async function withReconnect<T>(
 // Tool Operations
 // ============================================================================
 
+/** What a THROWING `egressChecks` entry denies with, whichever check it was: a
+ *  fixed text, because the exception may quote the very arguments the check
+ *  was withholding. One of the egress gate's fixed texts (boundary guards). */
+export const EGRESS_CHECK_FAILED =
+  'Refused: the check on outgoing requests failed, so this request was not sent. Answer from what you already have.'
+
 /**
  * Execute a tool and — when a `withInjectionGuard` wrapper is active and the
  * tool's namespace is configured untrusted — sanitize its content before the
@@ -333,7 +339,7 @@ export async function callTool(
     } catch {
       // An unavailable check must not turn into an unchecked dispatch, and its
       // exception may quote the very arguments being withheld.
-      denial ??= 'Tool call refused: outgoing privacy check unavailable.'
+      denial ??= EGRESS_CHECK_FAILED
     }
   }
   if (denial) return { success: false, data: null, error: denial }

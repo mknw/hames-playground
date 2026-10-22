@@ -58,6 +58,7 @@ is and why it is shaped this way, start at the front page —
   - [parallel()](#parallelpatterns)
   - [withReferences()](#withreferencespattern-config)
   - [withPseudonymisedInputs()](#withpseudonymisedinputsconfigpattern-507-g14)
+  - [withEgressGate()](#withegressgateconfigpattern-boundary-guards-slice-4)
   - [compactExecution()](#compactexecutionconfig)
   - [compactIntent()](#compactintentconfig)
   - [planner()](#plannerplanfn-tools-config)
@@ -1287,8 +1288,11 @@ definition, deliberately not in a shared default):
 
 ### `withPseudonymisedInputs(config)(pattern)` (#507 G14)
 
-Wrap the web route's `withReferences` with this config-transparent input/egress
-boundary. It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
+Wrap the web route's `withReferences` with this config-transparent input
+boundary (K5). What LEAVES is not this wrapper's: every outgoing call is judged
+by [`withEgressGate`](#withegressgateconfigpattern-boundary-guards-slice-4), which
+took this wrapper's outgoing check (K6) and its refusal of web calls (boundary
+guards, slice 4). It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
 the answer the tier module registered into the run frame, so an absent or empty
 tier is whatever the host's policy defaults to (the self-deployed tier on the
 reference host, which is protected) and a present but unrecognised tier is the
@@ -1296,12 +1300,11 @@ self-deployed tier, refused when unreachable. With no tier module registered, co
 raw `inference.tier`. Core imports no host
 privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
 `(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning
-`apply<T>(value: T): T`, `redact<T>(value: T): T`, `checkLiterals(value): string | void`,
-`observe(data): void`, and `check(args): string | void` (a denial reason).
+`apply<T>(value: T): T`, `redact<T>(value: T): T` and `checkLiterals(value): string | void`.
 `redact` replaces only residual string bodies with `[withheld: private identity]`,
 retaining valid provenance fences; it also withholds residual object-key strings.
-`checkLiterals` uses the check's literal predicate without rejecting placeholders;
-`observe` extends only the outgoing literals from a local result.
+`checkLiterals` is the roster's literal predicate over any value, without
+rejecting placeholders.
 
 Before inner dispatch, it rewrites event-data copies in a synthetic backing
 context and all child data except the roster-input key. The backing copy contains
@@ -1335,31 +1338,16 @@ purpose through the display name. No references attach, the plan and all result 
 only an allowlisted handoff containing route/status/stats lines remains in child
 data. A `warning` with task
 `web_privacy` records "earlier results withheld: privacy filter unavailable".
-The child still runs on the user's message and Neo4j reads; every web call in
-that invocation is refused. The app's `createWebPseudonymiser` requires a readable,
-non-empty directory by default; `{ directory: 'none' }` is an explicit code-only
-choice for deployments without an org graph. A Neo4j/relay outage therefore
-refuses private web calls until it recovers.
-
-The wrapper scopes an `egressChecks` run-frame slot around the inner pattern.
-`RunFrame.egressChecks` is a readonly array of `EgressCheck`s; each accepts
-`{ name, args }` and returns (or resolves) a safe denial reason or nothing.
-Opening copies/freezes it; nested amendments concatenate **innermost first**,
-never replace. `callTool` runs every check before any transport and any denial
-returns `{ success: false, data: null, error }`, a recoverable tool failure,
-not a turn error. A throwing check denies with fixed feedback without exposing
-its exception. The wrapper checks every call except the explicitly local
-`neo4j` namespace (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
-namespace registration. In the same amendment, an `afterToolCall` hook extends
-the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
-It never rewrites those results. An extension failure withholds that result,
-records a fixed warning, and refuses subsequent outgoing calls.
+The child still runs on the user's message; it refuses no call itself (the
+egress gate judges every outgoing one). The app's `createWebPseudonymiser`
+requires a readable, non-empty directory by default; `{ directory: 'none' }` is
+an explicit code-only choice for deployments without an org graph.
 
 The app merges the fixed-order directory first with identities from the view
 and every source payload, unfencing string leaves before harvesting and building
 one ephemeral table per invocation. Rewriting and post-checking touch content
 bodies and leave provenance fences intact, including embedded plan/handoff fences.
-Both literal post-checks and outgoing checks normalise JSON escape sequences
+Both literal post-checks and the egress roster's matcher normalise JSON escape sequences
 (`\\[nrtfb"\\/]` and `\\uXXXX`) before NFKD without combining marks and mapping
 `-_.+/` to spaces. The actorCritic record extractor first unfences result leaves
 before JSON stringification; the loop then fences that record under its own key.
@@ -1367,10 +1355,9 @@ One active compiled alternation is rebuilt on each local observation. It matches
 literals plus letters-only full names of at least six characters within individual
 whitespace-delimited tokens, with boundaries, never across a whole string.
 An exact-token collision remains accepted: `Tim Ely` also matches `timely`.
-User-named forms are held in an exempt Set. It denies roster literals (except literal forms actually named
-in the latest user message), and `PERSON[\s_-]*<n>` tokens with any suffix
-("placeholders are not search terms"). Malformed URL encoding is
-refused. No table is kept or reversed; placeholders stay in route output.
+User-named forms are held in an exempt Set: a literal form actually named in the
+latest user message never matches. No table is kept or reversed; placeholders
+stay in route output.
 Only Graph-shaped identity fields are harvested from local results; a flat Cypher
 projection such as `{ name, email }` adds no identity unless another recognised
 field or the directory already supplied it.
@@ -1380,6 +1367,95 @@ permitted host import site is `harness-client/web-pseudonymiser.server.ts`,
 pinned by `egress-wiring.test.ts`, which also permits only `session.server.ts`
 to import that factory; history-at-rest, the Anthropic tier and file
 materialisation remain governed by their existing contracts.
+
+### `withEgressGate(config)(pattern)` (boundary guards, slice 4)
+
+One check before every outgoing call, on every tier, around whatever pattern it
+wraps: it installs ONE `egressChecks` entry and ONE `afterToolCall` hook on the
+run frame (`RunFrame.egressChecks` concatenates innermost first, never replaces;
+`callTool` runs every check before any transport, and a denial is a recoverable
+tool failure carrying the check's text; a check that throws denies with the
+fixed `EGRESS_CHECK_FAILED`, never its exception). A call is egress unless it is
+declared local: a namespace in `local` (its arguments reach only systems that
+already hold the deployment's data; network locality is not the test) or an
+exact name in `localTools` (a name that is in `catalog` refuses the run).
+`local`, `fetchTools` and `addressSources` are verified against `catalog` when
+the gate runs, like the injection guard's namespaces (#242 item 4); `fetchTools`
+without `addressSources` refuses construction. Every refusal text is one of
+`EGRESS_TEXTS`, none interpolated. The state's nonce source is not a config
+field: `setEgressNonceSourceForTests` fixes it under the test runner only.
+
+Per outgoing call, in this order: a turn closed by "Refuse all similar
+actions", this route closed by its tripwire, or a damaged roster refuses with a
+fixed text and no model call. Then step 1, deterministic and never a tripwire
+(`readOutgoing`): every string leaf and key of the arguments is percent-decoded
+(undecodable refuses), checked for a Unicode format or default-ignorable
+character (`\p{Cf}` or `\p{Default_Ignorable_Code_Point}` refuses: zero-width,
+soft hyphen, bidi controls, variation selectors, Hangul fillers; the cost is
+that a script needing a zero-width non-joiner, or an emoji with a presentation
+selector, is refused), NFKC-normalised, checked for a
+`PERSON_n` placeholder, and the decoded block (one `<key path>: <leaf>` line per
+leaf) is refused over `EGRESS_MAX_BLOCK_CHARS` (2 048), never truncated. In a
+tool in `fetchTools`, every string leaf that carries an http(s) address or sits
+under a `url` key (array items included) must, whole, be an address found in the
+user's latest message or in the DATA of a result whose namespace is in
+`addressSources`, and so must each address inside it (O21). A prefix, or a given
+address with text after it, is not one; a given address closed by sentence or
+Markdown punctuation is also given without it. A result's error text never
+counts, and a namespace whose tools compute their output from their arguments (a
+query engine, a code box) does not belong in `addressSources`: its result could
+carry any address the controller wrote. Then the host roster (`roster:
+EgressRosterSource`) is built with the user's latest message cut to the 4 000
+characters the state quotes (only what Decide sees exempts), matches the
+normalised leaves and returns its spans as the request wrote them.
+
+`mode` (`ByTier<'filter' | 'roster'>`, default `'filter'` with a `decide`, else
+`'roster'`): in `'filter'` the egress question `guard.egress` (`GUARD_EGRESS`, a
+`choice` over `personal`, `company`, `nothing_private`) is asked over a state the
+gate renders (`renderEgressState`): the tool name and every host the request
+names (nested URLs in decoded query values to three levels) outside the quotes,
+JSON-quoted on one line; the roster's spans as evidence under a header that
+claims no trust, each capped at 80, neutralised and quoted; the user's latest
+message (its first 4 000 characters) and the block, every line prefixed `"> "`
+and each quote bounded by markers carrying a per-call nonce. A state over the
+decision box's byte budget is unavailable. At or above τe (0.3) on
+1 − P(`nothing_private`) the call is refused with the larger private label's
+text (a tie names personal); below it the call goes out, and a roster match is
+recorded as an `egress_audit` event (human-facing only: one fixed line with no
+payload in LLM-facing views, no server log). Each answer is a `decision_made` event keyed
+`guard.egress`, with no state text. A Decide failure is retried once within the
+one `timeoutMs` budget (5 000 ms), which aborts the request through
+`DecideInput.signal`; a timeout is not retried.
+
+With Decide unavailable (`'roster'` mode, a failure after the retry, a timeout,
+a state it cannot be asked over), the directory status the roster reports
+decides (D5): `loaded` vetoes on a roster match with the roster text; with Decide
+down, `loadedDecideDown: 'by-shape'` (default) refuses a call with a URL query or
+a block over 200 characters and leaves any other to the roster, `'ask'` refuses
+every one; `empty` and `none` veto on a match and refuse the rest; `unreadable`
+refuses. These refusals are where the design asks the person; until the prompts
+land they refuse, with nobody asked. An `empty` or `unreadable` directory, a
+damaged roster and a degraded turn (with its counts in `detail`) each record a
+`warning` with task `egress_check` and a fixed message.
+
+**The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default 0). A refusal on
+Decide's answer or for want of one is a tripwire and an `egress_refused` event:
+refusal N + 1 on a route closes that route until the user's next message, and
+every later outgoing call of the route is refused with no model call. A route is
+the run frame's `route` slot, which `decisionLoop` writes around each child from
+its route key; calls outside any route share one bucket. The counts, the closed
+routes and the turn-wide closure are derived from the turn's recorded
+`egress_refused` events (everything after the last `user_message`,
+`egressClosures`), so a pause and resume continue the same count. One route's
+checks run one at a time in arrival (batch) order, so a tripwire is seen by the
+next call of the same batch; calls that pass still run concurrently.
+
+A roster source that throws (a neutralised identity field) or a local result
+whose observation throws DAMAGES the gate: every later outgoing call is refused
+with the fixed damaged-roster text and the result is delivered, since the gate
+guards what leaves. The roster is built once per invocation from the context's
+tool results and extended from every LOCAL call's result through the hook,
+across routes.
 
 ### `withReferences(pattern, config)`
 
@@ -2021,7 +2097,11 @@ the removed `general` agent and the default agent is unchanged. Its `orchestrato
 `office-data` (guarded Microsoft 365 tools and an office sandbox),
 `info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
-route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
+route wraps `withReferences` in `withPseudonymisedInputs`; the whole loop is
+wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
+'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local:
+`neo4j`, `graph`, and the office box's
+in-VM tools by name while that box is booted `mcp-only`). The info route admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
 from references and expansions, and disables independent prior-turn results. Each guard declares its own options
 and none is inherited. The office and info route guards declare `spotlight: 'always'`
@@ -3699,7 +3779,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall — hitl is a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest replace), activeRunFrame() THROWS outside a frame, registerEffectiveTier()/effectiveTier() are the one tier rule's seam: the tier module (`@hames-ai/harness-baml`) registers the function that answers "which tier is this run on" and every guard-side reader asks it instead of the raw `inference.tier` string (core interprets no tier string; unregistered, `effectiveTier()` is `undefined`), resolveByTier() reads a `ByTier` setting on that tier, and currentRunFrame() is the soft read
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall / route — hitl is a frozen `{ attended }`; route is the `decisionLoop` route label the egress gate counts by), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest — route included — replace), activeRunFrame() THROWS outside a frame, registerEffectiveTier()/effectiveTier() are the one tier rule's seam: the tier module (`@hames-ai/harness-baml`) registers the function that answers "which tier is this run on" and every guard-side reader asks it instead of the raw `inference.tier` string (core interprets no tier string; unregistered, `effectiveTier()` is `undefined`), resolveByTier() reads a `ByTier` setting on that tier, and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
 ├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
@@ -3711,6 +3791,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding, the screen's config types (mode, gate, exempt, classify) and the shared fence neutraliser
 ├── guard-gate.server.ts    # The guard gate (boundary guards slice 3): createGuardGate(decide) asks GUARD_SCREEN (`guard.screen`, one noul) over the screen's head, quoted line by line between nonce-carrying markers; its deadline aborts the request through DecideInput.signal; guardGateSkipRate() reads its decision_made events
+├── egress-gate.server.ts   # The egress question (boundary guards slice 4): GUARD_EGRESS (`guard.egress`, a choice), EGRESS_TEXTS, readOutgoing() (step 1's deterministic refusals), renderEgressState()
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — its COVERAGE unions and its options stay with the declaring guard, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards
@@ -3722,6 +3803,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── withInjectionGuard.server.ts # ALS wrapper attaching the injection guard; emits content_sanitized
+    ├── withEgressGate.server.ts # withEgressGate() — one check before every outgoing call: step 1, the egress question, the tripwire, the directory matrix; emits egress_audit / egress_refused
     ├── with-references.server.ts    # withReferences() — hands a pattern the relevant results of earlier turns
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE

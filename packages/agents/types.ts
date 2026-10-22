@@ -39,6 +39,7 @@ import type {
   RetrieverBackend,
   RetrieverData,
   PseudonymiseForWeb,
+  EgressRosterSource,
 } from '@hames-ai/harness-patterns'
 import type { OnToolResult } from '@hames-ai/harness-patterns/types'
 import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'
@@ -96,9 +97,17 @@ export interface SandboxAttach {
 export interface AgentDeps {
   /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
   graphFileIngest?: boolean
-  /** G14 web-route input/egress filter. Optional for Anthropic-only hosts;
-   *  absence fails closed in withPseudonymisedInputs on every other tier. */
+  /** G14 web-route input filter (K5). Optional for Anthropic-only hosts;
+   *  absence withholds earlier content in withPseudonymisedInputs on every
+   *  other tier. */
   pseudonymiseForWeb?: PseudonymiseForWeb
+  /**
+   * The egress gate's roster (boundary guards, slice 4): the directory status,
+   * the spans an outgoing request names, and its extension from local results.
+   * Absent: the gate runs with no directory (`'none'`), so its question still
+   * judges every call, and a call it cannot judge is refused.
+   */
+  egressRoster?: EgressRosterSource
   /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
   memory?: MemoryConfig
   /**

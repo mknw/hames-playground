@@ -342,7 +342,9 @@ describe('graph_files_shared', () => {
     const res = await runAppTool('graph_files_shared', { shared_by: 'Nobody Here' })
     const data = res.data as GraphSharedFilesResult
     expect(data.items).toEqual([])
-    expect(data.note).toMatch(/Nobody Here/)
+    // The sharer's name is the controller's text: it is not echoed.
+    expect(data.note).not.toMatch(/Nobody Here/)
+    expect(data.note).toMatch(/by the person named/)
     expect(data.note).toMatch(/graph_files_search/)
   })
 
@@ -413,7 +415,8 @@ describe('via filter', () => {
     const res = await runAppTool('graph_files_shared', { shared_by: 'Lidia', via: 'email' })
     const data = res.data as GraphSharedFilesResult
     expect(data.items).toEqual([])
-    expect(data.note).toMatch(/by "Lidia"/)
+    expect(data.note).toMatch(/by the person named/)
+    expect(data.note).not.toMatch(/Lidia/)
     expect(data.note).toMatch(/via email/)
     expect(data.note).toMatch(/graph_files_search/)
   })

@@ -9,7 +9,7 @@ here (base64 audio, keyed by `run_id`) for provenance + inline playback — stor
 only, not ingested.
 
 ```
-upload ─▶ store (RedisJSON) ─▶ chunk ─▶ embed (local/OpenRouter) ─▶ HNSW index
+upload ─▶ store (RedisJSON) ─▶ chunk ─▶ embed (local) ─▶ HNSW index
                                                                          │
 query ─────────────────────── embed query (same model) ────▶ KNN search ┘
 ```
@@ -70,7 +70,7 @@ contract as the upload route — see
 
 ## Session ownership
 
-`graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
+`graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, an embedder that is `local` or declared trusted). Turn-results materialisation stays disabled.
 
 Documents are keyed by `sessionId`, so each route resolves that session's owner
 and answers **404** unless it is the caller's — the same response an unknown
@@ -180,7 +180,7 @@ Default `{ maxChars: 1000, overlap: 200, strategy: 'paragraph' }`. `chunkDocumen
 Vectors are only comparable within one model, so there is **no silent cross-provider fallback**. The provider is a deliberate choice:
 
 - **`local`** (dev default) — `llama-server --embedding` on `:8090` (Qwen3-Embedding-0.6B, 1024-dim), OpenAI-compatible `/v1/embeddings`. In the container stack the same server is the compose `embedder` service (internal network only, `EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1`; [`DOCKER_COMPOSE.md`](DOCKER_COMPOSE.md)); #419 memory embeds through it too.
-- **`openrouter`** — selectable; requires `OPENROUTER_API_KEY`.
+- **`openrouter`** — implemented, and refused at boot in this app (boundary guards, ruling W): the retriever's query reaches the embedder without the egress gate, so boot accepts only `local` or a provider declared trusted in code (`TRUSTED_EMBEDDING_PROVIDERS`, `@hames-ai/harness-patterns/stash/embeddings.server`). `openrouter` is not declared trusted; an env var cannot declare one.
 
 `embed()` returns vectors tagged with `{provider, model, dimensions}`; `assertSameSpace()` enforces comparability. The space is baked into the index name and key prefix, and re-ingesting a session under a different model **throws** (override with `allowSpaceChange`). Env: `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_LOCAL_URL`, `EMBEDDINGS_LOCAL_MODEL`.
 

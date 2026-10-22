@@ -660,7 +660,8 @@ export function closeCutFences(text: string): string {
 // ============================================================================
 
 /** See {@link neutralizeFenceMarkers}. */
-const FENCE_MARKER_RE = /(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi
+const FENCE_MARKER_RE =
+  /\b(?:BEGIN|END)\s{1,4}(?:UNTRUSTED\s{1,4})?CONTENT(?:\s{1,4}UNDER\s{1,4}REVIEW)?\b/gi
 
 /**
  * Neutralize the review fences' marker words in text about to be quoted between
@@ -673,25 +674,27 @@ const FENCE_MARKER_RE = /(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/
  * markers (`---BEGIN/END … CONTENT UNDER REVIEW---`) that have no such
  * protection. Without this, a page could close the fence and address the
  * reviewing model directly — the hole `sentinel-escape` exists to close, one
- * layer up. It catches plain spellings only, so it is defence in depth: what
- * quoted text cannot forge is a per-call nonce on the markers, which the gate's
- * state carries (`guard-gate.server.ts`).
+ * layer up. It catches plain spellings only (an underscored, hyphenated or
+ * homoglyph marker passes it), so it is defence in depth: what quoted text
+ * cannot forge is a per-call nonce on the markers, which the gate's and the
+ * egress question's states carry.
+ *
+ * It replaces the MARKER WORDS and nothing else: both forms, old
+ * (`BEGIN|END UNTRUSTED CONTENT`) and new (`BEGIN|END CONTENT UNDER REVIEW`),
+ * with or without `UNTRUSTED`, become `[fence]`, and the text after a marker is
+ * kept, so a forged marker hides nothing from the judge that the controller or
+ * the outgoing request still carries. The word boundaries keep it out of
+ * ordinary words (`frontend content`, `weekend content`). The cost: an ordinary
+ * standalone "end content" reads as `[fence]` to the judge, and nothing after it
+ * is lost.
  *
  * Anchored on the KEYWORD, not on a leading `-{2,}` run. The original
  * `-{2,}\s*(?:BEGIN|END)…` put two variable-length runs back to back, which is
- * quadratic: 100k hyphens measured 10s of synchronous CPU. Dropping the hyphen
- * run is also strictly STRONGER — the old pattern required at least two
- * hyphens, so `BEGIN UNTRUSTED CONTENT` with no decoration at all evaded it
- * while still reading as a fence to the reviewing model. A caller truncates
- * BEFORE calling this: only the quoted head reaches a prompt, so scanning the
- * rest buys nothing and hands an attacker a free CPU multiplier.
- *
- * A known cost until the boundary-guard slice that rewrites this regex: it hides
- * up to 40 characters after each old-form marker (`BEGIN|END UNTRUSTED CONTENT`)
- * from the screen and the gate, while the controller still reads them, so text
- * following a forged marker on the same line never reaches either judge. It
- * does not touch the gate's own marker form (`---END CONTENT UNDER REVIEW
- * <nonce>---`): the nonce and the `"> "` prefix hold that quote shut.
+ * quadratic: 100k hyphens measured 10s of synchronous CPU. Every run here is
+ * bounded (`\s{1,4}`) and every group optional by a fixed word, so the scan is
+ * linear. A caller truncates BEFORE calling this: only the quoted head reaches a
+ * prompt, so scanning the rest buys nothing and hands an attacker a free CPU
+ * multiplier.
  */
 export function neutralizeFenceMarkers(text: string): string {
   return text.replace(FENCE_MARKER_RE, '[fence]')

@@ -46,6 +46,7 @@
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { query } from './client.server'
+import { USER_FACING } from '../server-fn-errors/wire-error'
 import {
   DataDecryptionError,
   MissingDataEncryptionKeyError,
@@ -83,6 +84,7 @@ export interface CreateSkillInput {
 
 /** A create that broke a rule the repository owns. Its message is for the user. */
 export class SkillRejectedError extends Error {
+  readonly [USER_FACING] = true
   constructor(message: string) {
     super(message)
     this.name = 'SkillRejectedError'

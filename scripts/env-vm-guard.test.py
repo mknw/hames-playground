@@ -1004,6 +1004,9 @@ class Harness(unittest.TestCase):
         for i in self.host.instances:
             i["status"] = "Running"
 
+    def drop_bridges(self):
+        self.host.bridges = {k: v for k, v in self.host.bridges.items() if not k.startswith("envvm-")}
+
     def writes(self):
         return [c for c in self.host.calls if c[:3] == ["nft", "-f", "-"] or c[:2] == ["nft", "delete"]
                 or c[:2] == ["nft", "flush"]]
@@ -1461,7 +1464,7 @@ class DeadMan(Harness):
         self.assertEqual(guard.applied(self.entries()), json.loads(first))
         self.assertEqual(self.guard_model(), guard.expected(json.loads(first)))
         guard.INSTALLED_CONFIG.write_text(first)  # the operator re-plans
-        self.host.bridges = {k: v for k, v in self.host.bridges.items() if not k.startswith("envvm-")}
+        self.drop_bridges()
         self.assertEqual(self.invoke("--remove"), 0, self.err)
         self.assertNotIn(("inet", guard.TABLE), self.host.tables)
 
@@ -1519,6 +1522,10 @@ class Persistence(Harness):
         self.assertEqual(self.invoke("--remove"), 1, "removal under a running VM would widen access")
         self.assertIn(("inet", guard.TABLE), self.host.tables)
         self.stop_vms()
+        self.assertEqual(self.invoke("--remove"), 1, "a stopped VM's bridge would outlive the guard")
+        self.assertIn("bridge exists", self.err)
+        self.assertIn(("inet", guard.TABLE), self.host.tables)
+        self.drop_bridges()
         self.assertEqual(self.invoke("--remove"), 0, self.err)
         self.assertNotIn(("inet", guard.TABLE), self.host.tables)
         for path in (guard.UNIT, guard.INSTALLED_SCRIPT, guard.INSTALLED_CONFIG, guard.CONFIG_DIR):
@@ -1531,6 +1538,7 @@ class Persistence(Harness):
     def test_removal_refuses_edited_files_and_a_drifted_table(self):
         self.ready()
         self.stop_vms()
+        self.drop_bridges()
         guard.UNIT.write_text(guard.service_unit() + "# operator edit\n")
         self.host.calls.clear()
         self.assertEqual(self.invoke("--remove"), 1)
@@ -1586,6 +1594,7 @@ class Persistence(Harness):
             self.assertEqual(self.invoke("--persist"), 1)
         self.assertTrue(guard.UNIT.exists())
         self.stop_vms()
+        self.drop_bridges()
         self.assertEqual(self.invoke("--remove"), 0, self.err)
         self.assertFalse(guard.UNIT.exists(), "a published file the journal does not know survives undo")
 
@@ -1605,6 +1614,7 @@ class Persistence(Harness):
         self.assertFalse(guard.UNIT.exists())
         self.assertFalse(self.host.units[guard.UNIT.name])
         self.stop_vms()
+        self.drop_bridges()
         self.assertEqual(self.invoke("--remove"), 0, self.err)
 
 
@@ -2066,7 +2076,8 @@ MUTATIONS = {
     "deadman-timer-runs-the-checkout": ('"-I", str(INSTALLED_SCRIPT),\n         "--deadman-restore"', '"-I", str(Path(__file__)),\n         "--deadman-restore"'),
     "deadman-any-length": ("    if args.deadman is not None and not 60 <= args.deadman <= 3600:", "    if False:"),
     # §11.1 bullet 7: a removal while a VM runs, or of an edited file.
-    "remove-under-running-vm": ('    require(not attached(), "an environment VM is running; removal refused")', "    pass"),
+    # O8: and while a bridge exists, which a running VM's tap needs, so this is also the running-VM pin.
+    "O8-remove-with-bridge": ('    require(not any(str(link.get("ifname", "")).startswith("envvm-") for link in document("ip", "-j", "link", "show")),', "    require(True,"),
     "remove-edited-file": ('            require(not path.is_symlink() and (not path.exists() or path.read_text() == e["content"]),\n                    "guard file changed; undo refused")', "            pass"),
     "remove-drifted-table": ('    require(document_ is None or not drifted, "live table differs from its journaled render; undo refused")', "    pass"),
     "remove-disable-now": ('    while entries:\n        e = entries[-1]\n        if e["kind"] == "enable":\n            run(["systemctl", "disable", e["unit"]])',

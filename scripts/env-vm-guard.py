@@ -671,8 +671,11 @@ def restore(entries, ident):
 
 def remove(entries):
     require(armed(entries) is None, "a dead-man is armed; confirm it first")
-    # The one undo that would widen access: never under a running guest.
-    require(not attached(), "an environment VM is running; removal refused")
+    # The one undo that would widen access: never while an environment bridge
+    # exists, which a running guest needs and a stopped one would start on
+    # unguarded (the rollback order: no bridge outlives the guard).
+    require(not any(str(link.get("ifname", "")).startswith("envvm-") for link in document("ip", "-j", "link", "show")),
+            "an environment bridge exists; stop its VM and delete it first; removal refused")
     for e in entries:
         if e["kind"] == "file":
             path = Path(e["path"])

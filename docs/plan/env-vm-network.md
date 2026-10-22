@@ -415,8 +415,10 @@ only the configured ones: every safety check lists them all.
 - **Exact undo.** `--remove` reverses only journaled entries, newest first. The table is deleted
   only if its live content equals the journaled render, the unit is disabled only if this installer
   enabled it, and files are removed only if they are byte-identical to what it wrote. It **refuses
-  while any environment VM is running**: removing the guard under a running guest is the one undo
-  that would widen access. The manual equivalent from a console, in this order: stop the VM,
+  while any `envvm-*` bridge exists**, so also while any environment VM is running: removing the
+  guard under a running guest is the one undo that would widen access, and a stopped VM's bridge
+  would let its next start run unguarded. The rollback order ([§7](#7-operator-runbook)) deletes
+  the bridge first. The manual equivalent from a console, in this order: stop the VM,
   disable the unit, `nft delete table inet env_vm_guard`. Never `nft flush ruleset`, and never
   restore a saved full ruleset.
 - **Dead-man switch.** An operator change runs `--apply --deadman 600`, or

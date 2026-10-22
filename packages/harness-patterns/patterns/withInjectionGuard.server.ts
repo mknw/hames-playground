@@ -202,31 +202,46 @@ export function createInjectionGuard(
    * Only `'off'` and `'gated'` can skip the screen, each by its exact value. The
    * declaration is read on every call, so a value construction never saw (a cast,
    * a later write) fails safe: anything else runs the screen, as `'shadow'` does.
+   *
+   * A gate whose answer is not obeyed is not waited for: its call is returned
+   * as `shadowGate`, to run beside the screen and be awaited after it, so a
+   * `'shadow'` result costs the slower of the two calls rather than their sum,
+   * and the gate's decision is still recorded inside this scope. It never
+   * rejects.
    */
   const shouldScreen = async (
     screen: InjectionScreenConfig,
     p: { tool: string; namespace: string; data: unknown; report: SanitizeReport },
-  ): Promise<boolean> => {
-    if (screen.exempt?.includes(p.namespace)) return false
+  ): Promise<{ run: boolean; shadowGate?: Promise<void> }> => {
+    if (screen.exempt?.includes(p.namespace)) return { run: false }
     const mode = resolveByTier(screen.mode ?? (screen.gate ? 'shadow' : 'always'))
-    if (mode === 'off') return false
-    if (p.report.findings.length > 0) return true
-    if (classifyIngress(screen.classify, p) === 'internal') return false
-    if (mode === 'always' || !screen.gate) return true
-    let run = true
-    try {
-      const verdict = await screen.gate({
+    if (mode === 'off') return { run: false }
+    if (p.report.findings.length > 0) return { run: true }
+    if (classifyIngress(screen.classify, p) === 'internal') return { run: false }
+    const gate = screen.gate
+    if (mode === 'always' || !gate) return { run: true }
+    const asked = (async () =>
+      gate({
         tool: p.tool,
         namespace: p.namespace,
         content: typeof p.data === 'string' ? p.data : (JSON.stringify(p.data) ?? ''),
         ...(mode !== 'gated' && { shadow: true }),
         onDecision: recordGateDecision,
-      })
-      run = verdict.run
-    } catch {
-      run = true
+      }))()
+    if (mode !== 'gated') {
+      return {
+        run: true,
+        shadowGate: asked.then(
+          () => undefined,
+          () => undefined,
+        ),
+      }
     }
-    return mode !== 'gated' || run
+    try {
+      return { run: (await asked).run }
+    } catch {
+      return { run: true }
+    }
   }
 
   return {
@@ -249,7 +264,10 @@ export function createInjectionGuard(
       // original spans. A screen outage is recorded on the report; the
       // declaration's `onUnavailable` decides whether the payload stands.
       const screen = overrides?.screen === false ? undefined : options.screen
-      if (screen && (await shouldScreen(screen, { tool, namespace, data, report }))) {
+      const decided = screen
+        ? await shouldScreen(screen, { tool, namespace, data, report })
+        : { run: false }
+      if (screen && decided.run) {
         const screenInput = report.findings.length > 0 ? out : data
         try {
           const verdict = await screen.run({
@@ -299,6 +317,9 @@ export function createInjectionGuard(
           }
         }
       }
+      // A shadow gate ran beside the screen; its decision lands before this
+      // result is returned.
+      await decided.shadowGate
 
       if (report.findings.length === 0) {
         // Nothing was DETECTED. `out` may still differ from `data` — a bare

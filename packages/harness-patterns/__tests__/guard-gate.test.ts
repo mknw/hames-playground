@@ -16,7 +16,7 @@ import {
   guardGateSkipRate,
   renderGuardGateState,
 } from '../guard-gate.server'
-import { SCREEN_WITHHELD, type InjectionScreenConfig } from '../injection-guard'
+import { SCREEN_WITHHELD, type GuardGate, type InjectionScreenConfig } from '../injection-guard'
 import { createInjectionGuard } from '../patterns/withInjectionGuard.server'
 import { registerEffectiveTier, resolveByTier, withRunFrame } from '../run-frame.server'
 import type { ContextEvent, DecideFn, DecisionMadeEventData, LLMCallRecord } from '../types'
@@ -165,6 +165,50 @@ describe("mode 'shadow'", () => {
     const [decision] = decisions(events)
     expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
     expect((decision.data as DecisionMadeEventData).pTrue).toBeCloseTo(0.01)
+  })
+})
+
+describe("mode 'shadow': the gate runs beside the screen", () => {
+  // MUTATION: await the gate before returning from `shouldScreen` in 'shadow'
+  // (`return { run: (await asked).run || true }`): the screen waits for the gate.
+  it('the screen is called before the gate settles, and the decision is recorded before the result returns', async () => {
+    const events: ContextEvent[] = []
+    let release!: (verdict: { run: boolean; pTrue: number; why: 'gate' }) => void
+    const gate = vi.fn<GuardGate>(
+      ({ onDecision }) =>
+        new Promise((resolve) => {
+          release = (verdict) => {
+            onDecision?.(
+              { key: 'guard.screen', abstained: false, pTrue: verdict.pTrue } as never,
+              undefined,
+            )
+            resolve(verdict)
+          }
+        }),
+    )
+    const run = vi.fn(async () => verdictClean)
+    const pending = guardWith({ run, mode: 'shadow', gate }, events).sanitize('fetch_page', CLEAN)
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1))
+    expect(gate).toHaveBeenCalledTimes(1)
+    let settled = false
+    void pending.then(() => (settled = true))
+    await new Promise((r) => setTimeout(r, 5))
+    expect(settled).toBe(false)
+    release({ run: false, pTrue: 0.01, why: 'gate' })
+    await pending
+    expect(decisions(events)).toHaveLength(1)
+  })
+
+  // MUTATION: drop the rejection handler from `shadowGate`: the gate's
+  // rejection fails the result it never had a say in.
+  it('a shadow gate that throws changes nothing', async () => {
+    const run = vi.fn(async () => verdictClean)
+    const gate: GuardGate = async () => {
+      throw new Error('custom gate down')
+    }
+    const { data } = await guardWith({ run, mode: 'shadow', gate }).sanitize('fetch_page', CLEAN)
+    expect(data).toBe(CLEAN)
+    expect(run).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -1122,7 +1122,10 @@ it (SA-M5). Whether it runs on a payload is decided in this order:
    a throw, or any other answer, is external, and with no classifier every
    payload is;
 5. `'always'`: always. `'shadow'`: the gate is asked and its answer recorded, and
-   the screen runs whatever it said. `'gated'`: the gate decides, and a gate that
+   the screen runs whatever it said, beside the gate rather than after it (the
+   result waits for the slower of the two, and the gate's decision is recorded
+   before it returns; a shadow gate that throws changes nothing). `'gated'`: the
+   gate decides, and a gate that
    throws, times out or answers nothing usable runs the screen (the safe
    direction).
 

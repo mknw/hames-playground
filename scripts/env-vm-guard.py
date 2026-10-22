@@ -48,6 +48,15 @@ SMOKE_BOUND = 300
 CONNECT = 5
 QUIET = 5
 REPLY = ("established", "related")
+# Plan §2.2: the environment bridge's Incus settings.
+BRIDGE = {
+    "ipv4.nat": "false",
+    "ipv4.dhcp": "false",
+    "ipv6.address": "none",
+    "dns.mode": "none",
+    "ipv4.firewall": "false",
+    "ipv6.firewall": "false",
+}
 
 
 def service_unit():
@@ -743,6 +752,7 @@ def check(config, entries):
              if line.startswith("-A ")]
     instances = incus_instances()
     projects = {p["name"]: p for p in document("incus", "query", "/1.0/projects?recursion=1")}
+    managed = {n["name"]: n for n in document("incus", "query", "/1.0/networks?recursion=1&project=default")}
     on_bridge = {}
     for instance in instances:
         bridges = {nic_bridge(d) for d in instance["nics"].values()}
@@ -807,6 +817,21 @@ def check(config, entries):
                 member = container
             for accept in docker_accepts(link_bridge):
                 require(accept in rules, "Docker's forward accept for the link bridge is missing")
+        # The kernel's own ports: bridged frames never reach the inet hooks, so a
+        # second port on either bridge talks at layer 2 past the table, or holds
+        # the pinned address, whatever Incus and Docker list.
+        ports = {bridge: [link for link in links if link.get("master") == bridge] for bridge in (vm_bridge, link_bridge)}
+        require(len(ports[vm_bridge]) <= 1, "a second port on an environment bridge")
+        require(not ports[vm_bridge] or (vm is not None and vm["status"] == "Running"),
+                "a port on an environment bridge whose VM does not run")
+        require(len(ports[link_bridge]) <= 1, "a second port on a link bridge")
+        require(not ports[link_bridge] or member is not None, "a port on a link bridge that is not its Docker member")
+        if any(link.get("ifname") == vm_bridge for link in links):
+            require(vm_bridge in managed, "an environment bridge Incus does not manage")
+            settings = managed[vm_bridge].get("config") or {}
+            require(not settings.get("bridge.external_interfaces"), "an environment bridge has an external interface")
+            require(all(settings.get(key) == value for key, value in BRIDGE.items()),
+                    "the environment bridge's Incus settings differ from plan section 2.2")
         facts[name] = {"vm": vm, "member": member, "network": link_bridge in networks,
                        "running": any(link.get("master") == vm_bridge for link in links),
                        "gateway": own[vm_bridge], "link": own[link_bridge], "entry_point": entry_point}

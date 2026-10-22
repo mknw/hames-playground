@@ -478,7 +478,12 @@ refuses unless they equal `envvm-<environment>` and the rendered VM address. The
 carry `restricted=true`, without which Incus ignores every `restricted.*` key, with
 `restricted.devices.nic=managed` and `restricted.devices.proxy=block`, as the package sets them
 (`incus-environment.server.ts:498`, `:507`, `:515`): otherwise the environment's credential could
-add a NIC on another network after the check. It also refuses any
+add a NIC on another network after the check. Bridged frames never reach the `inet` hooks, so it
+reads the kernel's own bridge ports (`ip -j link`), not only what Incus and Docker list: an
+`envvm-<environment>` bridge has at most one port, and only while its VM runs, and an
+`envapp-<environment>` bridge at most one, its Docker member's. Once the environment bridge
+exists, Incus must manage it with the settings of [§2.2](#22-the-environment-bridge-incus) and no
+`bridge.external_interfaces`. It also refuses any
 instance in a `sandbox-*` project whose NIC is not on an `envvm-*` bridge, and a guard config that
 differs from the entry point's config (the file W8 names) in environment, bridge or address. The
 entry point accepts any bridge name (`incus-environment.server.ts:264`; its README's example is
@@ -635,7 +640,7 @@ Each step is exact and refuses on state it does not own.
 | After a reboot, the guard unit failed, the Incus daemon did not start, the environment VMs are stopped and the previous table is back | a dead-man was armed and unconfirmed when the host went down, so the boot `--apply` ran the restore and exited non-zero                        | As for a fired dead-man. Start the Incus daemon only after re-planning.                                                                                                           |
 | SSH lost after a change                                                                                                               | should be impossible: no rule matches the public interface                                                                                     | Wait for the dead-man, at most 10 minutes. If it did not fire, from the console: stop the VMs, disable the unit, `nft delete table inet env_vm_guard`.                            |
 | A writer refuses: lock held, or a dead-man armed                                                                                      | another run is in progress, or a change awaits its confirmation                                                                                | Wait for it, confirm it from a new login session, or resolve it from the console. Never delete the lock or the journal.                                                           |
-| `--check` refuses: a second instance on a bridge, another member on the link network, an address drift                                | a manual attachment or a Compose edit                                                                                                          | Detach or revert. The validator and `check-vps.py --clones` should have refused it first, so find out why they did not.                                                           |
+| `--check` refuses: a second instance or port on a bridge, another member on the link network, an address drift                        | a manual attachment or a Compose edit                                                                                                          | Detach or revert. The validator and `check-vps.py --clones` should have refused it first, so find out why they did not.                                                           |
 
 ## 9. What the plan relies on and the window verifies
 

@@ -39,6 +39,9 @@ PRIMARY = "203.0.113.5"
 APP_NET = "synthetic_app-network"
 APP_BRIDGE = "br-0123456789ab"
 METADATA_ADDRESS = "169.254.169.254"
+# Plan §2.2, written out here so that the installer's own copy is what is tested.
+BRIDGE_SETTINGS = {"ipv4.nat": "false", "ipv4.dhcp": "false", "ipv6.address": "none", "dns.mode": "none",
+                   "ipv4.firewall": "false", "ipv6.firewall": "false"}
 
 
 # ------------------------------------------------- independent nft model
@@ -536,9 +539,12 @@ class Host:
         self.trace_ids = iter(range(0x1000, 0x10000000))
         self.bridges = {"envvm-dev": "198.51.100.1/29", "envapp-dev": "192.0.2.1/29",
                         APP_BRIDGE: "192.0.2.65/26", "eth0": PRIMARY + "/24"}
+        self.incus_networks = [{"name": "incusbr0", "config": {"ipv4.nat": "true"}},
+                               {"name": "envvm-dev", "config": dict(BRIDGE_SETTINGS)}]
         if two:
             self.bridges.update({"envvm-rel": "198.51.100.17/29", "envapp-rel": "192.0.2.9/29"})
-        self.extra_routes = []
+            self.incus_networks.append({"name": "envvm-rel", "config": dict(BRIDGE_SETTINGS)})
+        self.extra_routes, self.extra_links = [], []
         self.link_local = {"envvm-dev": "fe80::1"}
         self.units = {guard.UNIT.name: False}
         self.managers = {"nftables.service": ("disabled", "inactive"), "firewalld.service": ("", "inactive")}
@@ -586,6 +592,7 @@ class Host:
         self.flushes = 0
 
     STATEFUL = ("tables", "instances", "projects", "networks", "containers", "bridges", "extra_routes", "units",
+                "extra_links", "incus_networks",
                 "managers", "docker_rules_missing", "public_reachable", "link_local")
 
     def snapshot(self):
@@ -703,7 +710,10 @@ class Host:
         raise AssertionError("unexpected nft call: " + repr(args))
 
     def links(self):
-        result = [{"ifname": name} for name in self.bridges]
+        result = [{"ifname": name} for name in self.bridges] + copy.deepcopy(self.extra_links)
+        for name, network in self.networks.items():
+            if name.startswith("envapp-"):
+                result += [{"ifname": "veth" + ident[:7], "master": name} for ident in network["Containers"]]
         for i in self.instances:
             if i["status"] == "Running":
                 for device in i["expanded_devices"].values():
@@ -786,6 +796,8 @@ class Host:
             return self.instances
         if args[1:] == ["query", "/1.0/projects?recursion=1"]:
             return self.projects
+        if args[1:] == ["query", "/1.0/networks?recursion=1&project=default"]:
+            return self.incus_networks
         if args[1:3] == ["stop", "--force"]:
             self.test.assertEqual(args[3], "--project")
             instance = next(i for i in self.instances if i["project"] == args[4] and i["name"] == args[5])
@@ -1655,6 +1667,17 @@ class Check(Harness):
             "foreign-instance": lambda h: h.instances.__setitem__(0, {"project": "default", "name": "squat", "status": "Stopped",
                                                                       "expanded_devices": {"eth0": {"type": "nic", "network": "envvm-dev"}}}),
             "project-network-access": lambda h: h.projects[1]["config"].update(**{"restricted.networks.access": "envvm-dev,incusbr0"}),
+            "vm-bridge-second-port": lambda h: h.extra_links.append({"ifname": "dummy0", "master": "envvm-dev"}),
+            "vm-bridge-port-vm-stopped": lambda h: (h.instances[0].update(status="Stopped"),
+                                                    h.extra_links.append({"ifname": "dummy0", "master": "envvm-dev"})),
+            "link-bridge-foreign-port": lambda h: h.extra_links.append({"ifname": "dummy1", "master": "envapp-dev"}),
+            "link-bridge-second-port": lambda h: (h.networks["envapp-dev"]["Containers"].update(
+                {"a" * 64: {"IPv4Address": DEV["clientAddress"] + "/29"}}),
+                h.extra_links.append({"ifname": "dummy1", "master": "envapp-dev"})),
+            "bridge-unmanaged": lambda h: h.incus_networks.pop(1),
+            "bridge-external-interface": lambda h: h.incus_networks[1]["config"].update(
+                **{"bridge.external_interfaces": "eth1"}),
+            **{"bridge-" + key: (lambda k: lambda h: h.incus_networks[1]["config"].pop(k))(key) for key in BRIDGE_SETTINGS},
             "project-unrestricted": lambda h: h.projects[1]["config"].update(restricted="false"),
             "project-restriction-unset": lambda h: h.projects[1]["config"].pop("restricted"),
             "project-nic-any": lambda h: h.projects[1]["config"].update(**{"restricted.devices.nic": "allow"}),
@@ -1685,6 +1708,11 @@ class Check(Harness):
                 self.assertEqual(self.checked(), 1, name)
         self.host.restore(good)
         guard.DAEMON.unlink(missing_ok=True)
+        self.assertEqual(self.checked(), 0, self.err)
+
+    def test_the_real_member_is_the_link_bridges_one_port(self):
+        self.ready()
+        self.host.networks["envapp-dev"]["Containers"]["a" * 64] = {"IPv4Address": DEV["clientAddress"] + "/29"}
         self.assertEqual(self.checked(), 0, self.err)
 
     def test_guard_and_entry_point_configs_must_agree(self):
@@ -2216,6 +2244,16 @@ MUTATIONS = {
     "O6-dry-run-digest-unprinted": ('            print("# DRY RUN: render sha256 " + digest(config))', "            pass"),
     # O9: probe 4b enters the throwaway's namespace by Docker's own path for it.
     "O9-4b-any-namespace-path": ('    require(bool(re.fullmatch(r"/var/run/docker/netns/[A-Za-z0-9_-]+", key)),', "    require(True,"),
+    # O2: --check reads the kernel's bridge ports and the environment bridge's Incus settings.
+    "O2-vm-bridge-ports-uncounted": ('        require(len(ports[vm_bridge]) <= 1, "a second port on an environment bridge")', "        pass"),
+    "O2-vm-bridge-port-without-vm": ('        require(not ports[vm_bridge] or (vm is not None and vm["status"] == "Running"),', "        require(True,"),
+    "O2-link-bridge-ports-uncounted": ('        require(len(ports[link_bridge]) <= 1, "a second port on a link bridge")', "        pass"),
+    "O2-link-port-without-member": ('        require(not ports[link_bridge] or member is not None,', "        require(True,"),
+    "O2-bridge-unmanaged": ('            require(vm_bridge in managed, "an environment bridge Incus does not manage")\n            settings = managed[vm_bridge].get("config") or {}',
+                            '            settings = managed.get(vm_bridge, {"config": BRIDGE}).get("config") or {}'),
+    "O2-bridge-external-interfaces": ('            require(not settings.get("bridge.external_interfaces"),', "            require(True,"),
+    "O2-bridge-settings-unchecked": ("            require(all(settings.get(key) == value for key, value in BRIDGE.items()),", "            require(True,"),
+    **{"O2-bridge-" + key: ('    "%s": "%s",\n' % (key, value), "") for key, value in guard.BRIDGE.items()},
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

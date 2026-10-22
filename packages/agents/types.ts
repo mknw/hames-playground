@@ -50,7 +50,7 @@ import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
  */
 export interface GraphElement extends ElementDefinition {
   /** Source of this graph element (for filtering by tab) */
-  source?: 'neo4j' | 'memory' | 'unknown'
+  source?: 'neo4j' | 'unknown'
 }
 
 // ============================================================================

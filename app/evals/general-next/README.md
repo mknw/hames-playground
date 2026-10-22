@@ -117,7 +117,7 @@ Every result row carries a `screen` block beside `spend`: the injection screen
 (`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
 screen's share of each. Each guard declares its own options and none is inherited: the
 office and info route guards carry the screen, so it covers their tool results (mail, files,
-sandbox results, web, library docs, graph and memory reads); the documents route's guard
+sandbox results, web, library docs and graph reads); the documents route's guard
 declares none, so retrieved hits are never screened. The loop itself sanitises and screens
 nothing: a route record is built from committed events and capped, and a quoted tool body
 (an `actorCritic` result, a retriever excerpt) carries the fence it arrived in, so no call

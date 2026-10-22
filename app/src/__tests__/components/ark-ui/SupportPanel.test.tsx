@@ -3,7 +3,7 @@
  * controls bar (sync freeze / clear).
  *
  * The panel's own logic is: which tab is showing, which `graphElements` reach
- * which tab (`source === 'memory'` vs neo4j-or-unset), and the freeze/thaw
+ * which tab (neo4j-or-unset), and the freeze/thaw
  * behaviour of `GraphTabContent`'s Sync toggle. `Tabs.Root` runs with
  * `lazyMount` + `unmountOnExit`, so a tab's child only exists while selected —
  * the tests lean on that to prove routing rather than inspecting internals.
@@ -174,7 +174,7 @@ describe('SupportPanel — tab routing', () => {
 
 describe('SupportPanel — per-source graph split', () => {
   it('sends unsourced and neo4j elements to the Neo4j tab only', async () => {
-    const elements = [node('a'), node('b', 'neo4j'), node('m', 'memory')]
+    const elements = [node('a'), node('b', 'neo4j')]
     const { container } = render(() => <SupportPanel graphElements={elements} />)
 
     await clickTab(container, 'Neo4j')
@@ -184,7 +184,7 @@ describe('SupportPanel — per-source graph split', () => {
   })
 
   it('opens the personal Memory panel in place of the retired MCP graph', async () => {
-    const { container } = render(() => <SupportPanel graphElements={[node('m', 'memory')]} />)
+    const { container } = render(() => <SupportPanel graphElements={[]} />)
     await clickTab(container, 'Memory')
     expect(container.querySelector('[data-testid="memory-panel"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="graph-viz"]')).toBeNull()

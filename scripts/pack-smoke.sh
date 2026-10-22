@@ -309,7 +309,7 @@ const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/agents/', import.
 //    the agent-surface types resolve through it
 const root = await import('@hames-ai/agents')
 for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeElement',
-  'isNodeElement', 'isNeo4jGraphResult', 'isMemoryGraphResult', 'extractReferences',
+  'isNodeElement', 'isNeo4jGraphResult', 'extractReferences',
   'referencesForDoc', 'errorBubble', 'replayMessages']) {
   assert.equal(typeof (root as Record<string, unknown>)[fn], 'function', `${fn} missing from the root barrel`)
 }

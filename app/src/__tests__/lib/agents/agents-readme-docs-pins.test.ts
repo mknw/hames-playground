@@ -128,7 +128,6 @@ describe('the @hames-ai/agents README compiles (guide-docs pin)', () => {
       'isEdgeElement',
       'isNodeElement',
       'isNeo4jGraphResult',
-      'isMemoryGraphResult',
       'extractReferences',
       'referencesForDoc',
       'errorBubble',

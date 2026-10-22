@@ -185,8 +185,8 @@ const READ_ONLY_VERBS = new Set([
 ])
 
 /**
- * Whole tool names that are reads but do not start with a read verb. Redis and
- * the memory graph account for all of them; anything not listed (and not
+ * Whole tool names that are reads but do not start with a read verb. Redis
+ * accounts for all of them; anything not listed (and not
  * verb-prefixed) is treated as potentially mutating.
  *
  * Note what is NOT here: `lpop`/`rpop` (they REMOVE the element they return),
@@ -223,9 +223,6 @@ const READ_ONLY_TOOLS = new Set([
   'scan_keys',
   'scan_all_keys',
   'json_get',
-  // Memory knowledge-graph reads
-  'open_nodes',
-  'read_graph',
 ])
 
 /**

@@ -1282,7 +1282,7 @@ never replace. `callTool` runs every check before any transport and any denial
 returns `{ success: false, data: null, error }`, a recoverable tool failure,
 not a turn error. A throwing check denies with fixed feedback without exposing
 its exception. The wrapper checks every call except the explicitly local
-`neo4j` and `memory` namespaces (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
+`neo4j` namespace (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
 namespace registration. In the same amendment, an `afterToolCall` hook extends
 the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
 It never rewrites those results. An extension failure withholds that result,
@@ -1475,7 +1475,7 @@ interface PlannerConfig extends PatternConfig {
 
 **Why.** A `simpleLoop` controller re-derives its high-level approach on every
 turn. With a diverse tool surface (`tools.all` spanning `neo4j-cypher` +
-`memory` + `web_search` + `context7`) that re-derivation is both the
+`redis` + `web_search` + `context7`) that re-derivation is both the
 expensive part of the prompt and the part most prone to greedy, locally
 coherent sequences ("search the web again" when turn 1 already pulled the
 docs). The planner pays for strategy once.

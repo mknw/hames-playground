@@ -497,14 +497,14 @@ Each agent's source is in
 The root entry point (`import from '@hames-ai/agents'`) is **browser-safe** —
 front-end code can import it without pulling in anything server-side:
 
-| Export                                                                        | What it is                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `extractGraphElements`, `extractGraphFromResult`                              | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
-| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`, `isMemoryGraphResult` | shape guards over extracted elements                            |
-| `extractReferences`, `referencesForDoc`                                       | retriever citations out of the event stream                     |
-| `errorBubble`, `warningBubble`, `replayMessages`, `ReplayedMessage`           | serialized context → minimal chat transcript                    |
-| `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
-| `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
+| Export                                                              | What it is                                                      |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `extractGraphElements`, `extractGraphFromResult`                    | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
+| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`              | shape guards over extracted elements                            |
+| `extractReferences`, `referencesForDoc`                             | retriever citations out of the event stream                     |
+| `errorBubble`, `warningBubble`, `replayMessages`, `ReplayedMessage` | serialized context → minimal chat transcript                    |
+| `GraphElement`, `OpenReferenceTarget`                               | the shared data types                                           |
+| `AgentDefinition`, `AgentData`, `AgentDeps`                         | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
 **server-only** — six registered agents plus three shared helpers

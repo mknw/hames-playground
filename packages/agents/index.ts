@@ -12,7 +12,6 @@ export {
   isEdgeElement,
   isNodeElement,
   isNeo4jGraphResult,
-  isMemoryGraphResult,
 } from './graph-extractor'
 export {
   extractReferences,

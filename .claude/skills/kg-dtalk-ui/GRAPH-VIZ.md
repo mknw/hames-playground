@@ -7,7 +7,7 @@
 
 # Network graphs (Cytoscape.js)
 
-Applies to `GraphVisualization.tsx`, the Neo4j / Memory tabs inside
+Applies to `GraphVisualization.tsx`, the Neo4j tab inside
 `SupportPanel`, and anything else that renders nodes and edges.
 
 Upstream classifies network graphs as **accessibility risk: high**. That is the

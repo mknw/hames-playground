@@ -19,7 +19,6 @@ const FIXTURES: Record<string, unknown> = {
   fetch: 'Lantern version 2 adds CSV export.',
   'resolve-library-id': { libraryId: '/solidjs/solid' },
   'get-library-docs': 'const [count, setCount] = createSignal(0)',
-  search_nodes: [{ name: 'Lantern', release: 'LANTERN-2' }],
   graph_mail_recent: [
     {
       id: 'mail-lantern-1',
@@ -36,7 +35,6 @@ const NAMESPACES: Record<string, string> = {
   fetch: 'web',
   'resolve-library-id': 'context7',
   'get-library-docs': 'context7',
-  search_nodes: 'memory',
   graph_mail_recent: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',

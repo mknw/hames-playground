@@ -32,11 +32,6 @@ import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
 
-/** Targeted read slice of the memory MCP namespace. Its create/add/delete tools
- *  stay withheld by name, and so does `read_graph`: the memory graph is shared by
- *  every user, and that call returns all of it in one result (S3b review F3). */
-const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes']
-
 // Synthetic office examples use the same JSON envelope as the actor's output
 // format. ActorMultiCalls supplies the mode-gated write-then-run batch beside
 // these single calls; completion belongs to the critic, so no example uses Return.
@@ -94,10 +89,8 @@ async function createPatterns(
     ...MICROSOFT_365_TOOLS,
     ...(deps.graphFileIngest === true ? ['graph_file_ingest'] : []),
   ].filter((name) => available.has(name))
-  const memoryAvailable = new Set(tools.memory ?? [])
-  const memoryReads = MEMORY_READ_TOOLS.filter((name) => memoryAvailable.has(name))
   const docTools = tools.context7 ?? []
-  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools, ...memoryReads]
+  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools]
   const office = deps.withSandbox({
     id: `${sessionId}:office`,
     sessionId,
@@ -158,14 +151,9 @@ async function createPatterns(
     screenDespiteFindings: true,
   }
   // The guard refuses a declared namespace that matches no catalog tool, so the
-  // two optional servers are declared only when the gateway offers them.
+  // optional server is declared only when the gateway offers it.
   const infoGuard = {
-    namespaces: [
-      'web',
-      'neo4j',
-      ...(docTools.length ? ['context7'] : []),
-      ...(memoryReads.length ? ['memory'] : []),
-    ],
+    namespaces: ['web', 'neo4j', ...(docTools.length ? ['context7'] : [])],
     catalog: tools.all,
     spotlight: 'always' as const,
     screen: createInjectionScreen(),
@@ -183,7 +171,7 @@ async function createPatterns(
                 'alongside the facts they support. Copy each source URL verbatim from the ' +
                 'tool results or from the url argument of a successful fetch; never invent or ' +
                 'construct a URL. If none of the sources you used has a URL (for example a ' +
-                'graph, memory or library-docs lookup), include no link. ' +
+                'graph or library-docs lookup), include no link. ' +
                 'Your Return is the source record used to write the final answer, so URLs ' +
                 'left only in tool calls will not reach that answer.',
             ),
@@ -250,9 +238,9 @@ async function createPatterns(
         'info-retrieval': {
           pattern: info,
           description:
-            'Look things up in the knowledge graph, on the web (including a file at a web address), in library docs and in the memory graph; it cannot open files uploaded to this conversation (that is read-documents)',
+            'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
           capability:
-            'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
+            'Read the knowledge graph; search or fetch public web sources and library documentation.',
           siblingResults: ['retriever'],
         },
         'read-documents': {
@@ -308,7 +296,6 @@ export const generalNextAgent: AgentDefinition = {
     'web_search',
     'fetch',
     'context7',
-    'memory (read-only)',
     'graph (app-side, per-user)',
     'office sandbox',
     'Data Stash',

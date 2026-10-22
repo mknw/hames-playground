@@ -205,14 +205,14 @@ failure policy and remaining literal-matching limits.
 Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
 `amendRunFrame`, innermost first: every check runs and any denial stops dispatch
 as a failed tool call, so an inner scope cannot switch off an outer check.
-Only the declared local `neo4j` and `memory` namespaces are exempt (`context7` is outbound and checked). A scoped `afterToolCall`
+Only the declared local `neo4j` namespace is exempt (`context7` is outbound and checked). A scoped `afterToolCall`
 hook extends outgoing literals from identities discovered by local reads;
 an update failure withholds the result and refuses further outgoing calls.
 
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
-lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
+lookups (plus `context7` library docs), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
 configuration withholds earlier content and refuses web calls. The loop itself
 sanitises and screens nothing: the office and info route guards declare the

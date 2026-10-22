@@ -126,7 +126,13 @@ function policy(
   tier: 'anthropic' | 'self_deployed',
   onPrivateCallStart?: (client: string) => void,
 ): void {
-  configureInferencePolicy({ defaultTier: () => tier, onPrivateCallStart })
+  // A self_deployed DEFAULT is reachability-checked on every read (the one tier
+  // rule), so the stand-in host says its tier is reachable.
+  configureInferencePolicy({
+    defaultTier: () => tier,
+    assertTierReachable: () => {},
+    onPrivateCallStart,
+  })
 }
 
 let restored: typeof process.env

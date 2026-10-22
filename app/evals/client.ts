@@ -71,9 +71,10 @@ import {
   type BamlRole,
 } from '@hames-ai/harness-baml/clients.server'
 // The composition root registers the harness client seam (tier policy, model
-// tables, cost rates). Without it the default tier is the seam's safe
-// package-side 'anthropic', so a run started with USE_SELF_DEPLOYED_INFERENCE=1 would
-// silently grade the Anthropic chains instead of the deployment it names.
+// tables, cost rates). Without it no host policy is registered, so
+// the default tier is the seam's package-side 'anthropic' and a run started with
+// USE_SELF_DEPLOYED_INFERENCE=1 would grade the Anthropic chains instead of the
+// deployment it names.
 import '../src/lib/inference/config.server'
 
 /** The roles this suite has scenarios for — every `BamlRole` since the planner

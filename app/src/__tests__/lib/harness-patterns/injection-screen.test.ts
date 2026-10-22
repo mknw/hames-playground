@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * `createInjectionScreen` — the BAML-backed `InjectionScreen` that is the
  * OPT-IN second layer of `withInjectionGuard`.
@@ -28,6 +28,8 @@ import '../../../lib/inference/config.server'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

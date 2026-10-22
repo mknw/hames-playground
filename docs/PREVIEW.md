@@ -561,10 +561,14 @@ For staging, **configure all five values** with the operator's private-tier
 endpoints and keys. A user who never chose starts on Private whenever the
 whole tier is configured, even with `USE_SELF_DEPLOYED_INFERENCE` unset; the first turn
 may pay a metered cold start. The conversation's own tier and the user's
-last-used tier take precedence. `USE_SELF_DEPLOYED_INFERENCE=1` also selects the
-private deployment default for runs without a conversation choice. A host
-that intentionally offers only Anthropic leaves all five values and the flag
-unset. These instructions change no tier default in code.
+last-used tier take precedence. A run that names no tier at all (a script, a
+job, an eval) is on the self-deployed tier by one rule that routing and the
+guards both read, and is refused where the tier is not configured; it is never
+routed to Anthropic. `USE_SELF_DEPLOYED_INFERENCE=1` is the boot-time switch
+only: it requires the tier to be configured when the server starts, and it no
+longer decides the tier of any run. A host that intentionally offers only
+Anthropic leaves all five values and the flag unset, and its runs name the
+Anthropic tier explicitly (every turn does).
 
 ```bash
 # Must print 5 for staging (0 only for an Anthropic-only host); any partial set
@@ -1694,8 +1698,8 @@ for these:
   `LARGE_LLM_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
   and `SMALL_LLM_API_KEY` — all five or none; staging configures all five.
   The two base URLs end in `/v1`; the full decisions URL ends in
-  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate deployment-default flag,
-  not a sixth required tier value.
+  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate boot-time switch (it
+  requires the tier to be configured), not a sixth required tier value.
 - `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
   line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
   address is not the one running the script.

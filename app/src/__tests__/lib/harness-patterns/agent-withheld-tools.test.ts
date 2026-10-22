@@ -24,6 +24,7 @@ import '../../../lib/inference/config.server'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { ControllerInput } from '@hames-ai/harness-patterns/types'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -105,6 +106,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.resetModules()
+  resetTierPolicy()
   vi.restoreAllMocks()
 })
 

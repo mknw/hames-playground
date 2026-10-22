@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../mocks/namespace-catalog'
-import '../../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../../mocks/flag-default-tier'
 import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
@@ -37,6 +37,8 @@ import type {
   ConversationScenario,
   ConversationTrace,
 } from '../../../../lib/eval-support/conversation'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('../../../../lib/org-graph/roster-source.server', () => ({ loadDirectoryRoster: vi.fn() }))
 

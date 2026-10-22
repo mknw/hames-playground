@@ -244,7 +244,8 @@ export async function runTurnAndPersist(
   //
   // Resolved here rather than at each entry point so both modes
   // (interactive, triggered) get it from one place, and a failure to
-  // read it falls back to the deployment default rather than failing the turn.
+  // read it falls back to the host's default tier — the self-deployed tier, which
+  // refuses the turn when it is not configured.
   //
   // Per conversation since the switch moved off the header: a turn's tier is
   // now a fact about the thread it belongs to, which is what lets an Anthropic

@@ -553,6 +553,7 @@ export {
   GUARD_GATE_THRESHOLD,
   GUARD_GATE_TIMEOUT_MS,
   GUARD_GATE_MAX_CHARS,
+  GUARD_GATE_MAX_STATE_BYTES,
   guardGateSkipRate,
   type GuardGateSettings,
 } from './guard-gate.server'

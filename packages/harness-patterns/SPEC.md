@@ -1156,18 +1156,25 @@ is the cheap question in front of the screen: ONE `noul` decision,
 `GUARD_SCREEN` (key `guard.screen`), asked through the same `DecideFn` seam the
 decision loop uses, over the same 20 000-character head the screen reads. The
 screen runs when its pTrue is at or above `threshold` (τi, default 0.15, an
-unmeasured placeholder). Its state quotes the head with every line prefixed
-`"> "` between markers carrying a per-call 16-hex nonce from the platform's
+unmeasured placeholder; on the self-deployed tier it must stay below 0.199, where
+the decision box floors an unsure "no"). Its state quotes the head with every line
+prefixed `"> "` (a line starts after CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028
+or U+2029) between markers carrying a per-call 16-hex nonce from the platform's
 cryptographic source, drawn again if the quoted text contains it, after the
 shared fence neutraliser (`neutralizeFenceMarkers`, the screen's own); text
-written before the call cannot know the nonce, so it cannot close the quote. The
+written before the call cannot know the nonce, so it cannot close the quote. A
+state over `maxStateBytes` (default 32 000 UTF-8 bytes, the decision box's state
+budget in tokens, which it would otherwise meet by dropping the middle) is refused
+before any request, so the gate is unavailable and the screen runs. The
 transport accepts only a probability, so a manipulated gate can at worst answer
 "skip"; it cannot emit text. Its deadline (`timeoutMs`, default 3 000) aborts the
 request itself through `DecideInput.signal`, not only the wait for it. Each answer
-is a `decision_made` event keyed `guard.screen`, `shadow: true` in `'shadow'`,
-carrying the state's size and never its text (the call record is redacted as the
-screen's is), so `guardGateSkipRate(events)` computes the skip rate from any run's
-events: a gate that is wrong rather than down is caught by measurement, never by
+is a `decision_made` event keyed `guard.screen`, `shadow: true` whenever the
+answer is not obeyed, carrying the state's size and never its text (the call record
+is redacted as the screen's is); an unavailable answer, a state it could not render
+included, is an abstained one. So `guardGateSkipRate(events)` computes the skip
+rate from any run's events (a custom gate that throws records nothing, so it is not
+counted): a gate that is wrong rather than down is caught by measurement, never by
 `onUnavailable`.
 
 **On detection: neutralize + annotate + emit, never silently drop.**

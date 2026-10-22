@@ -1379,23 +1379,35 @@ fixed `EGRESS_CHECK_FAILED`, never its exception). A call is egress unless it is
 declared local: a namespace in `local` (its arguments reach only systems that
 already hold the deployment's data; network locality is not the test) or an
 exact name in `localTools` (a name that is in `catalog` refuses the run).
-`local` and `fetchTools` are verified against `catalog` when the gate runs, like
-the injection guard's namespaces (#242 item 4). Every refusal text is one of
-`EGRESS_TEXTS`, none interpolated.
+`local`, `fetchTools` and `addressSources` are verified against `catalog` when
+the gate runs, like the injection guard's namespaces (#242 item 4); `fetchTools`
+without `addressSources` refuses construction. Every refusal text is one of
+`EGRESS_TEXTS`, none interpolated. The state's nonce source is not a config
+field: `setEgressNonceSourceForTests` fixes it under the test runner only.
 
 Per outgoing call, in this order: a turn closed by "Refuse all similar
 actions", this route closed by its tripwire, or a damaged roster refuses with a
 fixed text and no model call. Then step 1, deterministic and never a tripwire
 (`readOutgoing`): every string leaf and key of the arguments is percent-decoded
-(undecodable refuses), checked for a Unicode format character (`\p{Cf}`
-refuses: zero-width, soft hyphen, bidi controls; the cost is that a script
-needing a zero-width non-joiner is refused), NFKC-normalised, checked for a
+(undecodable refuses), checked for a Unicode format or default-ignorable
+character (`\p{Cf}` or `\p{Default_Ignorable_Code_Point}` refuses: zero-width,
+soft hyphen, bidi controls, variation selectors, Hangul fillers; the cost is
+that a script needing a zero-width non-joiner, or an emoji with a presentation
+selector, is refused), NFKC-normalised, checked for a
 `PERSON_n` placeholder, and the decoded block (one `<key path>: <leaf>` line per
-leaf) is refused over `EGRESS_MAX_BLOCK_CHARS` (2 048), never truncated. A tool in
-`fetchTools` must carry only addresses that appear verbatim in the user's latest
-message or in a tool result the run has seen (O21). Then the host roster
-(`roster: EgressRosterSource`) matches the normalised leaves and returns its
-spans as the request wrote them.
+leaf) is refused over `EGRESS_MAX_BLOCK_CHARS` (2 048), never truncated. In a
+tool in `fetchTools`, every string leaf that carries an http(s) address or sits
+under a `url` key (array items included) must, whole, be an address found in the
+user's latest message or in the DATA of a result whose namespace is in
+`addressSources`, and so must each address inside it (O21). A prefix, or a given
+address with text after it, is not one; a given address closed by sentence or
+Markdown punctuation is also given without it. A result's error text never
+counts, and a namespace whose tools compute their output from their arguments (a
+query engine, a code box) does not belong in `addressSources`: its result could
+carry any address the controller wrote. Then the host roster (`roster:
+EgressRosterSource`) is built with the user's latest message cut to the 4 000
+characters the state quotes (only what Decide sees exempts), matches the
+normalised leaves and returns its spans as the request wrote them.
 
 `mode` (`ByTier<'filter' | 'roster'>`, default `'filter'` with a `decide`, else
 `'roster'`): in `'filter'` the egress question `guard.egress` (`GUARD_EGRESS`, a
@@ -1409,8 +1421,8 @@ and each quote bounded by markers carrying a per-call nonce. A state over the
 decision box's byte budget is unavailable. At or above τe (0.3) on
 1 − P(`nothing_private`) the call is refused with the larger private label's
 text (a tie names personal); below it the call goes out, and a roster match is
-recorded as an `egress_audit` event (human-facing only: no LLM-facing
-serialization, no server log). Each answer is a `decision_made` event keyed
+recorded as an `egress_audit` event (human-facing only: one fixed line with no
+payload in LLM-facing views, no server log). Each answer is a `decision_made` event keyed
 `guard.egress`, with no state text. A Decide failure is retried once within the
 one `timeoutMs` budget (5 000 ms), which aborts the request through
 `DecideInput.signal`; a timeout is not retried.
@@ -2087,7 +2099,8 @@ the removed `general` agent and the default agent is unchanged. Its `orchestrato
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
 route wraps `withReferences` in `withPseudonymisedInputs`; the whole loop is
 wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
-'by-shape'`; local: `neo4j`, `graph`, and the office box's
+'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local:
+`neo4j`, `graph`, and the office box's
 in-VM tools by name while that box is booted `mcp-only`). The info route admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
 from references and expansions, and disables independent prior-turn results. Each guard declares its own options
@@ -3778,6 +3791,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding, the screen's config types (mode, gate, exempt, classify) and the shared fence neutraliser
 ├── guard-gate.server.ts    # The guard gate (boundary guards slice 3): createGuardGate(decide) asks GUARD_SCREEN (`guard.screen`, one noul) over the screen's head, quoted line by line between nonce-carrying markers; its deadline aborts the request through DecideInput.signal; guardGateSkipRate() reads its decision_made events
+├── egress-gate.server.ts   # The egress question (boundary guards slice 4): GUARD_EGRESS (`guard.egress`, a choice), EGRESS_TEXTS, readOutgoing() (step 1's deterministic refusals), renderEgressState()
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — its COVERAGE unions and its options stay with the declaring guard, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards
@@ -3789,6 +3803,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── judge.server.ts         # Evaluation pattern for quality gates
     ├── parallel.server.ts      # Concurrent branches; wraps each branch with pattern_enter/exit
     ├── withInjectionGuard.server.ts # ALS wrapper attaching the injection guard; emits content_sanitized
+    ├── withEgressGate.server.ts # withEgressGate() — one check before every outgoing call: step 1, the egress question, the tripwire, the directory matrix; emits egress_audit / egress_refused
     ├── with-references.server.ts    # withReferences() — hands a pattern the relevant results of earlier turns
     ├── chain.server.ts         # Sequential composition; accepts onEvent? for SSE streaming
     ├── compactExecution.server.ts   # Final response synthesis; skips BAML for DIRECT_RESPONSE_ROUTE

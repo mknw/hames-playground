@@ -185,7 +185,7 @@ scripts/check-vps.py:213.
   provider key issuance matched; no fallback provider is implied. Roll back
   before revocation by restoring the previous value and recreating
   (packages/harness-baml/jev-decide.server.ts:326).
-- `OPENROUTER_API_KEY`: only if that embedding backend is explicitly enabled.
+- `OPENROUTER_API_KEY`: unused while boot refuses that embedding backend.
   Rotate at its provider, update/recreate consumers, verify a synthetic embedding
   in an authorized window and revoke the old key. Do not change embedding space
   as part of rotation. Roll back before revocation using the old key

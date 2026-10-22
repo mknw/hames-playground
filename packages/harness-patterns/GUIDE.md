@@ -207,7 +207,10 @@ outgoing tool later is covered without a declaration. Outgoing checks use the
 `egressChecks` run-frame slot. It concatenates on nested `amendRunFrame`,
 innermost first: every check runs and any denial stops dispatch as a failed tool
 call, so an inner scope cannot switch off an outer check. A call is egress unless
-its namespace is declared `local` or its exact name `localTools`; the gate's
+its namespace is declared `local` or its exact name `localTools`. A fetch tool
+(`fetchTools`) may only fetch an address the user wrote or one found in the data
+of an `addressSources` result: name the namespaces that return content they did
+not compute (web pages, docs, mail), never a query engine or a code box. The gate's
 `afterToolCall` hook extends its roster from local results across routes, and an
 update failure refuses further outgoing calls while delivering the result. The
 gate counts its refusals per route by the run frame's `route` slot, which

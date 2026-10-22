@@ -224,6 +224,10 @@ rows[0].database!==decodeURIComponent(url.pathname.slice(1))||!rows[0].limited||
 })().catch(()=>{process.exitCode=1;});"""
 
 
+SANDBOX_ENDPOINT = ("SANDBOX_DOCKER_HOST", "SANDBOX_DOCKER_TLS_CA", "SANDBOX_DOCKER_TLS_CERT", "SANDBOX_DOCKER_TLS_KEY")
+SANDBOX_TLS = ("/run/sandbox-tls/ca.pem", "/run/sandbox-tls/cert.pem", "/run/sandbox-tls/key.pem")
+
+
 def clones():
     # Config/inspect stay in memory. The TCP login uses the running app's own
     # DATABASE_URL; neither credentials nor SQL results reach stdout or argv.
@@ -241,12 +245,20 @@ def clones():
             require(bool(desired.get(key)) and actual.get(key) == desired[key], "clone runtime differs from validated configuration")
         require(actual["SANDBOX_ENVIRONMENT"] == namespace and not actual.get("POSTGRES_PASSWORD"),
                 "clone namespace or administrator credential mismatch")
-        targets = ("/configs", "/var/run/docker.sock")
+        for key in SANDBOX_ENDPOINT:
+            require(actual.get(key) == desired.get(key), "clone sandbox endpoint differs from validated configuration")
+        targets = ("/configs", "/var/run/docker.sock", *SANDBOX_TLS)
         expected_mounts = sorted((v["target"], v["source"], v["type"], not v.get("read_only", False))
                                  for v in config["services"][service].get("volumes", []) if v["target"] in targets)
         actual_mounts = sorted((v["Destination"], v["Source"], v["Type"], v["RW"])
                                for v in app["Mounts"] if v["Destination"] in targets)
         require(actual_mounts == expected_mounts, "clone mounts differ from validated configuration")
+        if config.get("x-clone-" + namespace + "-sandbox") == "per-env":
+            # The validator pinned a VM clone's render to exactly these mounts;
+            # refuse any a recreate outside Compose added, a socket included.
+            require(sorted(v["Destination"] for v in app["Mounts"]) ==
+                    sorted(v["target"] for v in config["services"][service].get("volumes", [])),
+                    "VM clone mounts differ from validated configuration")
         if namespace == "dev":
             require(config.get("x-clone-dev-docker-socket") is True or
                     not any(v[0] == "/var/run/docker.sock" for v in actual_mounts), "dev socket requires owner opt-in")

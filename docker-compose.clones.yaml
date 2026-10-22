@@ -14,6 +14,12 @@ x-clone-database-policy:
 # adding docker-compose.dev-sandbox.yaml to COMPOSE_FILE (see §12).
 x-clone-dev-docker-socket: false
 
+# Where each clone's sandbox reaches Docker (#648). `socket` keeps the rules
+# above; `per-env` is that clone's own environment VM over mutual TLS, which
+# docker-compose.dev-sandbox-vm.yaml selects for dev. Only the validator reads these.
+x-clone-release-sandbox: socket
+x-clone-dev-sandbox: socket
+
 services:
   app:
     env_file: !override

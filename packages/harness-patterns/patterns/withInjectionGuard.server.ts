@@ -30,23 +30,31 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { createEvent, createModelCallEvent } from '../context.server'
+import { createEvent, createModelCallEvent, redactCall } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
 import {
   applyScreenVerdict,
   redactReport,
   sanitizeUntrusted,
+  SCREEN_WITHHELD,
   type ActiveInjectionGuard,
+  type IngressClass,
+  type IngressClassifier,
   type InjectionGuardOptions,
+  type InjectionScreenConfig,
   type SanitizeReport,
+  type ScreenMode,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
 import { isDegradedToolSurface } from '../gateway-health.server'
 import type {
+  ByTier,
   ConfiguredPattern,
   ContentSanitizedEventData,
   ContextEvent,
+  DecisionMadeEventData,
+  LLMCallRecord,
   PatternScope,
 } from '../types'
 
@@ -164,6 +172,78 @@ export function createInjectionGuard(
   const optionsFor = (tool: string): InjectionGuardOptions =>
     declares(tool) ? config : (outer?.optionsFor(tool) ?? config)
 
+  if (config.screen) refuseUnreadableScreen(config.screen, namespaces)
+
+  /** The gate's answer as a `decision_made` event in the live scope, its call
+   *  record redacted (the gate's state is the payload it read). Best effort, like
+   *  the screen's `model_call`: a recording failure never changes a verdict. */
+  const recordGateDecision = (event: DecisionMadeEventData, call?: LLMCallRecord): void => {
+    try {
+      emit(createEvent('decision_made', patternId, event, redactCall(call)))
+    } catch (recordErr) {
+      console.error(
+        '[withInjectionGuard] recording the gate decision failed; the verdict is unaffected:',
+        recordErr,
+      )
+    }
+  }
+
+  /**
+   * Whether the model screen runs on this payload, in this order:
+   *   1. an `exempt` namespace: never (ruling L), whatever else holds;
+   *   2. mode `'off'` on this call's tier: never;
+   *   3. a deterministic finding: always, with no gate call — a hit is already
+   *      a positive, and the gate would only add a way to talk the screen out;
+   *   4. an internal payload, by the declaration's classifier: never (ruling O);
+   *   5. `'always'`: always; `'shadow'`: the gate is asked and recorded, and the
+   *      screen runs whatever it said; `'gated'`: the gate decides, and a gate
+   *      that is unavailable or throws runs the screen (the safe direction).
+   *
+   * Only `'off'` and `'gated'` can skip the screen, each by its exact value. The
+   * declaration is read on every call, so a value construction never saw (a cast,
+   * a later write) fails safe: anything else runs the screen, as `'shadow'` does.
+   *
+   * A gate whose answer is not obeyed is not waited for: its call is returned
+   * as `shadowGate`, to run beside the screen and be awaited after it, so a
+   * `'shadow'` result costs the slower of the two calls rather than their sum,
+   * and the gate's decision is still recorded inside this scope. It never
+   * rejects.
+   */
+  const shouldScreen = async (
+    screen: InjectionScreenConfig,
+    p: { tool: string; namespace: string; data: unknown; report: SanitizeReport },
+  ): Promise<{ run: boolean; shadowGate?: Promise<void> }> => {
+    if (screen.exempt?.includes(p.namespace)) return { run: false }
+    const mode = resolveByTier(screen.mode ?? (screen.gate ? 'shadow' : 'always'))
+    if (mode === 'off') return { run: false }
+    if (p.report.findings.length > 0) return { run: true }
+    if (classifyIngress(screen.classify, p) === 'internal') return { run: false }
+    const gate = screen.gate
+    if (mode === 'always' || !gate) return { run: true }
+    const asked = (async () =>
+      gate({
+        tool: p.tool,
+        namespace: p.namespace,
+        content: typeof p.data === 'string' ? p.data : (JSON.stringify(p.data) ?? ''),
+        ...(mode !== 'gated' && { shadow: true }),
+        onDecision: recordGateDecision,
+      }))()
+    if (mode !== 'gated') {
+      return {
+        run: true,
+        shadowGate: asked.then(
+          () => undefined,
+          () => undefined,
+        ),
+      }
+    }
+    try {
+      return { run: (await asked).run }
+    } catch {
+      return { run: true }
+    }
+  }
+
   return {
     isUntrusted,
     optionsFor,
@@ -179,18 +259,18 @@ export function createInjectionGuard(
       const effective = { ...options, spotlight: overrides?.spotlight ?? options.spotlight }
       let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
 
-      // Default: a second opinion on regex-clean content. Opt-in callers can
-      // also screen the sanitized projection after findings; never resubmit or
-      // restore the original spans. Screen outages are recorded and fail open
-      // here (ingress); a caller can read `screenUnavailable` on the report.
-      if (
-        overrides?.screen !== false &&
-        options.screen &&
-        (report.findings.length === 0 || options.screenDespiteFindings)
-      ) {
+      // The model screen, as its declaration says (`shouldScreen`). After a
+      // deterministic finding it reads the sanitized projection, never the
+      // original spans. A screen outage is recorded on the report; the
+      // declaration's `onUnavailable` decides whether the payload stands.
+      const screen = overrides?.screen === false ? undefined : options.screen
+      const decided = screen
+        ? await shouldScreen(screen, { tool, namespace, data, report })
+        : { run: false }
+      if (screen && decided.run) {
         const screenInput = report.findings.length > 0 ? out : data
         try {
-          const verdict = await options.screen({
+          const verdict = await screen.run({
             tool,
             namespace,
             content: typeof screenInput === 'string' ? screenInput : JSON.stringify(screenInput),
@@ -229,8 +309,17 @@ export function createInjectionGuard(
             screenReason: `screen unavailable: ${err instanceof Error ? err.message : String(err)}`,
             screenUnavailable: true,
           }
+          // Any value but `'pass'` withholds: one construction never saw fails
+          // safe, like the mode.
+          if (screen.onUnavailable !== undefined && screen.onUnavailable !== 'pass') {
+            out = SCREEN_WITHHELD
+            report = { ...report, neutralized: true }
+          }
         }
       }
+      // A shadow gate ran beside the screen; its decision lands before this
+      // result is returned.
+      await decided.shadowGate
 
       if (report.findings.length === 0) {
         // Nothing was DETECTED. `out` may still differ from `data` — a bare
@@ -259,6 +348,101 @@ export function createInjectionGuard(
       return { data: out, summary: redactReport(report, event.id) }
     },
   }
+}
+
+/**
+ * A payload's class under the declaration's classifier. No classifier: every
+ * payload is external (the library default). A throw, or any answer but
+ * `'internal'`, is external: an unknown source is never trusted by accident.
+ */
+function classifyIngress(
+  classify: IngressClassifier | undefined,
+  p: { tool: string; namespace: string; data: unknown },
+): IngressClass {
+  if (!classify) return 'external'
+  try {
+    return classify({ namespace: p.namespace, tool: p.tool, data: p.data }) === 'internal'
+      ? 'internal'
+      : 'external'
+  } catch {
+    return 'external'
+  }
+}
+
+/** The four screen modes; any other value is refused at construction. */
+const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'shadow', 'gated', 'always'])
+
+/**
+ * REFUSE a screen declaration that reads like protection and is not:
+ *
+ *  - a `run` that is not a function — every call would be a screen outage;
+ *  - a `mode` that is not one of the four, on any tier, or a per-tier map with
+ *    no own `default` (it would resolve to the map itself) — whatever it was
+ *    meant to say, the guard would act on something else;
+ *  - an `onUnavailable` other than `'pass'` or `'withhold'`;
+ *  - a mode that asks the gate (`'shadow'`, `'gated'`) on any tier, with no
+ *    gate passed — it would run as nothing anyone declared;
+ *  - an `exempt` namespace the guard does not declare — it would match nothing
+ *    while reading like a decision (#242 item 4's rule, applied here).
+ *
+ * TypeScript catches a literal typo; this catches a JavaScript caller, a cast
+ * and a value read from configuration.
+ */
+function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<string>): void {
+  if (typeof screen.run !== 'function') {
+    throw new Error(
+      `[withInjectionGuard] the screen's \`run\` is not a function, so every payload ` +
+        `would record a screen outage. Pass \`run: createInjectionScreen()\` or your own.`,
+    )
+  }
+  const { mode } = screen
+  if (typeof mode === 'object' && mode !== null && !Object.hasOwn(mode, 'default')) {
+    throw new Error(
+      `[withInjectionGuard] the screen's per-tier mode has no \`default\`, so a tier it ` +
+        `does not name would resolve to the map itself. Add \`default\`.`,
+    )
+  }
+  const modes = mode === undefined ? [] : tierValues(mode)
+  const unknown = modes.filter((m) => !SCREEN_MODES.has(m))
+  if (unknown.length > 0) {
+    throw new Error(
+      `[withInjectionGuard] the screen's mode ${JSON.stringify(unknown[0])} is not one of ` +
+        `'off', 'shadow', 'gated' or 'always'.`,
+    )
+  }
+  if (
+    screen.onUnavailable !== undefined &&
+    screen.onUnavailable !== 'pass' &&
+    screen.onUnavailable !== 'withhold'
+  ) {
+    throw new Error(
+      `[withInjectionGuard] the screen's onUnavailable ${JSON.stringify(screen.onUnavailable)} ` +
+        `is not 'pass' or 'withhold'.`,
+    )
+  }
+  if (!screen.gate && modes.some((m) => m === 'shadow' || m === 'gated')) {
+    throw new Error(
+      `[withInjectionGuard] the screen's mode asks the guard gate ('shadow' or 'gated') ` +
+        `but no gate was passed. Pass \`gate: createGuardGate(decide)\`, or declare ` +
+        `'always' or 'off'.`,
+    )
+  }
+  for (const ns of screen.exempt ?? []) {
+    if (!namespaces.has(ns)) {
+      throw new Error(
+        `[withInjectionGuard] the screen exempts namespace '${ns}', which this guard does ` +
+          `not declare. An exemption must name one of the guard's own namespaces, or it ` +
+          `exempts nothing while reading like a decision. (#242 item 4)`,
+      )
+    }
+  }
+}
+
+/** Every value a `ByTier` setting can take, whichever tier a call is on. */
+function tierValues<T>(value: ByTier<T>): T[] {
+  return typeof value === 'object' && value !== null && Object.hasOwn(value, 'default')
+    ? Object.values(value as Record<string, T>)
+    : [value as T]
 }
 
 /** Declared namespaces already reported, so a per-turn pattern build doesn't

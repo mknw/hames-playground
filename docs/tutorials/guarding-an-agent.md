@@ -285,7 +285,8 @@ Everything below is optional; the defaults are the strict reading.
 | `spotlight`    | `'on-detection'` (default), `'always'` (fence every result), `'off'`                |
 | `rules`        | extra `InjectionRule`s, unioned with the built-in corpus                            |
 | `disableRules` | rule ids to switch off — a false-positive escape hatch for one agent's corpus       |
-| `screen`       | an optional LLM second opinion, run only on content the deterministic layer passed  |
+| `screen`       | an optional model screen, `{ run, mode, gate, … }`: a deterministic finding forces  |
+|                | it; on clean content its `mode` decides (`'always'` by default)                     |
 
 Two composition rules are worth knowing before you nest anything:
 
@@ -300,7 +301,8 @@ Two composition rules are worth knowing before you nest anything:
 - **The screen fails open; the deterministic layer does not.** A screen that throws (rate
   limit, timeout) leaves the deterministic verdict standing and records the reason on the
   event, because an outage must not turn a working tool call into a failed turn. If your
-  threat model cannot accept that, do not rely on the screen alone.
+  threat model cannot accept that, declare `onUnavailable: 'withhold'` on the screen, which
+  replaces the result with a fixed marker instead.
 
 Nested **transports**, by contrast, shadow rather than union — two sandboxes are two
 machines, and only an order answers "which machine". The inconsistency is deliberate.

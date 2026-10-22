@@ -242,7 +242,7 @@ describe('screen call record', () => {
     const { createInjectionScreen } = await ops()
     const events: { type: string }[] = []
     const guard = createInjectionGuard(
-      { tools: ['fetch_content'], screen: createInjectionScreen() },
+      { tools: ['fetch_content'], screen: { run: createInjectionScreen() } },
       (e) => {
         if (e.type === 'model_call') throw new Error('recorder is down')
         events.push(e)

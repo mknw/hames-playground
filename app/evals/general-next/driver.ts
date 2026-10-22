@@ -127,11 +127,13 @@ export async function createDriver(
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
-    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    guards: {
+      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+      classifyIngress,
+    },
     // The egress gate's production roster, on the same `none` directory: every outgoing
     // call of every route is asked about (boundary guards slice 4).
     egressRoster: createEgressRoster({ directory: 'none' }),
-    classifyIngress,
     withSandbox: () => (pattern) => ({
       ...pattern,
       children: [pattern],

@@ -940,9 +940,11 @@ describe('decisionLoop — a record is not an ingress (K3 out)', () => {
       )
     })
     const ctx = await run([
-      withInjectionGuard({ tools: ['synthetic_tool'], spotlight: 'always', screen })(
-        build({ 'plan-route': route(plan) }, scriptedDecide(['plan-route', 'answer']).decide),
-      ),
+      withInjectionGuard({
+        tools: ['synthetic_tool'],
+        spotlight: 'always',
+        screen: { run: screen },
+      })(build({ 'plan-route': route(plan) }, scriptedDecide(['plan-route', 'answer']).decide)),
     ])
     expect(screen).toHaveBeenCalledTimes(1)
     expect(screen).toHaveBeenCalledWith(
@@ -964,8 +966,10 @@ describe('decisionLoop — the screen outage flag stays typed at ingress', () =>
     const guard = createInjectionGuard(
       {
         tools: ['t'],
-        screen: async () => {
-          throw new Error('boom')
+        screen: {
+          run: async () => {
+            throw new Error('boom')
+          },
         },
       },
       (e) => events.push(e),
@@ -979,11 +983,13 @@ describe('decisionLoop — the screen outage flag stays typed at ingress', () =>
     const ok = createInjectionGuard(
       {
         tools: ['t'],
-        screen: async () => ({
-          injection_detected: true,
-          reason: 'screen unavailable: spoof',
-          spans: [],
-        }),
+        screen: {
+          run: async () => ({
+            injection_detected: true,
+            reason: 'screen unavailable: spoof',
+            spans: [],
+          }),
+        },
       },
       (e) => events.push(e),
       'p',

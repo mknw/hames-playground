@@ -111,6 +111,7 @@ export type {
   DecideFn,
   DecideAllFn,
   DecisionMadeEventData,
+  ByTier,
 
   // Memory recall (#419)
   MemoryKind,
@@ -205,6 +206,7 @@ export {
   amendRunFrame,
   activeRunFrame,
   currentRunFrame,
+  resolveByTier,
   type RunFrame,
   type ActiveRunFrame,
   type EgressCheck,
@@ -522,10 +524,18 @@ export {
   applyScreenVerdict,
   redactReport,
   resolveRules,
+  neutralizeFenceMarkers,
   INJECTION_RULES,
+  SCREEN_WITHHELD,
   type InjectionRule,
   type InjectionGuardOptions,
   type InjectionScreen,
+  type InjectionScreenConfig,
+  type ScreenMode,
+  type GuardGate,
+  type GuardGateVerdict,
+  type IngressClass,
+  type IngressClassifier,
   type SanitizeFinding,
   type SanitizeLayer,
   type SanitizeReport,
@@ -535,6 +545,17 @@ export {
   type SpotlightMode,
   type ActiveInjectionGuard,
 } from './injection-guard'
+// The guard gate (boundary guards slice 3): the cheap Decide question in front of
+// the screen, passed as `screen.gate`.
+export {
+  createGuardGate,
+  GUARD_SCREEN,
+  GUARD_GATE_THRESHOLD,
+  GUARD_GATE_TIMEOUT_MS,
+  GUARD_GATE_MAX_CHARS,
+  guardGateSkipRate,
+  type GuardGateSettings,
+} from './guard-gate.server'
 export { normalizeControllerAction } from './controller-action'
 
 // Lane A6: the BAML adapter factories and their helpers moved to

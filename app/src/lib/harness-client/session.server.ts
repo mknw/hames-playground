@@ -20,6 +20,7 @@ import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { enrichNeo4jResult } from './neo4j-enricher.server'
 import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
 import { createDecisionDocuments } from './decision-documents.server'
+import { classifyIngress } from './ingress-classifier.server'
 import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
@@ -81,6 +82,7 @@ export function agentDeps(): AgentDeps {
     enrichNeo4jResult,
     createRedisBackend,
     createDecisionDocuments,
+    classifyIngress,
     // The package's contract names the five fields its factories pass as
     // plain strings; the app narrows `rootfs`/`egress` onto its own unions
     // here — the one adapter seam between the two type surfaces.

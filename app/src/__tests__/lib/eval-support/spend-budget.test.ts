@@ -5,6 +5,8 @@ import {
   floorHourlyRate,
   screenShare,
   SCREEN_FUNCTION,
+  GATE_FUNCTION_PREFIX,
+  ledgerFunction,
   type SpendKey,
 } from '../../../lib/eval-support/spend-budget'
 
@@ -182,6 +184,25 @@ describe('per-function screen subtotal', () => {
     budget.observe(key, { costEur: 0.01 })
     expect(screenShare(budget.row(key)).calls).toBe(0)
     expect(budget.row(key).functions.unknown.calls).toBe(1)
+  })
+  // Boundary guards slice 3. MUTATION: drop the gate's prefix match in
+  // `screenShare` (count gate calls as "other"): the gate share reads 0 and
+  // `otherCalls` swallows it.
+  it('reports the guard gate (Decide calls keyed guard.*) on its own line, apart from the loop', () => {
+    const budget = fill()
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.screen'))
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.screen'))
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'next_step'))
+    const share = screenShare(budget.row(key))
+    expect(share).toMatchObject({ calls: 2, gateCalls: 2, otherCalls: 3 })
+    expect(share.gateObserverUsd).toBeCloseTo(0.02)
+    expect(share.gateCallShare).toBeCloseTo(2 / 7)
+    expect(budget.row(key).functions['Decide:next_step'].calls).toBe(1)
+  })
+  it('names a ledger line by function, and a Decide line by its question key too', () => {
+    expect(ledgerFunction('Decide', 'guard.screen')).toBe(`${GATE_FUNCTION_PREFIX}screen`)
+    expect(ledgerFunction('LoopController')).toBe('LoopController')
+    expect(ledgerFunction(undefined, 'guard.screen')).toBeUndefined()
   })
   it('still counts a screen call of unknown cost, and stops the run on it', () => {
     const budget = new SpendBudget(20, 0.8)

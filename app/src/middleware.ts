@@ -90,8 +90,10 @@ import {
   assertEmbeddingProviderAllowed,
   assertInferenceDeploymentConfigured,
 } from './lib/inference/tier-config.server'
+import { assertGuardsConfigured } from './lib/inference/guard-config.server'
 assertInferenceDeploymentConfigured()
 assertEmbeddingProviderAllowed()
+assertGuardsConfigured()
 
 // Neo4j config seam (design S5, #225 PR-3): the driver's connection is handed
 // over explicitly at app boot — `getEndpoints().neo4j.bolt` plus the same env

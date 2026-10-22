@@ -139,13 +139,15 @@ const deps = (sandbox: ReturnType<typeof createSyntheticSandbox>): AgentDeps => 
     fn: (scope, view) => amendRunFrame({ transports: [sandbox] }, () => pattern.fn(scope, view)),
   }),
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
-  pseudonymiseForWeb: async () => ({
-    apply: (v) => v,
-    redact: <T>(v: T): T => v,
-    checkLiterals: () => {},
-    observe: () => {},
-    check: () => {},
-  }),
+  guards: {
+    pseudonymiseForWeb: async () => ({
+      apply: (v) => v,
+      redact: <T>(v: T): T => v,
+      checkLiterals: () => {},
+      observe: () => {},
+      check: () => {},
+    }),
+  },
 })
 const walk = (ps: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] =>
   ps.flatMap((p) => [p, ...walk(p.children ?? [])])

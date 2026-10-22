@@ -12,6 +12,8 @@
  */
 
 import { graphFileIngestEnabled } from '../inference/tier-config.server'
+import { guardConfig } from '../inference/guard-config.server'
+import { createWebPseudonymiser } from './web-pseudonymiser.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { deserializeContext } from '@hames-ai/harness-patterns'
@@ -27,7 +29,7 @@ import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { releaseDeletedSessions } from '../stash/release.server'
 import { createHostMemoryConfig } from '../memory/config.server'
-import { createEgressRoster, createWebPseudonymiser } from './web-pseudonymiser.server'
+import { createEgressRoster } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
@@ -71,19 +73,36 @@ export type SessionData = AgentData
  * Every entry is app-side policy the package must not carry: the deployment's
  * tool catalog, the Neo4j enricher, the Data Stash backend, the sandbox
  * wrapper (SD-19 — the containment posture is supplied, not carried), the
- * tier override, title persistence, and the cache refusal.
+ * tier override, the GUARD_* guard switches, title persistence, and the cache
+ * refusal.
  */
 export function agentDeps(): AgentDeps {
   return {
     graphFileIngest: graphFileIngestEnabled(),
     memory: createHostMemoryConfig(),
-    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }),
+    // The guards' host settings, from the GUARD_* operator switches, read once
+    // per build (boundary guards, slice 6). The web route's input filter rides
+    // `guards` too (GUARD_PSEUDONYMISE): off, the field is OMITTED — the agent
+    // then composes no withPseudonymisedInputs, never a null filter into a
+    // wrapper that would withhold — and the field's own presence says on.
+    // `classifyIngress` rides `guards` so the screen's gating has one
+    // `AgentDeps` path, not two.
+    guards: (() => {
+      const switches = guardConfig()
+      return {
+        screenMode: switches.screenMode,
+        egressMode: switches.egressMode,
+        ...(switches.pseudonymise
+          ? { pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }) }
+          : {}),
+        classifyIngress,
+      }
+    })(),
     egressRoster: createEgressRoster({ directory: 'required' }),
     toolNamespaces: mcpNamespace,
     enrichNeo4jResult,
     createRedisBackend,
     createDecisionDocuments,
-    classifyIngress,
     // The package's contract names the five fields its factories pass as
     // plain strings; the app narrows `rootfs`/`egress` onto its own unions
     // here — the one adapter seam between the two type surfaces.

@@ -1209,6 +1209,13 @@ class Apply(Harness):
         guard.CONFIG_DIR.chmod(0o770)
         self.assertEqual(self.invoke("--apply"), 1)
         guard.CONFIG_DIR.chmod(0o700)
+        # --check and --smoke read the --config they are given as root, under the same rule.
+        loose = self.root / "loose.json"
+        loose.write_text(guard.INSTALLED_CONFIG.read_text())
+        loose.chmod(0o622)
+        for mode in (("--check",), ("--smoke", "--record", str(self.root / "record.json"))):
+            self.assertEqual(self.invoke(*mode, config_path=loose), 1, mode)
+            self.assertIn("unsafe guard file", self.err)
         # A parent another user owns could swap the file between check and read.
         real = os.stat
 
@@ -2234,7 +2241,6 @@ MUTATIONS = {
     "check-vm-single-nic": ('            require(set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', '            require(nic.get("network") == vm_bridge and'),
     "check-vm-nic-bridge": ('set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', 'set(vm["nics"]) == {"eth0"} and'),
     "check-vm-address": ('                    nic.get("ipv4.address") == guest, "the environment VM', '                    True, "the environment VM'),
-    "check-link-members": ('            require(len(members) <= 1, "another member on the link network")', "            pass"),
     "check-link-address": ('                require(attachment.get("IPv4Address", "").split("/")[0] == client, "link network address drift")', "                pass"),
     "check-link-service": ('                require(labels.get("com.docker.compose.service") == env["service"],', "                require(True,"),
     "check-link-internal": ('network.get("Internal") is False and', "True and"),

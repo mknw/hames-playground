@@ -837,9 +837,8 @@ def check(config, entries):
             require(network.get("Driver") == "bridge" and network.get("Internal") is False and
                     (network.get("Options") or {}).get("com.docker.network.bridge.name") == link_bridge,
                     "the link network is not the operator's bridge")
-            members = network.get("Containers") or {}
-            require(len(members) <= 1, "another member on the link network")
-            for container, attachment in members.items():
+            # A second member is a second port: the kernel's count below refuses it.
+            for container, attachment in (network.get("Containers") or {}).items():
                 require(attachment.get("IPv4Address", "").split("/")[0] == client, "link network address drift")
                 labels = document("docker", "inspect", container)[0]["Config"]["Labels"] or {}
                 require(labels.get("com.docker.compose.service") == env["service"],

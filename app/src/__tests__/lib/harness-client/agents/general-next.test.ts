@@ -152,6 +152,7 @@ const composition = vi.hoisted(() => ({
   routes: {} as Record<string, unknown>,
   config: {} as Record<string, unknown>,
   egress: {} as Record<string, unknown>,
+  guardConfigs: [] as unknown[],
 }))
 vi.mock('@hames-ai/harness-patterns', async (original) => {
   const actual = await original<typeof import('@hames-ai/harness-patterns')>()
@@ -166,6 +167,10 @@ vi.mock('@hames-ai/harness-patterns', async (original) => {
       composition.egress = { ...args[0] }
       return actual.withEgressGate(...args)
     },
+    withInjectionGuard: ((config: unknown) => {
+      composition.guardConfigs.push(config)
+      return actual.withInjectionGuard(config as never)
+    }) as typeof actual.withInjectionGuard,
   }
 })
 
@@ -189,11 +194,13 @@ const deps: AgentDeps = {
   toolNamespaces: mcpNamespace,
   withSandbox: attach,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
-  pseudonymiseForWeb: async () => ({
-    apply: (value) => value,
-    redact: <T>(value: T): T => value,
-    checkLiterals: () => {},
-  }),
+  guards: {
+    pseudonymiseForWeb: async () => ({
+      apply: (value) => value,
+      redact: <T>(value: T): T => value,
+      checkLiterals: () => {},
+    }),
+  },
 }
 let choices: string[]
 /** What the scripted decider takes once `choices` runs out, when the spec still offers it
@@ -212,6 +219,7 @@ let egressAnswer: (state: string) => 'personal' | 'company' | 'nothing_private'
 let requests: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
+  composition.guardConfigs = []
   mocks.synthesize.mockResolvedValue({ value: 'synthetic answer' })
   gateway.names = [
     ...GRAPH,
@@ -1025,10 +1033,10 @@ describe('general-next composition', () => {
   })
 
   it('G14: only info declares the filter; a private run calls the supplied host', async () => {
-    const pseudonymiseForWeb = vi.fn(deps.pseudonymiseForWeb!)
+    const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)
     const patterns = await agent.createPatterns('synthetic-session', {
       ...deps,
-      pseudonymiseForWeb,
+      guards: { pseudonymiseForWeb },
     })
     const routes = routesOf(patterns)
     expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
@@ -1051,7 +1059,7 @@ describe('general-next composition', () => {
         is_final: false,
       },
     })
-    const result = await run('self_deployed', { ...deps, pseudonymiseForWeb: undefined })
+    const result = await run('self_deployed', { ...deps, guards: undefined })
     const web = result.context.events.find(
       (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
     )
@@ -1256,7 +1264,7 @@ describe('general-next composition', () => {
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const patterns = await agent.createPatterns('synthetic-session', {
       ...deps,
-      pseudonymiseForWeb: createWebPseudonymiser(),
+      guards: { ...deps.guards, pseudonymiseForWeb: createWebPseudonymiser() },
       egressRoster: createEgressRoster(),
     })
     const result = await withRunFrame(
@@ -1323,7 +1331,7 @@ describe('general-next composition', () => {
     })
     await run('self_deployed', {
       ...deps,
-      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+      guards: { ...deps.guards, pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }) },
     })
     const handoff = mocks.controller.mock.calls[0][0].planContext
     expect(handoff).toContain('PERSON_')
@@ -1367,7 +1375,10 @@ describe('general-next composition', () => {
       })
       const result = await run('self_deployed', {
         ...deps,
-        pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+        guards: {
+          ...deps.guards,
+          pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+        },
       })
       expect(
         mocks.screen.mock.calls.filter(([input]) => input.tool === 'graph_mail_recent'),
@@ -1956,8 +1967,172 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
       },
     })
     gateway.result = 'CLEAN-INTERNAL-SENTINEL'
-    await run('anthropic', { ...deps, classifyIngress: () => 'internal' })
+    await run('anthropic', {
+      ...deps,
+      guards: { ...deps.guards, classifyIngress: () => 'internal' },
+    })
     expect(gateway.calls).toEqual(expect.arrayContaining(['search', 'graph_mail_recent']))
     expect(mocks.screen).not.toHaveBeenCalled()
+  })
+})
+
+describe('general-next: the GUARD_* operator switches (boundary guards slice 6)', () => {
+  const searchOnce = () =>
+    mocks.controller.mockResolvedValueOnce({
+      action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
+    })
+  const screenConfigs = () =>
+    composition.guardConfigs.filter(
+      (c) =>
+        typeof c === 'object' &&
+        c !== null &&
+        'screen' in c &&
+        (c as { screen?: unknown }).screen !== undefined,
+    )
+
+  // The switch reaches the guards as a `screen.mode`, and the DEFAULTS the
+  // switch replaces are the design's: 'shadow' on the self-deployed tier and
+  // 'always' on the Anthropic one. MUTATION: ignore `deps.guards.screenMode`
+  // (restore the agent's own tier map): the off case here goes red — the
+  // screen runs where the operator switched it off.
+  it.each(['anthropic', 'self_deployed'] as const)(
+    'GUARD_SCREEN=off reaches both route guards and no screen call happens (%s)',
+    async (tier) => {
+      searchOnce()
+      gateway.result = 'CLEAN-WEB-SENTINEL'
+      const result = await run(tier, {
+        ...deps,
+        guards: { ...deps.guards, screenMode: { default: 'off', anthropic: 'off' } },
+      })
+      expect(mocks.screen).not.toHaveBeenCalled()
+      const modes = screenConfigs().map((c) => (c as { screen: { mode: unknown } }).screen.mode)
+      expect(modes).toEqual([
+        { default: 'off', anthropic: 'off' },
+        { default: 'off', anthropic: 'off' },
+      ])
+      // No gate is asked either: 'off' skips both layers.
+      expect(
+        result.context.events.filter(
+          (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.screen',
+        ),
+      ).toEqual([])
+    },
+  )
+
+  // The Anthropic half of security delta N5, at the AGENT: GUARD_SCREEN — the
+  // self-deployed tier's switch — must leave the Anthropic tier's 'always'
+  // alone, so a weaker mode there can only ever come from
+  // GUARD_SCREEN_ANTHROPIC, which refuses anything but off/always at boot.
+  // MUTATION: apply GUARD_SCREEN to both tiers (spread it over the map) in
+  // general-next: the gate is asked on the Anthropic tier and this goes red.
+  it('GUARD_SCREEN=gated leaves the Anthropic tier screening every external result, gate never asked', async () => {
+    searchOnce()
+    gateway.result = 'CLEAN-WEB-SENTINEL'
+    await run('anthropic', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: { default: 'gated', anthropic: 'always' } },
+    })
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+    expect(gateStates).toEqual([])
+    const modes = screenConfigs().map((c) => (c as { screen: { mode: unknown } }).screen.mode)
+    expect(modes).toEqual([
+      { default: 'gated', anthropic: 'always' },
+      { default: 'gated', anthropic: 'always' },
+    ])
+  })
+
+  // The egress switch, live: GUARD_EGRESS=roster vetoes a directory match and
+  // never asks the guard.egress question; 'filter' (the default, pinned above)
+  // asks. MUTATION: drop `mode: deps.guards?.egressMode` from general-next's
+  // egress gate: the roster case asks the egress question and this goes red.
+  it('GUARD_EGRESS=roster vetoes a directory match on the egress gate with no Decide call', async () => {
+    mocks.controller.mockResolvedValueOnce({
+      action: {
+        reasoning: 'search',
+        tool_name: 'search',
+        tool_args: '{"query":"Mira Cedar"}',
+        is_final: false,
+      },
+    })
+    const { createEgressRoster } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const result = await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, egressMode: 'roster' },
+      egressRoster: createEgressRoster(),
+    })
+    expect(composition.egress.mode).toBe('roster')
+    // The gate never asked the egress question: the roster decided alone.
+    expect(egressStates).toEqual([])
+    // The veto reaches the controller as the fixed roster text, on the call's
+    // own result — a denial the loop can read, not a silent drop.
+    const web = result.context.events.find(
+      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
+    )
+    expect(web?.data).toMatchObject({ success: false })
+    expect(String((web?.data as { error?: string }).error)).toContain(
+      'Refused: this request contains the name or address of a private person.',
+    )
+    // A roster veto is a deterministic refusal, never a tripwire: no refusal
+    // event is recorded and the route stays open.
+    expect(result.context.events.some((e) => e.type === 'egress_refused')).toBe(false)
+  })
+
+  // The filter mode keeps its audited, Decide-judged path under the switch.
+  it('GUARD_EGRESS=filter (the declared default) judges the same call through the question', async () => {
+    mocks.controller.mockResolvedValueOnce({
+      action: {
+        reasoning: 'search',
+        tool_name: 'search',
+        tool_args: '{"query":"Mira Cedar"}',
+        is_final: false,
+      },
+    })
+    egressAnswer = () => 'nothing_private'
+    const { createEgressRoster } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const result = await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, egressMode: 'filter' },
+      egressRoster: createEgressRoster(),
+    })
+    expect(composition.egress.mode).toBe('filter')
+    expect(egressStates).toHaveLength(1)
+    const web = result.context.events.find(
+      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
+    )
+    expect(web?.data).toMatchObject({ success: true })
+    // A roster match Decide allows is audited (coordinator proposal 1).
+    expect(result.context.events.some((e) => e.type === 'egress_audit')).toBe(true)
+  })
+
+  // GUARD_PSEUDONYMISE=off composes the info route WITHOUT the wrapper, on the
+  // tier where it would otherwise run: the controller sees directory names as
+  // they are. MUTATION: restore the unconditional wrapper (or pass a null
+  // filter into it): the names here are rewritten to PERSON_n and this goes
+  // red — or the route withholds its inherited content outright.
+  it('GUARD_PSEUDONYMISE=off leaves the web route unwrapped: names reach the controller as written', async () => {
+    const patterns = await agent.createPatterns('synthetic-session', {
+      ...deps,
+      guards: { ...deps.guards, pseudonymiseForWeb: undefined },
+    })
+    const info = routesOf(patterns)[1]
+    expect(harnessPseudonymisesInputs([info])).toBe(false)
+    // The wrapper is gone, and with it its own node in the pattern graph:
+    // guard, document references, references, the loop — no filter anywhere.
+    expect(walk([info]).map((p) => p.name)).toEqual([
+      'withInjectionGuard(withInfoDocumentReferences(withReferences(simpleLoop)))',
+      'withInfoDocumentReferences(withReferences(simpleLoop))',
+      'withReferences(simpleLoop)',
+      'simpleLoop',
+    ])
+  })
+
+  // And the ON spelling keeps today's shape (the G14 pin above holds it via
+  // the real bag's field; this is the switch's own on path).
+  it('GUARD_PSEUDONYMISE=on keeps the wrapper on the info route only', async () => {
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    const routes = routesOf(patterns)
+    expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
   })
 })

@@ -35,14 +35,16 @@ import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.ser
 import type {
   ConfiguredPattern,
   DecisionDocumentsSource,
+  EgressMode,
+  EgressRosterSource,
+  IngressClassifier,
   MemoryConfig,
+  PseudonymiseForWeb,
   RetrieverBackend,
   RetrieverData,
-  PseudonymiseForWeb,
-  EgressRosterSource,
+  ScreenMode,
 } from '@hames-ai/harness-patterns'
-import type { OnToolResult } from '@hames-ai/harness-patterns/types'
-import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'
+import type { OnToolResult, ByTier } from '@hames-ai/harness-patterns/types'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
@@ -58,6 +60,39 @@ export interface GraphElement extends ElementDefinition {
 // ============================================================================
 // Agent definition surface (#225 — the @hames-ai/agents extraction)
 // ============================================================================
+
+/**
+ * The guards' host settings, per tier where the design's switches are
+ * (`boundary-guards.md`, the Settings table and "How the operator switch
+ * works"). Every member optional; absent, the agent keeps the design's
+ * per-tier defaults for it.
+ *
+ * - `screenMode` sets the injection screen's `mode` on every guard that
+ *   declares one. The composition root validates it against each tier's
+ *   declared default: on the self-deployed tier (and an absent or unknown
+ *   one) every of the four values is accepted, on the Anthropic tier only
+ *   `'off'` and `'always'` — `'gated'` or `'shadow'` there would send every
+ *   body the screen would have read to that tier's decisions host by an env
+ *   var, a processor change that belongs in a reviewed line of code.
+ * - `egressMode` sets the egress gate's `mode` (`'filter'` decides with the
+ *   roster's matches as evidence; `'roster'` vetoes on a match and asks no
+ *   model). Accepted on both tiers.
+ * - `classifyIngress` is the host's classifier (ruling O), passed as a
+ *   screen's `classify`. Absent: every payload is external, the safe default.
+ *   It rides `guards` rather than its own `AgentDeps` field — one path to the
+ *   screen's gating, not two — and no env variable sets it.
+ * - `pseudonymiseForWeb` is the input pseudonymiser (K5), until the retirement
+ *   slice removes it from the registered agents along with its switch. A
+ *   switch that turns the filter off omits it: the agent then composes no
+ *   `withPseudonymisedInputs` at all, never a null filter into a wrapper that
+ *   would withhold every word of inherited content on the tier it runs on.
+ */
+export interface AgentGuards {
+  readonly screenMode?: ByTier<ScreenMode>
+  readonly egressMode?: ByTier<EgressMode>
+  readonly classifyIngress?: IngressClassifier
+  readonly pseudonymiseForWeb?: PseudonymiseForWeb
+}
 
 /**
  * The composite the app calls `SessionData` (app `session.server.ts`) — all
@@ -97,25 +132,31 @@ export interface SandboxAttach {
 export interface AgentDeps {
   /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
   graphFileIngest?: boolean
-  /** G14 web-route input filter (K5). Optional for Anthropic-only hosts;
-   *  absence withholds earlier content in withPseudonymisedInputs on every
-   *  other tier. */
-  pseudonymiseForWeb?: PseudonymiseForWeb
+  /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
+  memory?: MemoryConfig
+  /**
+   * The guards' host settings (boundary guards, slice 6: the operator
+   * switches). One object rather than one field per guard, so a guard added
+   * later is a new key and not a second `AgentDeps` path. The composition root
+   * builds it from the `GUARD_*` env variables once at boot
+   * (`guard-config.server.ts`); a host that composes no guard settings leaves
+   * it absent, which keeps every guard at the design's per-tier defaults.
+   *
+   * These are the ONLY fields an env variable can set: the deterministic
+   * layers and the thresholds have no switch, and a value the design leaves in
+   * code (an `exempt` list, the egress tripwire's N, `loadedDecideDown`) stays
+   * there. An invalid value REFUSES boot; one below a tier's default warns.
+   */
+  guards?: AgentGuards
   /**
    * The egress gate's roster (boundary guards, slice 4): the directory status,
    * the spans an outgoing request names, and its extension from local results.
    * Absent: the gate runs with no directory (`'none'`), so its question still
-   * judges every call, and a call it cannot judge is refused.
+   * judges every call, and a call it cannot judge is refused. Separated from
+   * `guards` because it is WIRING, not a switch: the gate reads it at run
+   * time, and `GUARD_*` never turns the roster on or off.
    */
   egressRoster?: EgressRosterSource
-  /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
-  memory?: MemoryConfig
-  /**
-   * Which tool results the injection screen gates in (boundary guards, ruling
-   * O): the host's classifier, passed as a screen's `classify`. Absent: every
-   * payload is external, which is the library default and the safe direction.
-   */
-  classifyIngress?: IngressClassifier
   /**
    * This deployment's MCP tool→namespace resolver (the app's
    * `app-tools/mcp-catalog.ts`). Passed explicitly — owner ruling B-iii makes

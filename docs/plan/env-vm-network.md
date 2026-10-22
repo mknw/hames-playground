@@ -468,7 +468,8 @@ instance in a `sandbox-*` project whose NIC is not on an `envvm-*` bridge, and a
 differs from the entry point's config (the file W8 names) in environment, bridge or address. The
 entry point accepts any bridge name (`incus-environment.server.ts:264`; its README's example is
 `previewbr`, `packages/sandbox/README.md:258`), and its config is a separate file. Without these
-reads, a VM could sit wholly outside the table while every check stayed green.
+reads, a VM could sit wholly outside the table while every check stayed green. That file must
+therefore exist from the first `--check` (W3) on; a missing or unreadable one is refused.
 
 **How a probe runs.**
 

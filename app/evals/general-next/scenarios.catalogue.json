@@ -6587,9 +6587,9 @@
         }
       ],
       "fixtures": ["sandbox_bash → stdout “391”"],
-      "notes": "Owner, 2026-10-22: “The test Answer arithmetic without tools should use the sandbox for calculation.” This row replaces tn20-arithmetic-no-tools, which graded the opposite (answer directly, no tool, no extra route). The behaviour graded is now to compute in the sandbox and report its output, so the model’s own multiplication earns nothing. A calculator tool is the follow-up: #742 (add calculator tool); when it ships, this row’s tool and route change with it. Until that agent-side change exists a correct decider may answer 391 itself and this row goes red; the agent: item in needs says so, and the row stays must as the owner wrote it.",
+      "notes": "Owner, 2026-10-22: “The test Answer arithmetic without tools should use the sandbox for calculation.” This row replaces tn20-arithmetic-no-tools, which graded the opposite (answer directly, no tool, no extra route). The behaviour graded is now to compute in the sandbox and report its output, so the model’s own multiplication earns nothing. A calculator tool is the follow-up: #742 (add calculator tool); when it ships, this row’s tool and route change with it. The agent-side change is PR #748 (route and decider text only); the grader is unchanged, and the row stays must as the owner wrote it.",
       "needs": [
-        "agent: route or decider text that sends bare arithmetic to the sandbox (today the office-data route describes computing as running code over uploaded files and answer is always available, so a correct decider answers 391 directly), or #742's calculator tool"
+        "agent: satisfied by PR #748: the office-data route description and the decider's answer text now send exact calculation on numbers in the user's latest message to the sandbox and have the answer state its output; follow-up arithmetic over an earlier turn's number is not covered (#742's calculator tool is the later version)"
       ]
     },
     {

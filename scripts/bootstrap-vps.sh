@@ -1847,6 +1847,7 @@ stage_smoke() {
     note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
     note "10 forwarded metadata rules and persistence; cap-dropped throwaway bridge probe blocked; app healthy before/after"
     [[ $files == "$COMPOSE_FILES" ]] || note "11 both clones: running env matches the validated shape; read-only TCP login checks each limited Postgres role"
+    [[ $files != "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]] || note "12 environment VM guard --check (the installed config)"
     if ((PROBE_PRIVATE_HEALTH)); then
       note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
     else
@@ -1855,7 +1856,7 @@ stage_smoke() {
     return 0
   fi
   clone_preflight "$files" || return 1
-  local fails=0 h=$HOSTNAME_ARG out
+  local fails=0 h=$HOSTNAME_ARG out guard_out guard_rc
 
   out=$(sudo ss -H -ltnp | public_listeners "$(desired_ssh_ports) 80 443") || out="(ss failed)"
   if [[ -z $out ]]; then ok "1a tcp: only SSH ($(desired_ssh_ports | tr ' ' '+')), 80 and 443 listen publicly"; else
@@ -1978,6 +1979,27 @@ stage_smoke() {
     if vps_check --clones; then ok "11 both clones use their configured limited database roles and namespaces"; else
       fail "11 clone runtime or limited-role check failed or inconclusive"
       fails=$((fails + 1))
+    fi
+  fi
+  # Item 3 of docs/plan/env-vm-network.md §11: with the dev environment VM
+  # overlay selected, the smoke also runs the guard's own read-only --check
+  # (its default --config is the installed /etc/env-vm-guard/config.json). The
+  # guard's refusal — a missing config, a drifted table, anything it reports —
+  # fails the smoke with the guard's own message, and a checkout without the
+  # installer is refused here rather than silently skipped. The other shapes
+  # (single app, socket overlay, plain clones) never run it.
+  guard_out=""
+  if [[ $files == "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]]; then
+    if [[ -f $APP_DIR/scripts/env-vm-guard.py ]]; then
+      guard_out=$(sudo python3 "$APP_DIR/scripts/env-vm-guard.py" --check 2>&1) && guard_rc=0 || guard_rc=$?
+    else
+      guard_rc=1
+    fi
+    if ((guard_rc == 0)); then
+      ok "12 environment VM guard --check passed (installed config)"
+    else
+      fail "12 environment VM guard --check failed or is unavailable: ${guard_out:-the pinned checkout lacks scripts/env-vm-guard.py}"
+      fails=$((fails + 1)) # the guard refused
     fi
   fi
 

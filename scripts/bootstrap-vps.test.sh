@@ -226,11 +226,18 @@ export CLONE_PYTHON
 CLONE_PYTHON=${CLONE_PYTHON:-$(command -v python3)}
 cat >"$tmproot/bin/python3" <<'SHIM'
 #!/usr/bin/env bash
-if [[ ${SHIM_CLONES:-0} == 1 && ( $1 == *check-vps.py || $1 == *metadata-egress.py ) ]]; then
+if [[ ${SHIM_CLONES:-0} == 1 && ( $1 == *check-vps.py || $1 == *metadata-egress.py || $1 == *env-vm-guard.py ) ]]; then
   printf '%s|%s|python3 %s\n' "${COMPOSE_FILE:-}" "${COMPOSE_PROFILES:-}" "$*" >>"$CLONE_LOG"
   if [[ $1 == *metadata-egress.py ]]; then
     [[ $* == 'scripts/metadata-egress.py --docker-user-only --smoke' ]] || exit 2
     [[ ${SHIM_METADATA_FAIL:-0} == 0 ]] || exit 1
+  fi
+  if [[ $1 == *env-vm-guard.py ]]; then
+    # The smoke runs the guard's read-only --check only; anything else is a bug.
+    [[ $* == *' --check' ]] || exit 2
+    # A guard refusal (the real one for a missing config) is non-zero and speaks
+    # for itself, exactly as the installed guard would.
+    [[ ${SHIM_GUARD_FAIL:-0} == 0 ]] || { echo 'FAIL guard config unreadable or not JSON' >&2; exit 1; }
   fi
   exit 0
 fi
@@ -257,7 +264,7 @@ clone_tests() {
   local clones="$base:docker-compose.clones.yaml" out rc key file
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
-  touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py"
+  touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py" "$dir/release/scripts/env-vm-guard.py"
   for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml docker-compose.dev-sandbox-vm.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
@@ -560,6 +567,39 @@ PY
   if ((rc != 0)) && grep -q 'forwarded metadata policy/persistence/probe failed' <<<"$out"; then
     pass 'clones metadata smoke failure refuses admission'
   else flunk 'clones metadata smoke failure was ignored' "$out"; fi
+  # Item 3 of docs/plan/env-vm-network.md §11: with the dev environment VM
+  # overlay selected, the smoke runs the guard's read-only --check; without the
+  # overlay it never runs, and a guard refusal (carrying the guard's own
+  # message) fails the smoke instead of being swallowed.
+  guard_call="python3 $dir/release/scripts/env-vm-guard.py --check"
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml"
+  out=$(clone_boot smoke 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fq "$guard_call" "$dir/calls"; then
+    pass 'clones VM overlay smoke runs the guard check'
+  else flunk "clones VM overlay smoke did not run the guard check (rc=$rc)" "$out"; fi
+  for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
+    clone_reset
+    clone_select "$shape"
+    out=$(clone_boot smoke 2>&1); rc=$?
+    if ((rc == 0)) && ! grep -Fq "$guard_call" "$dir/calls"; then
+      pass 'clones smoke without the VM overlay runs no guard check'
+    else flunk "clones smoke ran the guard check without the overlay ($shape) (rc=$rc)" "$out"; fi
+  done
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml"
+  out=$(SHIM_GUARD_FAIL=1 clone_boot smoke 2>&1); rc=$?
+  if ((rc != 0)) && grep -q 'unavailable: FAIL guard config unreadable' <<<"$out"; then
+    pass 'clones a guard refusal fails the smoke with the guard message'
+  else flunk "clones ignored a failing guard check (rc=$rc)" "$out"; fi
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml"
+  mv "$dir/release/scripts/env-vm-guard.py" "$dir/held-guard"
+  out=$(clone_boot smoke 2>&1); rc=$?
+  mv "$dir/held-guard" "$dir/release/scripts/env-vm-guard.py"
+  if ((rc != 0)) && grep -q 'lacks scripts/env-vm-guard.py' <<<"$out"; then
+    pass 'clones a missing guard installer refuses instead of silently passing'
+  else flunk "clones accepted a missing guard installer (rc=$rc)" "$out"; fi
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
@@ -684,6 +724,14 @@ mutants = [
     ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
     ('dev-vm-firewall-evidence', '[[ $path == /* && -f $path && -s $path ]] ||', 'true ||'),
     ('dev-vm-firewall-evidence-empty', ' && -f $path && -s $path ]]', ' && -f $path ]]'),
+    # Item 3 (plan env-vm-network §11): with the VM overlay selected, the smoke
+    # runs the guard's read-only --check; its refusal fails the smoke.
+    ('vm-guard-check-skipped', '      guard_out=$(sudo python3 "$APP_DIR/scripts/env-vm-guard.py" --check 2>&1) && guard_rc=0 || guard_rc=$?', '      guard_rc=1'),
+    ('vm-guard-check-unconditional', '  guard_out=""\n  if [[ $files == "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]]; then', '  guard_out=""\n  if [[ $files != "$COMPOSE_FILES" ]]; then'),
+    ('vm-guard-exit-swallowed', '--check 2>&1) && guard_rc=0 || guard_rc=$?', '--check 2>&1 || true) && guard_rc=0 || guard_rc=$?'),
+    ('vm-guard-refusal-uncounted', 'fails=$((fails + 1)) # the guard refused', ': # the guard refused'),
+    ('vm-guard-message-withheld', 'failed or is unavailable: ${guard_out:-the pinned checkout lacks scripts/env-vm-guard.py}"', 'failed (its message withheld)"'),
+    ('vm-guard-missing-installer-accepted', 'if [[ -f $APP_DIR/scripts/env-vm-guard.py ]]; then', 'if [[ -e $APP_DIR ]]; then'),
     ('clone-profiles-app-only', 'if [[ -n $profiles ]] &&', 'if false &&'),
     ('clone-profiles-allow-app', r'''profiles:[[:space:]]*\["app"\]''', r'''profiles:[[:space:]]*\["none"\]'''),
     # Behaviourally identical on small files, so only stage 2b's scan sees it.

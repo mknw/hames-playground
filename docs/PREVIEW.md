@@ -1379,7 +1379,9 @@ answer on #648.
    release that supports it. The overlay cannot be combined with the socket
    opt-in.
 4. **Run the same preflight**, then recreate app-dev with bootstrap's
-   `--only boot --no-seed`, then `--only smoke --no-seed`.
+   `--only boot --no-seed`, then `--only smoke --no-seed`. With the VM overlay
+   selected, that smoke also runs the guard's read-only `--check` against the
+   installed config and refuses when it does not pass.
 
 For a clone declared `per-env`, the validator refuses:
 

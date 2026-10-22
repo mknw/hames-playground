@@ -1,6 +1,6 @@
 # Environment VM network rules (plan)
 
-> **Status: plan only, not built or run.** It answers owner question 9 of
+> **Status: §11 items 1 and 2 are built (installer, overlay, validator); nothing has run on a host.** It answers owner question 9 of
 > [#731](https://github.com/mknw/hames-playground/pull/731); the window needs the owner's explicit
 > GO and [§11](#11-what-has-to-land-before-the-window). SD-19, SD-20. **No SSH, `sshd`,
 > `authorized_keys` or public inbound-firewall change is part of it**: needing one is an escalation
@@ -42,7 +42,7 @@ every other container ──[app-network]──────┘    (every other f
 | Flow                                                       | Verdict                                                                  | Rule ([§2.1](#21-the-guard-table)) |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------- |
 | dev app (link bridge **and** pinned address) → dev VM:2376 | allowed                                                                  | `app_to_vm_dev`                    |
-| replies within an allowed flow                             | allowed                                                                  | the three reply accepts            |
+| replies within an allowed flow, to its own client          | allowed                                                                  | the three reply accepts            |
 | any other container, source or port → any environment VM   | refused, except holders of the host Docker socket (root-equivalent, §10) | `to_vm_refused`                    |
 | VM → the host (any host address and port, IPv4 or IPv6)    | refused                                                                  | `vm_to_host`                       |
 | VM → another environment VM                                | refused                                                                  | `vm_to_vm`                         |
@@ -54,8 +54,33 @@ every other container ──[app-network]──────┘    (every other f
 
 ### 2.1 The guard table
 
-The installer renders the table from a root-owned config with one entry per environment. Here it
-is for one environment, `dev`. Names in angle brackets are the deployment's own values.
+The installer renders the table from a root-owned config with one entry per environment. An
+unknown or missing key is refused. `service` is the environment's Compose service, the link
+network's only allowed member; `entryPointConfig` is the entry point's config, which `--check`
+compares; `probes` feeds the smoke ([§6](#6-what-the-smoke-check-verifies)):
+
+```json
+{
+  "environments": [
+    {
+      "name": "dev",
+      "service": "app-dev",
+      "guestAddress": "<dev-vm-address>",
+      "clientAddress": "<dev-app-address>",
+      "entryPointConfig": "<the entry point's config.json>"
+    }
+  ],
+  "probes": {
+    "otherGuestAddress": "<an address in another environment's planned subnet>",
+    "publicAddress": "<a public address the host reaches>",
+    "publicPort": 443,
+    "hostPort": "<a port the host listens on for every address>"
+  }
+}
+```
+
+Here is the table for one environment, `dev`. Names in angle brackets are the deployment's own
+values.
 
 ```text
 table inet env_vm_guard {
@@ -70,15 +95,15 @@ table inet env_vm_guard {
 
     chain input {
         type filter hook input priority filter - 10; policy accept;
-        # From the dev VM to the host: replies within a flow opened toward that VM only.
-        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established,related accept
+        # From the dev VM to the host: replies within a flow opened toward that VM only, never an ICMP error.
+        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established accept
         iifname "envvm-*" counter name "vm_to_host" drop
     }
 
     chain forward {
         type filter hook forward priority filter - 10; policy accept;
-        # Leaving an environment bridge: replies within a flow opened toward that VM only.
-        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established,related accept
+        # Leaving an environment bridge: replies within a flow opened toward that VM, to that flow's client only.
+        iifname "envvm-dev" ip saddr <dev-vm-address> oifname "envapp-dev" ip daddr <dev-app-address> ct original ip daddr <dev-vm-address> ct state established,related accept
         iifname "envvm-*" oifname "envvm-*" counter name "vm_to_vm" drop
         iifname "envvm-*" ip daddr 169.254.0.0/16 counter name "vm_to_metadata" drop
         iifname "envvm-*" counter name "vm_egress" drop
@@ -106,6 +131,13 @@ What each choice is for:
   it crafts about such a flow, or a packet it spoofs into one, is dropped. Entering the bridge, a
   packet of the allowed flow must still arrive on the link bridge, so a container elsewhere that
   spoofs app-dev's address into the established session is refused too.
+- **A reply goes back to the flow's own client, and never as an ICMP error to the host.**
+  Connection tracking relates an ICMP error by the tuple it embeds, not by where it is sent. While
+  any flow toward the VM exists, the guest could otherwise send an error about it to any address,
+  and the reply accept would end the chain for it. So the `forward` copy also names the link
+  bridge and app-dev's address as the destination (`oifname`, `ip daddr`), and the `input` copy
+  accepts `established` only: a flow the host opens to the VM needs no related error, and the
+  operator's `health` probe is TCP. Probe 8d tests both ([§6](#6-what-the-smoke-check-verifies)).
 - **`inet` covers IPv4 and IPv6.** The drops name no address family, so a guest's IPv6
   link-local packet to the host is dropped like an IPv4 one. Every accept is IPv4, like the
   endpoint: the clone validator refuses anything but a unicast IPv4 guest address
@@ -170,7 +202,8 @@ docker network create --driver bridge \
   envapp-dev
 ```
 
-In the dev VM overlay, a follow-up change ([§11](#11-what-has-to-land-before-the-window)):
+In the dev VM overlay, `docker-compose.dev-sandbox-vm.yaml`, where `<dev-app-address>` is the root
+input `DEV_SANDBOX_LINK_ADDRESS`:
 
 ```yaml
 services:
@@ -209,8 +242,8 @@ stop the release app.
   required, but Compose is not pinned. W0 records the Compose version and stops on a release
   without the key, and the validator refuses a render in which app-dev's link network does not
   carry `gw_priority: 1`.
-- **The validator refuses** any other service on the link network, and an app-dev without the
-  pinned address. `check-vps.py --clones` compares the live network (bridge name, subnet, sole
+- **The validator refuses** any other service on the link network, by the network name Compose
+  renders and not only by its key, and an app-dev without the pinned address. `check-vps.py --clones` compares the live network (bridge name, subnet, sole
   member, address) with the render.
 
 ### 2.4 Routing, end to end
@@ -337,14 +370,14 @@ installing (step W0).
 
 ## 5. Changing the rules: install, journal, undo, dead-man
 
-The installer is proposed as `scripts/env-vm-guard.py`, which does not exist yet
-([§11](#11-what-has-to-land-before-the-window)). It follows `scripts/metadata-egress.py`: an
+The installer is `scripts/env-vm-guard.py` ([§11](#11-what-has-to-land-before-the-window)). It
+follows `scripts/metadata-egress.py`: an
 offline render by default, Linux root only for writes, fixed failure labels and bounded
 subprocesses. Below, "an environment VM" means any instance attached to an `envvm-*` bridge, not
 only the configured ones: every safety check lists them all.
 
-- **Idempotent install.** `--apply` renders the table from the config and compares it with
-  `nft -j list table inet env_vm_guard`, ignoring rule handles and counter values. If they are
+- **Idempotent install.** `--apply` renders the table from the installed config and compares it
+  with `nft -j list table inet env_vm_guard`, ignoring rule handles and counter values. If they are
   equal, nothing is written. If they differ, or the table is absent, it syntax-checks the render
   with `nft -c -f` and then replaces the table in one transaction:
 
@@ -355,13 +388,17 @@ only the configured ones: every safety check lists them all.
   ```
 
   There is never a moment without the table, and a failed transaction leaves the previous one in
-  place. The readback must then equal the render.
+  place. The readback must then equal the render. `--apply` and `--persist` refuse a `--config`
+  that differs from the installed copy: the boot unit applies that copy, so a table applied and
+  confirmed from another file would be replaced at the next Incus start.
 
 - **No change while an environment VM runs.** Replacing the table keeps every connection-tracking
   entry, so a flow the old table admitted, or one that predates the table, would keep flowing
   under the new one. Any `--apply` that would write therefore refuses while an environment VM
   runs; stop the VMs first. A boot never meets one, because no VM runs before the Incus daemon
-  starts.
+  starts. The check reads the kernel, any interface enslaved to an `envvm-*` bridge, never the
+  Incus CLI: the unit runs while the daemon is down, and the CLI would socket-activate the daemon
+  that is waiting on the unit.
 - **The render is the source of truth.** A live table that differs from it, for example after a
   hand edit, is replaced on the next plain `--apply`, and the drifted content is kept in the state
   directory for review. Under `--deadman`, a drifted table is refused instead, because the restore
@@ -378,8 +415,10 @@ only the configured ones: every safety check lists them all.
 - **Exact undo.** `--remove` reverses only journaled entries, newest first. The table is deleted
   only if its live content equals the journaled render, the unit is disabled only if this installer
   enabled it, and files are removed only if they are byte-identical to what it wrote. It **refuses
-  while any environment VM is running**: removing the guard under a running guest is the one undo
-  that would widen access. The manual equivalent from a console, in this order: stop the VM,
+  while any `envvm-*` bridge exists**, so also while any environment VM is running: removing the
+  guard under a running guest is the one undo that would widen access, and a stopped VM's bridge
+  would let its next start run unguarded. The rollback order ([§7](#7-operator-runbook)) deletes
+  the bridge first. The manual equivalent from a console, in this order: stop the VM,
   disable the unit, `nft delete table inet env_vm_guard`. Never `nft flush ruleset`, and never
   restore a saved full ruleset.
 - **Dead-man switch.** An operator change runs `--apply --deadman 600`, or
@@ -396,12 +435,16 @@ only the configured ones: every safety check lists them all.
   and refuses to disarm if the readback differs from the render, so a confirmation cannot approve
   a wrong table.
   - **What counts as a new login.** The arm journals the arming process's logind session id and
-    the arm time. `--confirm` reads its own session
-    (`loginctl show-session self -p Id -p Timestamp`) and refuses unless that session is not the
-    arming one and started after the arm time. One SSH connection is one logind session, so a
-    second channel multiplexed over the arming connection is the same session and is refused; a
-    fresh SSH connection or a console login is a new one and counts. This relies on `sudo`
-    keeping the caller in its login session, which the dry-fire verifies (W2, A11).
+    the arm time on the monotonic clock. `--confirm` reads its own session
+    (`loginctl show-session self -p Id -p TimestampMonotonic -p Class -p Service -p Remote -p TTY`,
+    the same clock) and refuses unless that session is not the arming one, started after the arm
+    time, and is a fresh login: class `user`, and either service `sshd` with `Remote=yes` or a
+    console terminal (`tty<N>`, `ttyS<N>`, `hvc<N>`). One SSH connection is one logind session, so
+    a second channel multiplexed over the arming connection is the same session and is refused; a
+    fresh SSH connection or a console login is a new one and counts. A session started from inside
+    the arming one (`run0`, `systemd-run -p PAMName=login --pty`, `machinectl shell`) is new to
+    logind but proves no fresh login works, and is refused. This relies on `sudo` keeping the
+    caller in its login session, which the dry-fire verifies (W2, A11).
   - **"The previous ruleset" is the guard table's previous state.** Nothing else is written, so
     nothing else is restored: no Docker chain, no UFW rule, no Incus network. Restoring a whole
     saved ruleset would also undo whatever Docker, UFW or Incus changed in the meantime.
@@ -411,12 +454,19 @@ only the configured ones: every safety check lists them all.
     while a dead-man is armed (`--check`, `--confirm`) is bounded well below that. Once it holds
     the lock, it re-reads the journal and exits, journaling why, if its arm id was confirmed in
     the meantime, so it never undoes a confirmed change. If the wait ever reaches the limit, it
-    journals that it did not run and exits non-zero, and `--check` reports the overdue dead-man.
+    notes that it did not run in an append-only log beside the journal, whose lock it cannot
+    take, and exits non-zero, and `--check` reports the overdue dead-man.
   - **A reboot while armed.** A transient timer does not survive a reboot. The boot unit's
     `--apply` therefore reads the journal first, and over a dead-man that is armed, unconfirmed
     and unfired it refuses to apply and runs the restore instead. No VM can run before the Incus
-    daemon starts, so the restore's every-VM-stopped condition holds. The reboot step (W13) still
-    runs only after every change is confirmed, with the console as the fallback.
+    daemon starts, so the restore's every-VM-stopped condition holds. It journals the restore as
+    `restored at boot` and exits non-zero, so the guard unit fails and the Incus daemon does not
+    start. The unit runs again whenever something starts the daemon, any `incus` command through
+    its socket included, and it has no login session: while the journal's newest settled entry is
+    that boot restore, a `--apply` without a logind session refuses, so the unit keeps failing
+    and the environment VMs stay stopped until the operator has re-planned. Only an operator's
+    `--apply` from a login session clears it, and it journals who did. The reboot step (W13)
+    still runs only after every change is confirmed, with the console as the fallback.
 - **One operator at a time.** Writers (`--install`, `--apply`, `--persist`, `--confirm`,
   `--remove` and the restore) take the installer's lock exclusively, and all but the restore
   refuse at once when it is held. `--check` and `--smoke` take it shared. While a dead-man is
@@ -432,12 +482,26 @@ one result record.
 the readback, Docker's two forward rules (§3), the link network's sole member and address, and
 subnet overlaps, it reads through the Incus API, for each configured environment, the project's
 `restricted.networks.access` and its instance's `devices.eth0.network` and `ipv4.address`. It
-refuses unless they equal `envvm-<environment>` and the rendered VM address. It also refuses any
+refuses unless they equal `envvm-<environment>` and the rendered VM address. The project must also
+carry `restricted=true`, without which Incus ignores every `restricted.*` key, with
+`restricted.devices.nic=managed` and `restricted.devices.proxy=block`, as the package sets them
+(`incus-environment.server.ts:498`, `:507`, `:515`): otherwise the environment's credential could
+add a NIC on another network after the check. Bridged frames never reach the `inet` hooks, so it
+reads the kernel's own bridge ports (`ip -j link`), not only what Incus and Docker list: an
+`envvm-<environment>` bridge has at most one port, and only while its VM runs, and an
+`envapp-<environment>` bridge at most one, its Docker member's. Once the environment bridge
+exists, Incus must manage it with the settings of [§2.2](#22-the-environment-bridge-incus) and no
+`bridge.external_interfaces`. It also refuses any
 instance in a `sandbox-*` project whose NIC is not on an `envvm-*` bridge, and a guard config that
 differs from the entry point's config (the file W8 names) in environment, bridge or address. The
 entry point accepts any bridge name (`incus-environment.server.ts:264`; its README's example is
 `previewbr`, `packages/sandbox/README.md:258`), and its config is a separate file. Without these
-reads, a VM could sit wholly outside the table while every check stayed green.
+reads, a VM could sit wholly outside the table while every check stayed green. That file must
+therefore exist from the first `--check` (W3) on. It is read as root under the guard config's own
+rule: opened without following a link, a regular file owned by root and writable by root only, in
+a directory owned by root and writable by root only. A missing, unreadable or unsafe one is
+refused, and so is a delivery directory whose name holds anything but letters, digits, `.`, `_`,
+`-` and `/`, because the smoke's stand-in passes it to Docker's comma-separated `--mount`.
 
 **How a probe runs.**
 
@@ -448,8 +512,13 @@ reads, a VM could sit wholly outside the table while every check stayed green.
   below is.
 - **App-side probes** run either inside app-dev with `docker exec`, or as throwaway containers from
   the already-local app image, as the metadata smoke does (`scripts/metadata-egress.py:276-300`):
-  `--pull never`, every capability dropped, read-only, an unprivileged user. Probe 4b alone keeps
-  `NET_RAW`, to send its raw SYN.
+  `--pull never`, every capability dropped, read-only, an unprivileged user. No container gains a
+  capability. Probe 4b needs a raw SYN, which the app image cannot send: its runtime stage has no
+  raw-socket tool (`app/Dockerfile:15`, `:172`), and Node opens no raw socket. Its throwaway only
+  sleeps on `app-network`; the host's `python3 -I` enters that container's network namespace
+  by Docker's own path for it (`nsenter --net=<SandboxKey>`, under `/var/run/docker/netns/`,
+  which, unlike a pid, cannot be reused for another namespace during the probe) and sends the
+  SYN, which leaves through the container's veth. The record says so.
 - **The stand-in for app-dev** (W9) bind-mounts the three delivered TLS files read-only and runs
   as their owner's uid, with every capability dropped. The client key is delivered mode 0600 to
   its owner (`docs/PREVIEW.md:1330`); it is never copied and its mode is never widened. The
@@ -461,7 +530,7 @@ reads, a VM could sit wholly outside the table while every check stayed green.
 
 1. the TCP connect **times out**, or for a datagram, nothing is delivered;
 2. every packet the probe sent is traced on the host to its own named rule's drop. Each probe
-   uses a fixed, unique source port (the ICMP probe: its type), and the smoke traces that tuple
+   uses a fixed, unique source port (the ICMP probes: their type), and the smoke traces that tuple
    alone with `nft monitor trace`. The trace flag is set by a temporary table of the smoke's own,
    `inet env_vm_guard_trace`, which accepts and drops nothing, is deleted when the smoke ends,
    also on failure, and makes `--check` refuse while it exists. The guard table is never edited
@@ -478,28 +547,29 @@ A reset (`ECONNREFUSED`) proves the packet arrived: it is a failure, not a refus
 such as "no route" is inconclusive. Anything inconclusive fails the smoke. A connect that
 succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-and-what-the-operator-does)).
 
-| #   | Probe                                                                                                                                                                                         | Expected                                                                                                            | Counter                              |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| 1   | app-dev → its own VM:2376, with the app's own `SANDBOX_DOCKER_*` settings and the image's Docker CLI (`app/Dockerfile:180`)                                                                   | the daemon answers, mutual TLS                                                                                      | `app_to_vm_dev`                      |
-| 2   | host → VM:2376: the entry point's `health <config.json> --wait 600` (`packages/sandbox/scripts/incus-environment.ts`)                                                                         | exit 0, and `Docker ready at <endpoint>; client certificate valid for N more days` (`incus-environment.ts:285-317`) | none                                 |
-| 3   | throwaway on the link network with another address → VM:2376                                                                                                                                  | refused                                                                                                             | `to_vm_refused`                      |
-| 4   | throwaway on `app-network` → VM:2376 (stands for the release app, the gateway and every other service on its ordinary network path; holders of the host Docker socket: §10)                   | refused                                                                                                             | `to_vm_refused`                      |
-| 4b  | throwaway on `app-network` → VM:2376, a raw SYN with app-dev's pinned address as its source                                                                                                   | refused; `app_to_vm_dev` unchanged                                                                                  | `to_vm_refused`                      |
-| 5   | app-dev → its own VM on another port                                                                                                                                                          | refused                                                                                                             | `to_vm_refused`                      |
-| 6   | app-dev → another environment's VM:2376, once one exists                                                                                                                                      | refused                                                                                                             | `to_vm_refused`                      |
-| 7   | **VM → VM:** guest → another environment's guest:2376                                                                                                                                         | refused                                                                                                             | `vm_to_vm`                           |
-| 8   | **VM → host:** guest → its bridge gateway and the host's primary address, on a port the host listens on for every address; and the gateway's IPv6 link-local, if it has one                   | refused                                                                                                             | `vm_to_host`                         |
-| 8b  | **VM → host:** guest → the host, an ICMP error that embeds the tuple of a flow the smoke opens from the host                                                                                  | refused                                                                                                             | `vm_to_host`                         |
-| 8c  | **VM → host:** guest → a host listener the smoke opens on the bridge gateway, a datagram with a spoofed source address                                                                        | never delivered                                                                                                     | `vm_to_host`, or the NIC filter (A9) |
-| 9   | **VM → metadata:** guest → `169.254.169.254:80`                                                                                                                                               | refused                                                                                                             | `vm_to_metadata`                     |
-| 10  | **VM → internet:** guest → a public address on 443 that the host itself reaches (the positive control)                                                                                        | refused                                                                                                             | `vm_egress`                          |
-| 11  | VM → containers: guest → app-dev's link address, and a service on `app-network`                                                                                                               | refused                                                                                                             | `vm_egress`                          |
-| 12  | persistence: the unit enabled and ordered before the Incus daemon, files byte-identical to the reviewed copies, readback equal to the render, no flushing firewall manager, no dead-man armed | pass                                                                                                                | none                                 |
+| #   | Probe                                                                                                                                                                                                                                                                 | Expected                           | Counter                              |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------ |
+| 1   | app-dev → its own VM:2376, with the app's own `SANDBOX_DOCKER_*` settings and the image's Docker CLI (`app/Dockerfile:180`)                                                                                                                                           | the daemon answers, mutual TLS     | `app_to_vm_dev`                      |
+| 2   | host → VM:2376: the host's Docker CLI with the delivered TLS files (`docker --host tcp://<guest>:2376 --tlsverify … version`), bounded, no registry fetch. The entry point's `health <config.json> --wait 600` stays a runbook step before every smoke (W8, W12, W13) | the daemon answers                 | none                                 |
+| 3   | throwaway on the link network with another address → VM:2376                                                                                                                                                                                                          | refused                            | `to_vm_refused`                      |
+| 4   | throwaway on `app-network` → VM:2376 (stands for the release app, the gateway and every other service on its ordinary network path; holders of the host Docker socket: §10)                                                                                           | refused                            | `to_vm_refused`                      |
+| 4b  | `app-network` → VM:2376, a raw SYN with app-dev's pinned address as its source, sent by the host from a throwaway's network namespace (no capability added)                                                                                                           | refused; `app_to_vm_dev` unchanged | `to_vm_refused`                      |
+| 5   | app-dev → its own VM on another port                                                                                                                                                                                                                                  | refused                            | `to_vm_refused`                      |
+| 6   | app-dev → another environment's VM:2376, once one exists                                                                                                                                                                                                              | refused                            | `to_vm_refused`                      |
+| 7   | **VM → VM:** guest → another environment's guest:2376                                                                                                                                                                                                                 | refused                            | `vm_to_vm`                           |
+| 8   | **VM → host:** guest → its bridge gateway and the host's primary address, on a port the host listens on for every address; and the gateway's IPv6 link-local, if it has one                                                                                           | refused                            | `vm_to_host`                         |
+| 8b  | **VM → host:** guest → the host, an ICMP error that embeds the tuple of a flow the smoke opens from the host                                                                                                                                                          | refused                            | `vm_to_host`                         |
+| 8c  | **VM → host:** guest → a host listener the smoke opens on the bridge gateway, a datagram with a spoofed source address                                                                                                                                                | never delivered                    | `vm_to_host`, or the NIC filter (A9) |
+| 8d  | **VM → anywhere but the client:** guest → a public address, and → the host's primary address: an ICMP error that embeds a flow the host holds open to the VM's Docker port, so connection tracking relates it                                                         | refused                            | `vm_egress`; `vm_to_host`            |
+| 9   | **VM → metadata:** guest → `169.254.169.254:80`                                                                                                                                                                                                                       | refused                            | `vm_to_metadata`                     |
+| 10  | **VM → internet:** guest → a public address on 443 that the host itself reaches (the positive control)                                                                                                                                                                | refused                            | `vm_egress`                          |
+| 11  | VM → containers: guest → app-dev's link address, and a service on `app-network`                                                                                                                                                                                       | refused                            | `vm_egress`                          |
+| 12  | persistence: the unit enabled and ordered before the Incus daemon, files byte-identical to the reviewed copies, readback equal to the render, no flushing firewall manager, no dead-man armed                                                                         | pass                               | none                                 |
 
 - **The five required checks** (app-to-VM allowed; VM-to-VM, VM-to-host, VM-to-metadata and
   VM-to-internet refused) are probes 1, 7, 8, 9 and 10. Probes 1 and 3 together also show that the
   `forward` chain sees app-dev's own address rather than the masqueraded one. Probe 4b tests the
-  bridge half of the identity, and probes 8b and 8c the reply accepts' binding
+  bridge half of the identity, and probes 8b, 8c and 8d the reply accepts' binding
   ([§2.1](#21-the-guard-table)).
 - **With one environment** (dev, until release moves), probe 7 targets an address in another
   environment's planned subnet. With no second bridge, the packet would leave through the uplink,
@@ -509,10 +579,13 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
 - **Before app-dev joins the link network**, the stand-in holding the pinned address takes its
   place in probe 1. That is how the window proves the rule before it enables the overlay that
   needs the evidence (step W9).
-- **The record** holds the installer's commit, the render's hash, each probe's outcome, trace and
+- **The record** holds the installer's git blob id (`git log --find-object=<id>` names its
+  commit; the installed copy has no git), the render's hash, each probe's outcome, trace and
   counter change, which filter dropped probe 8c, and whether it was a single-environment run.
   `DEV_SANDBOX_FIREWALL_EVIDENCE` names it. Bootstrap only requires that file to exist and be
-  non-empty (`scripts/bootstrap-vps.sh:516-522`).
+  non-empty (`scripts/bootstrap-vps.sh:517-523`), so the smoke removes any earlier record when it
+  starts and writes a new one only when every probe passes: a failed run can never satisfy that
+  gate.
 
 ## 7. Operator runbook
 
@@ -542,8 +615,8 @@ no bridge is ever unguarded.
 | Step | Action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Undo                                                 |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
 | W0   | Read-only survey, with private snapshots for diffing only, never replayed: `nft list tables`, `iptables-save`, `ip6tables-save`, `iptables --version` (nf_tables or legacy), `ufw status verbose`, `ip -j route`, `ip -j addr`, `docker compose version`, the host's vsock listeners and packet sockets (`ss -l -p --vsock`, `ss -a -p --packet`), the Incus daemon's units, `getent group incus incus-admin`, `nftables.service`, each container's id, start time and health, and an `sshd -T` digest. **Stop** if a firewall manager that flushes the ruleset is enabled, a planned subnet overlaps a route, `FORWARD`'s first rule is not `-j DOCKER-USER`, Docker's firewall backend is not iptables, the Compose release does not support `gw_priority`, or a packet socket is bound to all interfaces. | none                                                 |
-| W1   | `--install`: copy the installer and its config to their root-owned places, journaled. From here on, every step runs that copy, never the checkout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `--remove`                                           |
-| W2   | Dry-fire the dead-man twice on a no-op, armed for 60 s each time. First, a `--confirm` from the arming session is refused, and one from a fresh login disarms it. Then, left unconfirmed, it fires and journals.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | none                                                 |
+| W1   | `--install`: copy the installer and its config to their root-owned places, journaled. It validates the bytes it copies and prints their render's sha256, which must equal the one the offline render printed for review. From here on, every step runs that copy, never the checkout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `--remove`                                           |
+| W2   | Dry-fire the dead-man twice on a no-op, `--deadman 60` alone, armed for 60 s each time. First, a `--confirm` from the arming session is refused, and so is one from a session started inside it with `run0` or `systemd-run -p PAMName=login --pty`; one from a fresh login disarms it. Then, left unconfirmed, it fires and journals.                                                                                                                                                                                                                                                                                                                                                                                                                                     | none                                                 |
 | W3   | `--apply --deadman 600`, before any bridge exists. From a fresh login: `--check`, then `--confirm`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `--remove`                                           |
 | W4   | `--persist --deadman 600`. `systemd-analyze verify` on the unit; the Incus daemon's unit lists the guard in `Requires=` and `After=`; `systemctl show incus-startup.service -p After -p Requires` lists `incus.service`, so the guard precedes the unit that restores VMs. From a fresh login: `--confirm`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `--remove`                                           |
 | W5   | Restart the Incus daemon (or start it, if the owner chose to stop it after the install plan's I12), with no bridge and no VM yet. The guard ran first; the readback is unchanged. The install plan's A9 record (`environment.firewall`), read again, is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | none                                                 |
@@ -566,38 +639,38 @@ Each step is exact and refuses on state it does not own.
 
 ## 8. Failure modes and what the operator does
 
-| Symptom                                                                                                | Likely cause                                                                                                                                   | What the operator does                                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The Incus daemon does not start; the guard unit failed                                                 | config unreadable or unsafe; `nft` refused the render; the readback differed; a change refused because an environment VM runs                  | `journalctl -u env-vm-guard.service` names the cause. Fix it, then start the Incus daemon. Never mask or disable the guard to get Incus up. Release is unaffected.                |
-| Probe 1 fails while every refusal passes                                                               | Docker's accept for the link bridge is missing (A3); app-dev is not on the link network or not routed through it; the guest's Docker is not up | `--check` names the missing precondition, and `health <config.json> --wait 600` checks the guest. Recreate app-dev if needed. Never add a broad accept.                           |
-| A refusal probe connects, or answers with a reset                                                      | the guard is not doing its job                                                                                                                 | Stop the VM at once (`incus stop --force`), keep the overlay off, keep the record, stop the window and escalate. No fixing forward inside the window.                             |
-| A refusal times out but its packets are not traced to its rule, or its counter moves by another amount | the packet never reached the rule (a wrong name, bridge or route), or another source moved the counter                                         | Treat it as a failure, and investigate before claiming any isolation.                                                                                                             |
-| `--check` reports the table missing or changed                                                         | a flush, a firewall manager that flushes, a hand edit                                                                                          | Stop the environment VMs, `--apply`, `--check`, start the VMs, `--smoke`. Then find what flushed: if Docker's and UFW's rules went too, that is a host incident beyond this plan. |
-| `--check` refuses: a VM's project, NIC bridge or address differs from the guard's config               | the guard's and the entry point's configs disagree, or a manual change to the instance                                                         | Stop the VM. Correct the config that is wrong, through a reviewed change, then `--check` and `--smoke`. Never widen the guard to match a VM.                                      |
-| The dead-man fired                                                                                     | no confirmation from a new login session within 10 minutes                                                                                     | The environment VMs are stopped and the previous table is back. Log in (by console if needed), read both journals and re-plan. Never re-run the same change unexamined.           |
-| After a reboot, the environment VMs are stopped and the previous table is back                         | a dead-man was armed and unconfirmed when the host went down, so the boot `--apply` ran the restore                                            | As for a fired dead-man.                                                                                                                                                          |
-| SSH lost after a change                                                                                | should be impossible: no rule matches the public interface                                                                                     | Wait for the dead-man, at most 10 minutes. If it did not fire, from the console: stop the VMs, disable the unit, `nft delete table inet env_vm_guard`.                            |
-| A writer refuses: lock held, or a dead-man armed                                                       | another run is in progress, or a change awaits its confirmation                                                                                | Wait for it, confirm it from a new login session, or resolve it from the console. Never delete the lock or the journal.                                                           |
-| `--check` refuses: a second instance on a bridge, another member on the link network, an address drift | a manual attachment or a Compose edit                                                                                                          | Detach or revert. The validator and `check-vps.py --clones` should have refused it first, so find out why they did not.                                                           |
+| Symptom                                                                                                                               | Likely cause                                                                                                                                                                                               | What the operator does                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The Incus daemon does not start; the guard unit failed                                                                                | config unreadable or unsafe; `nft` refused the render; the readback differed; a change refused because an environment VM runs                                                                              | `journalctl -u env-vm-guard.service` names the cause. Fix it, then start the Incus daemon. Never mask or disable the guard to get Incus up. Release is unaffected.                |
+| Probe 1 fails while every refusal passes                                                                                              | Docker's accept for the link bridge is missing (A3); app-dev is not on the link network or not routed through it; the guest's Docker is not up                                                             | `--check` names the missing precondition, and `health <config.json> --wait 600` checks the guest. Recreate app-dev if needed. Never add a broad accept.                           |
+| A refusal probe connects, or answers with a reset                                                                                     | the guard is not doing its job                                                                                                                                                                             | Stop the VM at once (`incus stop --force`), keep the overlay off, keep the record, stop the window and escalate. No fixing forward inside the window.                             |
+| A refusal times out but its packets are not traced to its rule, or its counter moves by another amount                                | the packet never reached the rule (a wrong name, bridge or route), or another source moved the counter                                                                                                     | Treat it as a failure, and investigate before claiming any isolation.                                                                                                             |
+| `--check` reports the table missing or changed                                                                                        | a flush, a firewall manager that flushes, a hand edit                                                                                                                                                      | Stop the environment VMs, `--apply`, `--check`, start the VMs, `--smoke`. Then find what flushed: if Docker's and UFW's rules went too, that is a host incident beyond this plan. |
+| `--check` refuses: a VM's project, NIC bridge or address differs from the guard's config                                              | the guard's and the entry point's configs disagree, or a manual change to the instance                                                                                                                     | Stop the VM. Correct the config that is wrong, through a reviewed change, then `--check` and `--smoke`. Never widen the guard to match a VM.                                      |
+| The dead-man fired                                                                                                                    | no confirmation from a new login session within 10 minutes                                                                                                                                                 | The environment VMs are stopped and the previous table is back. Log in (by console if needed), read both journals and re-plan. Never re-run the same change unexamined.           |
+| After a reboot, the guard unit failed, the Incus daemon did not start, the environment VMs are stopped and the previous table is back | a dead-man was armed and unconfirmed when the host went down, so the boot `--apply` ran the restore, journaled it `restored at boot` and exited non-zero; every later run of the unit refuses the same way | As for a fired dead-man. After re-planning, run `--apply` from a login session, which clears the boot restore; only then start the Incus daemon.                                  |
+| SSH lost after a change                                                                                                               | should be impossible: no rule matches the public interface                                                                                                                                                 | Wait for the dead-man, at most 10 minutes. If it did not fire, from the console: stop the VMs, disable the unit, `nft delete table inet env_vm_guard`.                            |
+| A writer refuses: lock held, or a dead-man armed                                                                                      | another run is in progress, or a change awaits its confirmation                                                                                                                                            | Wait for it, confirm it from a new login session, or resolve it from the console. Never delete the lock or the journal.                                                           |
+| `--check` refuses: a second instance or port on a bridge, another member on the link network, an address drift                        | a manual attachment or a Compose edit                                                                                                                                                                      | Detach or revert. The validator and `check-vps.py --clones` should have refused it first, so find out why they did not.                                                           |
 
 ## 9. What the plan relies on and the window verifies
 
 These are upstream behaviours. The repository cannot pin them, so the window records evidence for
 each one.
 
-| Ref | Assumption                                                                                                                                                    | Evidence in the window                                                                       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| A1  | A `drop` in any base chain is final; an accept in another chain cannot override it                                                                            | probes 3 and 4 refuse flows that Docker's own rules accept                                   |
-| A2  | `iifname` wildcards match by name when a packet arrives                                                                                                       | the table loads before the bridges exist (W3); the probes pass after (W9)                    |
-| A3  | Docker accepts traffic leaving a non-internal bridge, and its replies                                                                                         | `--check` reads both rules; probe 1                                                          |
-| A4  | Incus writes only its own table                                                                                                                               | the W0 and W14 diffs of `nft list tables` and of Incus's own table                           |
-| A5  | The Incus daemon restores each VM's last power state when it starts                                                                                           | W12, W13                                                                                     |
-| A6  | `RequiredBy=`, `Before=` and `PartOf=` order the guard before every daemon start                                                                              | `systemd-analyze verify`; journal timestamps in W5, W12 and W13                              |
-| A7  | Docker masquerades app-dev's traffic at post-routing, after the guard's `forward` chain                                                                       | probes 1 and 3 together                                                                      |
-| A8  | Docker and UFW write only their own chains, through `iptables` on the backend W0 records, never this table                                                    | W13: after a reboot, Docker and UFW have loaded and the readback is unchanged                |
-| A9  | The guest NIC's IPv4 and IPv6 anti-spoofing is in force                                                                                                       | the persistent Incus install plan's own check; probe 8c                                      |
-| A10 | With `ipv4.firewall=false` and `ipv6.firewall=false`, Incus writes no filter rules for the bridge, and the allowed flow and its replies cross it without them | the W0 and W14 diffs of Incus's own table; probes 1 and 3, with Incus's rules absent         |
-| A11 | `sudo` keeps the caller in its logind session, and a channel multiplexed over an SSH connection is in that connection's session                               | W2: a `--confirm` from the arming session is refused, and one from a fresh login is accepted |
+| Ref | Assumption                                                                                                                                                                                                                                                                       | Evidence in the window                                                                                                       |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| A1  | A `drop` in any base chain is final; an accept in another chain cannot override it                                                                                                                                                                                               | probes 3 and 4 refuse flows that Docker's own rules accept                                                                   |
+| A2  | `iifname` wildcards match by name when a packet arrives                                                                                                                                                                                                                          | the table loads before the bridges exist (W3); the probes pass after (W9)                                                    |
+| A3  | Docker accepts traffic leaving a non-internal bridge, and its replies                                                                                                                                                                                                            | `--check` reads both rules; probe 1                                                                                          |
+| A4  | Incus writes only its own table                                                                                                                                                                                                                                                  | the W0 and W14 diffs of `nft list tables` and of Incus's own table                                                           |
+| A5  | The Incus daemon restores each VM's last power state when it starts                                                                                                                                                                                                              | W12, W13                                                                                                                     |
+| A6  | `RequiredBy=`, `Before=` and `PartOf=` order the guard before every daemon start                                                                                                                                                                                                 | `systemd-analyze verify`; journal timestamps in W5, W12 and W13                                                              |
+| A7  | Docker masquerades app-dev's traffic at post-routing, after the guard's `forward` chain                                                                                                                                                                                          | probes 1 and 3 together                                                                                                      |
+| A8  | Docker and UFW write only their own chains, through `iptables` on the backend W0 records, never this table                                                                                                                                                                       | W13: after a reboot, Docker and UFW have loaded and the readback is unchanged                                                |
+| A9  | The guest NIC's IPv4 and IPv6 anti-spoofing is in force                                                                                                                                                                                                                          | the persistent Incus install plan's own check; probe 8c                                                                      |
+| A10 | With `ipv4.firewall=false` and `ipv6.firewall=false`, Incus writes no filter rules for the bridge, and the allowed flow and its replies cross it without them                                                                                                                    | the W0 and W14 diffs of Incus's own table; probes 1 and 3, with Incus's rules absent                                         |
+| A11 | `sudo` keeps the caller in its logind session, a channel multiplexed over an SSH connection is in that connection's session, and logind reports a session started with `run0` or `systemd-run -p PAMName=login` as another service than `sshd`, not remote, on a pseudo-terminal | W2: a `--confirm` from the arming session, or from one started inside it, is refused, and one from a fresh login is accepted |
 
 ## 10. Deliberately left out
 
@@ -644,7 +717,8 @@ each one.
    At least:
    - a drop removed or narrowed (the wildcard reduced to one bridge); the allow widened (its
      address, bridge or port dropped); the replies' accept moved below the drops; a reply accept
-     that loses its `ct original` binding or its source address;
+     that loses its `ct original` binding or its source address; a `forward` reply accept that loses
+     its client binding, or an `input` one that accepts a related ICMP error;
    - an environment name longer than 8 characters accepted;
    - an apply that writes when the table is equal; the replacement split across two transactions;
      the readback skipped; an apply that writes while an environment VM runs; a `--deadman` apply
@@ -665,7 +739,7 @@ each one.
    [§2.3](#23-the-dev-apps-link-network-docker), with the validator refusing a render without
    `gw_priority: 1`. In the same PR as the installer: update `docs/PREVIEW.md` §12 to the link
    network as the one allowed source (step 1's proof, the evidence wording in step 2, and "What
-   this does not establish"), the matching comment in `scripts/bootstrap-vps.sh:517-518`, and
+   this does not establish"), the matching comment in `scripts/bootstrap-vps.sh:517-519`, and
    the Scripts line in `docs/INDEX.md` for `scripts/env-vm-guard.py`.
 3. **The bootstrap smoke**: with the VM overlay selected, `--only smoke` runs the guard's
    `--check`.

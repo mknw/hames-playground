@@ -101,9 +101,19 @@ with real certificate generation and pins these fail-closed invariants:
   only while the VM is stopped with `volatile.apply_template=create`, and read
   back with the MAC before start. Seed or MAC drift is refused. A booted VM
   with no seed is refused and must be recreated.
-- Manager origins require verified HTTPS; image origins additionally require
-  port 443. No redirects, plaintext retry, alternate provider, credential or
-  provider response body is exposed through diagnostics.
+- Manager origins require verified HTTPS; a simplestreams image origin
+  additionally requires port 443. No redirects, plaintext retry, alternate
+  provider, credential or provider response body is exposed through diagnostics.
+- The image option names exactly one source; a config naming both, or neither,
+  is refused. The local-files form stages the two split-image files root-owned
+  outside every checkout, and reconcile imports them into its own project over
+  the restricted certificate, bounded and checked first: absolute path, no
+  symlink anywhere in the path, a regular file, uid 0, no group/other write,
+  under its size cap, and no `.git` entry in any parent. The instance is
+  created only after Incus's own fingerprint over the received bytes equals
+  the pin; any other fingerprint is deleted and refused while no instance
+  exists, and the create names no remote server. With no server, the project's
+  image-server allowlist key stays unset, which permits no remote pull.
 - Docker requires mTLS on only the reserved guest bridge address. Certificate
   roles, CA constraints, key usage, server SAN, issuer and validity are explicit.
   Private keys, `state.json` and `creation.json` have mode 0600; the operator
@@ -130,7 +140,8 @@ certificate looks under TLS 1.3, or silence past the bound), no TLS at all
 File errors carry no contents.
 
 These hermetic tests and their red mutations establish the client contract,
-not a real VM or host firewall boundary. Real Incus image pulls, VM boot,
+not a real VM or host firewall boundary. Real Incus image pulls, real local
+image imports, VM boot,
 cloud-init/agent, routing/firewall, streams/files/PTY and performance remain
 spike evidence. The server key stays in cloud-init data for the VM lifetime;
 the compose overlay leaves the root app and gateway network/socket caveats

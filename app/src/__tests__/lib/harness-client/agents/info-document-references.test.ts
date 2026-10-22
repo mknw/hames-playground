@@ -321,7 +321,7 @@ describe('R1 flow 4', () => {
       toolNamespaces: mcpNamespace,
       withSandbox: () => (pattern) => pattern,
       createRedisBackend: () => backend,
-      pseudonymiseForWeb,
+      guards: { pseudonymiseForWeb },
     } satisfies AgentDeps)
     const result = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       composed.routes['info-retrieval'].pattern.fn(

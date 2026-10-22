@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * compactBulkData Tests
  *
@@ -19,6 +19,8 @@ import type {
   DescribeBatchItem,
 } from '@hames-ai/harness-patterns/types'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
+
+useFlagDrivenDefaultTier()
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns

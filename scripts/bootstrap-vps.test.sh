@@ -258,9 +258,23 @@ clone_tests() {
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
   touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py"
-  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
+  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml docker-compose.dev-sandbox-vm.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
+  # Synthetic dev environment VM client material, outside both checkouts.
+  mkdir -p "$dir/tls"
+  (
+    cd "$dir/tls" || exit 1
+    openssl req -new -x509 -nodes -days 1 -subj /CN=dev-ca -newkey rsa:2048 -keyout ca-key.pem \
+      -addext basicConstraints=critical,CA:TRUE -out ca.pem &&
+      openssl req -new -newkey rsa:2048 -nodes -subj /CN=dev-client -keyout key.pem -out client.csr &&
+      printf 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n' >client.ext &&
+      openssl x509 -req -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile client.ext -out cert.pem &&
+      chmod 600 key.pem ca-key.pem
+  ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
+  echo 'synthetic firewall evidence record' >"$dir/firewall-evidence.txt"
+  : >"$dir/firewall-empty.txt"
+
   for file in release dev; do
     cat >"$dir/$file-runtime.env" <<ENV
 AUTH_SESSION_SECRET=$file-synthetic-session-11111111111111111111111111111111
@@ -290,7 +304,8 @@ for clone, service in [('release', 'app'), ('dev', 'app-dev')]:
             AUTH_SESSION_SECRET=clone + '-synthetic-session-' + '1'*32,
             TOKEN_ENCRYPTION_KEY=clone + '-synthetic-token-' + '2'*32,
             DATABASE_URL=f'postgresql://{clone}_app:{clone}-synthetic@postgres:5432/app_{clone}'))
-(p / 'good.json').write_text(json.dumps({'name': 'synthetic', 'x-clone-dev-docker-socket': False, 'services': apps}))
+(p / 'good.json').write_text(json.dumps({'name': 'synthetic', 'x-clone-dev-docker-socket': False,
+    'x-clone-release-sandbox': 'socket', 'x-clone-dev-sandbox': 'socket', 'services': apps}))
 PY
   cat >"$dir/good.env" <<ENV
 COMPOSE_FILE=$clones
@@ -351,6 +366,17 @@ c['services']['app-dev']['volumes'].append(dict(type='bind',source='/var/run/doc
 p.write_text(json.dumps(c))
 PY
     fi
+    if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+      printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${2-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
+      python3 - "$dir/render.json" "$dir/tls" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); dev=c['services']['app-dev']
+c['x-clone-dev-sandbox']='per-env'
+dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://198.51.100.2:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
+dev['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
+p.write_text(json.dumps(c))
+PY
+    fi
   }
   clone_refused() {
     local label=$1 result status
@@ -373,6 +399,34 @@ PY
   if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox.yaml|app|compose up -d" "$dir/calls"; then
     pass "clones retains the explicit owner socket overlay"
   else flunk "clones owner overlay (rc=$rc)" "$out"; fi
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones:docker-compose.dev-sandbox-vm.yaml|app|compose up -d" "$dir/calls"; then
+    pass "clones retains the dev environment VM overlay"
+  else flunk "clones dev VM overlay (rc=$rc)" "$out"; fi
+  for shape in "$clones:docker-compose.dev-sandbox.yaml:docker-compose.dev-sandbox-vm.yaml" \
+    "$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.dev-sandbox.yaml" "$base:docker-compose.dev-sandbox-vm.yaml"; do
+    clone_reset
+    printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+    clone_refused 'a combined or clone-less dev sandbox overlay'
+  done
+  for evidence in '' "$dir/firewall-empty.txt" firewall-evidence.txt "$dir/absent.txt"; do
+    clone_reset
+    clone_select "$clones:docker-compose.dev-sandbox-vm.yaml" "$evidence"
+    clone_refused "the dev VM overlay without its firewall evidence file (${evidence:-unset})"
+  done
+  # A service of another profile is absent from the render the validator reads.
+  for profile in '    profiles: ["debug"]' '    profiles:' '    profiles: [app, debug]'; do
+    clone_reset
+    printf '%s\n' "$profile" >"$dir/release/docker-compose.clones.yaml"
+    clone_refused "a Compose profile other than app ($profile)"
+  done
+  clone_reset
+  printf '%s\n' '    profiles: ["app"]' >"$dir/release/docker-compose.clones.yaml"
+  out=$(clone_boot 2>&1); rc=$?
+  : >"$dir/release/docker-compose.clones.yaml"
+  if ((rc == 0)); then pass "clones accepts services of the app profile"; else flunk "clones app profile (rc=$rc)" "$out"; fi
   # Compare every box-changing command byte-for-byte, excluding only the two
   # exact read-only commands added by the coordinator-approved box-state guard.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
@@ -459,7 +513,7 @@ PY
 
   # The real shared wrappers: only Docker/Python/HTTP effects are inert.
   for operation in dc probe smoke images; do
-    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
+    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml" "$clones:docker-compose.dev-sandbox-vm.yaml"; do
       clone_reset
       clone_select "$shape"
       [[ $operation != images ]] || continue # failure path below; image catalogue is out of scope
@@ -625,6 +679,16 @@ mutants = [
     ('runtime-owner-file-parser', 'v=$(env_get "$key" "$file")', 'v=$(env_get "$key")'),
     ('dev-ref-head', '[[ $head == "$ref" && -z $dirty ]]', '[[ -z $dirty ]]'),
     ('dev-checkout-clean', '[[ $head == "$ref" && -z $dirty ]]', '[[ $head == "$ref" ]]'),
+    ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
+    ('dev-vm-firewall-evidence', '[[ $path == /* && -f $path && -s $path ]] ||', 'true ||'),
+    ('dev-vm-firewall-evidence-empty', ' && -f $path && -s $path ]]', ' && -f $path ]]'),
+    ('clone-profiles-app-only', 'if [[ -n $profiles ]] &&', 'if false &&'),
+    ('clone-profiles-allow-app', r'''profiles:[[:space:]]*\["app"\]''', r'''profiles:[[:space:]]*\["none"\]'''),
+    # Behaviourally identical on small files, so only stage 2b's scan sees it.
+    ('profiles-sigpipe-pipeline', '''profiles=$(grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" || true)
+    if [[ -n $profiles ]] && grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$' <<<"$profiles"; then''',
+     '''if grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" | grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$'; then''',
+     'FAIL 2b SIGPIPE-prone pipeline'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
@@ -632,14 +696,14 @@ if baseline.returncode:
 with tempfile.TemporaryDirectory() as tmp:
     validator = source.parent / 'validate-clones.mjs'
     policy = validator.read_text()
-    for name, old, new in mutants:
+    for name, old, new, *expected in mutants:
         if original.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
         changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
         result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
-        if not result.returncode or 'FAIL clones' not in result.stdout:
+        if not result.returncode or (expected or ['FAIL clones'])[0] not in result.stdout:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
     # New validator pins run the actual unit fixtures against a temporary
@@ -650,6 +714,57 @@ with tempfile.TemporaryDirectory() as tmp:
         ('equal-role-passwords', 'passwords[0] !== passwords[1]', 'true'),
         ('root-only-app-inputs', '!Object.keys(env).some', 'true || !Object.keys(env).some'),
         ('reserved-database', '!["postgres", "template0", "template1"].includes', 'true || !["postgres", "template0", "template1"].includes'),
+        # #648: each clone's sandbox endpoint, its own environment VM over TLS.
+        ('sandbox-mode-declared', 'modes.every((mode) => SANDBOX_MODES.includes(mode))', 'true'),
+        ('host-reach', '!HOST_REACH.some((key) => [app[key]].flat().some(Boolean))', 'true'),
+        ('host-reach-pid', '  "pid",\n', ''),
+        ('host-reach-volumes-from', '  "volumes_from",\n', ''),
+        ('vm-exact-mounts', 'volumes.length === 4 &&', ''),
+        ('vm-read-only-mounts', 'volumes.every((v) => v.type === "bind" && v.read_only === true) &&', ''),
+        ('vm-never-create-path', ' && v.bind?.create_host_path === false', ''),
+        ('vm-tls-settings', '.join() === ["SANDBOX_DOCKER_HOST", ...Object.keys(TLS_FILES)].join() &&', '.join() !== "" &&'),
+        ('vm-tls-targets', 'Object.entries(TLS_FILES).every(([key, target]) => env[key] === target)', 'true'),
+        ('vm-ipv4', 'isIPv4(endpoint[1]) &&', ''),
+        ('vm-port-range', 'Number(endpoint[2]) >= 1 &&\n      Number(endpoint[2]) <= 65535 &&', ''),
+        ('vm-address-class', '!(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254))', 'true'),
+        ('vm-regular-file', 'check(stat.isFile(), "TLS mounts must be regular files");', ''),
+        ('vm-outside-checkouts', '!roots.some((root) => path.startsWith(root + sep))', 'true'),
+        ('vm-key-permissions', '(files.SANDBOX_DOCKER_TLS_KEY.stat.mode & 0o077) === 0', 'true'),
+        ('vm-single-certificates', 'certificates(ca) === 1 &&\n      certificates(leaf) === 1 &&', ''),
+        ('vm-no-key-in-certificates', '![ca, leaf].some((pem) => pem.includes("PRIVATE KEY-----"))', 'true'),
+        ('vm-leaf-not-ca', '!certificate.ca &&', ''),
+        ('vm-chain-own-ca', 'certificate.verify(authority.publicKey) &&', ''),
+        ('vm-key-matches', 'certificate.checkPrivateKey(\n        createPrivateKey(files.SANDBOX_DOCKER_TLS_KEY.pem),\n      )', 'true'),
+        ('vm-one-service', 'other === name ||', 'true ||'),
+        ('vm-own-host', 'own.host !== other.host', 'true'),
+        ('vm-cross-identity', '!own.certificate.verify(other.authority.publicKey) &&\n        !other.certificate.verify(own.authority.publicKey)', 'true'),
+        ('socket-clone-no-vm-settings', '!Object.keys(envs[i]).some((key) => key.startsWith("SANDBOX_DOCKER_"))', 'true'),
+        ('dev-socket-beside-vm', '!(devDockerSocket && modes[1] === "per-env")', 'true'),
+        ('root-only-vm-inputs', '|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+', ''),
+        # #731 review round 1.
+        ('vm-certificate-not-before', 'new Date(x.validFrom) <= now && ', ''),
+        ('vm-certificate-not-after', ' && now <= new Date(x.validTo)', ''),
+        ('vm-ca-dates', '[authority, certificate].every(', '[certificate].every('),
+        ('vm-leaf-dates', '[authority, certificate].every(', '[authority].every('),
+        ('vm-no-docker-client-env', 'Object.keys(env).every((key) => !key.startsWith("DOCKER_"))', 'true'),
+        ('vm-endpoint-start-anchor', '/^tcp:', '/tcp:'),
+        ('vm-endpoint-end-anchor', '{1,5})$/.exec', '{1,5})/.exec'),
+        ('vm-ca-is-ca', 'authority.ca &&\n      ', ''),
+        ('vm-container-id-join', 'String(service[key] ?? "").startsWith("container:") &&', 'false &&'),
+        ('vm-container-other-app', 'service[key] !== `container:${apps[1 - i].container_name}`', 'true'),
+        ('vm-tls-mount-elsewhere', 'vm.sources.some((file) => within(file, resolved(v.source)))', 'false'),
+        ('vm-tls-directory-mount', 'within(file, resolved(v.source))', 'file === resolved(v.source)'),
+        ('vm-tls-root-mount', 'directory === sep ? directory : directory + sep', 'directory + sep'),
+        ('vm-missing-bind-source', 'return resolve(source); // A missing source cannot hold a TLS file.', 'throw new Error("missing");'),
+        # #731 review round 3 (R1): Compose bind-mounts secret and config files
+        # and local-driver volume devices too.
+        ('host-reach-secrets', '  "secrets",\n', ''),
+        ('host-reach-configs', '  "configs",\n', ''),
+        ('host-mounts-secret-files', '["secrets", "configs"].flatMap', '["configs"].flatMap'),
+        ('host-mounts-config-files', '["secrets", "configs"].flatMap', '["secrets"].flatMap'),
+        ('host-mounts-volume-device', 'return device ? [{ source: device, target: v.target }] : [];', 'return [];'),
+        ('socket-clone-host-mounts', '!hostMounts(config, app).some(', '!(app.volumes ?? []).filter((v) => v.type === "bind").some('),
+        ('vm-one-service-host-mounts', 'hostMounts(config, service).some(', '(service.volumes ?? []).filter((v) => v.type === "bind").some('),
     ]:
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
@@ -677,6 +792,14 @@ PY
   exit $?
 fi
 clone_tests
+# 2b. Never `producer | grep -q` under pipefail: grep -q exits at its first match,
+# the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
+# match is reported as absent. That shipped once here (the sshd -T check
+# refused every box). Comments are exempt.
+# One pipe, not the `||` of an or-list. A static scan needs no GNU tool, so it
+# runs here, where --clones-only (the macOS lanes and the mutants) reaches it.
+hits=$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+if [[ -z $hits ]]; then pass "2b no 'producer | grep -q' pipeline in the script"; else flunk "2b SIGPIPE-prone pipeline" "$hits"; fi
 if [[ ${1:-} == --clones-only ]]; then
   ((failures == 0)) || exit 1
   echo 'all clone checks passed'
@@ -813,13 +936,7 @@ for case in 'disabled|{"features":{"dynamic-tools":"disabled"}}|0' \
   if ((want == 0 ? rc == 0 : rc == 1)); then pass "2c dynamic-tools $label -> exit $rc"; else flunk "2c dynamic-tools $label (rc=$rc)" "$out"; fi
 done
 
-# Never `producer | grep -q` under pipefail: grep -q exits at its first match,
-# the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
-# match is reported as absent. That shipped once here (the sshd -T check
-# refused every box). Comments are exempt.
-# One pipe, not the `||` of an or-list.
-hits=$(grep -nE '(^|[^|])\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
-if [[ -z $hits ]]; then pass "2b no 'producer | grep -q' pipeline in the script"; else flunk "2b SIGPIPE-prone pipeline" "$hits"; fi
+# 2b's static scan runs before the --clones-only exit, above.
 out=$(
   set -o pipefail
   lib "$tmproot/m"

@@ -88,9 +88,9 @@ export function isInferenceTier(value: unknown): value is InferenceTier {
  * throw rather than fall through to Anthropic. The fall-through is refused by
  * design; refusing to *default* there is the only remaining option.
  *
- * Note for the owner: `USE_SELF_DEPLOYED_INFERENCE` keeps its base-branch meaning as
- * the deployment default for runs OUTSIDE a user scope, but it no longer gates
- * the per-user default. A deployment that has the endpoint configured and
+ * Note for the owner: `USE_SELF_DEPLOYED_INFERENCE` is the boot-time switch only;
+ * a run that names no tier is on the self-deployed tier either way, and the flag
+ * no longer gates the per-user default. A deployment that has the endpoint configured and
  * nevertheless wants its users to start on Anthropic has no lever today — that
  * would be one more env var, and inventing it unasked seemed worse than
  * naming the gap here.

@@ -4,7 +4,6 @@ import {
   collectToolNames,
   compactExecution,
   decisionLoop,
-  DECISION_LOOP_OUTPUT_KEY,
   planner,
   retriever,
   simpleLoop,
@@ -227,7 +226,7 @@ async function createPatterns(
   })
   const orchestrator = withInjectionGuard({
     namespaces: [...infoGuard.namespaces, ...docGuard.namespaces],
-    tools: [...sandboxTools, 'retriever', DECISION_LOOP_OUTPUT_KEY],
+    tools: [...sandboxTools, 'retriever'],
     catalog: tools.all,
     spotlight: 'always',
   })(
@@ -264,8 +263,6 @@ async function createPatterns(
         },
         think: {
           pattern: think,
-          // Model-authored plan only: keep deterministic sanitization and fencing.
-          screenOutput: false,
           description: 'Decide the steps before acting',
           capability: 'Write a plan using the agent map and earlier step results.',
         },

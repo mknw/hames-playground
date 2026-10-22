@@ -120,8 +120,10 @@ Every result row carries a `screen` block beside `spend`: the injection screen
 screen's share of each. Each guard declares its own options and none is inherited: the
 office and info route guards carry the screen, so it covers their tool results (mail, files,
 sandbox results, web, library docs, graph and memory reads); the documents route's guard
-declares none, so retrieved hits are never screened, and the orchestrator's guard declares
-none, so no route-output record is screened either. `screenDespiteFindings` is declared on
+declares none, so retrieved hits are never screened. The loop itself sanitises and screens
+nothing: a route record is built from committed events and capped, and a quoted tool body
+(an `actorCritic` result, a retriever excerpt) carries the fence it arrived in, so no call
+is made for a record at all and the counts below are ingress calls only. `screenDespiteFindings` is declared on
 the two route guards and adds only results with deterministic findings, which hermetic
 fixtures never produce, so switching it off would not change these counts. The levers that
 move cost are the screen's scope and the guards that declare it. On the private tier each

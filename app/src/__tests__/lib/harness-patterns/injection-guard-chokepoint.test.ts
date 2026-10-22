@@ -746,8 +746,9 @@ describe('nested guards sanitize each tool with the declaring guard’s own opti
   })
 })
 
-// MUTATION: add { screen: false } to the mcp-client result sanitize call.
-describe('planner screen exemption source boundary', () => {
+// MUTATION: add { screen: false } back to a record sanitize in decisionLoop.server.ts, or to
+// the mcp-client result sanitize call.
+describe('per-call screen override source boundary', () => {
   const root = resolve('..')
   const files = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -765,7 +766,7 @@ describe('planner screen exemption source boundary', () => {
     visit(node)
     ts.forEachChild(node, (child) => walk(child, visit))
   }
-  it('only decisionLoop sets screen to false in non-test source', () => {
+  it('no caller sets a per-call screen override in non-test source', () => {
     const callers: string[] = []
     for (const path of [...files(join(root, 'packages')), ...files(join(root, 'app/src'))]) {
       walk(parse(path), (node) => {
@@ -778,7 +779,7 @@ describe('planner screen exemption source boundary', () => {
         }
       })
     }
-    expect(callers).toEqual(['packages/harness-patterns/patterns/decisionLoop.server.ts'])
+    expect(callers).toEqual([])
   })
   it.each(['mcp-client.server.ts', 'patterns/retriever.server.ts'])(
     '%s sanitize calls pass no screen override',

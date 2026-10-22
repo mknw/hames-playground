@@ -182,7 +182,7 @@ export function createInjectionGuard(
       // Default: a second opinion on regex-clean content. Opt-in callers can
       // also screen the sanitized projection after findings; never resubmit or
       // restore the original spans. Screen outages are recorded and fail open
-      // here; decisionLoop applies its fail-closed output-boundary policy.
+      // here (ingress); a caller can read `screenUnavailable` on the report.
       if (
         overrides?.screen !== false &&
         options.screen &&

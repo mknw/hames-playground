@@ -561,10 +561,14 @@ For staging, **configure all five values** with the operator's private-tier
 endpoints and keys. A user who never chose starts on Private whenever the
 whole tier is configured, even with `USE_SELF_DEPLOYED_INFERENCE` unset; the first turn
 may pay a metered cold start. The conversation's own tier and the user's
-last-used tier take precedence. `USE_SELF_DEPLOYED_INFERENCE=1` also selects the
-private deployment default for runs without a conversation choice. A host
-that intentionally offers only Anthropic leaves all five values and the flag
-unset. These instructions change no tier default in code.
+last-used tier take precedence. A run that names no tier at all (a script, a
+job, an eval) is on the self-deployed tier by one rule that routing and the
+guards both read, and is refused where the tier is not configured; it is never
+routed to Anthropic. `USE_SELF_DEPLOYED_INFERENCE=1` is the boot-time switch
+only: it requires the tier to be configured when the server starts, and it no
+longer decides the tier of any run. A host that intentionally offers only
+Anthropic leaves all five values and the flag unset, and its runs name the
+Anthropic tier explicitly (every turn does).
 
 ```bash
 # Must print 5 for staging (0 only for an Anthropic-only host); any partial set
@@ -1132,7 +1136,9 @@ Set these operator inputs in the release checkout's root `.env`:
 
 The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
 flag is needed. Bootstrap accepts exactly the file order above, optionally followed
-by `:docker-compose.dev-sandbox.yaml` for the existing owner socket opt-in. Keep
+by **one** dev sandbox overlay: `:docker-compose.dev-sandbox.yaml` for the existing
+owner socket opt-in, or `:docker-compose.dev-sandbox-vm.yaml` for dev's own
+environment VM ([below](#dev-sandbox-on-its-own-environment-vm)). Keep
 `COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
 shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
 under the single-app file list, unsupported file orders, missing inputs, relative
@@ -1296,6 +1302,139 @@ refuse a missing environment label. Unlabelled legacy sandboxes are deliberately
 left alone: after confirming no old run is active, inspect and remove them by
 explicit resource ID, never by an unscoped family-label sweep.
 
+### Dev sandbox on its own environment VM
+
+[#648](https://github.com/mknw/hames-playground/issues/648) moves one clone's
+sandbox off the host socket onto that clone's **own** VM, which runs its own
+Docker daemon. The app reaches that daemon over mutual TLS. Nothing is shared
+between clones: one VM, one CA and one client certificate per clone. Dev moves
+first. Release keeps the host socket until its own VM lands, per the owner's
+answer on #648.
+
+1. **Provision dev's VM and deliver its client files** with the operator entry
+   point. Run it from the repo root of a checkout of the reviewed commit, after
+   a workspace install (`corepack pnpm install --frozen-lockfile`). It holds the
+   Incus manager credential, so it never runs inside an app:
+
+   ```bash
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts reconcile /operator-private/dev.json
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts health /operator-private/dev.json --wait 600
+   ```
+
+   - **The config file** is operator-private. It holds the
+     [`createIncusEnvironment` options](../packages/sandbox/README.md#incus-environment-vms-operator-opt-in),
+     with the manager's three PEM files given as paths, plus
+     `delivery: { directory, owner? }`. An unknown or misspelt key is refused.
+   - **`reconcile`** creates or verifies the VM. It then copies only the CA
+     certificate, the client certificate and the client key into
+     `delivery.directory`: mode 0700, files 0600, owned by `delivery.owner` when
+     set. Set the owner to the operator user who runs bootstrap, because the
+     preflight reads the files. Keep the directory outside both checkouts.
+     Unchanged files keep their inode, so a running app's binds stay valid. The
+     provisioner's state directory, which holds the CA key, is never delivered.
+     `reconcile` prints the four Docker inputs for step 2.
+   - **`health`** probes Docker over mutual TLS with the delivered files,
+     exactly as the app will. It stops at once if the daemon is not this
+     environment's.
+
+   Before routing an app to the VM, prove separately that only the app network
+   reaches the VM's Docker port, and record that proof for step 2. Neither the
+   provisioner nor the entry point sets firewall rules.
+
+2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
+   values:
+
+   | Input                           | Meaning                                                  |
+   | ------------------------------- | -------------------------------------------------------- |
+   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                       |
+   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate          |
+   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                |
+   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                        |
+   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record |
+
+   The evidence record is the operator's proof that only the app network
+   reaches the VM's Docker port. The preflight refuses the overlay until that
+   file exists and is not empty. It never reads what the file says.
+
+3. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
+   It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
+   its configs plus the three files (read-only, never created when missing) and
+   sets the four `SANDBOX_DOCKER_*` settings. It cannot be combined with the
+   socket opt-in.
+4. **Run the same preflight**, then recreate app-dev with bootstrap's
+   `--only boot --no-seed`, then `--only smoke --no-seed`.
+
+For a clone declared `per-env`, the validator refuses:
+
+- any Docker socket, under any target or source name, and any mount besides
+  the configs and the three TLS files;
+- an endpoint that is not `tcp://` to a unicast IPv4 guest address (loopback,
+  link-local, unspecified and multicast addresses are refused), or TLS settings
+  that do not name the mounted files;
+- any `DOCKER_*` variable, which the terminal path would inherit as a second
+  endpoint;
+- a CA or certificate file that holds a private key or more than one
+  certificate, a CA file that is not a CA, a client certificate that is a CA,
+  is not signed by its own CA or does not match its key, a CA or client
+  certificate outside its validity period, a key file with any group or other
+  permission, and TLS files inside either checkout;
+- with both clones `per-env`, a shared guest address, or either clone's client
+  certificate verifying under the other clone's CA;
+- another service built from, tagged as, or sharing a namespace or mounts with
+  the VM clone, joining any container by id, or mounting the VM clone's TLS
+  files or a directory that holds them, whether through a bind, the file behind
+  a `secrets` or `configs` entry, or a named volume whose local driver binds a
+  host path.
+
+For both apps, whatever their mode, it refuses `privileged`, `devices`,
+`cap_add`, `volumes_from`, `secrets`, `configs` and shared `pid`, `ipc`,
+`network_mode`, `userns_mode` or `cgroup` namespaces. Each reaches host or
+sibling resources around the mount rules; the MCP gateway, for one, holds the
+host socket, and Compose bind-mounts the file behind a secret or config at any
+target, a socket included. A clone declared `socket` mounts no host path but its
+configs and the socket, including through a named volume whose local driver
+binds one, and must not carry any `SANDBOX_DOCKER_*` setting. The render
+leaves out services of any other profile, so the preflight also refuses a
+`profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
+both running apps' endpoint settings and TLS mounts with the render, and refuses
+any mount on a VM clone that the render does not list.
+
+**Reboots, rotation and concurrency.**
+
+- **Reboots.** The state directory and the delivery directory must be on
+  persistent storage. The entry point refuses `/tmp`, `/var/tmp`, `/run`,
+  `/dev` and similar mounts, also behind a link and under their macOS
+  `/private` names. After a host reboot, Incus
+  restores each VM's last power state. Re-run `health --wait 600`, and run
+  `reconcile` if the VM was stopped: it starts the VM and never generates new
+  keys for an existing state.
+- **Rotation.** The client certificate is valid for 365 days. `health` warns
+  30 days before expiry, and once it has expired says so at once, instead of
+  waiting on a daemon that keeps refusing it. To rotate, run `teardown`, then
+  `reconcile`, then recreate app-dev: the paths are unchanged, but the files are
+  new inodes. A failed teardown keeps the state and the delivered files for
+  recovery.
+- **One operation per state directory.** A `<stateDirectory>.lock` beside the
+  directory records the holder's pid and boot, and refuses a second operation
+  while that holder runs. A lock whose holder is gone, after Ctrl-C, a kill or
+  a reboot, is reclaimed, and the entry point says so. A refused lock with no
+  operation running means its pid now belongs to another process: remove it
+  by hand. `teardown` keeps a delivery directory that holds other files, and
+  says so.
+
+**What this does not establish.** The checks are offline and see
+configuration only. They do not prove network isolation between the clones'
+VMs, or between a VM and host services: that is firewall evidence the operator
+records separately. Dev holds root inside its own VM, by design. The MCP
+gateway keeps its host socket and shares `app-network` with both apps. Still
+owed live: `createIncusEnvironment` creating and booting a VM on a real Incus
+host (the spike harness provisioned its own VMs), and Docker answering after a
+guest reboot and after a host reboot.
+
+**Rollback.** Remove the overlay from `COMPOSE_FILE` and recreate app-dev. Dev
+is then back to no Docker access and no sandbox agents. Tear down the VM
+separately.
+
 ### Shared state and the limits of the claim
 
 This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
@@ -1305,7 +1444,9 @@ Use synthetic/demo data only until that shared-data posture is acceptable to the
 operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
 The release app retains the root-equivalent Docker socket (SD-19). Dev has no
 socket by default and mounts only its own checkout's read-only `configs/`;
-sandbox agents on dev therefore remain unavailable. The single owner knob is
+sandbox agents on dev therefore remain unavailable. Dev's own environment VM
+([above](#dev-sandbox-on-its-own-environment-vm)) enables them without host
+Docker access. The other owner knob is
 adding `docker-compose.dev-sandbox.yaml` **after** the clones overlay in
 `COMPOSE_FILE`. That opt-in supplies both `x-clone-dev-docker-socket: true` and
 the socket mount; the validator refuses a dev socket without that policy.
@@ -1604,8 +1745,8 @@ for these:
   `LARGE_LLM_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
   and `SMALL_LLM_API_KEY` — all five or none; staging configures all five.
   The two base URLs end in `/v1`; the full decisions URL ends in
-  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate deployment-default flag,
-  not a sixth required tier value.
+  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate boot-time switch (it
+  requires the tier to be configured), not a sixth required tier value.
 - `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
   line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
   address is not the one running the script.

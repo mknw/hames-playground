@@ -78,7 +78,7 @@ owed by the deployment work.
 The supported API is the server-only `./incus-environment.server` subpath,
 excluded from the root entry point. It exports `createIncusEnvironment`, the
 `IncusEnvironment` controller and the named credential, options and connection
-types. The operator supplies manager credentials explicitly. Construction makes
+types, and `probeDockerEndpoint` with its `DockerProbe` result. The operator supplies manager credentials explicitly. Construction makes
 no network calls; `reconcile()` and `teardown()` serialize within a controller.
 See [README — Incus environment VMs](README.md#incus-environment-vms-operator-opt-in)
 for prerequisites, deployment and the live evidence still owed.
@@ -115,6 +115,19 @@ with real certificate generation and pins these fail-closed invariants:
 - Completed teardown removes generated credentials/state, so reconcile rotates
   the CA, Docker client key and Incus certificate. Failed teardown retains them
   for recovery; repeated teardown is safe. Shared bridges/pools are never deleted.
+
+`probeDockerEndpoint` makes one mutual-TLS `GET /_ping` with exactly the four
+settings an app receives, on a fresh connection, bounded by `timeoutMs` (10 s
+by default). `__tests__/incus-docker-probe.test.ts` pins it against real TLS in
+both directions. It accepts only a TLS tcp endpoint, never answers ready from
+plaintext, an unverified server or anything but `200 OK`, and reads at most a
+few bytes. A server certificate that fails verification is the only final
+result (`untrusted-server`): one this environment's CA did not sign, a
+self-signed or misnamed one, or one outside its validity. No answer after TLS
+completed (`refused`: a dropped connection, which is how a refused client
+certificate looks under TLS 1.3, or silence past the bound), no TLS at all
+(`unreachable`) and a wrong answer (`not-ready`) can change while a VM boots.
+File errors carry no contents.
 
 These hermetic tests and their red mutations establish the client contract,
 not a real VM or host firewall boundary. Real Incus image pulls, VM boot,

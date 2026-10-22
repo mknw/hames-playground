@@ -64,7 +64,7 @@ Import `createIncusEnvironment` only from
 the [README's operator example](README.md#incus-environment-vms-operator-opt-in)
 for Incus 7.3+, image/bridge/pool prerequisites, manager credentials and private
 state. The returned `dockerEnv` configures the existing connection seam above;
-wait for Docker readiness before starting the app. A completed teardown followed
+wait until `probeDockerEndpoint(dockerEnv)` is ready before starting the app. A completed teardown followed
 by reconcile rotates credentials; failed teardown keeps them for recovery.
 The [Incus contract](SPEC.md#operator-only-incus-environments) lists the pinned
 invariants and distinguishes hermetic checks from evidence owed to the spike.

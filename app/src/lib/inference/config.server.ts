@@ -40,17 +40,21 @@ import {
   configureCostRates,
   configureInferencePolicy,
   configureModelTables,
+  type InferenceTierPolicy,
 } from '@hames-ai/harness-baml/clients.server'
 
 assertServerOnImport()
 
 export type { InferenceTier } from '@hames-ai/harness-baml/clients.server'
 
-/** `USE_SELF_DEPLOYED_INFERENCE=1` — the DEPLOYMENT default: the tier every run takes
- *  when no per-run scope says otherwise. Read per call rather than cached at
- *  module load so a test (and a script that sets it before importing a
- *  pattern) sees it. MOVED here verbatim from `clients.server.ts` (PR-1a):
- *  it reads the host's env, which is exactly what stayed behind. */
+/** `USE_SELF_DEPLOYED_INFERENCE=1` — the BOOT-TIME switch: the self-deployed tier
+ *  must be configured, checked when this module loads. It is NOT the tier of a
+ *  run that names none: that is always the self-deployed tier (the ONE tier
+ *  rule, `harness-baml/tier.server.ts`), refused when unconfigured. Read per
+ *  call rather than cached at module load so a test (and a script that sets it
+ *  before importing a pattern) sees it. MOVED here verbatim from
+ *  `clients.server.ts` (PR-1a): it reads the host's env, which is exactly what
+ *  stayed behind. */
 export function selfDeployedInferenceEnabled(): boolean {
   return privateInferenceOnly() || inferenceEnv('USE_SELF_DEPLOYED_INFERENCE') === '1'
 }
@@ -72,8 +76,14 @@ configureModelTables({
   contextWindows: MODEL_CONTEXT_WINDOWS,
 })
 
-configureInferencePolicy({
-  defaultTier: () => (selfDeployedInferenceEnabled() ? 'self_deployed' : 'anthropic'),
+/** The host's tier policy, exported so a test double can spread it and change
+ *  one field instead of copying its shape. */
+export const hostInferencePolicy: InferenceTierPolicy = {
+  // The ONE tier rule (ruling E): a run that names no tier is a self-deployed-tier
+  // run whatever the flag says. A deployment that has not configured the tier
+  // REFUSES such a run (`assertTierReachable`, run by `activeInferenceTier()` on a
+  // defaulted tier) — it never routes it to Anthropic.
+  defaultTier: () => 'self_deployed',
   privateOnly: privateInferenceOnly,
   assertTierReachable: assertPrivateTierConfigured,
   onPrivateCallStart: (client: string) => {
@@ -87,7 +97,8 @@ configureInferencePolicy({
     if (client === LARGE_LLM_CLIENT_NAME) noteBoxCallStarting('large')
     if (client === SELF_DEPLOYED_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
-})
+}
+configureInferencePolicy(hostInferencePolicy)
 
 configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 

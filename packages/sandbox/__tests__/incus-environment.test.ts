@@ -833,8 +833,9 @@ describe('Incus trust and diagnostics', () => {
     expect(rootEntry).not.toContain('createIncusEnvironment')
     const { createIncusEnvironment: factory } = await import('../incus-environment.server')
     expect(factory).toBe(createIncusEnvironment)
-    expect(Object.keys(await import('../incus-environment.server'))).toEqual([
+    expect(Object.keys(await import('../incus-environment.server')).sort()).toEqual([
       'createIncusEnvironment',
+      'probeDockerEndpoint',
     ])
   })
   it('generates CA and leaf certificates with explicit roles, issuer, SAN and validity', async () => {

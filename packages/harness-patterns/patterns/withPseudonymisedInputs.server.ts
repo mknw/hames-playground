@@ -3,7 +3,7 @@
  *  and the pre-dispatch boundary. */
 import { assertServerOnImport } from '../assert.server'
 import { trackEvent } from '../context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentRunFrame, effectiveTier } from '../run-frame.server'
 import { inferServer } from '../tools.server'
 import type {
   ConfiguredPattern,
@@ -66,7 +66,12 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       const input = scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined
       let rewritten: UnifiedContext | undefined
       let filter: WebPseudonymisation | undefined
-      const explicitAnthropic = currentRunFrame()?.inference?.tier === 'anthropic'
+      // The ONE tier rule: the registered tier module's answer (an absent or
+      // empty frame tier is the host's default, a present but unrecognised one is
+      // the self-deployed tier, refused when unreachable; routing reads the same); the
+      // raw slot only when core runs with no tier interpreter registered.
+      const explicitAnthropic =
+        (effectiveTier() ?? currentRunFrame()?.inference?.tier) === 'anthropic'
       try {
         if (!explicitAnthropic && config.pseudonymise) {
           filter = await config.pseudonymise(

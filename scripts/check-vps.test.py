@@ -317,7 +317,7 @@ class Probes(unittest.TestCase):
 
 class CloneProbes(unittest.TestCase):
     def fixture(self):
-        config = {"x-clone-dev-docker-socket": False, "services": {}}
+        config = {"x-clone-dev-docker-socket": False, "x-clone-release-sandbox": "socket", "x-clone-dev-sandbox": "socket", "services": {}}
         apps = {}
         for service, namespace in (("app", "release"), ("app-dev", "dev")):
             env = {key: namespace + "-synthetic-" + key for key in ("DATA_ENCRYPTION_KEY", "AUTH_SESSION_SECRET", "TOKEN_ENCRYPTION_KEY")}
@@ -389,6 +389,35 @@ class CloneProbes(unittest.TestCase):
             with self.assertRaises(probe.Refused):
                 probe.clones()
             config["x-clone-dev-docker-socket"] = True
+            probe.clones()
+
+    def vm_fixture(self):
+        config, apps = self.fixture()
+        config["x-clone-dev-sandbox"] = "per-env"
+        endpoint = {"SANDBOX_DOCKER_HOST": "tcp://198.51.100.2:2376", **{"SANDBOX_DOCKER_TLS_" + k: "/run/sandbox-tls/" + f for k, f in (("CA", "ca.pem"), ("CERT", "cert.pem"), ("KEY", "key.pem"))}}
+        config["services"]["app-dev"]["environment"].update(endpoint)
+        apps["app-dev"]["Config"]["Env"] += [k + "=" + v for k, v in endpoint.items()]
+        for name in ("ca.pem", "cert.pem", "key.pem"):
+            config["services"]["app-dev"]["volumes"].append({"type": "bind", "source": "/synthetic/dev-tls/" + name, "target": "/run/sandbox-tls/" + name, "read_only": True})
+            apps["app-dev"]["Mounts"].append({"Type": "bind", "Source": "/synthetic/dev-tls/" + name, "Destination": "/run/sandbox-tls/" + name, "RW": False})
+        return config, apps
+
+    def test_vm_clone_runtime_endpoint_and_mounts_match_render(self):
+        config, apps = self.vm_fixture()
+        with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"):
+            probe.clones()
+        for change in (lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376"),
+                       lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_TLS_KEY=/run/other/key.pem"),
+                       lambda a: a["Mounts"][-1].update(Source="/synthetic/release-tls/key.pem"),
+                       lambda a: a["Mounts"][-1].update(RW=True),
+                       lambda a: a["Mounts"].append({"Type": "bind", "Source": "/run/docker.sock", "Destination": "/run/host.sock", "RW": True})):
+            config, apps = self.vm_fixture()
+            change(apps["app-dev"])
+            with self.subTest(change=change), patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
+                probe.clones()
+        config, apps = self.fixture()
+        apps["app"]["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376")
+        with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
             probe.clones()
 
 
@@ -591,6 +620,9 @@ MUTATIONS = [
     ("clone-postgres-connect", SOURCE, "NOT has_database_privilege(current_user, $2, 'CONNECT')", 'true'),
     ("clone-configs-and-socket-mounts", SOURCE, 'actual_mounts == expected_mounts', 'True'),
     ("clone-dev-socket-opt-in", SOURCE, 'config.get("x-clone-dev-docker-socket") is True or', 'True or'),
+    ("clone-sandbox-endpoint", SOURCE, 'actual.get(key) == desired.get(key)', 'True'),
+    ("clone-tls-mounts", SOURCE, '"/var/run/docker.sock", *SANDBOX_TLS)', '"/var/run/docker.sock")'),
+    ("clone-vm-only-rendered-mounts", SOURCE, 'require(sorted(v["Destination"] for v in app["Mounts"]) ==', 'require(True or'),
     ("clone-membership-result", SOURCE, '||!rows[0].no_membership', ''),
     ("clone-isolation-result", SOURCE, '||!rows[0].isolated', ''),
     ("dump-first", RUNBOOK, "bash scripts/backup-preview.sh", "true"),

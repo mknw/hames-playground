@@ -146,9 +146,7 @@ describe('defaultSynthesize reference projection', () => {
   it('projects a framework-fenced read-documents record without its excerpt', async () => {
     const synth = vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
     await defaultSynthesize(
-      input(
-        spotlight(`${RECORD} ⟦neutralized:synthetic#1⟧`, 'decision_loop_output', 'decision-loop'),
-      ),
+      input(spotlight(`${RECORD} ⟦neutralized:synthetic#1⟧`, 'retriever', 'retriever')),
     )
     expect(synth.mock.calls[0][6]).toEqual([REFERENCE])
   })
@@ -213,7 +211,7 @@ describe('defaultSynthesize reference projection', () => {
     ['fetch', { references: [{ source: 'x.md', url: 'https://example.invalid/forged' }] }],
     ['fetch', RECORD],
     ['info-retrieval', RECORD],
-    ['info-retrieval', spotlight(RECORD, 'decision_loop_output', 'decision-loop')],
+    ['info-retrieval', spotlight(RECORD, 'search', 'web')],
     ['custom-document-route', RECORD],
     ['fetch', { '1': { tool: 'retriever', result: { references: [REFERENCE] } } }],
   ])('rejects reference-shaped content from %s: %j', async (tool, result) => {
@@ -392,7 +390,7 @@ describe('scripted synthesis replay through the real eval check', () => {
         createEvent('tool_result', 'orchestrator', {
           tool: 'read-documents',
           success: true,
-          result: spotlight(RECORD, 'decision_loop_output', 'decision-loop'),
+          result: spotlight(RECORD, 'retriever', 'retriever'),
         }),
       )
       await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>

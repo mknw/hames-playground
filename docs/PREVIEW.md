@@ -1136,7 +1136,9 @@ Set these operator inputs in the release checkout's root `.env`:
 
 The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
 flag is needed. Bootstrap accepts exactly the file order above, optionally followed
-by `:docker-compose.dev-sandbox.yaml` for the existing owner socket opt-in. Keep
+by **one** dev sandbox overlay: `:docker-compose.dev-sandbox.yaml` for the existing
+owner socket opt-in, or `:docker-compose.dev-sandbox-vm.yaml` for dev's own
+environment VM ([below](#dev-sandbox-on-its-own-environment-vm)). Keep
 `COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
 shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
 under the single-app file list, unsupported file orders, missing inputs, relative
@@ -1300,6 +1302,92 @@ refuse a missing environment label. Unlabelled legacy sandboxes are deliberately
 left alone: after confirming no old run is active, inspect and remove them by
 explicit resource ID, never by an unscoped family-label sweep.
 
+### Dev sandbox on its own environment VM
+
+[#648](https://github.com/mknw/hames-playground/issues/648) moves one clone's
+sandbox off the host socket onto that clone's **own** VM, which runs its own
+Docker daemon. The app reaches that daemon over mutual TLS. Nothing is shared
+between clones: one VM, one CA and one client certificate per clone. Dev moves
+first. Release keeps the host socket until its own VM lands, per the owner's
+answer on #648.
+
+1. **Provision dev's VM** with `createIncusEnvironment`
+   ([`packages/sandbox` README](../packages/sandbox/README.md#incus-environment-vms-operator-opt-in)).
+   Before routing an app to the VM, prove separately that only the app network
+   reaches the VM's Docker port; the provisioner does not set firewall rules.
+2. **Deliver only the three client files**: the CA certificate, the client
+   certificate and the client key. Put them in a directory outside **both**
+   checkouts, owned by the operator user who runs bootstrap, with the key at
+   mode 0600. Never deliver the provisioner's state directory, which holds the
+   CA key.
+3. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
+   values:
+
+   | Input                           | Meaning                                                  |
+   | ------------------------------- | -------------------------------------------------------- |
+   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                       |
+   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate          |
+   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                |
+   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                        |
+   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record |
+
+   The evidence record is the operator's proof that only the app network
+   reaches the VM's Docker port. The preflight refuses the overlay until that
+   file exists and is not empty. It never reads what the file says.
+
+4. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
+   It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
+   its configs plus the three files (read-only, never created when missing) and
+   sets the four `SANDBOX_DOCKER_*` settings. It cannot be combined with the
+   socket opt-in.
+5. **Run the same preflight**, then recreate app-dev with bootstrap's
+   `--only boot --no-seed`, then `--only smoke --no-seed`.
+
+For a clone declared `per-env`, the validator refuses:
+
+- any Docker socket, under any target or source name, and any mount besides
+  the configs and the three TLS files;
+- an endpoint that is not `tcp://` to a unicast IPv4 guest address (loopback,
+  link-local, unspecified and multicast addresses are refused), or TLS settings
+  that do not name the mounted files;
+- any `DOCKER_*` variable, which the terminal path would inherit as a second
+  endpoint;
+- a CA or certificate file that holds a private key or more than one
+  certificate, a CA file that is not a CA, a client certificate that is a CA,
+  is not signed by its own CA or does not match its key, a CA or client
+  certificate outside its validity period, a key file with any group or other
+  permission, and TLS files inside either checkout;
+- with both clones `per-env`, a shared guest address, or either clone's client
+  certificate verifying under the other clone's CA;
+- another service built from, tagged as, or sharing a namespace or mounts with
+  the VM clone, joining any container by id, or mounting the VM clone's TLS
+  files or a directory that holds them, whether through a bind, the file behind
+  a `secrets` or `configs` entry, or a named volume whose local driver binds a
+  host path.
+
+For both apps, whatever their mode, it refuses `privileged`, `devices`,
+`cap_add`, `volumes_from`, `secrets`, `configs` and shared `pid`, `ipc`,
+`network_mode`, `userns_mode` or `cgroup` namespaces. Each reaches host or
+sibling resources around the mount rules; the MCP gateway, for one, holds the
+host socket, and Compose bind-mounts the file behind a secret or config at any
+target, a socket included. A clone declared `socket` mounts no host path but its
+configs and the socket, including through a named volume whose local driver
+binds one, and must not carry any `SANDBOX_DOCKER_*` setting. The render
+leaves out services of any other profile, so the preflight also refuses a
+`profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
+both running apps' endpoint settings and TLS mounts with the render, and refuses
+any mount on a VM clone that the render does not list.
+
+**What this does not establish.** The checks are offline and see
+configuration only. They do not prove network isolation between the clones'
+VMs, or between a VM and host services: that is firewall evidence the operator
+records separately. Dev holds root inside its own VM, by design. The MCP
+gateway keeps its host socket and shares `app-network` with both apps.
+
+**Rollback.** Remove the overlay from `COMPOSE_FILE` and recreate app-dev. Dev
+is then back to no Docker access and no sandbox agents. Tear down the VM
+separately.
+
 ### Shared state and the limits of the claim
 
 This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
@@ -1309,7 +1397,9 @@ Use synthetic/demo data only until that shared-data posture is acceptable to the
 operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
 The release app retains the root-equivalent Docker socket (SD-19). Dev has no
 socket by default and mounts only its own checkout's read-only `configs/`;
-sandbox agents on dev therefore remain unavailable. The single owner knob is
+sandbox agents on dev therefore remain unavailable. Dev's own environment VM
+([above](#dev-sandbox-on-its-own-environment-vm)) enables them without host
+Docker access. The other owner knob is
 adding `docker-compose.dev-sandbox.yaml` **after** the clones overlay in
 `COMPOSE_FILE`. That opt-in supplies both `x-clone-dev-docker-socket: true` and
 the socket mount; the validator refuses a dev socket without that policy.

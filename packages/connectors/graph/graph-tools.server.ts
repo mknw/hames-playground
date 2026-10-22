@@ -1325,9 +1325,13 @@ function normaliseDomain(domain: string): string {
  * domains are normalised. `''` when the domain is not canonical.
  */
 function canonicalDomain(raw: string): string {
+  // NFC first: `toLowerCase` folds the Kelvin sign (U+212A) onto ASCII `k`, and NFC changes it.
+  if (raw.normalize('NFC') !== raw) return ''
   const lower = raw.toLowerCase()
   const ascii = domainToASCII(raw)
   if (!ascii || (ascii !== lower && domainToUnicode(ascii) !== lower)) return ''
+  // Only letters, digits, hyphens and dots can be home: `*` is legal in a From, but never a domain.
+  if (!/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(ascii)) return ''
   return ascii
 }
 

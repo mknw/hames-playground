@@ -238,6 +238,24 @@ describe('the domain match', () => {
     expect(isHomeAddress(address, HOME)).toBe(false)
   })
 
+  // MUTATION: drop the `normalize('NFC')` line in `canonicalDomain`: `toLowerCase`
+  // folds the Kelvin sign onto `k`, so the first reads as home.
+  it('a sender domain that only case-folds onto a home domain is not home', () => {
+    expect(isHomeAddress('ceo@fabri\u212Aam.example', ['fabrikam.example'])).toBe(false)
+    expect(isHomeAddress('ceo@fabrikam.example', ['fabrikam.example'])).toBe(true)
+  })
+
+  // MUTATION: drop the character-class check in `canonicalDomain`: `*` and a
+  // trailing dot pass the literal comparison against a matching entry.
+  it.each([
+    ['x@*.com', ['*.com']],
+    ['x@a.*.com', ['*.com']],
+    ['x@*.contoso.com', ['*.contoso.com']],
+    ['x@contoso.com.', ['contoso.com.']],
+  ])('a sender domain with a non-domain character is never home: %s', (address, entries) => {
+    expect(isHomeAddress(address, entries)).toBe(false)
+  })
+
   it('a canonical Unicode or punycode domain still matches its configured form', () => {
     expect(isHomeAddress('avery@b\u00fccher.de', ['b\u00fccher.de'])).toBe(true)
     expect(isHomeAddress('avery@xn--bcher-kva.de', ['b\u00fccher.de'])).toBe(true)

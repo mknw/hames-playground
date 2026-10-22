@@ -1,7 +1,7 @@
 ---
-'@hames-ai/harness-patterns': minor
-'@hames-ai/agents': minor
-'@hames-ai/connectors': minor
+"@hames-ai/harness-patterns": minor
+"@hames-ai/agents": minor
+"@hames-ai/connectors": minor
 ---
 
 **Breaking (pre-1.0, so a minor bump): what leaves is judged by a new egress gate, and `withPseudonymisedInputs` no longer checks or refuses outgoing calls.**
@@ -15,6 +15,6 @@
 - The shared fence neutraliser (`neutralizeFenceMarkers`) is replaced: it turns the marker words of both fence forms (`BEGIN|END UNTRUSTED CONTENT` and `BEGIN|END CONTENT UNDER REVIEW`) into `[fence]`, word-bounded, and no longer deletes the 40 characters after a marker from what the screen, the guard gate and the egress question read.
 - Embeddings: `TRUSTED_EMBEDDING_PROVIDERS` (empty) and `embeddingProviderPassesEgress()` in `stash/embeddings.server`: `local`, unset, or a provider declared trusted in code.
 - `@hames-ai/agents`: `AgentDeps.egressRoster` (optional); `general-next` wraps its decision loop in the egress gate (`'filter'` on both tiers, N = 0, `loadedDecideDown: 'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local: `neo4j`, `graph`, and the office sandbox's in-VM tools by name only while that box is booted `mcp-only`, `officeLocalTools()`).
-- `@hames-ai/connectors`: `graph_file_ingest` refuses any embedding provider that does not pass `embeddingProviderPassesEgress` (an unregistered value as well as `openrouter`).
+- `@hames-ai/connectors`: `graph_file_ingest` refuses any embedding provider that does not pass `embeddingProviderPassesEgress` (an unregistered value as well as `openrouter`). No Graph result echoes a string the controller wrote, because `graph` is an address source: `graph_files_search` no longer returns `query` (`GraphFileSearchResult.query` is removed), and `graph_files_shared`'s empty-result note says "by the person named" instead of quoting `shared_by`.
 
 Migration: if you composed `withPseudonymisedInputs` for its outgoing check, wrap the pattern (or the whole loop) in `withEgressGate({ local, catalog: tools.all, decide, roster })` instead; a host `PseudonymiseForWeb` can drop `check` and `observe`, and a host roster for the gate implements `EgressRosterSource` (`{ directory, roster: { match, observe } }`). To keep the old "a roster match refuses by itself" behaviour, declare `mode: 'roster'`. A gate with `fetchTools` must also declare `addressSources`, the namespaces whose result data gives the controller addresses; leave out any whose tools compute their output from their arguments (a query engine, a code box). The cost, accepted: an address stored only there (for example a URL held only in Neo4j) is not fetchable until a search or another source returns it. Code that matched the old thrown-check text should match `EGRESS_CHECK_FAILED`.

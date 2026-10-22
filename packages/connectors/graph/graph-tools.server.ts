@@ -885,10 +885,13 @@ export function shapeFileEntries(raw: unknown): GraphFileEntry[] {
   })
 }
 
+/**
+ * No `query`: the composed KQL would echo the controller's own `site` / `author`
+ * text, URLs kept whole, into a result from a namespace the egress gate reads
+ * addresses from, so a URL the controller wrote would come back as one it was
+ * given. No Graph result may carry a string the controller wrote.
+ */
 export interface GraphFileSearchResult {
-  /** The KQL the app composed, so the model can see how its arguments were
-   *  read — and correct them — instead of guessing why a filter didn't bite. */
-  query: string
   /** Graph's reported match count; null when Search didn't report one. */
   total: number | null
   results: GraphFileHit[]
@@ -1838,7 +1841,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
             `(modified_after, file_type, site, author, sort="newest") over raising limit.`
           : undefined
-      return { query, total, results, ...(hint ? { hint } : {}) }
+      return { total, results, ...(hint ? { hint } : {}) }
     },
   })
 
@@ -2066,7 +2069,8 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
 
       if (rows.length === 0 && (sharedBy || via)) {
         const filters = [
-          ...(sharedBy ? [`by "${sharedBy}"`] : []),
+          // Not the `shared_by` text itself: see GraphFileSearchResult.
+          ...(sharedBy ? ['by the person named'] : []),
           ...(via ? [`via ${via}`] : []),
         ].join(' and ')
         return {

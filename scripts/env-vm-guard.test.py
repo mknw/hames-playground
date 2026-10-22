@@ -6,6 +6,7 @@ The fake host routes every probe packet through the rendered rules, so a wrong
 rule fails the smoke the way it would on a host. Mutations edit the production
 source in temp dirs and run these SAME tests.
 """
+import concurrent.futures
 import contextlib
 import copy
 import hashlib
@@ -2330,24 +2331,31 @@ MUTATIONS = {
 }
 
 
+def mutant(name, before, after, source):
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "env-vm-guard.py"
+        path.write_text(source.replace(before, after))
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve())],
+                                env={**os.environ, "ENV_VM_GUARD_SCRIPT": str(path)},
+                                capture_output=True, text=True, timeout=300)
+    # Import/syntax errors are not evidence that assertions discriminate.
+    return name, result.returncode != 0 and "FAILED (failures=" in result.stderr, result.stderr[-3000:]
+
+
 def mutations():
     source = SOURCE.read_text()
     survivors = []
-    for name, (before, after) in MUTATIONS.items():
+    for name, (before, _) in MUTATIONS.items():
         if source.count(before) != 1:
             raise AssertionError("mutation anchor drift: " + name)
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "env-vm-guard.py"
-            path.write_text(source.replace(before, after))
-            result = subprocess.run([sys.executable, str(Path(__file__).resolve())],
-                                    env={**os.environ, "ENV_VM_GUARD_SCRIPT": str(path)},
-                                    capture_output=True, text=True, timeout=300)
-            # Import/syntax errors are not evidence that assertions discriminate.
-            if result.returncode == 0 or "FAILED (failures=" not in result.stderr:
-                print("SURVIVED or invalid mutation: " + name + "\n" + result.stderr[-3000:], flush=True)
-                survivors.append(name)
-            else:
+    # Each mutant runs in its own temp dir and process, so they run side by side.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
+        for name, killed, stderr in pool.map(lambda item: mutant(item[0], *item[1], source), MUTATIONS.items()):
+            if killed:
                 print("KILLED " + name, flush=True)
+            else:
+                print("SURVIVED or invalid mutation: " + name + "\n" + stderr, flush=True)
+                survivors.append(name)
     killed = len(MUTATIONS) - len(survivors)
     print("%d/%d mutations killed" % (killed, len(MUTATIONS)) + ("; survivors: " + ", ".join(survivors) if survivors else ""))
     return 1 if survivors else 0

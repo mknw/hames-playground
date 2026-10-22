@@ -17,18 +17,6 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 const mockToolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema', 'Return'],
   web: ['search', 'fetch', 'fetch_content', 'Return'],
-  memory: [
-    'create_entities',
-    'create_relations',
-    'add_observations',
-    'delete_entities',
-    'delete_relations',
-    'delete_observations',
-    'open_nodes',
-    'search_nodes',
-    'read_graph',
-    'Return',
-  ],
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: [
     'read_text_file',
@@ -58,7 +46,6 @@ mockToolSets.all = [
   ...new Set([
     ...mockToolSets.neo4j,
     ...mockToolSets.web,
-    ...mockToolSets.memory,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
     ...mockToolSets.redis,
@@ -74,7 +61,6 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 const callToolMock = mockCallTool({
   responses: {
     get_neo4j_schema: { nodes: ['Person'], relationships: ['KNOWS'] },
-    read_graph: { entities: [], relations: [] },
     json_get: { data: 'cached value' },
     hset: 'OK',
     expire: true,

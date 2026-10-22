@@ -50,6 +50,10 @@ assertServerOnImport()
 export interface LlmUsageSample {
   /** BAML function name, e.g. `LoopController`. */
   functionName: string
+  /** The question's key, for a call of the decision transport (`Decide`):
+   *  `guard.screen` is the guard gate, `next_step` the decision loop. Lets a
+   *  ledger tell one Decide question's spend from another's. */
+  decisionKey?: string
   /** The client BAML SELECTED — `LargeQwen`, `AnthropicSonnet5`, … Absent when
    *  the collector never got far enough to name one. */
   clientName?: string

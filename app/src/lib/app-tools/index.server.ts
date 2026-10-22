@@ -49,6 +49,7 @@ import {
   type GraphStashStore,
 } from '@hames-ai/connectors/graph/graph-tools.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { checkHomeDomains, homeDomains } from '../harness-client/ingress-classifier.server'
 
 // The registry, with the app's identity resolution injected (design S3): the
 // app passes its own getRequestUserId/getRequestSessionId pair, so the
@@ -84,6 +85,9 @@ registerGraphConnectorTools({
       return false
     }
   },
+  // Ruling O: each mail, calendar and sharing result is stamped home or external
+  // from the raw addresses, against this deployment's own domains (read per call).
+  homeDomains,
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {
@@ -137,6 +141,10 @@ const appToolTransport: ToolTransport = {
 }
 
 registerTransport(appToolTransport)
+
+// Once, at boot: a single-label home domain is refused, and a list with no
+// usable domain (every sender external) is warned about.
+checkHomeDomains()
 
 // The deployment's MCP-gateway catalog (#225 L5), registered ONCE here — the
 // same boot point as the transport, so `inferServer` sees it without any call

@@ -1778,9 +1778,26 @@ export type DecisionFor<S> =
         ? ChoiceDecision<L>
         : never
 
+/**
+ * A setting that may differ per inference tier: a bare value applies on every
+ * tier; a map names tiers by their opaque string and falls back to `default`.
+ * Resolved PER CALL by `resolveByTier` (`run-frame.server.ts`) against the
+ * registered `effectiveTier()`, the one tier routing also takes, so a setting
+ * and the client a call lands on cannot name different tiers. Core compares
+ * strings and interprets none. For scalar settings: a map is recognised by its
+ * own `default` key.
+ */
+export type ByTier<T> = T | { readonly default: T; readonly [tier: string]: T }
+
 export interface DecideInput<L extends string = string> {
   readonly spec: DecisionSpec<L> | ScoreSpec<L> | NoulSpec
   readonly state: string
+  /** Aborts the request itself, not only the wait for it: a caller with its own
+   *  deadline (the guard gate) must not leave a request running, and billed by
+   *  time on a self-deployed box, after it has stopped listening. A transport
+   *  passes it to its fetch; one that ignores it is still bounded by the
+   *  caller's own race. */
+  readonly signal?: AbortSignal
 }
 
 export interface DecideResult<L extends string = string> {

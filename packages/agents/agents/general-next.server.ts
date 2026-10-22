@@ -3,6 +3,7 @@ import {
   actorCritic,
   collectToolNames,
   compactExecution,
+  createGuardGate,
   decisionLoop,
   planner,
   retriever,
@@ -31,11 +32,6 @@ import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
-
-/** Targeted read slice of the memory MCP namespace. Its create/add/delete tools
- *  stay withheld by name, and so does `read_graph`: the memory graph is shared by
- *  every user, and that call returns all of it in one result (S3b review F3). */
-const MEMORY_READ_TOOLS = ['search_nodes', 'open_nodes']
 
 // Synthetic office examples use the same JSON envelope as the actor's output
 // format. ActorMultiCalls supplies the mode-gated write-then-run batch beside
@@ -94,10 +90,8 @@ async function createPatterns(
     ...MICROSOFT_365_TOOLS,
     ...(deps.graphFileIngest === true ? ['graph_file_ingest'] : []),
   ].filter((name) => available.has(name))
-  const memoryAvailable = new Set(tools.memory ?? [])
-  const memoryReads = MEMORY_READ_TOOLS.filter((name) => memoryAvailable.has(name))
   const docTools = tools.context7 ?? []
-  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools, ...memoryReads]
+  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools]
   const office = deps.withSandbox({
     id: `${sessionId}:office`,
     sessionId,
@@ -145,31 +139,50 @@ async function createPatterns(
   // inherited from the orchestrator's guard below. The fence is declared on every
   // route guard because route records carry it onward. The screen sits on the
   // two routes that read content from outside (office: mail, files and sandbox
-  // results; info: web, library docs and the graph, no gate in front of it); the
-  // documents route declares none, so the retriever's hits get the deterministic
-  // pass and the fence only. `screenDespiteFindings` keeps the screen on results
-  // with deterministic findings too, as it was when the screen was inherited.
+  // results; info: web, library docs and the graph); the documents route declares
+  // none, so the retriever's hits get the deterministic pass and the fence only.
+  // A deterministic finding forces the screen. On clean content the mode is per
+  // tier: on the Anthropic tier the screen runs on every external result and the
+  // gate is never asked (it would send every body to that tier's decisions
+  // host); on the self-deployed tier, and an absent or unknown one, the gate is
+  // asked in 'shadow' — recorded, never obeyed — until the eval bar for 'gated'
+  // is met. The guard declares no `exempt`: nothing here is trusted by
+  // namespace. Only external content is gated in (ruling O):
+  // the host's classifier marks the deployment's own content internal, which
+  // gets the deterministic pass alone unless that pass finds something.
+  //
+  // A condition on moving any tier to 'gated': no tier declares 'gated' until
+  // the shared fence neutraliser's rewrite lands (marker words only, no tail).
+  // Today each forged `END UNTRUSTED CONTENT` deletes up to 40 characters after
+  // it from what the gate and the screen read, and markers chain, so a whole
+  // sentence can reach the controller and neither judge; under 'gated' the
+  // gate's "skip" would then decide alone.
+  const screenMode = { default: 'shadow', anthropic: 'always' } as const
+  const gate = createGuardGate(createDecideAdapter())
   const docGuard = {
     namespaces: ['graph'],
     tools: sandboxTools,
     catalog: tools.all,
     spotlight: 'always' as const,
-    screen: createInjectionScreen(),
-    screenDespiteFindings: true,
+    screen: {
+      run: createInjectionScreen(),
+      mode: screenMode,
+      gate,
+      classify: deps.classifyIngress,
+    },
   }
   // The guard refuses a declared namespace that matches no catalog tool, so the
-  // two optional servers are declared only when the gateway offers them.
+  // optional server is declared only when the gateway offers it.
   const infoGuard = {
-    namespaces: [
-      'web',
-      'neo4j',
-      ...(docTools.length ? ['context7'] : []),
-      ...(memoryReads.length ? ['memory'] : []),
-    ],
+    namespaces: ['web', 'neo4j', ...(docTools.length ? ['context7'] : [])],
     catalog: tools.all,
     spotlight: 'always' as const,
-    screen: createInjectionScreen(),
-    screenDespiteFindings: true,
+    screen: {
+      run: createInjectionScreen(),
+      mode: screenMode,
+      gate,
+      classify: deps.classifyIngress,
+    },
   }
   const doc = withInjectionGuard(docGuard)(office)
   const info = withInjectionGuard(infoGuard)(
@@ -183,7 +196,7 @@ async function createPatterns(
                 'alongside the facts they support. Copy each source URL verbatim from the ' +
                 'tool results or from the url argument of a successful fetch; never invent or ' +
                 'construct a URL. If none of the sources you used has a URL (for example a ' +
-                'graph, memory or library-docs lookup), include no link. ' +
+                'graph or library-docs lookup), include no link. ' +
                 'Your Return is the source record used to write the final answer, so URLs ' +
                 'left only in tool calls will not reach that answer.',
             ),
@@ -250,9 +263,9 @@ async function createPatterns(
         'info-retrieval': {
           pattern: info,
           description:
-            'Look things up in the knowledge graph, on the web (including a file at a web address), in library docs and in the memory graph; it cannot open files uploaded to this conversation (that is read-documents)',
+            'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
           capability:
-            'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
+            'Read the knowledge graph; search or fetch public web sources and library documentation.',
           siblingResults: ['retriever'],
         },
         'read-documents': {
@@ -308,7 +321,6 @@ export const generalNextAgent: AgentDefinition = {
     'web_search',
     'fetch',
     'context7',
-    'memory (read-only)',
     'graph (app-side, per-user)',
     'office sandbox',
     'Data Stash',

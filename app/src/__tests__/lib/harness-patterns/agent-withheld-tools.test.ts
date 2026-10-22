@@ -73,8 +73,8 @@ const KEPT = [
   'search',
   'resolve-library-id',
   'get-library-docs',
-  'read_graph',
-  'create_entities',
+  'json_get',
+  'read_text_file',
 ]
 
 /** A gateway serving `neo4j-cypher` with `read_only: false` — the regression the

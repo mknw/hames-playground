@@ -45,10 +45,10 @@ export type PseudonymiseForWeb = (
 
 // All other calls are checked, even with no namespace registration. A new
 // local capability must be declared here, never inferred as safe by default.
-// `memory` is the gateway's own knowledge-graph file: no outbound request, and
-// its results are the user's data, so they extend the roster like Neo4j's.
 // `context7` is deliberately absent: library lookup is an outbound public call.
-const LOCAL_SERVERS = new Set(['neo4j', 'memory'])
+// So is `memory`: the shared memory graph was retired, and a tool that
+// registers under that name is checked like any other.
+const LOCAL_SERVERS = new Set(['neo4j'])
 // Public services whose RESULTS are not identity sources; every other result
 // still extends the outgoing literals (the over-blocking direction is safe).
 const PUBLIC_RESULT_SERVERS = new Set(['web', 'context7'])

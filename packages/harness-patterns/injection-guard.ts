@@ -28,12 +28,12 @@
  * it too), costs a call and seconds of latency per tool result, and cannot be
  * pinned by a unit test. So the always-on layer is a bounded regex corpus plus
  * lossless control-character stripping, and the LLM screen
- * (`InjectionGuardOptions.screen`) is opt-in and normally runs only on content
- * the deterministic layer passed clean. `screenDespiteFindings` also screens
- * the sanitized projection after findings, preserving those neutralizations.
- * Both feed verdicts through the same finding/event trail. Regexes catch known
- * phrasings cheaply, the screen catches novel ones when an agent opts into
- * paying for it.
+ * (`InjectionGuardOptions.screen`) is opt-in. A deterministic finding forces it
+ * on the sanitized projection, preserving those neutralizations; on clean
+ * content its `mode` decides, per tier, whether it runs always, behind the
+ * cheap guard gate, or not at all. Both feed verdicts through the same
+ * finding/event trail. Regexes catch known phrasings cheaply, the screen
+ * catches novel ones when an agent opts into paying for it.
  *
  * ## What "neutralize" means here
  *
@@ -68,7 +68,7 @@
  * is available for agents that want the fence unconditionally.
  */
 
-import type { CallRecordSink } from './types'
+import type { ByTier, CallRecordSink, DecisionMadeEventData, LLMCallRecord } from './types'
 
 // ============================================================================
 // Sentinels
@@ -230,8 +230,8 @@ export interface ScreenVerdict {
   spans: string[]
 }
 
-/** Optional second-opinion classifier. Invoked ONLY for content the
- *  deterministic layer passed clean — see the module header. */
+/** Optional second-opinion classifier, run as `InjectionScreenConfig.mode`
+ *  says — see the module header. */
 export type InjectionScreen = (input: {
   tool: string
   namespace: string
@@ -245,6 +245,91 @@ export type InjectionScreen = (input: {
 /** When to apply the spotlight fence. */
 export type SpotlightMode = 'on-detection' | 'always' | 'off'
 
+/**
+ * How a guard's screen runs on an EXTERNAL payload the deterministic layer
+ * passed clean. A deterministic finding forces the screen in every mode but
+ * `'off'`, with no gate call: a hit is already a positive, and asking a model
+ * whether to look closer would only add a way to talk the screen out of running.
+ *
+ *  - `'always'`: the screen runs on every external payload; the gate is not asked.
+ *  - `'shadow'`: the gate is asked and its answer recorded, and the screen runs
+ *    whatever it said. How a gate is measured before it is trusted to skip.
+ *  - `'gated'`: the screen runs when the gate says so, or when the gate is
+ *    unavailable (the safe direction: the expensive guard runs).
+ *  - `'off'`: the deterministic layer only.
+ */
+export type ScreenMode = 'off' | 'shadow' | 'gated' | 'always'
+
+/** The guard gate's answer: run the screen or not, and why. */
+export interface GuardGateVerdict {
+  readonly run: boolean
+  /** The gate's probability that the content tries to direct the AI reading
+   *  it; `null` when the gate gave no usable answer. */
+  readonly pTrue: number | null
+  /** `'gate'`: the gate answered. `'gate-unavailable'`: it threw, timed out or
+   *  answered nothing usable, and `run` is true. */
+  readonly why: 'gate' | 'gate-unavailable'
+}
+
+/**
+ * The cheap question asked in front of the screen (`createGuardGate`). It sees
+ * the same head of the payload the screen would, and answers with a
+ * probability only: it cannot emit text.
+ */
+export type GuardGate = (input: {
+  tool: string
+  namespace: string
+  content: string
+  /** A `'shadow'`-mode call: the answer is recorded and changes nothing. */
+  shadow?: boolean
+  /** Receives the gate's decision, as `decision_made` event data, and its call
+   *  record, so the guard records one `decision_made` event per gate call.
+   *  The event data carries the size of the gate's state, never its text. */
+  onDecision?: (event: DecisionMadeEventData, call?: LLMCallRecord) => void
+}) => Promise<GuardGateVerdict>
+
+/** Where a payload came from, as far as the screen is concerned. */
+export type IngressClass = 'external' | 'internal'
+
+/**
+ * The host's classifier (ruling O: only external content is gated in). It is
+ * handed the RAW tool result, before the deterministic pass, and may read only
+ * code-written provenance from it, never shaped text a sender could set. Any
+ * answer other than `'internal'`, and any throw, is external.
+ */
+export type IngressClassifier = (ctx: {
+  readonly namespace: string
+  readonly tool: string
+  readonly data: unknown
+}) => IngressClass
+
+/** A guard's model screen and the settings around it. */
+export interface InjectionScreenConfig {
+  /** The screen itself (`createInjectionScreen()` in `@hames-ai/harness-baml`). */
+  run: InjectionScreen
+  /** Per tier. Default: `'always'`, or `'shadow'` when a `gate` is passed, so a
+   *  gate is measured before it skips anything; skipping takes an explicit
+   *  `'gated'`. A mode that asks the gate without one refuses construction. */
+  mode?: ByTier<ScreenMode>
+  /** The gate `'shadow'` and `'gated'` ask (`createGuardGate`). */
+  gate?: GuardGate
+  /** A screen that throws: `'pass'` (default) keeps the deterministic result and
+   *  records `screenUnavailable`; `'withhold'` replaces the payload with
+   *  {@link SCREEN_WITHHELD}. */
+  onUnavailable?: 'pass' | 'withhold'
+  /** Namespaces on which neither the gate nor the screen runs; the deterministic
+   *  layer still does. Each must be one the guard itself declares, or the guard
+   *  refuses construction. */
+  exempt?: string[]
+  /** Without it every payload is external. An internal payload gets the
+   *  deterministic layer only, unless that layer found something. */
+  classify?: IngressClassifier
+}
+
+/** What replaces a payload whose screen threw, under `onUnavailable: 'withhold'`.
+ *  Guard-owned sentinels, so content can never forge it. */
+export const SCREEN_WITHHELD = `${SENTINEL_OPEN}withheld: this result could not be screened; answer without it${SENTINEL_CLOSE}`
+
 /** Tuning for the sanitizer itself (the subset of the pattern config that this
  *  pure module needs — see `InjectionGuardConfig` for the pattern-level shape). */
 export interface InjectionGuardOptions {
@@ -255,12 +340,10 @@ export interface InjectionGuardOptions {
   /** Ids from the built-in corpus to disable (e.g. a false positive on a
    *  corpus this agent must read verbatim). */
   disableRules?: string[]
-  /** Opt-in LLM second opinion. Off by default. */
-  screen?: InjectionScreen
-  /** Screen the deterministically sanitized projection even after findings.
-   *  Off by default. Like every option it applies to the tools the declaring
-   *  guard declares, and to no others. */
-  screenDespiteFindings?: boolean
+  /** Opt-in model screen, its mode per tier and its gate. Off by default. Like
+   *  every option it applies to the tools the declaring guard declares, and to
+   *  no others. */
+  screen?: InjectionScreenConfig
 }
 
 /**
@@ -570,6 +653,48 @@ export function closeCutFences(text: string): string {
   const missing =
     text.split(`${SENTINEL_OPEN}UNTRUSTED CONTENT · `).length - text.split(close).length
   return missing > 0 ? text + `\n${close}`.repeat(missing) : text
+}
+
+// ============================================================================
+// The shared fence neutraliser
+// ============================================================================
+
+/** See {@link neutralizeFenceMarkers}. */
+const FENCE_MARKER_RE = /(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi
+
+/**
+ * Neutralize the review fences' marker words in text about to be quoted between
+ * them. ONE function for every model-facing quote of content under review — the
+ * screen's body (`createInjectionScreen`), the guard gate's state and the egress
+ * state — so there is one regex and one ReDoS review (SD-2).
+ *
+ * The guard escapes its `⟦⟧` sentinels out of content so data cannot forge a
+ * marker or close the spotlight fence; the review prompts fence with ASCII
+ * markers (`---BEGIN/END … CONTENT UNDER REVIEW---`) that have no such
+ * protection. Without this, a page could close the fence and address the
+ * reviewing model directly — the hole `sentinel-escape` exists to close, one
+ * layer up. It catches plain spellings only, so it is defence in depth: what
+ * quoted text cannot forge is a per-call nonce on the markers, which the gate's
+ * state carries (`guard-gate.server.ts`).
+ *
+ * Anchored on the KEYWORD, not on a leading `-{2,}` run. The original
+ * `-{2,}\s*(?:BEGIN|END)…` put two variable-length runs back to back, which is
+ * quadratic: 100k hyphens measured 10s of synchronous CPU. Dropping the hyphen
+ * run is also strictly STRONGER — the old pattern required at least two
+ * hyphens, so `BEGIN UNTRUSTED CONTENT` with no decoration at all evaded it
+ * while still reading as a fence to the reviewing model. A caller truncates
+ * BEFORE calling this: only the quoted head reaches a prompt, so scanning the
+ * rest buys nothing and hands an attacker a free CPU multiplier.
+ *
+ * A known cost until the boundary-guard slice that rewrites this regex: it hides
+ * up to 40 characters after each old-form marker (`BEGIN|END UNTRUSTED CONTENT`)
+ * from the screen and the gate, while the controller still reads them, so text
+ * following a forged marker on the same line never reaches either judge. It
+ * does not touch the gate's own marker form (`---END CONTENT UNDER REVIEW
+ * <nonce>---`): the nonce and the `"> "` prefix hold that quote shut.
+ */
+export function neutralizeFenceMarkers(text: string): string {
+  return text.replace(FENCE_MARKER_RE, '[fence]')
 }
 
 // ============================================================================

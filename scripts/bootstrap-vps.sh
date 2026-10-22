@@ -88,11 +88,11 @@ docker_key_problem() {
 readonly ENCRYPTION_BOUNDARY="56ac2b44af11d65c85cabc3096102c3cdc76d2ed"
 # The preview tool surface, sorted (docs/PREVIEW.md §3a; pinned for the overlay
 # by app/src/__tests__/lib/preview-tool-surface.test.ts).
-readonly PREVIEW_SERVERS="context7 fetch memory neo4j-cypher web_search"
-# 16 since #403: with `read_only: true` the Neo4j server does not offer
-# write_neo4j_cypher (it was 17). Derived, not yet read off a live box — a 17
+readonly PREVIEW_SERVERS="context7 fetch neo4j-cypher web_search"
+# 7 since the shared memory graph was retired (its nine tools left the
+# surface; 16 before that, 17 before #403 made Neo4j read-only). Derived, not yet read off a live box — a 17
 # here means the gateway still lists the write tool (docs/PREVIEW.md, step 1b).
-readonly PREVIEW_TOOL_COUNT=16
+readonly PREVIEW_TOOL_COUNT=7
 readonly KEYS_RE="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
 
 readonly STAGES=(preflight updates ssh firewall fail2ban docker checkout env hostname images boot seed smoke)
@@ -1350,7 +1350,7 @@ stage_checkout() {
   fi
   ok "deploying $(git -C "$APP_DIR" log -1 --format='%h %s' "$sha")"
 
-  # docs/PREVIEW.md §3a, verbatim: exactly the overlay's five servers. The
+  # docs/PREVIEW.md §3a, verbatim: exactly the overlay's four servers. The
   # tracked file is the DEVELOPMENT set (redis, filesystem, playwright) —
   # harmless behind the overlay's --servers allow-list, but the file and the
   # allow-list should say the same thing. No literal password: the
@@ -1374,9 +1374,6 @@ web_search:
   enabled: true
 
 context7:
-  enabled: true
-
-memory:
   enabled: true
 EOF
   run git -C "$APP_DIR" update-index --skip-worktree configs/mcp-config.yaml
@@ -1621,7 +1618,7 @@ stage_images() {
   run dc build
   run dc pull --ignore-buildable --quiet
   # The gateway pulls its catalog servers itself, but a failed pull there is a
-  # warning and the server just contributes 0 tools (#412). Pulling the five
+  # warning and the server just contributes 0 tools (#412). Pulling the four
   # allow-listed images here, on the host, makes a failure stop this run. Any
   # registry login belongs on the host too, never in docker-config.json (#422).
   local srv img

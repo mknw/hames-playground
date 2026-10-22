@@ -85,25 +85,6 @@ registry:
       - "{{rust-mcp-filesystem.allowed_directories|volume|into}}"
     disableNetwork: true
 
-  memory:
-    description: Knowledge graph-based persistent memory - entities, relations, and observations
-    title: Memory
-    type: server
-    image: mcp/memory@sha256:db0c2db07a44b6797eba7a832b1bda142ffc899588aae82c92780cbb2252407f
-    tools:
-      - name: create_entities
-      - name: create_relations
-      - name: add_observations
-      - name: delete_entities
-      - name: delete_relations
-      - name: delete_observations
-      - name: read_graph
-      - name: search_nodes
-      - name: open_nodes
-    volumes:
-      - claude-memory:/app/dist
-    disableNetwork: true
-
   redis:
     description: Redis database operations - key/value, hashes, lists, sets, sorted sets, streams, pub/sub, and vector search
     title: Redis

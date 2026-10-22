@@ -41,6 +41,7 @@ import type {
   PseudonymiseForWeb,
 } from '@hames-ai/harness-patterns'
 import type { OnToolResult } from '@hames-ai/harness-patterns/types'
+import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
@@ -50,7 +51,7 @@ import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
  */
 export interface GraphElement extends ElementDefinition {
   /** Source of this graph element (for filtering by tab) */
-  source?: 'neo4j' | 'memory' | 'unknown'
+  source?: 'neo4j' | 'unknown'
 }
 
 // ============================================================================
@@ -100,6 +101,12 @@ export interface AgentDeps {
   pseudonymiseForWeb?: PseudonymiseForWeb
   /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
   memory?: MemoryConfig
+  /**
+   * Which tool results the injection screen gates in (boundary guards, ruling
+   * O): the host's classifier, passed as a screen's `classify`. Absent: every
+   * payload is external, which is the library default and the safe direction.
+   */
+  classifyIngress?: IngressClassifier
   /**
    * This deployment's MCP tool→namespace resolver (the app's
    * `app-tools/mcp-catalog.ts`). Passed explicitly — owner ruling B-iii makes

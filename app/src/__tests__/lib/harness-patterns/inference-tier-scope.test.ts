@@ -451,6 +451,13 @@ describe('the one tier rule — every reader names the same tier', () => {
       anthropic: clients.onExplicitAnthropicTier(),
       effective: core.effectiveTier(),
       routed: clients.clientOverrideFor('controller')?.client ?? 'anthropic-chain',
+      // A guard's per-tier setting (slice 3), with a key for each tier so a
+      // reader that skips the rule falls to `default` and shows it.
+      byTier: core.resolveByTier({
+        default: 'raw-default',
+        anthropic: 'always',
+        self_deployed: 'shadow',
+      }),
     })
     return tier === 'no-frame'
       ? ask()
@@ -459,7 +466,9 @@ describe('the one tier rule — every reader names the same tier', () => {
 
   // Mutation: resolve the guard-side reader against the raw frame string (or
   // `effectiveTier()` against anything but `activeInferenceTier()`): the absent,
-  // empty and unknown rows disagree with routing and go red.
+  // empty and unknown rows disagree with routing and go red. The same three rows
+  // go red for `ByTier` (slice 3) resolved against the raw frame string: it
+  // finds no key for them and answers `default`.
   it.each([
     ['no frame', 'no-frame', 'self_deployed'],
     ['an unfilled frame', undefined, 'self_deployed'],
@@ -476,6 +485,7 @@ describe('the one tier rule — every reader names the same tier', () => {
       expect(seen.effective).toBe(want)
       expect(seen.anthropic).toBe(want === 'anthropic')
       expect(seen.routed).toBe(want === 'anthropic' ? 'anthropic-chain' : 'LargeQwen')
+      expect(seen.byTier).toBe(want === 'anthropic' ? 'always' : 'shadow')
     },
   )
 
@@ -488,6 +498,9 @@ describe('the one tier rule — every reader names the same tier', () => {
       expect(() => clients.activeInferenceTier()).toThrow(/Private-only/)
       expect(() => clients.onExplicitAnthropicTier()).toThrow(/Private-only/)
       expect(() => core.effectiveTier()).toThrow(/Private-only/)
+      expect(() => core.resolveByTier({ default: 'shadow', anthropic: 'always' })).toThrow(
+        /Private-only/,
+      )
     })
   })
 
@@ -495,7 +508,9 @@ describe('the one tier rule — every reader names the same tier', () => {
     // A library user has no self-deployed tier to default to. `effectiveTier()`
     // answers the tier routing takes, so a guard's `ByTier` key for the Anthropic
     // tier applies rather than its `default`. Mutation: have the package answer
-    // nothing (or the self-deployed tier) when no policy is registered.
+    // nothing (or the self-deployed tier) when no policy is registered; or
+    // resolve `ByTier` to its `default` key when no host policy is registered,
+    // or against the raw frame string (slice 3): the `byTier` line goes red.
     vi.resetModules()
     resetTierPolicy()
     const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -508,6 +523,7 @@ describe('the one tier rule — every reader names the same tier', () => {
           expect(core.effectiveTier()).toBe('anthropic')
           expect(clients.onExplicitAnthropicTier()).toBe(true)
           expect(clients.clientOverrideFor('controller')).toBeUndefined()
+          expect(core.resolveByTier({ default: 'shadow', anthropic: 'always' })).toBe('always')
         },
       )
     }

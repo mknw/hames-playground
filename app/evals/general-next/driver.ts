@@ -19,7 +19,6 @@ const FIXTURES: Record<string, unknown> = {
   fetch: 'Lantern version 2 adds CSV export.',
   'resolve-library-id': { libraryId: '/solidjs/solid' },
   'get-library-docs': 'const [count, setCount] = createSignal(0)',
-  search_nodes: [{ name: 'Lantern', release: 'LANTERN-2' }],
   graph_mail_recent: [
     {
       id: 'mail-lantern-1',
@@ -36,7 +35,6 @@ const NAMESPACES: Record<string, string> = {
   fetch: 'web',
   'resolve-library-id': 'context7',
   'get-library-docs': 'context7',
-  search_nodes: 'memory',
   graph_mail_recent: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
@@ -121,11 +119,15 @@ export async function createDriver(
   // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
   const { createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
+  // The production classifier too (ruling O): the graph's rows are internal, and no fixture
+  // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
+  const { classifyIngress } = await import('../../src/lib/harness-client/ingress-classifier.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    classifyIngress,
     withSandbox: () => (pattern) => ({
       ...pattern,
       children: [pattern],

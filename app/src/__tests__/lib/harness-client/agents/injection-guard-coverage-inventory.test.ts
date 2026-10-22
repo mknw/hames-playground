@@ -36,7 +36,6 @@ const toolSets = {
   web: ['search', 'fetch', 'fetch_content'],
   context7: ['resolve-library-id', 'get-library-docs'],
   filesystem: ['read_text_file', 'write_file'],
-  memory: ['search_nodes', 'read_graph'],
   graph: ['graph_me', 'graph_mail_recent'],
   all: [] as string[],
 }
@@ -45,7 +44,6 @@ toolSets.all = [
   ...toolSets.web,
   ...toolSets.context7,
   ...toolSets.filesystem,
-  ...toolSets.memory,
   ...toolSets.graph,
 ]
 

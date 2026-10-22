@@ -326,7 +326,7 @@ describe('retriever hits — no model screen without the retriever guard’s own
     const { matches } = await runRetriever(
       [hit(POISONED_CHUNK), hit(CLEAN_CHUNK, { id: 'chunk-2', source: 'plan.docx' })],
       { tools: ['retriever'], spotlight: 'always' },
-      { tools: ['retriever'], screen, screenDespiteFindings: true },
+      { tools: ['retriever'], screen: { run: screen } },
     )
     expect(screen).not.toHaveBeenCalled()
     // K1 still ran on the same hits: the injection is neutralized and fenced.
@@ -338,7 +338,7 @@ describe('retriever hits — no model screen without the retriever guard’s own
     // Without this the pin above would pass for a screen that can never be
     // reached from the retriever path at all.
     const screen = vi.fn(async () => clean)
-    await runRetriever([hit(CLEAN_CHUNK)], { tools: ['retriever'], screen })
+    await runRetriever([hit(CLEAN_CHUNK)], { tools: ['retriever'], screen: { run: screen } })
     expect(screen).toHaveBeenCalledTimes(2) // content, then filename
   })
 })

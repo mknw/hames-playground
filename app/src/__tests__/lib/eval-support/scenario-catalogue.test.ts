@@ -454,7 +454,7 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
     const fact = g.find((i) => i.check === 'answerContains')?.facts ?? []
     if (!a || fact.join() !== product || !flat(sum.fixtures).join().includes(product))
       errors.push(`p87-arithmetic-in-sandbox: the answer fact must be the product, ${product}`)
-    // Nothing in today's agent sends bare arithmetic to the sandbox, so the row waits on that.
+    // The agent: item records the route/decider change (#748); #742's calculator is the later version.
     if (!flat(sum.needs).some((n) => n.startsWith('agent:')))
       errors.push('p87-arithmetic-in-sandbox: needs must name the agent-side change (agent:)')
   }

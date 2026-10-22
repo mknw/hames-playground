@@ -1433,6 +1433,23 @@ class DeadMan(Harness):
         self.assertEqual(self.guard_model(), guard.model(as_json("inet", guard.TABLE, before[("inet", guard.TABLE)],
                                                                  iter(range(1, 99)))))
 
+    def test_a_fired_restore_leaves_the_previous_render_as_the_journaled_one(self):
+        self.assertEqual(self.invoke("--install"), 0)
+        self.stop_vms()
+        self.assertEqual(self.invoke("--apply"), 0)
+        first = guard.INSTALLED_CONFIG.read_text()
+        changed = json.loads(first)
+        changed["environments"][0]["clientAddress"] = "192.0.2.3"
+        guard.INSTALLED_CONFIG.write_text(json.dumps(changed))
+        self.assertEqual(self.invoke("--apply", "--deadman", "600"), 0, self.err)
+        self.assertEqual(self.fire(next(iter(self.host.timers))), 0, self.err)
+        self.assertEqual(guard.applied(self.entries()), json.loads(first))
+        self.assertEqual(self.guard_model(), guard.expected(json.loads(first)))
+        guard.INSTALLED_CONFIG.write_text(first)  # the operator re-plans
+        self.host.bridges = {k: v for k, v in self.host.bridges.items() if not k.startswith("envvm-")}
+        self.assertEqual(self.invoke("--remove"), 0, self.err)
+        self.assertNotIn(("inet", guard.TABLE), self.host.tables)
+
     def test_deadman_alone_is_a_no_op_dry_fire(self):
         self.assertEqual(self.invoke("--install"), 0)
         self.host.calls.clear()
@@ -2114,6 +2131,8 @@ MUTATIONS = {
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
+    # S3: a fired restore truncates the journal to the arm.
+    "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.
     "S4-apply-any-config": ('    require(safe_file(path) == safe_file(INSTALLED_CONFIG),', "    require(True,"),
     "S4-persistence-config-unchecked": ("(INSTALLED_CONFIG, safe_file(config_path))", "(INSTALLED_CONFIG, safe_file(INSTALLED_CONFIG))"),

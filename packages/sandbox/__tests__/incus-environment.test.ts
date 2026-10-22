@@ -23,19 +23,36 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 // A fixture directory named `root-owned-fixture` pretends its files belong to
 // uid 0: an unprivileged test cannot create a root-owned file, and the
-// entry point's contract is that the operator stages them as root. Everything
-// else lstats for real, so the negative direction is still a real uid.
+// entry point's contract is that the operator stages them as root. The fakes
+// apply to the OPEN DESCRIPTOR (handle.stat), which is where the entry point's
+// checks run — everything else stats for real, so the negative direction is
+// still a real uid. The markers compose, so one fixture can be both
+// root-owned and oversized, and `unreadable-ancestor-fixture` makes the
+// checkout walk's lstat of its `.git` fail with EACCES instead of answering.
+type OpenParams = Parameters<typeof import('node:fs/promises').open>
+type OpenRest = OpenParams extends [unknown, ...infer Rest] ? Rest : never
 vi.mock('node:fs/promises', async (original) => ({
   ...(await original<typeof import('node:fs/promises')>()),
-  lstat: vi.fn(async (path: string) => {
-    const real = await (await original<typeof import('node:fs/promises')>()).lstat(path)
+  open: vi.fn(async (path: OpenParams[0], ...rest: OpenRest) => {
+    const real = await original<typeof import('node:fs/promises')>()
+    const handle = await real.open(path, ...rest)
     const name = String(path)
-    // The two markers compose, so one fixture can be both root-owned and oversized.
-    if (!name.includes('root-owned-fixture') && !name.includes('oversized-fixture')) return real
-    return Object.assign(Object.create(Object.getPrototypeOf(real)), real, {
-      ...(name.includes('root-owned-fixture') ? { uid: 0 } : {}),
-      ...(name.includes('oversized-fixture') ? { size: 64 * 1024 ** 3 } : {}),
-    })
+    if (!name.includes('root-owned-fixture') && !name.includes('oversized-fixture')) return handle
+    const stat = handle.stat.bind(handle)
+    handle.stat = async () => {
+      const info = await stat()
+      return Object.assign(Object.create(Object.getPrototypeOf(info)), info, {
+        ...(name.includes('root-owned-fixture') ? { uid: 0 } : {}),
+        ...(name.includes('oversized-fixture') ? { size: 64 * 1024 ** 3 } : {}),
+      })
+    }
+    return handle
+  }),
+  lstat: vi.fn(async (path: Parameters<typeof import('node:fs/promises').lstat>[0]) => {
+    const name = String(path)
+    if (name.endsWith('/.git') && name.includes('unreadable-ancestor-fixture'))
+      throw Object.assign(new Error('Permission denied'), { code: 'EACCES' })
+    return (await original<typeof import('node:fs/promises')>()).lstat(path)
   }),
 }))
 import { createIncusEnvironment, type IncusEnvironmentOptions } from '../incus-environment.server'
@@ -47,6 +64,11 @@ let managerFingerprint: string
 let serverTLS: { key: string; cert: string }, otherServerTLS: { key: string; cert: string }
 let project: Json | undefined, certificate: Json | undefined, vm: Json | undefined
 let vmStatus = 102
+let staged = ''
+// Set by the descriptor-shape test: the fake image import unlinks the staged
+// disk once the request arrives, so only a stream already reading the checked
+// descriptor can still deliver the pinned bytes.
+let unlinkDiskOnUpload = false
 // Fingerprints of the images Incus holds in this project. The simplestreams
 // pin starts present (the pulled image is cached in the project); a local
 // import starts empty and gains what the fake computes over received bytes.
@@ -123,6 +145,11 @@ beforeAll(async () => {
     async (req, res) => {
       const url = new URL(req.url!, 'https://localhost')
       const method = req.method!
+      // The descriptor-shape probe: the staged disk is unlinked as the upload
+      // arrives, before this fake reads a body byte — only a stream already
+      // reading the checked descriptor can still deliver the pinned bytes.
+      if (unlinkDiskOnUpload && method === 'POST' && url.pathname === '/1.0/images')
+        await rm(join(staged, 'disk.qcow2'), { force: true })
       const chunks = []
       for await (const chunk of req) chunks.push(chunk)
       const raw = Buffer.concat(chunks)
@@ -323,6 +350,7 @@ beforeEach(async () => {
   asyncNext = false
   asyncCreate = false
   vmVisible = true
+  unlinkDiskOnUpload = false
   options = {
     ...options,
     stateDirectory: join(root, `state-${Math.random().toString(16).slice(2)}`),
@@ -759,7 +787,6 @@ describe('Incus environment wire contract', () => {
 })
 
 describe('Incus local image source', () => {
-  let staged: string
   const pin = sha256(Buffer.concat([METADATA_BYTES, DISK_BYTES]))
   const localConfig = (fingerprint: string, disk = DISK_BYTES) =>
     createIncusEnvironment({
@@ -836,6 +863,58 @@ describe('Incus local image source', () => {
     expect(requests.some((r) => r.method === 'POST' && r.url.pathname === '/1.0/instances')).toBe(
       false,
     )
+  })
+
+  it('keeps an image already verified in the project when a later import mismatches the pin', async () => {
+    const earlier = 'b'.repeat(64)
+    images = new Set([earlier])
+    await writeFile(join(staged, 'disk.qcow2'), Buffer.from('synthetic disk imagE\n'), {
+      mode: 0o600,
+    })
+    const assigned = sha256(Buffer.concat([METADATA_BYTES, Buffer.from('synthetic disk imagE\n')]))
+    expect(assigned).not.toBe(pin)
+    await expect(localConfig(pin).reconcile()).rejects.toThrow(
+      'fingerprint other than the pinned one',
+    )
+    expect(images.has(earlier)).toBe(true)
+    const removed = requests.filter(
+      (r) => r.method === 'DELETE' && r.url.pathname.startsWith('/1.0/images/'),
+    )
+    expect(removed.map((r) => r.url.pathname)).toEqual([`/1.0/images/${assigned}`])
+    expect(requests.some((r) => r.method === 'POST' && r.url.pathname === '/1.0/instances')).toBe(
+      false,
+    )
+  })
+
+  it('uploads from the checked descriptor, not a re-opened path', async () => {
+    unlinkDiskOnUpload = true
+    await localConfig(pin).reconcile()
+    expect([...images]).toEqual([pin])
+    expect(vmStatus).toBe(103)
+  })
+
+  it.each([
+    ['63 characters', 'a'.repeat(63)],
+    ['a non-hex character', 'a'.repeat(63) + 'g'],
+    ['uppercase hex', 'A'.repeat(64)],
+  ])('refuses a pin of $0 before any request', (_, bad) => {
+    expect(() => localConfig(bad)).toThrow('pinned image fingerprint')
+    expect(requests).toEqual([])
+  })
+
+  it('refuses image files under an unreadable ancestor instead of reading it as no checkout', async () => {
+    // The name carries both markers: root-owned (accepted) and the injected
+    // EACCES on the checkout walk's lstat of this directory's `.git`.
+    const hidden = join(await realpath(root), 'root-owned-fixture-unreadable-ancestor-fixture')
+    await rm(hidden, { recursive: true, force: true })
+    await mkdir(hidden, { recursive: true })
+    await writeFile(join(hidden, 'metadata.tar'), METADATA_BYTES)
+    await writeFile(join(hidden, 'disk.qcow2'), DISK_BYTES)
+    staged = hidden
+    await expect(localConfig(pin).reconcile()).rejects.toThrow(
+      'must have readable parent directories',
+    )
+    noCreate()
   })
 
   it('teardown removes the imported image only from its own project', async () => {

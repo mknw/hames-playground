@@ -2,7 +2,18 @@
 import { execFile } from 'node:child_process'
 import { X509Certificate, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, readFile, writeFile, lstat, chmod, readdir, rm, realpath } from 'node:fs/promises'
+import {
+  mkdir,
+  open,
+  readFile,
+  writeFile,
+  lstat,
+  chmod,
+  readdir,
+  rm,
+  realpath,
+} from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { request } from 'node:https'
 import { isIP } from 'node:net'
 import { isAbsolute, dirname, join } from 'node:path'
@@ -185,12 +196,14 @@ function exchange(
 
 /** One image import (POST /1.0/images): the two split-image parts Incus names
  * `metadata` and `rootfs`, streamed, never buffered, over the credential the
- * caller hands in — the project-restricted one, never the manager credential. */
+ * caller hands in — the project-restricted one, never the manager credential.
+ * Each part is read from the OPEN DESCRIPTOR its checks ran on, not re-opened
+ * by path: a swap between check and stream cannot change what moves. */
 function uploadImage(
   url: URL,
   tls: IncusCredential,
   boundary: string,
-  files: { name: string; file: string; limit: number }[],
+  files: { name: string; handle: FileHandle; limit: number }[],
   contentLength: number,
 ): Promise<Envelope> {
   return new Promise((resolve, reject) => {
@@ -200,7 +213,9 @@ function uploadImage(
           `--${boundary}\r\nContent-Disposition: form-data; name="${part.name}"; filename="${part.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
         )
         let sent = 0
-        for await (const chunk of createReadStream(part.file)) {
+        // The path argument is ignored once `fd` is provided (Node's documented
+        // ReadStream contract), so the empty path keeps the typed overload.
+        for await (const chunk of createReadStream('', { fd: part.handle.fd, autoClose: true })) {
           sent += chunk.length
           if (sent > part.limit)
             throw new EnvironmentError('Incus image file exceeded its size limit')
@@ -639,43 +654,80 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
   }
   /** The operator stages the reviewed build's two files root-owned, outside
    * every checkout (the install plan's I8). Refuse anything else before a byte
-   * moves: a symlink in the path, a non-regular file, a non-root owner,
-   * group/other write, a file over its bound, and a parent that holds a `.git`
-   * entry. Returns the checked size, so the upload can declare it. */
-  async function checkImageFile(label: string, file: string, limit: number): Promise<number> {
+   * moves. The file is OPENED ONCE: the symlink refusal runs on the path
+   * (`realpath`, before any open), every remaining check runs on the open
+   * descriptor (`fstat`: regular file, root-owned, no group/other write, size
+   * bound) and the `.git` ancestor walk distinguishes not-found from a parent
+   * it cannot even ask. Returns the handle and its checked size, so the upload
+   * streams the very bytes that were checked and declares exactly their length. */
+  async function openImageFile(
+    label: string,
+    file: string,
+    limit: number,
+  ): Promise<{ handle: FileHandle; size: number }> {
     if (!isAbsolute(file) || file.includes('\0'))
       throw new EnvironmentError(`Incus image ${label} file must be an absolute path`)
     const real = await realpath(file).catch(() => undefined)
     if (!real) throw new EnvironmentError(`Incus image ${label} file is unreadable`)
     if (real !== file)
       throw new EnvironmentError(`Incus image ${label} file must not be reached through a symlink`)
-    const info = await lstat(real)
-    if (!info.isFile())
-      throw new EnvironmentError(`Incus image ${label} file must be a regular file`)
-    if (info.uid !== 0) throw new EnvironmentError(`Incus image ${label} file must be root-owned`)
-    if (info.mode & 0o022)
-      throw new EnvironmentError(`Incus image ${label} file must not be group- or other-writable`)
-    if (info.size > limit)
-      throw new EnvironmentError(`Incus image ${label} file exceeds its size limit`)
-    for (let dir = dirname(real); ; dir = dirname(dir)) {
-      const git = join(dir, '.git')
-      if (
-        await lstat(git).then(
-          () => true,
-          () => false,
-        )
-      )
-        throw new EnvironmentError(`Incus image ${label} file must not live under a checkout`)
-      if (dir === dirname(dir)) break
+    const handle = await open(file, 'r').catch(() => {
+      throw new EnvironmentError(`Incus image ${label} file is unreadable`)
+    })
+    try {
+      const info = await handle.stat()
+      if (!info.isFile())
+        throw new EnvironmentError(`Incus image ${label} file must be a regular file`)
+      if (info.uid !== 0) throw new EnvironmentError(`Incus image ${label} file must be root-owned`)
+      if (info.mode & 0o022)
+        throw new EnvironmentError(`Incus image ${label} file must not be group- or other-writable`)
+      if (info.size > limit)
+        throw new EnvironmentError(`Incus image ${label} file exceeds its size limit`)
+      for (let dir = dirname(real); ; dir = dirname(dir)) {
+        const git = join(dir, '.git')
+        let present = false
+        try {
+          await lstat(git)
+          present = true
+        } catch (error) {
+          // Only a proven absence passes: an unreadable parent must not be read
+          // as "no checkout here".
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+            throw new EnvironmentError(
+              `Incus image ${label} file must have readable parent directories`,
+            )
+        }
+        if (present)
+          throw new EnvironmentError(`Incus image ${label} file must not live under a checkout`)
+        if (dir === dirname(dir)) break
+      }
+      return { handle, size: info.size }
+    } catch (error) {
+      await handle.close().catch(() => undefined)
+      throw error
     }
-    return info.size
+  }
+
+  /** Every fingerprint Incus currently holds in this environment's own project. */
+  async function listProjectImages(tls: IncusCredential): Promise<string[]> {
+    const listed = await api(tls, 'GET', '/1.0/images')
+    if (!Array.isArray(listed)) throw new EnvironmentError('Incus image list is invalid')
+    const fingerprints: string[] = []
+    for (const entry of listed) {
+      const match =
+        typeof entry === 'string' && /^\/1\.0\/images\/([a-f0-9]{64})(?:\?.*)?$/.exec(entry)
+      if (!match) throw new EnvironmentError('Incus image list is invalid')
+      fingerprints.push(match[1])
+    }
+    return fingerprints
   }
 
   /** Import the pinned split image into this environment's own project, or
    * verify an earlier import. The instance is never created unless Incus's own
-   * fingerprint over the received bytes equals the pin: on any other value the
-   * imported image is removed first, so a substituted image leaves no instance
-   * and no image behind. The upload rides the project-restricted certificate,
+   * fingerprint over the received bytes equals the pin: on any other value
+   * exactly what this import added is removed first — an earlier verified image
+   * in the project is kept — so a substituted image leaves no instance and only
+   * its own import behind. The upload rides the project-restricted certificate,
    * never the manager credential, and is scoped to this project. */
   async function ensurePinnedImage(tls: IncusCredential): Promise<void> {
     const pin = (o.image as { fingerprint: string }).fingerprint
@@ -689,38 +741,50 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
       },
       { label: 'disk', name: 'rootfs', file: files!.disk, limit: IMAGE_DISK_MAX_BYTES },
     ]
-    const sizes: number[] = []
-    for (const part of parts) sizes.push(await checkImageFile(part.label, part.file, part.limit))
-    const boundary = `sandbox${randomUUID().replaceAll('-', '')}`
-    const preamble = (name: string) =>
-      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`
-    const url = new URL('/1.0/images', origin)
-    url.searchParams.set('project', project)
-    const contentLength =
-      parts.reduce(
-        (total, part, index) => total + Buffer.byteLength(preamble(part.name)) + sizes[index] + 2,
-        0,
-      ) + Buffer.byteLength(`--${boundary}--\r\n`)
-    const response = await uploadImage(url, tls, boundary, parts, contentLength)
-    if (response.type !== 'async')
-      throw new EnvironmentError('Incus image import response is invalid')
-    await waitOperation(tls, operationId(response), false)
-    if (await optional(tls, `/1.0/images/${pin}`)) return
-    // Incus computed a fingerprint other than the pin: remove everything it
-    // did assign, then refuse. A scoped DELETE never touches another project.
-    const assigned = await api(tls, 'GET', '/1.0/images')
-    if (!Array.isArray(assigned)) throw new EnvironmentError('Incus image list is invalid')
-    const fingerprints: string[] = []
-    for (const entry of assigned) {
-      const match =
-        typeof entry === 'string' && /^\/1\.0\/images\/([a-f0-9]{64})(?:\?.*)?$/.exec(entry)
-      if (!match) throw new EnvironmentError('Incus image list is invalid')
-      fingerprints.push(match[1])
+    // Snapshot what the project already holds before the upload, so the
+    // mismatch cleanup below deletes only the delta this import added.
+    const before = new Set(await listProjectImages(tls))
+    const opened: FileHandle[] = []
+    try {
+      const checked: { name: string; handle: FileHandle; limit: number; size: number }[] = []
+      for (const part of parts) {
+        const result = await openImageFile(part.label, part.file, part.limit)
+        opened.push(result.handle)
+        checked.push({
+          name: part.name,
+          handle: result.handle,
+          limit: part.limit,
+          size: result.size,
+        })
+      }
+      const boundary = `sandbox${randomUUID().replaceAll('-', '')}`
+      const preamble = (name: string) =>
+        `--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+      const url = new URL('/1.0/images', origin)
+      url.searchParams.set('project', project)
+      const contentLength =
+        checked.reduce(
+          (total, part) => total + Buffer.byteLength(preamble(part.name)) + part.size + 2,
+          0,
+        ) + Buffer.byteLength(`--${boundary}--\r\n`)
+      const response = await uploadImage(url, tls, boundary, checked, contentLength)
+      if (response.type !== 'async')
+        throw new EnvironmentError('Incus image import response is invalid')
+      await waitOperation(tls, operationId(response), false)
+      if (await optional(tls, `/1.0/images/${pin}`)) return
+      // Incus computed a fingerprint other than the pin: remove what it did
+      // assign — present now but absent before the upload — then refuse. A
+      // scoped DELETE never touches another project.
+      for (const fingerprint of await listProjectImages(tls))
+        if (!before.has(fingerprint)) await api(tls, 'DELETE', `/1.0/images/${fingerprint}`)
+      throw new EnvironmentError(
+        'Incus assigned the imported image a fingerprint other than the pinned one',
+      )
+    } finally {
+      // The streams close their own descriptors; a handle whose stream never
+      // started (a size refusal mid-batch, an upload aborted early) is closed here.
+      for (const handle of opened) await handle.close().catch(() => undefined)
     }
-    for (const fingerprint of fingerprints) await api(tls, 'DELETE', `/1.0/images/${fingerprint}`)
-    throw new EnvironmentError(
-      'Incus assigned the imported image a fingerprint other than the pinned one',
-    )
   }
 
   async function certificate(): Promise<{

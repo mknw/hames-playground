@@ -22,6 +22,7 @@
  * recorded in the PR (verified by mutation, not by reading).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -66,6 +67,7 @@ beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
   for (const k of ENV_KEYS) delete process.env[k]
   vi.resetModules()
+  resetTierPolicy()
   noteBoxCallStarting.mockClear()
 })
 
@@ -118,13 +120,13 @@ describe('the configuration the host registers is the configuration the resoluti
     })
   })
 
-  it('the SCOPE, not the env default, is what the resolution reads', async () => {
-    // Flag OFF (so the default tier is anthropic) with the endpoints present
-    // (so the registered assert lets the scope open). The #342 M1 lesson: a
-    // mutation that points the reader at a second AsyncLocalStorage passes
-    // every default-tier test — with the flag on, the default tier routes
-    // exactly like the scope — and only a test that holds the default at
-    // 'anthropic' while the scope says 'self_deployed' catches it.
+  it('the SCOPE, not the host default, is what the resolution reads', async () => {
+    // The host's default is the self-deployed tier (the one tier rule), flag OFF
+    // and endpoints present (so the default is reachable). The #342 M1 lesson:
+    // a mutation that points the reader at a second AsyncLocalStorage passes
+    // every default-tier test — a scope that agrees with the default routes
+    // exactly like it — and only a test that holds the default at
+    // 'self_deployed' while the scope says 'anthropic' catches it.
     process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
     process.env.LARGE_LLM_API_KEY = 'test-key'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
@@ -132,12 +134,12 @@ describe('the configuration the host registers is the configuration the resoluti
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const clients = await loadWired()
 
-    expect(clients.activeInferenceTier()).toBe('anthropic')
-    await clients.runWithInferenceTier('self_deployed', async () => {
-      expect(clients.activeInferenceTier()).toBe('self_deployed')
-      expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
+    await clients.runWithInferenceTier('anthropic', async () => {
+      expect(clients.activeInferenceTier()).toBe('anthropic')
+      expect(clients.clientOverrideFor('controller')).toBeUndefined()
     })
-    expect(clients.activeInferenceTier()).toBe('anthropic')
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
   })
 
   it('the 4B summarizer takes the override and announces its own box', async () => {
@@ -150,10 +152,16 @@ describe('the configuration the host registers is the configuration the resoluti
     })
   })
 
-  it('the host env default flows: USE_SELF_DEPLOYED_INFERENCE=1 outside any scope still routes', async () => {
-    enable()
+  it('the host default flows: an unfilled frame routes to the self-deployed tier with the flag unset too', async () => {
+    // The flag is the BOOT-time switch, not the tier of a run that names none.
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
+    process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
+    process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
+    process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
     const clients = await loadWired()
 
+    expect(process.env.USE_SELF_DEPLOYED_INFERENCE).toBeUndefined()
     expect(clients.activeInferenceTier()).toBe('self_deployed')
     expect(clients.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
   })
@@ -328,6 +336,7 @@ describe('unregistered — the package-side defaults are safe', () => {
     clients.configureModelTables({ maxOutputTokens: { X: 1 }, contextWindows: { X: 99 } })
     clients.configureInferencePolicy({
       defaultTier: () => 'self_deployed',
+      assertTierReachable: () => {},
       onPrivateCallStart: (client: string) => seen.push(client),
     })
     clients.configureCostRates({ eurPerUsd: () => 3, largeEurPerHour: () => 4 })

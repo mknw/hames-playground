@@ -28,9 +28,11 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 import type { BamlRole } from '@hames-ai/harness-baml/clients.server'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 const ENV_KEYS = [
   'USE_SELF_DEPLOYED_INFERENCE',
+  'INFERENCE_TIERS',
   'LARGE_LLM_BASE_URL',
   'LARGE_LLM_API_KEY',
   // The private tier is TWO models since 2026-08-26 — `describe` runs on the 4B
@@ -88,8 +90,9 @@ const PRIVATE_CLIENT: Record<string, string> = {
 
 async function load() {
   vi.resetModules()
+  resetTierPolicy()
   // The composition root registers the seam (tier policy, model tables, cost
-  // rates) and its defaultTier reads USE_SELF_DEPLOYED_INFERENCE — the wiring every
+  // rates) and its defaultTier is the self-deployed tier — the wiring every
   // production path takes.
   await import('../../../lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
@@ -121,6 +124,7 @@ async function load() {
  *  against it. */
 async function loadTierConfig() {
   vi.resetModules()
+  resetTierPolicy()
   return await import('../../../lib/inference/config.server')
 }
 
@@ -234,10 +238,13 @@ describe('scope isolation — one user’s choice is not another’s routing', (
   it('does not leak past its own callback', async () => {
     const { runWithInferenceTier, clientOverrideFor } = await load()
 
-    await runWithInferenceTier('self_deployed', async () => {
-      expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    // The host default is the self-deployed tier (the one tier rule), so the
+    // scope under test is the Anthropic one: a scope that leaked would leave the
+    // default's `LargeQwen` replaced by the scope's `undefined` outside it.
+    await runWithInferenceTier('anthropic', async () => {
+      expect(clientOverrideFor('controller')).toBeUndefined()
     })
-    expect(clientOverrideFor('controller')).toBeUndefined()
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
   })
 
   it('keeps concurrent runs on their own tier', async () => {
@@ -390,19 +397,160 @@ describe('selfDeployedConfigured — the non-throwing sibling', () => {
 })
 
 describe('activeInferenceTier — what runs outside any scope', () => {
-  it('is anthropic with no flag, even when the endpoint is configured', async () => {
-    // The endpoint being reachable is what makes the tier OFFERABLE to a user;
-    // it is deliberately not what re-points background work that has no user.
+  it('is self_deployed with no flag when the endpoint is configured', async () => {
+    // The ONE tier rule (ruling E): a run that names no tier is a self-deployed-tier
+    // run. `USE_SELF_DEPLOYED_INFERENCE` is the boot-time switch and no longer the
+    // tier of such a run. (Until this rule it was the Anthropic tier here, "not
+    // what re-points background work that has no user"; the rule reverses that.)
     configureEndpointOnly()
     const { activeInferenceTier } = await load()
-    expect(activeInferenceTier()).toBe('anthropic')
+    expect(activeInferenceTier()).toBe('self_deployed')
   })
 
-  it('follows USE_SELF_DEPLOYED_INFERENCE when it is set', async () => {
+  it('is self_deployed with the flag set too — the flag no longer moves it', async () => {
     configureEndpointOnly()
     process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     const { activeInferenceTier } = await load()
     expect(activeInferenceTier()).toBe('self_deployed')
+  })
+
+  it('is REFUSED, never the Anthropic tier, when the self-deployed tier is not configured', async () => {
+    // No endpoint, no flag. The default tier cannot be taken, and the one
+    // outcome the tier exists to prevent is a quiet fall-through to Anthropic.
+    // Mutation: catch the reachability failure in `activeInferenceTier()` and
+    // answer 'anthropic' — this and the override assertion below go red.
+    const { activeInferenceTier, clientOverrideFor, resolveClientForRole } = await load()
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+
+    expect(() => activeInferenceTier()).toThrow(/self-deployed tier/)
+    expect(() => clientOverrideFor('controller')).toThrow(/self-deployed tier/)
+    expect(() => resolveClientForRole('controller')).toThrow(/self-deployed tier/)
+    // An unfilled frame takes the self-deployed default and an unrecognised one is read as
+    // the self-deployed tier, so both meet the same refusal.
+    await withRunFrame({}, async () => {
+      expect(() => activeInferenceTier()).toThrow(/self-deployed tier/)
+    })
+    await withRunFrame({ inference: { tier: 'unrecognised' } }, async () => {
+      expect(() => activeInferenceTier()).toThrow(/self-deployed tier/)
+    })
+    // A frame that NAMES the Anthropic tier needs no endpoint.
+    await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      expect(activeInferenceTier()).toBe('anthropic')
+      expect(clientOverrideFor('controller')).toBeUndefined()
+    })
+  })
+})
+
+describe('the one tier rule — every reader names the same tier', () => {
+  /** Every reader the rule binds, asked inside one frame (or none). */
+  async function readers(tier: string | undefined | 'no-frame') {
+    const clients = await load()
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    const ask = () => ({
+      active: clients.activeInferenceTier(),
+      anthropic: clients.onExplicitAnthropicTier(),
+      effective: core.effectiveTier(),
+      routed: clients.clientOverrideFor('controller')?.client ?? 'anthropic-chain',
+    })
+    return tier === 'no-frame'
+      ? ask()
+      : core.withRunFrame({ inference: tier === undefined ? {} : { tier } }, async () => ask())
+  }
+
+  // Mutation: resolve the guard-side reader against the raw frame string (or
+  // `effectiveTier()` against anything but `activeInferenceTier()`): the absent,
+  // empty and unknown rows disagree with routing and go red.
+  it.each([
+    ['no frame', 'no-frame', 'self_deployed'],
+    ['an unfilled frame', undefined, 'self_deployed'],
+    ['an empty tier', '', 'self_deployed'],
+    ['an unknown string', 'future', 'self_deployed'],
+    ['the self-deployed tier', 'self_deployed', 'self_deployed'],
+    ['the Anthropic tier', 'anthropic', 'anthropic'],
+  ] as const)(
+    '%s: routing, onExplicitAnthropicTier and effectiveTier agree',
+    async (_n, frame, want) => {
+      configureEndpointOnly()
+      const seen = await readers(frame)
+      expect(seen.active).toBe(want)
+      expect(seen.effective).toBe(want)
+      expect(seen.anthropic).toBe(want === 'anthropic')
+      expect(seen.routed).toBe(want === 'anthropic' ? 'anthropic-chain' : 'LargeQwen')
+    },
+  )
+
+  it('the Anthropic tier on a deployment restricted to the self-deployed tier is refused by every reader', async () => {
+    configureEndpointOnly()
+    process.env.INFERENCE_TIERS = 'self_deployed'
+    const clients = await load()
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    await core.withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
+      expect(() => clients.activeInferenceTier()).toThrow(/Private-only/)
+      expect(() => clients.onExplicitAnthropicTier()).toThrow(/Private-only/)
+      expect(() => core.effectiveTier()).toThrow(/Private-only/)
+    })
+  })
+
+  it('with no host policy registered, the package fallback is the Anthropic tier for an absent or empty tier (security delta N4)', async () => {
+    // A library user has no self-deployed tier to default to. `effectiveTier()`
+    // answers the tier routing takes, so a guard's `ByTier` key for the Anthropic
+    // tier applies rather than its `default`. Mutation: have the package answer
+    // nothing (or the self-deployed tier) when no policy is registered.
+    vi.resetModules()
+    resetTierPolicy()
+    const clients = await import('@hames-ai/harness-baml/clients.server')
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    for (const frame of [undefined, ''] as const) {
+      await core.withRunFrame(
+        { inference: frame === undefined ? {} : { tier: frame } },
+        async () => {
+          expect(clients.activeInferenceTier()).toBe('anthropic')
+          expect(core.effectiveTier()).toBe('anthropic')
+          expect(clients.onExplicitAnthropicTier()).toBe(true)
+          expect(clients.clientOverrideFor('controller')).toBeUndefined()
+        },
+      )
+    }
+  })
+
+  it('with no host policy registered, a PRESENT but unknown tier is refused by every reader, never the Anthropic tier (ruling E)', async () => {
+    // Mutation: `named ?? tierPolicy.defaultTier()` for a non-empty unknown
+    // string (the pre-fix line): every reader answers 'anthropic' and these go red.
+    vi.resetModules()
+    resetTierPolicy()
+    const clients = await import('@hames-ai/harness-baml/clients.server')
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    await core.withRunFrame({ inference: { tier: 'future' } }, async () => {
+      expect(() => clients.activeInferenceTier()).toThrow(/no inference policy/)
+      expect(() => clients.onExplicitAnthropicTier()).toThrow(/no inference policy/)
+      expect(() => core.effectiveTier()).toThrow(/no inference policy/)
+      expect(() => clients.clientOverrideFor('controller')).toThrow(/no inference policy/)
+    })
+  })
+})
+
+describe('the host policy is shared by every loaded copy of the package (SD-9)', () => {
+  it('a copy loaded after the host configured copy A answers the guards from the host policy, not the package fallback', async () => {
+    // The policy sits on a `Symbol.for` holder, like core's frame and tier reader.
+    // Mutation: hold it in a module-level `let` again — copy B registers its own
+    // reader (last wins) over the package fallback, so `effectiveTier()` answers
+    // 'anthropic' while copy A's routing said 'self_deployed', and this goes red.
+    vi.resetModules()
+    resetTierPolicy()
+    const a = await import('@hames-ai/harness-baml/clients.server')
+    a.configureInferencePolicy({
+      defaultTier: () => 'self_deployed',
+      assertTierReachable: () => {},
+    })
+    vi.resetModules()
+    const b = await import('@hames-ai/harness-baml/clients.server')
+    const core = await import('@hames-ai/harness-patterns/run-frame.server')
+    expect(b).not.toBe(a)
+    await core.withRunFrame({ inference: {} }, async () => {
+      expect(b.activeInferenceTier()).toBe('self_deployed')
+      expect(core.effectiveTier()).toBe('self_deployed')
+      expect(b.clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    })
   })
 })
 
@@ -421,26 +569,30 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
     // Mutation: restore `tierStore.getStore() ?? tierPolicy.defaultTier()` — a
     // store of this module's own, which is what the frame replaced — and the
     // frame's tier becomes invisible: `activeInferenceTier()` answers
-    // 'anthropic' inside the frame and this goes red.
+    // 'self_deployed' inside the frame and this goes red. The decoy is the
+    // host default, which since the one tier rule is the self-deployed tier,
+    // so the frame under test names the Anthropic tier (a frame that agreed
+    // with the default would pass whatever the reader read).
     configureEndpointOnly()
     const clients = await load()
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
 
     // The module global — the decoy this reader must not prefer.
-    expect(clients.activeInferenceTier()).toBe('anthropic')
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
 
-    const inside = await withRunFrame({ inference: { tier: 'self_deployed' } }, async () =>
+    const inside = await withRunFrame({ inference: { tier: 'anthropic' } }, async () =>
       clients.activeInferenceTier(),
     )
-    expect(inside).toBe('self_deployed')
+    expect(inside).toBe('anthropic')
     // And the frame closed behind itself.
-    expect(clients.activeInferenceTier()).toBe('anthropic')
+    expect(clients.activeInferenceTier()).toBe('self_deployed')
   })
 
-  it('an unrecognised tier string falls back to the default rather than routing blind', async () => {
+  it('an unrecognised tier string is read as the self-deployed tier rather than routing blind', async () => {
     // Core carries the tier as an OPAQUE STRING — it cannot know what 'self_deployed'
     // means — so the narrowing happens here, and a host that writes a typo into
-    // the slot gets the safe tier rather than an unrouted one.
+    // the slot gets the self-deployed tier rather than an unrouted one. Inverted by the
+    // one tier rule: an unrecognised value is the self-deployed tier, not the Anthropic one.
     configureEndpointOnly()
     const clients = await load()
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
@@ -449,8 +601,8 @@ describe("the run frame's inference slot — the reader reads the frame", () => 
       tier: clients.activeInferenceTier(),
       override: clients.clientOverrideFor('controller'),
     }))
-    expect(seen.tier).toBe('anthropic')
-    expect(seen.override).toBeUndefined()
+    expect(seen.tier).toBe('self_deployed')
+    expect(seen.override).toEqual({ client: 'LargeQwen' })
   })
 
   it('a per-run clientOverride is keyed by ROLE, so mapping describe never moves screen', async () => {

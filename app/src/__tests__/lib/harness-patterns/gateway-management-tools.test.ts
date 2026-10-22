@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 import { parseDocument } from 'yaml'
 import { SANDBOX_TOOL_PREFIX, V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -138,6 +139,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.resetModules()
+  resetTierPolicy()
   vi.restoreAllMocks()
 })
 

@@ -67,10 +67,11 @@ survive archive transfer into the classic guests. Classic-host selectors are
 unchanged.
 
 #654's environment controller selects a **VM image**, not individual flavour
-images. Its existing 64-hex Incus fingerprint input needs no change. That PR's
-HTTPS image-server transport still needs an operator-provided image server;
-this pipeline does not publish one or add local-file import to that controller.
-The spike can import the two local files directly. The builder does not issue
+images. Its existing 64-hex Incus fingerprint input needs no change. It takes
+either an HTTPS simplestreams origin (which still needs an operator-provided
+image server; this pipeline does not publish one) or the two local files, which
+it imports into the environment's own project and refuses unless Incus's
+computed fingerprint equals the pin. The builder does not issue
 TLS certificates or write daemon endpoints. Both the spike and #654 provision
 those after image assembly via `/etc/docker/daemon.json` and a systemd override.
 The guest provides `/usr/bin/dockerd` for both consumers, adding a symlink to

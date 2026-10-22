@@ -68,6 +68,8 @@ const BOOT_ID = '/proc/sys/kernel/random/boot_id'
 
 // The config is checked against this shape: an unknown or misspelt key is
 // refused rather than ignored, so a typo cannot silently drop a setting.
+// `image` names exactly one source (checked after the shape): an HTTPS
+// simplestreams server, or the two local files of the pinned split image.
 type Shape = 'string' | 'number' | { [key: string]: Shape }
 const CONFIG: Shape = {
   environment: 'string',
@@ -75,7 +77,11 @@ const CONFIG: Shape = {
   bridge: 'string',
   address: 'string',
   storagePool: 'string',
-  image: { server: 'string', fingerprint: 'string' },
+  image: {
+    'server?': 'string',
+    fingerprint: 'string',
+    'files?': { metadata: 'string', disk: 'string' },
+  },
   quota: { cpu: 'number', memoryMiB: 'number', diskGiB: 'number', rootDiskGiB: 'number' },
   stateDirectory: 'string',
   delivery: { directory: 'string', 'owner?': { uid: 'number', gid: 'number' } },
@@ -100,6 +106,17 @@ function conform(value: unknown, shape: Shape, name: string): void {
   }
 }
 
+/** The image option names exactly one source, with its pinned fingerprint:
+ * a config naming both, or neither, is refused before any request. The
+ * fingerprint's own shape is the library's check; the shape here is the
+ * config's. */
+function imageSource(value: Record<string, unknown>, name: string): void {
+  const hasServer = value.server !== undefined
+  const hasFiles = value.files !== undefined
+  if (hasServer === hasFiles)
+    throw new Error(`${name} must name exactly one source: a server or local files`)
+}
+
 interface Config extends Omit<IncusEnvironmentOptions, 'manager'> {
   manager: { url: string; ca: string; cert: string; key: string }
   delivery: { directory: string; owner?: { uid: number; gid: number } }
@@ -113,6 +130,7 @@ async function load(file: string): Promise<Config> {
     throw new Error('config file is unreadable or not JSON')
   }
   conform(value, CONFIG, 'file')
+  imageSource((value as Config).image, 'config image')
   return value as Config
 }
 

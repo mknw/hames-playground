@@ -609,11 +609,14 @@ export function withEgressGate(config: EgressGateConfig) {
             // A leaf that carries an address, or sits under a `url` key (in an
             // array too), must BE a given address, and so must each address in
             // it: a prefix of given text, or a given address with text after
-            // it, is not one.
+            // it, is not one. Only what a URL parser strips at the ends (C0
+            // controls and space) is stripped here: `trim()` also strips
+            // Unicode spaces a parser keeps, and those would carry data.
             const ungiven = request.raw.some(({ key, value }) => {
               const addresses = addressesIn(value)
               if (addresses.length === 0 && key?.toLowerCase() !== 'url') return false
-              return !given.has(value.trim()) || addresses.some((a) => !given.has(a))
+              const bare = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '')
+              return !given.has(bare) || addresses.some((a) => !given.has(a))
             })
             if (ungiven) return EGRESS_TEXTS.fetchAddress
           }

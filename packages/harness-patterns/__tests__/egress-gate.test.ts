@@ -459,6 +459,23 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
     expect(decide.seen.states).toHaveLength(2)
   })
 
+  // MUTATION: compare `value.trim()` again: every trailing Unicode space below
+  // is stripped, the value equals the given address, and the call is sent.
+  it('a given address followed by a Unicode space a URL parser keeps is not given', async () => {
+    const decide = egressDecide([PUBLIC])
+    const spaces = ['\u00a0', '\u3000', '\u2003', '\u2009', '\u202f', '\u00a0\u3000\u2003']
+    const results: ToolCallResult[] = []
+    await run(
+      { decide, ...O21 },
+      async () => {
+        for (const space of spaces) results.push(await callTool('fetch', { url: GIVEN + space }))
+      },
+      { prior: [webResult(`see ${GIVEN} for more`)] },
+    )
+    expect(results.map((r) => r.error)).toEqual(spaces.map(() => EGRESS_TEXTS.fetchAddress))
+    expect(decide.seen.states).toHaveLength(0)
+  })
+
   // MUTATION: stop stripping the closing punctuation on the given side: a link
   // at the end of a sentence, or inside Markdown parentheses, is refused.
   it('an address closed by a full stop or a Markdown parenthesis is given without it', async () => {

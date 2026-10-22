@@ -146,10 +146,8 @@ async function createPatterns(
   // gate is never asked (it would send every body to that tier's decisions
   // host); on the self-deployed tier, and an absent or unknown one, the gate is
   // asked in 'shadow' — recorded, never obeyed — until the eval bar for 'gated'
-  // is met. Memory reads are screened like any external result for now: ruling
-  // L's exemption (the guard's `exempt`) waits for the owner's attestation of
-  // the memory store, because entries the removed, unguarded `general` agent
-  // wrote never passed ingress. Only external content is gated in (ruling O):
+  // is met. The guard declares no `exempt`: nothing here is trusted by
+  // namespace. Only external content is gated in (ruling O):
   // the host's classifier marks the deployment's own content internal, which
   // gets the deterministic pass alone unless that pass finds something.
   //

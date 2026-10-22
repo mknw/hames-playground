@@ -2031,8 +2031,7 @@ no gate call; on the self-deployed tier (and an absent or unknown one) a gate ca
 recorded and not obeyed, and the screen as well. A deterministic finding forces
 the screen on either. The host's classifier keeps the deployment's own content
 (the graph, Microsoft 365 results whose every identity is on a home domain) to
-the deterministic pass; memory reads are screened like external content until the
-shared memory store is attested (the `exempt` option is not used yet); the
+the deterministic pass (no agent declares the `exempt` option); the
 documents route's guard declares the fence and no screen, so the retriever's
 hits get the deterministic pass and the fence only. The loop itself sanitises and screens nothing: a route record is the
 text the extractor built, and a quoted tool body carries the fence its result

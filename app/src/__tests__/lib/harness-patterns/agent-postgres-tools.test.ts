@@ -300,6 +300,8 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
   // tool` reddens (the non-vacuity check below proves the listing is live).
   // MUTATION 3: re-add `'search_nodes'` to `MCP_TOOL_CATALOG` under `neo4j` →
   // the same assertion reddens for `general-next`'s info loop.
+  // MUTATION 4: `infoTools` also spreads `...(tools.filesystem ?? [])` → the
+  // `holds read_text_file` assertion reddens.
   it('no agent is handed any memory-graph tool, or the whole gateway surface', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const prefixed = MEMORY_GRAPH_TOOLS.map((t) => `mcp__hames-mcp-gateway__${t}`)
@@ -321,6 +323,10 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
             tools,
             `${agent.id} → ${factory} holds the memory-graph tool ${name}`,
           ).not.toContain(name)
+        // Redis and filesystem names are outside the info guard's namespaces,
+        // so a loop handed either would run them unguarded.
+        for (const raw of ['json_get', 'read_text_file'])
+          expect(tools, `${agent.id} → ${factory} holds ${raw}`).not.toContain(raw)
       }
     }
 

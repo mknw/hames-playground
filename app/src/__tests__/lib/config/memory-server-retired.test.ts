@@ -10,7 +10,7 @@
  * bring back a volume-backed graph that every signed-in user's agent shares.
  * The preview allow-list is pinned in `preview-tool-surface.test.ts`.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -39,5 +39,21 @@ describe('the memory server is gone from the gateway configuration', () => {
     expect(readFileSync(path.join(REPO, 'configs/custom-catalog.yaml'), 'utf8')).not.toMatch(
       /claude-memory/,
     )
+  })
+
+  // `configs/catalog.yaml` is the upstream mirror and still lists `memory`
+  // (with the `claude-memory` volume); it is bind-mounted for reference only.
+  // MUTATION: add `--catalog=/mcp/catalog.yaml` to the gateway command in
+  // `docker-compose.yaml`: this goes red.
+  it('loads the upstream catalog mirror from no compose file', () => {
+    const files = readdirSync(REPO).filter((f) => /^docker-compose.*\.ya?ml$/.test(f))
+    expect(files).toContain('docker-compose.yaml')
+    for (const file of files) {
+      const body = readFileSync(path.join(REPO, file), 'utf8')
+        .split('\n')
+        .filter((l) => !/^\s*#/.test(l))
+        .join('\n')
+      expect(body, file).not.toMatch(/--catalog=\S*\/catalog\.yaml/)
+    }
   })
 })

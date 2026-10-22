@@ -393,7 +393,7 @@ assert.doesNotThrow(() => client.getNeo4jDriver(), 'configured client must build
 // 4. the catalog data and the pure transforms (the client-safe root barrel)
 const catalog = await import('@hames-ai/connectors/mcp-catalog')
 assert.equal(catalog.mcpNamespace('search'), 'web', 'catalog data must resolve after tarball install')
-assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 86, 'catalog must hold 86 names')
+assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 77, 'catalog must hold 77 names')
 const root = await import('@hames-ai/connectors')
 assert.equal(typeof root.transformNeo4jToCytoscape, 'function', 'root barrel must export the transform')
 

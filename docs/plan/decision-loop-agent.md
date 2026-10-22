@@ -241,7 +241,7 @@ Recall, wake and settle still run only on interactive turns (#553).
 
 **Injection guards.** Each inner agent gets its own `withInjectionGuard`, as in the sketch, declared by exact name where namespaces cannot reach:
 
-- **`INFO_GUARD`**: `namespaces: ['web', 'neo4j', 'context7', 'memory']` (S3b).
+- **`INFO_GUARD`**: `namespaces: ['web', 'neo4j', 'context7']` (S3b; `memory` removed 2026-10-22).
 - **`DOC_GUARD`**: `namespaces: ['graph']` plus the sandbox tools **by name** (`sandbox_read`, `sandbox_bash`, …). `namespaces: ['sandbox']` is refused when the agent is built (security review §1).
 - **`read-documents`**: needs `tools: ['retriever']` on a guard that wraps it.
 - **One guard around `orchestrator`**, shown in the shape: the union of the three plus the exact fixed tool key **`decision_loop_output`**, `spotlight: 'always'`, and `screen: createInjectionScreen()` (the role-resolved adapter, `packages/harness-baml/baml-adapters.server.ts:1663-1720`). `decisionLoop` uses that key for every output sanitize call; it never uses the route name for this boundary. Nested guards union and never shadow, so the inner guards stay as the local declaration of each agent's sources.

@@ -1721,7 +1721,7 @@ it.each([false, undefined])(
   },
 )
 
-describe('general-next: the screen mode per tier, its gate, and memory reads (boundary guards slice 3)', () => {
+describe('general-next: the screen mode per tier and its gate (boundary guards slice 3)', () => {
   const searchOnce = () =>
     mocks.controller.mockResolvedValueOnce({
       action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
@@ -1764,28 +1764,6 @@ describe('general-next: the screen mode per tier, its gate, and memory reads (bo
     expect(JSON.stringify(decision)).not.toContain('CLEAN-WEB-SENTINEL')
     // The loop's own states never carry the gate's.
     expect(states.join('\n')).not.toContain('CONTENT UNDER REVIEW')
-  })
-
-  // Ruling L's exemption waits for the owner's attestation of the memory store
-  // (entries the removed, unguarded agent wrote never passed ingress), so a
-  // memory read is screened as on main. MUTATION: declare `exempt: ['memory']`
-  // on the info guard: the read below reaches neither the gate nor the screen.
-  it('a memory read is screened behind a shadow gate: no exemption until the store is attested', async () => {
-    choices = ['info-retrieval', 'answer']
-    gateway.result = 'CLEAN-MEMORY-SENTINEL'
-    mocks.controller.mockResolvedValueOnce({
-      action: {
-        reasoning: 'recall',
-        tool_name: 'search_nodes',
-        tool_args: '{"query":"x"}',
-        is_final: false,
-      },
-    })
-    await run('self_deployed')
-    expect(gateway.calls).toContain('search_nodes')
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search_nodes')
-    expect(gateStates).toHaveLength(1)
-    expect(gateStates[0]).toContain('\n> CLEAN-MEMORY-SENTINEL\n')
   })
 
   // MUTATION: drop `classify: deps.classifyIngress` from either route guard's

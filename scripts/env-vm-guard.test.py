@@ -287,6 +287,9 @@ class Rules(unittest.TestCase):
                                                             state="established", orig=flow)), "accept")
             self.assertEqual(self.verdict("forward", packet(vm, env["guestAddress"], env["clientAddress"], 50000, app,
                                                             state="established", orig=flow)), "accept")
+            # An ICMP error about that flow, to its own client.
+            self.assertEqual(self.verdict("forward", packet(vm, env["guestAddress"], env["clientAddress"], None, app,
+                                                            proto="icmp", state="related", icmp=3, orig=flow)), "accept")
 
     def test_every_other_flow_into_a_vm_is_refused_by_name(self):
         dev, guest = DEV["clientAddress"], DEV["guestAddress"]
@@ -339,6 +342,22 @@ class Rules(unittest.TestCase):
             ("forward", packet("envvm-dev", REL["guestAddress"], DEV["clientAddress"], 50000, "envapp-dev",
                                state="established", orig=(REL["clientAddress"], REL["guestAddress"], 2376)), "vm_egress"),
             ("forward", packet("envvm-new", "198.51.100.42", PROBES["publicAddress"], 443, "eth0"), "vm_egress"),
+            # Conntrack relates an ICMP error by the tuple it embeds, wherever it is sent: an error
+            # about a flow toward the VM reaches neither the host nor anyone but that flow's client.
+            ("input", packet("envvm-dev", guest, PRIMARY, None, proto="icmp", state="related", icmp=3,
+                             orig=("198.51.100.1", guest, 2376)), "vm_to_host"),
+            ("forward", packet("envvm-dev", guest, PROBES["publicAddress"], None, "eth0", proto="icmp", state="related",
+                               icmp=3, orig=(DEV["clientAddress"], guest, 2376)), "vm_egress"),
+            ("forward", packet("envvm-dev", guest, "192.0.2.3", None, "envapp-dev", proto="icmp", state="related",
+                               icmp=3, orig=(DEV["clientAddress"], guest, 2376)), "vm_egress"),
+            ("forward", packet("envvm-dev", guest, DEV["clientAddress"], None, APP_BRIDGE, proto="icmp", state="related",
+                               icmp=3, orig=(DEV["clientAddress"], guest, 2376)), "vm_egress"),
+            # Nor about the client's flows elsewhere, nor from a spoofed source into the allowed flow.
+            ("forward", packet("envvm-dev", guest, DEV["clientAddress"], None, "envapp-dev", proto="icmp",
+                               state="related", icmp=3, orig=(DEV["clientAddress"], PROBES["publicAddress"], 443)),
+             "vm_egress"),
+            ("forward", packet("envvm-dev", "198.51.100.3", DEV["clientAddress"], 50000, "envapp-dev",
+                               state="established", orig=(DEV["clientAddress"], guest, 2376)), "vm_egress"),
         ]
         for hook, pkt, counter in cases:
             with self.subTest(pkt=pkt):
@@ -550,7 +569,7 @@ class Host:
         self.host_answer = self.exec_answer = "29.0.0\n"
         self.misattribute = self.ingress = self.allow_stuck = self.force_icmp = self.force_datagram = False
         self.ss = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 [::]:22 [::]:*\n"
-        self.icmp_delivered, self.datagrams = set(), set()
+        self.icmp_delivered, self.datagrams, self.held = set(), set(), set()
         self.next_port = 50000
         self.next_container = 0
         self.flushes = 0
@@ -570,6 +589,11 @@ class Host:
     def ephemeral(self):
         self.next_port += 1
         return self.next_port
+
+    def hold(self, source, address, port):
+        sock = Socket(self, source)
+        self.held.add((source, sock.port, address, port))
+        return sock
 
     def host_addresses(self):
         return {ipaddress.ip_interface(v).ip for v in self.bridges.values()}
@@ -771,10 +795,14 @@ class Host:
             source = "fe80::2" if ":" in rest[0] else guest_address
             return self.probe(rest[2], vm, source, rest[0], int(rest[1]), int(rest[2]))
         if mode == "icmp":
-            host_address, public, hport, pport = rest[0], rest[1], int(rest[2]), int(rest[3])
-            if self.deliver(packet(vm, guest_address, host_address, None, proto="icmp", state="related", icmp=3,
-                                   orig=(host_address, public, pport))):
-                self.icmp_delivered.add(hport)
+            target, src, dst, protocol, sport, dport = rest[0], rest[1], rest[2], rest[3], int(rest[4]), int(rest[5])
+            self.test.assertIn(protocol, ("tcp", "udp"))
+            if protocol == "tcp":
+                # 8d embeds the flow the host holds open, so conntrack relates the error.
+                self.test.assertIn((src, sport, dst, dport), self.held, "8d embeds no live flow")
+            if self.deliver(packet(vm, guest_address, target, None, proto="icmp", state="related", icmp=3,
+                                   orig=(src, dst, dport))) and protocol == "udp":
+                self.icmp_delivered.add(sport)
             return "SENT"
         if mode == "spoof":
             src, dst, dport, sport = rest[0], rest[1], int(rest[2]), int(rest[3])
@@ -928,6 +956,7 @@ class Harness(unittest.TestCase):
                   patch.object(guard.subprocess, "Popen", side_effect=lambda *a, **k: Monitor(self.host)),
                   patch.object(guard, "root"), patch.object(guard, "time", self.host.clock),
                   patch.object(guard, "host_udp", side_effect=lambda address: Socket(self.host, address)),
+                  patch.object(guard, "host_tcp", side_effect=self.host.hold),
                   patch.object(guard, "host_reaches", side_effect=lambda a, p: self.host.public_reachable)):
             p.start()
             self.addCleanup(p.stop)
@@ -1600,11 +1629,12 @@ class Smoke(Smoking, Harness):
         self.assertEqual(record["render_sha256"], hashlib.sha256(guard.render(self.cfg).encode()).hexdigest())
         results = self.results()
         self.assertEqual(set(results), {"1", "2", "3", "4", "4b", "5", "7", "8-gateway", "8-primary",
-                                        "8-link-local", "8b", "8c", "9", "10", "11-link", "11-app"})
+                                        "8-link-local", "8b", "8c", "8d", "8d-host", "9", "10", "11-link", "11-app"})
         self.assertTrue(results["1"]["stand_in"])
         expected = {"3": "to_vm_refused", "4": "to_vm_refused", "4b": "to_vm_refused", "5": "to_vm_refused",
                     "7": "vm_egress", "8-gateway": "vm_to_host", "8-primary": "vm_to_host",
-                    "8-link-local": "vm_to_host", "8b": "vm_to_host", "9": "vm_to_metadata", "10": "vm_egress",
+                    "8-link-local": "vm_to_host", "8b": "vm_to_host", "8d": "vm_egress", "8d-host": "vm_to_host",
+                    "9": "vm_to_metadata", "10": "vm_egress",
                     "11-link": "vm_egress", "11-app": "vm_egress"}
         for label, rule in expected.items():
             self.assertEqual((results[label]["outcome"], results[label]["rule"]), ("refused", rule), label)
@@ -1854,10 +1884,12 @@ MUTATIONS = {
     "allow-bridge-dropped": ('allows.append((("iifname", app), ("ip saddr", client), ("oifname", vm)', 'allows.append((("ip saddr", client), ("oifname", vm)'),
     "allow-port-dropped": ('("ip daddr", guest), ("tcp dport", DOCKER_PORT), ', '("ip daddr", guest), '),
     "allow-destination-dropped": ('("ip saddr", client), ("oifname", vm), ("ip daddr", guest), ', '("ip saddr", client), '),
-    "replies-below-host-drop": ('("input", replies + host)', '("input", host + replies)'),
+    "replies-below-host-drop": ('("input", host_replies + host)', '("input", host + host_replies)'),
     "replies-below-egress-drops": ("replies + leaving + allows + entering", "leaving + replies + allows + entering"),
-    "reply-loses-ct-original": ('("ip saddr", guest), ("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)', '("ip saddr", guest), ("ct state", REPLY), ("accept",)'),
-    "reply-loses-source": ('replies.append((("iifname", vm), ("ip saddr", guest), ', 'replies.append((("iifname", vm), '),
+    "reply-loses-ct-original": ('("ip daddr", client), ("ct original ip daddr", guest), ("ct state", REPLY)', '("ip daddr", client), ("ct state", REPLY)'),
+    "host-reply-loses-ct-original": ('("ip saddr", guest), ("ct original ip daddr", guest), ("ct state", ("established",))', '("ip saddr", guest), ("ct state", ("established",))'),
+    "reply-loses-source": ('        replies.append((("iifname", vm), ("ip saddr", guest), ', '        replies.append((("iifname", vm), '),
+    "host-reply-loses-source": ('host_replies.append((("iifname", vm), ("ip saddr", guest), ', 'host_replies.append((("iifname", vm), '),
     "flow-loses-original-source": ('("ct original ip saddr", client), ', ""),
     "flow-loses-original-destination": ('("ct original ip saddr", client), ("ct original ip daddr", guest), ', '("ct original ip saddr", client), '),
     "flow-loses-original-port": ('("ct original proto-dst", DOCKER_PORT), ', ""),
@@ -2015,6 +2047,15 @@ MUTATIONS = {
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
+    # S2 (PM: tighten): a reply to the host is never an ICMP error; a forwarded one goes to its client only; probe 8d.
+    "S2-host-reply-related": ('("ct original ip daddr", guest), ("ct state", ("established",)), ("accept",)', '("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)'),
+    "S2-forward-reply-any-destination": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), '),
+    "S2-forward-reply-any-bridge": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), ("ip daddr", client), '),
+    "S2-forward-reply-any-client": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), ("oifname", app), '),
+    "S2-probe-8d-skipped": ('            for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),\n                                           ("8d-host", shared["primary"], "vm_to_host")):',
+                            '            for label, target, counter in ():'),
+    "S2-probe-8d-host-skipped": ('                                           ("8d-host", shared["primary"], "vm_to_host")):', '                                           ):'),
+    "S2-probe-8d-embeds-nothing-live": ('lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT)', 'lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT - 1)'),
 }
 
 

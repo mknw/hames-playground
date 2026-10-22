@@ -42,7 +42,7 @@ every other container ──[app-network]──────┘    (every other f
 | Flow                                                       | Verdict                                                                  | Rule ([§2.1](#21-the-guard-table)) |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------ | ---------------------------------- |
 | dev app (link bridge **and** pinned address) → dev VM:2376 | allowed                                                                  | `app_to_vm_dev`                    |
-| replies within an allowed flow                             | allowed                                                                  | the three reply accepts            |
+| replies within an allowed flow, to its own client          | allowed                                                                  | the three reply accepts            |
 | any other container, source or port → any environment VM   | refused, except holders of the host Docker socket (root-equivalent, §10) | `to_vm_refused`                    |
 | VM → the host (any host address and port, IPv4 or IPv6)    | refused                                                                  | `vm_to_host`                       |
 | VM → another environment VM                                | refused                                                                  | `vm_to_vm`                         |
@@ -95,15 +95,15 @@ table inet env_vm_guard {
 
     chain input {
         type filter hook input priority filter - 10; policy accept;
-        # From the dev VM to the host: replies within a flow opened toward that VM only.
-        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established,related accept
+        # From the dev VM to the host: replies within a flow opened toward that VM only, never an ICMP error.
+        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established accept
         iifname "envvm-*" counter name "vm_to_host" drop
     }
 
     chain forward {
         type filter hook forward priority filter - 10; policy accept;
-        # Leaving an environment bridge: replies within a flow opened toward that VM only.
-        iifname "envvm-dev" ip saddr <dev-vm-address> ct original ip daddr <dev-vm-address> ct state established,related accept
+        # Leaving an environment bridge: replies within a flow opened toward that VM, to that flow's client only.
+        iifname "envvm-dev" ip saddr <dev-vm-address> oifname "envapp-dev" ip daddr <dev-app-address> ct original ip daddr <dev-vm-address> ct state established,related accept
         iifname "envvm-*" oifname "envvm-*" counter name "vm_to_vm" drop
         iifname "envvm-*" ip daddr 169.254.0.0/16 counter name "vm_to_metadata" drop
         iifname "envvm-*" counter name "vm_egress" drop
@@ -131,6 +131,13 @@ What each choice is for:
   it crafts about such a flow, or a packet it spoofs into one, is dropped. Entering the bridge, a
   packet of the allowed flow must still arrive on the link bridge, so a container elsewhere that
   spoofs app-dev's address into the established session is refused too.
+- **A reply goes back to the flow's own client, and never as an ICMP error to the host.**
+  Connection tracking relates an ICMP error by the tuple it embeds, not by where it is sent. While
+  any flow toward the VM exists, the guest could otherwise send an error about it to any address,
+  and the reply accept would end the chain for it. So the `forward` copy also names the link
+  bridge and app-dev's address as the destination (`oifname`, `ip daddr`), and the `input` copy
+  accepts `established` only: a flow the host opens to the VM needs no related error, and the
+  operator's `health` probe is TCP. Probe 8d tests both ([§6](#6-what-the-smoke-check-verifies)).
 - **`inet` covers IPv4 and IPv6.** The drops name no address family, so a guest's IPv6
   link-local packet to the host is dropped like an IPv4 one. Every accept is IPv4, like the
   endpoint: the clone validator refuses anything but a unicast IPv4 guest address
@@ -497,7 +504,7 @@ therefore exist from the first `--check` (W3) on; a missing or unreadable one is
 
 1. the TCP connect **times out**, or for a datagram, nothing is delivered;
 2. every packet the probe sent is traced on the host to its own named rule's drop. Each probe
-   uses a fixed, unique source port (the ICMP probe: its type), and the smoke traces that tuple
+   uses a fixed, unique source port (the ICMP probes: their type), and the smoke traces that tuple
    alone with `nft monitor trace`. The trace flag is set by a temporary table of the smoke's own,
    `inet env_vm_guard_trace`, which accepts and drops nothing, is deleted when the smoke ends,
    also on failure, and makes `--check` refuse while it exists. The guard table is never edited
@@ -527,6 +534,7 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
 | 8   | **VM → host:** guest → its bridge gateway and the host's primary address, on a port the host listens on for every address; and the gateway's IPv6 link-local, if it has one                                                                                           | refused                            | `vm_to_host`                         |
 | 8b  | **VM → host:** guest → the host, an ICMP error that embeds the tuple of a flow the smoke opens from the host                                                                                                                                                          | refused                            | `vm_to_host`                         |
 | 8c  | **VM → host:** guest → a host listener the smoke opens on the bridge gateway, a datagram with a spoofed source address                                                                                                                                                | never delivered                    | `vm_to_host`, or the NIC filter (A9) |
+| 8d  | **VM → anywhere but the client:** guest → a public address, and → the host's primary address: an ICMP error that embeds a flow the host holds open to the VM's Docker port, so connection tracking relates it                                                         | refused                            | `vm_egress`; `vm_to_host`            |
 | 9   | **VM → metadata:** guest → `169.254.169.254:80`                                                                                                                                                                                                                       | refused                            | `vm_to_metadata`                     |
 | 10  | **VM → internet:** guest → a public address on 443 that the host itself reaches (the positive control)                                                                                                                                                                | refused                            | `vm_egress`                          |
 | 11  | VM → containers: guest → app-dev's link address, and a service on `app-network`                                                                                                                                                                                       | refused                            | `vm_egress`                          |
@@ -535,7 +543,7 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
 - **The five required checks** (app-to-VM allowed; VM-to-VM, VM-to-host, VM-to-metadata and
   VM-to-internet refused) are probes 1, 7, 8, 9 and 10. Probes 1 and 3 together also show that the
   `forward` chain sees app-dev's own address rather than the masqueraded one. Probe 4b tests the
-  bridge half of the identity, and probes 8b and 8c the reply accepts' binding
+  bridge half of the identity, and probes 8b, 8c and 8d the reply accepts' binding
   ([§2.1](#21-the-guard-table)).
 - **With one environment** (dev, until release moves), probe 7 targets an address in another
   environment's planned subnet. With no second bridge, the packet would leave through the uplink,
@@ -680,7 +688,8 @@ each one.
    At least:
    - a drop removed or narrowed (the wildcard reduced to one bridge); the allow widened (its
      address, bridge or port dropped); the replies' accept moved below the drops; a reply accept
-     that loses its `ct original` binding or its source address;
+     that loses its `ct original` binding or its source address; a `forward` reply accept that loses
+     its client binding, or an `input` one that accepts a related ICMP error;
    - an environment name longer than 8 characters accepted;
    - an apply that writes when the table is equal; the replacement split across two transactions;
      the readback skipped; an apply that writes while an environment VM runs; a `--deadman` apply

@@ -134,13 +134,16 @@ def read_config(path, trusted=True):
 
 
 def chains(config):
-    replies, allows = [], []
+    host_replies, replies, allows = [], [], []
     for env in config["environments"]:
         vm, app = "envvm-" + env["name"], "envapp-" + env["name"]
         guest, client = env["guestAddress"], env["clientAddress"]
         # Replies leave an environment bridge only from the VM's own address,
-        # within a flow whose original destination is that VM.
-        replies.append((("iifname", vm), ("ip saddr", guest), ("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)))
+        # within a flow whose original destination is that VM. Conntrack relates
+        # an ICMP error by the tuple it embeds, not by where it is sent, so a reply
+        # to the host is never related, and a forwarded one goes to its client only.
+        host_replies.append((("iifname", vm), ("ip saddr", guest), ("ct original ip daddr", guest), ("ct state", ("established",)), ("accept",)))
+        replies.append((("iifname", vm), ("ip saddr", guest), ("oifname", app), ("ip daddr", client), ("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)))
         # One flow in: the link bridge AND the pinned address, to Docker only.
         allows.append((("iifname", app), ("ip saddr", client), ("oifname", vm), ("ip daddr", guest), ("tcp dport", DOCKER_PORT), ("ct state", ("new",)), ("counter", "app_to_vm_" + env["name"]), ("accept",)))
         allows.append((("iifname", app), ("oifname", vm), ("ct original ip saddr", client), ("ct original ip daddr", guest), ("ct original proto-dst", DOCKER_PORT), ("ct state", REPLY), ("accept",)))
@@ -149,7 +152,7 @@ def chains(config):
                (("iifname", ANY_VM), ("ip daddr", METADATA), ("counter", "vm_to_metadata"), ("drop",)),
                (("iifname", ANY_VM), ("counter", "vm_egress"), ("drop",))]
     entering = [(("oifname", ANY_VM), ("counter", "to_vm_refused"), ("drop",))]
-    return (("input", replies + host), ("forward", replies + leaving + allows + entering))
+    return (("input", host_replies + host), ("forward", replies + leaving + allows + entering))
 
 
 def counters(config):
@@ -830,10 +833,12 @@ elif mode in ("syn", "spoof"):
     s.sendto(packet, (dst, 0))
     print("SENT")
 elif mode == "icmp":
-    host, public, hport, pport = a[0], a[1], int(a[2]), int(a[3])
-    body = struct.pack("!BBHI", 3, 3, 0, 0) + ip(host, public, 17, struct.pack("!HHHH", hport, pport, 9, 0))
+    # An ICMP error sent to a[0] that embeds a[1] -> a[2] (tcp or udp, ports a[4] -> a[5]).
+    target, src, dst, tcp, sport, dport = a[0], a[1], a[2], a[3] == "tcp", int(a[4]), int(a[5])
+    inner = struct.pack("!HHI", sport, dport, 0) if tcp else struct.pack("!HHHH", sport, dport, 9, 0)
+    body = struct.pack("!BBHI", 3, 3, 0, 0) + ip(src, dst, 6 if tcp else 17, inner)
     body = body[:2] + struct.pack("!H", csum(body)) + body[4:]
-    socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP).sendto(body, (host, 0))
+    socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP).sendto(body, (target, 0))
     print("SENT")
 """
 # A fixed, unique source port per probe: the trace and the record key on it.
@@ -921,6 +926,13 @@ def host_udp(address):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((address, 0))
     return sock
+
+
+def host_tcp(source, address, port):
+    try:
+        return socket.create_connection((address, port), timeout=CONNECT, source_address=(source, 0))
+    except OSError:
+        raise Refused("8d: the host could not open a flow to the VM (inconclusive)") from None
 
 
 def host_reaches(address, port):
@@ -1049,7 +1061,8 @@ def probe_environment(config, env, facts, shared, deadline):
             hport = flow.getsockname()[1]
 
             def icmp():
-                guest_run("icmp", shared["primary"], probes["publicAddress"], hport, probes["publicPort"])
+                guest_run("icmp", shared["primary"], shared["primary"], probes["publicAddress"], "udp", hport,
+                          probes["publicPort"])
                 flow.setblocking(False)
                 try:
                     flow.recv(16)
@@ -1062,6 +1075,21 @@ def probe_environment(config, env, facts, shared, deadline):
                                    icmp, deadline, vm_bridge))
         finally:
             flow.close()
+        # 8d: an ICMP error about a live flow toward the VM, sent anywhere but that
+        # flow's client. Conntrack relates it by the tuple it embeds, so only the
+        # reply accepts' own binding refuses it. The host holds the flow: the guest
+        # sees app-dev's flow masqueraded, under a port it cannot predict.
+        held = host_tcp(gateway, guest, DOCKER_PORT)
+        try:
+            hport = held.getsockname()[1]
+            for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),
+                                           ("8d-host", shared["primary"], "vm_to_host")):
+                results.append(refused(label, counter, 'iifname "%s" icmp type destination-unreachable' % vm_bridge,
+                                       lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT),
+                                       deadline, vm_bridge))
+                results[-1]["embeds"] = "a flow the host holds open to the VM's Docker port"
+        finally:
+            held.close()
         # 8c: a spoofed datagram may die at the NIC filter first (A9): it passes
         # on non-delivery, and the record says which filter dropped it.
         listener = host_udp(gateway)

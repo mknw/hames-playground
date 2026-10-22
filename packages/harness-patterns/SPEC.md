@@ -1723,7 +1723,6 @@ interface DecisionLoopRoute<T> {
   capability?: string // one or two lines for the planner's agent map
   siblingResults?: readonly string[] // patternIds of OTHER routes whose events it may see; default none
   allowReplan?: boolean // planner routes only, refused elsewhere: offer it every iteration (default: see "What is offered")
-  screenOutput?: false // planner routes only: skip the model screen on route output, keeping deterministic sanitization and fencing
 }
 
 interface DecisionLoopConfig extends PatternConfig {
@@ -1783,7 +1782,7 @@ and the loop ends as `answer`. No `decision_made` is recorded for that ending, a
 iteration with its status and stats counted by code from the child's events
 (turns or attempts used against the child's own bound, tool calls, errors, wall
 time; a route that hit its bound reads differently from one that finished early;
-the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the loop's own fence restores provenance) — it does not
+the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the extractor puts the same fence back around the block it quotes) — it does not
 record how many documents it _searched_) — then **Latest results**, the last
 `handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
 window. It never holds memory.
@@ -1853,9 +1852,9 @@ with (a) every event of a sibling it may not see physically removed, so not even
 and (b) the loop's own route records removed, since they carry copies of those
 results. `siblingResults` names the patternIds it may see; **the default is none**
 (a route sees its own work, committed non-route events and the handoff text), and
-an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. Events are also hidden by the ROUTE they were emitted inside (every child is bracketed by an enter/exit carrying the route name), so a pattern rebuilt each turn with a generated `patternId` cannot leak an earlier turn's work; for the same reason `patternId` is REQUIRED on the loop itself (its records and withheld ids are matched by it across turns). The user's
+an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. Events are also hidden by the ROUTE they were emitted inside (every child is bracketed by an enter/exit carrying the route name), so a pattern rebuilt each turn with a generated `patternId` cannot leak an earlier turn's work; for the same reason `patternId` is REQUIRED on the loop itself (its records, and the withheld ids an older version persisted on them, are matched by it across turns). The user's
 message is not a route event and always stays. Child `data` is built fresh:
-the latest sanitized plan (`data.plan`), the separately headed handoff
+the latest plan (`data.plan`), the separately headed handoff
 (`data.handoff`) and, for a planner route only, the agent map (`data.agentMap`).
 Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
 flows back; only the route output does. `hitl_*` events a child pushes are dropped
@@ -1896,36 +1895,41 @@ is human-facing (SD-3). The record is stored as a `controller_action` /
 `tool_result` pair under the loop's own `patternId` — the shape `compactExecution`'s
 thread mode reads — and the stats line rides the action's `status`.
 
-**Route output is untrusted.** `result` and `reasoning` are capped
-(`maxResultChars`, excess replaced by a marker) and then each passed through
-`currentRunFrame()?.guard?.sanitize('decision_loop_output', …)`. The enclosing
-`withInjectionGuard` must list `decision_loop_output` in `tools` (`sanitize` is a
-no-op for an undeclared key, as for every opt-in) and `spotlight: 'always'` to
-fence everything handed up; a loop whose frame has no guard declaring the key passes the text
-through, capped, and warns once per process. The route's name is never the key. A screen that **threw** is
-reported by a typed `screenUnavailable` flag on `SanitizeReport` and on the
-redacted `SanitizeSummary` (never inferred from `screenReason`'s prose): the loop
-then records the route as `failed` with the marker-only result
-`withheld: screen unavailable`, having discarded the reasoning and every byte of
-the original output first, so neither the state, the handoff nor synthesis can
-carry it. That is this loop's policy; `withInjectionGuard` itself stays fail-open
-on a screen outage. S-d's reach: on an outage the record is withheld AND that iteration's child events (their ids persist on the marker record) are removed from every child context this loop builds, in this turn and in later turns, so previews, `expandPreviousResult` and `siblingResults` cannot reach what the screen did not clear; a reader outside the loop's own contexts is not covered. A throw from the deterministic sanitizer is not caught: it
-ends the turn, as it does in `callTool`.
+**A record is not an ingress: the loop sanitises and screens nothing.** `result`
+and `reasoning` are capped (`maxResultChars`, excess replaced by a marker) and
+recorded as they are. Guards run where content crosses the environment's edge,
+on the way in (a tool result, a retrieved hit) and on the way out (an outgoing
+call), and a route record is neither: its text is the model's own (a plan, a
+`simpleLoop` Return, reasoning), built by code (the stats line), or a tool-result
+body that already passed its route's guard. The loop makes no `guard.sanitize`
+call, declares no key, runs no screen, withholds nothing and warns about nothing
+when no guard is in the frame. A host that wants content guarded declares the
+guard on the routes that read it.
 
-**Planner-only screen exemption.** A route may set `screenOutput: false` only
-when its leaf kind is `planner`; construction refuses the option on every other
-kind. Omission preserves model screening for all consumers, including planners.
-The exemption is per route, planner kind only, successful plan only. The plan is
-model-authored from the user message plus already-screened prior records and may
-quote them; deterministic neutralisation and the fence still apply. The model
-screen at the plan boundary is the one layer removed; tool results and every
-other route are untouched. "planner" means the leaf pattern's `name === 'planner'`,
-so any pattern given that name qualifies (the same trust as `allowReplan`).
-The loop still caps and emits findings before state, handoff or synthesis can
-read the record. The guard's per-call `sanitize` override `{ screen: false }`
-implements this local exception. Failed planner records remain screened.
-A deterministic sanitizer throw still ends the turn. All screened routes retain
-the marker-only failure policy above.
+**Two extractors carry the ingress label.** `actorCritic` (the accepted results)
+and `retriever` (the excerpts) quote tool-result bodies. Each strips the guard's
+fence to excerpt the body (`unspotlight`; a capped excerpt of a fenced string is
+the header, not the body) and puts the SAME fence back around what it quoted
+(`spotlight(text, tool, namespace)` from the header it removed, read by
+`unspotlightParts`): no regex pass, no screen, no finding of its own, so the body
+reaches the decisions model and the next child's `plan_context` labelled with
+where it came from. The cap runs before the fence goes on, so a long body cannot
+cut its own closing line, so the fence's lines are added AFTER the cap (a batch
+share has them subtracted). A label is restored only when the run's guard declares
+the tool the header names (`isUntrusted`): text no guard sanitized can carry a
+forged header, so it stays unlabelled. A failed route's text (a tool error, a
+thrown message) takes the same cap-then-fence path. An `actorCritic` batch is one
+block per accepted result, each under its own result's fence (a batch can mix tools); the retriever's lines
+are one block under the fence its hits arrived in, the filename in each line
+inside it. A body that arrived unfenced (a guard declared with the default
+`spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents
+a label. The plan, a `simpleLoop` Return, reasoning and the stats are not fenced, and not sanitised either. Owner acceptance owed: Record text the loop did not build (the plan's record, a `simpleLoop` Return, reasoning, and failure text, a fenced tool error with its fence) goes into the Decide state and the handoff as ONE JSON string: every word kept, newlines escaped, so it cannot start a line that reads as the state's own structure. The plan stays raw under PLAN, an actorCritic or retriever body stays raw (inside its fence when it has one), and code-built lines go through as they are. A reader that rewrites this text (the web-route pseudonymiser) decodes each such string before matching. A carried body that came back unfenced (no guard declares its tool, its guard found nothing under `spotlight: 'on-detection'`, or its header names another tool) is raw too, newlines included, and nothing quotes it; every guard in `general-next` is `'always'`, so it is not reachable there. The handoff block ends with `HANDOFF_END`, so a context that follows it is not read as data. A fence cut off by the cap inside a failure text is closed (`closeCutFences`), and a label is restored only from a header naming the result's own tool.
+
+**Records an older version persisted.** A conversation saved before the screen-outage
+withholding was removed carries `withheldEventIds` on a loop record's `tool_result`.
+The loop reads them back as a pure filter, so every later child's context still
+omits those events (previews, `expandPreviousResult` and `siblingResults` cannot
+reach them); nothing writes new ones.
 
 **Failure — never a silent fallback.**
 
@@ -1957,12 +1961,10 @@ and none is inherited. The office and info route guards declare `spotlight: 'alw
 and a role-resolved screen with `screenDespiteFindings: true`, so a screen call per
 mail, file, web, library or graph result; the documents route's guard declares the
 fence and no screen, so the retriever's hits get the deterministic pass and the
-fence only. The orchestrator's guard declares `decision_loop_output` and
-`spotlight: 'always'` and no screen, so a route record is capped, sanitized
-deterministically and fenced, and no model screen reads it: `screenOutput: false`
-on `think` is now a no-op, and the screen-outage withholding described above can no
-longer fire for `general-next`. A screen failure inside a route is recorded and fails
-open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`; they are the already-sanitized, fenced records, and a withheld one stays marker-only), the user's message, and only this turn's errors: an earlier turn's failed or withheld record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
+fence only. The loop itself sanitises and screens nothing: a route record is the
+text the extractor built, and a quoted tool body carries the fence its result
+arrived in. A screen failure inside a route is recorded and fails
+open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
 
 `general-next` also opts into M7's optional `withMemory`. Only its synthesis receives
 recalled memory, while decisions and children receive none. The
@@ -3652,7 +3654,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── planner.server.ts       # Upfront decomposition → scope.data.plan (+ formatPlanContext, read by both loop patterns); emits plan_created
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
-    ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records sanitized under decision_loop_output
+    ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records built by code, capped and not sanitised, quoted tool bodies kept under their ingress fence
     ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, and the state/handoff rendering
     ├── decisionLoop-documents.server.ts # #507: the documents block of the decide state — deterministic name sanitising, type allowlist, caps
     ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves

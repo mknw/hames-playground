@@ -21,7 +21,6 @@ import { createContext, trackEvent } from '@hames-ai/harness-patterns/context.se
 import {
   decisionLoop,
   DECISION_DOCUMENTS_TIMEOUT_MS,
-  DECISION_LOOP_OUTPUT_KEY,
   type DecisionLoopData,
 } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 import {
@@ -35,7 +34,7 @@ import {
 } from '@hames-ai/harness-patterns/patterns/decisionLoop-documents.server'
 import { compactExecution } from '@hames-ai/harness-patterns/patterns/compactExecution.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
-import { withInjectionGuard } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
+import type { ActiveInjectionGuard } from '@hames-ai/harness-patterns/guard'
 import type {
   CompactExecutionInput,
   ConfiguredPattern,
@@ -566,19 +565,25 @@ describe('decisionLoop — the documents block in the state', () => {
     expect(states[0]).toBe('OVERRIDDEN')
   })
 
-  // Mutation: route names through `guard.sanitize`.
-  it('never calls the guard screen for a name', async () => {
-    const screen = vi.fn(async () => ({ injection_detected: false, reason: '', spans: [] }))
+  // Mutation: route names through `guard.sanitize`. A guard that treats every key as
+  // declared and records each call, so no key the mutation picks can slip past it.
+  it('never calls the guard for a name', async () => {
+    const sanitize = vi.fn(async (_tool: string, data: unknown) => ({ data }))
+    const guard = {
+      isUntrusted: () => true,
+      optionsFor: () => ({}),
+      sanitize,
+    } as unknown as ActiveInjectionGuard
     const { loop } = build(['answer'], {
       documents: async () => ({
         total: 2,
         names: [doc('a.md'), doc(`${INJECTION}.md`, { id: 'z' })],
       }),
     })
-    await run([
-      withInjectionGuard({ tools: [DECISION_LOOP_OUTPUT_KEY], spotlight: 'always', screen })(loop),
-    ])
-    expect(screen).not.toHaveBeenCalled()
+    await withRunFrame({ guard }, () =>
+      runChain(createContext<Data>('what is the answer?'), [loop]),
+    )
+    expect(sanitize).not.toHaveBeenCalled()
   })
 })
 
@@ -595,7 +600,7 @@ describe('where names do not travel', () => {
     const synth: CompactExecutionInput[] = []
     const { loop, states } = build(['info', 'answer'], { documents: async () => names }, seen)
     const ctx = await run([
-      withInjectionGuard({ tools: [DECISION_LOOP_OUTPUT_KEY], spotlight: 'always' })(loop),
+      loop,
       compactExecution<Data>({
         mode: 'thread',
         patternId: 'response-synth',

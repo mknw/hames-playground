@@ -30,6 +30,7 @@ import { deleteHitlRowsForConversations } from './hitl.server'
 import { deleteMemoriesForConversations } from './memories.server'
 import type { QueryRunner } from './migrate-encryption.server'
 import { SETTINGS_BOUNDS } from '../settings'
+import { USER_FACING } from '../server-fn-errors/wire-error'
 import {
   decryptFieldOrNull,
   decryptJsonb,
@@ -304,6 +305,7 @@ const INTERRUPTED_AFTER_SECONDS = (TURN_CLAIM_RENEW_MS / 1000) * 1.5
  * than "still running", which after a deploy or a crash is untrue.
  */
 export class ConversationBusyError extends Error {
+  readonly [USER_FACING] = true
   constructor(claimAgeSeconds?: number | null) {
     super(
       claimAgeSeconds != null && claimAgeSeconds > INTERRUPTED_AFTER_SECONDS
@@ -321,6 +323,7 @@ export class ConversationBusyError extends Error {
  * its message is user-facing; the detail goes to the log.
  */
 export class ConversationConflictError extends Error {
+  readonly [USER_FACING] = true
   constructor() {
     super('This conversation changed while the turn was running, so the turn was not saved.')
     this.name = 'ConversationConflictError'

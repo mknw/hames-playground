@@ -333,6 +333,7 @@ class Rules(unittest.TestCase):
                              orig=("198.51.100.1", guest, 2376)), "vm_to_host"),
             ("forward", packet("envvm-dev", guest, REL["guestAddress"], 2376, "envvm-rel"), "vm_to_vm"),
             ("forward", packet("envvm-dev", guest, METADATA_ADDRESS, 80, "eth0"), "vm_to_metadata"),
+            ("forward", packet("envvm-dev", guest, "169.254.1.1", 80, "eth0"), "vm_to_metadata"),
             ("forward", packet("envvm-dev", guest, PROBES["publicAddress"], 443, "eth0"), "vm_egress"),
             ("forward", packet("envvm-dev", guest, DEV["clientAddress"], 2376, "envapp-dev"), "vm_egress"),
             ("forward", packet("envvm-dev", guest, "192.0.2.66", 5432, APP_BRIDGE), "vm_egress"),
@@ -406,7 +407,8 @@ class Rules(unittest.TestCase):
 
     def test_environment_names_fit_the_interface_limit(self):
         for name, ok in (("dev", True), ("a", True), ("release", True), ("abcdefgh", True),
-                         ("abcdefghi", False), ("Dev", False), ("9dev", False), ("de v", False), ("", False)):
+                         ("abcdefghi", False), ("Dev", False), ("9dev", False), ("de v", False), ("", False),
+                         ("d*", False)):
             cfg = config()
             cfg["environments"][0]["name"] = name
             with self.subTest(name=name):
@@ -428,7 +430,9 @@ class Rules(unittest.TestCase):
                    lambda c: c["environments"][0].update(entryPointConfig="relative.json"),
                    lambda c: c["environments"][0].pop("service"),
                    lambda c: c["probes"].update(hostPort=0), lambda c: c["probes"].update(publicPort=True),
-                   lambda c: c["probes"].update(publicAddress="224.0.0.1")]
+                   lambda c: c["probes"].update(publicAddress="224.0.0.1"),
+                   lambda c: c["environments"][0].update(guestAddress="240.0.0.1"),
+                   lambda c: c["environments"][0].update(clientAddress="255.255.255.255")]
         for change in changes:
             cfg = config()
             change(cfg)
@@ -1128,6 +1132,17 @@ class Apply(Harness):
         del self.host.tables[("inet", guard.TABLE)]
         self.assertEqual(self.invoke("--apply", "--deadman", "600"), 1)
         self.assertEqual(self.invoke("--apply"), 0)
+
+    def test_every_deadman_arm_refuses_a_drifted_table(self):
+        self.assertEqual(self.invoke("--install"), 0)
+        self.stop_vms()
+        self.assertEqual(self.invoke("--apply"), 0)
+        self.host.tables[("inet", guard.TABLE)]["chains"]["forward"]["rules"].pop(0)
+        for mode in (("--persist", "--deadman", "600"), ("--deadman", "600")):
+            self.assertEqual(self.invoke(*mode), 1, mode)
+            self.assertIn("drifted", self.err)
+            self.assertFalse(self.host.timers)
+        self.assertFalse(guard.UNIT.exists())
 
     def test_journal_is_written_ahead_and_the_lock_refuses_without_waiting(self):
         self.assertEqual(self.invoke("--install"), 0)
@@ -2131,6 +2146,12 @@ MUTATIONS = {
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
+    # S5 and O10: pins that did not discriminate.
+    "S5-metadata-narrowed": ('METADATA = "169.254.0.0/16"', 'METADATA = "169.254.169.254/32"'),
+    "S5-reserved-accepted": ("or parsed.is_unspecified or parsed.is_reserved), label)", "or parsed.is_unspecified), label)"),
+    "O10-name-allows-wildcard": ('NAME = re.compile(r"[a-z][a-z0-9-]{0,7}")', 'NAME = re.compile(r"[a-z][a-z0-9*-]{0,7}")'),
+    "O10-persist-deadman-over-drift": ('        require(not drifted, "the live table drifted from its journaled render; resolve it before a dead-man change")\n        arm(', "        arm("),
+    "O10-deadman-alone-over-drift": ('                        require(not drifted, "the live table drifted from its journaled render")\n', ""),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

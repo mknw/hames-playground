@@ -1129,7 +1129,13 @@ it (SA-M5). Whether it runs on a payload is decided in this order:
 The core default is `'always'` for a screen alone and `'shadow'` for a screen with
 a gate, so a library user's gate is measured before it skips anything; skipping
 takes an explicit `'gated'`, and a mode that asks a gate with none passed refuses
-construction. `mode` is a `ByTier` setting: a bare value, or a map such as
+construction. So does a declaration the guard would act on as something else: a
+`run` that is not a function, a mode that is not one of the four on any tier, a
+per-tier map with no own `default`, and an `onUnavailable` other than `'pass'` or
+`'withhold'`. The declaration is read on every call, so a value construction never
+saw fails safe: only `'off'` and `'gated'` skip the screen, each by its exact value
+(any other mode runs it, and records the gate's answer as a shadow one), and any
+`onUnavailable` but `'pass'` withholds. `mode` is a `ByTier` setting: a bare value, or a map such as
 `{ default: 'shadow', anthropic: 'always' }` that `resolveByTier()` resolves per
 call against the registered `effectiveTier()`, the tier routing takes (with no
 tier module registered, the map's `default`). Like every option it governs the

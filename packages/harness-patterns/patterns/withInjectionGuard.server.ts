@@ -44,6 +44,7 @@ import {
   type InjectionGuardOptions,
   type InjectionScreenConfig,
   type SanitizeReport,
+  type ScreenMode,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
 import { isDegradedToolSurface } from '../gateway-health.server'
@@ -197,6 +198,10 @@ export function createInjectionGuard(
    *   5. `'always'`: always; `'shadow'`: the gate is asked and recorded, and the
    *      screen runs whatever it said; `'gated'`: the gate decides, and a gate
    *      that is unavailable or throws runs the screen (the safe direction).
+   *
+   * Only `'off'` and `'gated'` can skip the screen, each by its exact value. The
+   * declaration is read on every call, so a value construction never saw (a cast,
+   * a later write) fails safe: anything else runs the screen, as `'shadow'` does.
    */
   const shouldScreen = async (
     screen: InjectionScreenConfig,
@@ -214,14 +219,14 @@ export function createInjectionGuard(
         tool: p.tool,
         namespace: p.namespace,
         content: typeof p.data === 'string' ? p.data : (JSON.stringify(p.data) ?? ''),
-        ...(mode === 'shadow' && { shadow: true }),
+        ...(mode !== 'gated' && { shadow: true }),
         onDecision: recordGateDecision,
       })
       run = verdict.run
     } catch {
       run = true
     }
-    return mode === 'shadow' || run
+    return mode !== 'gated' || run
   }
 
   return {
@@ -286,7 +291,9 @@ export function createInjectionGuard(
             screenReason: `screen unavailable: ${err instanceof Error ? err.message : String(err)}`,
             screenUnavailable: true,
           }
-          if (screen.onUnavailable === 'withhold') {
+          // Any value but `'pass'` withholds: one construction never saw fails
+          // safe, like the mode.
+          if (screen.onUnavailable !== undefined && screen.onUnavailable !== 'pass') {
             out = SCREEN_WITHHELD
             report = { ...report, neutralized: true }
           }
@@ -341,16 +348,57 @@ function classifyIngress(
   }
 }
 
+/** The four screen modes; any other value is refused at construction. */
+const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'shadow', 'gated', 'always'])
+
 /**
  * REFUSE a screen declaration that reads like protection and is not:
  *
+ *  - a `run` that is not a function — every call would be a screen outage;
+ *  - a `mode` that is not one of the four, on any tier, or a per-tier map with
+ *    no own `default` (it would resolve to the map itself) — whatever it was
+ *    meant to say, the guard would act on something else;
+ *  - an `onUnavailable` other than `'pass'` or `'withhold'`;
  *  - a mode that asks the gate (`'shadow'`, `'gated'`) on any tier, with no
  *    gate passed — it would run as nothing anyone declared;
  *  - an `exempt` namespace the guard does not declare — it would match nothing
  *    while reading like a decision (#242 item 4's rule, applied here).
+ *
+ * TypeScript catches a literal typo; this catches a JavaScript caller, a cast
+ * and a value read from configuration.
  */
 function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<string>): void {
-  const modes = screen.mode === undefined ? [] : tierValues(screen.mode)
+  if (typeof screen.run !== 'function') {
+    throw new Error(
+      `[withInjectionGuard] the screen's \`run\` is not a function, so every payload ` +
+        `would record a screen outage. Pass \`run: createInjectionScreen()\` or your own.`,
+    )
+  }
+  const { mode } = screen
+  if (typeof mode === 'object' && mode !== null && !Object.hasOwn(mode, 'default')) {
+    throw new Error(
+      `[withInjectionGuard] the screen's per-tier mode has no \`default\`, so a tier it ` +
+        `does not name would resolve to the map itself. Add \`default\`.`,
+    )
+  }
+  const modes = mode === undefined ? [] : tierValues(mode)
+  const unknown = modes.filter((m) => !SCREEN_MODES.has(m))
+  if (unknown.length > 0) {
+    throw new Error(
+      `[withInjectionGuard] the screen's mode ${JSON.stringify(unknown[0])} is not one of ` +
+        `'off', 'shadow', 'gated' or 'always'.`,
+    )
+  }
+  if (
+    screen.onUnavailable !== undefined &&
+    screen.onUnavailable !== 'pass' &&
+    screen.onUnavailable !== 'withhold'
+  ) {
+    throw new Error(
+      `[withInjectionGuard] the screen's onUnavailable ${JSON.stringify(screen.onUnavailable)} ` +
+        `is not 'pass' or 'withhold'.`,
+    )
+  }
   if (!screen.gate && modes.some((m) => m === 'shadow' || m === 'gated')) {
     throw new Error(
       `[withInjectionGuard] the screen's mode asks the guard gate ('shadow' or 'gated') ` +

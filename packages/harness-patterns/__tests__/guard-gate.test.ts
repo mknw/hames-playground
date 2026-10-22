@@ -178,6 +178,76 @@ describe('the core default mode', () => {
   })
 })
 
+describe('a screen setting the guard does not recognise', () => {
+  const run = async () => verdictClean
+  const gate = createGuardGate(fakeDecide(0.9))
+
+  // MUTATION: drop the `typeof screen.run !== 'function'` check in
+  // `refuseUnreadableScreen`.
+  it('a run that is not a function refuses construction', () => {
+    expect(() => guardWith({ run: undefined as never })).toThrow(/`run` is not a function/)
+    expect(() => guardWith({ run: 'createInjectionScreen' as never })).toThrow(/not a function/)
+  })
+
+  // MUTATION: drop the own-`default` check: the map below resolves to itself on
+  // every tier and, with a gate answering skip, obeys it as 'gated' would.
+  it('a per-tier mode with no default refuses construction', () => {
+    const noDefault = { anthropic: 'always', self_deployed: 'shadow' } as never
+    expect(() => guardWith({ run, gate, mode: noDefault })).toThrow(/has no `default`/)
+  })
+
+  // MUTATION: drop the four-mode check: each of these constructs.
+  it.each([
+    ['a misspelling', 'shadwo'],
+    ['the wrong case', 'ALWAYS'],
+    ['an unknown value on one tier', { default: 'always', anthropic: 'bogus' }],
+    ['an undefined value on one tier', { default: 'always', anthropic: undefined }],
+  ])('a mode that is not one of the four refuses construction: %s', (_, mode) => {
+    expect(() => guardWith({ run, gate, mode: mode as never })).toThrow(/is not one of/)
+  })
+
+  // MUTATION: drop the onUnavailable check: 'withold' constructs and acts as 'pass'.
+  it("an onUnavailable other than 'pass' or 'withhold' refuses construction", () => {
+    expect(() => guardWith({ run, onUnavailable: 'withold' as never })).toThrow(
+      /onUnavailable "withold"/,
+    )
+  })
+
+  // MUTATION: restore `return mode === 'shadow' || run` in `shouldScreen`: the
+  // value written after construction obeys the gate's skip and the screen does
+  // not run.
+  // The gate's answer is then recorded as a shadow one, because it changed
+  // nothing. MUTATION: pass the shadow flag only for `mode === 'shadow'`.
+  it('a mode written after construction that is not one of the four fails safe: the screen runs', async () => {
+    const events: ContextEvent[] = []
+    const screen = vi.fn(async () => verdictClean)
+    const config: InjectionScreenConfig = {
+      run: screen,
+      mode: 'gated',
+      gate: createGuardGate(fakeDecide(0.01)),
+    }
+    const guard = guardWith(config, events)
+    ;(config as { mode: unknown }).mode = 'bogus'
+    await guard.sanitize('fetch_page', CLEAN)
+    expect(screen).toHaveBeenCalledTimes(1)
+    expect(decisions(events)[0].data).toMatchObject({ shadow: true })
+  })
+
+  // MUTATION: withhold only on `=== 'withhold'`: the value written after
+  // construction keeps the payload.
+  it('an onUnavailable written after construction that is not one of the two withholds', async () => {
+    const config: InjectionScreenConfig = {
+      run: async () => {
+        throw new Error('screen down')
+      },
+      onUnavailable: 'pass',
+    }
+    const guard = guardWith(config)
+    ;(config as { onUnavailable: unknown }).onUnavailable = 'withold'
+    expect((await guard.sanitize('fetch_page', CLEAN)).data).toBe(SCREEN_WITHHELD)
+  })
+})
+
 describe("the gate's state", () => {
   // MUTATION: drop `neutralizeFenceMarkers` from `renderGuardGateState`.
   it('a forged fence in the content arrives as [fence] in the state', async () => {
@@ -292,6 +362,8 @@ describe("the gate's decision event", () => {
     await guard.sanitize('fetch_page', `Page text ${SENTINEL}.`)
     const recorded = decisions(events)
     expect(recorded).toHaveLength(1)
+    // An obeyed answer is not a shadow one. MUTATION: pass `shadow: true` in every mode.
+    expect(recorded[0].data).not.toHaveProperty('shadow')
     expect((recorded[0].data as DecisionMadeEventData).stateChars).toBeGreaterThan(0)
     expect(recorded[0].llmCall?.clientName).toBe('PrivateSystemOne')
     expect(JSON.stringify(events)).not.toContain(SENTINEL)

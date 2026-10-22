@@ -546,6 +546,8 @@ def apply(entries, config, deadman):
     document_, current, drifted = table_state(entries)
     if model(document_) == want:
         print("PASS guard table equals the render; nothing written")
+        if deadman is not None:
+            print("NOTE: nothing written, no dead-man armed: there is nothing to --confirm")
         return
     if deadman is not None:
         # The restore puts back the previous render, not what is live.

@@ -1481,6 +1481,14 @@ class DeadMan(Harness):
         self.assertEqual(self.entries()[-1], {"kind": "fired", "id": second, "outcome": "restored"})
         self.assertNotIn(("inet", guard.TABLE), self.host.tables)
 
+    def test_an_equal_table_arms_nothing_and_says_so(self):
+        self.arm_apply()
+        self.host.session = ("3", int(self.host.clock.now * 1_000_000) + 1)
+        self.assertEqual(self.invoke("--confirm"), 0, self.err)
+        self.assertEqual(self.invoke("--apply", "--deadman", "600"), 0, self.err)
+        self.assertIn("NOTE: nothing written, no dead-man armed", self.out)
+        self.assertEqual(self.host.timers, {})
+
     def test_the_deadman_runs_the_installed_copy_only(self):
         self.assertEqual(self.invoke("--install"), 0)
         guard.INSTALLED_SCRIPT.write_text("# an edited copy\n")
@@ -2152,6 +2160,8 @@ MUTATIONS = {
     "O10-name-allows-wildcard": ('NAME = re.compile(r"[a-z][a-z0-9-]{0,7}")', 'NAME = re.compile(r"[a-z][a-z0-9*-]{0,7}")'),
     "O10-persist-deadman-over-drift": ('        require(not drifted, "the live table drifted from its journaled render; resolve it before a dead-man change")\n        arm(', "        arm("),
     "O10-deadman-alone-over-drift": ('                        require(not drifted, "the live table drifted from its journaled render")\n', ""),
+    # S7: an apply under --deadman over an equal table says that it armed nothing.
+    "S7-equal-apply-silent": ('            print("NOTE: nothing written, no dead-man armed: there is nothing to --confirm")', "            pass"),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

@@ -8,6 +8,7 @@ import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
 } from '../../src/lib/eval-support/synthetic-sandbox'
+import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -203,7 +204,12 @@ export async function createDriver(
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
         async () => {
-          const patterns = await agent.createPatterns(sessionId, deps)
+          // Per-user memory is on for the scenarios that name it and off for every other one,
+          // so no other scenario pays a recall step.
+          const patterns = await agent.createPatterns(
+            sessionId,
+            next.memory ? { ...deps, memory: createSyntheticMemory(() => EVAL_OWNER) } : deps,
+          )
           const run = harness(...patterns)
           let serialized: string | undefined
           for (turn = 0; turn < next.messages.length; turn++) {

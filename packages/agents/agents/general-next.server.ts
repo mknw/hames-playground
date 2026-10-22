@@ -25,6 +25,7 @@ import {
   createLoopControllerAdapter,
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
@@ -154,16 +155,20 @@ async function createPatterns(
   // two routes that read content from outside (office: mail, files and sandbox
   // results; info: web, library docs and the graph); the documents route declares
   // none, so the retriever's hits get the deterministic pass and the fence only.
-  // A deterministic finding forces the screen. On clean content the mode is per
-  // tier: on the Anthropic tier the screen runs on every external result and the
-  // gate is never asked (it would send every body to that tier's decisions
-  // host); on the self-deployed tier, and an absent or unknown one, the gate is
-  // asked in 'shadow' — recorded, never obeyed — until the eval bar for 'gated'
-  // is met. The guard declares no `exempt`: nothing here is trusted by
-  // namespace. Only external content is gated in (ruling O):
-  // the host's classifier marks the deployment's own content internal, which
-  // gets the deterministic pass alone unless that pass finds something.
-  const screenMode = { default: 'shadow', anthropic: 'always' } as const
+  // A deterministic finding forces the screen. The mode is per tier: on the
+  // Anthropic tier the screen runs on every external result and the gate is
+  // never asked (it would send every body to that tier's decisions host); on
+  // the self-deployed tier, and an absent or unknown one, the gate is asked in
+  // 'shadow' — recorded, never obeyed — until the eval bar for 'gated' is met.
+  // That tier map is also the composition root's GUARD_* switch (slice 6):
+  // deps.guards.screenMode replaces it (GUARD_SCREEN, validated at boot
+  // against these defaults, and GUARD_SCREEN_ANTHROPIC accepted there only as
+  // 'off' or 'always'). The guard declares no `exempt`: nothing here is
+  // trusted by namespace. Only external content is gated in (ruling O): the
+  // host's classifier marks the deployment's own content internal, which gets
+  // the deterministic pass alone unless that pass finds something.
+  const screenMode: ByTier<ScreenMode> =
+    deps.guards?.screenMode ?? ({ default: 'shadow', anthropic: 'always' } as const)
   const gate = createGuardGate(createDecideAdapter())
   const docGuard = {
     namespaces: ['graph'],
@@ -174,7 +179,7 @@ async function createPatterns(
       run: createInjectionScreen(),
       mode: screenMode,
       gate,
-      classify: deps.classifyIngress,
+      classify: deps.guards?.classifyIngress,
     },
   }
   // The guard refuses a declared namespace that matches no catalog tool, so the
@@ -187,47 +192,60 @@ async function createPatterns(
       run: createInjectionScreen(),
       mode: screenMode,
       gate,
-      classify: deps.classifyIngress,
+      classify: deps.guards?.classifyIngress,
     },
   }
   const doc = withInjectionGuard(docGuard)(office)
-  const info = withInjectionGuard(infoGuard)(
-    withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(
-      withInfoDocumentReferences(
-        withReferences<AgentData>(
-          simpleLoop<AgentData>(
-            createLoopControllerAdapter(
-              NEO4J_READ_ONLY_CONTEXT +
-                '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
-                'alongside the facts they support. Copy each source URL verbatim from the ' +
-                'tool results or from the url argument of a successful fetch; never invent or ' +
-                'construct a URL. If none of the sources you used has a URL (for example a ' +
-                'graph or library-docs lookup), include no link. ' +
-                'Your Return is the source record used to write the final answer, so URLs ' +
-                'left only in tool calls will not reach that answer.',
-            ),
-            infoTools,
-            {
-              patternId: 'info',
-              schema,
-              liveEvents: true,
-              returnStyle: 'answer',
-              rememberPriorTurns: false,
-            },
-          ),
-          {
-            patternId: 'info',
-            selector: baml.selector,
-            source: ['retriever', 'info'],
-            // simpleLoop reads user_message from this view, so keep the task
-            // alongside the allowed siblings rather than the last pattern alone.
-            viewConfig: { fromLast: false, fromLastNTurns: 1 },
-            liveEvents: true,
-          },
+  const infoLoop = withInfoDocumentReferences(
+    withReferences<AgentData>(
+      simpleLoop<AgentData>(
+        createLoopControllerAdapter(
+          NEO4J_READ_ONLY_CONTEXT +
+            '\n\nWhen you Return, include the URLs of the sources you used as Markdown links ' +
+            'alongside the facts they support. Copy each source URL verbatim from the ' +
+            'tool results or from the url argument of a successful fetch; never invent or ' +
+            'construct a URL. If none of the sources you used has a URL (for example a ' +
+            'graph or library-docs lookup), include no link. ' +
+            'Your Return is the source record used to write the final answer, so URLs ' +
+            'left only in tool calls will not reach that answer.',
         ),
+        infoTools,
+        {
+          patternId: 'info',
+          schema,
+          liveEvents: true,
+          returnStyle: 'answer',
+          rememberPriorTurns: false,
+        },
       ),
+      {
+        patternId: 'info',
+        selector: baml.selector,
+        source: ['retriever', 'info'],
+        // simpleLoop reads user_message from this view, so keep the task
+        // alongside the allowed siblings rather than the last pattern alone.
+        viewConfig: { fromLast: false, fromLastNTurns: 1 },
+        liveEvents: true,
+      },
     ),
   )
+  // K5 (the web route's input filter) runs where it runs today, unless the
+  // host turns it off. Two ways to be without it, deliberately different:
+  //   - a bag with NO `guards` field at all (a host that predates the switch,
+  //     or composes no guard settings) keeps the old shape: the wrapper is
+  //     composed with no filter, which withholds every word of inherited
+  //     content wherever the tier is not the Anthropic tier — the recorded
+  //     fail-closed default (G14 D3), never a silent pass-through.
+  //   - a bag WITH `guards` but no `pseudonymiseForWeb` (the operator's
+  //     GUARD_PSEUDONYMISE=off, or a host that chose this) composes the route
+  //     WITHOUT the wrapper — never a null filter into one that would
+  //     withhold. The switch is validated at boot; it goes away when the
+  //     retirement slice removes K5 from this agent.
+  const infoRoute =
+    deps.guards && !deps.guards.pseudonymiseForWeb
+      ? infoLoop
+      : withPseudonymisedInputs({ pseudonymise: deps.guards?.pseudonymiseForWeb })(infoLoop)
+  const info = withInjectionGuard(infoGuard)(infoRoute)
   const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
     retriever<AgentData>({
       patternId: 'retriever',
@@ -260,7 +278,10 @@ async function createPatterns(
     addressSources: ['web', 'context7', 'graph'],
     roster: deps.egressRoster,
     decide: createDecideAdapter(),
-    mode: 'filter',
+    // The composition root's GUARD_EGRESS switch (slice 6), validated at boot;
+    // the design's default — Decide decides, a roster match is evidence —
+    // stands without it.
+    mode: deps.guards?.egressMode ?? 'filter',
     maxOutgoingRetriesPostTripwire: 0,
     loadedDecideDown: 'by-shape',
   })

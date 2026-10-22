@@ -140,8 +140,9 @@ configured in
 
 `general-next` is the selectable decision-loop agent. It replaced `general`, which
 was removed (see the changelog for the migration); the default remains `search`. It requires `deps.withSandbox` and
-`deps.createRedisBackend`, and accepts `deps.pseudonymiseForWeb` for the
-web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
+`deps.createRedisBackend`, and accepts `deps.guards` — the host's guard
+settings, from the `GUARD_*` operator switches (below) — plus
+`deps.egressRoster` for the egress gate. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
 orchestrator's guarded route records. Each guard declares its own options and
 none is inherited: the office and info route guards declare an always-on fence
@@ -149,9 +150,13 @@ and a screen behind the guard gate, with a mode per tier. On the Anthropic tier
 the screen runs on every external result and the gate is never asked; on the
 self-deployed tier the gate is asked first and, in `'shadow'`, its answer is
 recorded and the screen runs anyway, until an eval bar moves that tier to
-`'gated'`. A deterministic finding always forces the screen, after
+`'gated'`. `deps.guards.screenMode` replaces that tier map when the host sets
+it (validated at boot against these defaults; on the Anthropic tier only
+`'off'` and `'always'` are accepted — `'gated'` or `'shadow'` there would send
+the bodies the screen would have read to that tier's decisions host). A
+deterministic finding always forces the screen, after
 sanitization, so those neutralizations stay intact. The host's classifier
-(`deps.classifyIngress`) keeps the deployment's own content to the deterministic
+(`deps.guards.classifyIngress`) keeps the deployment's own content to the deterministic
 pass. That is a screen call per
 external office or info result, plus a gate call on the self-deployed tier. The documents route's guard declares the
 fence and no screen, so retrieved hits get the deterministic pass only. The
@@ -159,8 +164,14 @@ orchestrator's loop sanitizes and screens nothing of its own: a route record
 is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web
 route admits only its own and retriever
 references, excluding sandbox-promoted documents, and pseudonymises inherited
-content on the private tier. Missing private host wiring withholds earlier
-content and refuses web calls. An unconfigured private decisions endpoint
+content when the host supplies `deps.guards.pseudonymiseForWeb` (omitting it
+with a `guards` bag present — the `GUARD_PSEUDONYMISE=off` switch — composes
+the route without the wrapper; a bag with no `guards` field at all keeps the
+wrapper, which withholds earlier content rather than pass it through
+unfiltered). The web route's outgoing calls are judged by the egress gate
+(`deps.egressRoster`; `deps.guards.egressMode` sets `filter` or `roster`).
+Missing private host wiring withholds earlier
+content and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
 `general-next` also opts into optional memory. Only its final synthesis receives recalled

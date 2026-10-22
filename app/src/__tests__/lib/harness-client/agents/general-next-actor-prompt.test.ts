@@ -66,13 +66,15 @@ const deps: AgentDeps = {
   toolNamespaces: mcpNamespace,
   withSandbox: () => (pattern) => pattern,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
-  pseudonymiseForWeb: async () => ({
-    apply: (v) => v,
-    redact: <T>(v: T): T => v,
-    checkLiterals: () => {},
-    observe: () => {},
-    check: () => {},
-  }),
+  guards: {
+    pseudonymiseForWeb: async () => ({
+      apply: (v) => v,
+      redact: <T>(v: T): T => v,
+      checkLiterals: () => {},
+      observe: () => {},
+      check: () => {},
+    }),
+  },
 }
 const walk = (ps: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] =>
   ps.flatMap((p) => [p, ...walk(p.children ?? [])])

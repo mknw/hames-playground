@@ -207,6 +207,8 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     'COMPOSE_FILE',
     'DEV_SANDBOX_DOCKER_HOST',
     'RELEASE_SANDBOX_DOCKER_TLS_KEY',
+    'DEV_SANDBOX_LINK_ADDRESS',
+    'DEV_SANDBOX_FIREWALL_EVIDENCE',
   ])('refuses root-only %s in either app env', (key) => {
     for (const service of ['app', 'app-dev'] as const) {
       const config = configuration()
@@ -564,6 +566,9 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     'app-dev': () => triple('dev-ca', 'dev-client'),
   }
   const hosts = { app: 'tcp://203.0.113.2:2376', 'app-dev': 'tcp://198.51.100.2:2376' }
+  // Each VM clone's own link network and pinned address (plan env-vm-network §2.3).
+  const links = { app: 'envapp-release', 'app-dev': 'envapp-dev' } as const
+  const pinned = { app: '203.0.113.66', 'app-dev': '192.0.2.66' }
   function vm(
     config: Config,
     name: 'app' | 'app-dev',
@@ -586,8 +591,18 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
         read_only: true,
         bind: { create_host_path: false },
       })
+    config.networks = {
+      ...(config.networks as object),
+      [links[name]]: { name: links[name], external: true },
+    }
+    app.networks = {
+      'app-network': null,
+      [links[name]]: { ipv4_address: pinned[name], gw_priority: 1 },
+    }
     return app
   }
+  const linkOf = (app: Service, name: 'app' | 'app-dev') =>
+    (app.networks as Record<string, Record<string, unknown> | null>)[links[name]]!
   const tlsMount = (app: Service, part: string) =>
     app.volumes.find((v) => v.target === `/run/sandbox-tls/${part}.pem`)!
   const fresh = () => configuration() as Config
@@ -626,6 +641,17 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
       SANDBOX_DOCKER_TLS_KEY: '/run/sandbox-tls/key.pem',
     })
     expect(JSON.stringify(vmOverlay)).not.toMatch(/docker\.sock|RELEASE_/)
+    // Merged with app-network from the base, never replacing it.
+    expect(dev.networks).toEqual({
+      'envapp-dev': {
+        ipv4_address: expect.stringMatching(/^\$\{DEV_SANDBOX_LINK_ADDRESS:\?/),
+        gw_priority: 1,
+      },
+    })
+    expect((doc.getIn(['services', 'app-dev', 'networks'], true) as { tag?: string }).tag).toBe(
+      undefined,
+    )
+    expect(vmOverlay.networks).toEqual({ 'envapp-dev': { external: true } })
   })
 
   it('accepts dev on its own VM beside a socket release, and both clones on separate VMs', () => {
@@ -634,6 +660,116 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     expect(() => validateClones(config)).not.toThrow()
     vm(config, 'app')
     expect(() => validateClones(config)).not.toThrow()
+  })
+
+  type Change = (config: Config, app: Service) => unknown
+  const linkChanges: [string, Change][] = [
+    ['without gw_priority', (_c, app) => delete linkOf(app, 'app-dev').gw_priority],
+    ['with gw_priority 0', (_c, app) => (linkOf(app, 'app-dev').gw_priority = 0)],
+    ['with gw_priority 2', (_c, app) => (linkOf(app, 'app-dev').gw_priority = 2)],
+    ['with gw_priority "1"', (_c, app) => (linkOf(app, 'app-dev').gw_priority = '1')],
+    ['without a pinned address', (_c, app) => delete linkOf(app, 'app-dev').ipv4_address],
+    ['at a loopback address', (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '127.0.0.2')],
+    [
+      'at a link-local address',
+      (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '169.254.169.254'),
+    ],
+    ['at the unspecified address', (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '0.0.0.0')],
+    ['at a multicast address', (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '224.0.0.1')],
+    ['at a truncated address', (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '192.0.2')],
+    ['at an IPv6 address', (_c, app) => (linkOf(app, 'app-dev').ipv4_address = '2001:db8::66')],
+    [
+      'on a network Compose would create',
+      (config) =>
+        ((config.networks as Record<string, object>)['envapp-dev'] = { name: 'envapp-dev' }),
+    ],
+    [
+      'with no declared network',
+      (config) => delete (config.networks as Record<string, object>)['envapp-dev'],
+    ],
+    [
+      'on a project-prefixed network name',
+      (config) =>
+        ((config.networks as Record<string, object>)['envapp-dev'] = {
+          name: 'synthetic_envapp-dev',
+          external: true,
+        }),
+    ],
+    ['with a third network', (_c, app) => ((app.networks as Record<string, unknown>).other = null)],
+    [
+      'with app-network as its default route',
+      (_c, app) => ((app.networks as Record<string, unknown>)['app-network'] = { gw_priority: 1 }),
+    ],
+    [
+      'with app-network above the link network',
+      (_c, app) => ((app.networks as Record<string, unknown>)['app-network'] = { gw_priority: 2 }),
+    ],
+    [
+      "on the other clone's link network",
+      (config, app) => {
+        const networks = app.networks as Record<string, unknown>
+        networks['envapp-release'] = networks['envapp-dev']
+        delete networks['envapp-dev']
+        ;(config.networks as Record<string, object>)['envapp-release'] = {
+          name: 'envapp-release',
+          external: true,
+        }
+      },
+    ],
+    [
+      'off its link network',
+      (_c, app) => delete (app.networks as Record<string, unknown>)['envapp-dev'],
+    ],
+  ]
+  it.each(linkChanges)('refuses a VM clone %s', (_label, change) => {
+    const config = fresh()
+    change(config, vm(config, 'app-dev'))
+    expect(() => validateClones(config)).toThrow(/own link network at a pinned address/)
+  })
+
+  it('refuses a release VM clone without its own link network', () => {
+    const config = fresh()
+    const release = vm(config, 'app')
+    delete (release.networks as Record<string, unknown>)['envapp-release']
+    expect(() => validateClones(config)).toThrow(/own link network/)
+  })
+
+  it('refuses any other service on a VM clone link network, the other clone included', () => {
+    // A release on its own VM is refused by its own link rule first.
+    for (const [other, onVm, error] of [
+      ['sidecar', false, /Only the VM clone/],
+      ['app', false, /Only the VM clone/],
+      ['app', true, /own link network/],
+    ] as const) {
+      const config = fresh()
+      vm(config, 'app-dev')
+      if (onVm) vm(config, 'app')
+      const service =
+        other === 'sidecar'
+          ? ((config.services as Record<string, unknown>).sidecar = { image: 'busybox' })
+          : config.services.app
+      const networks = ((service as { networks?: Record<string, unknown> }).networks ??= {})
+      networks['envapp-dev'] = { ipv4_address: '192.0.2.67' }
+      expect(() => validateClones(config), `${other} ${onVm}`).toThrow(error)
+    }
+  })
+
+  it('refuses another service on the link network under another key, and app-network renamed to it', () => {
+    let config = fresh()
+    vm(config, 'app-dev')
+    ;(config.networks as Record<string, object>).sneaky = { name: 'envapp-dev', external: true }
+    ;(config.services as Record<string, unknown>).sidecar = {
+      image: 'busybox',
+      networks: { sneaky: null },
+    }
+    expect(() => validateClones(config)).toThrow(/Only the VM clone/)
+    config = fresh()
+    vm(config, 'app-dev')
+    ;(config.networks as Record<string, Record<string, unknown>>)['app-network'] = {
+      name: 'envapp-dev',
+      external: true,
+    }
+    expect(() => validateClones(config)).toThrow(/Only the VM clone/)
   })
 
   it.each([undefined, 'common-pool', 'per-env ', true])(

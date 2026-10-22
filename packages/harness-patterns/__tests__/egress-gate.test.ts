@@ -300,6 +300,32 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
     expect(decide.seen.states).toHaveLength(1)
   })
 
+  // The web fetch tool's argument may be a `ref://<id>` token that the tool
+  // server resolves to a URL from an earlier search result. The gate sees the
+  // token string, not the URL it resolves to: `addressesIn` matches http(s)
+  // schemes only, so the token never joins the given-address corpus even when
+  // a result carries it, and a fetch under a `url` key is refused (O21).
+  // Open residual: the token resolves server-side to a URL the gate did not
+  // see, so the gate cannot judge that URL; the refusal closes the call
+  // before the tool server resolves it.
+  // MUTATION: drop the url-key fallback (`&& key?.toLowerCase() !== 'url'`):
+  // a leaf under a url key that carries no http(s) address is then not
+  // checked, and the token fetch is dispatched and reaches Decide.
+  it('a ref:// token is refused, even when a result carried it', async () => {
+    const TOKEN = 'ref://abc123'
+    const decide = egressDecide([PUBLIC])
+    const results: ToolCallResult[] = []
+    await run(
+      { decide, ...O21 },
+      async () => {
+        results.push(await callTool('fetch', { url: TOKEN }))
+      },
+      { prior: [webResult({ items: [TOKEN] })] },
+    )
+    expect(results[0]).toMatchObject({ success: false, error: EGRESS_TEXTS.fetchAddress })
+    expect(decide.seen.states).toHaveLength(0)
+  })
+
   it('an address the user typed, or one a result of this turn returned, goes on to Decide', async () => {
     const decide = egressDecide([PUBLIC])
     sent.mockImplementation(async (name) =>

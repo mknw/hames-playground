@@ -1400,7 +1400,8 @@ For a clone declared `per-env`, the validator refuses:
 - networks other than exactly `app-network` and the clone's own external link
   network, `envapp-<clone>`; a link attachment without `gw_priority: 1` or
   without a pinned unicast IPv4 address; `app-network` as the default route;
-  and any other service on that link network;
+  and any other service on that link network, under whatever key it names the
+  network with, `app-network` renamed to it included;
 - another service built from, tagged as, or sharing a namespace or mounts with
   the VM clone, joining any container by id, or mounting the VM clone's TLS
   files or a directory that holds them, whether through a bind, the file behind

@@ -265,11 +265,17 @@ export function validateClones(config) {
     }
     const vm = environmentVm(apps[i], roots);
     vms.push(vm);
-    // Any other member would hold the clone's network identity.
+    // Any other member would hold the clone's network identity. A service joins
+    // a network by the name Compose renders for its key, not by the key itself,
+    // so app-network renamed to the link network is refused too: release joins it.
     const link = linkNetwork(config, apps[i], ["release", "dev"][i]);
+    const named = (key) => config.networks?.[key]?.name ?? key;
     for (const [peer, service] of Object.entries(config.services)) {
       check(
-        peer === name || !Object.hasOwn(service.networks ?? {}, link),
+        peer === name ||
+          !Object.keys(service.networks ?? {}).some(
+            (key) => named(key) === link,
+          ),
         "Only the VM clone joins its link network",
       );
     }

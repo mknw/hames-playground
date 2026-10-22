@@ -242,8 +242,8 @@ stop the release app.
   required, but Compose is not pinned. W0 records the Compose version and stops on a release
   without the key, and the validator refuses a render in which app-dev's link network does not
   carry `gw_priority: 1`.
-- **The validator refuses** any other service on the link network, and an app-dev without the
-  pinned address. `check-vps.py --clones` compares the live network (bridge name, subnet, sole
+- **The validator refuses** any other service on the link network, by the network name Compose
+  renders and not only by its key, and an app-dev without the pinned address. `check-vps.py --clones` compares the live network (bridge name, subnet, sole
   member, address) with the render.
 
 ### 2.4 Routing, end to end

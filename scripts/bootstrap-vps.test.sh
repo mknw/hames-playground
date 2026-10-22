@@ -774,7 +774,9 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-link-gw-priority', 'attachment?.gw_priority === 1 &&', ''),
         ('vm-link-address', 'unicastIPv4(attachment?.ipv4_address) &&', ''),
         ('vm-link-app-network-priority', '!((networks["app-network"]?.gw_priority ?? 0) >= 1)', 'true'),
-        ('vm-link-sole-member', 'peer === name || !Object.hasOwn(service.networks ?? {}, link)', 'true'),
+        ('vm-link-sole-member', '(key) => named(key) === link,', '(key) => false,'),
+        # #745 review: a member under another key, or app-network renamed to the link network.
+        ('vm-link-member-by-key', 'const named = (key) => config.networks?.[key]?.name ?? key;', 'const named = (key) => key;'),
         ('vm-link-per-clone', 'linkNetwork(config, apps[i], ["release", "dev"][i])', 'linkNetwork(config, apps[i], "dev")'),
         ('root-only-link-inputs', '(RELEASE|DEV)_SANDBOX_[A-Z_]+)$/', '(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+)$/'),
     ]:

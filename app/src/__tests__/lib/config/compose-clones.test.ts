@@ -754,6 +754,24 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     }
   })
 
+  it('refuses another service on the link network under another key, and app-network renamed to it', () => {
+    let config = fresh()
+    vm(config, 'app-dev')
+    ;(config.networks as Record<string, object>).sneaky = { name: 'envapp-dev', external: true }
+    ;(config.services as Record<string, unknown>).sidecar = {
+      image: 'busybox',
+      networks: { sneaky: null },
+    }
+    expect(() => validateClones(config)).toThrow(/Only the VM clone/)
+    config = fresh()
+    vm(config, 'app-dev')
+    ;(config.networks as Record<string, Record<string, unknown>>)['app-network'] = {
+      name: 'envapp-dev',
+      external: true,
+    }
+    expect(() => validateClones(config)).toThrow(/Only the VM clone/)
+  })
+
   it.each([undefined, 'common-pool', 'per-env ', true])(
     'refuses an undeclared or unbuilt sandbox mode: %s',
     (mode) => {

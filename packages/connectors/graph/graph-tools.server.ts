@@ -1345,7 +1345,7 @@ function canonicalDomain(raw: string): string {
 export function isHomeAddress(address: unknown, homeDomains: readonly string[]): boolean {
   if (typeof address !== 'string') return false
   const at = address.lastIndexOf('@')
-  if (at <= 0) return false
+  if (at <= 0 || address.indexOf('@') !== at) return false
   const domain = canonicalDomain(address.slice(at + 1))
   if (!domain) return false
   return homeDomains.some((configured) => {

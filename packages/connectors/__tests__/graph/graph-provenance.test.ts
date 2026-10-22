@@ -256,6 +256,17 @@ describe('the domain match', () => {
     expect(isHomeAddress(address, entries)).toBe(false)
   })
 
+  // MUTATION: drop the `address.indexOf('@') !== at` check in `isHomeAddress`: the
+  // domain after the LAST `@` is home, so each of these reads as home.
+  it.each([
+    ['a second @ in the local part', 'ceo@evil.example@contoso.com'],
+    ['an obsolete route form', '@evil.example:ceo@contoso.com'],
+    ['a comma-separated tail', 'ceo@evil.example,x@contoso.com'],
+    ['two adjacent @', 'ceo@@contoso.com'],
+  ])('an address with more than one @ is never home: %s', (_, address) => {
+    expect(isHomeAddress(address, HOME)).toBe(false)
+  })
+
   it('a canonical Unicode or punycode domain still matches its configured form', () => {
     expect(isHomeAddress('avery@b\u00fccher.de', ['b\u00fccher.de'])).toBe(true)
     expect(isHomeAddress('avery@xn--bcher-kva.de', ['b\u00fccher.de'])).toBe(true)

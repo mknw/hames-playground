@@ -75,7 +75,7 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
     expect(decisions).toHaveLength(2)
     expect(decisions.every((c) => c.endpoint === 'jev')).toBe(true)
     expect(JSON.parse(decisions[1].prompt).state).toContain('42')
-    expect(JSON.parse(decisions[1].prompt).state).toContain('⟦UNTRUSTED CONTENT')
+    expect(JSON.parse(decisions[1].prompt).state).not.toContain('⟦')
     expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(true)
   })
 

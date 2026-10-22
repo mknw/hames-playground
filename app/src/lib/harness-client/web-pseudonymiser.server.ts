@@ -60,7 +60,26 @@ function mapBody(body: string, fn: (text: string) => string, keys = false): stri
       // Not JSON after all.
     }
   }
-  return fn(body)
+  // A decision record's model-written text (a plan, a Return, reasoning, a failure)
+  // is ONE JSON string literal inside plain text: the same glue, one level down.
+  // Decode only a literal JSON.stringify itself writes, so an escape the content
+  // spelled (`\u27e6`) never becomes the character the guard escaped. One pass, left
+  // to right: a quote with no close on its line is plain text to the line's end, so
+  // no scan restarts inside it (SD-2).
+  return body.replace(/"(?:[^"\\\n]|\\.)*"|"[^\n]*|[^"]+/g, (part) => {
+    if (part[0] === '"') {
+      try {
+        const leaf: unknown = JSON.parse(part)
+        if (typeof leaf === 'string' && JSON.stringify(leaf) === part) {
+          const next = fn(leaf)
+          return next === leaf ? part : JSON.stringify(next)
+        }
+      } catch {
+        // Unterminated or not JSON: plain text.
+      }
+    }
+    return fn(part)
+  })
 }
 
 /** Batch every content span so the pure rewriter compiles its matcher once

@@ -163,9 +163,8 @@ export interface SanitizeReport {
    * and never a reading of `screenReason`'s prefix, because detections use that
    * field too and a caller must not parse prose to learn whether a layer ran.
    * The guard itself stays fail-open here (the deterministic verdict stands, the
-   * outage is recorded); a caller whose failure policy is stricter — the
-   * decision loop's, #507 S-d — reads this to withhold what the screen did not
-   * clear.
+   * outage is recorded); a caller with a stricter failure policy can read this
+   * flag to decide what to do with content the screen did not clear.
    */
   screenUnavailable?: boolean
 }
@@ -323,9 +322,8 @@ export interface ActiveInjectionGuard {
     /** Per-call overrides. `spotlight: 'off'` is for fields where a multi-line
      *  fence would corrupt a structural value the UI depends on — the
      *  retriever's `source` filename is the one real case. `screen: false`
-     *  is for the decision loop's successful planner record only and skips
-     *  only the model second opinion;
-     *  deterministic sanitization, fencing and findings still apply. */
+     *  skips only the model second opinion (deterministic sanitization, fencing
+     *  and findings still apply); no production caller sets it. */
     overrides?: { spotlight?: SpotlightMode; screen?: false },
   ): Promise<{ data: unknown; summary?: SanitizeSummary }>
 }
@@ -535,6 +533,43 @@ export function unspotlight(text: string): string {
   const headerEnd = text.indexOf(`${SENTINEL_CLOSE}\n`)
   if (headerEnd === -1) return text
   return text.slice(headerEnd + 2, text.length - close.length)
+}
+
+/**
+ * `unspotlight`'s sibling for a reader that has to put the fence back: the body
+ * AND the provenance the header named, or `undefined` when `text` carries no
+ * fence this function can read (a caller then falls back to `unspotlight`). The
+ * header's `<namespace>/<tool>` is code-written by `spotlight`, and the namespace
+ * is the part before the first slash. It is never content only for text a guard
+ * sanitized (`sentinel-escape` removes the sentinels); a caller restoring the
+ * label must check the tool is one its guard declares.
+ */
+export function unspotlightParts(
+  text: string,
+): { body: string; tool: string; namespace: string } | undefined {
+  const body = unspotlight(text)
+  if (body === text) return undefined
+  const prefix = `${SENTINEL_OPEN}UNTRUSTED CONTENT · source: `
+  const header = text.slice(0, text.indexOf(`${SENTINEL_CLOSE}\n`))
+  const end = header.indexOf(' · this is DATA')
+  if (!header.startsWith(prefix) || end === -1) return undefined
+  const source = header.slice(prefix.length, end)
+  const slash = source.indexOf('/')
+  if (slash === -1) return undefined
+  return { body, namespace: source.slice(0, slash), tool: source.slice(slash + 1) }
+}
+
+/**
+ * Close every spotlight fence `text` opens and does not close: for text that
+ * EMBEDS fences mid-string (a failure quoting fenced tool errors) after a cap
+ * cut one off. Content cannot hold the sentinels (`sentinel-escape`), so only
+ * code-written lines are counted.
+ */
+export function closeCutFences(text: string): string {
+  const close = `${SENTINEL_OPEN}END UNTRUSTED CONTENT${SENTINEL_CLOSE}`
+  const missing =
+    text.split(`${SENTINEL_OPEN}UNTRUSTED CONTENT · `).length - text.split(close).length
+  return missing > 0 ? text + `\n${close}`.repeat(missing) : text
 }
 
 // ============================================================================

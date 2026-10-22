@@ -1311,16 +1311,37 @@ between clones: one VM, one CA and one client certificate per clone. Dev moves
 first. Release keeps the host socket until its own VM lands, per the owner's
 answer on #648.
 
-1. **Provision dev's VM** with `createIncusEnvironment`
-   ([`packages/sandbox` README](../packages/sandbox/README.md#incus-environment-vms-operator-opt-in)).
+1. **Provision dev's VM and deliver its client files** with the operator entry
+   point. Run it from the repo root of a checkout of the reviewed commit, after
+   a workspace install (`corepack pnpm install --frozen-lockfile`). It holds the
+   Incus manager credential, so it never runs inside an app:
+
+   ```bash
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts reconcile /operator-private/dev.json
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts health /operator-private/dev.json --wait 600
+   ```
+
+   - **The config file** is operator-private. It holds the
+     [`createIncusEnvironment` options](../packages/sandbox/README.md#incus-environment-vms-operator-opt-in),
+     with the manager's three PEM files given as paths, plus
+     `delivery: { directory, owner? }`. An unknown or misspelt key is refused.
+   - **`reconcile`** creates or verifies the VM. It then copies only the CA
+     certificate, the client certificate and the client key into
+     `delivery.directory`: mode 0700, files 0600, owned by `delivery.owner` when
+     set. Set the owner to the operator user who runs bootstrap, because the
+     preflight reads the files. Keep the directory outside both checkouts.
+     Unchanged files keep their inode, so a running app's binds stay valid. The
+     provisioner's state directory, which holds the CA key, is never delivered.
+     `reconcile` prints the four Docker inputs for step 2.
+   - **`health`** probes Docker over mutual TLS with the delivered files,
+     exactly as the app will. It stops at once if the daemon is not this
+     environment's.
+
    Before routing an app to the VM, prove separately that only the app network
-   reaches the VM's Docker port; the provisioner does not set firewall rules.
-2. **Deliver only the three client files**: the CA certificate, the client
-   certificate and the client key. Put them in a directory outside **both**
-   checkouts, owned by the operator user who runs bootstrap, with the key at
-   mode 0600. Never deliver the provisioner's state directory, which holds the
-   CA key.
-3. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
+   reaches the VM's Docker port, and record that proof for step 2. Neither the
+   provisioner nor the entry point sets firewall rules.
+
+2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
    values:
 
    | Input                           | Meaning                                                  |
@@ -1335,12 +1356,12 @@ answer on #648.
    reaches the VM's Docker port. The preflight refuses the overlay until that
    file exists and is not empty. It never reads what the file says.
 
-4. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
+3. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
    It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
    its configs plus the three files (read-only, never created when missing) and
    sets the four `SANDBOX_DOCKER_*` settings. It cannot be combined with the
    socket opt-in.
-5. **Run the same preflight**, then recreate app-dev with bootstrap's
+4. **Run the same preflight**, then recreate app-dev with bootstrap's
    `--only boot --no-seed`, then `--only smoke --no-seed`.
 
 For a clone declared `per-env`, the validator refuses:
@@ -1378,11 +1399,37 @@ leaves out services of any other profile, so the preflight also refuses a
 both running apps' endpoint settings and TLS mounts with the render, and refuses
 any mount on a VM clone that the render does not list.
 
+**Reboots, rotation and concurrency.**
+
+- **Reboots.** The state directory and the delivery directory must be on
+  persistent storage. The entry point refuses `/tmp`, `/var/tmp`, `/run`,
+  `/dev` and similar mounts, also behind a link and under their macOS
+  `/private` names. After a host reboot, Incus
+  restores each VM's last power state. Re-run `health --wait 600`, and run
+  `reconcile` if the VM was stopped: it starts the VM and never generates new
+  keys for an existing state.
+- **Rotation.** The client certificate is valid for 365 days. `health` warns
+  30 days before expiry, and once it has expired says so at once, instead of
+  waiting on a daemon that keeps refusing it. To rotate, run `teardown`, then
+  `reconcile`, then recreate app-dev: the paths are unchanged, but the files are
+  new inodes. A failed teardown keeps the state and the delivered files for
+  recovery.
+- **One operation per state directory.** A `<stateDirectory>.lock` beside the
+  directory records the holder's pid and boot, and refuses a second operation
+  while that holder runs. A lock whose holder is gone, after Ctrl-C, a kill or
+  a reboot, is reclaimed, and the entry point says so. A refused lock with no
+  operation running means its pid now belongs to another process: remove it
+  by hand. `teardown` keeps a delivery directory that holds other files, and
+  says so.
+
 **What this does not establish.** The checks are offline and see
 configuration only. They do not prove network isolation between the clones'
 VMs, or between a VM and host services: that is firewall evidence the operator
 records separately. Dev holds root inside its own VM, by design. The MCP
-gateway keeps its host socket and shares `app-network` with both apps.
+gateway keeps its host socket and shares `app-network` with both apps. Still
+owed live: `createIncusEnvironment` creating and booting a VM on a real Incus
+host (the spike harness provisioned its own VMs), and Docker answering after a
+guest reboot and after a host reboot.
 
 **Rollback.** Remove the overlay from `COMPOSE_FILE` and recreate app-dev. Dev
 is then back to no Docker access and no sandbox agents. Tear down the VM

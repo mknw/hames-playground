@@ -188,6 +188,46 @@ describe('reconcile delivers only the clone client files', () => {
     }
   })
 
+  it('passes the local-files image source through to the library unchanged, and never prints file contents', async () => {
+    await writeFile(join(root, 'metadata.tar'), 'synthetic metadata tarball bytes')
+    await writeFile(join(root, 'disk.qcow2'), 'synthetic disk image bytes')
+    const files = { metadata: join(root, 'metadata.tar'), disk: join(root, 'disk.qcow2') }
+    await writeConfig({ ...config(), image: { files, fingerprint: 'b'.repeat(64) } })
+    expect(await run('reconcile', configFile)).toBe(0)
+    expect(created[0].image).toEqual({ files, fingerprint: 'b'.repeat(64) })
+    expect(printed.join('\n')).not.toMatch(/synthetic (metadata tarball|disk image) bytes/)
+  })
+
+  it.each([
+    [
+      'both sources',
+      (c: Record<string, unknown>) => ({
+        ...c,
+        image: {
+          server: 'https://images.example.test',
+          files: { metadata: 'm', disk: 'd' },
+          fingerprint: 'a'.repeat(64),
+        },
+      }),
+    ],
+    ['neither', (c: Record<string, unknown>) => ({ ...c, image: { fingerprint: 'a'.repeat(64) } })],
+  ])('refuses a config naming %s before any request', async (_label, change) => {
+    await writeConfig(change(config()))
+    expect(await run('reconcile', configFile)).toBe(1)
+    expect(printed.at(-1)).toMatch(/^refused: config image must name exactly one source/)
+    expect(created).toEqual([])
+  })
+
+  it('refuses local files without both paths before any request', async () => {
+    await writeConfig({
+      ...config(),
+      image: { files: { metadata: 'm' }, fingerprint: 'a'.repeat(64) },
+    })
+    expect(await run('reconcile', configFile)).toBe(1)
+    expect(printed.at(-1)).toMatch(/^refused: config .*disk must be a string/)
+    expect(created).toEqual([])
+  })
+
   it('prefixes the root inputs with the environment, and says when no clone reads them', async () => {
     await writeConfig({ ...config(), environment: 'dev-2' })
     expect(await run('reconcile', configFile)).toBe(0)

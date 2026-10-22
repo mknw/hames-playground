@@ -16,7 +16,21 @@ export async function fixtureInference() {
       for await (const chunk of req) raw += chunk
       const body = JSON.parse(raw)
       let value: unknown
-      if (req.url === '/v1/systemone') {
+      const questions = req.url === '/v1/systemone' ? Object.values(body.questions) : []
+      if (
+        questions.length > 0 &&
+        questions.every((q) => (q as { type?: string }).type === 'noul')
+      ) {
+        // The guard gate's question (`guard.screen`) is not a route decision: it consumes no
+        // scripted route. A fixed answer below the gate's threshold ("skip"), which 'shadow'
+        // records and ignores, so the screen still runs and the report counts the gate call.
+        value = {
+          answers: Object.fromEntries(
+            Object.keys(body.questions).map((name) => [name, { type: 'noul', noul: 0.05 }]),
+          ),
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
+      } else if (req.url === '/v1/systemone') {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
         const answers = Object.fromEntries(
           Object.entries(body.questions).map(([name, question]) => {

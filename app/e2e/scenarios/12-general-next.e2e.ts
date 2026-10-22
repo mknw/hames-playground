@@ -66,9 +66,10 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
     ).toHaveLength(1)
     expect(app.fakeGateway.toolCalls.filter((c) => c.name === 'read_neo4j_cypher')).toHaveLength(1)
     expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toHaveLength(1)
-    expect(
-      app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent').length,
-    ).toBeGreaterThan(0)
+    // Boundary guards slice 3, ruling O: a graph read is the deployment's own content,
+    // so the host's classifier keeps it to the deterministic pass and no screen runs.
+    // MUTATION: drop `classify` from general-next's info guard — a screen call appears.
+    expect(app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent')).toHaveLength(0)
     const decisions = app.fakeLlm.calls.filter(
       (c) => c.endpoint && JSON.parse(c.prompt).questions.next_step,
     )

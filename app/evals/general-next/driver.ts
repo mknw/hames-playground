@@ -8,6 +8,7 @@ import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
 } from '../../src/lib/eval-support/synthetic-sandbox'
+import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -19,7 +20,6 @@ const FIXTURES: Record<string, unknown> = {
   fetch: 'Lantern version 2 adds CSV export.',
   'resolve-library-id': { libraryId: '/solidjs/solid' },
   'get-library-docs': 'const [count, setCount] = createSignal(0)',
-  search_nodes: [{ name: 'Lantern', release: 'LANTERN-2' }],
   graph_mail_recent: [
     {
       id: 'mail-lantern-1',
@@ -36,7 +36,6 @@ const NAMESPACES: Record<string, string> = {
   fetch: 'web',
   'resolve-library-id': 'context7',
   'get-library-docs': 'context7',
-  search_nodes: 'memory',
   graph_mail_recent: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
@@ -205,7 +204,12 @@ export async function createDriver(
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
         async () => {
-          const patterns = await agent.createPatterns(sessionId, deps)
+          // Per-user memory is on for the scenarios that name it and off for every other one,
+          // so no other scenario pays a recall step.
+          const patterns = await agent.createPatterns(
+            sessionId,
+            next.memory ? { ...deps, memory: createSyntheticMemory(() => EVAL_OWNER) } : deps,
+          )
           const run = harness(...patterns)
           let serialized: string | undefined
           for (turn = 0; turn < next.messages.length; turn++) {

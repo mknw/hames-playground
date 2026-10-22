@@ -26,6 +26,10 @@ export const GENERAL_BASELINE: Readonly<Record<string, BaselineStatus>> = {
   '03-web-read': 'pass',
   // Eval run 2, 2026-10-19 (main b90eb2ba): #507 comment 6278332237. Not re-run since.
   '04-library-docs': 'pass',
+  // CHANGED MEANING, 2026-10-22: this `pass` measured the shared-memory-graph lookup, which
+  // is retired (PR #744). 05 is now a per-user memory recall, so the entry still bars the
+  // candidate on 05 but has no live reading of the new behaviour: re-baselined at the next
+  // live run. The gate still counts the same six passes (01-06).
   '05-memory-lookup': 'pass',
   // Eval run 5, 2026-10-20 (main 9ca83e9a): #507 comment 6292721566. Also passed in
   // run 3; failed in the first live run, before the Return-only fix (#612).

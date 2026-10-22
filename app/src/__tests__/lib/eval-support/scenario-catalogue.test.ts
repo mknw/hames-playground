@@ -394,9 +394,59 @@ function validate(c: Json, md: string, modules: string[], handed = sourceTools()
   return [
     ...errors,
     ...saturation(c, scenarios, handed, byId),
+    ...retiredAndMemory(c, scenarios, byId),
     ...rulings(c, byId),
     ...markdown(c, md),
   ]
+}
+
+/**
+ * The shared memory graph is retired (PR #744) and per-user memory is what remains: no row,
+ * vocabulary value or saturation cell may name the graph or its tools (the two read tools stay
+ * in `saturation.tools` only until #744 removes them from the agent); a row that names
+ * `user-memory` runs with the synthetic owner-scoped store; the arithmetic row computes in the
+ * sandbox (#742 is the calculator follow-up); and the cross-owner row asks for a fact that the
+ * synthetic store really holds under the other owner.
+ */
+function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): string[] {
+  const errors: string[] = []
+  const sat = c.saturation as Json
+  const retired =
+    /memory-graph|memory graph|MCP memory|search_nodes|open_nodes|read_graph|create_entities|create_relations|add_observations|delete_entities|delete_observations|delete_relations/
+  const scanned: Array<[string, unknown]> = [
+    ['dimensions', c.dimensions],
+    ['intentSource', sat.intentSource],
+    ['negativeOnlyCells', sat.negativeOnlyCells],
+    // A row's notes may say what it replaced; everything the Eval reads or grades may not.
+    ...scenarios.map((s): [string, unknown] => [String(s.id), { ...s, notes: undefined }]),
+  ]
+  for (const [at, value] of scanned)
+    if (retired.test(JSON.stringify(value)))
+      errors.push(`${at}: names the retired shared memory graph or its tools (PR #744)`)
+  for (const s of scenarios)
+    if (s.status === 'existing' && flat(dims(s).sources).includes('user-memory'))
+      if (!/\bmemory:\s*true\b/.test(moduleText(String(s.id))))
+        errors.push(`${String(s.id)}: names user-memory but its module does not turn memory on`)
+  const sum = byId.get('p87-arithmetic-in-sandbox')
+  if (!sum) errors.push('p87-arithmetic-in-sandbox: missing (owner, 2026-10-22: use the sandbox)')
+  else {
+    const g = graderOf(sum)
+    const calls = g.some(
+      (i) => i.check === 'orderedTools' && (i.tools ?? []).join() === 'sandbox_bash',
+    )
+    if (!calls || g.some((i) => ['noTools', 'onlyRoutes'].includes(i.check)))
+      errors.push('p87-arithmetic-in-sandbox: arithmetic must be computed in the sandbox (#742)')
+  }
+  const other = byId.get('tn58-other-owner-memory')
+  const facts = other
+    ? graderOf(other)
+        .filter((i) => i.check === 'answerExcludes')
+        .flatMap((i) => i.facts ?? [])
+    : []
+  const store = read('src/lib/eval-support/synthetic-memory.ts')
+  if (!facts.length || !facts.every((f) => store.includes(f)))
+    errors.push('tn58-other-owner-memory: must exclude a fact the synthetic store holds')
+  return errors
 }
 
 /** An existing row carries its module's own checks, so the owner reviews what the suite runs. */
@@ -896,7 +946,7 @@ describe('general-next scenario catalogue', () => {
           (g) => !(g.sources as string[]).includes('user-memory'),
         )
       })
-      expect(errors.join()).toMatch(/lookup-fact x user-memory: neither covered nor declared/)
+      expect(errors.join()).toMatch(/find-person x user-memory: neither covered nor declared/)
     })
     it('a declared cell that a scenario covers', () => {
       const errors = mutate((c) => {
@@ -933,9 +983,15 @@ describe('general-next scenario catalogue', () => {
     })
     it('a withheld tool graded as a correct call', () => {
       const errors = mutate((_, s) => {
-        ;(s[0].grader as Json[]).push({ check: 'oneOfTools', says: '', tools: ['read_graph'] })
+        ;(s[0].grader as Json[]).push({
+          check: 'oneOfTools',
+          says: '',
+          tools: ['write_neo4j_cypher'],
+        })
       })
-      expect(errors.join()).toMatch(/tool read_graph: withheld but graded as a correct call/)
+      expect(errors.join()).toMatch(
+        /tool write_neo4j_cypher: withheld but graded as a correct call/,
+      )
     })
     it('a tool general-next is handed but the catalogue omits', () => {
       const errors = mutate((c) => delete ((c.saturation as Json).tools as Json).graph_files_recent)
@@ -1041,9 +1097,9 @@ describe('general-next scenario catalogue', () => {
     it('M3: a proposed query changed in the JSON but not in SCENARIOS.md', () => {
       expect(
         mutate(
-          (_, s) => (row(s, 'tn20-arithmetic-no-tools').turns = ['What is 18 times 23?']),
+          (_, s) => (row(s, 'p87-arithmetic-in-sandbox').turns = ['What is 18 times 23?']),
         ).join(),
-      ).toMatch(/### Proposed scenarios: row `tn20-arithmetic-no-tools` is stale/)
+      ).toMatch(/### Proposed scenarios: row `p87-arithmetic-in-sandbox` is stale/)
     })
     it('a coverage count edited by hand', () => {
       const md = scenariosMd.replace(/\| intents +\| `meta` +\| (\d+)/, (_m, n) =>
@@ -1134,13 +1190,74 @@ describe('general-next scenario catalogue', () => {
         /lookup-fact x knowledge-graph: declared negative-only but a positive covers it/,
       )
     })
-    it('N3: a memory write tool handed to general-next while declared withheld', () => {
+    it('N3: a write tool handed to general-next while declared withheld', () => {
       const errors = validate(catalogue(), scenariosMd, moduleIds, [
         ...sourceTools(),
-        'create_entities',
+        'write_neo4j_cypher',
       ])
       expect(errors.join()).toMatch(
-        /tool create_entities: handed to general-next but declared withheld/,
+        /tool write_neo4j_cypher: handed to general-next but declared withheld/,
+      )
+    })
+
+    // Round 2: the retired memory graph, the sandbox arithmetic row, the cross-owner row
+    it('R1: a row re-targeting the retired shared memory graph', () => {
+      const errors = mutate((_, s) => {
+        ;(row(s, '01-greeting').dimensions as Json).sources = ['memory-graph']
+      })
+      expect(errors.join()).toMatch(/01-greeting: names the retired shared memory graph/)
+    })
+    it('R1: a grader naming a retired memory tool', () => {
+      const errors = mutate((_, s) => {
+        row(s, '02-graph-count').grader = [
+          ...graderOf(row(s, '02-graph-count')),
+          { check: 'forbiddenTools', says: '', tools: ['read_graph'] },
+        ]
+      })
+      expect(errors.join()).toMatch(/02-graph-count: names the retired shared memory graph/)
+    })
+    it('R2: an existing user-memory row whose module leaves memory off', () => {
+      const errors = mutate((_, s) => {
+        ;(row(s, '01-greeting').dimensions as Json).sources = ['user-memory']
+      })
+      expect(errors.join()).toMatch(/01-greeting: names user-memory but its module does not turn/)
+    })
+    it('R3: the arithmetic row answered without the sandbox', () => {
+      const errors = mutate((_, s) => {
+        row(s, 'p87-arithmetic-in-sandbox').grader = [
+          { check: 'noTools', says: '' },
+          { check: 'answerContains', says: '', facts: ['391'] },
+        ]
+      })
+      expect(errors.join()).toMatch(/p87-arithmetic-in-sandbox: arithmetic must be computed/)
+    })
+    it('R3: the arithmetic row dropped', () => {
+      const errors = mutate((_, s) =>
+        s.splice(
+          s.findIndex((x) => x.id === 'p87-arithmetic-in-sandbox'),
+          1,
+        ),
+      )
+      expect(errors.join()).toMatch(/p87-arithmetic-in-sandbox: missing/)
+    })
+    it('R4: the cross-owner row excluding a fact the store does not hold', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, 'tn58-other-owner-memory', 'answerExcludes').facts = ['KESTREL-6']
+      })
+      expect(errors.join()).toMatch(/tn58-other-owner-memory: must exclude a fact the synthetic/)
+    })
+    it('R4: the cross-owner row with no exclusion', () => {
+      const errors = mutate((_, s) => {
+        row(s, 'tn58-other-owner-memory').grader = graderOf(
+          row(s, 'tn58-other-owner-memory'),
+        ).filter((i) => i.check !== 'answerExcludes')
+      })
+      expect(errors.join()).toMatch(/tn58-other-owner-memory: must exclude a fact the synthetic/)
+    })
+    it('R5: the driver gives memory to the scenarios that ask for it and to no other', () => {
+      // Mutation (driver.ts): pass `memory: createSyntheticMemory(...)` unconditionally.
+      expect(read('evals/general-next/driver.ts')).toMatch(
+        /next\.memory\s*\?\s*\{\s*\.\.\.deps,\s*memory:\s*createSyntheticMemory\(\(\) => EVAL_OWNER\)\s*\}\s*:\s*deps/,
       )
     })
     it('N4: a multi-tag row without cells', () => {

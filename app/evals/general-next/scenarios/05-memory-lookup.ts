@@ -2,18 +2,18 @@ import type { ConversationScenario } from '../types'
 
 export const scenario: ConversationScenario = {
   id: '05-memory-lookup',
-  title: 'Read a named entity in the shared memory graph',
+  title: 'Recall a confirmed per-user memory in a later turn',
   priority: 'should',
   baseline: true,
   p4: false,
-  messages: [
-    'Look up the Lantern project in the shared memory graph (the MCP memory server). What is its release tag?',
-  ],
-  expectedTools: ['search_nodes'],
-  expectedArgs: { search_nodes: (a) => /Lantern/i.test(String(a.query)) },
-  expectedRoutes: ['info-retrieval'],
+  memory: true,
+  messages: ['What do you remember about me?', 'Which release tag goes with that project?'],
+  expectedTools: [],
+  expectedRoutes: [],
   answerIncludes: ['LANTERN-2'],
+  turnAnswerIncludes: [['Lantern'], ['LANTERN-2']],
   artifacts: [],
   forbiddenTools: [],
+  noTools: true,
   maxIterations: 6,
 }

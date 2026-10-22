@@ -143,6 +143,6 @@ failure" are self-fulfilling there. Only these discriminate hermetically: tool o
 arguments, route selection and completion, stash artifacts, the index and retrieval checks,
 and "first turn recorded a tool failure". A scenario whose only discriminating checks are
 absent (06) is a vacuous pass hermetically; every hermetic report says so in `hermeticCaveat`.
-The eval omits `deps.memory`, so no `withMemory` describe calls are priced that production makes.
+The eval passes `deps.memory` to scenario 05 alone, as a synthetic read-only owner-scoped store (`src/lib/eval-support/synthetic-memory.ts`) whose recall gate is a fixed answer, and never runs the store step; so no `withMemory` gate or describe calls are priced that production makes.
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

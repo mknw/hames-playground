@@ -999,6 +999,18 @@ describe('fix round 1 remaining findings', () => {
     expect(compilations()).toBe(1)
   })
 
+  // MUTATION: return no span when the request cannot be mapped back character
+  // for character (`if (!mapped) return []`): a matched name is no evidence.
+  it('a match that cannot be mapped back (a context-sensitive lower case) quotes the whole leaf', async () => {
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([
+      { displayName: 'Οδυσσέας Παπαδόπουλος', mail: 'odysseas@example.test' },
+    ])
+    const { roster } = await createEgressRoster()([], '')
+    // A final capital sigma lowercases to the final form only in context.
+    const leaf = 'query: ΟΔΥΣΣΕΑΣ ΠΑΠΑΔΟΠΟΥΛΟΣ τηλέφωνο'
+    expect(roster.match([leaf])).toEqual([leaf])
+  })
+
   it.each(['PERSON 3', 'PERSON-3', 'PERSON__3_EMAIL', 'PERSON%203', 'PERSON-3-FUTURE'])(
     'refuses the linkable placeholder %s',
     async (query) => {

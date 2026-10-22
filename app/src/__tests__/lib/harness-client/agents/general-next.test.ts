@@ -604,7 +604,8 @@ describe('general-next composition', () => {
   })
 
   // MUTATION: declare `maxOutgoingRetriesPostTripwire: 1` (or `mode: 'roster'`,
-  // or `loadedDecideDown: 'ask'`) in general-next's egress gate.
+  // or `loadedDecideDown: 'ask'`, or add `'neo4j'` to `addressSources`) in
+  // general-next's egress gate.
   it('declares the egress gate on both tiers: filter mode, N = 0, by-shape, the host roster', async () => {
     const egressRoster = vi.fn()
     await agent.createPatterns('synthetic-session', { ...deps, egressRoster })
@@ -612,6 +613,7 @@ describe('general-next composition', () => {
       local: ['neo4j', 'graph'],
       localTools: SANDBOX,
       fetchTools: ['fetch', 'fetch_content'],
+      addressSources: ['web', 'context7', 'graph'],
       mode: 'filter',
       maxOutgoingRetriesPostTripwire: 0,
       loadedDecideDown: 'by-shape',

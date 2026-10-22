@@ -229,7 +229,6 @@ function literalCheck(table: PseudonymTable, latestUserMessage: string) {
           found.push([mapped.starts[at], mapped.ends[end - 1]])
         at = end + 1
       }
-      if (found.length === 0) return [text]
       found.sort((a, b) => a[0] - b[0] || a[1] - b[1])
       const spans: string[] = []
       for (const [start, end] of found) {

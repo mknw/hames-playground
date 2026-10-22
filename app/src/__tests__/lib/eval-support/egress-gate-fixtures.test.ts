@@ -55,6 +55,7 @@ async function throughGate(row: EgressGateFixture) {
     catalog: [row.tool],
     decide,
     fetchTools: row.tool === 'fetch' ? ['fetch'] : [],
+    addressSources: [],
   })(probe)
   await withRunFrame(
     {

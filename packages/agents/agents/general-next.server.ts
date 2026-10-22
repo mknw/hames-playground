@@ -249,11 +249,15 @@ async function createPatterns(
   // that box has no network. Everything else is egress, so a route that gains
   // an outgoing tool later is covered with no declaration.
   // N = 0: a refusal closes its route's egress until the user's next message.
+  // A fetch address must come from the user or from content the run did not
+  // compute: web pages, library docs and Microsoft 365 data give addresses; a
+  // Cypher RETURN and the office box's output do not (O21).
   const egressGate = withEgressGate({
     local: ['neo4j', 'graph'],
     localTools: officeLocalTools(officeAttach, sandboxTools),
     catalog: tools.all,
     fetchTools: (tools.web ?? []).filter((name) => name.includes('fetch')),
+    addressSources: ['web', 'context7', 'graph'],
     roster: deps.egressRoster,
     decide: createDecideAdapter(),
     mode: 'filter',

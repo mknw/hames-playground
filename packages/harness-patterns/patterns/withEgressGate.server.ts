@@ -16,7 +16,10 @@
  *     no Decide call.
  *  1. Integrity (deterministic, never a tripwire): undecodable encoding, a
  *     format character, a placeholder, a block over the size bound, a fetch
- *     address nobody gave the controller (O21).
+ *     address nobody gave the controller (O21: the user's latest message and
+ *     the DATA of `addressSources` results only, matched address for address,
+ *     because a result the run computed from its own arguments, a Cypher
+ *     `RETURN` or a script's output, would launder any address).
  *  2. The roster's matches become EVIDENCE (`filter`) or a veto (`roster`).
  *  3. `'filter'`: the egress question (`guard.egress`). At or above τe the call
  *     is refused with its category's text: the TRIPWIRE. Below, it goes out,
@@ -65,6 +68,7 @@ import {
   EGRESS_SMALL_BLOCK_CHARS,
   EGRESS_SPAN_CAP,
   EGRESS_TEXTS,
+  EGRESS_USER_CAP,
   EGRESS_WARNING_TASK,
   EGRESS_WARNINGS,
   egressToolLabel,
@@ -90,6 +94,7 @@ import type {
   EventType,
   PatternScope,
   ToolCallResult,
+  ToolResultEventData,
   UnifiedContext,
   UserMessageEventData,
   WarningEventData,
@@ -139,11 +144,19 @@ export interface EgressGateConfig {
   readonly localTools?: readonly string[]
   /** The tool names the wrapped pattern was built from (`tools.all`). */
   readonly catalog: readonly string[]
-  /** Tools whose addresses must have been given (O21): every http(s) address in
-   *  their arguments, and every `url` argument, must appear verbatim in the
-   *  user's latest message or in an earlier tool result. Each must be in
-   *  `catalog`. */
+  /** Tools whose addresses must have been given (O21): every string argument
+   *  that carries an http(s) address or sits under a `url` key must, whole, be
+   *  an address found in the user's latest message or in the data of an
+   *  `addressSources` result, and so must every address inside it. Each must
+   *  be in `catalog`. */
   readonly fetchTools?: readonly string[]
+  /** Namespaces whose results' DATA gives the controller addresses (O21).
+   *  Required with `fetchTools`: only tools that return content they did not
+   *  compute from their arguments belong here (a web page, a library doc, a
+   *  mail), never a query engine or a code box, whose output the controller
+   *  can make say any address. A result's error text never counts. Verified
+   *  against `catalog` like `local`. */
+  readonly addressSources?: readonly string[]
   /** The host's roster. Without one the directory is `'none'` and nothing matches. */
   readonly roster?: EgressRosterSource
   /** The egress question's seam (`createDecideAdapter()`). Serves `choice`. */
@@ -164,8 +177,19 @@ export interface EgressGateConfig {
    *  `'ask'` refuses every such call. (Each refusal is a person cell, asked
    *  once the prompts land.) */
   readonly loadedDecideDown?: 'by-shape' | 'ask'
-  /** Test seam for the state's nonce source. */
-  readonly drawNonce?: () => string
+}
+
+/** The state's nonce source under the test runner; never a config field, so a
+ *  library caller cannot ship a fence whose code it chose. */
+let testNonceSource: (() => string) | undefined
+
+/** Fix the egress state's nonce for a test (`undefined` restores the random
+ *  draw). Refused, and never read, outside the test runner. */
+export function setEgressNonceSourceForTests(draw: (() => string) | undefined): void {
+  if (!process.env.VITEST) {
+    throw new Error('[withEgressGate] the nonce source can be fixed only under the test runner.')
+  }
+  testNonceSource = draw
 }
 
 const MODES: ReadonlySet<string> = new Set(['filter', 'roster'])
@@ -177,9 +201,9 @@ const NO_ROUTE = null
 /** User-facing hints for the gate's warnings. Never model-visible: a warning
  *  is serialized as `task: message` only. */
 const WARNING_FALLBACKS = {
-  damagedRoster: 'The assistant answered without outside requests.',
-  directoryMissing: 'Outgoing requests were still checked.',
-  directoryUnreadable: 'Outgoing requests were still checked, and refused when they could not be.',
+  damagedRoster: 'Further outside requests were refused.',
+  directoryMissing: 'Outside requests were still checked.',
+  directoryUnreadable: 'Outside requests were still checked, and refused when they could not be.',
   checkDegraded:
     'Requests that could not be checked were refused, or sent after a name check only.',
 } as const
@@ -232,7 +256,7 @@ function tierValues<T>(value: ByTier<T>): T[] {
     : [value as T]
 }
 
-const warnedLocal = new Set<string>()
+const warnedNamespaces = new Set<string>()
 
 /**
  * Refuse names that would read like a declaration and match nothing (#242 item
@@ -242,31 +266,34 @@ const warnedLocal = new Set<string>()
  */
 function refuseUnverifiableNames(config: EgressGateConfig): void {
   const degraded = isDegradedToolSurface(config.catalog)
-  for (const ns of config.local) {
+  const verify = (field: 'local' | 'addressSources', ns: string, meaning: string): void => {
     const canonical = inferServer(ns)
     if (canonical !== ns) {
       throw new Error(
-        `[withEgressGate] local namespace '${ns}' can never match a tool: inferServer('${ns}') ` +
-          `is '${canonical}'. Declare '${canonical}', or list exact names under \`localTools\`.`,
+        `[withEgressGate] ${field} namespace '${ns}' can never match a tool: inferServer('${ns}') ` +
+          `is '${canonical}'. Declare '${canonical}'` +
+          (field === 'local' ? ', or list exact names under `localTools`.' : '.'),
       )
     }
     if (!config.catalog.some((tool) => inferServer(tool) === ns)) {
       if (degraded) {
-        if (!warnedLocal.has(ns)) {
-          warnedLocal.add(ns)
+        if (!warnedNamespaces.has(`${field}:${ns}`)) {
+          warnedNamespaces.add(`${field}:${ns}`)
           console.warn(
-            `[withEgressGate] local namespace '${ns}' matches no tool in a catalog built while ` +
-              `the gateway was unreachable; it cannot be verified this turn.`,
+            `[withEgressGate] ${field} namespace '${ns}' matches no tool in a catalog built ` +
+              `while the gateway was unreachable; it cannot be verified this turn.`,
           )
         }
-        continue
+        return
       }
       throw new Error(
-        `[withEgressGate] local namespace '${ns}' matches no tool in the catalog ` +
-          `(${config.catalog.length} names), so it declares nothing local.`,
+        `[withEgressGate] ${field} namespace '${ns}' matches no tool in the catalog ` +
+          `(${config.catalog.length} names), so it ${meaning}.`,
       )
     }
   }
+  for (const ns of config.local) verify('local', ns, 'declares nothing local')
+  for (const ns of config.addressSources ?? []) verify('addressSources', ns, 'gives no address')
   for (const name of config.localTools ?? []) {
     if (config.catalog.includes(name)) {
       throw new Error(
@@ -322,7 +349,28 @@ function refuseUnreadableSettings(config: EgressGateConfig): void {
   if (down !== 'by-shape' && down !== 'ask') {
     throw new Error(`[withEgressGate] loadedDecideDown must be 'by-shape' or 'ask'.`)
   }
+  // Fail closed: with no declared sources, every result (a Cypher RETURN, a
+  // script's output) would give the controller any address it wrote there.
+  if (config.fetchTools?.length && !Array.isArray(config.addressSources)) {
+    throw new Error(
+      `[withEgressGate] \`fetchTools\` needs \`addressSources\`: the namespaces whose results ` +
+        `give the controller addresses.`,
+    )
+  }
 }
+
+/** What the operator learns about a roster failure: the error's class name,
+ *  reduced like a tool name, never its message (which can carry an identity).
+ *  Never empty, because an empty cause would read as "not damaged". */
+function damageCause(error: unknown): string {
+  const name = error instanceof Error && typeof error.name === 'string' ? error.name : ''
+  return name ? egressToolLabel(name) : typeof error
+}
+
+// What may close a given address in running text (a sentence's full stop, a
+// Markdown link's parenthesis) and is not part of it. Stripped from the GIVEN
+// side only, so the request's own address is still compared whole.
+const TRAILING_PUNCTUATION = /[.,;:!?)\]]+$/
 
 /** What one ask of the egress question came to. */
 type EgressAnswer =
@@ -360,7 +408,10 @@ export function withEgressGate(config: EgressGateConfig) {
   const timeoutMs = config.timeoutMs ?? GUARD_EGRESS_TIMEOUT_MS
   const maxRetries = config.maxOutgoingRetriesPostTripwire ?? 0
   const loadedDecideDown = config.loadedDecideDown ?? 'by-shape'
+  const addressSources = new Set(config.addressSources ?? [])
   const isLocal = (name: string): boolean => localTools.has(name) || local.has(inferServer(name))
+  const givesAddresses = (tool: unknown): boolean =>
+    typeof tool === 'string' && addressSources.has(inferServer(tool))
 
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const fn = async (
@@ -389,27 +440,43 @@ export function withEgressGate(config: EgressGateConfig) {
 
       const latest = ctx.events.findLast((e) => e.type === 'user_message')
       const latestUser = latest ? (latest.data as UserMessageEventData).content : ''
-      const results = ctx.events.filter((e) => e.type === 'tool_result').map((e) => e.data)
+      const resultEvents = ctx.events.filter((e) => e.type === 'tool_result')
+      const results = resultEvents.map((e) => e.data)
       const closures = egressClosures(ctx.events)
-      // The addresses the controller was given (O21): the user's latest message
-      // and every tool result in the context, extended by this invocation's.
-      const given: string[] = [latestUser, ...stringsOf(results)]
+      // The addresses the controller was given (O21), each as `addressesIn`
+      // finds it: the user's latest message and the data of every
+      // `addressSources` result in the context, extended by this invocation's.
+      const given = new Set<string>()
+      const give = (text: string): void => {
+        for (const address of addressesIn(text)) {
+          given.add(address)
+          given.add(address.replace(TRAILING_PUNCTUATION, ''))
+        }
+      }
+      give(latestUser)
+      for (const e of resultEvents) {
+        const d = e.data as Partial<ToolResultEventData> | undefined
+        if (givesAddresses(d?.tool)) for (const text of stringsOf(d?.result)) give(text)
+      }
 
       let directory: EgressDirectoryStatus = 'none'
       let roster: EgressRoster | undefined
-      let damaged = false
+      let damaged: string | undefined
       if (config.roster) {
         try {
-          const built = await config.roster(results, latestUser)
+          // The roster exempts what the user wrote; Decide is shown only the
+          // first EGRESS_USER_CAP characters, so only those exempt.
+          const built = await config.roster(results, latestUser.slice(0, EGRESS_USER_CAP))
           // An answer outside the four is a host bug: refuse rather than guess.
           directory = DIRECTORY_STATUSES.has(built.directory) ? built.directory : 'unreadable'
           roster = built.roster
-        } catch {
-          // The rejection can carry an identity: only the fixed warning is kept.
-          damaged = true
+        } catch (error) {
+          // The rejection can carry an identity: its name is kept for the
+          // operator, never its message.
+          damaged = damageCause(error)
         }
       }
-      if (damaged) warn('damagedRoster')
+      if (damaged) warn('damagedRoster', { cause: damaged })
       else if (directory === 'empty' || directory === 'unreadable') {
         // Loud: a server log line (no content) as well as the turn's warning.
         console.warn(
@@ -539,12 +606,16 @@ export function withEgressGate(config: EgressGateConfig) {
           if (!read.ok) return read.refusal
           const request = read.request
           if (fetchTools.has(call.name)) {
-            const addresses = request.raw.flatMap(({ key, value }) =>
-              key?.toLowerCase() === 'url' ? [value, ...addressesIn(value)] : addressesIn(value),
-            )
-            if (addresses.some((a) => !given.some((text) => text.includes(a)))) {
-              return EGRESS_TEXTS.fetchAddress
-            }
+            // A leaf that carries an address, or sits under a `url` key (in an
+            // array too), must BE a given address, and so must each address in
+            // it: a prefix of given text, or a given address with text after
+            // it, is not one.
+            const ungiven = request.raw.some(({ key, value }) => {
+              const addresses = addressesIn(value)
+              if (addresses.length === 0 && key?.toLowerCase() !== 'url') return false
+              return !given.has(value.trim()) || addresses.some((a) => !given.has(a))
+            })
+            if (ungiven) return EGRESS_TEXTS.fetchAddress
           }
 
           const spans = roster ? roster.match(request.texts) : []
@@ -562,7 +633,7 @@ export function withEgressGate(config: EgressGateConfig) {
                 latestUserMessage: latestUser,
                 lines: request.lines,
               },
-              { drawNonce: config.drawNonce },
+              { drawNonce: process.env.VITEST ? testNonceSource : undefined },
             )
           } catch {
             // A state the question cannot be asked over (over the box's budget,
@@ -613,15 +684,16 @@ export function withEgressGate(config: EgressGateConfig) {
         call: { readonly name: string },
         result: ToolCallResult,
       ): Promise<undefined> => {
-        given.push(...stringsOf(result.data), ...(result.error ? [result.error] : []))
+        // Data only: an error string can quote the arguments that caused it.
+        if (givesAddresses(call.name)) for (const text of stringsOf(result.data)) give(text)
         if (!roster || damaged || !isLocal(call.name)) return undefined
         try {
           roster.observe(result.data)
-        } catch {
+        } catch (error) {
           // Delivered, not withheld: the gate guards what leaves, and this
           // result never leaves. Every later outgoing call is refused.
-          damaged = true
-          warn('damagedRoster')
+          damaged = damageCause(error)
+          warn('damagedRoster', { cause: damaged })
         }
         return undefined
       }

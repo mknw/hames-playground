@@ -281,8 +281,9 @@ export type EventType =
    *  the client it actually ran on. See `ModelCallEventData`. */
   | 'model_call'
   /** An outgoing call the egress gate allowed although the roster matched part
-   *  of it (boundary guards). Human-facing: never rendered into an LLM-facing
-   *  serialization and never written to a server log. See `EgressAuditEventData`. */
+   *  of it (boundary guards). Human-facing: rendered into LLM-facing views as one
+   *  fixed line with no payload, and never written to a server log. See
+   *  `EgressAuditEventData`. */
   | 'egress_audit'
   /** An outgoing call the egress gate refused on Decide's answer or for want of
    *  one: the record its tripwire count is derived from, so the count survives a
@@ -2292,9 +2293,9 @@ export interface EgressProbabilities {
  * outgoing call that went out although the roster matched part of it, so the
  * judgement that let it go can be audited afterwards. HUMAN-FACING ONLY, like
  * `content_sanitized` (SD-3): `spans` are text the request carries that names
- * a person, so the event is never rendered into an LLM-facing serialization
- * (`formatEventData` has its own case) and never written to a server log. It
- * lives in the conversation blob, which is encrypted at rest.
+ * a person, so the event is rendered into LLM-facing views as one fixed line with
+ * no payload (`formatEventData` has its own case) and never written to a server
+ * log. It lives in the conversation blob, which is encrypted at rest.
  */
 export interface EgressAuditEventData {
   /** The tool name, reduced to `[A-Za-z0-9._:-]` and capped at 64. */

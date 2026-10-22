@@ -171,8 +171,8 @@ export interface OutgoingRequest {
   readonly block: string
   /** Every decoded, normalised leaf and key, for the roster's match. */
   readonly texts: readonly string[]
-  /** Every raw string leaf, as the call sends it, with its key (`null` in an
-   *  array), for the fetch-address rule. */
+  /** Every raw string leaf, as the call sends it, with its key (an array item
+   *  carries its array's key; `null` at the top), for the fetch-address rule. */
   readonly raw: readonly { readonly key: string | null; readonly value: string }[]
 }
 
@@ -184,8 +184,11 @@ export type ReadOutgoing =
 // A run of percent escapes, decoded as one: a literal percent ("5% growth") is
 // left alone. The same decode the old outgoing check ran.
 const PERCENT_RUN = /(?:%[\da-f]{2})+/gi
-const FORMAT_CHARACTER = /\p{Cf}/u
-const FORMAT_CHARACTERS = /\p{Cf}/gu
+// A format character, or any other character a renderer may draw as nothing
+// (`Default_Ignorable_Code_Point`: the Hangul fillers are letters, not `Cf`, and
+// would otherwise split a name the roster then misses).
+const FORMAT_CHARACTER = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/u
+const FORMAT_CHARACTERS = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
 // A placeholder in any spelling a separator or an escape can give it: the old
 // check's rule (`PERSON[\s_-]*\d+` after its separators became spaces).
 const PLACEHOLDER = /PERSON[\s_\-.+/]*\d/i
@@ -257,7 +260,7 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
     if (entries.length === 0 && path) lines.push(`${path}: ${Array.isArray(value) ? '[]' : '{}'}`)
     for (const [k, item] of entries) {
       if (typeof k === 'number') {
-        walk(item, `${path}[${k}]`, null, depth + 1)
+        walk(item, `${path}[${k}]`, key, depth + 1)
         continue
       }
       const name = read(k)

@@ -36,6 +36,7 @@
  * server**: the model passes structured arguments and this module composes the
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
+import { domainToASCII, domainToUnicode } from 'node:url'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { GraphAuthRequiredError } from './graph-auth'
 import type { AppToolDefinition } from '../app-tools/registry'
@@ -168,6 +169,10 @@ export interface GraphConnectorDeps {
    * identify a private run. Until tier-flip release ships, the host must also
    * require a private-only deployment. No deployment-default tier fallback. */
   fileIngestAllowed: () => boolean
+  /** The deployment's home email domains, read PER CALL, from which each result's
+   *  {@link GRAPH_PROVENANCE} is computed. Optional: without it every item's
+   *  provenance is `'unknown'`, which an ingress classifier reads as external. */
+  homeDomains?: () => readonly string[]
 }
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
@@ -1270,6 +1275,126 @@ export function shapeAttachmentMessage(
 }
 
 // ============================================================================
+// Provenance — where a result came from, computed BEFORE shaping
+// ============================================================================
+//
+// The injection guard gates its model screen in only for content from outside
+// (boundary guards, ruling O), and a mail result's shaped `from` cannot say so:
+// `shapeMessages` keeps the display NAME whenever one exists, and a display name
+// is free text any sender sets. So each tool that carries identities reads the
+// ADDRESSES off the raw Graph response, before shaping, and stamps a code-written
+// verdict on every shaped item and on the result. The identities follow #433
+// §6.1: a message's `from`, a calendar entry's organiser, a shared-with-me row's
+// `sharedBy`. File listings select no identity field, so they carry no stamp, and
+// a result with no stamp is external.
+
+/** A Graph item's or result's provenance. `'unknown'` is read as external. */
+export type GraphProvenance = 'home' | 'external' | 'unknown'
+
+/**
+ * The key the verdict rides under: a symbol, set NON-ENUMERABLE. `JSON.stringify`,
+ * `Object.keys`/`entries`, `for…in`, spread and `structuredClone` never see it, so
+ * it reaches no serialization a model reads (the guard's own fence rebuilds every
+ * object it touches from `Object.entries`), and content cannot forge it: tool
+ * content is parsed JSON, which has no symbols. `Symbol.for`, so two loaded
+ * copies of this package agree on it.
+ */
+export const GRAPH_PROVENANCE: unique symbol = Symbol.for(
+  'hames.connectors.graph-provenance',
+) as never
+
+/** The verdict stamped on `value`, or `undefined` when it carries none. */
+export function graphProvenance(value: unknown): GraphProvenance | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const p = (value as Record<symbol, unknown>)[GRAPH_PROVENANCE]
+  return p === 'home' || p === 'external' || p === 'unknown' ? p : undefined
+}
+
+/** A configured domain lower-cased and IDNA-normalised, or `''` when it is not one. */
+function normaliseDomain(domain: string): string {
+  return domainToASCII(domain.trim())
+}
+
+/**
+ * An address's domain in its ASCII form, but only when it is already canonical:
+ * its lower-cased spelling is that form or that form's Unicode spelling. IDNA
+ * mapping folds fullwidth letters, ideographic full stops and ignorable
+ * characters (a zero-width space, a soft hyphen) into ASCII, so normalising the
+ * SENDER's spelling would make `ｃｏｎｔｏｓｏ.com` home; nothing says the tenant's
+ * DMARC alignment counts that spelling as the home domain. Only the configured
+ * domains are normalised. `''` when the domain is not canonical.
+ */
+function canonicalDomain(raw: string): string {
+  // NFC first: `toLowerCase` folds the Kelvin sign (U+212A) onto ASCII `k`, and NFC changes it.
+  if (raw.normalize('NFC') !== raw) return ''
+  const lower = raw.toLowerCase()
+  const ascii = domainToASCII(raw)
+  if (!ascii || (ascii !== lower && domainToUnicode(ascii) !== lower)) return ''
+  // Only letters, digits, hyphens and dots can be home: `*` is legal in a From, but never a domain.
+  if (!/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(ascii)) return ''
+  return ascii
+}
+
+/**
+ * True when `address`'s domain is one of `homeDomains` or a subdomain of one,
+ * both lower-cased and IDNA-normalised, so a lookalike (`contoso.com.example`,
+ * `evilcontoso.com`, a homoglyph) is not home. The address's domain must already
+ * be canonical (`canonicalDomain`): a spelling IDNA folds onto a home domain is
+ * not home. Anything that is not an address is not home.
+ */
+export function isHomeAddress(address: unknown, homeDomains: readonly string[]): boolean {
+  if (typeof address !== 'string') return false
+  const at = address.lastIndexOf('@')
+  if (at <= 0 || address.indexOf('@') !== at) return false
+  const domain = canonicalDomain(address.slice(at + 1))
+  if (!domain) return false
+  return homeDomains.some((configured) => {
+    const home = normaliseDomain(configured)
+    return home !== '' && (domain === home || domain.endsWith(`.${home}`))
+  })
+}
+
+/** One item's verdict from the addresses it carries: external when any address
+ *  is not home, unknown when one is missing, home only when all are home. */
+export function provenanceOf(
+  addresses: readonly unknown[],
+  homeDomains: readonly string[],
+): GraphProvenance {
+  if (addresses.length === 0) return 'unknown'
+  let missing = false
+  for (const address of addresses) {
+    if (typeof address !== 'string' || !address.includes('@')) missing = true
+    else if (!isHomeAddress(address, homeDomains)) return 'external'
+  }
+  return missing ? 'unknown' : 'home'
+}
+
+/** A result's verdict from its items': home only when it has items and every
+ *  one is home; external when any is; unknown otherwise. */
+function resultProvenance(items: readonly unknown[]): GraphProvenance {
+  const verdicts = items.map((item) => graphProvenance(item) ?? 'unknown')
+  if (verdicts.includes('external')) return 'external'
+  return verdicts.length > 0 && verdicts.every((v) => v === 'home') ? 'home' : 'unknown'
+}
+
+/** Stamp `value` with a verdict, non-enumerable. Returns `value`. */
+function stamp<T extends object>(value: T, verdict: GraphProvenance): T {
+  Object.defineProperty(value, GRAPH_PROVENANCE, { value: verdict, enumerable: false })
+  return value
+}
+
+/** The raw items of a Graph collection response. */
+function rawItems(raw: unknown): Record<string, unknown>[] {
+  const items = (raw as { value?: unknown[] })?.value
+  return Array.isArray(items) ? items.map((it) => (it ?? {}) as Record<string, unknown>) : []
+}
+
+/** `emailAddress.address` of a Graph recipient (`from`, `organizer`). */
+function recipientAddress(recipient: unknown): unknown {
+  return (recipient as { emailAddress?: { address?: unknown } } | undefined)?.emailAddress?.address
+}
+
+// ============================================================================
 // Registration — an explicit factory call, not an import side effect
 // ============================================================================
 
@@ -1330,6 +1455,24 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
   requireGraphSupplier(stash, 'loadStore')
   requireGraphSupplier(stash, 'ingest')
   const { conversionEnabled, isConvertible, guessMimeType, isTextMime } = content
+  // Optional, but a present supplier that is not a function is refused here like
+  // any other: it would read as configuration and classify nothing.
+  if (deps.homeDomains !== undefined) requireGraphSupplier(deps, 'homeDomains')
+  /** One item's verdict, read per call. No supplier, or one that throws: unknown. */
+  const provenance = (addresses: readonly unknown[]): GraphProvenance => {
+    if (!deps.homeDomains) return 'unknown'
+    try {
+      return provenanceOf(addresses, deps.homeDomains())
+    } catch {
+      return 'unknown'
+    }
+  }
+  /** Stamp each shaped item from its raw twin (shaping maps index to index). */
+  const stampAll = <T extends object>(
+    shaped: T[],
+    raw: Record<string, unknown>[],
+    addresses: (item: Record<string, unknown>) => unknown[],
+  ): T[] => shaped.map((item, i) => stamp(item, provenance(addresses(raw[i] ?? {}))))
 
   registerAppTool({
     name: 'graph_calendar_today',
@@ -1365,7 +1508,10 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           headers: { Prefer: `outlook.timezone="${tz}"` },
         },
       )
-      return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) }
+      const events = stampAll(shapeEvents(raw), rawItems(raw), (e) => [
+        recipientAddress(e.organizer),
+      ])
+      return stamp({ timeZone: tz, day: start.slice(0, 10), events }, resultProvenance(events))
     },
   })
 
@@ -1404,7 +1550,10 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           (unreadOnly ? `&$filter=isRead eq false` : ''),
         { scopes: ['Mail.Read'] },
       )
-      return { unreadOnly, messages: shapeMessages(raw) }
+      const messages = stampAll(shapeMessages(raw), rawItems(raw), (m) => [
+        recipientAddress(m.from),
+      ])
+      return stamp({ unreadOnly, messages }, resultProvenance(messages))
     },
   })
 
@@ -1868,8 +2017,12 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       }
       const needle = sharedBy.toLowerCase()
       const seen = new Set<string>()
-      const rows = ((raw as { value?: unknown[] })?.value ?? [])
-        .map(shapeSharedInsight)
+      const rows = rawItems(raw)
+        .map((it) => {
+          const row = shapeSharedInsight(it)
+          const by = ((it.lastShared ?? {}) as { sharedBy?: { address?: unknown } }).sharedBy
+          return row && stamp(row, provenance([by?.address]))
+        })
         .filter((r): r is GraphSharedFile => r !== null)
         .filter((r) => !needle || (r.shared_by ?? '').toLowerCase().includes(needle))
         .filter((r) => !via || r.via === via)
@@ -1923,7 +2076,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
             'author for older files.',
         }
       }
-      return { items: rows }
+      return stamp({ items: rows }, resultProvenance(rows))
     },
   })
 
@@ -1997,7 +2150,13 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       )
 
       const messages = ((raw as { value?: unknown[] })?.value ?? [])
-        .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
+        .map((m) => ({
+          raw: m,
+          shaped: stamp(
+            shapeAttachmentMessage(m, direction),
+            provenance([recipientAddress((m as { from?: unknown } | null)?.from)]),
+          ),
+        }))
         .filter(({ raw: m }) => {
           if (!person) return true
           const msg = (m ?? {}) as Record<string, unknown>
@@ -2021,7 +2180,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         .filter((m) => m.attachments.length > 0)
         .slice(0, limit)
 
-      return { direction, messages }
+      return stamp({ direction, messages }, resultProvenance(messages))
     },
   })
 }

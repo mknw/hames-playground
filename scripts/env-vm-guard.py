@@ -1050,12 +1050,14 @@ def probe_environment(config, env, facts, shared, deadline):
                        "--network", shared["app_network"], "--entrypoint", "sleep", image, "60"],
                       timeout=remaining(deadline)).strip()
         try:
-            pid = run(["docker", "inspect", "--format", "{{.State.Pid}}", sleeper]).strip()
-            require(pid.isdigit() and pid != "0", "probe 4b: throwaway has no process")
+            # By the namespace's own path: a pid could be reused during the quiet baseline.
+            key = run(["docker", "inspect", "--format", "{{.NetworkSettings.SandboxKey}}", sleeper]).strip()
+            require(bool(re.fullmatch(r"/var/run/docker/netns/[A-Za-z0-9_-]+", key)),
+                    "probe 4b: throwaway has no network namespace of Docker's")
             counts = packet_counts()[allow]
 
             def raw_syn():
-                return run(["nsenter", "--net=/proc/%s/ns/net" % pid, "/usr/bin/python3", "-I", "-c", PACKET, "syn",
+                return run(["nsenter", "--net=" + key, "/usr/bin/python3", "-I", "-c", PACKET, "syn",
                             client, guest, str(DOCKER_PORT), str(SPORT["4b"])], timeout=remaining(deadline)).strip()
             results.append(refused("4b", "to_vm_refused", "tcp sport %d" % SPORT["4b"], raw_syn, deadline,
                                    shared["app_bridge"]))

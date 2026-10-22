@@ -499,8 +499,9 @@ refused, and so is a delivery directory whose name holds anything but letters, d
   capability. Probe 4b needs a raw SYN, which the app image cannot send: its runtime stage has no
   raw-socket tool (`app/Dockerfile:15`, `:172`), and Node opens no raw socket. Its throwaway only
   sleeps on `app-network`; the host's `python3 -I` enters that container's network namespace
-  (`nsenter --net=/proc/<pid>/ns/net`) and sends the SYN, which leaves through the container's
-  veth. The record says so.
+  by Docker's own path for it (`nsenter --net=<SandboxKey>`, under `/var/run/docker/netns/`,
+  which, unlike a pid, cannot be reused for another namespace during the probe) and sends the
+  SYN, which leaves through the container's veth. The record says so.
 - **The stand-in for app-dev** (W9) bind-mounts the three delivered TLS files read-only and runs
   as their owner's uid, with every capability dropped. The client key is delivered mode 0600 to
   its owner (`docs/PREVIEW.md:1330`); it is never copied and its mode is never widened. The

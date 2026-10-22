@@ -574,6 +574,7 @@ class Host:
         self.misattribute = self.ingress = self.allow_stuck = self.force_icmp = self.force_datagram = False
         self.ss = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 [::]:22 [::]:*\n"
         self.icmp_delivered, self.datagrams, self.held = set(), set(), set()
+        self.sandbox_key = None
         self.next_port = 50000
         self.next_container = 0
         self.flushes = 0
@@ -816,8 +817,9 @@ class Host:
         raise AssertionError(mode)
 
     def cmd_nsenter(self, args, payload):
-        pid = re.fullmatch(r"--net=/proc/(\d+)/ns/net", args[1]).group(1)
-        container = next(c for c in self.containers.values() if c["pid"] == pid)
+        key = re.fullmatch(r"--net=/var/run/docker/netns/sb(\d+)", args[1])
+        self.test.assertIsNotNone(key, "nsenter outside Docker's namespaces: " + args[1])
+        container = next(c for c in self.containers.values() if c["pid"] == key.group(1))
         self.test.assertEqual(args[2:6], ["/usr/bin/python3", "-I", "-c", guard.PACKET])
         self.test.assertEqual(args[6], "syn")
         src, dst, dport, sport = args[7], args[8], int(args[9]), int(args[10])
@@ -850,8 +852,8 @@ class Host:
             container = self.containers[args[-1]]
             if args[2:4] == ["--format", "{{.Image}}"]:
                 return container["image"] + "\n"
-            if args[2:4] == ["--format", "{{.State.Pid}}"]:
-                return container["pid"] + "\n"
+            if args[2:4] == ["--format", "{{.NetworkSettings.SandboxKey}}"]:
+                return self.sandbox_key or ("/var/run/docker/netns/sb" + container["pid"] if container["pid"] != "0" else "") + "\n"
             return [{"Config": {"Labels": {"com.docker.compose.service": container["service"]}}}]
         if args[1] == "run":
             return self.run_container(args[2:])
@@ -1843,6 +1845,14 @@ class Smoke(Smoking, Harness):
         with patch.object(self.host, "cmd_nsenter", side_effect=leaky):
             self.assert_fails("reached the allow rule")
 
+    def test_4b_enters_a_docker_namespace_by_its_path_never_by_pid(self):
+        self.ready()
+        for key in ("/proc/4002/ns/net", "/var/run/docker/netns/../../proc/1/ns/net", ""):
+            self.host.sandbox_key = key + "\n"
+            with self.subTest(key=key):
+                self.assert_fails("probe 4b: throwaway has no network namespace")
+                self.assertFalse(any(c[0] == "nsenter" for c in self.host.calls))
+
     def test_packets_traced_to_another_rule_fail(self):
         self.ready()
         self.host.misattribute = True
@@ -2107,7 +2117,7 @@ MUTATIONS = {
     "stand-in-wrong-address": ('"--network", "envapp-" + env["name"], "--ip", env["clientAddress"],', '"--network", "envapp-" + env["name"],'),
     # A1: no container gains a capability; the host's python3 sends 4b from the throwaway's netns; the record says so.
     "A1-4b-gains-net-raw": ('        sleeper = run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "65534:65534",', '        sleeper = run(["docker", "run", "-d", "--rm", *HARDENED, "--cap-add", "NET_RAW", "--user", "65534:65534",'),
-    "A1-4b-host-netns": ('run(["nsenter", "--net=/proc/%s/ns/net" % pid, "/usr/bin/python3"', 'run(["/usr/bin/python3"'),
+    "A1-4b-host-netns": ('run(["nsenter", "--net=" + key, "/usr/bin/python3"', 'run(["/usr/bin/python3"'),
     "A1-4b-unrecorded": ('            results[-1]["sent_from"] = "the netns of a throwaway on " + shared["app_network"]', "            pass"),
     "A1-4b-allow-counter-unchecked": ('            require(packet_counts()[allow] == counts, "probe 4b: a spoofed source reached the allow rule")', "            pass"),
     # B1: probe 2 is the host's own Docker CLI with the delivered files.
@@ -2191,6 +2201,8 @@ MUTATIONS = {
     "O6-install-unvalidated": ("        config = validated(json.loads(content))", "        config = json.loads(content)"),
     "O6-install-digest-unprinted": ('    print("render sha256 %s: compare it with the render you reviewed" % digest(config))', "    pass"),
     "O6-dry-run-digest-unprinted": ('            print("# DRY RUN: render sha256 " + digest(config))', "            pass"),
+    # O9: probe 4b enters the throwaway's namespace by Docker's own path for it.
+    "O9-4b-any-namespace-path": ('    require(bool(re.fullmatch(r"/var/run/docker/netns/[A-Za-z0-9_-]+", key)),', "    require(True,"),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

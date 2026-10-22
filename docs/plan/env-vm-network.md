@@ -470,6 +470,10 @@ reads, a VM could sit wholly outside the table while every check stayed green.
    the number of packets traced to it. The guest's background traffic (IPv6 neighbour discovery,
    for one) can move a counter, so a noisy baseline makes the probe inconclusive, never a pass.
 
+Probe 8c is the one exception to 2 and 3: the NIC filter may drop its packet on the bridge before
+it reaches the table (A9), so it passes on non-delivery alone, and the record says which filter
+dropped it.
+
 A reset (`ECONNREFUSED`) proves the packet arrived: it is a failure, not a refusal. A local error
 such as "no route" is inconclusive. Anything inconclusive fails the smoke. A connect that
 succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-and-what-the-operator-does)).

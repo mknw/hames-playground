@@ -32,6 +32,8 @@ export interface ConversationScenario {
   maxIterations: number
   failFirstTurn?: boolean
   noTools?: boolean
+  /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`); absent = memory off. */
+  memory?: boolean
   turnAnswerIncludes?: string[][]
   citation?: string
   indexed?: string

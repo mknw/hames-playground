@@ -549,6 +549,7 @@ class Host:
         self.units = {guard.UNIT.name: False}
         self.managers = {"nftables.service": ("disabled", "inactive"), "firewalld.service": ("", "inactive")}
         self.timers, self.session = {}, ("2", 1)
+        self.login = {"Class": "user", "Service": "sshd", "Remote": "yes", "TTY": ""}
         self.instances = [{"project": "sandbox-dev", "name": "docker", "status": "Running", "expanded_devices": {
             "root": {"type": "disk"}, "eth0": {"type": "nic", "network": "envvm-dev", "ipv4.address": DEV["guestAddress"]}}},
             {"project": "default", "name": "other", "status": "Running", "expanded_devices": {
@@ -786,10 +787,11 @@ class Host:
         return ""
 
     def cmd_loginctl(self, args, payload):
-        self.test.assertEqual(args, ["loginctl", "show-session", "self", "-p", "Id", "-p", "TimestampMonotonic"])
+        self.test.assertEqual(args, ["loginctl", "show-session", "self", "-p", "Id", "-p", "TimestampMonotonic",
+                                     "-p", "Class", "-p", "Service", "-p", "Remote", "-p", "TTY"])
         if self.session is None:
             return (1, "")
-        return "Id=%s\nTimestampMonotonic=%d\n" % self.session
+        return "Id=%s\nTimestampMonotonic=%d\n" % self.session + "".join("%s=%s\n" % i for i in self.login.items())
 
     def cmd_incus(self, args, payload):
         if args[1:] == ["query", "/1.0/instances?recursion=1&all-projects=true"]:
@@ -1313,6 +1315,31 @@ class DeadMan(Harness):
         self.assertNotIn(ident, self.host.timers)
         self.assertEqual(self.entries()[-1], {"kind": "confirmed", "id": ident})
         self.assertEqual(self.invoke("--confirm"), 1, "nothing left to confirm")
+
+    def test_confirm_needs_a_fresh_ssh_or_console_login(self):
+        ident = self.arm_apply()
+        self.host.session = ("3", int(self.host.clock.now * 1_000_000) + 5)
+        spawned = {
+            "run0": {"Class": "user", "Service": "systemd-run0", "Remote": "no", "TTY": "pts/1"},
+            "systemd-run -p PAMName=login --pty": {"Class": "user", "Service": "login", "Remote": "no", "TTY": "pts/2"},
+            "a local sshd PAM stack": {"Class": "user", "Service": "sshd", "Remote": "no", "TTY": "pts/3"},
+            "a remote non-sshd service": {"Class": "user", "Service": "login", "Remote": "yes", "TTY": "pts/4"},
+            "a background class": {"Class": "background", "Service": "sshd", "Remote": "yes", "TTY": ""},
+            "a console-like pty": {"Class": "user", "Service": "login", "Remote": "no", "TTY": "pts/10"},
+        }
+        for label, login in spawned.items():
+            self.host.login = login
+            with self.subTest(label):
+                self.assertEqual(self.invoke("--confirm"), 1)
+                self.assertIn("fresh SSH or console login", self.err)
+                self.assertIn(ident, self.host.timers)
+        for tty in ("tty1", "ttyS0", "hvc0"):
+            self.host.login = {"Class": "user", "Service": "login", "Remote": "no", "TTY": tty}
+            self.host.timers[ident] = 600
+            entries = [e for e in self.entries() if e["kind"] != "confirmed"]
+            (guard.STATE / "journal.json").write_text(json.dumps(entries))
+            with self.subTest(tty):
+                self.assertEqual(self.invoke("--confirm"), 0, self.err)
 
     def test_confirm_after_a_reboot_is_refused(self):
         ident = self.arm_apply()
@@ -2103,7 +2130,7 @@ MUTATIONS = {
     "confirm-timer-left-armed": ('    run(["systemctl", "stop", "env-vm-guard-deadman-%s.timer" % pending["id"]])', "    pass"),
     "confirm-journaled-after-timer-stop": ('    record(entries, {"kind": "confirmed", "id": pending["id"]})\n    run(["systemctl", "stop", "env-vm-guard-deadman-%s.timer" % pending["id"]])',
                                            '    run(["systemctl", "stop", "env-vm-guard-deadman-%s.timer" % pending["id"]])\n    record(entries, {"kind": "confirmed", "id": pending["id"]})'),
-    "confirm-human-timestamp": ('"-p", "TimestampMonotonic"])', '"-p", "Timestamp"])'),
+    "confirm-human-timestamp": ('"-p", "TimestampMonotonic",\n', '"-p", "Timestamp",\n'),
     "restore-flushes-ruleset": ('    if entry["previous"] is None:\n        if ("inet", TABLE) in tables():\n            run(["nft", "delete", "table", "inet", TABLE])',
                                 '    if entry["previous"] is None:\n        if ("inet", TABLE) in tables():\n            run(["nft", "flush", "ruleset"])'),
     "restore-stops-every-vm": ('    return [i for i in instances if any(nic_bridge(d).startswith("envvm-") for d in i["nics"].values())]', "    return list(instances)"),
@@ -2254,6 +2281,12 @@ MUTATIONS = {
     "O2-bridge-external-interfaces": ('            require(not settings.get("bridge.external_interfaces"),', "            require(True,"),
     "O2-bridge-settings-unchecked": ("            require(all(settings.get(key) == value for key, value in BRIDGE.items()),", "            require(True,"),
     **{"O2-bridge-" + key: ('    "%s": "%s",\n' % (key, value), "") for key, value in guard.BRIDGE.items()},
+    # O4: --confirm needs a fresh SSH or console login, not a session spawned inside the arming one.
+    "O4-confirm-any-session": ('    require(fresh_login(values), "confirm from a fresh SSH or console login', '    require(True, "confirm from a fresh SSH or console login'),
+    "O4-confirm-any-class": ('    return values.get("Class") == "user" and (', "    return ("),
+    "O4-confirm-local-sshd": ('(values.get("Service") == "sshd" and values.get("Remote") == "yes")', '(values.get("Service") == "sshd")'),
+    "O4-confirm-remote-any-service": ('(values.get("Service") == "sshd" and values.get("Remote") == "yes")', '(values.get("Remote") == "yes")'),
+    "O4-confirm-any-tty": ('CONSOLE = re.compile(r"tty[0-9]+|ttyS[0-9]+|hvc[0-9]+")', 'CONSOLE = re.compile(r".*tty[0-9]+|ttyS[0-9]+|hvc[0-9]+|pts/[0-9]+")'),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

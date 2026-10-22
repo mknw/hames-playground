@@ -347,12 +347,25 @@ def now_us():
     return time.monotonic_ns() // 1000
 
 
+CONSOLE = re.compile(r"tty[0-9]+|ttyS[0-9]+|hvc[0-9]+")
+
+
 def session():
-    out = run(["loginctl", "show-session", "self", "-p", "Id", "-p", "TimestampMonotonic"])
+    out = run(["loginctl", "show-session", "self", "-p", "Id", "-p", "TimestampMonotonic",
+               "-p", "Class", "-p", "Service", "-p", "Remote", "-p", "TTY"])
     values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     require(bool(values.get("Id")) and values.get("TimestampMonotonic", "").isdigit(),
             "no logind session; arm and confirm from a login session")
-    return values["Id"], int(values["TimestampMonotonic"])
+    return values["Id"], int(values["TimestampMonotonic"]), values
+
+
+def fresh_login(values):
+    # A session spawned from inside the arming one (run0, systemd-run -p
+    # PAMName=login, machinectl shell) is new to logind but proves no new login
+    # works: only an SSH connection or a console login counts.
+    return values.get("Class") == "user" and (
+        (values.get("Service") == "sshd" and values.get("Remote") == "yes") or
+        bool(CONSOLE.fullmatch(values.get("TTY", ""))))
 
 
 # ------------------------------------------------------- files and state
@@ -549,7 +562,7 @@ def install(entries, source):
 def arm(entries, seconds, previous):
     require(safe_file(INSTALLED_SCRIPT) == Path(__file__).read_text(),
             "a dead-man runs the installed copy: --install this script first")
-    ident, _ = session()
+    ident, _, _ = session()
     entry = {"kind": "deadman", "id": secrets.token_hex(8), "session": ident, "armed_at": now_us(),
              "boot": boot(), "seconds": seconds, "previous": previous}
     record(entries, entry)
@@ -615,8 +628,9 @@ def confirm(entries):
     pending = armed(entries)
     require(pending is not None, "no dead-man is armed")
     require(pending["boot"] == boot(), "the dead-man was armed before a reboot")
-    ident, started = session()
+    ident, started, values = session()
     require(ident != pending["session"], "confirm from a NEW login session, not the arming one")
+    require(fresh_login(values), "confirm from a fresh SSH or console login, not a session started inside another")
     require(started > pending["armed_at"], "confirm from a login session started after the arm")
     after = entries[entries.index(pending) + 1:]
     target = applied(after) if applied(after) is not None else pending["previous"]

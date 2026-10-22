@@ -308,11 +308,13 @@ describe('general-next composition', () => {
         ),
       })
       expect(
-        Object.keys(criteria).filter((route) =>
-          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
-            criteria[route],
+        Object.keys(criteria)
+          .filter((route) => route !== 'answer')
+          .filter((route) =>
+            /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
+              criteria[route],
+            ),
           ),
-        ),
       ).toEqual(['office-data'])
       expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
       expect(criteria['read-documents']).toContain('uploaded')
@@ -326,9 +328,13 @@ describe('general-next composition', () => {
     },
   )
 
-  // p87 (owner, 2026-10-22): exact calculation is sandbox work. MUTATION: drop the
-  // calculation sentence from the office-data description or the decider's answer text in
-  // general-next.server.ts (or add "arithmetic" to another route's description): red.
+  // p87 (owner, 2026-10-22): exact calculation on numbers in the user's LATEST message is
+  // sandbox work; a follow-up over an earlier turn's number is not (the child cannot see it).
+  // MUTATIONS, each red: drop or reword the office-data clause (restoring "numbers the user
+  // typed" or unscoped "arithmetic"); append anything to the answer text, or restore the
+  // negated "never answered before" form; add "multiplies" to another route.
+  const P87_ANSWER =
+    "Generate the answer for the user now, from the conversation and any results so far. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
   it.each(['anthropic', 'self_deployed'])(
     'p87: names exact calculation as office-data work, and no other route (%s)',
     async (tier) => {
@@ -336,12 +342,25 @@ describe('general-next composition', () => {
       await run(tier)
       const body = JSON.parse(String(requests.mock.calls[0][1].body))
       const criteria = body.questions.next_step.criteria as Record<string, string>
-      expect(criteria['office-data']).toContain('exact calculation (arithmetic, percentages, sums')
-      expect(criteria['office-data']).toContain('the answer states the output of that run')
-      expect(criteria.answer).toContain('an exact calculation is never answered before office-data')
-      for (const route of ['info-retrieval', 'read-documents', 'think']) {
-        expect(criteria[route]).not.toMatch(/arithmetic|calculat|percentages/i)
-      }
+      expect(criteria['office-data']).toContain(
+        "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
+      )
+      expect(criteria.answer).toBe(P87_ANSWER)
+      // Scoped to the latest message: unscoped "arithmetic" would route a follow-up such as
+      // "Double that number" to a child that cannot see the earlier turn's number.
+      expect(criteria['office-data']).not.toMatch(/numbers the user typed|earlier (?:step|turn)/i)
+      // The output requirement lives once, in the answer criterion, not in a route text.
+      expect(criteria['office-data']).not.toMatch(/\boutput\b|\bstates?\b/i)
+      expect(
+        Object.keys(criteria).filter(
+          (route) =>
+            route !== 'office-data' &&
+            route !== 'answer' &&
+            /\b(?:arithmetic|calculat\w*|percent\w*|multipl\w*|divi\w*|maths?|averages?|products?|sums?|times)\b/i.test(
+              criteria[route],
+            ),
+        ),
+      ).toEqual([])
     },
   )
 

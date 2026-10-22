@@ -505,7 +505,7 @@
           "max": 6
         }
       ],
-      "notes": "Retargeted 2026-10-22 (owner: “Retire shared memory graph as a whole”, PR #744). It used to look up Lantern in the shared memory graph (the MCP memory server) with search_nodes; it now runs with per-user memory on: the Eval driver passes a synthetic, read-only, owner-scoped memory (src/lib/eval-support/synthetic-memory.ts) holding one confirmed memory for the Eval user and one for another user, and recall attaches the first only. The id is unchanged but the meaning is not: the frozen live baseline for 05 (general-baseline.ts, “pass”, run 2, 2026-10-19) measured the shared-graph lookup, so 05 is re-baselined at the next live run. The flip gate is not weakened: it counted six baseline passes before (01-06) and counts the same six after, but 05’s bar now names the new behaviour and has no live reading yet."
+      "notes": "Retargeted 2026-10-22 (owner: “Retire shared memory graph as a whole”, PR #744). It used to look up Lantern in the shared memory graph (the MCP memory server) with search_nodes; it now runs with per-user memory on: the Eval driver passes a synthetic, read-only, owner-scoped memory (src/lib/eval-support/synthetic-memory.ts) holding one confirmed memory for the Eval user and one for another user, and recall attaches the first only. The id is unchanged but the meaning is not: the frozen live baseline for 05 (general-baseline.ts, “pass”, run 2, 2026-10-19) measured the shared-graph lookup, so 05 is kept as a candidate-only should row (baseline false, no entry in general-baseline.ts), as #744 did when it removed the old 05. The flip gate counts only the five baseline passes that were actually measured (01-04 and 06-07); 05’s old pass is not evidence for the new behaviour, and general was removed before any live run could measure it."
     },
     {
       "id": "06-read-only",
@@ -10660,18 +10660,6 @@
       "get-library-docs": {
         "namespace": "context7",
         "exposure": "offered"
-      },
-      "search_nodes": {
-        "namespace": "memory",
-        "exposure": "offered",
-        "positiveReason": "Retired with the shared memory graph (owner: “Retire shared memory graph as a whole”, PR #744); no row grades it. The entry goes when that PR removes MEMORY_READ_TOOLS from general-next.server.ts.",
-        "negativeReason": "Retired with the shared memory graph (owner: “Retire shared memory graph as a whole”, PR #744); no row grades it. The entry goes when that PR removes MEMORY_READ_TOOLS from general-next.server.ts."
-      },
-      "open_nodes": {
-        "namespace": "memory",
-        "exposure": "offered",
-        "positiveReason": "Retired with the shared memory graph (owner: “Retire shared memory graph as a whole”, PR #744); no row grades it. The entry goes when that PR removes MEMORY_READ_TOOLS from general-next.server.ts.",
-        "negativeReason": "Retired with the shared memory graph (owner: “Retire shared memory graph as a whole”, PR #744); no row grades it. The entry goes when that PR removes MEMORY_READ_TOOLS from general-next.server.ts."
       },
       "graph_me": {
         "namespace": "graph",

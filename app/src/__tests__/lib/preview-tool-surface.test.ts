@@ -15,7 +15,8 @@
  * "every server in the CATALOG", so the config file supplies connection
  * parameters, not enablement. Measured against a live gateway with the same
  * config file: 9 servers / 134 tools with the flag, 5 servers / 17 tools with
- * the allow-list. Reintroducing the flag, or quietly widening the list, is
+ * the allow-list (before the shared memory graph was retired; the allow-list
+ * is four servers now). Reintroducing the flag, or quietly widening the list, is
  * therefore a change that reads like nothing and reopens a cross-user read of
  * every colleague's Data Stash uploads (`redis`). `database-server` (arbitrary
  * SQL over the app's own Postgres) is no longer in the catalog at all (#412,
@@ -37,11 +38,18 @@ import { resolve } from 'node:path'
 const OVERLAY = resolve(process.cwd(), '../docker-compose.prod.yaml')
 
 /** Exactly the servers docs/PREVIEW.md §3a enumerates, in the overlay's order. */
-const ALLOWED = ['neo4j-cypher', 'fetch', 'web_search', 'context7', 'memory']
+const ALLOWED = ['neo4j-cypher', 'fetch', 'web_search', 'context7']
 
-/** Enabled in the base compose file (or, for `database-server`, once was), and
- *  deliberately absent from the preview. */
-const FORBIDDEN = ['redis', 'database-server', 'rust-mcp-filesystem', 'playwright', 'github']
+/** Enabled in the base compose file (or, for `database-server` and `memory`, once
+ *  was), and deliberately absent from the preview. */
+const FORBIDDEN = [
+  'memory',
+  'redis',
+  'database-server',
+  'rust-mcp-filesystem',
+  'playwright',
+  'github',
+]
 
 function gatewayCommand(): string[] {
   const src = readFileSync(OVERLAY, 'utf-8')
@@ -75,7 +83,7 @@ describe('preview tool surface (docker-compose.prod.yaml)', () => {
     expect(cmd).not.toContain('--enable-all-servers')
   })
 
-  it('allows exactly the five servers the runbook enumerates', () => {
+  it('allows exactly the four servers the runbook enumerates', () => {
     const flag = gatewayCommand().find((a) => a.startsWith('--servers='))!
     const servers = flag.slice('--servers='.length).split(',').filter(Boolean)
     expect(servers).toEqual(ALLOWED)

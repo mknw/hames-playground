@@ -44,9 +44,6 @@ rust-mcp-filesystem:
   allowed_directories:
     - /workspace
 
-memory:
-  enabled: true
-
 redis:
   enabled: true
   host: redis

@@ -443,11 +443,11 @@ Tabbed right panel. **Context manager is the default tab.** Uses `lazyMount` + `
 | Tab                             | Content                                                                                                                                                                                                                                                     |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Neo4j                           | Graph visualization for Neo4j query results (accumulated, live sync)                                                                                                                                                                                        |
-| Memory                          | Graph visualization for Memory MCP entities                                                                                                                                                                                                                 |
+| Memory                          | The signed-in user's own saved memories from Postgres (list, filter, forget, export, switch off)                                                                                                                                                            |
 | **Context manager** _(default)_ | Event timeline + LLM call detail                                                                                                                                                                                                                            |
 | Data                            | Data Stash — two collapsible groups: **Your Uploads** (drag-drop/picker + document chips) and **Agent Findings** (tool-result icons by turn), each with hide/archive/delete. See [DATA_STASH.md](DATA_STASH.md) for the upload→chunk→embed→search pipeline. |
 
-**Conversation Sync toggle:** The Neo4j and Memory graph tabs have a pause/play "Sync" button (cyan when live, amber when paused; the state is in its `aria-label`, since the glyph is a `material-symbols` icon). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
+**Conversation Sync toggle:** The Neo4j graph tab has a pause/play "Sync" button (cyan when live, amber when paused; the state is in its `aria-label`, since the glyph is a `material-symbols` icon). Implemented in `GraphTabContent` via a `syncEnabled` signal. When paused, the current element list is snapshotted into `frozenElements` and passed to `GraphVisualization` instead of live `props.elements`. Resuming restores the live feed.
 
 **Touched-node highlight (Neo4j tab only):** When an agent runs a Neo4j query, the `enrichNeo4jResult` hook (`onToolResult` on `simpleLoop`) attaches a 1-hop neighborhood plus a `_touched` list to the tool result. The extractor tags nodes whose name is in that list with `data.touched = true`, and the Neo4j tab passes a static `TOUCHED_NODE_STYLES` block (`node[touched]` selector → magenta fill/border + glow) as `extraStyles` to `GraphVisualization`. The result: nodes the agent's query _actually targeted_ render in magenta, while neighborhood-context nodes render in the default cyan. The Memory tab does not receive this stylesheet.
 
@@ -596,7 +596,7 @@ index.tsx (view state only)
     │
     └─> SupportPanel (lazyMount + unmountOnExit)
             │   Props: graphElements, contextEvents, highlightedIds, onCypherWrite
-            ├─> GraphTabContent (Neo4j/Memory tabs)
+            ├─> GraphTabContent (Neo4j tab)
             │       └─> GraphVisualization (elements, highlightedIds, onCypherWrite)
             │               └─ Inline edit / relation create / node create → onCypherWrite
             ├─> DataStashPanel (events, onStashAction)

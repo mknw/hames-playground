@@ -51,15 +51,14 @@ its repositories, never through the gateway.
 
 ### Registered Servers
 
-| Server                | Title           | Tools                                                                        | Auth                 | Backend                      |
-| --------------------- | --------------- | ---------------------------------------------------------------------------- | -------------------- | ---------------------------- |
-| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)              | Password (hardcoded) | neo4j-relay → isolated neo4j |
-| `fetch`               | Fetch           | `fetch`                                                                      | None                 | -                            |
-| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                    | None                 | -                            |
-| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                     | None                 | -                            |
-| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more        | None (volume mounts) | -                            |
-| `memory`              | Memory          | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume)        | -                            |
-| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more    | Password (hardcoded) | redis container              |
+| Server                | Title           | Tools                                                                     | Auth                 | Backend                      |
+| --------------------- | --------------- | ------------------------------------------------------------------------- | -------------------- | ---------------------------- |
+| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)           | Password (hardcoded) | neo4j-relay → isolated neo4j |
+| `fetch`               | Fetch           | `fetch`                                                                   | None                 | -                            |
+| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                 | None                 | -                            |
+| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                  | None                 | -                            |
+| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more     | None (volume mounts) | -                            |
+| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more | Password (hardcoded) | redis container              |
 
 ### Configuration Strategy
 

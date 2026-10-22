@@ -471,7 +471,7 @@ const warnedNamespaces = new Set<string>()
  * 2. **Healthy catalog, nothing produces the namespace** — the string IS a
  *    fixed point (`inferServer('wikipedia') === 'wikipedia'`), yet no name in
  *    the catalog resolves to it. This is the unregistered-catalog signature:
- *    the gateway answered its 86 names and none lands in the declared
+ *    the gateway answered its 77 names and none lands in the declared
  *    namespace, because `registerToolNamespaces(mcpNamespace)` never ran.
  *    Refused, with a message naming the registration and the package that
  *    exports it.

@@ -195,17 +195,19 @@ nothing**.
 an explicit allow-list:
 
 ```
---servers=neo4j-cypher,fetch,web_search,context7,memory
+--servers=neo4j-cypher,fetch,web_search,context7
 ```
 
 That is the control. `--enable-all-servers` means _every server in the
 catalog_, so `configs/mcp-config.yaml` is a **connection-parameter file, not an
 enablement list** — deleting an entry from it changes nothing while the flag is
 set. Verified on this stack, same config file both times: with the flag, nine
-servers and 134 tools; with the allow-list, five servers and 17 tools. A trimmed
+servers and 134 tools; with the allow-list, five servers and 17 tools (measured
+before the `memory` server was retired; the allow-list is four servers now and the
+count has not been re-measured). A trimmed
 config file on its own would read like protection and match nothing.
 
-Write `configs/mcp-config.yaml` with exactly the five, so the file and the
+Write `configs/mcp-config.yaml` with exactly the four, so the file and the
 allow-list say the same thing and nobody has to reconcile them later:
 
 ```yaml
@@ -226,9 +228,6 @@ web_search:
   enabled: true
 
 context7:
-  enabled: true
-
-memory:
   enabled: true
 ```
 
@@ -276,16 +275,15 @@ can tighten here:
   `grep -n 'user_id\|ownerId' app/src/lib/neo4j/*.ts` returns nothing — so
   every signed-in colleague's turn reads the same graph. The future writer is
   the memory hook (#419), which writes through the app and asks the user to
-  confirm first (#206). §11 records the shared property for `memory`, which
-  no agent writes since the `general` agent was removed. `PREVIEW-WELCOME.md`
-  carries both.
+  confirm first (#206). The shared `memory` MCP server is retired (§11).
+  `PREVIEW-WELCOME.md` carries the Neo4j property.
 - **The agent holding that surface used to declare no content boundary; the
   one left without one is the sandbox agent.** `withInjectionGuard` is declared
   by four agents — `microsoft-365`, `search`, `retriever-agent` and
   `general-next`. The unguarded `general` agent, which passed `tools.all` into
   one loop (web fetch and the shared `memory` writes in the same controller turn),
-  was removed on 2026-10-21, and no agent now holds a `memory` write tool:
-  `general-next` is handed `search_nodes` and `open_nodes` only. (No agent holds
+  was removed on 2026-10-21, and the shared memory graph itself was retired on
+  2026-10-22: no agent is handed any memory-graph tool. (No agent holds
   `write_neo4j_cypher` either, since #403.) The gap that remains in this register
   is the sandbox agent's, the same one §11 records for the sandbox.
 
@@ -762,8 +760,8 @@ docker compose logs mcp-gateway | grep -E 'Those servers are enabled|tools liste
 Step 1b must print exactly:
 
 ```
-- Those servers are enabled: neo4j-cypher, fetch, web_search, context7, memory
-> 16 tools listed in …
+- Those servers are enabled: neo4j-cypher, fetch, web_search, context7
+> 7 tools listed in …
 ```
 
 Order varies; the **set** and the **count** do not. `redis`,
@@ -1065,15 +1063,14 @@ diagnosis, and nothing is reachable from outside.
 - **No off-box backups.** `backups/` sits on the VM's own disk and nothing
   copies it away (§9). Losing the VM loses the data with it. Accepted for this
   alpha by owner decision; not a posture to carry past it.
-- **The `memory` MCP server is one graph for everybody.** It is backed by a
-  single named volume (`claude-memory:/app/dist`,
-  `configs/custom-catalog.yaml:88-104`) with no per-user or per-session
-  scoping, so anything an agent writes there is readable by every other
-  signed-in user's agent. It is in the preview's allow-list (§3a) because
-  the `general` agent advertised it in the picker (since removed; `general-next`
-  reads it and never writes) — a choice made when that list was written, not
-  something an agent's `servers: [...]` array enforces; nothing in the preview
-  writes to it on its own.
+- **The shared `memory` MCP server is retired (2026-10-22).** It was one graph
+  for every signed-in user, kept in a single named volume with no per-user
+  scoping. It is gone from the catalog, the gateway config and the §3a
+  allow-list, and no agent is handed a memory-graph tool
+  (`agent-postgres-tools.test.ts`). Personal memory is per-user, encrypted, in
+  Postgres (#419). A host provisioned earlier may still hold the old
+  `claude-memory` volume: it is no longer read, and exporting then removing it
+  is a separate, announced operator step, backup first.
 - **The sandbox containers are not hardened.** They run as root with no
   capability drops, no read-only root and no seccomp profile, and only the
   strict egress profile is actually enforced — the other profile names fall
@@ -1439,7 +1436,7 @@ separately.
 
 This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
 it **does not isolate all clone data**. Both clones can read/write the shared
-Neo4j graph; Redis stash keys and the gateway memory volume are also shared.
+Neo4j graph; Redis stash keys are also shared (and, on a host not yet moved to this code, the retired gateway memory volume).
 Use synthetic/demo data only until that shared-data posture is acceptable to the
 operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
 The release app retains the root-equivalent Docker socket (SD-19). Dev has no
@@ -1576,13 +1573,13 @@ action, and you re-run with the same arguments once it is done:
 | `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the rules for a firewall in front of the box                                                                                                                                                                                                                                                                           |
 | `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the baseline `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). `ignoreip` is loopback plus the operator: `--f2b-ignore <ip>[,…]`, else this SSH session's own client address, printed. It refuses to overwrite a `jail.local` it did not write                                                                                                                                                           |
 | `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks that the key file holds exactly Docker's one signing key and refuses if Docker publishes no suite for the release. It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds the login user to the `docker` group                                                                                                                                   |
-| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                                                                                                                  |
+| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's four-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                                                                                                                  |
 | `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow, except on the run that generated the keys                                                                                                                                                                           |
 | `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                                                                                                                                           |
-| `images`    | Requires Engine >= 28 and safe daemon isolation settings before `docker compose build` and `pull`, a host pull of the five allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                                                                     |
+| `images`    | Requires Engine >= 28 and safe daemon isolation settings before `docker compose build` and `pull`, a host pull of the four allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                                                                     |
 | `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d`, verifies the deployed Neo4j network is internal/isolated, and waits for service health                                                                                                                                                                  |
 | `seed`      | Imports `neo4j_dumps/seed-data.cypher`, or `--seed-file`, through `scripts/import-neo4j.sh`, and only into an empty graph. It never passes `--wipe`                                                                                                                                                                                                                                                                                                                                                          |
-| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the five servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; the graph is not empty; Neo4j isolation and paired egress probes pass; Cypher traverses the relay. Private `/health` is skipped unless `--probe-private-health` is supplied (may wake a box) |
+| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the four servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; the graph is not empty; Neo4j isolation and paired egress probes pass; Cypher traverses the relay. Private `/health` is skipped unless `--probe-private-health` is supplied (may wake a box) |
 
 **The anti-lockout procedure.** The lockout-capable stages, `ssh` and
 `firewall`, run first. Once either one changes something, the script stops
@@ -1859,13 +1856,14 @@ means concretely:
   no Arm redis override loaded, and the gateway's merged `command:` carrying
   `--servers=…` with no `--enable-all-servers` left in it.
 - **§3a's tool surface, by running the gateway three ways against the same
-  catalog.** `--enable-all-servers` with a five-server `mcp-config.yaml`:
+  catalog.** `--enable-all-servers` with a mcp-config.yaml naming only the allow-listed servers:
   _nine_ servers enabled, 134 tools — the config file does not narrow anything,
   which is why the allow-list and not the config file is the control.
-  `--servers=neo4j-cypher,fetch,web_search,context7,memory`: five servers, 17
+  `--servers=neo4j-cypher,fetch,web_search,context7,memory` (the allow-list
+  at the time, before the `memory` server was retired): five servers, 17
   tools. The same allow-list against the development `mcp-config.yaml` that
   still carries a `github:` block: still five servers, still 17 tools, no
-  `github`.
+  `github`. These figures predate the retirement and have not been re-measured.
 - Fail-closed substitution: removing `POSTGRES_PASSWORD` aborts with
   `required variable POSTGRES_PASSWORD is missing a value` rather than silently
   falling back to the base file's `password`.

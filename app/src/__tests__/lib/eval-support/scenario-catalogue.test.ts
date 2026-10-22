@@ -27,7 +27,6 @@ function sourceTools(): string[] {
   }
   return [
     ...list('../packages/agents/agents/microsoft-365.server.ts', 'MICROSOFT_365_TOOLS'),
-    ...list('../packages/agents/agents/general-next.server.ts', 'MEMORY_READ_TOOLS'),
     ...[
       ...read('src/lib/eval-support/synthetic-sandbox.ts').matchAll(/name: '(sandbox_[a-z]+)'/g),
     ].map((m) => m[1]),
@@ -861,9 +860,9 @@ describe('general-next scenario catalogue', () => {
     // Guards the drift pins: an empty parse would let a new tool or a stale table through.
     const tools = sourceTools()
     expect(tools).toContain('graph_files_shared')
-    expect(tools).toContain('open_nodes')
+    expect(tools).toContain('graph_me')
     expect(tools).toContain('sandbox_edit')
-    expect(tools.length).toBeGreaterThanOrEqual(17)
+    expect(tools.length).toBeGreaterThanOrEqual(15)
     expect(driverTools()).toContain('graph_mail_recent')
     expect(
       tableAfter(scenariosMd, '### Scenario matrix (existing and proposed)').length,

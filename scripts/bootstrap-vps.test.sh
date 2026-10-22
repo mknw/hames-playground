@@ -100,8 +100,8 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
     exit 0
   fi
   if [[ $args == *" logs "* && $args == *" mcp-gateway "* ]]; then
-    echo 'Those servers are enabled: context7,fetch,memory,neo4j-cypher,web_search'
-    echo '16 tools listed'
+    echo 'Those servers are enabled: context7,fetch,neo4j-cypher,web_search'
+    echo '7 tools listed'
   fi
   [[ $args != *" printenv "* ]] || echo false
   exit 0
@@ -906,9 +906,9 @@ if (
   image_pinned "$got"
 ); then pass "2 the real compose files' gateway passes the pin gate"; else flunk "2 the real gateway image is not pinned: '$got'"; fi
 
-# The five allow-listed MCP servers each resolve to a digest-pinned catalog
+# The four allow-listed MCP servers each resolve to a digest-pinned catalog
 # image, which the images stage pulls on the host.
-for srv in context7 fetch memory neo4j-cypher web_search; do
+for srv in context7 fetch neo4j-cypher web_search; do
   img=$(
     lib "$ROOT"
     catalog_image "$srv"
@@ -1455,7 +1455,7 @@ cat >"$tmproot/compose-clean.json" <<'JSON'
 {"services": {
   "postgres": {"ports": [{"host_ip": "127.0.0.1", "published": "5432", "target": 5432}]},
   "mcp-gateway": {"image": "docker/mcp-gateway@sha256:abb58d13e267939e602118c0be88be31e2ebcea4c762980ff647ee2aeba92cde",
-                  "command": ["--servers=neo4j-cypher,fetch,web_search,context7,memory"],
+                  "command": ["--servers=neo4j-cypher,fetch,web_search,context7"],
                   "ports": [{"host_ip": "127.0.0.1", "published": "8811", "target": 8811}]},
   "caddy": {"ports": [{"published": "80", "target": 80}, {"published": "443", "target": 443}, {"published": "443", "target": 443, "protocol": "udp"}]}
 }}

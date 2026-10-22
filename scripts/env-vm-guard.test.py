@@ -1157,6 +1157,37 @@ class Apply(Harness):
         guard.CONFIG_DIR.chmod(0o770)
         self.assertEqual(self.invoke("--apply"), 1)
         guard.CONFIG_DIR.chmod(0o700)
+        # A parent another user owns could swap the file between check and read.
+        real = os.stat
+
+        def foreign_parent(path, *args, **kwargs):
+            result = real(path, *args, **kwargs)
+            if Path(path) == guard.CONFIG_DIR:
+                values = list(result)
+                values[4] = os.getuid() + 1
+                return os.stat_result(values)
+            return result
+        with patch.object(guard.os, "stat", side_effect=foreign_parent):
+            self.assertEqual(self.invoke("--apply"), 1)
+            self.assertIn("unsafe guard file or parent", self.err)
+        real_fstat = os.fstat
+
+        def foreign_file(fd):
+            values = list(real_fstat(fd))
+            values[4] = os.getuid() + 1
+            return os.stat_result(values)
+        with patch.object(guard.os, "fstat", side_effect=foreign_file):
+            self.assertEqual(self.invoke("--apply"), 1)
+            self.assertIn("unsafe guard file or parent", self.err)
+        # A symlink is refused, never followed, even to a safe copy.
+        copy_ = guard.CONFIG_DIR / "copy.json"
+        copy_.write_text(guard.INSTALLED_CONFIG.read_text())
+        guard.INSTALLED_CONFIG.rename(guard.CONFIG_DIR / "saved.json")
+        guard.INSTALLED_CONFIG.symlink_to(copy_)
+        self.assertEqual(self.invoke("--apply"), 1)
+        self.assertIn("unsafe", self.err)
+        guard.INSTALLED_CONFIG.unlink()
+        (guard.CONFIG_DIR / "saved.json").rename(guard.INSTALLED_CONFIG)
         self.assertNotIn(("inet", guard.TABLE), self.host.tables)
         self.assertEqual(self.invoke("--apply"), 0, self.err)
 
@@ -1582,6 +1613,12 @@ class Check(Harness):
         path.unlink()
         self.assertEqual(self.checked(), 1)
         path.write_text(good)
+        # Read as root like the guard's own config: root-owned, not group- or other-writable.
+        for mode in (0o620, 0o602):
+            path.chmod(mode)
+            self.assertEqual(self.checked(), 1)
+            self.assertIn("unsafe guard file", self.err)
+        path.chmod(0o600)
         self.assertEqual(self.checked(), 0)
 
     def test_before_any_bridge_exists_the_table_alone_is_checked(self):
@@ -1673,6 +1710,15 @@ class Smoke(Smoking, Harness):
         self.host.calls.clear()
         self.assertEqual(self.smoke(), 1)
         self.assertIn("readable by others", self.err)
+        self.assertFalse(any(c[:2] == ["docker", "run"] for c in self.host.calls))
+
+    def test_a_delivery_directory_that_would_add_mount_keys_is_refused(self):
+        self.ready()
+        odd = self.root / "tls,readonly=false"
+        (self.root / "tls").rename(odd)
+        path = Path(self.cfg["environments"][0]["entryPointConfig"])
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), delivery={"directory": str(odd)})))
+        self.assert_fails("unsafe delivery directory")
         self.assertFalse(any(c[:2] == ["docker", "run"] for c in self.host.calls))
 
     def test_real_app_dev_run_and_probe_8c_attributed_to_its_rule(self):
@@ -1941,7 +1987,7 @@ MUTATIONS = {
     "boot-apply-applies": ('                elif pending is not None and args.apply and pending["boot"] != boot():', "                elif False:"),
     "C1-boot-restore-exits-zero": ('                    raise Refused("a dead-man was armed across a reboot: previous state restored; re-plan before starting Incus")', "                    pass"),
     "W2-deadman-alone-refused": ('                        arm(entries, args.deadman, current if document_ is not None else None)', '                        raise Refused("--deadman needs --apply or --persist")'),
-    "deadman-runs-the-checkout": ('    require(INSTALLED_SCRIPT.read_text() == Path(__file__).read_text(),\n            "a dead-man runs', '    require(True,\n            "a dead-man runs'),
+    "deadman-runs-the-checkout": ('    require(safe_file(INSTALLED_SCRIPT) == Path(__file__).read_text(),\n            "a dead-man runs', '    require(True,\n            "a dead-man runs'),
     "deadman-timer-runs-the-checkout": ('"-I", str(INSTALLED_SCRIPT),\n         "--deadman-restore"', '"-I", str(Path(__file__)),\n         "--deadman-restore"'),
     "deadman-any-length": ("    if args.deadman is not None and not 60 <= args.deadman <= 3600:", "    if False:"),
     # §11.1 bullet 7: a removal while a VM runs, or of an edited file.
@@ -1992,7 +2038,7 @@ MUTATIONS = {
     "probe-7-run-kind-unrecorded": ('        results[-1]["single_environment"] = not pairs', "        pass"),
     "smoke-trace-table-left": ('            if ("inet", TRACE_TABLE) in tables():\n                run(["nft", "delete", "table", "inet", TRACE_TABLE])', "            pass"),
     "smoke-while-armed": ('        require(armed(entries) is None, "a dead-man is armed; the smoke refuses until it is confirmed")', "        pass"),
-    "smoke-unit-unchecked": ('        require(path.read_text() == content, "guard persistence file missing or changed")', "        pass"),
+    "smoke-unit-unchecked": ('        require(safe_file(path) == content, "guard persistence file missing or changed")', "        pass"),
     "smoke-enablement-unchecked": ('    require(show(UNIT.name, "UnitFileState").get("UnitFileState") == "enabled", "guard unit is not enabled")', "    pass"),
     "smoke-order-unchecked": ('    require(UNIT.name in order.get("Requires", "").split() and UNIT.name in order.get("After", "").split(),', "    require(True,"),
     "smoke-flusher-unchecked": ('        require(not state.get("UnitFileState", "").startswith("enabled") and state.get("ActiveState") != "active",', "        require(True,"),
@@ -2029,11 +2075,11 @@ MUTATIONS = {
     "lock-blocks": ('fcntl.flock(lock, (fcntl.LOCK_SH if mode == "read" else fcntl.LOCK_EX) | fcntl.LOCK_NB)', 'fcntl.flock(lock, fcntl.LOCK_SH if mode == "read" else fcntl.LOCK_EX)'),
     "state-unchecked": ("    private_file(STATE)\n    flags", "    flags"),
     "file-owner-unchecked": ("info.st_uid == OWNER and", "True and"),
-    "file-mode-unchecked": ("            info.st_mode & 0o022 == 0 and path.parent.stat().st_mode & 0o022 == 0,", "            path.parent.stat().st_mode & 0o022 == 0,"),
-    "file-parent-unchecked": ("            info.st_mode & 0o022 == 0 and path.parent.stat().st_mode & 0o022 == 0,", "            info.st_mode & 0o022 == 0,"),
-    "config-trusted-unchecked": ("    if trusted:\n        safe_file(path)", "    if False:\n        safe_file(path)"),
-    "install-clobbers": ('            require(path.read_text() == text, "an installed guard file differs; operator review required")', "            pass"),
-    "persist-clobbers": ('        require(UNIT.read_text() == unit, "existing guard unit differs; operator review required")', "        pass"),
+    "file-mode-unchecked": ("info.st_uid == OWNER and info.st_mode & 0o022 == 0 and", "info.st_uid == OWNER and"),
+    "file-parent-unchecked": ("parent.st_uid == OWNER and parent.st_mode & 0o022 == 0,", "parent.st_uid == OWNER,"),
+    "config-trusted-unchecked": ("safe_file(path) if trusted else path.read_text()", "path.read_text()"),
+    "install-clobbers": ('            require(safe_file(path) == text, "an installed guard file differs; operator review required")', "            pass"),
+    "persist-clobbers": ('        require(safe_file(UNIT) == unit, "existing guard unit differs; operator review required")', "        pass"),
     "persist-not-enabled": ('        run(["systemctl", "enable", UNIT.name])', "        pass"),
     "publish-partial-file": ('        record(entries, {"kind": "file", "path": str(path), "content": content})\n        os.link(stream.name, path)',
                              '        os.link(stream.name, path)\n        record(entries, {"kind": "file", "path": str(path), "content": content})'),
@@ -2047,6 +2093,11 @@ MUTATIONS = {
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
+    # S6 and O7: files read as root are opened without following a link and checked on the descriptor.
+    "O7-file-parent-owner-unchecked": ("parent.st_uid == OWNER and parent.st_mode", "parent.st_mode"),
+    "O7-file-follows-symlink": ("os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK", "os.O_RDONLY | os.O_NONBLOCK"),
+    "S6-entry-point-config-untrusted": ('json.loads(safe_file(Path(env["entryPointConfig"])))', 'json.loads(Path(env["entryPointConfig"]).read_text())'),
+    "O7-delivery-directory-unchecked": ('    require(bool(re.fullmatch(r"/[A-Za-z0-9._/-]+", delivery["directory"])), "unsafe delivery directory name")\n', ""),
     # S2 (PM: tighten): a reply to the host is never an ICMP error; a forwarded one goes to its client only; probe 8d.
     "S2-host-reply-related": ('("ct original ip daddr", guest), ("ct state", ("established",)), ("accept",)', '("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)'),
     "S2-forward-reply-any-destination": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), '),

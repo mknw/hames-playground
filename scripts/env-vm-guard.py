@@ -121,10 +121,8 @@ def validated(config):
 
 
 def read_config(path, trusted=True):
-    if trusted:
-        safe_file(path)
     try:
-        return validated(json.loads(path.read_text()))
+        return validated(json.loads(safe_file(path) if trusted else path.read_text()))
     except (OSError, ValueError):
         raise Refused("guard config unreadable or not JSON") from None
 
@@ -344,10 +342,18 @@ def root():
 
 
 def safe_file(path):
-    info = path.lstat()
-    require(stat.S_ISREG(info.st_mode) and not path.is_symlink() and info.st_uid == OWNER and
-            info.st_mode & 0o022 == 0 and path.parent.stat().st_mode & 0o022 == 0,
-            "unsafe guard file or parent: " + path.name)
+    """The file's text, read through the descriptor whose owner and mode were checked."""
+    try:
+        parent = os.stat(path.parent)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Refused("unsafe or missing guard file: " + path.name) from None
+    with os.fdopen(fd) as stream:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == OWNER and info.st_mode & 0o022 == 0 and
+                parent.st_uid == OWNER and parent.st_mode & 0o022 == 0,
+                "unsafe guard file or parent: " + path.name)
+        return stream.read()
 
 
 def private_file(path):
@@ -504,8 +510,7 @@ def install(entries, source):
     files = ((INSTALLED_SCRIPT, Path(__file__).read_text()), (INSTALLED_CONFIG, content))
     for path, text in files:
         if path.exists() or path.is_symlink():
-            safe_file(path)
-            require(path.read_text() == text, "an installed guard file differs; operator review required")
+            require(safe_file(path) == text, "an installed guard file differs; operator review required")
     if not CONFIG_DIR.exists():
         record(entries, {"kind": "dir", "path": str(CONFIG_DIR)})
         CONFIG_DIR.mkdir(mode=0o700)
@@ -515,8 +520,7 @@ def install(entries, source):
 
 
 def arm(entries, seconds, previous):
-    safe_file(INSTALLED_SCRIPT)
-    require(INSTALLED_SCRIPT.read_text() == Path(__file__).read_text(),
+    require(safe_file(INSTALLED_SCRIPT) == Path(__file__).read_text(),
             "a dead-man runs the installed copy: --install this script first")
     ident, _ = session()
     entry = {"kind": "deadman", "id": secrets.token_hex(8), "session": ident, "armed_at": now_us(),
@@ -560,8 +564,7 @@ def persist(entries, deadman):
         safe_file(path)
     unit = service_unit()
     if UNIT.exists() or UNIT.is_symlink():
-        safe_file(UNIT)
-        require(UNIT.read_text() == unit, "existing guard unit differs; operator review required")
+        require(safe_file(UNIT) == unit, "existing guard unit differs; operator review required")
     enabled = show(UNIT.name, "UnitFileState").get("UnitFileState") == "enabled"
     if UNIT.exists() and enabled:
         print("PASS guard unit installed and enabled; nothing written")
@@ -731,10 +734,11 @@ def check(config, entries):
     for env in config["environments"]:
         name, guest, client = env["name"], env["guestAddress"], env["clientAddress"]
         vm_bridge, link_bridge, project = "envvm-" + name, "envapp-" + name, "sandbox-" + name
+        # Read as root and trusted for its delivery directory: the guard config's rule.
         try:
-            entry_point = json.loads(Path(env["entryPointConfig"]).read_text())
-        except (OSError, ValueError):
-            raise Refused("entry point config unreadable") from None
+            entry_point = json.loads(safe_file(Path(env["entryPointConfig"])))
+        except ValueError:
+            raise Refused("entry point config is not JSON") from None
         require(isinstance(entry_point, dict) and entry_point.get("environment") == name and
                 entry_point.get("bridge") == vm_bridge and entry_point.get("address") == guest,
                 "guard and entry point configs disagree in environment, bridge or address")
@@ -946,6 +950,8 @@ def host_reaches(address, port):
 def client_files(entry_point):
     delivery = entry_point.get("delivery")
     require(isinstance(delivery, dict) and isinstance(delivery.get("directory"), str), "entry point names no delivery")
+    # It lands in Docker's comma-separated --mount value: a comma would add keys.
+    require(bool(re.fullmatch(r"/[A-Za-z0-9._/-]+", delivery["directory"])), "unsafe delivery directory name")
     directory = Path(delivery["directory"])
     files = {part: directory / (part + ".pem") for part in ("ca", "cert", "key")}
     for path in files.values():
@@ -1137,9 +1143,8 @@ def probe_environment(config, env, facts, shared, deadline):
 def persistence(config_path):
     # Probe 12: reviewed copies, enabled, ordered before the daemon, no flusher.
     for path, content in ((INSTALLED_SCRIPT, Path(__file__).read_text()), (UNIT, service_unit()),
-                          (INSTALLED_CONFIG, config_path.read_text())):
-        safe_file(path)
-        require(path.read_text() == content, "guard persistence file missing or changed")
+                          (INSTALLED_CONFIG, safe_file(config_path))):
+        require(safe_file(path) == content, "guard persistence file missing or changed")
     require(show(UNIT.name, "UnitFileState").get("UnitFileState") == "enabled", "guard unit is not enabled")
     order = show(INCUS_UNIT, "Requires", "After")
     require(UNIT.name in order.get("Requires", "").split() and UNIT.name in order.get("After", "").split(),

@@ -476,7 +476,11 @@ differs from the entry point's config (the file W8 names) in environment, bridge
 entry point accepts any bridge name (`incus-environment.server.ts:264`; its README's example is
 `previewbr`, `packages/sandbox/README.md:258`), and its config is a separate file. Without these
 reads, a VM could sit wholly outside the table while every check stayed green. That file must
-therefore exist from the first `--check` (W3) on; a missing or unreadable one is refused.
+therefore exist from the first `--check` (W3) on. It is read as root under the guard config's own
+rule: opened without following a link, a regular file owned by root and writable by root only, in
+a directory owned by root and writable by root only. A missing, unreadable or unsafe one is
+refused, and so is a delivery directory whose name holds anything but letters, digits, `.`, `_`,
+`-` and `/`, because the smoke's stand-in passes it to Docker's comma-separated `--mount`.
 
 **How a probe runs.**
 

@@ -281,8 +281,11 @@ The Data Stash pipeline needs an embedder. Two options:
   file or the production overlay. Memory text is embedded there (#419), so
   keep it unreachable from outside; if a host-run process truly needs it, add a
   git-ignored override binding `127.0.0.1` and nothing wider.
-- **Hosted provider** — set `EMBEDDINGS_PROVIDER` to a remote provider instead.
-  (`openrouter` sends text off the box; the memory pipeline pins `local`.)
+- **Hosted provider** — not selectable by env alone: the app boots only with
+  `local` or a provider declared trusted in code (`TRUSTED_EMBEDDING_PROVIDERS`),
+  because the retriever's query reaches the embedder without the egress gate.
+  `openrouter` is not declared trusted, so boot refuses it. (`local` names the
+  wire format: point `EMBEDDINGS_LOCAL_URL` only at a box the deployment runs.)
 
 If you don't use DataStash search, you can skip this.
 
@@ -307,7 +310,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | Var                                                                       | Purpose                                                                | Default / note                                                                                                                          |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key                  | —                                                                                                                                       |
-| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
+| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | unused: boot refuses `EMBEDDINGS_PROVIDER=openrouter`                                                                                   |
 | `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/hames` — **override the password**                                                       |
 | `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                                   | `http://localhost:8811/mcp`                                                                                                             |
 | `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120)                | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |

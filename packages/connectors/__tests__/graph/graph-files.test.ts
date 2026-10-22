@@ -326,7 +326,6 @@ describe('graph_files_search', () => {
     const res = await runAppTool('graph_files_search', { query: 'budget' })
 
     expect(res.data).toEqual<GraphFileSearchResult>({
-      query: 'budget', // the KQL actually run, echoed back
       total: 42,
       results: [
         {
@@ -350,12 +349,12 @@ describe('graph_files_search', () => {
     })
   })
 
-  it('reports the composed query, not the raw argument', async () => {
+  it('does not report the composed query', async () => {
     const res = await runAppTool('graph_files_search', {
       query: 'budget',
       file_type: 'pdf',
     })
-    expect((res.data as GraphFileSearchResult).query).toBe('budget filetype:pdf')
+    expect(res.data).not.toHaveProperty('query')
   })
 
   it('no hint when everything matched was returned', async () => {

@@ -45,11 +45,12 @@ somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
 uniform. See `packages/harness-patterns/run-frame.server.ts`.
 
-**Web pseudonymisation guard** — the web route's boundary over earlier results
-and outgoing tool arguments, retaining their content while replacing known
-identities with placeholders. Only the local `neo4j`
-namespace is exempt from the outgoing check; `context7` library lookup is
-outbound and checked like web search. See
+**Web pseudonymisation guard** — the web route's boundary over earlier
+results, retaining their content while replacing known identities with
+placeholders. It no longer checks outgoing tool arguments: the **egress gate**
+(`withEgressGate`) judges every outgoing call, on every tier, and only a
+declared local namespace (in `general-next`: `neo4j`, `graph`) is never asked
+about; `context7` library lookup is outbound and judged like web search. See
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
 **Proposal** — a question put to a person from outside a run, by a post-reply

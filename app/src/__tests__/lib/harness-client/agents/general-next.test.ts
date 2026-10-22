@@ -12,6 +12,7 @@ import {
   createEvent,
   createEventView,
   createScope,
+  EGRESS_TEXTS,
   harness,
   harnessHasRedisRetriever,
   harnessPseudonymisesInputs,
@@ -150,6 +151,7 @@ vi.mock('@hames-ai/harness-baml', async (original) => ({
 const composition = vi.hoisted(() => ({
   routes: {} as Record<string, unknown>,
   config: {} as Record<string, unknown>,
+  egress: {} as Record<string, unknown>,
 }))
 vi.mock('@hames-ai/harness-patterns', async (original) => {
   const actual = await original<typeof import('@hames-ai/harness-patterns')>()
@@ -159,6 +161,10 @@ vi.mock('@hames-ai/harness-patterns', async (original) => {
       composition.routes = args[0]
       composition.config = { ...args[1] }
       return actual.decisionLoop(...args)
+    },
+    withEgressGate: (...args: Parameters<typeof actual.withEgressGate>) => {
+      composition.egress = { ...args[0] }
+      return actual.withEgressGate(...args)
     },
   }
 })
@@ -187,8 +193,6 @@ const deps: AgentDeps = {
     apply: (value) => value,
     redact: <T>(value: T): T => value,
     checkLiterals: () => {},
-    observe: () => {},
-    check: () => {},
   }),
 }
 let choices: string[]
@@ -201,6 +205,10 @@ let states: string[]
 let gateStates: string[]
 /** The gate's answer, pTrue. Below τi (0.15): "skip", which 'shadow' records and ignores. */
 let gateP: number
+/** The egress question's states (`guard.egress`), and its answer: the label
+ *  given all the mass. `nothing_private` lets every outgoing call go. */
+let egressStates: string[]
+let egressAnswer: (state: string) => 'personal' | 'company' | 'nothing_private'
 let requests: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
@@ -220,6 +228,8 @@ beforeEach(() => {
   states = []
   gateStates = []
   gateP = 0.05
+  egressStates = []
+  egressAnswer = () => 'nothing_private'
   mocks.screen.mockImplementation(async () => ({
     injection_detected: false,
     reason: 'clean',
@@ -253,6 +263,23 @@ beforeEach(() => {
         usage: { input_tokens: 1, output_tokens: 0 },
       })
     }
+    // Setup change 2, its second half: the egress question (slice 4).
+    if (body.questions['guard.egress']) {
+      egressStates.push(body.state)
+      const labels = Object.keys(body.questions['guard.egress'].criteria)
+      const answer = egressAnswer(body.state)
+      return Response.json({
+        answers: {
+          'guard.egress': {
+            type: 'choice',
+            choice: answer,
+            confidence: 1,
+            probabilities: Object.fromEntries(labels.map((l) => [l, l === answer ? 1 : 0])),
+          },
+        },
+        usage: { input_tokens: 1, output_tokens: 0 },
+      })
+    }
     states.push(body.state)
     const keys = Object.keys(body.questions.next_step.criteria)
     const choice = choices.shift() ?? (sticky && keys.includes(sticky) ? sticky : 'answer')
@@ -277,6 +304,10 @@ afterEach(() => {
 
 function walk(patterns: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] {
   return patterns.flatMap((p) => [p, ...walk(p.children ?? [])])
+}
+/** The decision loop's routes, in declaration order: office, info, documents, think. */
+function routesOf(patterns: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] {
+  return walk(patterns).find((p) => p.name === 'decisionLoop')!.children!
 }
 async function run(tier = 'anthropic', supplied = deps, message = 'synthetic task') {
   const patterns = await agent.createPatterns('synthetic-session', supplied)
@@ -596,7 +627,10 @@ describe('general-next composition', () => {
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
     ).toEqual(['retriever'])
-    const info = patterns[0].children![0].children![1]
+    // The egress gate wraps the whole loop, inside the orchestrator's guard
+    // (boundary guards, slice 4): every route's outgoing calls meet it.
+    expect(patterns[0].name).toBe('withInjectionGuard(withEgressGate(decisionLoop))')
+    const info = routesOf(patterns)[1]
     expect(walk([info]).map((p) => p.name)).toEqual([
       'withInjectionGuard(withInfoDocumentReferences(withReferences(simpleLoop)))',
       'withInfoDocumentReferences(withReferences(simpleLoop))',
@@ -605,6 +639,57 @@ describe('general-next composition', () => {
       'simpleLoop',
     ])
     expect(agent.servers).toEqual(expect.arrayContaining(['office sandbox', 'Data Stash']))
+  })
+
+  // MUTATION: declare `maxOutgoingRetriesPostTripwire: 1` (or `mode: 'roster'`,
+  // or `loadedDecideDown: 'ask'`, or add `'neo4j'` to `addressSources`) in
+  // general-next's egress gate.
+  it('declares the egress gate on both tiers: filter mode, N = 0, by-shape, the host roster', async () => {
+    const egressRoster = vi.fn()
+    await agent.createPatterns('synthetic-session', { ...deps, egressRoster })
+    expect(composition.egress).toMatchObject({
+      local: ['neo4j', 'graph'],
+      localTools: SANDBOX,
+      fetchTools: ['fetch', 'fetch_content'],
+      addressSources: ['web', 'context7', 'graph'],
+      mode: 'filter',
+      maxOutgoingRetriesPostTripwire: 0,
+      loadedDecideDown: 'by-shape',
+    })
+    expect(composition.egress.roster).toBe(egressRoster)
+  })
+
+  // MUTATION: derive `localTools` without reading the profile (return `tools`
+  // whatever `attach.egress` says): a networked box's tools stay local.
+  it("the office box's tools are local only while it is booted 'mcp-only'", async () => {
+    const { officeLocalTools } = await import('@hames-ai/agents/agents/general-next.server')
+    await agent.createPatterns('synthetic-session', deps)
+    const booted = attach.mock.calls[0][0]
+    expect(booted.egress).toBe('mcp-only')
+    expect(officeLocalTools(booted, SANDBOX)).toEqual(SANDBOX)
+    for (const egress of ['pypi', 'github-trusted', 'open', undefined])
+      expect(officeLocalTools({ ...booted, egress }, SANDBOX), String(egress)).toEqual([])
+  })
+
+  // MUTATION: drop `'graph'` from general-next's `local`: the mail read is asked.
+  // (The sandbox tools are local by name, pinned above; that a declared local
+  // tool is never asked is the core gate's pin.)
+  it('a Graph read is never asked about', async () => {
+    choices = ['office-data', 'answer']
+    mocks.actor.mockResolvedValueOnce({
+      action: {
+        reasoning: 'mail',
+        tool_name: 'graph_mail_recent',
+        tool_args: '{}',
+        is_final: true,
+      },
+    })
+    const result = await run('self_deployed')
+    const tools = result.context.events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => (e.data as { tool: string }).tool)
+    expect(tools).toContain('graph_mail_recent')
+    expect(egressStates).toEqual([])
   })
 
   it('S3b: a gateway without context7 still builds, with that namespace undeclared', async () => {
@@ -843,7 +928,9 @@ describe('general-next composition', () => {
       }))
       for (const cited of [false, true]) {
         choices = ['info-retrieval', 'answer']
-        gateway.result = 'Version 2 adds CSV export.'
+        // The search result names the address the controller then fetches: the
+        // egress gate fetches only addresses it was given (O21).
+        gateway.result = `Version 2 adds CSV export. Release notes: ${url}`
         mocks.controller
           .mockResolvedValueOnce({
             action: {
@@ -943,7 +1030,7 @@ describe('general-next composition', () => {
       ...deps,
       pseudonymiseForWeb,
     })
-    const routes = patterns[0].children![0].children!
+    const routes = routesOf(patterns)
     expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
     await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       harness(...patterns)('synthetic task'),
@@ -951,7 +1038,11 @@ describe('general-next composition', () => {
     expect(pseudonymiseForWeb).toHaveBeenCalledTimes(1)
   })
 
-  it('G14 D3: refuses a web call on a private frame without a host pseudonymiser', async () => {
+  // Boundary guards slice 4: the K5 half stays (no host: earlier content is
+  // withheld), and the egress half is the egress gate's, on both tiers.
+  // MUTATION: keep K5's own refusal of web calls (restore its `egressChecks`
+  // entry): the call is refused before the egress question is asked.
+  it('G14 D3: without a host pseudonymiser K5 withholds earlier content and refuses nothing; the egress gate judges the call', async () => {
     mocks.controller.mockResolvedValueOnce({
       action: {
         reasoning: 'search',
@@ -964,40 +1055,80 @@ describe('general-next composition', () => {
     const web = result.context.events.find(
       (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
     )
-    expect(web?.data).toMatchObject({
-      success: false,
-      error: expect.stringContaining('privacy filter unavailable'),
-    })
-    expect(JSON.stringify(web?.data)).not.toContain('synthetic result')
+    expect(web?.data).toMatchObject({ success: true })
+    expect(egressStates).toHaveLength(1)
+    expect(
+      result.context.events.some(
+        (e) => e.type === 'warning' && (e.data as { task: string }).task === 'web_privacy',
+      ),
+    ).toBe(true)
   })
 
-  it('S3b: a private run egress-checks context7 like web search', async () => {
-    const checked: string[] = []
-    const pseudonymiseForWeb: AgentDeps['pseudonymiseForWeb'] = async () => ({
-      ...(await deps.pseudonymiseForWeb!([], '')),
-      check: (args) => {
-        checked.push(JSON.stringify(args))
-        return JSON.stringify(args).includes('PRIVATE-NAME') ? 'refused literal' : undefined
-      },
-    })
-    const call = (tool_name: string, query: string) => ({
-      action: {
-        reasoning: 'lookup',
-        tool_name,
-        tool_args: JSON.stringify({ query, libraryName: query }),
-        is_final: false,
-      },
-    })
-    mocks.controller.mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
-    const result = await run('self_deployed', { ...deps, pseudonymiseForWeb })
-    const byTool = (tool: string) =>
-      result.context.events.find(
-        (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
-      )?.data
-    expect(byTool('resolve-library-id')).toMatchObject({ success: false })
-    expect(checked.some((c) => c.includes('PRIVATE-NAME'))).toBe(true)
-    expect(checked).toHaveLength(1)
-  })
+  // MUTATION: skip the gate on the Anthropic tier (return early from its check
+  // when `effectiveTier() === 'anthropic'`): the Anthropic run's call goes out.
+  it.each(['anthropic', 'self_deployed'])(
+    'the egress gate refuses a call the egress question flags, on the %s tier',
+    async (tier) => {
+      egressAnswer = () => 'personal'
+      mocks.controller.mockResolvedValueOnce({
+        action: {
+          reasoning: 'search',
+          tool_name: 'search',
+          tool_args: '{"query":"synthetic colleague detail"}',
+          is_final: false,
+        },
+      })
+      const result = await run(tier)
+      const web = result.context.events.find(
+        (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
+      )
+      expect(web?.data).toMatchObject({ success: false, error: EGRESS_TEXTS.personalClosing })
+      expect(gateway.calls).not.toContain('search')
+      expect(
+        result.context.events.filter((e) => e.type === 'egress_refused').map((e) => e.data),
+      ).toEqual([
+        {
+          tool: 'search',
+          route: 'info-retrieval',
+          cause: 'decide',
+          category: 'personal',
+          closes: 'route',
+        },
+      ])
+    },
+  )
+
+  // MUTATION: declare `context7` local in general-next's egress gate: the
+  // library lookup is never asked about and goes out.
+  it.each(['anthropic', 'self_deployed'])(
+    'S3b: on the %s tier the egress gate asks about context7 like web search, and leaves neo4j reads local',
+    async (tier) => {
+      egressAnswer = (state) => (state.includes('PRIVATE-NAME') ? 'personal' : 'nothing_private')
+      const call = (tool_name: string, query: string) => ({
+        action: {
+          reasoning: 'lookup',
+          tool_name,
+          tool_args: JSON.stringify({ query, libraryName: query }),
+          is_final: false,
+        },
+      })
+      mocks.controller
+        .mockResolvedValueOnce(call('read_neo4j_cypher', 'PRIVATE-NAME'))
+        .mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
+      const result = await run(tier)
+      const byTool = (tool: string) =>
+        result.context.events.find(
+          (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
+        )?.data
+      expect(byTool('read_neo4j_cypher')).toMatchObject({ success: true })
+      expect(byTool('resolve-library-id')).toMatchObject({
+        success: false,
+        error: EGRESS_TEXTS.personalClosing,
+      })
+      expect(egressStates).toHaveLength(1)
+      expect(egressStates[0]).toContain('Service: "resolve-library-id"')
+    },
+  )
 
   it('excludes the office mail event from info’s view and refuses its expansion', async () => {
     choices = ['office-data', 'info-retrieval', 'answer']
@@ -1010,7 +1141,7 @@ describe('general-next composition', () => {
       },
     })
     const patterns = await agent.createPatterns('synthetic-session', deps)
-    const office = patterns[0].children![0].children![0]
+    const office = routesOf(patterns)[0]
     const officeFn = office.fn
     let mailId = ''
     office.fn = async (...args) => {
@@ -1058,9 +1189,9 @@ describe('general-next composition', () => {
     ).toMatchObject({ success: false, error: expect.stringContaining(mailId) })
   })
 
-  // P4 web-exit pin: assert the outgoing literal denial, independent of any
-  // input rewrite. Mutations: drop the host outgoing-literal check;
-  // remove general-next's wrapper.
+  // P4 web-exit pin: assert the outgoing denial, independent of any input
+  // rewrite. Mutations: drop the host roster's match (no evidence reaches the
+  // egress question); remove general-next's egress gate.
   it('P4: an ingested file keeps its bytes and its directory member cannot leave through web search', async () => {
     const { createWebPseudonymiser } =
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
@@ -1118,9 +1249,15 @@ describe('general-next composition', () => {
           is_final: true,
         },
       })
+    // The egress question refuses what the directory evidence names.
+    egressAnswer = (state) =>
+      /^People named in the request .*"Mira Cedar"/m.test(state) ? 'personal' : 'nothing_private'
+    const { createEgressRoster } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const patterns = await agent.createPatterns('synthetic-session', {
       ...deps,
       pseudonymiseForWeb: createWebPseudonymiser(),
+      egressRoster: createEgressRoster(),
     })
     const result = await withRunFrame(
       {
@@ -1335,7 +1472,7 @@ describe('general-next composition', () => {
     expect(harnessUsesMemory(patterns)).toBe(true)
     expect(patterns.map((p) => p.name)).toEqual([
       'memoryRecall',
-      'withInjectionGuard(decisionLoop)',
+      'withInjectionGuard(withEgressGate(decisionLoop))',
       'compactExecution',
     ])
     const ctx = createContext<AgentData>('synthetic task', {

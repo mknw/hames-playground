@@ -30,6 +30,25 @@ export async function fixtureInference() {
           ),
           usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
         }
+      } else if (req.url === '/v1/systemone' && body.questions['guard.egress']) {
+        // The egress question (`guard.egress`, boundary guards slice 4) is not a route
+        // decision either: it consumes no scripted route. No fixture carries private data, so
+        // every outgoing request is `nothing_private` and goes out; the report counts the call.
+        const labels = Object.keys(
+          (body.questions['guard.egress'] as { criteria: Record<string, unknown> }).criteria,
+        )
+        value = {
+          answers: {
+            'guard.egress': {
+              type: 'choice',
+              choice: 'nothing_private',
+              probabilities: Object.fromEntries(
+                labels.map((l) => [l, l === 'nothing_private' ? 1 : 0]),
+              ),
+            },
+          },
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
       } else if (req.url === '/v1/systemone') {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
         const answers = Object.fromEntries(

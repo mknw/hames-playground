@@ -453,8 +453,10 @@ describe('P4 executor policy before I/O', () => {
     expect(denied.stash.loadStore).not.toHaveBeenCalled()
     expect(denied.stash.ingest).not.toHaveBeenCalled()
   })
-  it('refuses external embeddings before any I/O', async () => {
-    vi.stubEnv('EMBEDDINGS_PROVIDER', 'openrouter')
+  // Ruling W: the tool reads the shared predicate (`local`, or declared trusted
+  // in code). MUTATION: compare with 'openrouter' again: `other` gets through.
+  it.each(['openrouter', 'other'])('refuses the %s embedder before any I/O', async (provider) => {
+    vi.stubEnv('EMBEDDINGS_PROVIDER', provider)
     const denied = buildGraphHarness()
     expect(await denied.runAppTool('graph_file_ingest', { item_id: 'synthetic-id' })).toMatchObject(
       {

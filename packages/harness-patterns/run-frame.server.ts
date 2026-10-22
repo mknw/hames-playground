@@ -157,6 +157,11 @@ export interface RunFrame {
   afterToolCall?: readonly AfterToolCallHook[]
   /** Checks run before any tool dispatch in this scope. */
   egressChecks?: readonly EgressCheck[]
+  /** Which route of a `decisionLoop` this scope runs, as the loop names it (its
+   *  route key). Code-written by the loop around each child, never by content:
+   *  the egress gate counts its refusals per route by this label, and records
+   *  it on each refusal event so the count survives a pause. */
+  route?: string
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -189,6 +194,8 @@ export interface ActiveRunFrame {
   readonly afterToolCall: readonly AfterToolCallHook[]
   /** Never undefined; innermost first, without dropping outer checks. */
   readonly egressChecks: readonly EgressCheck[]
+  /** The innermost `decisionLoop` route this code runs inside, if any. */
+  readonly route?: string
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -327,6 +334,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       : NO_HOOKS,
     afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
     egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
+    route: frame.route,
   }
 }
 
@@ -404,6 +412,8 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     never switch an outer one off.
  *   - `egressChecks` CONCATENATE, innermost first, like transports. Every
  *     check runs; any denial denies, so an inner scope cannot remove one.
+ *   - `route` REPLACES, like everything else: a nested `decisionLoop`'s child
+ *     runs under its own route's label, and leaving it restores the outer one.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -444,6 +454,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
     egressChecks: partial.egressChecks
       ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
       : open.egressChecks,
+    route: partial.route ?? open.route,
   }
   return store.run(amended, fn)
 }

@@ -250,10 +250,14 @@ describe('the bag the composition root supplies is the bag the moved factories r
 })
 
 // Advertisement follows the real composition-root policy, not a test-only flag.
+// The embedder half is the shared predicate (boundary guards, ruling W).
+// MUTATION: compare with 'openrouter' again in `graphFileIngestEnabled`: the
+// unregistered `other` row turns true.
 it.each([
   ['private', 'local', true],
   ['', 'local', false],
   ['private', 'openrouter', false],
+  ['private', 'other', false],
   ['PRIVATE', 'local', false],
 ])('P4 host capability: policy %s, embedder %s => %s', (policy, embedder, expected) => {
   vi.stubEnv('INFERENCE_TIERS', policy)

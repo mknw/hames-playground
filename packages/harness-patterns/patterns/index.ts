@@ -72,6 +72,17 @@ export {
   type WebPseudonymisation,
 } from './withPseudonymisedInputs.server'
 
+export {
+  withEgressGate,
+  egressClosures,
+  type EgressClosures,
+  type EgressDirectoryStatus,
+  type EgressGateConfig,
+  type EgressMode,
+  type EgressRoster,
+  type EgressRosterSource,
+} from './withEgressGate.server'
+
 // Typed systemone decisions and recording.
 export {
   evaluateDecision,

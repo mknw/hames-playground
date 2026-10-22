@@ -360,6 +360,10 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'loop_recovery',
   'decision_made',
   'model_call',
+  // The egress gate's audit and refusal records: a security record is not
+  // optional history, and the tripwire's count is derived from the refusals.
+  'egress_audit',
+  'egress_refused',
 ])
 
 /** Commit scope events to context based on strategy.

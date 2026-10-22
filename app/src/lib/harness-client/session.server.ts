@@ -27,7 +27,7 @@ import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { releaseDeletedSessions } from '../stash/release.server'
 import { createHostMemoryConfig } from '../memory/config.server'
-import { createWebPseudonymiser } from './web-pseudonymiser.server'
+import { createEgressRoster, createWebPseudonymiser } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
 import {
@@ -78,6 +78,7 @@ export function agentDeps(): AgentDeps {
     graphFileIngest: graphFileIngestEnabled(),
     memory: createHostMemoryConfig(),
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }),
+    egressRoster: createEgressRoster({ directory: 'required' }),
     toolNamespaces: mcpNamespace,
     enrichNeo4jResult,
     createRedisBackend,

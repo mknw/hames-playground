@@ -141,6 +141,9 @@ Every path to the API is root or root-equivalent, so every one is counted:
   listener enrol a client. Every `oidc.*` key is unset.
 - **The unix socket.** `/var/lib/incus/unix.socket` gives full control to root and to members of
   `incus-admin`. Both `incus-admin` and `incus` stay without members.
+- **The guest-facing path** is the Incus agent's vsock channel to the daemon, which this plan
+  does not touch; the network plan's [§10](env-vm-network.md#10-deliberately-left-out) leaves it
+  out too.
 - **`incus-user.socket`** gives every member of `incus` a project of its own. Nothing in this
   design uses it, so I6 masks it.
 - **The residual**, as in the network plan's [§10](env-vm-network.md#10-deliberately-left-out):
@@ -157,7 +160,7 @@ The entry point names one existing pool, `storagePool`, and its project may use 
 volume toward it, beside the root disk (`sandbox-vm-spike.md:380-382`). The entry point only checks
 that `rootDiskGiB` is below `diskGiB` (`incus-environment.server.ts:277-278`), and the spike's
 arithmetic lives in its private `storage_preflight` (`sandbox_vm.py:915-948`), which no mode
-exposes. So I8 checks both by hand, read-only, before creating the pool:
+exposes. So I11 checks both by hand, read-only, before creating the pool, from the image staged at I8:
 
 - **The cap**: `rootDiskGiB` plus the image's virtual size is at most `diskGiB` (the one-VM form
   of `sandbox_vm.py:926`).
@@ -234,14 +237,14 @@ does not publish one or add local-file import to that controller"
 **No signature exists.** The pipeline checks signatures only on its build inputs
 (`vm-image/README.md:10-19`). Its output's identity is the Incus fingerprint, the SHA-256 of
 `metadata.tar` followed by `disk.qcow2` (`:27`), recorded in the build's `manifest.json`
-(`:283-286`). The control against substitution is that pin, taken from the **reviewed build's
+(`build.py:283-286`). The control against substitution is that pin, taken from the **reviewed build's
 `manifest.json`**, copied root-owned, never from an image server, and compared with the bytes
 before they reach Incus.
 
-**What the window can do today**, in step I11: stage the reviewed build's two files and its
+**What the window can do today**, in step I8: stage the reviewed build's two files and its
 manifest root-owned, and check the staged bytes against the pin. The image enters Incus only at
 the network plan's W8, through `reconcile`, once question 2's prerequisite has landed. With an
-image host instead, I11 checks the files that host serves, by the same command, before W8.
+image host instead, I8 checks the files that host serves, by the same command, before W8.
 
 ## 8. A9: the firewall driver Incus selected
 
@@ -292,10 +295,10 @@ from. Lost access is recovered from the console.
 | I5   | installs and holds the packages                                                                     | [§12](#12-undo-and-how-it-composes-with-the-network-plans-rollback)        |
 | I6   | masks `incus-user.socket`                                                                           | `systemctl unmask incus-user.socket`                                       |
 | I7   | nothing: audits the fresh state                                                                     | none                                                                       |
-| I8   | creates the storage pool                                                                            | `incus storage delete <pool>`, which refuses while the pool is used        |
+| I8   | stages the image files                                                                              | remove `<image-dir>`                                                       |
 | I9   | sets the loopback listener                                                                          | `incus config unset core.https_address`                                    |
 | I10  | creates and trusts the manager credential                                                           | `incus config trust remove <fingerprint>`; remove `<credential-dir>`       |
-| I11  | stages the image files                                                                              | remove `<image-dir>`                                                       |
+| I11  | creates the storage pool                                                                            | `incus storage delete <pool>`, which refuses while the pool is used        |
 | I12  | nothing: records A9 and diffs against I0                                                            | none                                                                       |
 
 **I0. Record directory, then a read-only snapshot.** `install -d -m 0700 -o root -g root <record-dir>`,
@@ -303,7 +306,7 @@ then, into it: `dpkg-query -W`, `apt-mark showhold`, `dpkg --audit`, `systemctl 
 `systemctl list-units --all 'incus*'`, `getent passwd incus`, `getent group incus incus-admin`,
 `grep '^root:' /etc/subuid /etc/subgid`, `sysctl -n` for the eleven keys in
 `sandbox_vm.py:47-51`, `nft list tables`, `iptables-save`, `ip6tables-save`, `ufw status verbose`,
-`ss -ltunp`, `ls -la /var/lib/incus`, the residue check in `sandbox-vm-spike.md:79-87`, each
+`ss -ltunp`, `command -v qemu-img` (the host's own, which I11 uses; the bundled QEMU is not on `PATH`), `ls -la /var/lib/incus`, the residue check in `sandbox-vm-spike.md:79-87`, each
 container's id, start time, restart count, mounts and health, and an `sshd -T` digest. The
 snapshots are for diffing only and are never replayed. **Stop** if `dpkg --audit` prints anything,
 an apt or unattended-upgrades process runs, any Incus package is in a state other than absent or
@@ -379,14 +382,15 @@ every `Inst` name in the reviewed dependency list: the rules the spike enforces 
 `incus profile show default`, `incus image list --all-projects` and `incus storage list`. Expected
 in [§10](#10-checks-expected-results-and-what-turns-each-red).
 
-**I8. The storage pool.** First the two checks in [§5](#5-storage-pool):
-`qemu-img info --output=json <image-dir>/disk.qcow2` for the virtual size, and
-`df -B1 --output=avail <the pool's backing path>`. Then:
+**I8. Stage the image** in `<image-dir>` (root, 0700): the reviewed build's `metadata.tar`,
+`disk.qcow2` and `manifest.json`, then
 
 ```sh
-incus storage create <pool> <driver> [source=<path>]
-incus storage show <pool>
+cat <image-dir>/metadata.tar <image-dir>/disk.qcow2 | sha256sum
 ```
+
+which must equal the Incus fingerprint in that `manifest.json` and the `image.fingerprint` of the
+entry point's config.
 
 **I9. The loopback listener.** `incus config set core.https_address 127.0.0.1:<port>`, then the
 listener checks in [§10](#10-checks-expected-results-and-what-turns-each-red).
@@ -411,22 +415,23 @@ https.get(new URL("/1.0", url), { ca: read(ca), cert: read(cert), key: read(key)
   res.on("data", (c) => (body += c)).on("end", () => console.log(JSON.parse(body).metadata.auth))
 }).on("error", (e) => { console.error(e.code); process.exit(1) })
 ' https://127.0.0.1:<port>/ <credential-dir>/server.pem <credential-dir>/manager.pem <credential-dir>/manager-key.pem
-docker ps -q | xargs docker inspect --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'
+docker ps -q | xargs -r docker inspect --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}'
 ```
+
+Compare each mount source the last command printed with `<credential-dir>`: for the directory and each of its parents, `grep -Fx <path>` over the listing must match nothing, and a source that is a parent of `<credential-dir>` is found the same way. Empty output (no running container) passes.
 
 The entry point's config names `server.pem` as `manager.ca`, `manager.pem` as `manager.cert` and
 `manager-key.pem` as `manager.key`. Rotation, before `<days>` run out: add a new certificate,
 verify it the same way, then remove the old one.
 
-**I11. Stage the image** in `<image-dir>` (root, 0700): the reviewed build's `metadata.tar`,
-`disk.qcow2` and `manifest.json`, then
+**I11. The storage pool.** First the two checks in [§5](#5-storage-pool):
+`qemu-img info --output=json <image-dir>/disk.qcow2` (the host's own binary, recorded at I0) for the virtual size, and
+`df -B1 --output=avail <the pool's backing path>`. Then:
 
 ```sh
-cat <image-dir>/metadata.tar <image-dir>/disk.qcow2 | sha256sum
+incus storage create <pool> <driver> [source=<path>]
+incus storage show <pool>
 ```
-
-which must equal the Incus fingerprint in that `manifest.json` and the `image.fingerprint` of the
-entry point's config.
 
 **I12. A9 and the post-check.** `incus query /1.0` (its `environment.firewall`), `lsmod` for
 `br_netfilter`, and `sysctl net.bridge.bridge-nf-call-iptables net.bridge.bridge-nf-call-ip6tables`,
@@ -438,7 +443,7 @@ the daemon's own tables already in place.
 **With question 4 (a) only**, a last step stops the daemon until W5:
 `systemctl stop incus.service incus.socket incus-startup.service` (`incus-user.socket` is masked
 since I6), because socket activation otherwise restarts it on the next `incus` call. Verify with `systemctl is-active` on all three.
-Undo: `systemctl start incus.socket incus.service`.
+Undo: `systemctl start incus.socket incus.service incus-startup.service`.
 
 ## 10. Checks: expected results, and what turns each red
 
@@ -455,14 +460,14 @@ host, in its step.
 | I7   | `incus config show`                                                                                         | no `*_address` and no `oidc.*` key                           | rehearsal: state not moved aside, with an address set in it                               |
 | I7   | `incus config trust list`; `incus config trust list-tokens`                                                 | both empty                                                   | rehearsal: `incus config trust add <name>` leaves a token                                 |
 | I7   | `incus network list`; `incus project list`; `incus profile show default`; `incus image list --all-projects` | no managed network; only `default`; `devices: {}`; empty     | rehearsal: `incus admin init --auto`, which creates a bridge and a profile device         |
-| I8   | `incus storage list`                                                                                        | only `<pool>`, with the reviewed driver and source           | rehearsal: a second pool                                                                  |
+| I8   | `cat metadata.tar disk.qcow2 \| sha256sum`                                                                  | the manifest's fingerprint and the config's pin              | here: a copy with one byte of the disk altered                                            |
 | I9   | `incus config show`                                                                                         | one `*_address` key, `core.https_address: 127.0.0.1:<port>`  | rehearsal: `core.https_address=:<port>`; and `core.metrics_address` set                   |
 | I9   | `ss -H -ltunp`, filtered to incusd                                                                          | one line, TCP, `127.0.0.1:<port>`                            | rehearsal: `core.https_address=[::]:<port>`                                               |
 | I10  | `openssl x509 … -ext subjectAltName`                                                                        | lists the loopback address in `manager.url`                  | rehearsal: a server certificate without that address                                      |
 | I10  | the Node probe                                                                                              | `trusted`                                                    | here: a throwaway certificate prints `untrusted`; another CA file fails the TLS handshake |
 | I10  | the mount listing                                                                                           | no source is `<credential-dir>`, inside it or a parent of it | rehearsal: a container bind-mounting the directory's parent                               |
 | I10  | `stat -c '%U %G %a' <credential-dir> <credential-dir>/*`                                                    | `root root 700`, then `root root 600` for each file          | here: a copy with mode 0644 is reported                                                   |
-| I11  | `cat metadata.tar disk.qcow2 \| sha256sum`                                                                  | the manifest's fingerprint and the config's pin              | here: a copy with one byte of the disk altered                                            |
+| I11  | `incus storage list`                                                                                        | only `<pool>`, with the reviewed driver and source           | rehearsal: a second pool                                                                  |
 | I12  | `environment.firewall`; bridge netfilter                                                                    | `nftables`; loaded                                           | none: a recorded value; the proof is probe 8c                                             |
 | I12  | the I0 snapshot again, diffed                                                                               | only the differences below                                   | rehearsal: an unrelated package installed between I0 and I12                              |
 
@@ -511,7 +516,7 @@ watches upstream for security fixes, and how often**, is owner question 6.
 
 ## 12. Undo, and how it composes with the network plan's rollback
 
-**This plan's undo** runs newest first, I11 back to I0, with each row's undo from §9. It
+**This plan's undo** runs newest first, I12 back to I0, with each row's undo from §9. It
 **refuses** while any instance, any managed network, any project other than `default`, or any
 image exists: `incus list --all-projects`, `incus network list`,
 `incus project list` and `incus image list --all-projects` must all show nothing of the

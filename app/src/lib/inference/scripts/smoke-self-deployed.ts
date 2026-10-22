@@ -219,8 +219,8 @@ export async function servedModelIds(
 async function preflight(): Promise<void> {
   if (!selfDeployedInferenceEnabled()) {
     throw new Error(
-      'USE_SELF_DEPLOYED_INFERENCE is not set to 1, so this run would route to Anthropic and prove ' +
-        'nothing. Re-run as:\n' +
+      'USE_SELF_DEPLOYED_INFERENCE is not set to 1, and this check requires the flag as its ' +
+        'precondition. Re-run as:\n' +
         '  USE_SELF_DEPLOYED_INFERENCE=1 pnpm dlx tsx --env-file=.env ' +
         'src/lib/inference/scripts/smoke-self-deployed.ts',
     )

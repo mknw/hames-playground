@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); the pricing assertions below need the same wiring a
 // production turn takes, or every call would read as "unknown".
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * The describe and screen calls reach the run's observability.
  *
@@ -18,6 +18,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { Collector } from '@boundaryml/baml'
 import { createInjectionGuard } from '@hames-ai/harness-patterns/patterns'
 import type { LLMCallRecord } from '@hames-ai/harness-patterns/types'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

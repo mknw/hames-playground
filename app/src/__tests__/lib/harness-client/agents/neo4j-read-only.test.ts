@@ -1,6 +1,6 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables); every adapter below runs through it as a production turn does.
-import '../../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../../mocks/flag-default-tier'
 // The guards `search` and `retriever` declare resolve their namespaces through
 // THIS deployment's catalog, registered at boot in production.
 import '../../../mocks/namespace-catalog'
@@ -44,6 +44,8 @@ import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDefinition } from '@hames-ai/agents'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
 import { testAgentDeps } from './test-deps'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

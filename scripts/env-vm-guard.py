@@ -359,6 +359,14 @@ def session():
     return values["Id"], int(values["TimestampMonotonic"]), values
 
 
+def login_session():
+    """The caller's logind session id, or None: the boot unit has none."""
+    try:
+        return session()[0]
+    except Refused:
+        return None
+
+
 def fresh_login(values):
     # A session spawned from inside the arming one (run0, systemd-run -p
     # PAMName=login, machinectl shell) is new to logind but proves no new login
@@ -421,6 +429,8 @@ def owned(entry):
         return set(entry) == {"kind", "id"} and isinstance(entry["id"], str)
     if kind == "fired":
         return set(entry) == {"kind", "id", "outcome"} and isinstance(entry["outcome"], str)
+    if kind == "replanned":
+        return set(entry) == {"kind", "session"} and isinstance(entry["session"], str)
     return False
 
 
@@ -521,6 +531,12 @@ def armed(entries):
     settled = {e["id"] for e in entries if e["kind"] in ("confirmed", "fired")}
     pending = [e for e in entries if e["kind"] == "deadman" and e["id"] not in settled]
     return pending[-1] if pending else None
+
+
+def restored_at_boot(entries):
+    """Whether the newest settle is a boot restore no operator has re-planned since."""
+    settles = [e for e in entries if e["kind"] in ("confirmed", "fired", "replanned")]
+    return bool(settles) and settles[-1].get("outcome") == "restored at boot"
 
 
 def applied(entries):
@@ -651,7 +667,7 @@ def stop_environment_vms():
     return not attached()
 
 
-def restore(entries, ident):
+def restore(entries, ident, outcome="restored"):
     entry = next((e for e in entries if e["kind"] == "deadman" and e["id"] == ident), None)
     require(entry is not None, "unknown dead-man")
     settled = [e for e in entries if e["kind"] in ("confirmed", "fired") and e["id"] == ident]
@@ -688,7 +704,7 @@ def restore(entries, ident):
         run(["nft", "-f", "-"], replacement(render(entry["previous"])))
         require(model(live()) == expected(entry["previous"]), "restored guard table readback differs")
     del entries[index + 1:]
-    record(entries, {"kind": "fired", "id": ident, "outcome": "restored"})
+    record(entries, {"kind": "fired", "id": ident, "outcome": outcome})
     print("PASS dead-man " + ident + " fired: environment VMs stopped, previous guard state restored")
 
 
@@ -1349,7 +1365,7 @@ def main():
                 elif pending is not None and args.apply and pending["boot"] != boot():
                     # A transient timer does not survive a reboot: the boot unit
                     # restores instead of applying, and fails so Incus stays down.
-                    restore(entries, pending["id"])
+                    restore(entries, pending["id"], "restored at boot")
                     raise Refused("a dead-man was armed across a reboot: previous state restored; re-plan before starting Incus")
                 else:
                     require(pending is None, "a dead-man is armed; confirm it from a new login session first")
@@ -1362,7 +1378,15 @@ def main():
                         installed_config(args.config)
                         persist(entries, args.deadman)
                     elif args.apply:
-                        apply(entries, installed_config(args.config), args.deadman)
+                        config = installed_config(args.config)
+                        if restored_at_boot(entries):
+                            # Any incus CLI call re-runs the unit, which has no session: only
+                            # an operator who has re-planned lets the Incus daemon start again.
+                            ident = login_session()
+                            require(ident is not None,
+                                    "a dead-man restore ran at boot; re-plan, then --apply from a login session")
+                            record(entries, {"kind": "replanned", "session": ident})
+                        apply(entries, config, args.deadman)
                     else:
                         document_, current, drifted = table_state(entries)
                         require(not drifted, "the live table drifted from its journaled render")

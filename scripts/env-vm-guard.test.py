@@ -1479,10 +1479,20 @@ class DeadMan(Harness):
         self.assertEqual(self.invoke("--apply"), 1, "Incus must not start over an unconfirmed change")
         self.assertIn("across a reboot", self.err)
         self.assertNotIn(("inet", guard.TABLE), self.host.tables)
-        self.assertEqual(self.entries()[-1]["outcome"], "restored")
+        self.assertEqual(self.entries()[-1]["outcome"], "restored at boot")
         self.assertFalse(any(c[0] == "incus" for c in self.host.calls), "no incus CLI while the daemon waits")
         self.assertEqual(self.invoke("--confirm"), 1)
-        # The fired arm no longer blocks; the next plain apply is the operator's.
+        # The unit's next run (any incus CLI call triggers one) has no session, and refuses again.
+        self.host.session = None
+        for _ in range(2):
+            self.assertEqual(self.invoke("--apply"), 1, "the unconfirmed render must not come back")
+            self.assertIn("restore ran at boot", self.err)
+            self.assertNotIn(("inet", guard.TABLE), self.host.tables)
+        # Only the operator's --apply from a login session, after re-planning, clears it.
+        self.host.session = ("3", int(self.host.clock.now * 1_000_000) + 1)
+        self.assertEqual(self.invoke("--apply"), 0, self.err)
+        self.assertIn({"kind": "replanned", "session": "3"}, self.entries())
+        self.host.session = None
         self.assertEqual(self.invoke("--apply"), 0, self.err)
 
     def test_a_boot_apply_restores_the_previous_render(self):
@@ -2287,6 +2297,11 @@ MUTATIONS = {
     "O4-confirm-local-sshd": ('(values.get("Service") == "sshd" and values.get("Remote") == "yes")', '(values.get("Service") == "sshd")'),
     "O4-confirm-remote-any-service": ('(values.get("Service") == "sshd" and values.get("Remote") == "yes")', '(values.get("Remote") == "yes")'),
     "O4-confirm-any-tty": ('CONSOLE = re.compile(r"tty[0-9]+|ttyS[0-9]+|hvc[0-9]+")', 'CONSOLE = re.compile(r".*tty[0-9]+|ttyS[0-9]+|hvc[0-9]+|pts/[0-9]+")'),
+    # O5 (PM: hold C1 until re-planned): the boot restore is journaled as such, and blocks the unit until cleared.
+    "O5-boot-restore-unlabelled": ('restore(entries, pending["id"], "restored at boot")', 'restore(entries, pending["id"])'),
+    "O5-unit-reapplies-after-boot-restore": ("                        if restored_at_boot(entries):", "                        if False:"),
+    "O5-cleared-without-session": ('                            require(ident is not None,', "                            require(True,"),
+    "O5-never-cleared": ('    return bool(settles) and settles[-1].get("outcome") == "restored at boot"', '    return any(e.get("outcome") == "restored at boot" for e in settles)'),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

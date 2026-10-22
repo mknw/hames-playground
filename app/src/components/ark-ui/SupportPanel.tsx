@@ -166,7 +166,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
           </Tabs.Trigger>
 
           <Tabs.Trigger
-            value="memory-graph"
+            value="memory"
             p="x-3 y-2"
             text="sm ui-text-primary"
             flex="~"
@@ -175,12 +175,11 @@ export const SupportPanel = (props: SupportPanelProps) => {
             cursor="pointer"
             border="b-2 transparent"
             transition="all"
-            data-state={selectedTab() === 'memory-graph' ? 'active' : 'inactive'}
+            data-state={selectedTab() === 'memory' ? 'active' : 'inactive'}
             style={{
               'border-bottom-color':
-                selectedTab() === 'memory-graph' ? 'var(--ui-accent)' : 'transparent',
-              color:
-                selectedTab() === 'memory-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
+                selectedTab() === 'memory' ? 'var(--ui-accent)' : 'transparent',
+              color: selectedTab() === 'memory' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
             }}
           >
             <span class="i-material-symbols-psychology-outline" w="4" h="4" aria-hidden="true" />
@@ -267,8 +266,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
             />
           </Tabs.Content>
 
-          {/* Personal memories — replaces the retired shared MCP graph. */}
-          <Tabs.Content value="memory-graph" h="full" flex="~ col">
+          {/* The signed-in user's own memories from Postgres (the shared MCP graph is retired). */}
+          <Tabs.Content value="memory" h="full" flex="~ col">
             <MemoryPanel />
           </Tabs.Content>
 

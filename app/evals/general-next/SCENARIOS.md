@@ -2,7 +2,7 @@
 
 All names, documents, people and results below are synthetic. This catalogue is the acceptance contract; assistant lines describe required outcomes, not preloaded successful answers. `RUNNABLE NOW` describes the P4 boundary, not permission to spend: candidate execution waits for S3 registration, and live execution waits for the coordinator message **S3 merged: go**.
 
-The PRIVATE tier (`self_deployed`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. The baseline cases (01–07) were run against `general` on the private tier; since its removal on 2026-10-21 they run on the candidate only and are compared with `general`'s last live results, recorded in `src/lib/eval-support/general-baseline.ts`; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
+The PRIVATE tier (`self_deployed`) alone runs these cases; there are no Anthropic-tier runs. The owner amended the original two-tier brief on 2026-10-15. The baseline cases (01–04 and 06–07; 05, a lookup in the retired shared memory graph, was removed 2026-10-22) were run against `general` on the private tier; since its removal on 2026-10-21 they run on the candidate only and are compared with `general`'s last live results, recorded in `src/lib/eval-support/general-baseline.ts`; additional capabilities are graded only on the selected candidate. Graph mail and people are fixture-only. P4 slice 1 exposes guarded file ingestion on private-only deployments. The existing two P4 driver cases remain reported as gated, never as passing; scenario 18 below records the required file-path acceptance contract without a live run. Uploaded-document cases are rebased on synthetic uploads.
 
 The built-in dependency driver uses an in-memory stash and scripted sandbox effects. It proves routing, ordering, handoff and artifact/index contracts; it does not certify Office rendering or the HTTP upload path. The future app-path evidence must seed synthetic documents through the app upload route before claiming that integration. No real Graph, Redis, Neo4j, sandbox container or company data is required.
 
@@ -67,20 +67,6 @@ Expected routes: `info-retrieval`. Expected tools: `resolve-library-id`, `get-li
 Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries createSignal; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
 A live pass proves: the model resolves SolidJS before requesting its documentation and uses createSignal.
-
-### 05-memory-lookup — Read a named memory entity
-
-**RUNNABLE NOW · should** · recorded `general` baseline
-
-User: “Look up the Lantern project in the memory graph. What is its release tag?”
-
-Expected assistant: The release tag is LANTERN-2.
-
-Expected routes: `info-retrieval`. Expected tools: `search_nodes`.
-
-Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries LANTERN-2; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
-
-A live pass proves: the model queries the named memory entity and reports its release tag.
 
 ### 06-read-only — Explain a missing write capability
 
@@ -319,11 +305,11 @@ remains private-only; this scenario does not certify a tier flip or enable one.
 
 | Design-doc criterion                     | Scenario / evidence                                                                                                                                                                                                    |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1: no baseline regression                | 01–07, candidate vs the recorded `general` baseline; candidate-only decision checks are labelled above                                                                                                                 |
+| 1: no baseline regression                | 01–04 and 06–07, candidate vs the recorded `general` baseline; candidate-only decision checks are labelled above                                                                                                       |
 | 2: synthetic fetch → read back → compute | **proposed — owner to rule:** 17: mailbox fetch → uploaded notes/sales → analysis → indexed markdown → cited retrieval follow-up; 14 covers the upload-only variant. The Graph-file variant 15/16 remains gated on P4. |
 | 3: P2/P3/P5                              | 09/10/11/14/17 exercise routes; shipped S3 structural pins and its independent review supply the dependency-boundary evidence                                                                                          |
 | 4: P1 or no route gates                  | S3 structural pins; runtime termination checks in every candidate scenario                                                                                                                                             |
-| 5: M7 memory opt-in                      | S3 wiring pins; 05 covers named memory lookup only                                                                                                                                                                     |
+| 5: M7 memory opt-in                      | S3 wiring pins; the named-lookup scenario 05 went with the shared memory graph (no per-user memory scenario yet)                                                                                                       |
 | 6: P4 file path                          | 18 is the written must-scenario; 15/16 remain driver-gated. Layer-1 pins cover guarded ingestion and the outgoing web exit; turn-results materialisation remains absent                                                |
 
 Reports compute `flipGate: { eligible, reasons[] }`. Eligibility requires a live, complete selection, every candidate `must` pass, and no regression on any scenario the recorded `general` baseline passed (including `should` cases). P4-gated `should`/`nice` rows stay visible. The gate certifies this Eval’s synthetic-edge contract; the structural and integration evidence in the map is still required before changing the default.

@@ -119,8 +119,7 @@ Every result row carries a `screen` block beside `spend`: the injection screen
 own options and none is inherited: the office and info route guards carry the screen, so it
 covers their external tool results (mail and files from outside senders, sandbox results,
 web and library docs); the host's classifier keeps the graph and Microsoft 365 results whose
-every identity is on a home domain to the deterministic pass, memory reads are screened like
-external content until the memory store is attested, and the documents route's guard
+every identity is on a home domain to the deterministic pass, and the documents route's guard
 declares no screen, so retrieved hits are never screened. The
 loop itself sanitises and screens nothing: a route record is built from committed events and
 capped, and a quoted tool body (an `actorCritic` result, a retriever excerpt) carries the

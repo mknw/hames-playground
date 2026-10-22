@@ -1,17 +1,12 @@
 /**
  * graph-extractor — the paths the fixture-driven `graph-extractor.test.ts`
- * doesn't reach: Memory-MCP results, the Neo4j *driver* shape (node /
+ * doesn't reach: the Neo4j *driver* shape (node /
  * relationship / path objects), source routing by patternId vs. tool name,
  * and the event-level guards (failed calls, non-graph tools, dedup).
  */
 
 import { describe, it, expect } from 'vitest'
-import {
-  extractGraphElements,
-  extractGraphFromResult,
-  isNeo4jGraphResult,
-  isMemoryGraphResult,
-} from '@hames-ai/agents'
+import { extractGraphElements, extractGraphFromResult, isNeo4jGraphResult } from '@hames-ai/agents'
 
 function ev(tool: string, result: unknown, patternId = 'neo4j-query', success = true) {
   return { type: 'tool_result' as const, ts: 1, patternId, data: { tool, result, success } }
@@ -28,84 +23,22 @@ describe('tool classification', () => {
     expect(isNeo4jGraphResult('get_neo4j_schema', null)).toBe(true)
     expect(isNeo4jGraphResult('search', null)).toBe(false)
   })
-
-  it('recognises the memory-graph tools', () => {
-    for (const t of [
-      'read_graph',
-      'search_nodes',
-      'open_nodes',
-      'create_entities',
-      'create_relations',
-      'add_observations',
-    ]) {
-      expect(isMemoryGraphResult(t, null)).toBe(true)
-    }
-    expect(isMemoryGraphResult('fetch_content', null)).toBe(false)
-  })
 })
 
-describe('memory MCP results', () => {
+// The shared memory graph was retired: its results are not graph data, whatever
+// pattern or tool name carries them, and the module no longer exports a probe.
+describe('retired memory-graph results', () => {
   const memoryGraph = {
-    entities: [
-      { name: 'Redis', entityType: 'Database', observations: ['in-memory'] },
-      { name: 'Solid', entityType: 'Framework' },
-    ],
+    entities: [{ name: 'Redis', entityType: 'Database' }],
     relations: [{ from: 'Solid', to: 'Redis', relationType: 'USES' }],
   }
 
-  it('turns entities into nodes and relations into edges', () => {
-    const elements = extractGraphElements([ev('read_graph', memoryGraph, 'memory-loop')])
-
-    const nodes = elements.filter((e) => !isEdge(e))
-    const edges = elements.filter((e) => isEdge(e))
-
-    expect(nodes.map((n) => n.data?.id)).toEqual(['Redis', 'Solid'])
-    expect(nodes[0].data).toMatchObject({
-      label: 'Redis',
-      type: 'Database',
-      observations: ['in-memory'],
-    })
-    expect(nodes[1].data?.type).toBe('Framework')
-
-    expect(edges).toHaveLength(1)
-    expect(edges[0].data).toMatchObject({
-      id: 'Solid-USES-Redis',
-      source: 'Solid',
-      target: 'Redis',
-      label: 'USES',
-    })
-    expect(edges[0].source).toBe('memory')
+  it.each(['memory', 'memory-loop', 'neo4j-query'])('extracts nothing under pattern %s', (id) => {
+    expect(extractGraphElements([ev('read_graph', memoryGraph, id)])).toEqual([])
   })
 
-  it('falls back to a default entity type and RELATES_TO label', () => {
-    const elements = extractGraphElements([
-      ev(
-        'read_graph',
-        { entities: [{ name: 'X' }], relations: [{ from: 'X', to: 'Y' }] },
-        'memory',
-      ),
-    ])
-    expect(elements.find((e) => !isEdge(e))?.data?.type).toBe('Entity')
-    expect(elements.find(isEdge)?.data?.label).toBe('RELATES_TO')
-  })
-
-  it('skips malformed entries instead of emitting broken elements', () => {
-    const elements = extractGraphElements([
-      ev(
-        'read_graph',
-        {
-          entities: [null, 'nope', { name: 'Good' }],
-          relations: [null, { from: 'Good', to: 'Good', relationType: 'SELF' }],
-        },
-        'memory',
-      ),
-    ])
-    expect(elements.map((e) => e.data?.id)).toEqual(['Good', 'Good-SELF-Good'])
-  })
-
-  it('yields nothing for a result with neither entities nor relations', () => {
-    expect(extractGraphElements([ev('read_graph', { ok: true }, 'memory')])).toEqual([])
-    expect(extractGraphElements([ev('read_graph', 'a plain string', 'memory')])).toEqual([])
+  it('no longer exports isMemoryGraphResult', async () => {
+    expect(await import('@hames-ai/agents')).not.toHaveProperty('isMemoryGraphResult')
   })
 })
 
@@ -216,22 +149,16 @@ describe('source routing', () => {
     expect(el.source).toBe('neo4j')
   })
 
-  it('routes by a patternId that merely contains neo4j / memory', () => {
+  it('routes by a patternId that merely contains neo4j', () => {
     const [neo] = extractGraphElements([
       ev('read_neo4j_cypher', [{ n: { name: 'A' } }], 'custom-neo4j-route'),
     ])
     expect(neo.source).toBe('neo4j')
-    const [mem] = extractGraphElements([
-      ev('read_graph', { entities: [{ name: 'B' }] }, 'custom-memory-route'),
-    ])
-    expect(mem.source).toBe('memory')
   })
 
   it('falls back to the tool name when the patternId says nothing', () => {
     const [neo] = extractGraphElements([ev('read_neo4j_cypher', [{ n: { name: 'A' } }], 'router')])
     expect(neo.source).toBe('neo4j')
-    const [mem] = extractGraphElements([ev('read_graph', { entities: [{ name: 'B' }] }, 'router')])
-    expect(mem.source).toBe('memory')
   })
 })
 
@@ -270,9 +197,9 @@ describe('event-level guards', () => {
 describe('extractGraphFromResult', () => {
   it('reads the events off a harness result', () => {
     const result = {
-      context: { events: [ev('read_graph', { entities: [{ name: 'E' }] }, 'memory')] },
+      context: { events: [ev('read_neo4j_cypher', [{ n: { name: 'E' } }])] },
     }
-    expect(extractGraphFromResult(result).map((e) => e.data?.id)).toEqual(['E'])
+    expect(extractGraphFromResult(result).map((e) => e.data?.name ?? e.data?.id)).toEqual(['E'])
   })
 
   it('returns nothing for a result with no context or no events', () => {

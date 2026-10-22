@@ -49,7 +49,7 @@ import {
   type GraphStashStore,
 } from '@hames-ai/connectors/graph/graph-tools.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
-import { homeDomains, warnWhenNoHomeDomains } from '../harness-client/ingress-classifier.server'
+import { checkHomeDomains, homeDomains } from '../harness-client/ingress-classifier.server'
 
 // The registry, with the app's identity resolution injected (design S3): the
 // app passes its own getRequestUserId/getRequestSessionId pair, so the
@@ -142,8 +142,9 @@ const appToolTransport: ToolTransport = {
 
 registerTransport(appToolTransport)
 
-// Once, at boot: an empty home-domain list makes every sender external.
-warnWhenNoHomeDomains()
+// Once, at boot: a single-label home domain is refused, and a list with no
+// usable domain (every sender external) is warned about.
+checkHomeDomains()
 
 // The deployment's MCP-gateway catalog (#225 L5), registered ONCE here — the
 // same boot point as the transport, so `inferServer` sees it without any call

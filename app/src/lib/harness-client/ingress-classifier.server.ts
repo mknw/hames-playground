@@ -21,6 +21,7 @@
  * finding on it still forces the screen (the guard's rule, not this module's).
  * Memory reads never reach this: they are exempt from the screen (ruling L).
  */
+import { domainToASCII } from 'node:url'
 import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'
 import { graphProvenance } from '@hames-ai/connectors/graph/graph-tools.server'
 
@@ -39,25 +40,77 @@ export function homeDomains(): readonly string[] {
     .filter((domain) => domain.length > 0)
 }
 
-let warned = false
+/** Suffixes many organisations share, and public mail providers: as a home
+ *  domain, each makes every address under it internal. A short fixed list,
+ *  warned about rather than refused, since a deployment may own a name under one. */
+const SHARED_SUFFIXES: ReadonlySet<string> = new Set([
+  'co.uk',
+  'com.au',
+  'onmicrosoft.com',
+  'gmail.com',
+  'outlook.com',
+  'hotmail.com',
+  'live.com',
+  'yahoo.com',
+  'icloud.com',
+])
 
-/** Logged once, at boot, by the composition root that hands {@link homeDomains}
- *  to the Graph tools. An empty list is a safe default, so it warns rather than
- *  refuses: every sender is external, and the screen and its gate run on all of
- *  them. */
-export function warnWhenNoHomeDomains(log: (message: string) => void = console.warn): void {
-  if (warned || homeDomains().length > 0) return
-  warned = true
+/** A normalised domain an address can match: dot-separated labels of letters,
+ *  digits and hyphens, none empty. */
+const USABLE_DOMAIN = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/
+
+let checked = false
+
+/**
+ * Run once, at boot, by the composition root that hands {@link homeDomains} to
+ * the Graph tools. It REFUSES (throws) an entry with fewer than two labels after
+ * normalisation: `com` would make every `.com` sender internal through the
+ * subdomain rule. It warns, naming the entry, on one that normalises to no
+ * domain or one an address can never match (`@contoso.com`, `https://…`,
+ * `*.contoso.com`), and on a shared suffix or public mail provider. When no entry
+ * is usable it warns that every sender is external: a safe default, so a
+ * warning rather than a refusal, but one somebody should be told about.
+ */
+export function checkHomeDomains(log: (message: string) => void = console.warn): void {
+  if (checked) return
+  checked = true
+  let usable = 0
+  for (const entry of homeDomains()) {
+    const domain = domainToASCII(entry)
+    if (domain !== '' && domain.split('.').filter(Boolean).length < 2) {
+      throw new Error(
+        `[ingress] HOME_EMAIL_DOMAINS entry ${JSON.stringify(entry)} has fewer than two ` +
+          'labels: every address under it would count as internal and skip the injection ' +
+          'screen. Name the deployment’s own domains.',
+      )
+    }
+    if (!USABLE_DOMAIN.test(domain)) {
+      log(
+        `[ingress] HOME_EMAIL_DOMAINS entry ${JSON.stringify(entry)} is not a domain an ` +
+          'address can match, so it is ignored. Write a bare domain such as contoso.com.',
+      )
+      continue
+    }
+    if (SHARED_SUFFIXES.has(domain)) {
+      log(
+        `[ingress] HOME_EMAIL_DOMAINS entry ${JSON.stringify(entry)} is a shared suffix or a ` +
+          'public mail provider: every address under it counts as internal and skips the ' +
+          'injection screen.',
+      )
+    }
+    usable++
+  }
+  if (usable > 0) return
   log(
-    '[ingress] HOME_EMAIL_DOMAINS is empty: every Microsoft 365 sender, organiser and ' +
-      'sharer counts as external, so the injection screen and its gate run on all of ' +
-      'their content. Set it to the deployment’s own email domains.',
+    '[ingress] HOME_EMAIL_DOMAINS names no usable domain: every Microsoft 365 sender, ' +
+      'organiser and sharer counts as external, so the injection screen and its gate run ' +
+      'on all of their content. Set it to the deployment’s own email domains.',
   )
 }
 
-/** Test-only: forget that the warning was logged. */
-export function __resetHomeDomainsWarning(): void {
-  warned = false
+/** Test-only: forget that the check ran. */
+export function __resetHomeDomainsCheck(): void {
+  checked = false
 }
 
 /** The host classifier. Reads code-written provenance only; anything it cannot

@@ -14,17 +14,17 @@ import type { GuardGate, InjectionScreen } from '@hames-ai/harness-patterns/inje
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
 import {
-  __resetHomeDomainsWarning,
+  __resetHomeDomainsCheck,
+  checkHomeDomains,
   classifyIngress,
   homeDomains,
-  warnWhenNoHomeDomains,
 } from '../../../lib/harness-client/ingress-classifier.server'
 
 const clean = { injection_detected: false, reason: 'clean', spans: [] }
 
 beforeEach(() => {
   vi.stubEnv('HOME_EMAIL_DOMAINS', 'contoso.com')
-  __resetHomeDomainsWarning()
+  __resetHomeDomainsCheck()
 })
 afterEach(() => vi.unstubAllEnvs())
 
@@ -81,17 +81,63 @@ describe('homeDomains()', () => {
     expect(homeDomains()).toEqual([])
   })
 
-  // MUTATION: drop the empty-list check in `warnWhenNoHomeDomains` (or the
-  // `warned` latch): it warns on a configured list, or more than once.
+  // MUTATION: drop the no-usable-domain warning in `checkHomeDomains` (or the
+  // `checked` latch): it stays quiet on an empty list, or warns more than once.
   it('an empty list logs one boot warning; a configured one logs none', () => {
     const log = vi.fn()
-    warnWhenNoHomeDomains(log)
+    checkHomeDomains(log)
     expect(log).not.toHaveBeenCalled()
+    __resetHomeDomainsCheck()
     vi.stubEnv('HOME_EMAIL_DOMAINS', '')
-    warnWhenNoHomeDomains(log)
-    warnWhenNoHomeDomains(log)
+    checkHomeDomains(log)
+    checkHomeDomains(log)
     expect(log).toHaveBeenCalledTimes(1)
-    expect(log.mock.calls[0][0]).toMatch(/HOME_EMAIL_DOMAINS is empty: every .* sender/)
+    expect(log.mock.calls[0][0]).toMatch(/names no usable domain: every .* sender/)
+  })
+
+  // MUTATION: drop the two-label check in `checkHomeDomains`: `com` boots and
+  // makes every .com sender internal through the subdomain rule.
+  it.each(['com', 'contoso.com,com', '.com', 'COM.'])(
+    'an entry with fewer than two labels is refused at boot: %s',
+    (value) => {
+      vi.stubEnv('HOME_EMAIL_DOMAINS', value)
+      expect(() => checkHomeDomains(vi.fn())).toThrow(/fewer than two labels/)
+    },
+  )
+
+  // MUTATION: count every non-empty entry as usable (the old `homeDomains().length
+  // > 0` test): the list below is non-empty, nothing in it can match, and boot
+  // says nothing about the second half.
+  it('an entry that normalises to no domain is named, and a list with no usable entry warns', () => {
+    vi.stubEnv('HOME_EMAIL_DOMAINS', '@contoso.com')
+    const log = vi.fn()
+    checkHomeDomains(log)
+    expect(log.mock.calls.map(([m]) => m)).toEqual([
+      expect.stringMatching(/entry "@contoso\.com" is not a domain an address can match/),
+      expect.stringMatching(/names no usable domain/),
+    ])
+  })
+
+  it.each(['https://contoso.com', '*.contoso.com', 'contoso.com.'])(
+    'an entry an address can never match is named and ignored: %s',
+    (entry) => {
+      vi.stubEnv('HOME_EMAIL_DOMAINS', `${entry},example.org`)
+      const log = vi.fn()
+      checkHomeDomains(log)
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(log.mock.calls[0][0]).toContain(`entry ${JSON.stringify(entry)} is not a domain`)
+    },
+  )
+
+  // MUTATION: drop the shared-suffix check: a public mail provider boots quietly.
+  it('a shared suffix or a public mail provider is warned about, by name', () => {
+    vi.stubEnv('HOME_EMAIL_DOMAINS', 'contoso.com,gmail.com')
+    const log = vi.fn()
+    checkHomeDomains(log)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0][0]).toMatch(
+      /entry "gmail\.com" is a shared suffix or a public mail provider/,
+    )
   })
 })
 

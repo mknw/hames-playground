@@ -7,7 +7,8 @@
  * `path`) and its `cause` chain. A caller needs the message of an error the app
  * wrote for it, and nothing else; the rest belongs in the server log.
  *
- * `handler-transform.ts` routes the handler's catch through {@link toWireError}.
+ * `handler-transform.ts` routes the handler's catch, and the in-process call path
+ * (server rendering, a server function calling another), through {@link toWireError}.
  *
  * ## Which build keeps detail
  *
@@ -51,6 +52,32 @@ function isAuthored(error: Error): boolean {
   )
 }
 
+/**
+ * What the server log keeps of a thrown value. Never the object itself: Node's
+ * inspector prints every own property and the `cause` chain, and provider and
+ * driver errors carry prompts, response bodies and row detail there. So: the
+ * name, message, code and stack, and the NAMES in the cause chain.
+ */
+export function describeForLog(thrown: unknown): Record<string, unknown> {
+  if (!(thrown instanceof Error)) return { type: typeof thrown }
+  const code = (thrown as { code?: unknown }).code
+  const causes: string[] = []
+  const seen = new Set<unknown>([thrown])
+  let cause = (thrown as { cause?: unknown }).cause
+  while (cause !== undefined && causes.length < 5 && !seen.has(cause)) {
+    seen.add(cause)
+    causes.push(cause instanceof Error ? cause.name : typeof cause)
+    cause = cause instanceof Error ? (cause as { cause?: unknown }).cause : undefined
+  }
+  return {
+    name: thrown.name,
+    message: thrown.message,
+    code: typeof code === 'string' || typeof code === 'number' ? code : undefined,
+    stack: thrown.stack,
+    causes,
+  }
+}
+
 export interface WireErrorOptions {
   /** Keep the thrown value untouched. Defaults to the build constant above. */
   detailed?: boolean
@@ -62,7 +89,7 @@ export function toWireError(thrown: unknown, options: WireErrorOptions = {}): un
   if (thrown instanceof Response) return thrown
   if (options.detailed ?? import.meta.env.DEV === true) return thrown
 
-  ;(options.log ?? console.error)('[server-fn] a server function threw:', thrown)
+  ;(options.log ?? console.error)('[server-fn] a server function threw:', describeForLog(thrown))
 
   const message =
     thrown instanceof Error && isAuthored(thrown)

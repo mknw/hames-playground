@@ -7,7 +7,7 @@
  * about the stack and own properties the serialiser reads off it.
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { crossSerializeStream } from 'seroval'
 import { describe, expect, it, vi } from 'vitest'
@@ -19,9 +19,17 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   ServerOnlyError: class ServerOnlyError extends Error {},
 }))
 
+import { createHash } from 'node:crypto'
 import { GENERIC_MESSAGE, USER_FACING, toWireError } from '~/lib/server-fn-errors/wire-error'
-import { HANDLER_ID, wrapHandlerErrors } from '~/lib/server-fn-errors/handler-transform'
-import { ConversationBusyError } from '~/lib/db/conversations.server'
+import {
+  HANDLER_ID,
+  RUNTIME_ID,
+  wireErrorPluginsFor,
+  wireErrorsPlugin,
+  wrapHandlerErrors,
+  wrapInProcessErrors,
+} from '~/lib/server-fn-errors/handler-transform'
+import { ConversationBusyError, ConversationConflictError } from '~/lib/db/conversations.server'
 import { SkillRejectedError } from '~/lib/db/skills.server'
 
 function serialise(value: unknown): string {
@@ -121,8 +129,17 @@ describe('toWireError in a production build', () => {
   })
 
   it('replaces the message of everything else with the generic one', () => {
-    for (const make of [classes[3], classes[4], classes[5], classes[6], classes[8]]) {
-      const out = prod(make[1]())
+    class QuietSubclass extends Error {}
+    const rest: Array<() => unknown> = [
+      ...classes
+        .filter(([name]) => !['authentication', 'validation', 'owner scope'].includes(name))
+        .map(([, make]) => make),
+      () => new RangeError('Invalid array length'),
+      () => new AggregateError([new Error(SECRET)], 'several'),
+      () => new QuietSubclass('a subclass with no own properties'),
+    ]
+    for (const make of rest) {
+      const out = prod(make())
       expect(out).toBeInstanceOf(Error)
       expect((out as Error).message).toBe(GENERIC_MESSAGE)
       expect(Object.keys(out as Error)).toEqual([])
@@ -131,11 +148,40 @@ describe('toWireError in a production build', () => {
     }
   })
 
-  it('logs the thrown value in full on the server', () => {
+  it('logs the error server-side without its content-bearing properties', () => {
     const log = vi.fn()
-    const thrown = new DatabaseError('boom')
+    const thrown = Object.assign(new DatabaseError('boom'), {
+      prompt: `PROMPT ${SECRET}`,
+      raw_output: `OUTPUT ${SECRET}`,
+      raw_response: `RESPONSE ${SECRET}`,
+      cause: Object.assign(new ProviderError('inner'), { headers: { authorization: SECRET } }),
+    })
     toWireError(thrown, { detailed: false, log })
-    expect(log).toHaveBeenCalledWith(expect.any(String), thrown)
+    expect(log).toHaveBeenCalledTimes(1)
+    const logged = JSON.stringify(log.mock.calls[0])
+    expect(logged).not.toContain(SECRET)
+    expect(logged).toContain('boom')
+    expect(logged).toContain('42P01')
+    expect(logged).toContain('"causes":["Error"]')
+    for (const arg of log.mock.calls[0]) expect(arg).not.toBe(thrown)
+    // a thrown string is content too: only its type is logged
+    const stringLog = vi.fn()
+    toWireError(`secret ${SECRET}`, { detailed: false, log: stringLog })
+    expect(JSON.stringify(stringLog.mock.calls)).not.toContain(SECRET)
+  })
+
+  it('marks the conflict error as user-facing', () => {
+    expect(new ConversationConflictError()[USER_FACING]).toBe(true)
+    const wire = serialise(prod(new ConversationConflictError()))
+    expect(wire).toContain('This conversation changed while the turn was running')
+  })
+
+  it('keeps the structural rule for bare errors, knowingly: a bare Error passes unchanged', () => {
+    // Package code interpolates foreign text into bare Errors (e.g. the work-sync and
+    // document-store throws). The allowlist cannot tell, so this pins the choice; no
+    // server function reaches those throws today.
+    const out = prod(new Error('sync failed: path /x stderr y')) as Error
+    expect(out.message).toBe('sync failed: path /x stderr y')
   })
 
   it('leaves a thrown Response (the redirect channel) alone', () => {
@@ -172,6 +218,106 @@ describe('toWireError in the dev and test layers', () => {
   })
 })
 
+describe('the hook wiring', () => {
+  const root = process.cwd()
+  const read = (p: string) => readFileSync(resolve(root, p), 'utf8')
+  const sha = (p: string) => createHash('sha256').update(read(p)).digest('hex')
+  const handlerPath = 'node_modules/@solidjs/start/dist/runtime/server-handler.js'
+  const runtimePath = 'node_modules/@solidjs/start/dist/runtime/server-fns-runtime.js'
+
+  it('gives the two server routers the plugin, and the client none', () => {
+    expect(wireErrorPluginsFor('server')).toHaveLength(1)
+    expect(wireErrorPluginsFor('server-function')).toHaveLength(1)
+    expect(wireErrorPluginsFor('client')).toHaveLength(0)
+  })
+
+  it('is spread into the config by that function', () => {
+    expect(read('app.config.ts')).toContain('...wireErrorPluginsFor(router)')
+  })
+
+  it('the framework still builds those routers with the config’s vite function', () => {
+    const framework = read('node_modules/@solidjs/start/config/index.js')
+    expect(framework).toContain('vite({ router: "server-function" })')
+    expect(framework).toContain('vite({ router: "server" })')
+    expect(framework).toContain('dist/runtime/server-fns-runtime.js')
+  })
+
+  it('the plugin rewrites the installed handler and runtime at their real paths', () => {
+    const plugin = wireErrorsPlugin()
+    const handlerOut = plugin.transform(read(handlerPath), realpathSync(resolve(root, handlerPath)))
+    expect(handlerOut?.code).toContain('x = toWireError(x);')
+    const runtimeOut = plugin.transform(read(runtimePath), realpathSync(resolve(root, runtimePath)))
+    expect(runtimeOut?.code).toContain('toWireError(x)')
+    expect(plugin.transform('catch (x) {', '/r/src/other.js')).toBeNull()
+    expect(RUNTIME_ID.test(realpathSync(resolve(root, runtimePath)))).toBe(true)
+  })
+
+  it('pins the two framework files, so an upgrade forces a re-review of every serialising path', () => {
+    expect(sha(handlerPath)).toBe(
+      '993ede3d996a50be22c5b284e80410ddde9e9de49f87cb843adab9ad27152443',
+    )
+    expect(sha(runtimePath)).toBe(
+      '33e2e98d4f3225fe83be82f65ffddbf2321eda4281def870f90e7ac4a1003d79',
+    )
+  })
+})
+
+describe('the in-process path (server rendering, a server function calling another)', () => {
+  // The transformed runtime, evaluated with stubbed imports.
+  const source = wrapInProcessErrors(
+    readFileSync(
+      resolve(process.cwd(), 'node_modules/@solidjs/start/dist/runtime/server-fns-runtime.js'),
+      'utf8',
+    ),
+  )
+    .replace(/^import .*$/gm, '')
+    .replace('export function createServerReference', 'function createServerReference')
+  const make = new Function(
+    'getRequestEvent',
+    'provideRequestEvent',
+    'cloneEvent',
+    'toWireError',
+    'import_meta_env',
+    `${source.replace(/import\.meta\.env/g, 'import_meta_env')}\nreturn createServerReference`,
+  )
+  const createServerReference = make(
+    () => ({ locals: {} }),
+    (_evt: unknown, run: () => unknown) => run(),
+    (evt: unknown) => ({ ...(evt as object) }),
+    prod,
+    { SERVER_BASE_URL: '' },
+  ) as (fn: (...a: unknown[]) => unknown, id: string, name: string) => (...a: unknown[]) => unknown
+
+  it('crosses a rejected server function as a message only', async () => {
+    const fn = createServerReference(
+      async () => {
+        throw new DatabaseError('relation "conversations" does not exist: SELECT 1')
+      },
+      'id',
+      'name',
+    )
+    const wire = await (fn() as Promise<unknown>).then(
+      () => 'resolved',
+      (e: unknown) => serialise(e),
+    )
+    for (const leak of LEAKS) expect(wire, leak).not.toContain(leak)
+    expect(wire).toContain(GENERIC_MESSAGE)
+  })
+
+  it('crosses a synchronous throw as a message only, and passes values through', async () => {
+    const throwing = createServerReference(
+      () => {
+        throw new ProviderError(SECRET)
+      },
+      'id',
+      'name',
+    )
+    expect(() => throwing()).toThrow(GENERIC_MESSAGE)
+    expect(await createServerReference(async () => 42, 'id', 'name')()).toBe(42)
+    expect(createServerReference(() => 7, 'id', 'name')()).toBe(7)
+  })
+})
+
 describe('the handler hook', () => {
   const handler = readFileSync(
     resolve(process.cwd(), 'node_modules/@solidjs/start/dist/runtime/server-handler.js'),
@@ -187,6 +333,42 @@ describe('the handler hook', () => {
   it('refuses to build when the anchor is missing or ambiguous', () => {
     expect(() => wrapHandlerErrors('try {} catch (e) {}')).toThrow(/found 0/)
     expect(() => wrapHandlerErrors('catch (x) {} catch (x) {}')).toThrow(/found 2/)
+    expect(() => wrapInProcessErrors('return 1')).toThrow(/found 0/)
+  })
+
+  it('runs the transformed catch block: the X-Error header and the body carry the message only', async () => {
+    const out = wrapHandlerErrors(handler)
+    const start = out.indexOf('catch (x) {')
+    let depth = 0
+    let end = start
+    for (let i = out.indexOf('{', start); i < out.length; i++) {
+      if (out[i] === '{') depth++
+      if (out[i] === '}' && --depth === 0) {
+        end = i + 1
+        break
+      }
+    }
+    const block = out.slice(start, end).replace(/import\.meta\.env\.SEROVAL_MODE/g, '"js"')
+    const headers: Record<string, string> = {}
+    const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as typeof Function
+    const run = new AsyncFunction(
+      'toWireError',
+      'setHeader',
+      'serializeToJSStream',
+      'x',
+      `const instance = {}, h3Event = {}; try { throw x } ${block}`,
+    )
+    const thrown = new DatabaseError('relation "conversations" does not exist')
+    const body = (await run(
+      prod,
+      (_e: unknown, name: string, value: string) => {
+        headers[name] = value
+      },
+      (_i: unknown, value: unknown) => serialise(value),
+      thrown,
+    )) as string
+    expect(headers['X-Error']).toBe(GENERIC_MESSAGE)
+    for (const leak of LEAKS) expect(body, leak).not.toContain(leak)
   })
 
   it('targets the handler under a pnpm path', () => {

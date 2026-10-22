@@ -522,7 +522,32 @@ class Clock:
 def restricted(bridge):
     """The keys of the package's own project restrictions that --check reads."""
     return {"restricted": "true", "restricted.devices.nic": "managed", "restricted.devices.proxy": "block",
-            "restricted.networks.access": bridge, "restricted.devices.disk": "block"}
+            "restricted.networks.access": bridge, "restricted.devices.disk": "block",
+            "restricted.virtual-machines.lowlevel": "block", "restricted.virtual-machines.nesting": "block",
+            "restricted.devices.unix-char": "block", "restricted.devices.unix-block": "block",
+            "restricted.devices.unix-hotplug": "block", "restricted.devices.usb": "block",
+            "restricted.devices.pci": "block", "restricted.devices.gpu": "block",
+            "restricted.devices.infiniband": "block", "restricted.snapshots": "block",
+            "restricted.backups": "block"}
+
+
+# The package's project restrictions are the source of truth: --check must refuse
+# exactly the restricted.* keys the package writes as "block", so both sets are
+# read from source and compared (test_the_block_keys_match_the_package).
+PACKAGE = ROOT / "packages/sandbox/incus-environment.server.ts"
+
+
+def package_block_keys():
+    """Every restricted.* key the package writes as block, parsed from its source."""
+    body = PACKAGE.read_text().split("function restrictions(", 1)[1]
+    body = body.split("return {", 1)[1].split("\n    }", 1)[0]
+    return {key for key, value in re.findall(r"'([^']+)': '([^']+)'", body)
+            if key.startswith("restricted.") and value == "block"}
+
+
+def guard_block_keys():
+    """Every restricted.* key --check requires to read block, parsed from its source."""
+    return set(re.findall(r'settings\.get\("(restricted\.[^"]+)"\) == "block"', SOURCE.read_text()))
 
 
 class Host:
@@ -1727,6 +1752,9 @@ class Check(Harness):
             "project-restriction-unset": lambda h: h.projects[1]["config"].pop("restricted"),
             "project-nic-any": lambda h: h.projects[1]["config"].update(**{"restricted.devices.nic": "allow"}),
             "project-proxy-allowed": lambda h: h.projects[1]["config"].update(**{"restricted.devices.proxy": "allow"}),
+            **{"project-" + key.rsplit(".", 1)[1] + "-allowed":
+               (lambda k: lambda h: h.projects[1]["config"].update(**{k: "allow"}))(key) for key in package_block_keys()
+               if key != "restricted.devices.proxy"},
             "link-second-member": lambda h: (h.containers.update({"f" * 64: dict(h.containers["a" * 64])}),
                                              h.networks["envapp-dev"]["Containers"].update({c * 64: {"IPv4Address": DEV["clientAddress"] + "/29"}
                                                                                             for c in "af"})),
@@ -1754,6 +1782,11 @@ class Check(Harness):
         self.host.restore(good)
         guard.DAEMON.unlink(missing_ok=True)
         self.assertEqual(self.checked(), 0, self.err)
+
+    def test_the_block_keys_match_the_package(self):
+        """--check refuses exactly the restricted.* keys the package writes as block."""
+        self.assertEqual(guard_block_keys(), package_block_keys(),
+                         "--check's block key set differs from the package's restrictions")
 
     def test_the_real_member_is_the_link_bridges_one_port(self):
         self.ready()
@@ -2239,6 +2272,11 @@ MUTATIONS = {
     "O3-project-restriction-unchecked": ('            require(settings.get("restricted") == "true" and', "            require(True and"),
     "O3-project-nic-unchecked": ('                    settings.get("restricted.devices.nic") == "managed" and', "                    True and"),
     "O3-project-proxy-unchecked": ('                    settings.get("restricted.devices.proxy") == "block" and', "                    True and"),
+    # N1: --check must refuse every restricted.* key the package writes as block;
+    # each dropped check leaves a network path that never crosses the table.
+    **{"O3-project-" + key.rsplit(".", 1)[1] + "-unchecked":
+       ('                    settings.get("%s") == "block" and' % key, "                    True and")
+       for key in sorted(package_block_keys() - {"restricted.devices.proxy"})},
     "check-vm-single-nic": ('            require(set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', '            require(nic.get("network") == vm_bridge and'),
     "check-vm-nic-bridge": ('set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', 'set(vm["nics"]) == {"eth0"} and'),
     "check-vm-address": ('                    nic.get("ipv4.address") == guest, "the environment VM', '                    True, "the environment VM'),

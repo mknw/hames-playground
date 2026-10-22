@@ -1,5 +1,9 @@
-/** #507 S7, layer 1. Real wrappers, loops, host factory and callTool; only
- *  directory I/O and transports are fakes. Red mutations are recorded on the PR. */
+/** #507 S7, layer 1. Real wrappers, loops, host factories and callTool; only
+ *  directory I/O and transports are fakes. Red mutations are recorded on the PR.
+ *  Boundary guards slice 4: what LEAVES is the egress gate's now, so every
+ *  outgoing assertion runs through `withEgressGate` with the real host roster
+ *  (`createEgressRoster`), in 'roster' mode (setup change 4: a roster match then
+ *  refuses by itself, as the old outgoing check did) or with a Decide stub. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
@@ -18,7 +22,10 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: class {},
 }))
 
-import { createWebPseudonymiser } from '../../../lib/harness-client/web-pseudonymiser.server'
+import {
+  createEgressRoster,
+  createWebPseudonymiser,
+} from '../../../lib/harness-client/web-pseudonymiser.server'
 import { loadDirectoryRoster } from '../../../lib/org-graph/roster-source.server'
 import * as roster from '../../../lib/privacy/graph-roster'
 import * as pseudonym from '../../../lib/privacy/pseudonymise'
@@ -52,7 +59,16 @@ import {
   activeRunFrame,
   type RunFrame,
 } from '@hames-ai/harness-patterns/run-frame.server'
-import { callTool, closeMcpClient } from '@hames-ai/harness-patterns/mcp-client.server'
+import {
+  callTool,
+  closeMcpClient,
+  EGRESS_CHECK_FAILED,
+} from '@hames-ai/harness-patterns/mcp-client.server'
+import {
+  withEgressGate,
+  type EgressGateConfig,
+} from '@hames-ai/harness-patterns/patterns/withEgressGate.server'
+import { EGRESS_TEXTS, readOutgoing } from '@hames-ai/harness-patterns/egress-gate.server'
 import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import type {
   ConfiguredPattern,
@@ -119,6 +135,38 @@ const frame = (tier?: string): RunFrame => ({
   inference: tier === undefined ? undefined : { tier },
   transports: [transport],
 })
+
+const CATALOG = [
+  'fetch',
+  'web_search',
+  'read_neo4j_cypher',
+  'resolve-library-id',
+  'search_nodes',
+  'open_nodes',
+]
+/** The egress gate in 'roster' mode over the real host roster (setup change 4). */
+const rosterGate = (config: Partial<EgressGateConfig> = {}) =>
+  withEgressGate({
+    local: ['neo4j'],
+    catalog: CATALOG,
+    roster: createEgressRoster(),
+    mode: 'roster',
+    ...config,
+  })
+/** What the real host roster finds in a call's arguments, read the way the gate
+ *  reads them (decoded and NFKC-normalised by core first): the matched spans,
+ *  or the step-1 refusal text. */
+async function egressMatch(
+  payloads: unknown[] = [],
+  user = '',
+  directory: 'required' | 'none' = 'required',
+) {
+  const { roster } = await createEgressRoster({ directory })(payloads, user)
+  return (args: Record<string, unknown>): string[] => {
+    const read = readOutgoing(args)
+    return read.ok ? roster.match(read.request.texts) : [read.refusal]
+  }
+}
 const result = (id: string, payload: unknown, summary: string) => ({
   ...createEvent('tool_result', 'retriever', {
     tool: 'retriever',
@@ -526,6 +574,50 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
   )
 })
 
+describe('the egress roster against the real gate (boundary guards, slice 4)', () => {
+  // The pseudonymiser's fence split (`mapContent`) is a copy of `spotlight()`'s
+  // header; this pin is the one that names the binding.
+  // MUTATION: change one word of `spotlight()`'s header text in
+  // `injection-guard.ts`: the split misses it, and `redact` withholds the whole
+  // string, header and footer included.
+  it('the fence split recognises the real spotlight() header', async () => {
+    const filter = await createWebPseudonymiser()([], '')
+    expect(filter.redact(spotlight(DIRECTORY.displayName, 'graph_mail_recent', 'graph'))).toBe(
+      spotlight('[withheld: private identity]', 'graph_mail_recent', 'graph'),
+    )
+  })
+
+  // Setup change 4's twin: in 'filter' mode a roster match does not refuse by
+  // itself. MUTATION: veto on a roster match in 'filter' mode.
+  it("'filter' mode: a directory name Decide passes is dispatched, and audited with the name as written", async () => {
+    const decide = Object.assign(
+      async () => ({
+        probs: { personal: 0, company: 0, nothing_private: 1 },
+        method: 'jev' as const,
+        calibrated: false,
+      }),
+      { supportedTypes: ['choice'] as const },
+    ) as unknown as DecideFn
+    const scope = createScope<Data>('probe', {})
+    const child = configurePattern<Data>('probe', async (s) => {
+      expect(await callTool('web_search', { query: 'mira%20cedar keynote' })).toMatchObject({
+        success: true,
+      })
+      return s
+    })
+    await withRunFrame(frame('self_deployed'), () =>
+      rosterGate({ mode: 'filter', decide })(child).fn(
+        scope,
+        createEventView(createContext('Find the keynote')),
+      ),
+    )
+    expect(outgoing).toHaveBeenCalledOnce()
+    expect(scope.events.filter((e) => e.type === 'egress_audit').map((e) => e.data)).toEqual([
+      expect.objectContaining({ spans: ['mira cedar'], allowedBy: 'decide' }),
+    ])
+  })
+})
+
 describe('nested guard-fence roster defence', () => {
   it('unfences to a fixed point before harvesting identities and preserves all fence labels', async () => {
     const fence = (text: string) =>
@@ -540,8 +632,9 @@ describe('nested guard-fence roster defence', () => {
     const filter = await createWebPseudonymiser({ directory: 'none' })([payload], '')
     expect(filter.apply(`A message from ${EXTERNAL.name}`)).toBe('A message from PERSON_1')
     expect(filter.apply(payload).from.emailAddress.name).toBe(fence('PERSON_1'))
-    expect(filter.check({ query: EXTERNAL.name })).toContain('private identity')
-    expect(filter.check({ query: EXTERNAL.address })).toContain('private identity')
+    const match = await egressMatch([payload], '', 'none')
+    expect(match({ query: EXTERNAL.name })).toEqual([EXTERNAL.name])
+    expect(match({ query: EXTERNAL.address })).toEqual([EXTERNAL.address])
   })
 })
 
@@ -552,7 +645,7 @@ describe('fix round 2 regressions', () => {
       const filter = await createWebPseudonymiser()([MAIL], '')
       const text = escape === '\\u004f' ? `${escape}tto` : `${escape}Otto`
       expect(filter.checkLiterals(text)).toContain('private identity')
-      expect(filter.check({ query: text })).toContain('private identity')
+      expect((await egressMatch([MAIL]))({ query: text })).not.toEqual([])
     },
   )
 
@@ -561,12 +654,13 @@ describe('fix round 2 regressions', () => {
       { displayName: 'Tim Ely', mail: 'contact@example.test' },
       { displayName: 'Al Bo Cy', mail: 'other@example.test' },
     ])
-    const filter = await createWebPseudonymiser()([], '')
-    expect(filter.check({ query: 'untimely' })).toBeUndefined()
-    expect(filter.check({ query: 'Al! Bo! Cy' })).toBeUndefined()
+    const match = await egressMatch()
+    expect(match({ query: 'untimely' })).toEqual([])
+    expect(match({ query: 'Al! Bo! Cy' })).toEqual([])
     // Owner accepts this exact-token collision rather than weakening matching.
-    expect(filter.check({ query: 'timely' })).toContain('private identity')
-    expect(filter.check({ query: 'https://profiles.example/TimEly' })).toContain('private identity')
+    expect(match({ query: 'timely' })).toEqual(['timely'])
+    // The compact spelling is found per token, and quoted as the request wrote it.
+    expect(match({ query: 'https://profiles.example/TimEly' })).toEqual(['TimEly'])
   })
 
   it('D-4: forged header text is content and cannot shield an identity', async () => {
@@ -617,18 +711,20 @@ describe('fix round 2 regressions', () => {
       },
       { patternId: 'probe', viewConfig: { fromLast: false, fromLastNTurns: window } },
     )
-    const wrapped = withPseudonymisedInputs({
-      pseudonymise: async (...args) => {
-        const filter = await host(...args)
-        return {
-          ...filter,
-          apply: (value) => {
-            applications.push(value)
-            return filter.apply(value)
-          },
-        }
-      },
-    })(child)
+    const wrapped = rosterGate()(
+      withPseudonymisedInputs({
+        pseudonymise: async (...args) => {
+          const filter = await host(...args)
+          return {
+            ...filter,
+            apply: (value) => {
+              applications.push(value)
+              return filter.apply(value)
+            },
+          }
+        },
+      })(child),
+    )
     const scope = createScope<Data>('probe', {})
     await withRunFrame(frame('self_deployed'), () =>
       wrapped.fn(scope, createEventView(ctx, child.config.viewConfig, 'probe')),
@@ -660,7 +756,7 @@ describe('fix round 2 regressions', () => {
   it('D-2 privacy: the old header literal is refused before outgoing dispatch', async () => {
     const seen = await oldHeaderRun(2)
     expect(seen.dump).not.toContain(DIRECTORY.mail)
-    expect(seen.privateCall).toMatchObject({ success: false })
+    expect(seen.privateCall).toMatchObject({ success: false, error: EGRESS_TEXTS.roster })
     expect(outgoing).toHaveBeenCalledOnce()
     expect(outgoing.mock.calls[0]).toEqual(['web_search', { query: 'ordinary facts' }])
   })
@@ -712,10 +808,8 @@ describe('fix round 1 Critical and High regressions', () => {
   it.each(['mira-cedar', 'mira_cedar', 'MiraCedar', 'mira-cedar-1a2b'])(
     'denies the name slug %s in a fetch URL',
     async (slug) => {
-      const filter = await createWebPseudonymiser()([], '')
-      expect(filter.check({ url: `https://profiles.example/in/${slug}` })).toContain(
-        'private identity',
-      )
+      const match = await egressMatch()
+      expect(match({ url: `https://profiles.example/in/${slug}` })).not.toEqual([])
     },
   )
 })
@@ -730,8 +824,9 @@ describe('fix round 1 remaining findings', () => {
         expect(await callTool(name, { query: 'ordinary facts' })).toMatchObject({ success: true })
         return s
       })
+      // Nothing is declared local, so nothing has to resolve: every call is egress.
       await withRunFrame(frame('self_deployed'), () =>
-        withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+        rosterGate({ local: [], catalog: [] })(child).fn(
           createScope('probe', {}),
           createEventView(createContext('Research')),
         ),
@@ -743,6 +838,7 @@ describe('fix round 1 remaining findings', () => {
   it.each([false, true])(
     'learns identities from this invocation’s guarded local reads (fenced=%s)',
     async (fenced) => {
+      // A declared local namespace, and a name declared local exactly.
       for (const name of ['read_neo4j_cypher', 'read_filesystem_file']) {
         outgoing.mockResolvedValueOnce({ success: true, data: MAIL })
         const child = configurePattern<Data>('probe', async (s) => {
@@ -762,7 +858,7 @@ describe('fix round 1 remaining findings', () => {
           })
           return s
         })
-        const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
+        const wrapped = rosterGate({ localTools: ['read_filesystem_file'] })(child)
         const guarded = fenced
           ? withInjectionGuard({ tools: [name], spotlight: 'always' })(wrapped)
           : wrapped
@@ -777,6 +873,8 @@ describe('fix round 1 remaining findings', () => {
 
   // S3b: context7 is an outbound public service (checked, never an identity
   // source); neo4j is local (unchecked, and its results extend the roster).
+  // MUTATION: observe every result, not only a local call's: the context7
+  // result's address is refused on the first web call.
   it('checks context7 arguments like web, exempts neo4j, and learns only from neo4j results', async () => {
     outgoing.mockResolvedValueOnce({ success: true, data: MAIL }) // context7 result
     outgoing.mockResolvedValueOnce({ success: true, data: 'web ok' }) // first web_search
@@ -802,10 +900,7 @@ describe('fix round 1 remaining findings', () => {
       return s
     })
     await withRunFrame(frame('self_deployed'), () =>
-      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
-        createScope('probe', {}),
-        createEventView(createContext('Research')),
-      ),
+      rosterGate()(child).fn(createScope('probe', {}), createEventView(createContext('Research'))),
     )
     expect(outgoing).toHaveBeenCalledTimes(3)
   })
@@ -815,13 +910,20 @@ describe('fix round 1 remaining findings', () => {
   // while neo4j reads still never do.
   it('runs the egress check for memory- and context7-namespaced calls, never for neo4j reads', async () => {
     const seen: string[] = []
-    const base = await createWebPseudonymiser()([], '')
-    const pseudonymise = async () => ({
-      ...base,
-      check: (args: Readonly<Record<string, unknown>>) => {
-        seen.push(String(args.query ?? args.libraryName))
-      },
-    })
+    const real = createEgressRoster()
+    const spied: typeof real = async (...args) => {
+      const built = await real(...args)
+      return {
+        ...built,
+        roster: {
+          ...built.roster,
+          match: (texts) => {
+            seen.push(...texts.filter((t) => t.endsWith('-ARG')))
+            return built.roster.match(texts)
+          },
+        },
+      }
+    }
     const child = configurePattern<Data>('probe', async (s) => {
       await callTool('read_neo4j_cypher', { query: 'NEO4J-ARG' })
       await callTool('search_nodes', { query: 'MEMORY-ARG' })
@@ -829,7 +931,7 @@ describe('fix round 1 remaining findings', () => {
       return s
     })
     await withRunFrame(frame('self_deployed'), () =>
-      withPseudonymisedInputs({ pseudonymise })(child).fn(
+      rosterGate({ roster: spied })(child).fn(
         createScope('probe', {}),
         createEventView(createContext('Research')),
       ),
@@ -837,25 +939,25 @@ describe('fix round 1 remaining findings', () => {
     expect(seen).toEqual(['MEMORY-ARG', 'DOCS-ARG'])
   })
 
+  // Ruling K: the local result is DELIVERED (the gate guards what leaves), and
+  // every later outgoing call is refused with the fixed damaged-roster text.
   it('refuses subsequent outgoing calls when roster extension throws, without exposing the error', async () => {
     const child = configurePattern<Data>('probe', async (s) => {
       vi.spyOn(roster, 'extractRoster').mockImplementationOnce(() => {
         throw new Error(EXTERNAL.address)
       })
       const read = await callTool('read_neo4j_cypher', { query: 'RETURN 1' })
-      expect(read.success).toBe(false)
+      expect(read.success).toBe(true)
       expect(JSON.stringify(read)).not.toContain(EXTERNAL.address)
       expect(await callTool('web_search', { query: 'ordinary facts' })).toMatchObject({
         success: false,
+        error: EGRESS_TEXTS.damagedRoster,
       })
       return s
     })
     const scope = createScope<Data>('probe', {})
     await withRunFrame(frame('self_deployed'), () =>
-      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
-        scope,
-        createEventView(createContext('Research')),
-      ),
+      rosterGate()(child).fn(scope, createEventView(createContext('Research'))),
     )
     expect(outgoing).toHaveBeenCalledOnce()
     expect(JSON.stringify(scope.events)).not.toContain(EXTERNAL.address)
@@ -880,23 +982,39 @@ describe('fix round 1 remaining findings', () => {
     const regex = vi.spyOn(globalThis, 'RegExp').mockImplementation(function (pattern, flags) {
       return new NativeRegExp(pattern, flags)
     })
-    const filter = await createWebPseudonymiser()([], `Search for ${people[99].displayName}`)
-    // RegExp's species constructor is also used by native String.split;
-    // count explicit outgoing matchers, whose flags are exactly `u`.
+    const { roster: egress } = await createEgressRoster()(
+      [],
+      `Search for ${people[99].displayName}`,
+    )
+    // RegExp's species constructor is also used by native String.split, and the
+    // test transform lowers `\p{…}` literals to `new RegExp`; count the outgoing
+    // matcher by its own signature (its leading boundary), not by its flags.
     const compilations = () =>
-      regex.mock.calls.filter(([, flags]) => flags === 'u' || flags === 'iu').length
+      regex.mock.calls.filter(([pattern]) => String(pattern).startsWith('(?<![\\p{L}\\p{N}])'))
+        .length
     expect(compilations()).toBe(1)
-    for (let n = 0; n < 10; n++) expect(filter.check({ query: 'ordinary facts' })).toBeUndefined()
-    expect(filter.check({ query: people[98].displayName })).toContain('private identity')
-    expect(filter.check({ query: people[99].displayName })).toBeUndefined()
+    for (let n = 0; n < 10; n++) expect(egress.match(['ordinary facts'])).toEqual([])
+    expect(egress.match([people[98].displayName])).toEqual([people[98].displayName])
+    expect(egress.match([people[99].displayName])).toEqual([])
     expect(compilations()).toBe(1)
+  })
+
+  // MUTATION: return no span when the request cannot be mapped back character
+  // for character (`if (!mapped) return []`): a matched name is no evidence.
+  it('a match that cannot be mapped back (a context-sensitive lower case) quotes the whole leaf', async () => {
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([
+      { displayName: 'Οδυσσέας Παπαδόπουλος', mail: 'odysseas@example.test' },
+    ])
+    const { roster } = await createEgressRoster()([], '')
+    // A final capital sigma lowercases to the final form only in context.
+    const leaf = 'query: ΟΔΥΣΣΕΑΣ ΠΑΠΑΔΟΠΟΥΛΟΣ τηλέφωνο'
+    expect(roster.match([leaf])).toEqual([leaf])
   })
 
   it.each(['PERSON 3', 'PERSON-3', 'PERSON__3_EMAIL', 'PERSON%203', 'PERSON-3-FUTURE'])(
     'refuses the linkable placeholder %s',
     async (query) => {
-      const filter = await createWebPseudonymiser()([], '')
-      expect(filter.check({ query })).toContain('Placeholders')
+      expect(readOutgoing({ query })).toEqual({ ok: false, refusal: EGRESS_TEXTS.placeholder })
     },
   )
 
@@ -905,7 +1023,7 @@ describe('fix round 1 remaining findings', () => {
       { displayName: 'Li Xu', mail: 'contact@example.test' },
       { displayName: 'René Alder', mail: 'other@example.test' },
     ])
-    const filter = await createWebPseudonymiser()([], '')
+    const match = await egressMatch()
     for (const query of [
       'Li+Xu',
       'Li%2BXu',
@@ -918,7 +1036,7 @@ describe('fix round 1 remaining findings', () => {
       'Rene\u0301/Alder',
       'René.Alder',
     ]) {
-      expect(filter.check({ query })).toContain('private identity')
+      expect(match({ query }), query).not.toEqual([])
     }
   })
 
@@ -981,13 +1099,15 @@ describe('withholding and outgoing checks', () => {
       ['fetch'],
       { patternId: 'info', maxTurns: 4 },
     )
-    const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(loop)
+    const wrapped = rosterGate()(
+      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(loop),
+    )
     const scope = createScope<Data>('info', {})
     await withRunFrame(frame('self_deployed'), () =>
       wrapped.fn(scope, createEventView(createContext('Find public background'))),
     )
     expect(seen).toHaveLength(3)
-    expect(JSON.stringify(seen[1].turns)).toContain('private identity')
+    expect(JSON.stringify(seen[1].turns)).toContain(EGRESS_TEXTS.roster)
     expect(scope.events.filter((e) => e.type === 'error')).toEqual([])
     expect(
       scope.events
@@ -998,8 +1118,11 @@ describe('withholding and outgoing checks', () => {
   })
 
   // D3/E2 mutations: pass through a missing host; move deletion after success.
+  // Boundary guards slice 4: K5's half withholds earlier content and refuses
+  // NOTHING (mutation: keep the K5-local refusal of web calls); whether the call
+  // leaves is the egress gate's, whose directory matrix is pinned on its own.
   it.each(['missing', 'roster', 'table', 'directory', 'empty', 'apply'] as const)(
-    'fails closed on %s without a turn error',
+    'fails closed on %s without a turn error, and leaves the call to the egress gate',
     async (failure) => {
       if (failure === 'roster')
         vi.spyOn(roster, 'extractRoster').mockImplementation(() => {
@@ -1024,11 +1147,12 @@ describe('withholding and outgoing checks', () => {
       expect(scope.events.some((e) => e.type === 'error')).toBe(false)
       expect(scope.events.filter((e) => e.type === 'warning')).toHaveLength(1)
       expect(JSON.stringify(scope.events)).not.toContain('sensitive')
+      vi.restoreAllMocks()
+      vi.mocked(loadDirectoryRoster).mockResolvedValue([DIRECTORY])
       const inner = configurePattern<Data>('probe', async (s) => {
         expect(s.data).not.toHaveProperty(WEB_ROSTER_INPUT)
         expect(await callTool('fetch', { url: 'https://public.example.test' })).toMatchObject({
-          success: false,
-          error: expect.stringContaining('privacy filter unavailable'),
+          success: true,
         })
         expect(await callTool('read_neo4j_cypher', { query: 'RETURN 1' })).toMatchObject({
           success: true,
@@ -1042,7 +1166,7 @@ describe('withholding and outgoing checks', () => {
           createEventView(createContext('task')),
         ),
       )
-      expect(outgoing).toHaveBeenCalledTimes(1)
+      expect(outgoing).toHaveBeenCalledTimes(2)
     },
   )
 
@@ -1063,40 +1187,47 @@ describe('withholding and outgoing checks', () => {
     expect(scope.data).not.toHaveProperty(WEB_ROSTER_INPUT)
   })
 
-  it('denies percent-encoded identities and every placeholder suffix before dispatch; user-named literals are allowed', async () => {
-    const child = configurePattern<Data>('probe', async (s) => {
-      for (const term of [
-        'PERSON_3',
-        'PERSON_3_EMAIL',
-        'PERSON_3_FUTURE_SUFFIX',
-        'PERSON%5F3',
-        encodeURIComponent(DIRECTORY.mail),
-        `<${DIRECTORY.mail}>`,
-      ]) {
-        expect(
-          await callTool('fetch', { url: `https://public.example.test/?q=${term}` }),
-        ).toMatchObject({ success: false })
-      }
-      expect(outgoing).not.toHaveBeenCalled()
-      expect(await callTool('web_search', { query: DIRECTORY.displayName })).toMatchObject({
-        success: true,
+  // MUTATION: skip the gate on the Anthropic tier (return early from its check
+  // when the frame's tier is 'anthropic'): that row dispatches the identities.
+  it.each(['anthropic', 'self_deployed'])(
+    'on the %s tier, denies percent-encoded identities and every placeholder suffix before dispatch; user-named literals are allowed',
+    async (tier) => {
+      const child = configurePattern<Data>('probe', async (s) => {
+        for (const term of [
+          'PERSON_3',
+          'PERSON_3_EMAIL',
+          'PERSON_3_FUTURE_SUFFIX',
+          'PERSON%5F3',
+          encodeURIComponent(DIRECTORY.mail),
+          `<${DIRECTORY.mail}>`,
+        ]) {
+          expect(
+            await callTool('fetch', { url: `https://public.example.test/?q=${term}` }),
+          ).toMatchObject({ success: false })
+        }
+        expect(outgoing).not.toHaveBeenCalled()
+        expect(await callTool('web_search', { query: DIRECTORY.displayName })).toMatchObject({
+          success: true,
+        })
+        expect(await callTool('web_search', { query: 'ordinary facts' })).toMatchObject({
+          success: true,
+        })
+        expect(await callTool('web_search', { query: '5% growth' })).toMatchObject({
+          success: true,
+        })
+        expect(await callTool('fetch', { url: 'https://public.example.test/%FF' })).toMatchObject({
+          success: false,
+          error: EGRESS_TEXTS.undecodable,
+        })
+        return s
       })
-      expect(await callTool('web_search', { query: 'ordinary facts' })).toMatchObject({
-        success: true,
-      })
-      expect(await callTool('web_search', { query: '5% growth' })).toMatchObject({ success: true })
-      expect(await callTool('fetch', { url: 'https://public.example.test/%FF' })).toMatchObject({
-        success: false,
-        error: expect.stringContaining('URL-decoded'),
-      })
-      return s
-    })
-    const wrapped = withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)
-    await withRunFrame(frame('self_deployed'), () =>
-      wrapped.fn(createScope('probe', {}), createEventView(createContext(USER))),
-    )
-    expect(outgoing).toHaveBeenCalledTimes(3)
-  })
+      const wrapped = rosterGate()(child)
+      await withRunFrame(frame(tier), () =>
+        wrapped.fn(createScope('probe', {}), createEventView(createContext(USER))),
+      )
+      expect(outgoing).toHaveBeenCalledTimes(3)
+    },
+  )
 
   // Mutation: nested egressChecks replace rather than concatenate, or delete
   // callTool's pre-dispatch loop. Both must fail at the dispatch observation.
@@ -1161,7 +1292,7 @@ describe('withholding and outgoing checks', () => {
         expect(await callTool('fetch', {})).toEqual({
           success: false,
           data: null,
-          error: 'Tool call refused: outgoing privacy check unavailable.',
+          error: EGRESS_CHECK_FAILED,
         })
       },
     )
@@ -1175,15 +1306,34 @@ describe('withholding and outgoing checks', () => {
     vi.mocked(loadDirectoryRoster).mockRejectedValue(new Error('not read'))
     const noDirectory = await createWebPseudonymiser({ directory: 'none' })([MAIL], '')
     expect(noDirectory.apply(EXTERNAL.name)).toBe('PERSON_1')
-    expect(noDirectory.check({ query: EXTERNAL.address })).toContain('private identity')
-    expect(noDirectory.check({ query: 'public facts' })).toBeUndefined()
+    const match = await egressMatch([MAIL], '', 'none')
+    expect(match({ query: EXTERNAL.address })).toEqual([EXTERNAL.address])
+    expect(match({ query: 'public facts' })).toEqual([])
+  })
+
+  // The egress roster REPORTS the directory instead of throwing for it: what an
+  // empty or unreadable directory means for a call is the gate's matrix.
+  // MUTATION: let `createEgressRoster` throw on an unreadable directory, or
+  // report `loaded` for an empty one.
+  it('the egress roster reports the directory as loaded, empty, unreadable or none', async () => {
+    const status = async (directory: 'required' | 'none' = 'required') =>
+      (await createEgressRoster({ directory })([MAIL], '')).directory
+    expect(await status()).toBe('loaded')
+    expect(await status('none')).toBe('none')
+    vi.mocked(loadDirectoryRoster).mockResolvedValue([])
+    expect(await status()).toBe('empty')
+    vi.mocked(loadDirectoryRoster).mockRejectedValue(new Error(DIRECTORY.mail))
+    const unreadable = await createEgressRoster()([MAIL], '')
+    expect(unreadable.directory).toBe('unreadable')
+    // The payload roster still answers: the sender of MAIL is matched.
+    expect(unreadable.roster.match([EXTERNAL.address])).toEqual([EXTERNAL.address])
   })
 
   it('matches tagged addresses, URL-encoded Unicode names, and form-query spaces', async () => {
     vi.mocked(loadDirectoryRoster).mockResolvedValue([
       { displayName: 'René Alder', mail: 'rene+tag@example.test' },
     ])
-    const filter = await createWebPseudonymiser()([], '')
+    const match = await egressMatch()
     for (const query of [
       'rene+tag@example.test',
       'rene%2Btag%40example.test',
@@ -1192,11 +1342,11 @@ describe('withholding and outgoing checks', () => {
       '<René Alder>',
       '%3CRen%C3%A9%20Alder%3E',
     ]) {
-      expect(filter.check({ query })).toContain('private identity')
+      expect(match({ query }), query).not.toEqual([])
     }
-    expect(filter.check({ query: 'Renéish Alderwood' })).toBeUndefined()
-    const userNamed = await createWebPseudonymiser()([], 'Search for <René Alder>')
-    expect(userNamed.check({ query: 'René Alder' })).toBeUndefined()
+    expect(match({ query: 'Renéish Alderwood' })).toEqual([])
+    const userNamed = await egressMatch([], 'Search for <René Alder>')
+    expect(userNamed({ query: 'René Alder' })).toEqual([])
   })
 
   it('leaves earlier placeholders unchanged when labelled fields are harvested again', async () => {
@@ -1213,14 +1363,14 @@ describe('withholding and outgoing checks', () => {
     vi.mocked(loadDirectoryRoster).mockResolvedValue([
       { displayName: 'Nora Spruce', mail: address },
     ])
-    const filter = await createWebPseudonymiser()([], '')
-    expect(filter.check({ query: address })).toContain('private identity')
+    const match = await egressMatch()
+    expect(match({ query: address })).not.toEqual([])
     expect(
-      filter.check({
+      match({
         nested: [{ url: `https://public.example.test/?q=${encodeURIComponent(address)}` }],
       }),
-    ).toContain('private identity')
-    expect(filter.check({ [address]: 'value' })).toContain('private identity')
+    ).not.toEqual([])
+    expect(match({ [address]: 'value' })).not.toEqual([])
   })
 })
 
@@ -1335,18 +1485,25 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
     })
   })
 
-  it('screen span equal to the sender name: the wrapper withholds earlier content and refuses web calls', async () => {
+  // K5 withholds earlier content; the egress gate, whose roster is damaged by
+  // the same result in the context, refuses the call (ruling K).
+  it('screen span equal to the sender name: K5 withholds earlier content and the egress gate refuses web calls', async () => {
     const child = configurePattern<Data>('probe', async (s) => {
-      expect(await callTool('web_search', { query: 'Mr Willow' })).toMatchObject({ success: false })
+      expect(await callTool('web_search', { query: 'Mr Willow' })).toMatchObject({
+        success: false,
+        error: EGRESS_TEXTS.damagedRoster,
+      })
       return s
     })
     const scope = createScope<Data>('probe', {
       [WEB_ROSTER_INPUT]: { payloads: [screened(EXTERNAL.name)], steps: 'Steps so far' },
     })
+    const ctx = createContext<Data>('Research')
+    ctx.events.push(result('screened', screened(EXTERNAL.name), 'mail'))
     await withRunFrame(frame('self_deployed'), () =>
-      withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child).fn(
+      rosterGate()(withPseudonymisedInputs({ pseudonymise: createWebPseudonymiser() })(child)).fn(
         scope,
-        createEventView(createContext('Research')),
+        createEventView(ctx),
       ),
     )
     expect(outgoing).not.toHaveBeenCalled()

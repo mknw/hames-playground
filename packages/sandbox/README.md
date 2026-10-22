@@ -258,10 +258,20 @@ const environment = createIncusEnvironment({
   bridge: 'previewbr', // dedicated, operator-created managed bridge
   address: '10.77.0.2', // reserve this guest IPv4 on that bridge
   storagePool: 'sandbox-pool',
+  // Exactly one image source. A simplestreams server:
   image: {
     server: 'https://images.example.test', // HTTPS simplestreams origin
     fingerprint: imageFingerprint, // pinned 64-character SHA-256
   },
+  // …or the two staged files of the split image, imported into the project
+  // before the VM is created from them (the fingerprint is the same pin):
+  // image: {
+  //   files: {
+  //     metadata: '/operator-private/staged/metadata.tar',
+  //     disk: '/operator-private/staged/disk.qcow2',
+  //   },
+  //   fingerprint: imageFingerprint,
+  // },
   quota: { cpu: 2, memoryMiB: 2048, diskGiB: 24, rootDiskGiB: 16 },
   stateDirectory: '/operator-private/sandbox-preview', // parent must exist
 })
@@ -300,9 +310,19 @@ its restrictions on every call. Containers are disabled, one VM is allowed,
 CPU/memory/disk totals are explicit, and host devices, snapshots, backups and
 low-level VM settings are blocked. Root storage and the selected managed NIC are
 the necessary exceptions. The project allows only the selected storage pool;
-VM nesting is blocked and the VM explicitly disables it. Network access and
-image-server domain allowlists are nonempty. Image origins use the default
-HTTPS port (443); other ports are refused. It registers a separate restricted Incus client certificate confined to
+VM nesting is blocked and the VM explicitly disables it. Network access is
+explicit. A simplestreams image origin uses the default HTTPS port (443); other
+ports are refused, and the project's image-server domain allowlist names it.
+A local-files image source names no server: the allowlist key stays unset —
+no remote image pull is permitted — and `reconcile` imports the two staged
+files into its own project before the instance exists. The files are checked
+first (absolute paths, no symlink anywhere in the path, regular files, owned
+by root, no group or other write, bounded sizes, and no checkout — a `.git`
+entry in any parent — above them), and the upload rides the project-restricted
+certificate, never the manager credential. Incus computes the fingerprint over
+the bytes it received: unless it equals the pin, the imported image is deleted
+and `reconcile` refuses **before creating any instance**, so a substituted or
+corrupted image cannot become the VM's source. It registers a separate restricted Incus client certificate confined to
 exactly that project, verifies the registered scope, and uses **that certificate**
 for instance operations. The manager credential is never sent to the guest.
 
@@ -337,9 +357,14 @@ key generation may require operator recovery of the incomplete local directory.
 Transport/API errors omit response bodies, credential values and underlying TLS
 errors, and never retry through plaintext or a different origin.
 
-A slow image pull is recorded as an Incus operation in the private state directory;
+A slow image pull or local import is recorded as an Incus operation in the
+private state directory;
 retrying reconcile resumes it before submitting another create. Teardown also waits
-for that create and handles completed operations that Incus has expired.
+for that create and handles completed operations that Incus has expired. A
+locally imported image needs its staged files only on the import itself: once
+the fingerprint matches, later reconciles reuse the image and never re-read
+them. Teardown removes the imported image by its pinned fingerprint from this
+project only.
 
 Before first boot, reconcile reads and validates `volatile.eth0.hwaddr` (the
 Incus device key, independent of the guest name), then writes a per-instance
@@ -376,8 +401,9 @@ host socket and mounts only the three Docker client files read-only. Adapt any
 other app mounts explicitly. The MCP gateway's own socket remains out of scope.
 No compose defaults change without this overlay.
 
-Real Incus 7.3+ VM creation with these restrictions and NIC filters, and a pull
-from an allowed image-server domain, remain evidence owed to the spike, along
+Real Incus 7.3+ VM creation with these restrictions and NIC filters, a pull
+from an allowed image-server domain and a local-file import with fingerprint
+verification, remain evidence owed to the spike, along
 with VM boot/agent/cloud-init, firewall/routing, streams/files/PTY and performance.
 The overlay still runs the app container as root and shares `app-network` with
 the gateway, whose host socket remains mounted; it does not establish removal

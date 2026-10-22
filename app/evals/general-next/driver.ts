@@ -8,6 +8,7 @@ import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
 } from '../../src/lib/eval-support/synthetic-sandbox'
+import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -117,7 +118,7 @@ export async function createDriver(
   // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
   // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
   // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
-  const { createWebPseudonymiser } =
+  const { createEgressRoster, createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
   // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
@@ -127,6 +128,9 @@ export async function createDriver(
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    // The egress gate's production roster, on the same `none` directory: every outgoing
+    // call of every route is asked about (boundary guards slice 4).
+    egressRoster: createEgressRoster({ directory: 'none' }),
     classifyIngress,
     withSandbox: () => (pattern) => ({
       ...pattern,
@@ -203,7 +207,12 @@ export async function createDriver(
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
         async () => {
-          const patterns = await agent.createPatterns(sessionId, deps)
+          // Per-user memory is on for the scenarios that name it and off for every other one,
+          // so no other scenario pays a recall step.
+          const patterns = await agent.createPatterns(
+            sessionId,
+            next.memory ? { ...deps, memory: createSyntheticMemory(() => EVAL_OWNER) } : deps,
+          )
           const run = harness(...patterns)
           let serialized: string | undefined
           for (turn = 0; turn < next.messages.length; turn++) {

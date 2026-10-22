@@ -70,9 +70,9 @@
  * claim does not cover, stated rather than rounded off:
  *
  * - It is about MODEL calls routed through this file. `EMBEDDINGS_PROVIDER`
- *   (`docs/DATA_STASH.md`) has its own route and its `openrouter` setting would
- *   send the user's query text to a third party; the default is `local`, so the
- *   claim holds as shipped, but it is a different seam.
+ *   (`docs/DATA_STASH.md`) has its own route: boot refuses any provider that is
+ *   not `local` or declared trusted in code, so `openrouter` cannot send the
+ *   user's query text to a third party, but it is a different seam.
  * - The screen's move buys the posture and costs a MEASUREMENT: `LargeQwen` is
  *   unmeasured on the two properties a screener needs (see the map entry). The
  *   trade was made knowingly, so the honest record is "accepted, unmeasured,

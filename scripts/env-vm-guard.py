@@ -819,11 +819,28 @@ def check(config, entries):
                     "a foreign instance on an environment bridge")
         if project in projects:
             settings = projects[project].get("config", {})
-            # Incus ignores every restricted.* key unless restricted is true; without
-            # the NIC rule, the environment's credential could hot-plug a NIC anywhere.
+            # Incus ignores every restricted.* key unless restricted is true, and the
+            # environment's credential must never be able to add a path past the table.
+            # Every restricted.* key the package writes as "block"
+            # (packages/sandbox/incus-environment.server.ts) must read "block" here:
+            # lowlevel admits raw.qemu -netdev backends whose traffic leaves as the
+            # host's own sockets, and a passthrough device (nic excepted, managed)
+            # can carry a NIC the input and forward hooks never see.
             require(settings.get("restricted") == "true" and
                     settings.get("restricted.devices.nic") == "managed" and
                     settings.get("restricted.devices.proxy") == "block" and
+                    settings.get("restricted.virtual-machines.lowlevel") == "block" and
+                    settings.get("restricted.virtual-machines.nesting") == "block" and
+                    settings.get("restricted.devices.disk") == "block" and
+                    settings.get("restricted.devices.unix-char") == "block" and
+                    settings.get("restricted.devices.unix-block") == "block" and
+                    settings.get("restricted.devices.unix-hotplug") == "block" and
+                    settings.get("restricted.devices.usb") == "block" and
+                    settings.get("restricted.devices.pci") == "block" and
+                    settings.get("restricted.devices.gpu") == "block" and
+                    settings.get("restricted.devices.infiniband") == "block" and
+                    settings.get("restricted.snapshots") == "block" and
+                    settings.get("restricted.backups") == "block" and
                     settings.get("restricted.networks.access") == vm_bridge,
                     "the environment project is not restricted to its own bridge")
         vm = next((i for i in instances if i["project"] == project and i["name"] == "docker"), None)

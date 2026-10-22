@@ -326,6 +326,25 @@ describe('general-next composition', () => {
     },
   )
 
+  // p87 (owner, 2026-10-22): exact calculation is sandbox work. MUTATION: drop the
+  // calculation sentence from the office-data description or the decider's answer text in
+  // general-next.server.ts (or add "arithmetic" to another route's description): red.
+  it.each(['anthropic', 'self_deployed'])(
+    'p87: names exact calculation as office-data work, and no other route (%s)',
+    async (tier) => {
+      choices = ['answer']
+      await run(tier)
+      const body = JSON.parse(String(requests.mock.calls[0][1].body))
+      const criteria = body.questions.next_step.criteria as Record<string, string>
+      expect(criteria['office-data']).toContain('exact calculation (arithmetic, percentages, sums')
+      expect(criteria['office-data']).toContain('the answer states the output of that run')
+      expect(criteria.answer).toContain('an exact calculation is never answered before office-data')
+      for (const route of ['info-retrieval', 'read-documents', 'think']) {
+        expect(criteria[route]).not.toMatch(/arithmetic|calculat|percentages/i)
+      }
+    },
+  )
+
   // E4/#507 scenario 13 (live pass 3 and run 2): Decide chose info-retrieval, the
   // info child could not get the notes (it only searches the graph and web), and
   // the SECOND Decide chose answer: read-documents was never selected. Replays

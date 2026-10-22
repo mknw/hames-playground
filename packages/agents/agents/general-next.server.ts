@@ -252,7 +252,8 @@ async function createPatterns(
             (deps.graphFileIngest === true
               ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
               : 'Graph file ingestion is unavailable. ') +
-            'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
+            'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox; ' +
+            'exact calculation (arithmetic, percentages, sums over numbers the user typed) is also run here, and the answer states the output of that run',
           capability:
             'Read Microsoft 365 mail and file metadata; ' +
             (deps.graphFileIngest === true
@@ -283,7 +284,7 @@ async function createPatterns(
       {
         decide: createDecideAdapter(),
         answer:
-          'Generate the answer for the user now, from the conversation and any results so far',
+          'Generate the answer for the user now, from the conversation and any results so far; an exact calculation is never answered before office-data has run it, and the answer comes from its output',
         handoff: { lastN: 2 },
         maxIterations: 6,
         patternId: 'orchestrator',

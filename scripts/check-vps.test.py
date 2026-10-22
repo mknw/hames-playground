@@ -539,7 +539,7 @@ class Wiring(unittest.TestCase):
         body = '''DRY_RUN=0 NO_SEED=1 SSH_PORT=50022 HOSTNAME_ARG=app.example.invalid;
         PROBE_PRIVATE_HEALTH=$1; failure_mode=$2; touch "$ENV_FILE"; mkdir "$APP_DIR/configs"; touch "$APP_DIR/configs/mcp-config.yaml";
         desired_ssh_ports() { echo 50022; }; sudo() { case "$*" in *metadata-egress.py*) echo "METADATA $*"; [[ $failure_mode != metadata ]];; *) return 0;; esac; }; public_listeners() { cat >/dev/null; };
-        dc() { case "$*" in *mcp-gateway*) echo 'Those servers are enabled: context7,fetch,memory,neo4j-cypher,web_search';; *printenv*) echo false;; esac; };
+        dc() { case "$*" in *mcp-gateway*) echo 'Those servers are enabled: context7,fetch,neo4j-cypher,web_search';; *printenv*) echo false;; esac; };
         curl() { case "$*" in *http://*) echo '301 https://app.example.invalid/';; *'/api/health') echo '{"status":"ok"}';; *) echo 401;; esac; };
         dynamic_tools_state() { echo disabled; }; assert_engine_supported() { echo ENGINE; };
         vps_check() { echo "PROBE $*"; [[ $* != *"$failure_mode"* || $failure_mode == none ]]; };

@@ -152,8 +152,7 @@ recorded and the screen runs anyway, until an eval bar moves that tier to
 `'gated'`. A deterministic finding always forces the screen, after
 sanitization, so those neutralizations stay intact. The host's classifier
 (`deps.classifyIngress`) keeps the deployment's own content to the deterministic
-pass. Memory reads are screened like external content until the shared memory
-store is attested (ruling L's exemption is not enabled). That is a screen call per
+pass. That is a screen call per
 external office or info result, plus a gate call on the self-deployed tier. The documents route's guard declares the
 fence and no screen, so retrieved hits get the deterministic pass only. The
 orchestrator's loop sanitizes and screens nothing of its own: a route record
@@ -364,13 +363,13 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                                        | Injection guard                                                                                                                            |
-| --------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                                              | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                                              | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token                      | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
-| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, memory (read), Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                                     | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
+| Agent           | Composition                                                      | Tools                                                         | Injection guard                                                                                                                            |
+| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                               | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                               | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token       | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
+| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                      | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
 
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets
@@ -503,14 +502,14 @@ Each agent's source is in
 The root entry point (`import from '@hames-ai/agents'`) is **browser-safe** —
 front-end code can import it without pulling in anything server-side:
 
-| Export                                                                        | What it is                                                      |
-| ----------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `extractGraphElements`, `extractGraphFromResult`                              | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
-| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`, `isMemoryGraphResult` | shape guards over extracted elements                            |
-| `extractReferences`, `referencesForDoc`                                       | retriever citations out of the event stream                     |
-| `errorBubble`, `warningBubble`, `replayMessages`, `ReplayedMessage`           | serialized context → minimal chat transcript                    |
-| `GraphElement`, `OpenReferenceTarget`                                         | the shared data types                                           |
-| `AgentDefinition`, `AgentData`, `AgentDeps`                                   | the definition types (see Configuration)                        |
+| Export                                                              | What it is                                                      |
+| ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `extractGraphElements`, `extractGraphFromResult`                    | ContextEvent/tool-result → `GraphElement[]` for graph rendering |
+| `isEdgeElement`, `isNodeElement`, `isNeo4jGraphResult`              | shape guards over extracted elements                            |
+| `extractReferences`, `referencesForDoc`                             | retriever citations out of the event stream                     |
+| `errorBubble`, `warningBubble`, `replayMessages`, `ReplayedMessage` | serialized context → minimal chat transcript                    |
+| `GraphElement`, `OpenReferenceTarget`                               | the shared data types                                           |
+| `AgentDefinition`, `AgentData`, `AgentDeps`                         | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
 **server-only** — six registered agents plus three shared helpers

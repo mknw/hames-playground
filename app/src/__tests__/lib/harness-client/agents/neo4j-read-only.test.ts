@@ -65,8 +65,8 @@ const { WRITE, mockSdkCallTool, MockClient } = vi.hoisted(() => {
     'search',
     'fetch',
     'fetch_content',
-    'read_graph',
-    'create_entities',
+    'json_get',
+    'read_text_file',
   ]
 
   const mockSdkCallTool = vi.fn(async ({ name }: { name: string }) => {

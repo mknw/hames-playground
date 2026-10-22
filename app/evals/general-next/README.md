@@ -1,6 +1,8 @@
 # general-next conversation Eval (#507 W4)
 
-[SCENARIOS.md](SCENARIOS.md) records the 18 acceptance scenarios. This extends the
+[SCENARIOS.md](SCENARIOS.md) records the 18 acceptance scenarios and, as a draft for
+the owner's review, the question space and the proposed rows
+([scenarios.catalogue.json](scenarios.catalogue.json)). This extends the
 existing role-level compatibility evals with whole conversations: run the shipped
 package agent through `harness` / `continueSession`, then check tool order, routes,
 termination, facts, artifacts and retrieval locators. Each scenario has its own file.
@@ -119,8 +121,7 @@ Every result row carries a `screen` block beside `spend`: the injection screen
 own options and none is inherited: the office and info route guards carry the screen, so it
 covers their external tool results (mail and files from outside senders, sandbox results,
 web and library docs); the host's classifier keeps the graph and Microsoft 365 results whose
-every identity is on a home domain to the deterministic pass, memory reads are screened like
-external content until the memory store is attested, and the documents route's guard
+every identity is on a home domain to the deterministic pass, and the documents route's guard
 declares no screen, so retrieved hits are never screened. The
 loop itself sanitises and screens nothing: a route record is built from committed events and
 capped, and a quoted tool body (an `actorCritic` result, a retriever excerpt) carries the
@@ -141,6 +142,6 @@ failure" are self-fulfilling there. Only these discriminate hermetically: tool o
 arguments, route selection and completion, stash artifacts, the index and retrieval checks,
 and "first turn recorded a tool failure". A scenario whose only discriminating checks are
 absent (06) is a vacuous pass hermetically; every hermetic report says so in `hermeticCaveat`.
-The eval omits `deps.memory`, so no `withMemory` describe calls are priced that production makes.
+The eval passes `deps.memory` to scenario 05 alone, as a synthetic read-only owner-scoped store (`src/lib/eval-support/synthetic-memory.ts`) whose recall gate is a fixed answer, and never runs the store step; so no `withMemory` gate or describe calls are priced that production makes.
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

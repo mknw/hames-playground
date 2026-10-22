@@ -20,30 +20,16 @@
  * names this registration. Skipping it is a build-time error, not a silent
  * pass-through.
  *
- * 86 distinct names across 6 namespaces. The app-side per-user tools are NOT
+ * 77 distinct names across 5 namespaces. The app-side per-user tools are NOT
  * here — they declare their own namespaces (`registry.server.ts`), which ride
  * `inferServer` through the app transport's `namespaceFor`.
  */
 
 /** Explicit mapping of tool names to server groups. Covers tools whose names
- *  don't encode the server identity (memory, context7, redis, filesystem, web)
+ *  don't encode the server identity (context7, redis, filesystem, web)
  *  and pins names the heuristic already gets right (neo4j) so a future edit to
  *  the heuristic's verb list can't silently regroup them. */
 const MCP_TOOL_CATALOG: Record<string, string> = {}
-
-// Memory Knowledge Graph server
-for (const t of [
-  'create_entities',
-  'create_relations',
-  'add_observations',
-  'delete_entities',
-  'delete_relations',
-  'delete_observations',
-  'open_nodes',
-  'search_nodes',
-  'read_graph',
-])
-  MCP_TOOL_CATALOG[t] = 'memory'
 
 // Neo4j Cypher server. These already resolve to 'neo4j' via the verb-strip
 // heuristic in core (read_/write_/get_ → parts[1]), but pin them explicitly so

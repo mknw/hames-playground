@@ -21,7 +21,6 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mockCallTool, mockListTools } from '../../../mocks/mcp'
-import { collectToolNames } from '@hames-ai/harness-patterns/patterns/decisionLoop-records.server'
 // The definitions moved into @hames-ai/agents (#225 PR-2); the inventory walks
 // them from the package. `testAgentDeps` supplies the injected app-side bag
 // the factories now take — the fake sandbox wrapper mirrors the real one's
@@ -37,9 +36,6 @@ const toolSets = {
   web: ['search', 'fetch', 'fetch_content'],
   context7: ['resolve-library-id', 'get-library-docs'],
   filesystem: ['read_text_file', 'write_file'],
-  // The MCP memory server's write tools too: the gateway lists them, so an
-  // agent that took the namespace wholesale would carry them (pinned below).
-  memory: ['search_nodes', 'read_graph', 'create_entities', 'create_relations', 'add_observations'],
   graph: ['graph_me', 'graph_mail_recent'],
   all: [] as string[],
 }
@@ -48,7 +44,6 @@ toolSets.all = [
   ...toolSets.web,
   ...toolSets.context7,
   ...toolSets.filesystem,
-  ...toolSets.memory,
   ...toolSets.graph,
 ]
 
@@ -295,36 +290,6 @@ describe('agents with NO guard anywhere (pinned gaps)', () => {
     // The `office` and `data` flavours exist to PARSE user-supplied documents
     // (#78) — the delivery vehicle the guard's own threat model names first.
     expect(rows.filter((r) => r.includes('[actorCritic]'))).toHaveLength(3)
-  })
-})
-
-// ============================================================================
-// The shared memory store has no writer among the agents
-// ============================================================================
-
-describe('no registered agent writes the MCP memory store', () => {
-  // A memory read is trusted only because what is stored was screened on its
-  // way in (boundary guards ruling L's premise), and the store is shared by
-  // every user. The removed `general` agent ran one loop over `tools.all`, the
-  // memory server's write tools included, with no guard: that is how entries
-  // that never passed ingress got there. This pins that no agent the app
-  // registers (`AGENT_MODULES`, equal to the registry, pinned above) can add to
-  // them. MUTATION: add 'create_entities' to general-next's MEMORY_READ_TOOLS.
-  it('no agent carries create_entities, create_relations or add_observations', async () => {
-    const writes = ['create_entities', 'create_relations', 'add_observations']
-    const seen: string[] = []
-    for (const { file, exportName } of AGENT_MODULES) {
-      const tools = (await patternsOf(file, exportName)).flatMap((p) =>
-        collectToolNames(p as never),
-      )
-      seen.push(...tools)
-      expect(
-        tools.filter((tool) => writes.includes(tool)),
-        file,
-      ).toEqual([])
-    }
-    // The walk sees memory tools at all: general-next's reads are in it.
-    expect(seen).toContain('search_nodes')
   })
 })
 

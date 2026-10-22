@@ -149,13 +149,6 @@ describe('graph-extractor — element identity (SA-H9)', () => {
     expect(edges[0].data?.target).toBe('B')
   })
 
-  it('keeps the derived id on a memory entity whose property is called id', () => {
-    const result = { entities: [{ name: 'Ada', id: 99, entityType: 'Person' }], relations: [] }
-    const [node] = extractGraphElements([toolResultEvent('read_graph', result)])
-    expect(node.data?.id).toBe('Ada')
-    expect(node.data?.type).toBe('Person')
-  })
-
   it('keeps the derived label on a driver-shaped node with a label property', () => {
     const result = [
       { n: { identity: 7, labels: ['Concept'], properties: { name: 'Graphs', id: 'nope' } } },
@@ -181,18 +174,6 @@ describe('graph-extractor — node vs edge (SA-M12)', () => {
     expect(isEdgeElement(el)).toBe(false)
     // The property survives for display — it is just no longer load-bearing.
     expect(el.data?.source).toBe('report.pdf')
-  })
-
-  it('stamps kind and group on memory relations', () => {
-    const result = {
-      entities: [{ name: 'A' }, { name: 'B' }],
-      relations: [{ from: 'A', to: 'B', relationType: 'KNOWS' }],
-    }
-    const elements = extractGraphElements([toolResultEvent('read_graph', result)])
-    const edge = elements.find((e) => e.data?.id === 'A-KNOWS-B')!
-    expect(edge.data?.kind).toBe('edge')
-    expect(edge.group).toBe('edges')
-    expect(isEdgeElement(edge)).toBe(true)
   })
 
   it('falls back to the endpoint shape for elements with no kind stamp', () => {

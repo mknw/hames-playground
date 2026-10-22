@@ -55,10 +55,11 @@ const GRAPH = [
   'graph_file_ingest',
 ]
 const CONTEXT7 = ['resolve-library-id', 'get-library-docs']
-// Exact READ names only; the memory server's create/add/delete tools are withheld.
-const MEMORY_READ = ['search_nodes', 'open_nodes']
-// Withheld by exact name: every write, and `read_graph` (global, all-at-once).
-const MEMORY_WITHHELD = [
+// The retired shared memory graph's tools: a gateway that still lists them
+// hands none to any route (the catalog names no namespace for them).
+const MEMORY_GRAPH_TOOLS = [
+  'search_nodes',
+  'open_nodes',
   'read_graph',
   'create_entities',
   'create_relations',
@@ -74,7 +75,6 @@ const INFO = [
   'fetch',
   'fetch_content',
   ...CONTEXT7,
-  ...MEMORY_READ,
 ]
 // Explicit names are P1's reviewed ungated surface. A registry addition must
 // fail this pin instead of silently widening both actual and expected lists.
@@ -208,7 +208,7 @@ beforeEach(() => {
   gateway.names = [
     ...GRAPH,
     ...INFO,
-    ...MEMORY_WITHHELD,
+    ...MEMORY_GRAPH_TOOLS,
     'query_database',
     'write_neo4j_cypher',
     'search_redis_documents',
@@ -308,11 +308,13 @@ describe('general-next composition', () => {
         ),
       })
       expect(
-        Object.keys(criteria).filter((route) =>
-          /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
-            criteria[route],
+        Object.keys(criteria)
+          .filter((route) => route !== 'answer')
+          .filter((route) =>
+            /\b(?:comput\w*|analys\w*|analyz\w*|sums?|totals?|add(?:s|ing)? up|count\w*|spreadsheets?|csv|tables?|deliverables?|sav(?:e|ing))\b/i.test(
+              criteria[route],
+            ),
           ),
-        ),
       ).toEqual(['office-data'])
       expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
       expect(criteria['read-documents']).toContain('uploaded')
@@ -323,6 +325,42 @@ describe('general-next composition', () => {
       )
       expect(criteria['read-documents']).not.toMatch(/\bwhenever\b/)
       expect(criteria['info-retrieval']).toContain('Look things up')
+    },
+  )
+
+  // p87 (owner, 2026-10-22): exact calculation on numbers in the user's LATEST message is
+  // sandbox work; a follow-up over an earlier turn's number is not (the child cannot see it).
+  // MUTATIONS, each red: drop or reword the office-data clause (restoring "numbers the user
+  // typed" or unscoped "arithmetic"); append anything to the answer text, or restore the
+  // negated "never answered before" form; add "multiplies" to another route.
+  const P87_ANSWER =
+    "Generate the answer for the user now, from the conversation and any results so far. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
+  it.each(['anthropic', 'self_deployed'])(
+    'p87: names exact calculation as office-data work, and no other route (%s)',
+    async (tier) => {
+      choices = ['answer']
+      await run(tier)
+      const body = JSON.parse(String(requests.mock.calls[0][1].body))
+      const criteria = body.questions.next_step.criteria as Record<string, string>
+      expect(criteria['office-data']).toContain(
+        "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
+      )
+      expect(criteria.answer).toBe(P87_ANSWER)
+      // Scoped to the latest message: unscoped "arithmetic" would route a follow-up such as
+      // "Double that number" to a child that cannot see the earlier turn's number.
+      expect(criteria['office-data']).not.toMatch(/numbers the user typed|earlier (?:step|turn)/i)
+      // The output requirement lives once, in the answer criterion, not in a route text.
+      expect(criteria['office-data']).not.toMatch(/\boutput\b|\bstates?\b/i)
+      expect(
+        Object.keys(criteria).filter(
+          (route) =>
+            route !== 'office-data' &&
+            route !== 'answer' &&
+            /\b(?:arithmetic|calculat\w*|percent\w*|multipl\w*|divi\w*|maths?|averages?|products?|sums?|times)\b/i.test(
+              criteria[route],
+            ),
+        ),
+      ).toEqual([])
     },
   )
 
@@ -516,12 +554,11 @@ describe('general-next composition', () => {
             ['web', 'neo4j', 'context7'].includes(namespace) && name !== 'write_neo4j_cypher',
         )
         .map(([name]) => name)
-        .concat(MEMORY_READ)
         .sort(),
     ).toEqual([...INFO].sort())
-    // No memory write and no raw redis/filesystem/database tool reaches any route.
+    // No memory-graph tool and no raw redis/filesystem/database tool reaches any route.
     const reachable = collectToolNames(patterns[0])
-    for (const name of [...MEMORY_WITHHELD, 'query_database', 'search_redis_documents'])
+    for (const name of [...MEMORY_GRAPH_TOOLS, 'query_database', 'search_redis_documents'])
       expect(reachable, name).not.toContain(name)
     expect(loop.config).toMatchObject({ rememberPriorTurns: false, returnStyle: 'answer' })
     const references = all.find((p) => p.name.startsWith('withReferences('))!
@@ -552,9 +589,9 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
-        'Look things up in the knowledge graph, on the web (including a file at a web address), in library docs and in the memory graph; it cannot open files uploaded to this conversation (that is read-documents)',
+        'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
       capability:
-        'Read the knowledge graph and the memory graph; search or fetch public web sources and library documentation.',
+        'Read the knowledge graph; search or fetch public web sources and library documentation.',
     })
     expect(
       (composition.routes['info-retrieval'] as { siblingResults: string[] }).siblingResults,
@@ -570,7 +607,7 @@ describe('general-next composition', () => {
     expect(agent.servers).toEqual(expect.arrayContaining(['office sandbox', 'Data Stash']))
   })
 
-  it('S3b: a gateway without context7 or memory still builds, with those namespaces undeclared', async () => {
+  it('S3b: a gateway without context7 still builds, with that namespace undeclared', async () => {
     gateway.names = [...GRAPH, 'get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch']
     const patterns = await agent.createPatterns('synthetic-session', deps)
     const info = walk(patterns).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
@@ -627,17 +664,11 @@ describe('general-next composition', () => {
       tools: SANDBOX,
     })
     expect(guarded.find((p) => p.config.patternId === 'info')?.injectionGuard).toEqual({
-      namespaces: ['web', 'neo4j', 'context7', 'memory'],
+      namespaces: ['web', 'neo4j', 'context7'],
       tools: [],
     })
     // The orchestrator's own guard unions the route namespaces (S3b review R5).
-    expect(patterns[0].injectionGuard?.namespaces).toEqual([
-      'web',
-      'neo4j',
-      'context7',
-      'memory',
-      'graph',
-    ])
+    expect(patterns[0].injectionGuard?.namespaces).toEqual(['web', 'neo4j', 'context7', 'graph'])
     expect(guarded.find((p) => p.config.patternId === 'retriever')?.injectionGuard).toEqual({
       namespaces: [],
       tools: ['retriever'],
@@ -940,7 +971,7 @@ describe('general-next composition', () => {
     expect(JSON.stringify(web?.data)).not.toContain('synthetic result')
   })
 
-  it('S3b: a private run egress-checks context7 like web search, and leaves memory reads local', async () => {
+  it('S3b: a private run egress-checks context7 like web search', async () => {
     const checked: string[] = []
     const pseudonymiseForWeb: AgentDeps['pseudonymiseForWeb'] = async () => ({
       ...(await deps.pseudonymiseForWeb!([], '')),
@@ -957,16 +988,13 @@ describe('general-next composition', () => {
         is_final: false,
       },
     })
-    mocks.controller
-      .mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
-      .mockResolvedValueOnce(call('search_nodes', 'PRIVATE-NAME'))
+    mocks.controller.mockResolvedValueOnce(call('resolve-library-id', 'PRIVATE-NAME'))
     const result = await run('self_deployed', { ...deps, pseudonymiseForWeb })
     const byTool = (tool: string) =>
       result.context.events.find(
         (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
       )?.data
     expect(byTool('resolve-library-id')).toMatchObject({ success: false })
-    expect(byTool('search_nodes')).toMatchObject({ success: true })
     expect(checked.some((c) => c.includes('PRIVATE-NAME'))).toBe(true)
     expect(checked).toHaveLength(1)
   })
@@ -1028,68 +1056,6 @@ describe('general-next composition', () => {
           e.type === 'tool_result' && (e.data as { tool: string }).tool === 'expandPreviousResult',
       )?.data,
     ).toMatchObject({ success: false, error: expect.stringContaining(mailId) })
-  })
-
-  // S3b delta review D2: the guarded (fenced) memory path. A fenced result hides
-  // every field from memoryRoster unless harvest unfences first, so this fails
-  // if the ordering flips, with real guard, real filter and real composition.
-  it('S3b D2: memory-sourced identities are refused on later outbound calls and absent from the next invocation', async () => {
-    const { createWebPseudonymiser } =
-      await import('../../../../lib/harness-client/web-pseudonymiser.server')
-    const NAME = 'Ottilie Ferngrove'
-    const EMAIL = 'ottilie.f@fernco.example'
-    choices = ['info-retrieval', 'info-retrieval', 'answer']
-    gateway.result = {
-      entities: [
-        {
-          type: 'entity',
-          name: NAME,
-          entityType: 'person',
-          observations: [`reach her at ${EMAIL}`],
-        },
-      ],
-      relations: [],
-    }
-    const call = (tool_name: string, args: Record<string, unknown>) => ({
-      action: {
-        reasoning: 'lookup',
-        tool_name,
-        tool_args: JSON.stringify(args),
-        is_final: false,
-      },
-    })
-    const script = [
-      call('search_nodes', { query: 'Fernco' }),
-      { action: { reasoning: 'done', tool_name: 'Return', tool_args: 'ok', is_final: true } },
-      call('resolve-library-id', { libraryName: NAME }),
-      call('get-library-docs', { topic: `about ${NAME}` }),
-      call('search', { query: EMAIL }),
-      call('fetch', { url: `https://x.example/?q=${encodeURIComponent(NAME)}` }),
-    ]
-    // The turn log is mutated in place, so snapshot each input at call time.
-    const seen: string[] = []
-    mocks.controller.mockImplementation(async (input) => {
-      seen.push(JSON.stringify(input))
-      return (
-        script.shift() ?? {
-          action: { reasoning: 'done', tool_name: 'Return', tool_args: 'ok', is_final: true },
-        }
-      )
-    })
-    const result = await run('self_deployed', {
-      ...deps,
-      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
-    })
-    const results = result.context.events.filter((e) => e.type === 'tool_result')
-    const byTool = (tool: string) =>
-      results.find((e) => (e.data as { tool: string }).tool === tool)!.data
-    expect(byTool('search_nodes')).toMatchObject({ success: true })
-    for (const tool of ['resolve-library-id', 'get-library-docs', 'search', 'fetch'])
-      expect(byTool(tool), tool).toMatchObject({ success: false })
-    // The second invocation's first controller input (call index 2).
-    const next = seen[2]
-    expect(next).not.toContain(NAME)
-    expect(next).not.toContain(EMAIL)
   })
 
   // P4 web-exit pin: assert the outgoing literal denial, independent of any
@@ -1793,7 +1759,7 @@ it.each([false, undefined])(
   },
 )
 
-describe('general-next: the screen mode per tier, its gate, and memory reads (boundary guards slice 3)', () => {
+describe('general-next: the screen mode per tier and its gate (boundary guards slice 3)', () => {
   const searchOnce = () =>
     mocks.controller.mockResolvedValueOnce({
       action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
@@ -1836,28 +1802,6 @@ describe('general-next: the screen mode per tier, its gate, and memory reads (bo
     expect(JSON.stringify(decision)).not.toContain('CLEAN-WEB-SENTINEL')
     // The loop's own states never carry the gate's.
     expect(states.join('\n')).not.toContain('CONTENT UNDER REVIEW')
-  })
-
-  // Ruling L's exemption waits for the owner's attestation of the memory store
-  // (entries the removed, unguarded agent wrote never passed ingress), so a
-  // memory read is screened as on main. MUTATION: declare `exempt: ['memory']`
-  // on the info guard: the read below reaches neither the gate nor the screen.
-  it('a memory read is screened behind a shadow gate: no exemption until the store is attested', async () => {
-    choices = ['info-retrieval', 'answer']
-    gateway.result = 'CLEAN-MEMORY-SENTINEL'
-    mocks.controller.mockResolvedValueOnce({
-      action: {
-        reasoning: 'recall',
-        tool_name: 'search_nodes',
-        tool_args: '{"query":"x"}',
-        is_final: false,
-      },
-    })
-    await run('self_deployed')
-    expect(gateway.calls).toContain('search_nodes')
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search_nodes')
-    expect(gateStates).toHaveLength(1)
-    expect(gateStates[0]).toContain('\n> CLEAN-MEMORY-SENTINEL\n')
   })
 
   // MUTATION: drop `classify: deps.classifyIngress` from either route guard's

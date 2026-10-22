@@ -108,7 +108,7 @@ services:
     # `docker-config.json` mount, which sets that feature to "disabled". Do not
     # add a `volumes:` override that drops that mount (#412, #420).
     command: !override
-      - --servers=neo4j-cypher,fetch,web_search,context7,memory
+      - --servers=neo4j-cypher,fetch,web_search,context7
       # The rendered config the base file's `mcp-config` service writes — it
       # fills ${NEO4J_PASSWORD} from this host's .env.
       - --config=/mcp/rendered/config.yaml

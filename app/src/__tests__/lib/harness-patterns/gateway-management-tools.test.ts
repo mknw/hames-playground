@@ -113,8 +113,8 @@ const SERVER_TOOLS = [
   'search',
   'resolve-library-id',
   'get-library-docs',
-  'read_graph',
-  'create_entities',
+  'json_get',
+  'hget',
   ...FILESYSTEM_TOOLS,
 ]
 

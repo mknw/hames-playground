@@ -1,8 +1,8 @@
 /**
  * The MCP-gateway namespace catalog — the DATA half (#225 L5 / PR-C2).
  *
- * The 86-entry catalog moved here from core, and these cases moved with it:
- * they assert THIS DEPLOYMENT's 6 namespaces and the grouping the catalog
+ * The 77-entry catalog moved here from core, and these cases moved with it:
+ * they assert THIS DEPLOYMENT's 5 namespaces and the grouping the catalog
  * produces when handed to `ToolsFrom`. The COMPOSITION half — the catalog
  * registered on core's resolver seam by the host's composition root, and the
  * app transport's namespaceFor answering ahead of it — stayed in the host's
@@ -21,14 +21,30 @@ import { ToolsFrom, registerToolNamespaces } from '@hames-ai/harness-patterns/to
 registerToolNamespaces(mcpNamespace)
 
 describe('the MCP namespace catalog', () => {
-  it('holds 86 distinct names across 6 namespaces', async () => {
-    const catalog = MCP_TOOL_CATALOG
+  it('holds 77 distinct names across 5 namespaces', async () => {
     const names = Object.keys(MCP_TOOL_CATALOG)
-    expect(names.length).toBe(86)
-    expect(new Set(names).size).toBe(86)
+    expect(names.length).toBe(77)
+    expect(new Set(names).size).toBe(77)
     expect(new Set(Object.values(MCP_TOOL_CATALOG))).toEqual(
-      new Set(['memory', 'neo4j', 'context7', 'web', 'redis', 'filesystem']),
+      new Set(['neo4j', 'context7', 'web', 'redis', 'filesystem']),
     )
+  })
+
+  // The shared memory graph was retired; its tools name no namespace. Written
+  // out, so re-adding one to the catalog turns this red.
+  it.each([
+    'create_entities',
+    'create_relations',
+    'add_observations',
+    'delete_entities',
+    'delete_relations',
+    'delete_observations',
+    'open_nodes',
+    'search_nodes',
+    'read_graph',
+  ])('does not catalogue the retired memory-graph tool %s', (name) => {
+    expect(MCP_TOOL_CATALOG).not.toHaveProperty(name)
+    expect(mcpNamespace(name)).toBeUndefined()
   })
 })
 
@@ -36,28 +52,6 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
   async function load() {
     return { mcpNamespace, ToolsFrom }
   }
-
-  it('groups memory tools under memory namespace', async () => {
-    const { mcpNamespace, ToolsFrom } = await load()
-
-    const tools = ToolsFrom(
-      [
-        { name: 'create_entities', description: 'Create entities', inputSchema: {} },
-        { name: 'create_relations', description: 'Create relations', inputSchema: {} },
-        { name: 'add_observations', description: 'Add observations', inputSchema: {} },
-        { name: 'delete_entities', description: 'Delete entities', inputSchema: {} },
-        { name: 'open_nodes', description: 'Open nodes', inputSchema: {} },
-        { name: 'search_nodes', description: 'Search nodes', inputSchema: {} },
-        { name: 'read_graph', description: 'Read graph', inputSchema: {} },
-      ],
-      { namespaces: mcpNamespace },
-    )
-
-    expect(tools.memory).toHaveLength(7)
-    expect(tools.memory).toContain('create_entities')
-    expect(tools.memory).toContain('search_nodes')
-    expect(tools.memory).toContain('read_graph')
-  })
 
   it('groups web tools under web namespace', async () => {
     const { mcpNamespace, ToolsFrom } = await load()
@@ -158,11 +152,6 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
       [
         { name: 'mcp__hames-mcp-gateway__search', description: 'Search', inputSchema: {} },
         {
-          name: 'mcp__hames-mcp-gateway__create_entities',
-          description: 'Create entities',
-          inputSchema: {},
-        },
-        {
           name: 'mcp__hames-mcp-gateway__read_neo4j_cypher',
           description: 'Read Neo4j',
           inputSchema: {},
@@ -172,7 +161,6 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
     )
 
     expect(tools.web).toContain('mcp__hames-mcp-gateway__search')
-    expect(tools.memory).toContain('mcp__hames-mcp-gateway__create_entities')
     expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__read_neo4j_cypher')
   })
 
@@ -203,16 +191,6 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
           description: 'Schema',
           inputSchema: {},
         },
-        {
-          name: 'mcp__hames-mcp-gateway__create_entities',
-          description: 'Create entities',
-          inputSchema: {},
-        },
-        {
-          name: 'mcp__hames-mcp-gateway__search_nodes',
-          description: 'Search nodes',
-          inputSchema: {},
-        },
       ],
       { namespaces: mcpNamespace },
     )
@@ -229,18 +207,13 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
     expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__write_neo4j_cypher')
     expect(tools.neo4j).toContain('mcp__hames-mcp-gateway__get_neo4j_schema')
 
-    // Memory tools grouped under 'memory'
-    expect(tools.memory).toHaveLength(2)
-    expect(tools.memory).toContain('mcp__hames-mcp-gateway__create_entities')
-    expect(tools.memory).toContain('mcp__hames-mcp-gateway__search_nodes')
-
     // Should NOT have scattered groups
     expect(tools.mcp).toBeUndefined()
 
-    expect(tools.all).toHaveLength(8)
+    expect(tools.all).toHaveLength(6)
   })
 
-  it('groups the full agent tool set across all six namespaces', async () => {
+  it('groups the full agent tool set across all five namespaces', async () => {
     const { mcpNamespace, ToolsFrom } = await load()
 
     const tools = ToolsFrom(
@@ -252,10 +225,6 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
         { name: 'read_neo4j_cypher', description: 'Read', inputSchema: {} },
         { name: 'write_neo4j_cypher', description: 'Write', inputSchema: {} },
         { name: 'get_neo4j_schema', description: 'Schema', inputSchema: {} },
-        // Memory
-        { name: 'create_entities', description: 'Create', inputSchema: {} },
-        { name: 'create_relations', description: 'Relations', inputSchema: {} },
-        { name: 'read_graph', description: 'Read graph', inputSchema: {} },
         // Filesystem
         { name: 'read_file', description: 'Read file', inputSchema: {} },
         { name: 'write_file', description: 'Write file', inputSchema: {} },
@@ -272,10 +241,9 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
 
     expect(tools.web).toHaveLength(2)
     expect(tools.neo4j).toHaveLength(3)
-    expect(tools.memory).toHaveLength(3)
     expect(tools.filesystem).toHaveLength(2)
     expect(tools.redis).toHaveLength(3)
     expect(tools.context7).toHaveLength(2)
-    expect(tools.all).toHaveLength(15)
+    expect(tools.all).toHaveLength(12)
   })
 })

@@ -91,12 +91,4 @@ export const fixtures = {
     ],
     fetchResult: '<html>Page content</html>',
   },
-
-  memory: {
-    entities: [{ name: 'Entity1', entityType: 'Person', observations: ['Observation 1'] }],
-    searchResult: {
-      entities: [],
-      relations: [],
-    },
-  },
 }

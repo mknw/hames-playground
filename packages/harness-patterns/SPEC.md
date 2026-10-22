@@ -1349,7 +1349,7 @@ never replace. `callTool` runs every check before any transport and any denial
 returns `{ success: false, data: null, error }`, a recoverable tool failure,
 not a turn error. A throwing check denies with fixed feedback without exposing
 its exception. The wrapper checks every call except the explicitly local
-`neo4j` and `memory` namespaces (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
+`neo4j` namespace (`context7` library lookup is outbound and IS checked), including uncatalogued calls and calls made without the app's
 namespace registration. In the same amendment, an `afterToolCall` hook extends
 the outgoing literals from every result except web and `context7` ones, after unfencing each string leaf.
 It never rewrites those results. An extension failure withholds that result,
@@ -1542,7 +1542,7 @@ interface PlannerConfig extends PatternConfig {
 
 **Why.** A `simpleLoop` controller re-derives its high-level approach on every
 turn. With a diverse tool surface (`tools.all` spanning `neo4j-cypher` +
-`memory` + `web_search` + `context7`) that re-derivation is both the
+`redis` + `web_search` + `context7`) that re-derivation is both the
 expensive part of the prompt and the part most prone to greedy, locally
 coherent sequences ("search the web again" when turn 1 already pulled the
 docs). The planner pays for strategy once.
@@ -2031,8 +2031,7 @@ no gate call; on the self-deployed tier (and an absent or unknown one) a gate ca
 recorded and not obeyed, and the screen as well. A deterministic finding forces
 the screen on either. The host's classifier keeps the deployment's own content
 (the graph, Microsoft 365 results whose every identity is on a home domain) to
-the deterministic pass; memory reads are screened like external content until the
-shared memory store is attested (the `exempt` option is not used yet); the
+the deterministic pass (no agent declares the `exempt` option); the
 documents route's guard declares the fence and no screen, so the retriever's
 hits get the deterministic pass and the fence only. The loop itself sanitises and screens nothing: a route record is the
 text the extractor built, and a quoted tool body carries the fence its result

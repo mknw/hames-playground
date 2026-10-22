@@ -47,8 +47,8 @@ uniform. See `packages/harness-patterns/run-frame.server.ts`.
 
 **Web pseudonymisation guard** — the web route's boundary over earlier results
 and outgoing tool arguments, retaining their content while replacing known
-identities with placeholders. Only the local `neo4j` and `memory`
-namespaces are exempt from the outgoing check; `context7` library lookup is
+identities with placeholders. Only the local `neo4j`
+namespace is exempt from the outgoing check; `context7` library lookup is
 outbound and checked like web search. See
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
@@ -125,7 +125,7 @@ see" a configuration decision rather than a code change.
 
 **Tool namespace** — the group an MCP tool belongs to, inferred from its name and
 used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
-`filesystem`, `memory`, `redis` — plus `all`, which is every tool. There is no
+`filesystem`, `redis` — plus `all`, which is every tool. There is no
 `database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 

@@ -583,7 +583,6 @@ describe('mcp-client', () => {
           'lrange',
           'scan_keys',
           'read_graph',
-          'open_nodes',
           'mcp__gateway__read_file',
         ]) {
           expect(isReadOnlyTool(name), name).toBe(true)

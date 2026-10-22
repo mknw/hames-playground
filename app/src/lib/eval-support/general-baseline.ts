@@ -26,7 +26,6 @@ export const GENERAL_BASELINE: Readonly<Record<string, BaselineStatus>> = {
   '03-web-read': 'pass',
   // Eval run 2, 2026-10-19 (main b90eb2ba): #507 comment 6278332237. Not re-run since.
   '04-library-docs': 'pass',
-  '05-memory-lookup': 'pass',
   // Eval run 5, 2026-10-20 (main 9ca83e9a): #507 comment 6292721566. Also passed in
   // run 3; failed in the first live run, before the Return-only fix (#612).
   '06-read-only': 'pass',

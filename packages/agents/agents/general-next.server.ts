@@ -157,6 +157,13 @@ async function createPatterns(
   // still sanitized. Only external content is gated in (ruling O): the host's
   // classifier marks the deployment's own content internal, which gets the
   // deterministic pass alone unless that pass finds something.
+  //
+  // A condition on moving any tier to 'gated': no tier declares 'gated' until
+  // the shared fence neutraliser's rewrite lands (marker words only, no tail).
+  // Today each forged `END UNTRUSTED CONTENT` deletes up to 40 characters after
+  // it from what the gate and the screen read, and markers chain, so a whole
+  // sentence can reach the controller and neither judge; under 'gated' the
+  // gate's "skip" would then decide alone.
   const screenMode = { default: 'shadow', anthropic: 'always' } as const
   const gate = createGuardGate(createDecideAdapter())
   const docGuard = {

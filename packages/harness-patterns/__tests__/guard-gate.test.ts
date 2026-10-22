@@ -565,6 +565,10 @@ describe('onUnavailable', () => {
     )
     expect(held.data).toBe(SCREEN_WITHHELD)
     expect(held.summary?.screenUnavailable).toBe(true)
+    // The one fixed text this guard adds that a model reads: it says what to do
+    // next, so the controller does not retry the call. MUTATION: drop "; answer
+    // without it".
+    expect(SCREEN_WITHHELD).toBe('⟦withheld: this result could not be screened; answer without it⟧')
 
     const byDefault = await guardWith({ run: throwing }).sanitize('fetch_page', CLEAN)
     expect(byDefault.data).toBe(CLEAN)

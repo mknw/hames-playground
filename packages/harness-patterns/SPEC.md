@@ -1152,7 +1152,7 @@ never degrades to silence. A screen that throws is non-fatal under the default
 recorded on the event (the one case where a finding-less `content_sanitized` is
 still emitted, because a silently degraded second layer must be visible);
 `'withhold'` replaces the payload with the fixed `SCREEN_WITHHELD` marker
-instead.
+instead, which tells the controller to answer without it.
 
 **The guard gate.** `createGuardGate(decide, settings?)` (`guard-gate.server.ts`)
 is the cheap question in front of the screen: ONE `noul` decision,

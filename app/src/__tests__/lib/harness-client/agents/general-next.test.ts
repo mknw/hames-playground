@@ -1817,6 +1817,10 @@ describe('general-next: the screen mode per tier, its gate, and memory reads (bo
 
   // MUTATION: declare `default: 'gated'` in general-next's screen mode: the gate's
   // "skip" (pTrue 0.05 < τi) is then obeyed and the screen call disappears.
+  // A condition on that flip, beside `screenMode` too: no tier declares 'gated'
+  // until the shared fence neutraliser's rewrite lands (marker words only, no
+  // tail). Chained forged markers hide a whole sentence from the gate and the
+  // screen today, which only stops mattering while the gate decides nothing.
   it("the self-deployed tier asks the gate in 'shadow': recorded, and the screen runs on a skip", async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'

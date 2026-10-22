@@ -328,7 +328,7 @@ export interface InjectionScreenConfig {
 
 /** What replaces a payload whose screen threw, under `onUnavailable: 'withhold'`.
  *  Guard-owned sentinels, so content can never forge it. */
-export const SCREEN_WITHHELD = `${SENTINEL_OPEN}withheld: this result could not be screened${SENTINEL_CLOSE}`
+export const SCREEN_WITHHELD = `${SENTINEL_OPEN}withheld: this result could not be screened; answer without it${SENTINEL_CLOSE}`
 
 /** Tuning for the sanitizer itself (the subset of the pattern config that this
  *  pure module needs — see `InjectionGuardConfig` for the pattern-level shape). */
@@ -685,6 +685,13 @@ const FENCE_MARKER_RE = /(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/
  * while still reading as a fence to the reviewing model. A caller truncates
  * BEFORE calling this: only the quoted head reaches a prompt, so scanning the
  * rest buys nothing and hands an attacker a free CPU multiplier.
+ *
+ * A known cost until the boundary-guard slice that rewrites this regex: it hides
+ * up to 40 characters after each old-form marker (`BEGIN|END UNTRUSTED CONTENT`)
+ * from the screen and the gate, while the controller still reads them, so text
+ * following a forged marker on the same line never reaches either judge. It
+ * does not touch the gate's own marker form (`---END CONTENT UNDER REVIEW
+ * <nonce>---`): the nonce and the `"> "` prefix hold that quote shut.
  */
 export function neutralizeFenceMarkers(text: string): string {
   return text.replace(FENCE_MARKER_RE, '[fence]')

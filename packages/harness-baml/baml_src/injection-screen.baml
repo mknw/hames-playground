@@ -9,9 +9,8 @@
 // On clean content its job is novel phrasings the corpus does not know, and
 // the guard's `screen.mode` decides per tier whether it runs on every external
 // payload or behind the guard gate; after a deterministic finding it reads the
-// sanitized projection. Its definition of an injection is the gate's, word for
-// word (`GUARD_SCREEN` in guard-gate.server.ts, boundary guards ruling B), so a
-// gate that flags a payload is followed by a screen that judges it the same way.
+// sanitized projection. Its behaviour list is the gate's, item for item
+// (`GUARD_SCREEN` in guard-gate.server.ts, ruling B); change both together.
 // Cheap DescribeAnthropic client, held as its own `screen` role in
 // clients.server.ts rather than sharing `describe`: a screen must not be
 // talked out of reporting and must copy spans verbatim, so it must never

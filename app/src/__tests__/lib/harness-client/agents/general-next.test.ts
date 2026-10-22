@@ -1883,9 +1883,13 @@ describe('general-next: the screen mode per tier, its gate, and memory reads (bo
   })
 
   // MUTATION: declare `exempt: ['memory']` unconditionally: with no memory tools
-  // offered the info guard does not declare `memory`, and construction refuses.
-  it('exempts memory only when memory is offered, so a gateway without it still builds', async () => {
+  // offered the info guard does not declare `memory`, so the guard refuses to be
+  // built when the route runs, and the search below reaches no screen.
+  it('exempts memory only when memory is offered, so the info route still runs without it', async () => {
     gateway.names = gateway.names.filter((name) => !MEMORY_READ.includes(name))
-    await expect(agent.createPatterns('no-memory', deps)).resolves.toBeDefined()
+    searchOnce()
+    const result = await run('anthropic')
+    expect(JSON.stringify(result.context.events)).not.toContain('exempts namespace')
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
   })
 })

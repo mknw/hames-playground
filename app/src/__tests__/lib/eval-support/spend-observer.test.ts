@@ -63,3 +63,19 @@ describe('runner synchronous spend stop', () => {
     expect(budget.row(key).functions.Synthesize.calls).toBe(1)
   })
 })
+
+describe('a Decide sample is filed under its question key (boundary guards slice 3)', () => {
+  // MUTATION: pass `sample.functionName` alone to the ledger: the gate's call is
+  // filed with every other Decide call and its share cannot be told apart.
+  it("the guard gate's Decide call is its own ledger line", () => {
+    const { budget, observer } = setup()
+    observer.activate(key)
+    observer.observe({
+      functionName: 'Decide',
+      decisionKey: 'guard.screen',
+      clientName: 'PrivateSystemOne',
+      metrics: { costEur: 0.001 },
+    })
+    expect(Object.keys(budget.row(key).functions)).toEqual(['Decide:guard.screen'])
+  })
+})

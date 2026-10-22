@@ -116,18 +116,23 @@ role evals run in CI. No public package API changed, so this PR needs no package
 changeset or core SPEC/GUIDE update.
 
 Every result row carries a `screen` block beside `spend`: the injection screen
-(`ScreenUntrustedContent`) calls and observer cost, the same for everything else, and the
-screen's share of each. Each guard declares its own options and none is inherited: the
-office and info route guards carry the screen, so it covers their tool results (mail, files,
-sandbox results, web, library docs, graph and memory reads); the documents route's guard
-declares none, so retrieved hits are never screened. The loop itself sanitises and screens
-nothing: a route record is built from committed events and capped, and a quoted tool body
-(an `actorCritic` result, a retriever excerpt) carries the fence it arrived in, so no call
-is made for a record at all and the counts below are ingress calls only. `screenDespiteFindings` is declared on
-the two route guards and adds only results with deterministic findings, which hermetic
-fixtures never produce, so switching it off would not change these counts. The levers that
-move cost are the screen's scope and the guards that declare it. On the private tier each
-call is large-model time.
+(`ScreenUntrustedContent`) calls and observer cost, the guard gate's (`Decide` calls keyed
+`guard.*`) the same, everything else the same, and each one's share. Each guard declares its
+own options and none is inherited: the office and info route guards carry the screen, so it
+covers their external tool results (mail and files from outside senders, sandbox results,
+web and library docs); the host's classifier keeps the graph and Microsoft 365 results whose
+every identity is on a home domain to the deterministic pass, memory reads are screened like
+external content until the memory store is attested, and the documents route's guard
+declares no screen, so retrieved hits are never screened. The
+loop itself sanitises and screens nothing: a route record is built from committed events and
+capped, and a quoted tool body (an `actorCritic` result, a retriever excerpt) carries the
+fence it arrived in, so no call is made for a record at all and the counts below are ingress
+calls only. On the self-deployed tier, where this eval runs, the screen's mode is `'shadow'`:
+the gate is asked on every external result and its answer recorded, and the screen runs as
+well, so each screened result costs a gate call too until the eval bar moves the tier to
+`'gated'`. A deterministic finding forces the screen in every mode but `'off'`. The levers that
+move cost are the screen's scope, its mode per tier and the guards that declare it. On the
+private tier each screen call is large-model time and each gate call small-box time.
 Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
 the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).
 

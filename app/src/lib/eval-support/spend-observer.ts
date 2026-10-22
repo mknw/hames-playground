@@ -1,4 +1,4 @@
-import type { SpendBudget, SpendKey } from './spend-budget'
+import { ledgerFunction, type SpendBudget, type SpendKey } from './spend-budget'
 
 /** onStop MUST terminate synchronously: the production notifier swallows throws. */
 export function createSpendObserver({
@@ -17,6 +17,7 @@ export function createSpendObserver({
     },
     observe(sample: {
       functionName?: string
+      decisionKey?: string
       clientName?: string
       metrics?: { costEur?: number }
     }) {
@@ -30,7 +31,11 @@ export function createSpendObserver({
         onStop()
         return
       }
-      budget.observe(active, live ? sample.metrics : { costEur: 0 }, sample.functionName)
+      budget.observe(
+        active,
+        live ? sample.metrics : { costEur: 0 },
+        ledgerFunction(sample.functionName, sample.decisionKey),
+      )
       if (budget.stopped) onStop()
     },
   }

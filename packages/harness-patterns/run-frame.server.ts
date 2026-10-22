@@ -58,7 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ContextEvent, ToolCallResult } from './types'
+import type { ByTier, ContextEvent, ToolCallResult } from './types'
 
 assertServerOnImport()
 
@@ -254,6 +254,24 @@ export function registerEffectiveTier(read: (() => string) | undefined): void {
  */
 export function effectiveTier(): string | undefined {
   return effectiveTierHolder.read?.()
+}
+
+/**
+ * A {@link ByTier} setting's value on the tier this call is on. A map's key for
+ * {@link effectiveTier}'s answer when it has one, else its `default`; a bare
+ * value as it is. With a tier module registered, an absent tier is whatever that
+ * module answers (its host's default, or its own fallback with no host policy),
+ * never `default` by omission. Only with nothing registered, where nothing
+ * routes, is there no tier and `default` applies. A reader that refuses throws,
+ * and so does this: a setting that cannot learn its tier must not guess it.
+ */
+export function resolveByTier<T>(value: ByTier<T>): T {
+  if (typeof value !== 'object' || value === null || !Object.hasOwn(value, 'default')) {
+    return value as T
+  }
+  const map = value as { readonly default: T; readonly [tier: string]: T }
+  const tier = effectiveTier()
+  return tier !== undefined && Object.hasOwn(map, tier) ? map[tier] : map.default
 }
 
 /** Which slots a caller actually supplied — an explicit `undefined` is not a

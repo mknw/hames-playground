@@ -73,7 +73,8 @@ vi.mock('@hames-ai/harness-baml', () => ({
   createLoopControllerAdapter: () => composed.controller,
   createActorControllerAdapter: () => vi.fn(),
   createCriticAdapter: () => vi.fn(),
-  createDecideAdapter: () => vi.fn(),
+  // The guard gate refuses a seam that cannot serve its `noul` question.
+  createDecideAdapter: () => Object.assign(vi.fn(), { supportedTypes: ['choice', 'noul'] }),
   createInjectionScreen: () => vi.fn(),
 }))
 import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'

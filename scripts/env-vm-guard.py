@@ -778,8 +778,14 @@ def check(config, entries):
             require(instance["project"] == project and instance["name"] == "docker",
                     "a foreign instance on an environment bridge")
         if project in projects:
-            require(projects[project].get("config", {}).get("restricted.networks.access") == vm_bridge,
-                    "the environment project may use another bridge")
+            settings = projects[project].get("config", {})
+            # Incus ignores every restricted.* key unless restricted is true; without
+            # the NIC rule, the environment's credential could hot-plug a NIC anywhere.
+            require(settings.get("restricted") == "true" and
+                    settings.get("restricted.devices.nic") == "managed" and
+                    settings.get("restricted.devices.proxy") == "block" and
+                    settings.get("restricted.networks.access") == vm_bridge,
+                    "the environment project is not restricted to its own bridge")
         vm = next((i for i in instances if i["project"] == project and i["name"] == "docker"), None)
         if vm is not None:
             nic = vm["nics"].get("eth0", {})

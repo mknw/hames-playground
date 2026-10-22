@@ -515,6 +515,12 @@ class Clock:
         self.now += seconds
 
 
+def restricted(bridge):
+    """The keys of the package's own project restrictions that --check reads."""
+    return {"restricted": "true", "restricted.devices.nic": "managed", "restricted.devices.proxy": "block",
+            "restricted.networks.access": bridge, "restricted.devices.disk": "block"}
+
+
 class Host:
     """A host with Docker, Incus, systemd and netfilter, all in memory."""
 
@@ -542,11 +548,11 @@ class Host:
             {"project": "default", "name": "other", "status": "Running", "expanded_devices": {
                 "eth0": {"type": "nic", "network": "incusbr0"}}}]
         self.projects = [{"name": "default", "config": {}},
-                         {"name": "sandbox-dev", "config": {"restricted.networks.access": "envvm-dev"}}]
+                         {"name": "sandbox-dev", "config": restricted("envvm-dev")}]
         if two:
             self.instances.append({"project": "sandbox-rel", "name": "docker", "status": "Running", "expanded_devices": {
                 "eth0": {"type": "nic", "network": "envvm-rel", "ipv4.address": REL["guestAddress"]}}})
-            self.projects.append({"name": "sandbox-rel", "config": {"restricted.networks.access": "envvm-rel"}})
+            self.projects.append({"name": "sandbox-rel", "config": restricted("envvm-rel")})
         self.stuck = False
         self.networks = {
             "envapp-dev": {"Name": "envapp-dev", "Id": "e" * 64, "Driver": "bridge", "Internal": False,
@@ -1649,6 +1655,10 @@ class Check(Harness):
             "foreign-instance": lambda h: h.instances.__setitem__(0, {"project": "default", "name": "squat", "status": "Stopped",
                                                                       "expanded_devices": {"eth0": {"type": "nic", "network": "envvm-dev"}}}),
             "project-network-access": lambda h: h.projects[1]["config"].update(**{"restricted.networks.access": "envvm-dev,incusbr0"}),
+            "project-unrestricted": lambda h: h.projects[1]["config"].update(restricted="false"),
+            "project-restriction-unset": lambda h: h.projects[1]["config"].pop("restricted"),
+            "project-nic-any": lambda h: h.projects[1]["config"].update(**{"restricted.devices.nic": "allow"}),
+            "project-proxy-allowed": lambda h: h.projects[1]["config"].update(**{"restricted.devices.proxy": "allow"}),
             "link-second-member": lambda h: (h.containers.update({"f" * 64: dict(h.containers["a" * 64])}),
                                              h.networks["envapp-dev"]["Containers"].update({c * 64: {"IPv4Address": DEV["clientAddress"] + "/29"}
                                                                                             for c in "af"})),
@@ -2152,7 +2162,10 @@ MUTATIONS = {
     "check-overdue-deadman": ('        require(pending["boot"] == boot() and now_us() <= limit, "a dead-man is overdue or outlived a reboot")', "        pass"),
     "check-second-instance": ('    require(all(len(members) == 1 for members in on_bridge.values()), "a second instance on an environment bridge")', "    pass"),
     "check-foreign-instance": ('            require(instance["project"] == project and instance["name"] == "docker",', "            require(True,"),
-    "check-project-networks": ('            require(projects[project].get("config", {}).get("restricted.networks.access") == vm_bridge,', "            require(True,"),
+    "check-project-networks": ('                    settings.get("restricted.networks.access") == vm_bridge,', "                    True,"),
+    "O3-project-restriction-unchecked": ('            require(settings.get("restricted") == "true" and', "            require(True and"),
+    "O3-project-nic-unchecked": ('                    settings.get("restricted.devices.nic") == "managed" and', "                    True and"),
+    "O3-project-proxy-unchecked": ('                    settings.get("restricted.devices.proxy") == "block" and', "                    True and"),
     "check-vm-single-nic": ('            require(set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', '            require(nic.get("network") == vm_bridge and'),
     "check-vm-nic-bridge": ('set(vm["nics"]) == {"eth0"} and nic.get("network") == vm_bridge and', 'set(vm["nics"]) == {"eth0"} and'),
     "check-vm-address": ('                    nic.get("ipv4.address") == guest, "the environment VM', '                    True, "the environment VM'),

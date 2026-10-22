@@ -474,7 +474,11 @@ one result record.
 the readback, Docker's two forward rules (§3), the link network's sole member and address, and
 subnet overlaps, it reads through the Incus API, for each configured environment, the project's
 `restricted.networks.access` and its instance's `devices.eth0.network` and `ipv4.address`. It
-refuses unless they equal `envvm-<environment>` and the rendered VM address. It also refuses any
+refuses unless they equal `envvm-<environment>` and the rendered VM address. The project must also
+carry `restricted=true`, without which Incus ignores every `restricted.*` key, with
+`restricted.devices.nic=managed` and `restricted.devices.proxy=block`, as the package sets them
+(`incus-environment.server.ts:498`, `:507`, `:515`): otherwise the environment's credential could
+add a NIC on another network after the check. It also refuses any
 instance in a `sandbox-*` project whose NIC is not on an `envvm-*` bridge, and a guard config that
 differs from the entry point's config (the file W8 names) in environment, bridge or address. The
 entry point accepts any bridge name (`incus-environment.server.ts:264`; its README's example is

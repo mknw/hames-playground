@@ -19,7 +19,9 @@
  *
  * Internal content still gets the deterministic pass, and a deterministic
  * finding on it still forces the screen (the guard's rule, not this module's).
- * Memory reads never reach this: they are exempt from the screen (ruling L).
+ * Memory reads reach this as a namespace the rule does not know, so they are
+ * external and screened: `general-next`'s exemption for them (ruling L) waits
+ * for the owner's attestation of the memory store.
  */
 import { domainToASCII } from 'node:url'
 import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'

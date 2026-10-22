@@ -152,7 +152,8 @@ recorded and the screen runs anyway, until an eval bar moves that tier to
 `'gated'`. A deterministic finding always forces the screen, after
 sanitization, so those neutralizations stay intact. The host's classifier
 (`deps.classifyIngress`) keeps the deployment's own content to the deterministic
-pass, and memory reads are exempt from gate and screen. That is a screen call per
+pass. Memory reads are screened like external content until the shared memory
+store is attested (ruling L's exemption is not enabled). That is a screen call per
 external office or info result, plus a gate call on the self-deployed tier. The documents route's guard declares the
 fence and no screen, so retrieved hits get the deterministic pass only. The
 orchestrator's loop sanitizes and screens nothing of its own: a route record

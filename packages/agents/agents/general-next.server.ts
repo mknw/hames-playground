@@ -153,10 +153,12 @@ async function createPatterns(
   // gate is never asked (it would send every body to that tier's decisions
   // host); on the self-deployed tier, and an absent or unknown one, the gate is
   // asked in 'shadow' — recorded, never obeyed — until the eval bar for 'gated'
-  // is met. Memory reads are trusted (ruling L): exempt from gate and screen,
-  // still sanitized. Only external content is gated in (ruling O): the host's
-  // classifier marks the deployment's own content internal, which gets the
-  // deterministic pass alone unless that pass finds something.
+  // is met. Memory reads are screened like any external result for now: ruling
+  // L's exemption (the guard's `exempt`) waits for the owner's attestation of
+  // the memory store, because entries the removed, unguarded `general` agent
+  // wrote never passed ingress. Only external content is gated in (ruling O):
+  // the host's classifier marks the deployment's own content internal, which
+  // gets the deterministic pass alone unless that pass finds something.
   //
   // A condition on moving any tier to 'gated': no tier declares 'gated' until
   // the shared fence neutraliser's rewrite lands (marker words only, no tail).
@@ -193,7 +195,6 @@ async function createPatterns(
       run: createInjectionScreen(),
       mode: screenMode,
       gate,
-      exempt: memoryReads.length ? ['memory'] : [],
       classify: deps.classifyIngress,
     },
   }

@@ -1337,30 +1337,49 @@ answer on #648.
      exactly as the app will. It stops at once if the daemon is not this
      environment's.
 
-   Before routing an app to the VM, prove separately that only the app network
-   reaches the VM's Docker port, and record that proof for step 2. Neither the
-   provisioner nor the entry point sets firewall rules.
+   Before routing app-dev to the VM, prove that only app-dev reaches the VM's
+   Docker port, and record that proof for step 2. The one allowed source is the
+   dev link network, `envapp-dev`, with app-dev at its pinned address. Create
+   that network once, before the overlay, on a subnet that overlaps no host
+   route and none of Docker's address pools:
+
+   ```bash
+   docker network create --driver bridge --subnet <link-subnet> --gateway <link-gateway> \
+     --opt com.docker.network.bridge.name=envapp-dev envapp-dev
+   ```
+
+   The rules belong to the environment VM network guard,
+   `scripts/env-vm-guard.py`. Its `--smoke --record <path>` writes the evidence
+   record, and only when every probe passes. [The plan](plan/env-vm-network.md)
+   has the rules, the probes and the operator runbook. Neither the provisioner
+   nor the entry point sets firewall rules.
 
 2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
    values:
 
-   | Input                           | Meaning                                                  |
-   | ------------------------------- | -------------------------------------------------------- |
-   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                       |
-   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate          |
-   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                |
-   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                        |
-   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record |
+   | Input                           | Meaning                                                        |
+   | ------------------------------- | -------------------------------------------------------------- |
+   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                             |
+   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate                |
+   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                      |
+   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                              |
+   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record       |
+   | `DEV_SANDBOX_LINK_ADDRESS`      | app-dev's pinned IPv4 address on the `envapp-dev` link network |
 
-   The evidence record is the operator's proof that only the app network
-   reaches the VM's Docker port. The preflight refuses the overlay until that
-   file exists and is not empty. It never reads what the file says.
+   The evidence record is the guard smoke's record. It proves that only the
+   link network's pinned address, which app-dev takes, reaches the VM's Docker
+   port. The preflight refuses the overlay until that file exists and is not
+   empty. It never reads what the file says.
 
 3. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
    It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
    its configs plus the three files (read-only, never created when missing) and
-   sets the four `SANDBOX_DOCKER_*` settings. It cannot be combined with the
-   socket opt-in.
+   sets the four `SANDBOX_DOCKER_*` settings. It also attaches app-dev to the
+   external `envapp-dev` network at `DEV_SANDBOX_LINK_ADDRESS` with
+   `gw_priority: 1`, which makes that network app-dev's default route. App-dev
+   stays on `app-network` for its data services. `gw_priority` needs a Compose
+   release that supports it. The overlay cannot be combined with the socket
+   opt-in.
 4. **Run the same preflight**, then recreate app-dev with bootstrap's
    `--only boot --no-seed`, then `--only smoke --no-seed`.
 
@@ -1380,6 +1399,10 @@ For a clone declared `per-env`, the validator refuses:
   permission, and TLS files inside either checkout;
 - with both clones `per-env`, a shared guest address, or either clone's client
   certificate verifying under the other clone's CA;
+- networks other than exactly `app-network` and the clone's own external link
+  network, `envapp-<clone>`; a link attachment without `gw_priority: 1` or
+  without a pinned unicast IPv4 address; `app-network` as the default route;
+  and any other service on that link network;
 - another service built from, tagged as, or sharing a namespace or mounts with
   the VM clone, joining any container by id, or mounting the VM clone's TLS
   files or a directory that holds them, whether through a bind, the file behind
@@ -1397,7 +1420,10 @@ binds one, and must not carry any `SANDBOX_DOCKER_*` setting. The render
 leaves out services of any other profile, so the preflight also refuses a
 `profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
 both running apps' endpoint settings and TLS mounts with the render, and refuses
-any mount on a VM clone that the render does not list.
+any mount on a VM clone that the render does not list. For a VM clone it also
+compares the live link network with the render: its bridge name, one IPv4
+subnet that holds the pinned address, the clone as its sole member, and the
+clone's address on it.
 
 **Reboots, rotation and concurrency.**
 
@@ -1422,18 +1448,23 @@ any mount on a VM clone that the render does not list.
   by hand. `teardown` keeps a delivery directory that holds other files, and
   says so.
 
-**What this does not establish.** The checks are offline and see
-configuration only. They do not prove network isolation between the clones'
-VMs, or between a VM and host services: that is firewall evidence the operator
-records separately. Dev holds root inside its own VM, by design. The MCP
-gateway keeps its host socket and shares `app-network` with both apps. Still
-owed live: `createIncusEnvironment` creating and booting a VM on a real Incus
-host (the spike harness provisioned its own VMs), and Docker answering after a
-guest reboot and after a host reboot.
+**What this does not establish.** The preflight's checks are offline and see
+configuration only, and smoke compares what Docker reports with that
+configuration. Neither proves network isolation between the clones' VMs, or
+between a VM and host services: that is the guard smoke's evidence, which the
+preflight requires but never reads. The guard cannot refuse a holder of the
+host Docker socket, which is root-equivalent: the release app and the MCP
+gateway hold it ([plan §10](plan/env-vm-network.md#10-deliberately-left-out)).
+Dev holds root inside its own VM, by design. The MCP gateway shares
+`app-network` with both apps. Still owed live: `createIncusEnvironment`
+creating and booting a VM on a real Incus host (the spike harness provisioned
+its own VMs), and Docker answering after a guest reboot and after a host
+reboot.
 
 **Rollback.** Remove the overlay from `COMPOSE_FILE` and recreate app-dev. Dev
-is then back to no Docker access and no sandbox agents. Tear down the VM
-separately.
+is then back to no Docker access and no sandbox agents. Tear down the VM, the
+link network and the guard separately, in the plan's
+[rollback order](plan/env-vm-network.md#7-operator-runbook).
 
 ### Shared state and the limits of the claim
 

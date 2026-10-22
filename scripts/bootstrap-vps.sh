@@ -514,8 +514,9 @@ clone_preflight() {
   for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev; do
     [[ -r $APP_DIR/$path && -f $APP_DIR/$path ]] || { printf '%s\n' "Clone configuration is missing a required overlay, validator or Caddy file" >&2; return 1; }
   done
-  # Only the operator can prove the VM's Docker port is reachable from the app
-  # network alone (§12); the overlay waits for that record. Its content is not read.
+  # Only the operator can prove the VM's Docker port is reachable from the dev
+  # link network alone (envapp-dev, app-dev at its pinned address; §12 and
+  # docs/plan/env-vm-network.md); the overlay waits for that record. Its content is not read.
   if [[ $files == *:docker-compose.dev-sandbox-vm.yaml ]]; then
     path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)
     [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The dev environment VM overlay requires DEV_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }

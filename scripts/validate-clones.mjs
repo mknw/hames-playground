@@ -38,6 +38,15 @@ const HOST_REACH = [
 const check = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+// A routable unicast address: not unspecified, loopback, multicast or
+// link-local (the cloud metadata range).
+const unicastIPv4 = (address) => {
+  const [a, b] = String(address).split(".").map(Number);
+  return (
+    isIPv4(String(address)) &&
+    !(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254))
+  );
+};
 const within = (path, directory) =>
   path === directory ||
   path.startsWith(directory === sep ? directory : directory + sep);
@@ -93,13 +102,11 @@ function environmentVm(app, roots) {
   const endpoint = /^tcp:\/\/([0-9.]+):([0-9]{1,5})$/.exec(
     env.SANDBOX_DOCKER_HOST,
   );
-  const [a, b] = endpoint?.[1].split(".").map(Number) ?? [];
   check(
     endpoint &&
-      isIPv4(endpoint[1]) &&
+      unicastIPv4(endpoint[1]) &&
       Number(endpoint[2]) >= 1 &&
-      Number(endpoint[2]) <= 65535 &&
-      !(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254)),
+      Number(endpoint[2]) <= 65535,
     "A VM clone needs a tcp://IPv4:port guest endpoint",
   );
   const files = {};
@@ -152,6 +159,26 @@ function environmentVm(app, roots) {
   );
   const sources = Object.values(files).map((file) => file.path);
   return { host: endpoint[1], authority, certificate, sources };
+}
+
+// The network guard admits one source to a VM clone's Docker port: its own
+// link network, at a pinned address that is its default route
+// (docs/plan/env-vm-network.md §2.3). The operator creates the network, so it
+// keeps its bridge name and subnet across recreates.
+function linkNetwork(config, app, clone) {
+  const link = `envapp-${clone}`;
+  const networks = app.networks ?? {};
+  const attachment = networks[link];
+  check(
+    config.networks?.[link]?.external === true &&
+      config.networks[link].name === link &&
+      Object.keys(networks).sort().join() === ["app-network", link].join() &&
+      attachment?.gw_priority === 1 &&
+      unicastIPv4(attachment?.ipv4_address) &&
+      !((networks["app-network"]?.gw_priority ?? 0) >= 1),
+    "A VM clone joins its own link network at a pinned address as its default route",
+  );
+  return link;
 }
 
 export function validateClones(config) {
@@ -238,6 +265,14 @@ export function validateClones(config) {
     }
     const vm = environmentVm(apps[i], roots);
     vms.push(vm);
+    // Any other member would hold the clone's network identity.
+    const link = linkNetwork(config, apps[i], ["release", "dev"][i]);
+    for (const [peer, service] of Object.entries(config.services)) {
+      check(
+        peer === name || !Object.hasOwn(service.networks ?? {}, link),
+        "Only the VM clone joins its link network",
+      );
+    }
     // Another service built from, tagged as or joined to a VM clone would run
     // that clone's code beside whatever it mounts, and one that mounts its TLS
     // files, or a directory holding them, by any of hostMounts' routes would
@@ -298,7 +333,7 @@ export function validateClones(config) {
   for (const [i, env] of envs.entries()) {
     check(
       !Object.keys(env).some((key) =>
-        /^(RELEASE_DATABASE_URL|DEV_DATABASE_URL|.*_RUNTIME_ENV_FILE|DEV_CLONE_PATH|COMPOSE_FILE|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+)$/.test(
+        /^(RELEASE_DATABASE_URL|DEV_DATABASE_URL|.*_RUNTIME_ENV_FILE|DEV_CLONE_PATH|COMPOSE_FILE|(RELEASE|DEV)_SANDBOX_[A-Z_]+)$/.test(
           key,
         ),
       ),

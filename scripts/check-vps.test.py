@@ -400,11 +400,27 @@ class CloneProbes(unittest.TestCase):
         for name in ("ca.pem", "cert.pem", "key.pem"):
             config["services"]["app-dev"]["volumes"].append({"type": "bind", "source": "/synthetic/dev-tls/" + name, "target": "/run/sandbox-tls/" + name, "read_only": True})
             apps["app-dev"]["Mounts"].append({"Type": "bind", "Source": "/synthetic/dev-tls/" + name, "Destination": "/run/sandbox-tls/" + name, "RW": False})
+        config["services"]["app-dev"]["networks"] = {"app-network": None, "envapp-dev": {"ipv4_address": "192.0.2.66", "gw_priority": 1}}
+        self.link = {"Name": "envapp-dev", "Driver": "bridge", "Internal": False,
+                     "Options": {"com.docker.network.bridge.name": "envapp-dev"},
+                     "IPAM": {"Config": [{"Subnet": "192.0.2.64/29", "Gateway": "192.0.2.65"}]},
+                     "Containers": {"app-dev": {"Name": "synthetic-app-dev", "IPv4Address": "192.0.2.66/29"}}}
         return config, apps
+
+    def documents(self, config):
+        # The render, and the live link network a VM clone is compared with.
+        def document(*args):
+            if args == ("docker", "compose", "config", "--format", "json"):
+                return config
+            self.assertEqual(args, ("docker", "network", "inspect", "envapp-dev"))
+            if self.link is None:
+                raise probe.Refused("command unavailable or failed (inconclusive)")
+            return [self.link]
+        return document
 
     def test_vm_clone_runtime_endpoint_and_mounts_match_render(self):
         config, apps = self.vm_fixture()
-        with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"):
+        with patch.object(probe, "document", side_effect=self.documents(config)), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"):
             probe.clones()
         for change in (lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376"),
                        lambda a: a["Config"]["Env"].append("SANDBOX_DOCKER_TLS_KEY=/run/other/key.pem"),
@@ -413,12 +429,43 @@ class CloneProbes(unittest.TestCase):
                        lambda a: a["Mounts"].append({"Type": "bind", "Source": "/run/docker.sock", "Destination": "/run/host.sock", "RW": True})):
             config, apps = self.vm_fixture()
             change(apps["app-dev"])
-            with self.subTest(change=change), patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
+            with self.subTest(change=change), patch.object(probe, "document", side_effect=self.documents(config)), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
                 probe.clones()
         config, apps = self.fixture()
         apps["app"]["Config"]["Env"].append("SANDBOX_DOCKER_HOST=tcp://203.0.113.2:2376")
         with patch.object(probe, "document", return_value=config), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
             probe.clones()
+
+    def test_vm_clone_link_network_matches_render(self):
+        config, apps = self.vm_fixture()
+        with patch.object(probe, "document", side_effect=self.documents(config)) as document, patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"):
+            probe.clones()
+            self.assertIn(unittest.mock.call("docker", "network", "inspect", "envapp-dev"), document.call_args_list)
+            # An IPv6 subnet beside it is not a second IPv4 subnet.
+            self.link["IPAM"]["Config"].append({"Subnet": "2001:db8::/64"})
+            try:
+                probe.clones()
+            except probe.Refused:
+                self.fail("an IPv6 subnet was counted as a second IPv4 subnet")
+        other = {"Name": "synthetic-other", "IPv4Address": "192.0.2.67/29"}
+        for change in (lambda n: n.update(Options={"com.docker.network.bridge.name": "br-0123456789ab"}),
+                       lambda n: n.update(Options={}),
+                       lambda n: n.update(Driver="macvlan"),
+                       lambda n: n.update(Internal=True),
+                       lambda n: n["IPAM"]["Config"][0].update(Subnet="192.0.2.128/29"),
+                       lambda n: n["IPAM"]["Config"].append({"Subnet": "198.51.100.0/24"}),
+                       lambda n: n["Containers"].update(other=other),
+                       lambda n: n.update(Containers={"other": dict(other, IPv4Address="192.0.2.66/29")}),
+                       lambda n: n.update(Containers={}),
+                       lambda n: n["Containers"]["app-dev"].update(IPv4Address="192.0.2.67/29"),
+                       "absent"):
+            config, apps = self.vm_fixture()
+            if change == "absent":
+                self.link = None  # inspect fails
+            else:
+                change(self.link)
+            with self.subTest(change=change), patch.object(probe, "document", side_effect=self.documents(config)), patch.object(probe, "container", side_effect=apps.__getitem__), patch.object(probe, "checked"), self.assertRaises(probe.Refused):
+                probe.clones()
 
 
 class NodePrograms(unittest.TestCase):
@@ -623,6 +670,16 @@ MUTATIONS = [
     ("clone-sandbox-endpoint", SOURCE, 'actual.get(key) == desired.get(key)', 'True'),
     ("clone-tls-mounts", SOURCE, '"/var/run/docker.sock", *SANDBOX_TLS)', '"/var/run/docker.sock")'),
     ("clone-vm-only-rendered-mounts", SOURCE, 'require(sorted(v["Destination"] for v in app["Mounts"]) ==', 'require(True or'),
+    # The dev link network (plan env-vm-network §2.3), compared live with the render.
+    ("clone-link-unchecked", SOURCE, 'require(link_net["Options"].get("com.docker.network.bridge.name") == link and', 'require(True or'),
+    ("clone-link-bridge-name", SOURCE, 'link_net["Options"].get("com.docker.network.bridge.name") == link and', 'True and'),
+    ("clone-link-driver", SOURCE, 'link_net["Driver"] == "bridge" and', 'True and'),
+    ("clone-link-internal", SOURCE, 'link_net["Internal"] is False', 'True'),
+    ("clone-link-one-subnet", SOURCE, 'len(subnets) == 1 and', 'True and'),
+    ("clone-link-ipv4-subnets", SOURCE, ' if ipaddress.ip_network(c["Subnet"]).version == 4]', ']'),
+    ("clone-link-subnet-contains", SOURCE, 'ipaddress.ip_address(address) in ipaddress.ip_network(subnets[0])', 'True'),
+    ("clone-link-sole-member", SOURCE, 'list(members) == [app["Id"]]', 'app["Id"] in members'),
+    ("clone-link-member-address", SOURCE, 'members[app["Id"]]["IPv4Address"].split("/")[0] == address', 'True'),
     ("clone-membership-result", SOURCE, '||!rows[0].no_membership', ''),
     ("clone-isolation-result", SOURCE, '||!rows[0].isolated', ''),
     ("dump-first", RUNBOOK, "bash scripts/backup-preview.sh", "true"),

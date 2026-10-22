@@ -259,6 +259,18 @@ def clones():
             require(sorted(v["Destination"] for v in app["Mounts"]) ==
                     sorted(v["target"] for v in config["services"][service].get("volumes", [])),
                     "VM clone mounts differ from validated configuration")
+            # Its one allowed source to the VM (docs/plan/env-vm-network.md §2.3):
+            # the operator's link network, with this app as its sole member.
+            link = "envapp-" + namespace
+            address = config["services"][service]["networks"][link]["ipv4_address"]
+            link_net = document("docker", "network", "inspect", link)[0]
+            subnets = [c["Subnet"] for c in link_net["IPAM"]["Config"] if ipaddress.ip_network(c["Subnet"]).version == 4]
+            members = link_net["Containers"] or {}
+            require(link_net["Options"].get("com.docker.network.bridge.name") == link and
+                    link_net["Driver"] == "bridge" and link_net["Internal"] is False and
+                    len(subnets) == 1 and ipaddress.ip_address(address) in ipaddress.ip_network(subnets[0]) and
+                    list(members) == [app["Id"]] and members[app["Id"]]["IPv4Address"].split("/")[0] == address,
+                    "VM clone link network differs from validated configuration")
         if namespace == "dev":
             require(config.get("x-clone-dev-docker-socket") is True or
                     not any(v[0] == "/var/run/docker.sock" for v in actual_mounts), "dev socket requires owner opt-in")

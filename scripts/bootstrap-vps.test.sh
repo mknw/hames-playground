@@ -374,6 +374,8 @@ p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); dev=c['services']['app
 c['x-clone-dev-sandbox']='per-env'
 dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://198.51.100.2:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
 dev['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
+dev['networks']['envapp-dev'] = dict(ipv4_address='192.0.2.66', gw_priority=1)
+c['networks'] = {'envapp-dev': dict(name='envapp-dev', external=True)}
 p.write_text(json.dumps(c))
 PY
     fi
@@ -724,8 +726,8 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-never-create-path', ' && v.bind?.create_host_path === false', ''),
         ('vm-tls-settings', '.join() === ["SANDBOX_DOCKER_HOST", ...Object.keys(TLS_FILES)].join() &&', '.join() !== "" &&'),
         ('vm-tls-targets', 'Object.entries(TLS_FILES).every(([key, target]) => env[key] === target)', 'true'),
-        ('vm-ipv4', 'isIPv4(endpoint[1]) &&', ''),
-        ('vm-port-range', 'Number(endpoint[2]) >= 1 &&\n      Number(endpoint[2]) <= 65535 &&', ''),
+        ('vm-ipv4', 'isIPv4(String(address)) &&', ''),
+        ('vm-port-range', 'unicastIPv4(endpoint[1]) &&\n      Number(endpoint[2]) >= 1 &&\n      Number(endpoint[2]) <= 65535,', 'unicastIPv4(endpoint[1]),'),
         ('vm-address-class', '!(a === 0 || a === 127 || a >= 224 || (a === 169 && b === 254))', 'true'),
         ('vm-regular-file', 'check(stat.isFile(), "TLS mounts must be regular files");', ''),
         ('vm-outside-checkouts', '!roots.some((root) => path.startsWith(root + sep))', 'true'),
@@ -740,7 +742,7 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-cross-identity', '!own.certificate.verify(other.authority.publicKey) &&\n        !other.certificate.verify(own.authority.publicKey)', 'true'),
         ('socket-clone-no-vm-settings', '!Object.keys(envs[i]).some((key) => key.startsWith("SANDBOX_DOCKER_"))', 'true'),
         ('dev-socket-beside-vm', '!(devDockerSocket && modes[1] === "per-env")', 'true'),
-        ('root-only-vm-inputs', '|(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+', ''),
+        ('root-only-vm-inputs', '|(RELEASE|DEV)_SANDBOX_[A-Z_]+', ''),
         # #731 review round 1.
         ('vm-certificate-not-before', 'new Date(x.validFrom) <= now && ', ''),
         ('vm-certificate-not-after', ' && now <= new Date(x.validTo)', ''),
@@ -765,6 +767,16 @@ with tempfile.TemporaryDirectory() as tmp:
         ('host-mounts-volume-device', 'return device ? [{ source: device, target: v.target }] : [];', 'return [];'),
         ('socket-clone-host-mounts', '!hostMounts(config, app).some(', '!(app.volumes ?? []).filter((v) => v.type === "bind").some('),
         ('vm-one-service-host-mounts', 'hostMounts(config, service).some(', '(service.volumes ?? []).filter((v) => v.type === "bind").some('),
+        # Dev link network (plan env-vm-network §2.3).
+        ('vm-link-external', 'config.networks?.[link]?.external === true &&', ''),
+        ('vm-link-name', 'config.networks[link].name === link &&', ''),
+        ('vm-link-exact-networks', 'Object.keys(networks).sort().join() === ["app-network", link].join() &&', ''),
+        ('vm-link-gw-priority', 'attachment?.gw_priority === 1 &&', ''),
+        ('vm-link-address', 'unicastIPv4(attachment?.ipv4_address) &&', ''),
+        ('vm-link-app-network-priority', '!((networks["app-network"]?.gw_priority ?? 0) >= 1)', 'true'),
+        ('vm-link-sole-member', 'peer === name || !Object.hasOwn(service.networks ?? {}, link)', 'true'),
+        ('vm-link-per-clone', 'linkNetwork(config, apps[i], ["release", "dev"][i])', 'linkNetwork(config, apps[i], "dev")'),
+        ('root-only-link-inputs', '(RELEASE|DEV)_SANDBOX_[A-Z_]+)$/', '(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+)$/'),
     ]:
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)

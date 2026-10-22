@@ -1161,6 +1161,9 @@ def listens(port, six):
 
 def smoke(config, config_path, record_path):
     deadline = time.monotonic() + SMOKE_BOUND
+    # An earlier run's record must not outlive a failing one: bootstrap admits
+    # the overlay on any non-empty file. A symlink is removed, never followed.
+    record_path.unlink(missing_ok=True)
     with journal("read") as entries:
         require(armed(entries) is None, "a dead-man is armed; the smoke refuses until it is confirmed")
         facts = check(config, entries)

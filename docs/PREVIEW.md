@@ -1346,8 +1346,9 @@ answer on #648.
    ```
 
    The rules belong to the environment VM network guard,
-   `scripts/env-vm-guard.py`. Its `--smoke --record <path>` writes the evidence
-   record, and only when every probe passes. [The plan](plan/env-vm-network.md)
+   `scripts/env-vm-guard.py`. Its `--smoke --record <path>` removes any earlier
+   evidence record when it starts and writes a new one only when every probe
+   passes. [The plan](plan/env-vm-network.md)
    has the rules, the probes and the operator runbook. Neither the provisioner
    nor the entry point sets firewall rules.
 

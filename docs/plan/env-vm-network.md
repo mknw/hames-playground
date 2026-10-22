@@ -549,8 +549,9 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
   commit; the installed copy has no git), the render's hash, each probe's outcome, trace and
   counter change, which filter dropped probe 8c, and whether it was a single-environment run.
   `DEV_SANDBOX_FIREWALL_EVIDENCE` names it. Bootstrap only requires that file to exist and be
-  non-empty (`scripts/bootstrap-vps.sh:517-523`), so the smoke writes it only when every probe
-  passes: a failed run can never satisfy that gate.
+  non-empty (`scripts/bootstrap-vps.sh:517-523`), so the smoke removes any earlier record when it
+  starts and writes a new one only when every probe passes: a failed run can never satisfy that
+  gate.
 
 ## 7. Operator runbook
 

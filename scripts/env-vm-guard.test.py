@@ -1657,6 +1657,14 @@ class Smoke(Smoking, Harness):
         self.assertEqual(results["8c"]["dropped_by"], "vm_to_host")
         self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 1)
 
+    def test_a_failed_run_removes_an_earlier_record(self):
+        self.ready()
+        self.assertEqual(self.smoke(), 0, self.err)
+        self.assertTrue(self.record().exists())
+        self.host.outcome = {"47109": "CONNECTED"}
+        self.assertEqual(self.smoke(), 1)
+        self.assertFalse(self.record().exists(), "an earlier record survived a failed smoke")
+
     def test_a_timeout_without_its_counter_rise_fails(self):
         self.ready()
         self.host.stuck_counter = True
@@ -1960,8 +1968,8 @@ MUTATIONS = {
     "throwaway-pulls": ('HARDENED = ["--pull", "never", ', 'HARDENED = ["--pull", "always", '),
     "throwaway-writable": ('"--security-opt", "no-new-privileges", "--read-only",', '"--security-opt", "no-new-privileges",'),
     "throwaway-as-root": ('        return run(["docker", "run", "--rm", *HARDENED, "--user", "65534:65534", "--network", network,', '        return run(["docker", "run", "--rm", *HARDENED, "--network", network,'),
-    "record-written-before-the-probes": ('    deadline = time.monotonic() + SMOKE_BOUND\n    with journal("read") as entries:',
-                                         '    deadline = time.monotonic() + SMOKE_BOUND\n    record_path.write_text("{}")\n    with journal("read") as entries:'),
+    "record-written-before-the-probes": ('    record_path.unlink(missing_ok=True)\n    with journal("read") as entries:',
+                                         '    record_path.unlink(missing_ok=True)\n    record_path.write_text("{}")\n    with journal("read") as entries:'),
     "unit-names-another-incus-unit": ("Before=incus.service\nPartOf=incus.service", "Before=incusd.service\nPartOf=incusd.service"),
     "record-wrong-blob": ('hashlib.sha1(b"blob %d\\0" % len(', 'hashlib.sha1(b"blob %d" % len('),
     # --check's other reads (section 6, "What --check reads").
@@ -2005,6 +2013,8 @@ MUTATIONS = {
     "readback-ignores-objects": ('        else:\n            result["other"].append(kind)\n    result["counters"].sort()', '        else:\n            pass\n    result["counters"].sort()'),
     "readback-ignores-rule-comment": ('        if body.get("comment") is not None and kind != "table":\n            result["other"].append(kind)', '        if False:\n            result["other"].append(kind)'),
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
+    # Review round 1 on #745 (S = the code review, O = the security review).
+    "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
 }
 
 

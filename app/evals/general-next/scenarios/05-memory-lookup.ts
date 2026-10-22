@@ -7,7 +7,7 @@ export const scenario: ConversationScenario = {
   baseline: false,
   p4: false,
   memory: true,
-  messages: ['What do you remember about me?', 'Which release tag goes with that project?'],
+  messages: ['What do you remember about me?', 'And which release tag do you have noted for it?'],
   expectedTools: [],
   expectedRoutes: [],
   answerIncludes: ['LANTERN-2'],

@@ -3,7 +3,7 @@
  * is data for the owner's review: read as text, never imported (src/ may not import evals/).
  * Every rule below is one the review page and a later implementation rely on.
  */
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -373,7 +373,11 @@ function validate(c: Json, md: string, modules: string[], handed = sourceTools()
       }
     if (s.status === 'proposed') {
       const want = derivedNeeds(s, checks, driver).join()
-      if (flat(s.needs).join() !== want) errors.push(`${at}: needs should be [${want}]`)
+      // `agent:` names a change in the agent itself that the row waits for; it is prose, not derived.
+      const got = flat(s.needs)
+        .filter((n) => !n.startsWith('agent:'))
+        .join()
+      if (got !== want) errors.push(`${at}: needs should be [${want}]`)
     } else if ('needs' in s) errors.push(`${at}: needs is for proposed rows`)
   }
 
@@ -401,11 +405,11 @@ function validate(c: Json, md: string, modules: string[], handed = sourceTools()
 
 /**
  * The shared memory graph is retired (PR #744) and per-user memory is what remains: no row,
- * vocabulary value or saturation cell may name the graph or its tools (the two read tools stay
- * in `saturation.tools` only until #744 removes them from the agent); a row that names
- * `user-memory` runs with the synthetic owner-scoped store; the arithmetic row computes in the
- * sandbox (#742 is the calculator follow-up); and the cross-owner row asks for a fact that the
- * synthetic store really holds under the other owner.
+ * vocabulary value or saturation cell may name the graph or its tools; a row that declares
+ * `memory: true` runs with the synthetic owner-scoped store, and a module that turns memory on
+ * says so in its row; the arithmetic row computes in the sandbox (#742 is the calculator
+ * follow-up) and says what the agent must change first; and the cross-owner row asks for a
+ * fact that the synthetic store really holds under the other owner.
  */
 function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): string[] {
   const errors: string[] = []
@@ -422,10 +426,17 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
   for (const [at, value] of scanned)
     if (retired.test(JSON.stringify(value)))
       errors.push(`${at}: names the retired shared memory graph or its tools (PR #744)`)
+  // Keyed on the row's own `memory` field, not on the user-memory source: tn35 and tn36 name
+  // that source and expect memory OFF, so a source key would force memory on for them.
   for (const s of scenarios)
-    if (s.status === 'existing' && flat(dims(s).sources).includes('user-memory'))
-      if (!/\bmemory:\s*true\b/.test(moduleText(String(s.id))))
-        errors.push(`${String(s.id)}: names user-memory but its module does not turn memory on`)
+    if (s.status === 'existing') {
+      const on =
+        moduleIds.includes(String(s.id)) && /\bmemory:\s*true\b/.test(moduleText(String(s.id)))
+      if (s.memory === true && !on)
+        errors.push(`${String(s.id)}: declares memory but its module does not turn memory on`)
+      if (s.memory !== true && on)
+        errors.push(`${String(s.id)}: its module turns memory on but the row does not declare it`)
+    } else if ('memory' in s) errors.push(`${String(s.id)}: memory is for existing rows`)
   const sum = byId.get('p87-arithmetic-in-sandbox')
   if (!sum) errors.push('p87-arithmetic-in-sandbox: missing (owner, 2026-10-22: use the sandbox)')
   else {
@@ -435,6 +446,17 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
     )
     if (!calls || g.some((i) => ['noTools', 'onlyRoutes'].includes(i.check)))
       errors.push('p87-arithmetic-in-sandbox: arithmetic must be computed in the sandbox (#742)')
+    if (!g.some((i) => i.check === 'validArgs' && i.tool === 'sandbox_bash'))
+      errors.push('p87-arithmetic-in-sandbox: must grade that the command carries both operands')
+    // The answer fact is the product of the operands in the query, and the fixture says so.
+    const [, a, b] = String(flat(sum.turns)[0]).match(/(\d+) times (\d+)/) ?? []
+    const product = String(Number(a) * Number(b))
+    const fact = g.find((i) => i.check === 'answerContains')?.facts ?? []
+    if (!a || fact.join() !== product || !flat(sum.fixtures).join().includes(product))
+      errors.push(`p87-arithmetic-in-sandbox: the answer fact must be the product, ${product}`)
+    // Nothing in today's agent sends bare arithmetic to the sandbox, so the row waits on that.
+    if (!flat(sum.needs).some((n) => n.startsWith('agent:')))
+      errors.push('p87-arithmetic-in-sandbox: needs must name the agent-side change (agent:)')
   }
   const other = byId.get('tn58-other-owner-memory')
   const facts = other
@@ -445,6 +467,30 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
   const store = read('src/lib/eval-support/synthetic-memory.ts')
   if (!facts.length || !facts.every((f) => store.includes(f)))
     errors.push('tn58-other-owner-memory: must exclude a fact the synthetic store holds')
+  // The row cannot go red from a production defect (the double does the owner filtering), so
+  // it must say so and point at the pin that can: the owner-scoped store test.
+  const pin = 'src/__tests__/lib/db/memories-db-store.test.ts'
+  if (other && (other.twin !== '05-memory-lookup' || !String(other.notes).includes(pin)))
+    errors.push(`tn58-other-owner-memory: twin must be 05 and the notes must point at ${pin}`)
+  if (other && !existsSync(join(APP, pin.replace(/^src\//, 'src/'))))
+    errors.push(`tn58-other-owner-memory: ${pin} does not exist`)
+  // A .docx or .xlsx is built by a script, so the text of a sandbox_write cannot grade it.
+  for (const s of scenarios)
+    for (const i of graderOf(s))
+      if (i.check === 'writtenArtifact' && (i.files ?? []).some((f) => /\.(docx|xlsx)$/.test(f)))
+        errors.push(
+          `${String(s.id)}: writtenArtifact cannot grade an office file; use artifactContains`,
+        )
+  // The owner's tn04 change is an OFFER, so it is graded: the refusal, the offer and the
+  // statement that the user uploads the edited file themselves.
+  const tn04 = byId.get('tn04-edit-sharepoint-file')
+  if (tn04 && graderOf(tn04).filter((i) => i.check === 'answerMatches').length < 3)
+    errors.push('tn04-edit-sharepoint-file: refusal, offer and “you upload it” must each be graded')
+  // The owner's p15 verdict: the answer returns the person's contact details from the graph.
+  const p15 = byId.get('p15-find-person-by-skill')
+  const mail = graderOf(p15 ?? {}).find((i) => i.check === 'answerContains')?.facts ?? []
+  if (p15 && !mail.some((f) => /@example\.test$/.test(f) && flat(p15.fixtures).join().includes(f)))
+    errors.push('p15-find-person-by-skill: the answer must carry the contact email the graph holds')
   return errors
 }
 
@@ -498,6 +544,12 @@ function againstModule(s: Json, t: string): string[] {
       !f.length || find('turnAnswerContains').some((i) => i.turn === n + 1 && same(i.facts, f)),
       `turn ${n + 1} facts`,
     ),
+  )
+  expect(
+    find('turnAnswerContains').every((i) =>
+      turnFacts.some((f, n) => i.turn === n + 1 && same(i.facts, f)),
+    ),
+    'turnAnswerIncludes (a catalogue turn fact the module does not carry)',
   )
   const artifacts = arr('artifacts')
   expect(
@@ -839,9 +891,22 @@ function markdown(c: Json, md: string): string[] {
   for (const t of Object.keys((sat.tools ?? {}) as Json))
     if (!toolRows.has(`\`${t}\``)) errors.push(`SCENARIOS.md ### Tools: ${t} missing`)
   const rulingRows = new Set(tableAfter(md, '### For the owner to rule').map((r) => r[0]))
-  for (const r of (c.rulings ?? []) as Json[])
+  const rulingTable = tableAfter(md, '### For the owner to rule')
+  const rulings = (c.rulings ?? []) as Json[]
+  for (const r of rulings) {
     if (!rulingRows.has(`\`${String(r.key)}\``))
       errors.push(`SCENARIOS.md: ruling ${String(r.key)} missing`)
+    // The table is compared with the JSON in both directions: options and recommendation too.
+    const got = rulingTable.find((x) => x[0] === `\`${String(r.key)}\``)
+    const rec = (r.recommendation as Json).option
+    if (got && !got[3].startsWith(`\`${String(rec)}\``))
+      errors.push(`SCENARIOS.md: ruling ${String(r.key)} recommends something else`)
+    for (const o of r.options as Json[])
+      if (got && !got[2].includes(`\`${String(o.id)}\``))
+        errors.push(`SCENARIOS.md: ruling ${String(r.key)} lacks option ${String(o.id)}`)
+  }
+  if (rulingTable.length !== rulings.length)
+    errors.push(`SCENARIOS.md: ${rulingTable.length} ruling rows, want ${rulings.length}`)
   return errors
 }
 
@@ -1215,11 +1280,22 @@ describe('general-next scenario catalogue', () => {
       })
       expect(errors.join()).toMatch(/02-graph-count: names the retired shared memory graph/)
     })
-    it('R2: an existing user-memory row whose module leaves memory off', () => {
+    it('R2: a row declaring memory whose module leaves memory off', () => {
       const errors = mutate((_, s) => {
-        ;(row(s, '01-greeting').dimensions as Json).sources = ['user-memory']
+        row(s, '01-greeting').memory = true
       })
-      expect(errors.join()).toMatch(/01-greeting: names user-memory but its module does not turn/)
+      expect(errors.join()).toMatch(/01-greeting: declares memory but its module does not turn/)
+    })
+    it('R2: a module that turns memory on while its row does not declare it', () => {
+      const errors = mutate((_, s) => {
+        delete row(s, '05-memory-lookup').memory
+      })
+      expect(errors.join()).toMatch(/05-memory-lookup: its module turns memory on but the row/)
+    })
+    it('R2: the 05 module losing its per-turn facts', () => {
+      const text = moduleText('05-memory-lookup').replace(/\n {2}turnAnswerIncludes: .*\n/, '\n')
+      const s = catalogue().scenarios as Json[]
+      expect(againstModule(row(s, '05-memory-lookup'), text).join()).toMatch(/turnAnswerIncludes/)
     })
     it('R3: the arithmetic row answered without the sandbox', () => {
       const errors = mutate((_, s) => {
@@ -1288,6 +1364,153 @@ describe('general-next scenario catalogue', () => {
       expect(mutate((_, s) => (row(s, 'tn01-send-mail').twin = 'tn02-move-event')).join()).toMatch(
         /tn01-send-mail: twin must name a positive scenario/,
       )
+    })
+
+    // Round 3: the tn04 offer, p87's agent-side need, tn58's honest scope, p07/p24/p15
+    const answerItem = (s: Json[], id: string, says: RegExp) =>
+      graderOf(row(s, id)).find(
+        (i) => i.check === 'answerMatches' && says.test(String(i.says ?? '')),
+      ) as Item
+    const notMatching = (s: Json[], id: string) => itemOf(s, id, 'answerNotMatches')
+    it('B1: tn04 claim pattern flagging “copy … back” as an instruction again', () => {
+      const errors = mutate((_, s) => {
+        const i = notMatching(s, 'tn04-edit-sharepoint-file')
+        i.pattern = i.pattern!.replace(
+          "\\bI(?:['’]ve| have)?\\s+(?:now\\s+)?(?:copied|uploaded)\\b[^.]{0,40}\\bback",
+          '\\bcopy\\b[^.]{0,40}\\bback',
+        )
+      })
+      expect(errors.join()).toMatch(
+        /tn04-edit-sharepoint-file: .*copy it back to SharePoint yourself/,
+      )
+    })
+    it('B1: tn04 claim pattern flagging a workspace copy again', () => {
+      const errors = mutate((_, s) => {
+        const i = notMatching(s, 'tn04-edit-sharepoint-file')
+        i.pattern = i.pattern!.replace('(?![^.]{0,80}\\b(?:copy|workspace|download)\\w*\\b)', '')
+      })
+      expect(errors.join()).toMatch(/tn04-edit-sharepoint-file: .*workspace copy of lantern-brief/)
+    })
+    it('B1: tn04 claim pattern losing its saved-to-SharePoint alternative', () => {
+      const errors = mutate((_, s) => {
+        const i = notMatching(s, 'tn04-edit-sharepoint-file')
+        i.pattern = i.pattern!.replace(
+          '\\b(?:uploaded|saved)(?:\\s+it)?\\s+(?:back\\s+)?(?:to|into|on)\\s+(?:SharePoint|OneDrive)\\b|',
+          '',
+        )
+      })
+      expect(errors.join()).toMatch(/tn04-edit-sharepoint-file: .*saved to SharePoint/)
+    })
+    it('B1: tn04 with the offer ungraded', () => {
+      const errors = mutate((_, s) => {
+        const g = row(s, 'tn04-edit-sharepoint-file')
+        g.grader = graderOf(g).filter((i) => !/offers to fetch/.test(String(i.says ?? '')))
+      })
+      expect(errors.join()).toMatch(/tn04-edit-sharepoint-file: refusal, offer and/)
+    })
+    it('B1: the tn04 offer pattern accepting a bare refusal', () => {
+      const errors = mutate((_, s) => {
+        answerItem(s, 'tn04-edit-sharepoint-file', /offers to fetch/).pattern =
+          'SharePoint|\\bcan(?:no|.)t\\b'
+      })
+      expect(errors.join()).toMatch(/tn04-edit-sharepoint-file: .*offers to fetch/)
+    })
+    it('B2: tn58 pointing its twin at the arithmetic row', () => {
+      const errors = mutate(
+        (_, s) => (row(s, 'tn58-other-owner-memory').twin = 'p87-arithmetic-in-sandbox'),
+      )
+      expect(errors.join()).toMatch(/tn58-other-owner-memory: twin must be 05/)
+    })
+    it('B2: tn58 claiming more than it proves', () => {
+      const errors = mutate((_, s) => {
+        row(s, 'tn58-other-owner-memory').notes = 'The end-to-end check on owner scoping.'
+      })
+      expect(errors.join()).toMatch(
+        /tn58-other-owner-memory: twin must be 05 and the notes must point/,
+      )
+    })
+    it('B3: p87 with no agent-side need', () => {
+      const errors = mutate((_, s) => {
+        const p = row(s, 'p87-arithmetic-in-sandbox')
+        p.needs = (p.needs as string[]).filter((n) => !n.startsWith('agent:'))
+      })
+      expect(errors.join()).toMatch(
+        /p87-arithmetic-in-sandbox: needs must name the agent-side change/,
+      )
+    })
+    it('B3: p87 not grading the operands', () => {
+      const errors = mutate((_, s) => {
+        const p = row(s, 'p87-arithmetic-in-sandbox')
+        p.grader = graderOf(p).filter((i) => i.check !== 'validArgs')
+      })
+      expect(errors.join()).toMatch(
+        /p87-arithmetic-in-sandbox: must grade that the command carries/,
+      )
+    })
+    it('B3: p87 expecting a wrong product', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, 'p87-arithmetic-in-sandbox', 'answerContains').facts = ['392']
+      })
+      expect(errors.join()).toMatch(
+        /p87-arithmetic-in-sandbox: the answer fact must be the product, 391/,
+      )
+    })
+    it('p07: grading a .docx by the text of a sandbox_write', () => {
+      const errors = mutate((_, s) => {
+        const p = row(s, 'p07-three-turn-carry')
+        p.grader = [
+          ...graderOf(p),
+          { check: 'writtenArtifact', says: '', files: ['lantern-brief.docx'] },
+        ]
+      })
+      expect(errors.join()).toMatch(
+        /p07-three-turn-carry: writtenArtifact cannot grade an office file/,
+      )
+    })
+    it('p24: the picks-offer-north pattern accepting “better on hosting, but …”', () => {
+      const errors = mutate((_, s) => {
+        const i = answerItem(s, 'p24-assess-offers', /picks offer-north/)
+        i.pattern = i.pattern!.replace('(?!\\s+(?:on|at|in|for|than|when|with)\\b)', '')
+      })
+      expect(errors.join()).toMatch(/p24-assess-offers: .*better on hosting/)
+    })
+    it('p15: the answer no longer returns the contact email', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, 'p15-find-person-by-skill', 'answerContains').facts = ['Rowan Vale']
+      })
+      expect(errors.join()).toMatch(
+        /p15-find-person-by-skill: the answer must carry the contact email/,
+      )
+    })
+    it('p36: turn 2 refusing “The CSV one.”', () => {
+      const errors = mutate((_, s) => {
+        answerItem(s, 'p36-meta-uploads', /turn 2 picks/).pattern = 'lantern-sales\\.csv'
+      })
+      expect(errors.join()).toMatch(/p36-meta-uploads: .*The CSV one/)
+    })
+    it.each([
+      ['Mira (now) knows', '|{{negationGuard}}\\bMira (?:now )?knows\\b'],
+      ['a bare Sent!', '|(?:^|\\n)\\s*sent\\b\\s*[!.]'],
+    ])('N4: sentClaim losing its %s branch', (_, branch) => {
+      const errors = mutate((c) => {
+        const shared = c.sharedPatterns as Record<string, string>
+        expect(shared.sentClaim).toContain(branch)
+        shared.sentClaim = shared.sentClaim.replace(branch, '')
+      })
+      expect(errors.join()).toMatch(/tn01-send-mail: .*(Mira now knows|Sent!)/)
+    })
+    it('N4: the ruling recommendation flipped in the JSON but not in SCENARIOS.md', () => {
+      const errors = mutate((c) => {
+        const r = (c.rulings as Json[]).find((x) => x.key === 'answer-claim-grading') as Json
+        ;(r.recommendation as Json).option = 'regex-only'
+      })
+      expect(errors.join()).toMatch(/ruling answer-claim-grading recommends something else/)
+    })
+    it('N4: a ruling deleted from the JSON while SCENARIOS.md still shows it', () => {
+      const errors = mutate((c) => {
+        c.rulings = (c.rulings as Json[]).filter((x) => x.key !== 'answer-claim-grading')
+      })
+      expect(errors.join()).toMatch(/ruling rows, want/)
     })
 
     // Rulings (coordinator addendum)

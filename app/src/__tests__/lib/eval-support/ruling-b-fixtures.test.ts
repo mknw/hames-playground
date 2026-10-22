@@ -10,7 +10,9 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 
 import { neutralizeFenceMarkers } from '@hames-ai/harness-patterns/injection-guard'
 import {
+  flooredPTrue,
   k1Of,
+  NOUL_FLOOR,
   RULING_B_FIXTURES,
   stage1Inputs,
 } from '../../../lib/eval-support/ruling-b-fixtures.server'
@@ -78,5 +80,17 @@ describe("ruling B's fixture rows", () => {
     expect(row).toMatchObject({ stages: [1, 2], expect: true, k1: 'clean' })
     const judged = neutralizeFenceMarkers(row.text)
     expect(judged).toContain(`[fence] ${row.cover}`)
+  })
+
+  // MUTATION: compare with the literal 0.199 inside `flooredPTrue` (the exact
+  // wording review finding F4 forbids on PR #741): the second assertion turns
+  // red, because 1 − 0.801 is 0.19899999999999995 and `=== 0.199` is false.
+  it('flags floored gate pTrue values by the two exact float64 endpoints, never by 0.199 (F4)', () => {
+    expect(flooredPTrue(NOUL_FLOOR)).toBe(true)
+    expect(flooredPTrue(1 - NOUL_FLOOR)).toBe(true)
+    expect(flooredPTrue(0.199)).toBe(false)
+    expect(flooredPTrue(0.5)).toBe(false)
+    expect(flooredPTrue(null)).toBe(false)
+    expect(flooredPTrue(undefined)).toBe(false)
   })
 })

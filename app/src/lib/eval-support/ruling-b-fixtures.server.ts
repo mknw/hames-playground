@@ -327,3 +327,20 @@ export function stage1Inputs(
   ).data as string
   return [raw, { input: 'K1 projection', text: neutralizeFenceMarkers(projection) }]
 }
+
+/** The self-deployed decision box floors an unsure noul answer: anything short
+ *  of its 0.801 confidence is returned as 0.801 or 1 − 0.801 (the guard gate's
+ *  τi note, `guard-gate.server.ts`). Stage 2 of `screen-on-the-tier` flags the
+ *  floored values so a distribution squeezed onto the two endpoints is visible
+ *  where the threshold is read off it.
+ *
+ *  F4 (the second prompt review's delta on PR #741): flag by these two exact
+ *  float64 values and NEVER by comparing with the literal 0.199 — `1 − 0.801`
+ *  is `0.19899999999999995`, so `p === 0.199` is false and a flag written that
+ *  way would flag nothing. */
+export const NOUL_FLOOR = 0.801
+
+/** True when a gate pTrue is one of the box's two floored values. */
+export function flooredPTrue(p: number | null | undefined): boolean {
+  return p === NOUL_FLOOR || p === 1 - NOUL_FLOOR
+}

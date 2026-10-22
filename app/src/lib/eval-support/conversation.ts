@@ -6,6 +6,7 @@ export interface Check {
 }
 import type { SpendKey } from './spend-budget'
 import type { ArgsPredicate } from './tool-arguments'
+import type { GuardTurnCounts } from './guard-report'
 
 export interface ConversationScenario {
   id: string
@@ -58,6 +59,9 @@ export interface ConversationResult extends SpendKey {
   status: 'pass' | 'fail' | 'gated' | 'stopped'
   checks: Check[]
   error?: string
+  /** Per-turn guard counts (boundary guards slice 7), computed from the turn's
+   *  own events; present whenever a trace came back. */
+  guards?: GuardTurnCounts[]
 }
 
 export interface ConversationDriver {

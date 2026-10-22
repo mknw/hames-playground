@@ -1029,9 +1029,7 @@ class Apply(Harness):
         self.stop_vms()
         self.assertEqual(self.invoke("--apply"), 0)
         self.host.cfg["environments"][0]["clientAddress"] = "192.0.2.3"
-        changed = self.root / "changed.json"
-        changed.write_text(json.dumps(self.host.cfg))
-        changed.chmod(0o600)
+        guard.INSTALLED_CONFIG.write_text(json.dumps(self.host.cfg))
         presence = []
         real = self.host.cmd_nft
 
@@ -1040,7 +1038,7 @@ class Apply(Harness):
             presence.append(("inet", guard.TABLE) in self.host.tables)
             return result
         with patch.object(self.host, "cmd_nft", side_effect=watched):
-            self.assertEqual(self.invoke("--apply", config_path=changed), 0, self.err)
+            self.assertEqual(self.invoke("--apply"), 0, self.err)
         self.assertTrue(all(presence), "the guard table was absent between two nft calls")
         self.assertEqual(self.guard_model(), guard.expected(self.host.cfg))
 
@@ -1098,6 +1096,20 @@ class Apply(Harness):
                 self.assertEqual(self.writes(), [])
                 self.assertFalse(any(c[0] == "incus" for c in self.host.calls),
                                  "the running check reads the kernel, never the incus CLI")
+
+    def test_apply_and_persist_take_the_installed_config_only(self):
+        self.assertEqual(self.invoke("--install"), 0)
+        self.stop_vms()
+        changed = self.root / "changed.json"
+        changed.write_text(json.dumps(dict(self.cfg, probes=dict(PROBES, publicPort=8443))))
+        changed.chmod(0o600)
+        for mode in ("--apply", "--persist"):
+            self.host.calls.clear()
+            self.assertEqual(self.invoke(mode, config_path=changed), 1, mode)
+            self.assertIn("installed config only", self.err)
+            self.assertEqual(self.writes(), [])
+        self.assertFalse(guard.UNIT.exists())
+        self.assertEqual(self.invoke("--apply"), 0, self.err)
 
     def test_drift_is_replaced_and_kept_but_refused_under_a_deadman(self):
         self.ready()
@@ -1414,12 +1426,10 @@ class DeadMan(Harness):
         self.assertEqual(self.invoke("--apply"), 0)
         before = copy.deepcopy(self.host.tables)
         self.host.cfg["environments"][0]["clientAddress"] = "192.0.2.3"
-        changed = self.root / "changed.json"
-        changed.write_text(json.dumps(self.host.cfg))
-        changed.chmod(0o600)
-        self.assertEqual(self.invoke("--apply", "--deadman", "600", config_path=changed), 0, self.err)
+        guard.INSTALLED_CONFIG.write_text(json.dumps(self.host.cfg))
+        self.assertEqual(self.invoke("--apply", "--deadman", "600"), 0, self.err)
         guard.BOOT_ID.write_text("boot-2\n")
-        self.assertEqual(self.invoke("--apply", config_path=changed), 1)
+        self.assertEqual(self.invoke("--apply"), 1)
         self.assertEqual(self.guard_model(), guard.model(as_json("inet", guard.TABLE, before[("inet", guard.TABLE)],
                                                                  iter(range(1, 99)))))
 
@@ -1877,6 +1887,17 @@ class Smoke(Smoking, Harness):
             path.write_text(saved)
         self.assertEqual(self.smoke(), 0, self.err)
 
+    def test_probe_12_compares_the_installed_config_with_the_one_given(self):
+        self.ready()
+        other = self.root / "other.json"
+        other.write_text(json.dumps(self.cfg))  # the same config, other bytes
+        other.chmod(0o600)
+        self.assertNotEqual(other.read_text(), guard.INSTALLED_CONFIG.read_text())
+        self.record().unlink(missing_ok=True)
+        self.assertEqual(self.invoke("--smoke", "--record", str(self.record()), config_path=other), 1)
+        self.assertIn("changed", self.err)
+        self.assertFalse(self.record().exists())
+
     def test_unit_order_is_read_from_systemd(self):
         self.ready()
         for directive in ("Before=incus.service\n", "RequiredBy=incus.service\n"):
@@ -2093,6 +2114,9 @@ MUTATIONS = {
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
+    # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.
+    "S4-apply-any-config": ('    require(safe_file(path) == safe_file(INSTALLED_CONFIG),', "    require(True,"),
+    "S4-persistence-config-unchecked": ("(INSTALLED_CONFIG, safe_file(config_path))", "(INSTALLED_CONFIG, safe_file(INSTALLED_CONFIG))"),
     # S6 and O7: files read as root are opened without following a link and checked on the descriptor.
     "O7-file-parent-owner-unchecked": ("parent.st_uid == OWNER and parent.st_mode", "parent.st_mode"),
     "O7-file-follows-symlink": ("os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK", "os.O_RDONLY | os.O_NONBLOCK"),

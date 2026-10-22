@@ -120,6 +120,14 @@ def validated(config):
     return config
 
 
+def installed_config(path):
+    # The boot unit applies the installed copy: a table applied and confirmed from
+    # another file would be silently replaced at the next Incus start.
+    require(safe_file(path) == safe_file(INSTALLED_CONFIG),
+            "--apply and --persist take the installed config only; --install it first")
+    return read_config(INSTALLED_CONFIG)
+
+
 def read_config(path, trusted=True):
     try:
         return validated(json.loads(safe_file(path) if trusted else path.read_text()))
@@ -1288,9 +1296,10 @@ def main():
                     elif args.remove:
                         remove(entries)
                     elif args.persist:
+                        installed_config(args.config)
                         persist(entries, args.deadman)
                     elif args.apply:
-                        apply(entries, read_config(args.config), args.deadman)
+                        apply(entries, installed_config(args.config), args.deadman)
                     else:
                         document_, current, drifted = table_state(entries)
                         require(not drifted, "the live table drifted from its journaled render")

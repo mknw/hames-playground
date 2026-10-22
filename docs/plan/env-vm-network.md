@@ -376,8 +376,8 @@ offline render by default, Linux root only for writes, fixed failure labels and 
 subprocesses. Below, "an environment VM" means any instance attached to an `envvm-*` bridge, not
 only the configured ones: every safety check lists them all.
 
-- **Idempotent install.** `--apply` renders the table from the config and compares it with
-  `nft -j list table inet env_vm_guard`, ignoring rule handles and counter values. If they are
+- **Idempotent install.** `--apply` renders the table from the installed config and compares it
+  with `nft -j list table inet env_vm_guard`, ignoring rule handles and counter values. If they are
   equal, nothing is written. If they differ, or the table is absent, it syntax-checks the render
   with `nft -c -f` and then replaces the table in one transaction:
 
@@ -388,7 +388,9 @@ only the configured ones: every safety check lists them all.
   ```
 
   There is never a moment without the table, and a failed transaction leaves the previous one in
-  place. The readback must then equal the render.
+  place. The readback must then equal the render. `--apply` and `--persist` refuse a `--config`
+  that differs from the installed copy: the boot unit applies that copy, so a table applied and
+  confirmed from another file would be replaced at the next Incus start.
 
 - **No change while an environment VM runs.** Replacing the table keeps every connection-tracking
   entry, so a flow the old table admitted, or one that predates the table, would keep flowing

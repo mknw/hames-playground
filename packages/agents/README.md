@@ -145,10 +145,16 @@ web route. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
 orchestrator's guarded route records. Each guard declares its own options and
 none is inherited: the office and info route guards declare an always-on fence
-and a screen, and enable `screenDespiteFindings`, so even results with
-deterministic findings are screened after sanitization; those neutralizations
-stay intact. That is a screen call per office or info result, including extra
-inference time on the private tier. The documents route's guard declares the
+and a screen behind the guard gate, with a mode per tier. On the Anthropic tier
+the screen runs on every external result and the gate is never asked; on the
+self-deployed tier the gate is asked first and, in `'shadow'`, its answer is
+recorded and the screen runs anyway, until an eval bar moves that tier to
+`'gated'`. A deterministic finding always forces the screen, after
+sanitization, so those neutralizations stay intact. The host's classifier
+(`deps.classifyIngress`) keeps the deployment's own content to the deterministic
+pass. Memory reads are screened like external content until the shared memory
+store is attested (ruling L's exemption is not enabled). That is a screen call per
+external office or info result, plus a gate call on the self-deployed tier. The documents route's guard declares the
 fence and no screen, so retrieved hits get the deterministic pass only. The
 orchestrator's loop sanitizes and screens nothing of its own: a route record
 is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web

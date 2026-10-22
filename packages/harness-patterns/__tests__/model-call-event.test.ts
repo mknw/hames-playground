@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commitEvents, createContext, createModelCallEvent, createScope } from '../context.server'
 import { compactBulkData } from '../compactBulkData.server'
 import { createInjectionGuard } from '../patterns/withInjectionGuard.server'
+import type { InjectionScreen } from '../injection-guard'
 import { createEventView } from '../patterns/event-view.server'
 import { parallel } from '../patterns/parallel.server'
 import { withRunFrame } from '../run-frame.server'
@@ -81,10 +82,10 @@ const modelCalls = (events: ContextEvent[]): ContextEvent[] =>
 
 describe('the guard records the screen call', () => {
   const clean = { injection_detected: false, reason: 'clean', spans: [] }
-  const guardWith = (screen: Parameters<typeof createInjectionGuard>[0]['screen']) => {
+  const guardWith = (run: InjectionScreen) => {
     const events: ContextEvent[] = []
     const guard = createInjectionGuard(
-      { tools: ['fetch_content'], screen },
+      { tools: ['fetch_content'], screen: { run } },
       (e) => events.push(e),
       'guard',
     )
@@ -145,9 +146,11 @@ describe('the guard records the screen call', () => {
         {
           tools: ['fetch_content'],
           // Calls the sink and does NOT catch what it throws.
-          screen: async ({ onCall }) => {
-            onCall?.(record())
-            return injected
+          screen: {
+            run: async ({ onCall }) => {
+              onCall?.(record())
+              return injected
+            },
           },
         },
         (e) => {

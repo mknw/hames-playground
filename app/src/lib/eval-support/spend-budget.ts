@@ -6,9 +6,21 @@ export interface SpendKey {
 }
 
 /** The injection screen's BAML function. general-next's office and info route guards screen
- * their tool results (`screenDespiteFindings` adds results with deterministic findings);
- * retriever hits and route-output records are not model-screened, so its private-tier time is its own report line. */
+ * external tool results (always after a deterministic finding, otherwise as the screen's mode
+ * says); retriever hits and route-output records are not model-screened, so its private-tier
+ * time is its own report line. */
 export const SCREEN_FUNCTION = 'ScreenUntrustedContent'
+
+/** The guard gate's ledger prefix: a Decide call keyed `guard.*` (`guard.screen` asks the
+ * screen's gate). Its own line beside the screen's, so a run shows what the gate costs next to
+ * what it saves. */
+export const GATE_FUNCTION_PREFIX = 'Decide:guard.'
+
+/** The ledger name of one observer sample: the BAML function, and for a Decide call its question
+ * key, so the gate's calls are not filed with the loop's. */
+export function ledgerFunction(functionName?: string, decisionKey?: string): string | undefined {
+  return functionName && decisionKey ? `${functionName}:${decisionKey}` : functionName
+}
 
 export interface FunctionSpend {
   calls: number
@@ -166,17 +178,30 @@ export function floorHourlyRate(configured: number, committed: number): number {
   return Math.max(configured, committed)
 }
 
-/** The screen against everything else, for one row. Shares are of observer cost and
- * of calls; infrastructure and tail lines are scenario time and not attributable. */
+/** The screen and its gate against everything else, for one row. Shares are of observer cost
+ * and of calls; infrastructure and tail lines are scenario time and not attributable. */
 export function screenShare(row: Pick<SpendRow, 'functions' | 'calls' | 'observerUsd'>) {
   const screen = row.functions[SCREEN_FUNCTION] ?? { calls: 0, observerUsd: 0 }
+  const gate = Object.entries(row.functions)
+    .filter(([name]) => name.startsWith(GATE_FUNCTION_PREFIX))
+    .reduce(
+      (sum, [, f]) => ({
+        calls: sum.calls + f.calls,
+        observerUsd: sum.observerUsd + f.observerUsd,
+      }),
+      { calls: 0, observerUsd: 0 },
+    )
   const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
   return {
     calls: screen.calls,
     observerUsd: screen.observerUsd,
-    otherCalls: row.calls - screen.calls,
-    otherObserverUsd: row.observerUsd - screen.observerUsd,
+    gateCalls: gate.calls,
+    gateObserverUsd: gate.observerUsd,
+    otherCalls: row.calls - screen.calls - gate.calls,
+    otherObserverUsd: row.observerUsd - screen.observerUsd - gate.observerUsd,
     callShare: share(screen.calls, row.calls),
     observerUsdShare: share(screen.observerUsd, row.observerUsd),
+    gateCallShare: share(gate.calls, row.calls),
+    gateObserverUsdShare: share(gate.observerUsd, row.observerUsd),
   }
 }

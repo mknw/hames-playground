@@ -610,6 +610,27 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     expect(requests[0].init.signal).toBeInstanceOf(AbortSignal)
   })
 
+  // Boundary guards slice 3: the guard gate's deadline aborts the REQUEST, not
+  // only the wait for it. MUTATION: drop `input.signal` from `decide`'s call to
+  // the request (or `signal` from the fetch's `AbortSignal.any`): the fetch's
+  // signal no longer follows the caller's and this goes red.
+  it("DecideInput.signal reaches the fetch: the caller's abort aborts the request", async () => {
+    const caller = new AbortController()
+    let fetchSignal: AbortSignal | undefined
+    respond = () =>
+      new Promise<Response>((_, reject) => {
+        fetchSignal = requests[0].init.signal ?? undefined
+        fetchSignal?.addEventListener('abort', () => reject(fetchSignal?.reason))
+      })
+    const { decide } = await transport()
+    const pending = decide({ spec: SPEC, state: 's', signal: caller.signal })
+    await vi.waitFor(() => expect(fetchSignal).toBeDefined())
+    expect(fetchSignal?.aborted).toBe(false)
+    caller.abort(new Error('the gate stopped waiting'))
+    await expect(pending).rejects.toThrow(/request failed/)
+    expect(fetchSignal?.aborted).toBe(true)
+  })
+
   it('a missing key is a refusal before any request', async () => {
     delete process.env.JEV_DECISIONS_API_KEY
     const decide = await adapter()
@@ -631,6 +652,10 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     await evaluateDecision({ decide, spec: SPEC, state: 's' })
     expect(seen).toHaveLength(1)
     expect(seen[0].clientName).toBe('JevDecide')
+    // Slice 3: the sample names its question, so a ledger can tell the guard
+    // gate's Decide spend from the loop's. MUTATION: drop `decisionKey` from the
+    // transport's `notifyLlmUsage`.
+    expect(seen[0].decisionKey).toBe('memory.recall')
   })
 })
 

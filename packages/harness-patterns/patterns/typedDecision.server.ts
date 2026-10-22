@@ -164,6 +164,8 @@ export interface DecisionCall<S extends AnyDecisionSpec | string = DecisionSpec>
   readonly state: string
   /** A shadow-mode caller: recorded on the event, changes no verdict. */
   readonly shadow?: true
+  /** Handed to the transport as `DecideInput.signal`. */
+  readonly signal?: AbortSignal
 }
 
 /** What {@link evaluateDecision} hands back: the verdict, the event data to
@@ -233,7 +235,11 @@ export async function evaluateDecision<S extends AnyDecisionSpec>(
   try {
     if (!(call.decide.supportedTypes ?? ['choice']).includes(call.spec.type ?? 'choice'))
       throw new Error('Unsupported decision type')
-    result = await call.decide({ spec: call.spec, state: call.state })
+    result = await call.decide({
+      spec: call.spec,
+      state: call.state,
+      ...(call.signal && { signal: call.signal }),
+    })
   } catch (e) {
     failure = errorFrom(e, call.state)
   }

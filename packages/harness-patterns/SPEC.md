@@ -948,10 +948,18 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   catalog?: string[] // REQUIRED when namespaces is non-empty — pass tools.all (#242 item 4)
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
-  screen?: InjectionScreen // optional LLM second opinion; OFF by default
-  screenDespiteFindings?: boolean // screen sanitized content after findings; default false
+  screen?: InjectionScreenConfig // optional model screen; OFF by default
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
+}
+
+interface InjectionScreenConfig {
+  run: InjectionScreen // createInjectionScreen() in @hames-ai/harness-baml
+  mode?: ByTier<'off' | 'shadow' | 'gated' | 'always'> // default 'always'; 'shadow' with a gate
+  gate?: GuardGate // createGuardGate(decide); asked in 'shadow' and 'gated'
+  onUnavailable?: 'pass' | 'withhold' // a screen that throws; default 'pass'
+  exempt?: string[] // declared namespaces neither the gate nor the screen runs on
+  classify?: IngressClassifier // the host's; absent = every payload is external
 }
 ```
 
@@ -1092,25 +1100,85 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 > provenance in the text; a finding-less event only buries the real ones), and
 > callers test `data === input` — not `summary` presence — for "did it change?".
 
-**Optional LLM screen (off by default).** `screen` takes an `InjectionScreen`;
+**Optional model screen (off by default).** `screen` takes an
+`InjectionScreenConfig` whose `run` is an `InjectionScreen`;
 `createInjectionScreen()` (in `harness-baml`) is the BAML-backed one, on the cheap
 `DescribeAnthropic` client. It has its OWN `screen` role in
 `harness-baml/clients.server.ts` rather than riding `describe`, so re-pointing summarization
 at a cheaper model can never silently re-point prompt-injection screening with
-it (SA-M5). By default the guard calls it **only for content the
-deterministic layer passed clean**. With `screenDespiteFindings: true`, it also
-screens the deterministically sanitized projection after findings; applying the
-verdict preserves the original rule findings and neutralizations, with exactly
-one fence per string leaf and the original provenance label retained. The
-reference host unfences repeated wrappers to a fixed point before harvesting
-identity fields as defence in depth for older payloads. Like every option it
-governs the tools its declaring guard declares and no others. Regexes catch known phrasings and
-the screen catches novel ones. A verbatim span it quotes is neutralized like a
-regex match; a span it paraphrased (matching nothing) still forces the fence, so
-a verdict never degrades to silence. A screen that throws is non-fatal — the
-deterministic verdict stands and the outage is recorded on the event (the one
-case where a finding-less `content_sanitized` is still emitted, because a
-silently degraded second layer must be visible).
+it (SA-M5). Whether it runs on a payload is decided in this order:
+
+1. a namespace in `exempt` (each must be one the guard declares, or the guard
+   refuses construction): never — neither the gate nor the screen, and the
+   deterministic layer still runs;
+2. `mode` resolved for this call's tier is `'off'`: never;
+3. **a deterministic finding: always**, on the sanitized projection and with no
+   gate call — a hit is already a positive, and asking a model whether to look
+   closer would only add a way to talk the screen out of running. Applying the
+   verdict preserves the original rule findings and neutralizations, with exactly
+   one fence per string leaf and the original provenance label retained;
+4. `classify` says the payload is `'internal'`: never (the deterministic layer
+   only). It is handed the RAW result and may read only code-written provenance;
+   a throw, or any other answer, is external, and with no classifier every
+   payload is;
+5. `'always'`: always. `'shadow'`: the gate is asked and its answer recorded, and
+   the screen runs whatever it said, beside the gate rather than after it (the
+   result waits for the slower of the two, and the gate's decision is recorded
+   before it returns; a shadow gate that throws changes nothing). `'gated'`: the
+   gate decides, and a gate that
+   throws, times out or answers nothing usable runs the screen (the safe
+   direction).
+
+The core default is `'always'` for a screen alone and `'shadow'` for a screen with
+a gate, so a library user's gate is measured before it skips anything; skipping
+takes an explicit `'gated'`, and a mode that asks a gate with none passed refuses
+construction. So does a declaration the guard would act on as something else: a
+`run` that is not a function, a mode that is not one of the four on any tier, a
+per-tier map with no own `default`, and an `onUnavailable` other than `'pass'` or
+`'withhold'`. The declaration is read on every call, so a value construction never
+saw fails safe: only `'off'` and `'gated'` skip the screen, each by its exact value
+(any other mode runs it, and records the gate's answer as a shadow one), and any
+`onUnavailable` but `'pass'` withholds. `mode` is a `ByTier` setting: a bare value, or a map such as
+`{ default: 'shadow', anthropic: 'always' }` that `resolveByTier()` resolves per
+call against the registered `effectiveTier()`, the tier routing takes (with no
+tier module registered, the map's `default`). Like every option it governs the
+tools its declaring guard declares and no others. The reference host unfences
+repeated wrappers to a fixed point before harvesting identity fields as defence
+in depth for older payloads. Regexes catch known phrasings and the screen
+catches novel ones. A verbatim span it quotes is neutralized like a regex match;
+a span it paraphrased (matching nothing) still forces the fence, so a verdict
+never degrades to silence. A screen that throws is non-fatal under the default
+`onUnavailable: 'pass'` — the deterministic verdict stands and the outage is
+recorded on the event (the one case where a finding-less `content_sanitized` is
+still emitted, because a silently degraded second layer must be visible);
+`'withhold'` replaces the payload with the fixed `SCREEN_WITHHELD` marker
+instead, which tells the controller to answer without it.
+
+**The guard gate.** `createGuardGate(decide, settings?)` (`guard-gate.server.ts`)
+is the cheap question in front of the screen: ONE `noul` decision,
+`GUARD_SCREEN` (key `guard.screen`), asked through the same `DecideFn` seam the
+decision loop uses, over the same 20 000-character head the screen reads. The
+screen runs when its pTrue is at or above `threshold` (τi, default 0.15, an
+unmeasured placeholder; on the self-deployed tier it must stay below 0.199, where
+the decision box floors an unsure "no"). Its state quotes the head with every line
+prefixed `"> "` (a line starts after CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028
+or U+2029) between markers carrying a per-call 16-hex nonce from the platform's
+cryptographic source, drawn again if the quoted text contains it, after the
+shared fence neutraliser (`neutralizeFenceMarkers`, the screen's own); text
+written before the call cannot know the nonce, so it cannot close the quote. A
+state over `maxStateBytes` (default 32 000 UTF-8 bytes, the decision box's state
+budget in tokens, which it would otherwise meet by dropping the middle) is refused
+before any request, so the gate is unavailable and the screen runs. The
+transport accepts only a probability, so a manipulated gate can at worst answer
+"skip"; it cannot emit text. Its deadline (`timeoutMs`, default 3 000) aborts the
+request itself through `DecideInput.signal`, not only the wait for it. Each answer
+is a `decision_made` event keyed `guard.screen`, `shadow: true` whenever the
+answer is not obeyed, carrying the state's size and never its text (the call record
+is redacted as the screen's is); an unavailable answer, a state it could not render
+included, is an abstained one. So `guardGateSkipRate(events)` computes the skip
+rate from any run's events (a custom gate that throws records nothing, so it is not
+counted): a gate that is wrong rather than down is caught by measurement, never by
+`onUnavailable`.
 
 **On detection: neutralize + annotate + emit, never silently drop.**
 
@@ -1190,14 +1258,13 @@ two guards both declare takes the inner guard's options. The `content_sanitized`
 event and the screen's `model_call` event go to the innermost guard's scope
 either way.
 
-| Dimension               | Nesting rule                                       | Why                                                                                      |
-| ----------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools`    | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`          | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`                 | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared               |
-| `spotlight`             | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself   |
-| `screenDespiteFindings` | the declaring guard's own                          | an enclosing guard's post-finding screen is not inherited                                |
-| `screen`                | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen |
+| Dimension            | Nesting rule                                       | Why                                                                                      |
+| -------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `namespaces`/`tools` | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
+| `disableRules`       | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
+| `rules`              | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared               |
+| `spotlight`          | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself   |
+| `screen`             | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen |
 
 A guard that wants a screen, a fence or an extra rule on a tool declares it
 itself. Declaring one on an enclosing guard no longer reaches the guards inside
@@ -1958,10 +2025,16 @@ route wraps `withReferences` in `withPseudonymisedInputs`, admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
 from references and expansions, and disables independent prior-turn results. Each guard declares its own options
 and none is inherited. The office and info route guards declare `spotlight: 'always'`
-and a role-resolved screen with `screenDespiteFindings: true`, so a screen call per
-mail, file, web, library or graph result; the documents route's guard declares the
-fence and no screen, so the retriever's hits get the deterministic pass and the
-fence only. The loop itself sanitises and screens nothing: a route record is the
+and a role-resolved screen behind the guard gate, mode `{ default: 'shadow',
+anthropic: 'always' }`: on the Anthropic tier a screen call per external result and
+no gate call; on the self-deployed tier (and an absent or unknown one) a gate call,
+recorded and not obeyed, and the screen as well. A deterministic finding forces
+the screen on either. The host's classifier keeps the deployment's own content
+(the graph, Microsoft 365 results whose every identity is on a home domain) to
+the deterministic pass; memory reads are screened like external content until the
+shared memory store is attested (the `exempt` option is not used yet); the
+documents route's guard declares the fence and no screen, so the retriever's
+hits get the deterministic pass and the fence only. The loop itself sanitises and screens nothing: a route record is the
 text the extractor built, and a quoted tool body carries the fence its result
 arrived in. A screen failure inside a route is recorded and fails
 open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
@@ -1970,8 +2043,7 @@ open. Its thread synthesizer reads the `orchestrator` records of this turn and t
 recalled memory, while decisions and children receive none. The
 private tier refuses an unconfigured `SMALL_LLM_DECISIONS_URL` visibly, with
 no provider fallback. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. Layer-1 composition pins and the layer-2 graph-count conversation
-live in the host; it consumes the separately pinned core
-`screenDespiteFindings` opt-in.
+live in the host.
 
 ### `judge(evaluator, config?)`
 
@@ -2438,7 +2510,10 @@ statement holds. The endpoint's probabilities pass through untouched. To offer
 
 `defineChoice`, `defineScore` and `defineNoul` infer option ids from literal
 specs; `defineDecisionSet` groups typed fields over one state. `DecideFn` is the
-single-question seam; `DecideAllFn` answers a set in one request.
+single-question seam; `DecideAllFn` answers a set in one request. A
+`DecideInput.signal` (passed by `evaluateDecision`'s `signal`) aborts the request
+itself: the systemone transport hands it to its fetch beside its own timeout, so
+a caller with a deadline of its own (the guard gate) leaves nothing running.
 `createDecideAdapter()` and `createDecideAllAdapter()` provide these seams.
 `evaluateDecision` evaluates without a scope, `decide` records on a scope, and
 `decideFields` returns the typed fields and records one `decision_made` per
@@ -3625,7 +3700,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── types.ts                # Core types (UnifiedContext, PatternScope, RouterConfig, DIRECT_RESPONSE_ROUTE, the seam callables ControllerFn/PlannerFn/CompactIntentFn/… )
 ├── context.server.ts       # Context factory, createEvent(), generateId()
 ├── tools.server.ts         # Tools({ namespaces }) — groups MCP tools by namespace; the map is REQUIRED (ruling B-iii); inferServer consults transports' namespaceFor → registered resolvers (registerToolNamespaces) → heuristic; NO catalog in core — the 86-entry map lives in app-tools/mcp-catalog.ts and registers at boot
-├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall — hitl is a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest replace), activeRunFrame() THROWS outside a frame, registerEffectiveTier()/effectiveTier() are the one tier rule's seam: the tier module (`@hames-ai/harness-baml`) registers the function that answers "which tier is this run on" and every guard-side reader asks it instead of the raw `inference.tier` string (core interprets no tier string; unregistered, `effectiveTier()` is `undefined`), and currentRunFrame() is the soft read
+├── run-frame.server.ts     # THE run frame — one ALS scope per run holding its named slots (guard / transports / config / live / inference / hitl / egressChecks / stashWriteObservers / afterToolCall — hitl is a frozen `{ attended }`), on a globalThis symbol so two loaded copies share one store (#374 D4). withRunFrame() opens or joins, amendRunFrame() scopes below a run and is the ONE place the per-slot merge asymmetry lives (transports prepend, hitl passes by reference and is refused below an open one, egressChecks, stashWriteObservers and afterToolCall concatenate, the rest replace), activeRunFrame() THROWS outside a frame, registerEffectiveTier()/effectiveTier() are the one tier rule's seam: the tier module (`@hames-ai/harness-baml`) registers the function that answers "which tier is this run on" and every guard-side reader asks it instead of the raw `inference.tier` string (core interprets no tier string; unregistered, `effectiveTier()` is `undefined`), resolveByTier() reads a `ByTier` setting on that tier, and currentRunFrame() is the soft read
 ├── harness.server.ts       # harness() (a bound runner: agent.resume / agent.continue carry its own patterns, S4), resumeHarness(serialized, patterns, answers, { principal, resolve }), continueSession() — each OPENS the run frame (ruling Q17/D5) with a `{ attended: true }` hitl slot unless the frame says otherwise, or joins the host's and adds nothing; resumeHarness binds every answer to a request the run waits on before anything runs, continueSession supersedes what waits; HarnessResultScoped is a union on status — `pending` is non-optional when paused [F18]
 ├── hitl.server.ts          # Human in the loop (#433): readHitl() / answerOf() read the hitl_* events; proposeToHuman() / answerProposal() / readProposals() are the out-of-run, non-blocking form (S11, the memory confirmation); askHuman() raises (or replays, or applies resolveUnattended()) into the run's HITL bookkeeping — an async-context store of its own on a Symbol.for holder, opened by the owning runChain, never on the frame (#477) — held() is a gated executor's placeholder, hitlPending() is the loops' stop check; the owning runChain commits from the buffer only what askHuman could have written, straight into the context, and pauses. S3: checkResume() is the pause binding (HitlAnswerError), recordAnswers() / supersedeHitl() / expireHitl() close requests and substitute held results through sanitizeUntrusted. S4: humanGate() / confirm() are the gate patterns — the custom case and the one-call preset over askHuman
 ├── tool-transport.server.ts # ToolTransport + registerTransport() (process, consulted after every scoped one) / activeTransports() (reads the run frame's `transports` slot); the difference between the two ways to supply one IS the containment invariant — there is no priority field and no argument that could express one
@@ -3635,7 +3710,8 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── parallel-tools.server.ts # runBatch() + combineOutcomes() — multi-call turn executor (parallel/serial modes, stop-on-failure, index-keyed combined map)
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
-├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding
+├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding, the screen's config types (mode, gate, exempt, classify) and the shared fence neutraliser
+├── guard-gate.server.ts    # The guard gate (boundary guards slice 3): createGuardGate(decide) asks GUARD_SCREEN (`guard.screen`, one noul) over the screen's head, quoted line by line between nonce-carrying markers; its deadline aborts the request through DecideInput.signal; guardGateSkipRate() reads its decision_made events
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — its COVERAGE unions and its options stay with the declaring guard, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates
 ├── assert.server.ts        # Server-only guards

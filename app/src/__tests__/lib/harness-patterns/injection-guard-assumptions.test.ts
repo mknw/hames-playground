@@ -57,6 +57,16 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
+/** The screen behind a gate that answers "run", in `'gated'` mode (boundary
+ *  guards slice 3). MUTATION for every test that uses it: make the stub answer
+ *  "skip" (`run: false`) — the screen no longer runs on clean content and the
+ *  test goes red. */
+const gatedScreen = (run: unknown) => ({
+  run: run as never,
+  mode: 'gated' as const,
+  gate: vi.fn(async () => ({ run: true, pTrue: 0.9, why: 'gate' as const })),
+})
+
 async function loadGuard() {
   const { createInjectionGuard } =
     await import('@hames-ai/harness-patterns/patterns/withInjectionGuard.server')
@@ -353,7 +363,7 @@ const TRIADS: RuleTriad[] = [
     questionable: {
       text: 'Company logo: ![Vendor Ltd](https://cdn.vendor.example/logo.png)',
       label: 'a markdown logo in a newsletter',
-      why: 'Every markdown-rendered newsletter. Defanging is cheap and arguably right here — the point is that it fires constantly, and each firing suppresses the LLM screen for the whole result (see the screen-gate block).',
+      why: 'Every markdown-rendered newsletter. Defanging is cheap and arguably right here — the point is that it fires constantly, and each firing forces the LLM screen over the whole result, a model call per newsletter (see the screen block).',
     },
   },
   {
@@ -491,47 +501,46 @@ describe('exfil-data-url: which real URLs it defangs, and which slip past', () =
 })
 
 // ============================================================================
-// 4. The screen gate
+// 4. The screen and the cheap rules
 // ============================================================================
 
-describe('the screen gate: any cheap-rule hit suppresses semantic screening of the whole result', () => {
+describe('the screen and a cheap-rule hit: the hit forces the screen over the whole result', () => {
   const verdictDetected = {
     injection_detected: true,
     reason: 'the preview instructs the reader to conceal the transaction',
     spans: ['keep this arrangement between us'],
   }
 
-  it('documents current behavior: one false-positive URL means the prose is never screened', async () => {
-    // This is the consequence of `if (options.screen && report.findings.length === 0)`
-    // meeting the observation above. The mail result contains:
-    //   - a webLink that trips `exfil-data-url` (a false positive)
-    //   - a preview carrying an instruction-shaped payload no rule matches
-    // Because the corpus produced ONE finding, the screen — the only layer that
-    // could read the preview semantically — is not called at all.
-    //
-    // Whether that is an acceptable trade turns on the claim in the source
-    // comment: "if regexes already fired we have neutralized and fenced the
-    // content, and a second call would buy nothing". The test above shows the
-    // fence lands on the webLink leaf ONLY, so on this input the claim does not
-    // hold: the prose is neither neutralized nor fenced nor screened. The
-    // agent-level effect is that the strongest layer is switched off by the
-    // weakest layer's false positive, on every mail result, for as long as
-    // Outlook mints permalinks that way.
+  // INVERTED in boundary guards slice 3 (step 1). The mail result contains a
+  // webLink that trips `exfil-data-url` (a false positive) and a preview
+  // carrying an instruction-shaped payload no rule matches. Before, the one
+  // finding switched the screen off and the prose was neither neutralized nor
+  // fenced nor screened: the strongest layer switched off by the weakest
+  // layer's false positive. Now a finding FORCES the screen, on the sanitized
+  // projection and with no gate call, so the prose is read. MUTATION: ask the
+  // gate before checking findings (the stub below says skip) — red.
+  it('one false-positive URL finding forces the screen, which then reads the prose', async () => {
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
+    const gate = vi.fn(async () => ({ run: false, pTrue: 0.01, why: 'gate' as const }))
     const guard = createInjectionGuard(
-      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      {
+        namespaces: ['graph'],
+        catalog: ['list_graph_messages'],
+        screen: { run: screen, gate, mode: 'gated' },
+      },
       () => {},
       'microsoft-365',
     )
 
     const { data, summary } = await guard.sanitize(CTX.tool, { messages: [mailMessage()] })
 
-    expect(screen).not.toHaveBeenCalled()
-    expect(summary?.rules).toEqual(['exfil-data-url'])
-    expect(summary?.screenReason).toBeUndefined()
+    expect(screen).toHaveBeenCalledTimes(1)
+    expect(gate).not.toHaveBeenCalled()
+    expect(summary?.rules).toEqual(expect.arrayContaining(['exfil-data-url', 'llm-screen-1']))
+    expect(summary?.screenReason).toBe(verdictDetected.reason)
     const preview = (data as { messages: Record<string, string>[] }).messages[0].preview
-    expect(preview).toBe(MARKETING_PREVIEW)
+    expect(preview).toContain('neutralized:llm-screen-1')
   })
 
   it('screens the same prose when the permalink is absent', async () => {
@@ -540,7 +549,7 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
     const guard = createInjectionGuard(
-      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen: gatedScreen(screen) },
       () => {},
       'microsoft-365',
     )
@@ -555,10 +564,9 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     expect(preview).toContain('neutralized:llm-screen-1')
   })
 
-  it('disableRules on the false-positive rule restores screening for the whole result', async () => {
-    // The available remediation today, pinned so the PR discussion has a
-    // measured alternative rather than a guess: switching `exfil-data-url` off
-    // for this agent lets the screen see the prose again. It also stops
+  it('disableRules on the false-positive rule leaves the result clean, and the gate lets the screen read it', async () => {
+    // Switching `exfil-data-url` off for this agent leaves no finding, so the
+    // screen runs as its mode says (here: the gate says run). It also stops
     // defanging every genuine data-URL for that agent, which is the trade.
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
@@ -566,7 +574,7 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
       {
         namespaces: ['graph'],
         catalog: ['list_graph_messages'],
-        screen,
+        screen: gatedScreen(screen),
         disableRules: ['exfil-data-url'],
       },
       () => {},
@@ -592,7 +600,7 @@ describe('the screen gate: any cheap-rule hit suppresses semantic screening of t
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue({ injection_detected: false, reason: '', spans: [] })
     const guard = createInjectionGuard(
-      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen },
+      { namespaces: ['graph'], catalog: ['list_graph_messages'], screen: gatedScreen(screen) },
       () => {},
       'p',
     )
@@ -790,7 +798,7 @@ describe('spotlight modes: what actually reaches the controller', () => {
       const outerScreen = vi.fn().mockResolvedValue(verdict)
       const innerScreen = vi.fn().mockResolvedValue(verdict)
       const outer = createInjectionGuard(
-        { namespaces: ['web'], catalog: ['search', 'fetch'], screen: outerScreen },
+        { namespaces: ['web'], catalog: ['search', 'fetch'], screen: { run: outerScreen } },
         () => {},
         'outer',
       )
@@ -808,7 +816,11 @@ describe('spotlight modes: what actually reaches the controller', () => {
         expect(outerScreen).toHaveBeenCalledTimes(1)
 
         const own = createInjectionGuard(
-          { namespaces: ['graph'], catalog: ['list_graph_messages'], screen: innerScreen },
+          {
+            namespaces: ['graph'],
+            catalog: ['list_graph_messages'],
+            screen: { run: innerScreen },
+          },
           () => {},
           'i2',
         )
@@ -872,7 +884,7 @@ describe('failure asymmetry: the rule engine fails CLOSED, the screen fails OPEN
     const events: unknown[] = []
     const screen = vi.fn().mockRejectedValue(new Error('rate limited'))
     const guard = createInjectionGuard(
-      { namespaces: ['web'], catalog: ['search', 'fetch'], screen },
+      { namespaces: ['web'], catalog: ['search', 'fetch'], screen: gatedScreen(screen) },
       (e) => events.push(e),
       'p',
     )
@@ -895,12 +907,15 @@ describe('failure asymmetry: the rule engine fails CLOSED, the screen fails OPEN
     const events: unknown[] = []
     const screen = vi.fn().mockResolvedValue({ reason: 'x', spans: ['whatever'] })
     const guard = createInjectionGuard(
-      { namespaces: ['web'], catalog: ['search', 'fetch'], screen },
+      { namespaces: ['web'], catalog: ['search', 'fetch'], screen: gatedScreen(screen) },
       (e) => events.push(e),
       'p',
     )
 
     const { data, summary } = await guard.sanitize('search', 'clean enough')
+    // The screen RAN and its malformed answer read as clean; without this the
+    // test passes with no screen at all.
+    expect(screen).toHaveBeenCalledTimes(1)
     expect(data).toBe('clean enough')
     expect(summary).toBeUndefined()
     expect(events).toHaveLength(0)

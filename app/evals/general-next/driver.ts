@@ -119,11 +119,15 @@ export async function createDriver(
   // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
   const { createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
+  // The production classifier too (ruling O): the graph's rows are internal, and no fixture
+  // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
+  const { classifyIngress } = await import('../../src/lib/harness-client/ingress-classifier.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
     pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    classifyIngress,
     withSandbox: () => (pattern) => ({
       ...pattern,
       children: [pattern],

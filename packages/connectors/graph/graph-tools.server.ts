@@ -36,7 +36,7 @@
  * server**: the model passes structured arguments and this module composes the
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
-import { domainToASCII } from 'node:url'
+import { domainToASCII, domainToUnicode } from 'node:url'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { GraphAuthRequiredError } from './graph-auth'
 import type { AppToolDefinition } from '../app-tools/registry'
@@ -1310,22 +1310,39 @@ export function graphProvenance(value: unknown): GraphProvenance | undefined {
   return p === 'home' || p === 'external' || p === 'unknown' ? p : undefined
 }
 
-/** A domain lower-cased and IDNA-normalised, or `''` when it is not one. */
+/** A configured domain lower-cased and IDNA-normalised, or `''` when it is not one. */
 function normaliseDomain(domain: string): string {
   return domainToASCII(domain.trim())
 }
 
 /**
+ * An address's domain in its ASCII form, but only when it is already canonical:
+ * its lower-cased spelling is that form or that form's Unicode spelling. IDNA
+ * mapping folds fullwidth letters, ideographic full stops and ignorable
+ * characters (a zero-width space, a soft hyphen) into ASCII, so normalising the
+ * SENDER's spelling would make `ｃｏｎｔｏｓｏ.com` home; nothing says the tenant's
+ * DMARC alignment counts that spelling as the home domain. Only the configured
+ * domains are normalised. `''` when the domain is not canonical.
+ */
+function canonicalDomain(raw: string): string {
+  const lower = raw.toLowerCase()
+  const ascii = domainToASCII(raw)
+  if (!ascii || (ascii !== lower && domainToUnicode(ascii) !== lower)) return ''
+  return ascii
+}
+
+/**
  * True when `address`'s domain is one of `homeDomains` or a subdomain of one,
  * both lower-cased and IDNA-normalised, so a lookalike (`contoso.com.example`,
- * `evilcontoso.com`, a homoglyph) is not home. Anything that is not an address
- * is not home.
+ * `evilcontoso.com`, a homoglyph) is not home. The address's domain must already
+ * be canonical (`canonicalDomain`): a spelling IDNA folds onto a home domain is
+ * not home. Anything that is not an address is not home.
  */
 export function isHomeAddress(address: unknown, homeDomains: readonly string[]): boolean {
   if (typeof address !== 'string') return false
   const at = address.lastIndexOf('@')
   if (at <= 0) return false
-  const domain = normaliseDomain(address.slice(at + 1))
+  const domain = canonicalDomain(address.slice(at + 1))
   if (!domain) return false
   return homeDomains.some((configured) => {
     const home = normaliseDomain(configured)

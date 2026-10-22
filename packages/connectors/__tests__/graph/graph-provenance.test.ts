@@ -160,24 +160,26 @@ describe('the other tools that carry identities', () => {
     expect(graphProvenance(data)).toBe('external')
   })
 
+  // MUTATION: stamp every shared-with-me row `'home'` (`stamp(row, 'home')`):
+  // the outside sharer's row and the row with no sharer read as home.
   it('graph_files_shared stamps by sharer, and graph_mail_attachments by sender', async () => {
+    const sharedRow = (id: string, sharedBy?: { displayName: string; address: string }) => ({
+      resourceReference: { type: 'microsoft.graph.driveItem', id: `drives/d1/items/${id}` },
+      resourceVisualization: { title: `Synthetic-${id}.docx` },
+      lastShared: { ...(sharedBy && { sharedBy }), sharedDateTime: '2026-10-01T09:00:00Z' },
+    })
     graphFetch.mockResolvedValue({
       value: [
-        {
-          resourceReference: { type: 'microsoft.graph.driveItem', id: 'drives/d1/items/i1' },
-          resourceVisualization: { title: 'Synthetic.docx' },
-          lastShared: {
-            sharedBy: { displayName: 'A', address: 'a@contoso.com' },
-            sharedDateTime: '2026-10-01T09:00:00Z',
-          },
-        },
+        sharedRow('i1', { displayName: 'A', address: 'a@contoso.com' }),
+        sharedRow('i2', { displayName: 'B', address: 'b@fabrikam.example' }),
+        sharedRow('i3'),
       ],
     })
     const shared = (await compose().runAppTool('graph_files_shared', {})).data as {
       items: object[]
     }
-    expect(shared.items.map(graphProvenance)).toEqual(['home'])
-    expect(graphProvenance(shared)).toBe('home')
+    expect(shared.items.map(graphProvenance)).toEqual(['home', 'external', 'unknown'])
+    expect(graphProvenance(shared)).toBe('external')
 
     graphFetch.mockResolvedValue({
       value: [
@@ -221,6 +223,25 @@ describe('the domain match', () => {
     ['@contoso.com', false],
   ])('%s → home %s', (address, home) => {
     expect(isHomeAddress(address, HOME)).toBe(home)
+  })
+
+  // MUTATION: normalise the address's domain like a configured one (drop the
+  // canonical check in `canonicalDomain`): IDNA folds each spelling below onto
+  // `contoso.com`, so all five read as home.
+  it.each([
+    ['fullwidth letters', 'ceo@\uff43\uff4f\uff4e\uff54\uff4f\uff53\uff4f.com'],
+    ['an ideographic full stop', 'ceo@contoso\u3002com'],
+    ['a fullwidth full stop', 'ceo@contoso\uff0ecom'],
+    ['a zero-width space', 'ceo@contoso\u200b.com'],
+    ['a soft hyphen', 'ceo@con\u00adtoso.com'],
+  ])('a sender domain IDNA folds onto a home domain is not home: %s', (_, address) => {
+    expect(isHomeAddress(address, HOME)).toBe(false)
+  })
+
+  it('a canonical Unicode or punycode domain still matches its configured form', () => {
+    expect(isHomeAddress('avery@b\u00fccher.de', ['b\u00fccher.de'])).toBe(true)
+    expect(isHomeAddress('avery@xn--bcher-kva.de', ['b\u00fccher.de'])).toBe(true)
+    expect(isHomeAddress('avery@B\u00dcCHER.DE', ['xn--bcher-kva.de'])).toBe(true)
   })
 
   it('configured domains are normalised the same way', () => {

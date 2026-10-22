@@ -146,7 +146,9 @@ incus network create envvm-<environment> \
 
 ### 2.3 The dev app's link network (Docker)
 
-This section assumes the recommended answer to owner question 1 (the PR that adds this plan).
+This section assumes the recommended answer to owner question 1 on
+[#740](https://github.com/mknw/hames-playground/pull/740), the PR that added this plan. With
+answer (b), this section drops out and the allow matches the shared network's bridge instead.
 
 ```sh
 docker network create --driver bridge \
@@ -445,7 +447,7 @@ line and its undo before it runs.
 | W10  | Enable the overlay as in `docs/PREVIEW.md` §12, steps 3–5, with `DEV_SANDBOX_FIREWALL_EVIDENCE` naming the record.                                                                                                                                                                                                                                                                                                                                                                                          | remove the overlay and recreate app-dev |
 | W11  | `--smoke` with the real app-dev. It replaces the record.                                                                                                                                                                                                                                                                                                                                                                                                                                                    | none                                    |
 | W12  | Restart the Incus daemon with the VM running (it may stop and come back, depending on packaging). Then `health --wait` and `--smoke`.                                                                                                                                                                                                                                                                                                                                                                       | none                                    |
-| W13  | If the owner chooses it: reboot. Afterwards, the guard finished before the daemon started (journal timestamps), then `health --wait`, `--smoke` and `bootstrap-vps.sh --only smoke`.                                                                                                                                                                                                                                                                                                                        | none                                    |
+| W13  | If the owner chooses it (question 2 on #740): reboot. Afterwards, the guard finished before the daemon started (journal timestamps), then `health --wait`, `--smoke` and `bootstrap-vps.sh --only smoke`.                                                                                                                                                                                                                                                                                                   | none                                    |
 | W14  | Post-checks. Diffed against W0, the only differences are the guard table, the bridge, the link network and Docker's own rules for it, and the installer's files and unit. UFW, `DOCKER-USER`, the metadata units, `sshd -T` and the release containers are unchanged (start times aside, after a reboot). A fresh SSH login works.                                                                                                                                                                          | none                                    |
 
 **Rollback**, in this order: remove the overlay and recreate app-dev; the entry point's
@@ -491,7 +493,8 @@ each one.
   (`docker-compose.yaml:99`). A holder of the host's Docker socket could start a container in the
   host's network namespace and reach the port this way. It would still need the client key, and a
   socket holder is root-equivalent in any case (`docs/deployment/egress-design.md:27-30`). Owner
-  question 4 asks whether to narrow this path anyway.
+  question 4 on [#740](https://github.com/mknw/hames-playground/pull/740) asks whether to narrow
+  this path anyway.
 - **The MCP gateway's host socket**, and its sharing `app-network` with app-dev (#731 question 10).
 - **The release environment.** Release keeps the host socket until its own VM lands
   ([#648](https://github.com/mknw/hames-playground/issues/648) Q2). The table takes more

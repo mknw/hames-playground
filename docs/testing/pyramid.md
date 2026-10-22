@@ -156,7 +156,7 @@ Two lanes that each start one need different ports and container names.
 share that one database. Their dev-bypass user ids still keep their rows apart
 (above).
 
-**No database at all**, as CI's `check` job runs it: `CI=1 pnpm test:run`. The
+**No database at all**, as CI's `test · unit` job runs it: `CI=1 pnpm test:run`. The
 unit suite's DB-backed tests skip. Their URL then names a Unix socket in a
 directory that does not exist, so `pg` fails at once with no TCP connection. It
 is never left unset, because `lib/db/client.server.ts` reads an unset
@@ -183,19 +183,19 @@ back on its own would go round it.
 ## The database in CI: pull requests only
 
 The owner's decision (2026-10-03): "postgres to CI yes, but only pre-merge and
-not every push." So layer 1 runs in two CI jobs, and the event decides which:
+not every push." So layer 1 runs in two CI jobs, and the event decides which. (The required check named `typecheck · lint · test · build` is an aggregate over the parallel jobs `typecheck · lint · format`, `shell · tests`, `test · unit`, `test · packages` and `build`; it fails unless every one succeeded.)
 
-| Job (its check name)              | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
-| --------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
-| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
-| `test · postgres`                 | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
+| Job (its check name)                                               | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
+| ------------------------------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
+| `test · unit` (part of the `typecheck · lint · test · build` gate) | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
+| `test · postgres`                                                  | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
 
 The second job runs the same `pnpm test:run --coverage` with `TEST_DATABASE_URL`
 set to the service, so the guard takes its first row. It is a job of its own
 because a service container cannot depend on the event; only a job's `if` can.
 It runs the whole suite rather than a list of DB test files, so the next DB
 test file is included without anyone having to add it. It runs in parallel with
-`check`, so it adds no wall clock to a pull request. Whether a red one blocks
+the gate's other jobs, so it adds no wall clock to a pull request. Whether a red one blocks
 the merge is the `CI-before-merge` ruleset's decision, not the workflow's.
 
 **It fails closed.** A DB-backed test that cannot reach its database reports as
@@ -211,7 +211,7 @@ database was never created, or a skip condition is simply wrong.
 base commit on `main`, and a push to `main` never has a database. An upload from
 this job would credit every pull request with a rise it did not make, and with
 `require_changes` in `codecov.yml`, Codecov would comment on every one of them.
-So `check` stays the only `app` upload, and pull requests and `main` are
+So `test · unit` stays the only `app` upload, and pull requests and `main` are
 measured the same way. The higher figure is in this job's log. The floors in
 `app/vitest.config.ts` are unchanged and apply to both jobs. They were set
 against the run without a database, which is the lower of the two.

@@ -38,6 +38,7 @@
  */
 import { domainToASCII, domainToUnicode } from 'node:url'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { embeddingProviderPassesEgress } from '@hames-ai/harness-patterns/stash/embeddings.server'
 import { GraphAuthRequiredError } from './graph-auth'
 import type { AppToolDefinition } from '../app-tools/registry'
 
@@ -1614,7 +1615,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           'Copying Microsoft 365 files into this conversation is not enabled on this deployment (it needs private inference on a private-only deployment). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
         )
       }
-      if (process.env.EMBEDDINGS_PROVIDER === 'openrouter') {
+      if (!embeddingProviderPassesEgress(process.env.EMBEDDINGS_PROVIDER)) {
         throw new Error(
           'Copying Microsoft 365 files into this conversation is not enabled on this deployment (its document index uses an external embedding service). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
         )

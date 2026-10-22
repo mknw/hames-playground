@@ -230,9 +230,11 @@ stop being assumed:
 
 - Two things the "no BAML call leaves the building" claim does **not** cover, so
   that it is not read wider than it is: it is about model calls routed through
-  `clients.server.ts`, and `EMBEDDINGS_PROVIDER=openrouter` is a different seam
-  that would send a user's query text to a third party (the default is `local`,
-  so the claim holds as shipped); and it says nothing about the sandbox boxes'
+  `clients.server.ts`, and the embedder is a different seam that would send a
+  user's query text to whatever provider it names (boot refuses any provider
+  that is not `local` or declared trusted in code, so `openrouter` cannot be
+  selected; `local` names the wire format, so its host must be the deployment's
+  own box); and it says nothing about the sandbox boxes'
   network egress, which SD-20 records as uncovered by anything.
 - The **infrastructure** is company-controlled, which is a claim about hosting,
   not a completed Art. 28 / Chapter V analysis: DataCrunch is still a hosting

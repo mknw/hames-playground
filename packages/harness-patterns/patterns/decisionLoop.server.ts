@@ -81,6 +81,7 @@ import { createEvent, createScope, dropHitl, resolveConfig, trackEvent } from '.
 import { getErrorHint } from '../error-hints'
 import { hitlPending } from '../hitl.server'
 import { emitLive } from '../live-event-context.server'
+import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import { trimToFit } from '../token-budget.server'
 import { createEventView } from './event-view.server'
 import {
@@ -625,7 +626,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       let thrown: unknown
       let finished: PatternScope<T> = childScope
       try {
-        finished = await pattern.fn(childScope, childView)
+        // The child runs under its route's label (the route key, code-written
+        // here, never by content): the egress gate counts refusals per route by
+        // it. Outside a run frame (a pattern driven directly) there is no slot.
+        const run = () => pattern.fn(childScope, childView)
+        finished = await (currentRunFrame() ? amendRunFrame({ route: label }, run) : run())
       } catch (e) {
         thrown = e
       }

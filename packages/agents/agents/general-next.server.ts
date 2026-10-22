@@ -9,6 +9,7 @@ import {
   retriever,
   simpleLoop,
   Tools,
+  withEgressGate,
   withInjectionGuard,
   withMemory,
   withPseudonymisedInputs,
@@ -24,7 +25,7 @@ import {
   createLoopControllerAdapter,
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import type { AgentData, AgentDefinition, AgentDeps } from '../types'
+import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
 import { getGraphSchema } from './graph-schema.server'
@@ -73,6 +74,17 @@ const OFFICE_FEW_SHOTS: FewShot[] = [
   },
 ]
 
+/**
+ * The office sandbox's in-VM tools are local to the egress gate ONLY while the
+ * box has no network: `'mcp-only'` is the strict profile, booted with no network
+ * at all. Read from the same attach config the box is booted with, so a later
+ * change to a networked profile makes those tools egress rather than leaving
+ * them declared local (SD-20).
+ */
+export function officeLocalTools(attach: SandboxAttach, tools: readonly string[]): string[] {
+  return attach.egress === 'mcp-only' ? [...tools] : []
+}
+
 async function createPatterns(
   sessionId: string,
   deps: AgentDeps,
@@ -92,7 +104,7 @@ async function createPatterns(
   ].filter((name) => available.has(name))
   const docTools = tools.context7 ?? []
   const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools]
-  const office = deps.withSandbox({
+  const officeAttach: SandboxAttach = {
     id: `${sessionId}:office`,
     sessionId,
     rootfs: 'office',
@@ -100,7 +112,8 @@ async function createPatterns(
     syncWorkspace: true,
     // Graph-only work (mail, file metadata) must not need a container engine.
     lazy: true,
-  })(
+  }
+  const office = deps.withSandbox(officeAttach)(
     actorCritic<AgentData>(
       createActorControllerAdapter({
         fewShots: OFFICE_FEW_SHOTS.filter(
@@ -150,13 +163,6 @@ async function createPatterns(
   // namespace. Only external content is gated in (ruling O):
   // the host's classifier marks the deployment's own content internal, which
   // gets the deterministic pass alone unless that pass finds something.
-  //
-  // A condition on moving any tier to 'gated': no tier declares 'gated' until
-  // the shared fence neutraliser's rewrite lands (marker words only, no tail).
-  // Today each forged `END UNTRUSTED CONTENT` deletes up to 40 characters after
-  // it from what the gate and the screen read, and markers chain, so a whole
-  // sentence can reach the controller and neither judge; under 'gated' the
-  // gate's "skip" would then decide alone.
   const screenMode = { default: 'shadow', anthropic: 'always' } as const
   const gate = createGuardGate(createDecideAdapter())
   const docGuard = {
@@ -237,59 +243,78 @@ async function createPatterns(
     schema,
     liveEvents: true,
   })
+  // Every outgoing call of every route is judged before it leaves, on both
+  // tiers (boundary guards, slice 4). Local: the deployment's own graph, the
+  // company tenant's read-only tools, and the office box's in-VM tools while
+  // that box has no network. Everything else is egress, so a route that gains
+  // an outgoing tool later is covered with no declaration.
+  // N = 0: a refusal closes its route's egress until the user's next message.
+  const egressGate = withEgressGate({
+    local: ['neo4j', 'graph'],
+    localTools: officeLocalTools(officeAttach, sandboxTools),
+    catalog: tools.all,
+    fetchTools: (tools.web ?? []).filter((name) => name.includes('fetch')),
+    roster: deps.egressRoster,
+    decide: createDecideAdapter(),
+    mode: 'filter',
+    maxOutgoingRetriesPostTripwire: 0,
+    loadedDecideDown: 'by-shape',
+  })
   const orchestrator = withInjectionGuard({
     namespaces: [...infoGuard.namespaces, ...docGuard.namespaces],
     tools: [...sandboxTools, 'retriever'],
     catalog: tools.all,
     spotlight: 'always',
   })(
-    decisionLoop<AgentData>(
-      {
-        'office-data': {
-          pattern: doc,
-          description:
-            'Read Microsoft 365 mail and file metadata; ' +
-            (deps.graphFileIngest === true
-              ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
-              : 'Graph file ingestion is unavailable. ') +
-            'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
-          capability:
-            'Read Microsoft 365 mail and file metadata; ' +
-            (deps.graphFileIngest === true
-              ? 'copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest; '
-              : 'Graph file ingestion is unavailable. ') +
-            'compute and create files in the office sandbox.',
+    egressGate(
+      decisionLoop<AgentData>(
+        {
+          'office-data': {
+            pattern: doc,
+            description:
+              'Read Microsoft 365 mail and file metadata; ' +
+              (deps.graphFileIngest === true
+                ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
+                : 'Graph file ingestion is unavailable. ') +
+              'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox',
+            capability:
+              'Read Microsoft 365 mail and file metadata; ' +
+              (deps.graphFileIngest === true
+                ? 'copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest; '
+                : 'Graph file ingestion is unavailable. ') +
+              'compute and create files in the office sandbox.',
+          },
+          'info-retrieval': {
+            pattern: info,
+            description:
+              'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
+            capability:
+              'Read the knowledge graph; search or fetch public web sources and library documentation.',
+            siblingResults: ['retriever'],
+          },
+          'read-documents': {
+            pattern: retrieve,
+            description:
+              'Search uploaded and indexed documents in this conversation and return cited excerpts, including an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it; use it when the answer needs text quoted from such a file. A OneDrive or SharePoint file not yet copied into this conversation is office-data. A file the user gives a web address for is info-retrieval. Running code over a file is office-data',
+            capability: 'Search this conversation’s Data Stash and return cited excerpts.',
+          },
+          think: {
+            pattern: think,
+            description: 'Decide the steps before acting',
+            capability: 'Write a plan using the agent map and earlier step results.',
+          },
         },
-        'info-retrieval': {
-          pattern: info,
-          description:
-            'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
-          capability:
-            'Read the knowledge graph; search or fetch public web sources and library documentation.',
-          siblingResults: ['retriever'],
+        {
+          decide: createDecideAdapter(),
+          answer:
+            'Generate the answer for the user now, from the conversation and any results so far',
+          handoff: { lastN: 2 },
+          maxIterations: 6,
+          patternId: 'orchestrator',
+          liveEvents: true,
+          documents: deps.createDecisionDocuments?.(sessionId),
         },
-        'read-documents': {
-          pattern: retrieve,
-          description:
-            'Search uploaded and indexed documents in this conversation and return cited excerpts, including an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it; use it when the answer needs text quoted from such a file. A OneDrive or SharePoint file not yet copied into this conversation is office-data. A file the user gives a web address for is info-retrieval. Running code over a file is office-data',
-          capability: 'Search this conversation’s Data Stash and return cited excerpts.',
-        },
-        think: {
-          pattern: think,
-          description: 'Decide the steps before acting',
-          capability: 'Write a plan using the agent map and earlier step results.',
-        },
-      },
-      {
-        decide: createDecideAdapter(),
-        answer:
-          'Generate the answer for the user now, from the conversation and any results so far',
-        handoff: { lastN: 2 },
-        maxIterations: 6,
-        patternId: 'orchestrator',
-        liveEvents: true,
-        documents: deps.createDecisionDocuments?.(sessionId),
-      },
+      ),
     ),
   )
   const patterns = [

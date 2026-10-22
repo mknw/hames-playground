@@ -642,6 +642,15 @@ function formatEventData(event: ContextEvent): string {
       const data = event.data as ModelCallEventData
       return `${data.role} call${data.source ? `: ${data.source}` : ''}`
     }
+    case 'egress_audit':
+      // NOTHING from the payload: `spans` are the roster's matches (text that
+      // names a person) and `hosts` are labels the request's author chose. The
+      // event is for a human auditing the egress gate, never for a model.
+      return 'egress audit recorded'
+    case 'egress_refused':
+      // METADATA ONLY, and none of it: the controller already read the fixed
+      // refusal text in its own turn log; a later prompt needs only that one was.
+      return 'outgoing request refused'
     case 'approval_request':
     case 'approval_response':
       // Legacy (#433, F9): superseded by hitl_*, and never read by readHitl.

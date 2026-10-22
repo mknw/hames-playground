@@ -187,27 +187,32 @@ copies are limited to the child's visible events and post-checked per string;
 residual bodies become `[withheld: private identity]` (per leaf inside a JSON
 body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
-that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
-and outgoing-argument check; no host privacy
+that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
 module or table is imported into core. `decisionLoop` gives the wrapper roster
 input from every earlier iteration, even beyond the handoff window, without
 widening its sibling visibility. That temporary input is removed before the
 inner pattern runs.
 
-Missing or failed host wiring withholds earlier results and refuses web calls,
-recording a warning while allowing the child to continue on the user's message
-and internal reads. The app host requires a readable, non-empty directory;
+Missing or failed host wiring withholds earlier results, recording a warning
+while allowing the child to continue on the user's message; it refuses no call
+itself. The app host requires a readable, non-empty directory;
 declare `{ directory: 'none' }` in code only for deployments without one. Its
 table is never stored or reversed. See SPEC's
 [G14 boundary](SPEC.md#withpseudonymisedinputsconfigpattern-507-g14) for the
 failure policy and remaining literal-matching limits.
 
-Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
-`amendRunFrame`, innermost first: every check runs and any denial stops dispatch
-as a failed tool call, so an inner scope cannot switch off an outer check.
-Only the declared local `neo4j` namespace is exempt (`context7` is outbound and checked). A scoped `afterToolCall`
-hook extends outgoing literals from identities discovered by local reads;
-an update failure withholds the result and refuses further outgoing calls.
+What leaves is judged by `withEgressGate` (boundary guards, slice 4), wrapped
+around the whole decision loop rather than one route, so a route that gains an
+outgoing tool later is covered without a declaration. Outgoing checks use the
+`egressChecks` run-frame slot. It concatenates on nested `amendRunFrame`,
+innermost first: every check runs and any denial stops dispatch as a failed tool
+call, so an inner scope cannot switch off an outer check. A call is egress unless
+its namespace is declared `local` or its exact name `localTools`; the gate's
+`afterToolCall` hook extends its roster from local results across routes, and an
+update failure refuses further outgoing calls while delivering the result. The
+gate counts its refusals per route by the run frame's `route` slot, which
+`decisionLoop` writes around each child. See SPEC's
+[egress gate](SPEC.md#withegressgateconfigpattern-boundary-guards-slice-4).
 
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
@@ -611,6 +616,9 @@ Two properties are the design, not accidents:
   wants a fence or a screen on a tool declares it itself. The inconsistency with
   transports is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.
+
+**`route` replaces** like the rest: `decisionLoop` writes its route key there
+around each child, and the egress gate counts refusals per route by it.
 
 **Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's
 `storeDocument` has durably stored a document) and `afterToolCall` (run by

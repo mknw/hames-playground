@@ -24,12 +24,10 @@
  * carry a per-call nonce from the platform's cryptographic source, drawn again
  * if the quoted text contains it: text written before the call cannot know it,
  * so it cannot close the quote. The shared neutraliser runs first as defence in
- * depth, with a known cost until the boundary-guard slice that rewrites it: it
- * hides up to 40 characters after each old-form marker (`BEGIN|END UNTRUSTED
- * CONTENT`) from the gate, as from the screen, and it does not touch the gate's
- * own marker form, which the nonce and the prefix hold shut. The wording of the
- * question and the state is the second prompt review of ruling B, pasted as
- * reviewed.
+ * depth: it turns the marker words of both fence forms into `[fence]` and keeps
+ * every character after them, so a forged marker hides nothing from the gate.
+ * The wording of the question and the state is the second prompt review of
+ * ruling B, pasted as reviewed.
  *
  * ## Failure policy, stated
  *
@@ -134,7 +132,7 @@ export function drawFenceNonce(quoted: string, draw: () => string = cryptoNonce)
  *  FS, GS, RS, NEL, U+2028, U+2029: Unicode's mandatory breaks and what
  *  `str.splitlines()` splits on): content cannot start a line of its own after
  *  any of them. */
-const LINE_BREAK = /\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/
+export const LINE_BREAK = /\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]/
 
 /**
  * The gate's state for one payload (ruling B, second prompt review: the FINAL

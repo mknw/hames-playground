@@ -280,6 +280,14 @@ export type EventType =
    *  selected, the duration and the step's `metrics`, so the call is priced on
    *  the client it actually ran on. See `ModelCallEventData`. */
   | 'model_call'
+  /** An outgoing call the egress gate allowed although the roster matched part
+   *  of it (boundary guards). Human-facing: never rendered into an LLM-facing
+   *  serialization and never written to a server log. See `EgressAuditEventData`. */
+  | 'egress_audit'
+  /** An outgoing call the egress gate refused on Decide's answer or for want of
+   *  one: the record its tripwire count is derived from, so the count survives a
+   *  pause. Metadata only. See `EgressRefusedEventData`. */
+  | 'egress_refused'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -1334,6 +1342,9 @@ export type WarningTask =
   | 'planner'
   /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
   | 'decision_documents'
+  /** The egress gate checked outgoing calls with less than it should have: a
+   *  damaged roster, a missing or unreadable directory, or Decide down. */
+  | 'egress_check'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried
@@ -1360,6 +1371,9 @@ export interface WarningEventData {
   fallback: string
   /** The underlying failure, verbatim, for the observability drill-down. */
   error?: string
+  /** Counts and cells for the observability drill-down. Never rendered into an
+   *  LLM-facing serialization (`formatEventData` reads `task` and `message`). */
+  detail?: Readonly<Record<string, number | string>>
 }
 
 /**
@@ -1666,8 +1680,9 @@ export const MAX_SCORE_LEVELS = 10
 
 export type DecisionType = 'choice' | 'score' | 'noul'
 
-/** One label of a typed decision. `description` is the ONLY text the model
- *  sees for this label — the id is an identifier, not prose. */
+/** One label of a typed decision. The decision box prints each id before its
+ *  description (`A) personal: …`), so the model reads both: keep ids readable
+ *  words that agree with their description. */
 export interface DecisionLabel<L extends string = string> {
   readonly id: L
   readonly description: string
@@ -2263,6 +2278,56 @@ export interface ModelCallEventData {
   readonly source?: string
   /** Results one batched call summarized. */
   readonly items?: number
+}
+
+/** The egress question's three probabilities, as Decide returned them. */
+export interface EgressProbabilities {
+  readonly personal: number
+  readonly company: number
+  readonly nothing_private: number
+}
+
+/**
+ * Data payload for `egress_audit` (boundary guards, coordinator proposal 1): an
+ * outgoing call that went out although the roster matched part of it, so the
+ * judgement that let it go can be audited afterwards. HUMAN-FACING ONLY, like
+ * `content_sanitized` (SD-3): `spans` are text the request carries that names
+ * a person, so the event is never rendered into an LLM-facing serialization
+ * (`formatEventData` has its own case) and never written to a server log. It
+ * lives in the conversation blob, which is encrypted at rest.
+ */
+export interface EgressAuditEventData {
+  /** The tool name, reduced to `[A-Za-z0-9._:-]` and capped at 64. */
+  readonly tool: string
+  /** Every host the request names, nested URLs included, in order of appearance. */
+  readonly hosts: readonly string[]
+  /** The roster's matched spans, as they occur in the request, each capped at 80. */
+  readonly spans: readonly string[]
+  /** The egress question's answer. */
+  readonly probs: EgressProbabilities
+  /** Who let the call go: the egress question, or (once the person is asked) the person. */
+  readonly allowedBy: 'decide' | 'person'
+}
+
+/**
+ * Data payload for `egress_refused`: one tripwire, i.e. an outgoing call the
+ * egress gate refused on Decide's answer (`cause: 'decide'`) or for want of one
+ * (`'unchecked'`). The gate derives each route's count, the closed routes and the
+ * turn-wide closure from these events (and only from these and the turn's
+ * answers), so a pause and resume continue the same count. METADATA ONLY: no
+ * argument text, ever.
+ */
+export interface EgressRefusedEventData {
+  /** The tool name, reduced like `EgressAuditEventData.tool`. */
+  readonly tool: string
+  /** The `decisionLoop` route the call came from (the run frame's `route`
+   *  slot), or `null` for a call outside any route. */
+  readonly route: string | null
+  readonly cause: 'decide' | 'unchecked'
+  /** The category Decide named; absent for `'unchecked'`. */
+  readonly category?: 'personal' | 'company'
+  /** What the refusal closed: nothing, this route, or every route for the turn. */
+  readonly closes: 'none' | 'route' | 'turn'
 }
 
 // ============================================================================

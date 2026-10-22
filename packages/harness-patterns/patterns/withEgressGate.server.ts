@@ -1,0 +1,646 @@
+/**
+ * The egress gate (boundary guards, slice 4): one check before every outgoing
+ * call, on every tier, around whatever pattern it wraps.
+ *
+ * It installs ONE `egressChecks` entry and ONE `afterToolCall` hook on the run
+ * frame, so every `callTool` inside the wrapped pattern is covered, a route that
+ * gains an outgoing tool later included, with no declaration. A call is egress
+ * unless it is declared local: a namespace in `local` (its arguments reach only
+ * systems that already hold the deployment's data) or an exact name in
+ * `localTools`. Local-ness is declared, never inferred.
+ *
+ * ## The order of one outgoing call's check
+ *
+ *  0. Closed: the turn was closed (`'turn'`), this route was closed by its
+ *     tripwire, or the roster is damaged (ruling K) — refused with a fixed text,
+ *     no Decide call.
+ *  1. Integrity (deterministic, never a tripwire): undecodable encoding, a
+ *     format character, a placeholder, a block over the size bound, a fetch
+ *     address nobody gave the controller (O21).
+ *  2. The roster's matches become EVIDENCE (`filter`) or a veto (`roster`).
+ *  3. `'filter'`: the egress question (`guard.egress`). At or above τe the call
+ *     is refused with its category's text: the TRIPWIRE. Below, it goes out,
+ *     and a roster match is audited (`egress_audit`).
+ *  4. Decide unavailable (`'roster'` mode, a failure after one retry, a
+ *     timeout, a state it cannot be asked over): the directory matrix (D5).
+ *
+ * Where the design asks the person (an `egress-release` prompt), this slice
+ * refuses: the prompts and their resume are a later slice, and until it lands
+ * every person cell takes its "nobody to ask" default, which is Refuse.
+ *
+ * ## The tripwire (ruling M)
+ *
+ * A refusal on Decide's answer or in a D5 cell is a tripwire. Each route's
+ * refusals are counted per turn, and refusal `N + 1` closes the route for the
+ * rest of the turn (`maxOutgoingRetriesPostTripwire`, N, default 0: the first
+ * closes it). Every later outgoing call of a closed route is refused with no
+ * Decide call. A route is the run frame's `route` slot, which `decisionLoop`
+ * writes around each child from its own route key; a call outside any route
+ * shares one bucket. The count, the closed routes and the turn-wide closure are
+ * DERIVED from the turn's recorded `egress_refused` events, never held in this
+ * invocation alone: a resume re-runs the wrapper, and a count held in its
+ * closure would reset at every pause. A route's checks run one at a time, in the
+ * order the calls arrive (batch order), so a tripwire is seen by the next call
+ * of the same batch; the calls that pass still run concurrently.
+ *
+ * ## Failure policy, stated
+ *
+ * A Decide FAILURE is retried once inside the same budget; a TIMEOUT is not
+ * (the budget is spent). Both leave the call to the directory matrix and are
+ * counted on the turn's `warning`. A roster source that throws (a damaged
+ * identity field, or any host failure) DAMAGES the gate: every outgoing call
+ * is refused for the rest of the invocation, and the result that carried the
+ * damage is delivered, because the gate guards what leaves. A check that
+ * throws is refused by `callTool` with its fixed text.
+ *
+ * Every text the controller reads is one of `EGRESS_TEXTS`, none interpolated:
+ * the feedback never quotes the request.
+ */
+import { assertServerOnImport } from '../assert.server'
+import { createEvent, redactCall } from '../context.server'
+import {
+  addressesIn,
+  carriesUrlQuery,
+  destinationHosts,
+  EGRESS_SMALL_BLOCK_CHARS,
+  EGRESS_SPAN_CAP,
+  EGRESS_TEXTS,
+  EGRESS_WARNING_TASK,
+  EGRESS_WARNINGS,
+  egressToolLabel,
+  GUARD_EGRESS,
+  GUARD_EGRESS_THRESHOLD,
+  GUARD_EGRESS_TIMEOUT_MS,
+  readOutgoing,
+  renderEgressState,
+  type OutgoingRequest,
+} from '../egress-gate.server'
+import { isDegradedToolSurface } from '../gateway-health.server'
+import { emitLive } from '../live-event-context.server'
+import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
+import { inferServer } from '../tools.server'
+import type {
+  ByTier,
+  ConfiguredPattern,
+  ContextEvent,
+  DecideFn,
+  EgressAuditEventData,
+  EgressProbabilities,
+  EgressRefusedEventData,
+  EventType,
+  PatternScope,
+  ToolCallResult,
+  UnifiedContext,
+  UserMessageEventData,
+  WarningEventData,
+  WarningTask,
+} from '../types'
+import { evaluateDecision } from './typedDecision.server'
+
+assertServerOnImport()
+
+/** How the host found the company directory (G14 D4, declared in code). */
+export type EgressDirectoryStatus = 'loaded' | 'empty' | 'unreadable' | 'none'
+
+/** The host's roster for one invocation: the directory plus the labelled
+ *  identities of the results it was handed. */
+export interface EgressRoster {
+  /**
+   * The spans of `texts` that name an identity the roster holds, AS THEY OCCUR
+   * in the text, in order. Never a directory record: only text the request
+   * already carries. A form the user's latest message names is exempt.
+   */
+  match(texts: readonly string[]): string[]
+  /** Extend the roster from a local result. Throws when a labelled identity
+   *  field was neutralised (the roster would no longer know that person). */
+  observe(data: unknown): void
+}
+
+/** The host's roster source (`createEgressRoster` in the app). Rejects when an
+ *  identity field of `payloads` was neutralised: the gate is then damaged. */
+export type EgressRosterSource = (
+  payloads: readonly unknown[],
+  latestUserMessage: string,
+) => Promise<{ readonly directory: EgressDirectoryStatus; readonly roster: EgressRoster }>
+
+/** `'filter'`: Decide decides and a roster match is evidence (ruling A).
+ *  `'roster'`: a roster match vetoes on its own and no model is asked. */
+export type EgressMode = 'filter' | 'roster'
+
+export interface EgressGateConfig {
+  /** Namespaces whose arguments reach only systems that already hold the
+   *  deployment's data (its own services, its own tenant), never a third party
+   *  that does not. Network locality is not the test. Every other call is
+   *  egress. Verified against `catalog`. */
+  readonly local: readonly string[]
+  /** Exact local tool names (the sandbox's in-VM tools on a box with no
+   *  network). A name that is in `catalog` refuses construction: a gateway tool
+   *  is local only through its namespace. */
+  readonly localTools?: readonly string[]
+  /** The tool names the wrapped pattern was built from (`tools.all`). */
+  readonly catalog: readonly string[]
+  /** Tools whose addresses must have been given (O21): every http(s) address in
+   *  their arguments, and every `url` argument, must appear verbatim in the
+   *  user's latest message or in an earlier tool result. Each must be in
+   *  `catalog`. */
+  readonly fetchTools?: readonly string[]
+  /** The host's roster. Without one the directory is `'none'` and nothing matches. */
+  readonly roster?: EgressRosterSource
+  /** The egress question's seam (`createDecideAdapter()`). Serves `choice`. */
+  readonly decide?: DecideFn
+  /** Per tier. Default `'filter'` with a `decide`, else `'roster'`. */
+  readonly mode?: ByTier<EgressMode>
+  /** τe. Default {@link GUARD_EGRESS_THRESHOLD}. */
+  readonly threshold?: number
+  /** The egress question's whole budget, retry included. Default
+   *  {@link GUARD_EGRESS_TIMEOUT_MS}. */
+  readonly timeoutMs?: number
+  /** N (ruling M): refusals a route admits after its first before it closes.
+   *  Default 0: the first refusal closes the route for the turn. */
+  readonly maxOutgoingRetriesPostTripwire?: number
+  /** Ruling U: with Decide down on a loaded directory, `'by-shape'` (default)
+   *  refuses a call with a URL query or a decoded block over
+   *  {@link EGRESS_SMALL_BLOCK_CHARS} and leaves any other to the roster;
+   *  `'ask'` refuses every such call. (Each refusal is a person cell, asked
+   *  once the prompts land.) */
+  readonly loadedDecideDown?: 'by-shape' | 'ask'
+  /** Test seam for the state's nonce source. */
+  readonly drawNonce?: () => string
+}
+
+const MODES: ReadonlySet<string> = new Set(['filter', 'roster'])
+const DIRECTORY_STATUSES: ReadonlySet<string> = new Set(['loaded', 'empty', 'unreadable', 'none'])
+
+/** The bucket of a call outside any `decisionLoop` route. */
+const NO_ROUTE = null
+
+/** User-facing hints for the gate's warnings. Never model-visible: a warning
+ *  is serialized as `task: message` only. */
+const WARNING_FALLBACKS = {
+  damagedRoster: 'The assistant answered without outside requests.',
+  directoryMissing: 'Outgoing requests were still checked.',
+  directoryUnreadable: 'Outgoing requests were still checked, and refused when they could not be.',
+  checkDegraded:
+    'Requests that could not be checked were refused, or sent after a name check only.',
+} as const
+
+/** What the turn's recorded refusals say: each route's count, the closed
+ *  routes, and whether the whole turn's egress is closed. */
+export interface EgressClosures {
+  readonly counts: Map<string | null, number>
+  readonly closedRoutes: Set<string | null>
+  turnClosed: boolean
+}
+
+/**
+ * Derive the closures from a turn's events (everything after its last
+ * `user_message`). The ONE reader, so a resumed invocation continues the count
+ * the paused one left. A new user message starts at nothing.
+ */
+export function egressClosures(events: readonly ContextEvent[]): EgressClosures {
+  const start = events.findLastIndex((e) => e.type === 'user_message')
+  const closures: EgressClosures = { counts: new Map(), closedRoutes: new Set(), turnClosed: false }
+  for (const e of events.slice(start + 1)) {
+    if (e.type !== 'egress_refused') continue
+    const d = e.data as Partial<EgressRefusedEventData> | undefined
+    const route = typeof d?.route === 'string' ? d.route : NO_ROUTE
+    closures.counts.set(route, (closures.counts.get(route) ?? 0) + 1)
+    if (d?.closes === 'route') closures.closedRoutes.add(route)
+    if (d?.closes === 'turn') closures.turnClosed = true
+  }
+  return closures
+}
+
+/** Every string a value carries (leaves and keys), for the given-address corpus. */
+function stringsOf(value: unknown, out: string[] = [], depth = 0): string[] {
+  if (depth > 64) return out
+  if (typeof value === 'string') out.push(value)
+  else if (Array.isArray(value)) for (const item of value) stringsOf(item, out, depth + 1)
+  else if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out.push(k)
+      stringsOf(v, out, depth + 1)
+    }
+  }
+  return out
+}
+
+/** Declared values a `ByTier` setting can take on any tier. */
+function tierValues<T>(value: ByTier<T>): T[] {
+  return typeof value === 'object' && value !== null && Object.hasOwn(value, 'default')
+    ? Object.values(value as Record<string, T>)
+    : [value as T]
+}
+
+const warnedLocal = new Set<string>()
+
+/**
+ * Refuse names that would read like a declaration and match nothing (#242 item
+ * 4's rule). Checked when the gate RUNS, as the injection guard checks its
+ * namespaces, because `inferServer` answers from the tool registrations of the
+ * run, not of the module that built the pattern.
+ */
+function refuseUnverifiableNames(config: EgressGateConfig): void {
+  const degraded = isDegradedToolSurface(config.catalog)
+  for (const ns of config.local) {
+    const canonical = inferServer(ns)
+    if (canonical !== ns) {
+      throw new Error(
+        `[withEgressGate] local namespace '${ns}' can never match a tool: inferServer('${ns}') ` +
+          `is '${canonical}'. Declare '${canonical}', or list exact names under \`localTools\`.`,
+      )
+    }
+    if (!config.catalog.some((tool) => inferServer(tool) === ns)) {
+      if (degraded) {
+        if (!warnedLocal.has(ns)) {
+          warnedLocal.add(ns)
+          console.warn(
+            `[withEgressGate] local namespace '${ns}' matches no tool in a catalog built while ` +
+              `the gateway was unreachable; it cannot be verified this turn.`,
+          )
+        }
+        continue
+      }
+      throw new Error(
+        `[withEgressGate] local namespace '${ns}' matches no tool in the catalog ` +
+          `(${config.catalog.length} names), so it declares nothing local.`,
+      )
+    }
+  }
+  for (const name of config.localTools ?? []) {
+    if (config.catalog.includes(name)) {
+      throw new Error(
+        `[withEgressGate] '${name}' is a catalog tool, so it cannot be local by name: a ` +
+          `gateway tool is local only through its namespace.`,
+      )
+    }
+  }
+  for (const name of config.fetchTools ?? []) {
+    if (!config.catalog.includes(name) && !degraded) {
+      throw new Error(
+        `[withEgressGate] fetch tool '${name}' is not in the catalog, so the address rule ` +
+          `would apply to nothing.`,
+      )
+    }
+  }
+}
+
+/** Refuse settings that would read like a gate and check nothing they say
+ *  they check. TypeScript catches a literal typo; this catches a cast, a
+ *  JavaScript caller and a value read from configuration. */
+function refuseUnreadableSettings(config: EgressGateConfig): void {
+  const { mode } = config
+  if (typeof mode === 'object' && mode !== null && !Object.hasOwn(mode, 'default')) {
+    throw new Error(`[withEgressGate] the per-tier mode has no \`default\`.`)
+  }
+  const modes = mode === undefined ? [] : tierValues(mode)
+  const unknown = modes.find((m) => !MODES.has(m as string))
+  if (unknown !== undefined) {
+    throw new Error(`[withEgressGate] mode ${JSON.stringify(unknown)} is not 'filter' or 'roster'.`)
+  }
+  if (!config.decide && modes.includes('filter')) {
+    throw new Error(`[withEgressGate] 'filter' mode asks Decide, and no \`decide\` was passed.`)
+  }
+  if (config.decide && !(config.decide.supportedTypes ?? ['choice']).includes('choice')) {
+    throw new Error(`[withEgressGate] the decide seam does not serve 'choice' questions.`)
+  }
+  const threshold = config.threshold ?? GUARD_EGRESS_THRESHOLD
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    throw new Error(`[withEgressGate] threshold must be in [0, 1], got ${threshold}`)
+  }
+  const timeoutMs = config.timeoutMs ?? GUARD_EGRESS_TIMEOUT_MS
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error(`[withEgressGate] timeoutMs must be an integer >= 1, got ${timeoutMs}`)
+  }
+  const n = config.maxOutgoingRetriesPostTripwire ?? 0
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(
+      `[withEgressGate] maxOutgoingRetriesPostTripwire must be an integer >= 0, got ${n}`,
+    )
+  }
+  const down = config.loadedDecideDown ?? 'by-shape'
+  if (down !== 'by-shape' && down !== 'ask') {
+    throw new Error(`[withEgressGate] loadedDecideDown must be 'by-shape' or 'ask'.`)
+  }
+}
+
+/** What one ask of the egress question came to. */
+type EgressAnswer =
+  | { readonly kind: 'answered'; readonly probs: EgressProbabilities }
+  | { readonly kind: 'timeout' }
+  | { readonly kind: 'failed' }
+
+/** Per-turn counts of a degraded check, reported on the turn's warning. */
+interface Degraded {
+  timeouts: number
+  failures: number
+  /** Calls that went out on the roster alone (a loaded directory, Decide down). */
+  rosterOnly: number
+  /** Calls refused for want of Decide (a person cell, refused until the prompts land). */
+  refusedUnchecked: number
+}
+
+/**
+ * Wrap a pattern so every outgoing call inside it is judged before it leaves.
+ *
+ * @example
+ * withEgressGate({
+ *   local: ['neo4j'],
+ *   catalog: tools.all,
+ *   decide: createDecideAdapter(),
+ *   roster: deps.egressRoster,
+ * })(decisionLoop(routes, config))
+ */
+export function withEgressGate(config: EgressGateConfig) {
+  refuseUnreadableSettings(config)
+  const local = new Set(config.local)
+  const localTools = new Set(config.localTools ?? [])
+  const fetchTools = new Set(config.fetchTools ?? [])
+  const threshold = config.threshold ?? GUARD_EGRESS_THRESHOLD
+  const timeoutMs = config.timeoutMs ?? GUARD_EGRESS_TIMEOUT_MS
+  const maxRetries = config.maxOutgoingRetriesPostTripwire ?? 0
+  const loadedDecideDown = config.loadedDecideDown ?? 'by-shape'
+  const isLocal = (name: string): boolean => localTools.has(name) || local.has(inferServer(name))
+
+  return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
+    const fn = async (
+      scope: PatternScope<T>,
+      view: Parameters<typeof pattern.fn>[1],
+    ): Promise<PatternScope<T>> => {
+      refuseUnverifiableNames(config)
+      const ctx = (view as unknown as { ctx: UnifiedContext }).ctx
+      // Pushed directly, like the injection guard's events: a loop's
+      // `trackHistory` would filter a security record out of existence.
+      const record = (type: EventType, data: unknown, call?: Parameters<typeof redactCall>[0]) => {
+        const event = createEvent(type, scope.id, data, redactCall(call))
+        scope.events.push(event)
+        emitLive(event)
+      }
+      const warn = (
+        key: keyof typeof EGRESS_WARNINGS,
+        detail?: Readonly<Record<string, number | string>>,
+      ) =>
+        record('warning', {
+          task: EGRESS_WARNING_TASK as WarningTask,
+          message: EGRESS_WARNINGS[key],
+          fallback: WARNING_FALLBACKS[key],
+          ...(detail && { detail }),
+        } satisfies WarningEventData)
+
+      const latest = ctx.events.findLast((e) => e.type === 'user_message')
+      const latestUser = latest ? (latest.data as UserMessageEventData).content : ''
+      const results = ctx.events.filter((e) => e.type === 'tool_result').map((e) => e.data)
+      const closures = egressClosures(ctx.events)
+      // The addresses the controller was given (O21): the user's latest message
+      // and every tool result in the context, extended by this invocation's.
+      const given: string[] = [latestUser, ...stringsOf(results)]
+
+      let directory: EgressDirectoryStatus = 'none'
+      let roster: EgressRoster | undefined
+      let damaged = false
+      if (config.roster) {
+        try {
+          const built = await config.roster(results, latestUser)
+          // An answer outside the four is a host bug: refuse rather than guess.
+          directory = DIRECTORY_STATUSES.has(built.directory) ? built.directory : 'unreadable'
+          roster = built.roster
+        } catch {
+          // The rejection can carry an identity: only the fixed warning is kept.
+          damaged = true
+        }
+      }
+      if (damaged) warn('damagedRoster')
+      else if (directory === 'empty' || directory === 'unreadable') {
+        // Loud: a server log line (no content) as well as the turn's warning.
+        console.warn(
+          `[withEgressGate] the company directory is ${directory}: outgoing requests are ` +
+            `checked without it this turn.`,
+        )
+        warn(directory === 'empty' ? 'directoryMissing' : 'directoryUnreadable')
+      }
+
+      const degraded: Degraded = { timeouts: 0, failures: 0, rosterOnly: 0, refusedUnchecked: 0 }
+      const queues = new Map<string | null, Promise<unknown>>()
+
+      const askEgress = async (state: string): Promise<EgressAnswer> => {
+        const decide = config.decide!
+        const abort = new AbortController()
+        let timedOut = false
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const deadline = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true
+            abort.abort()
+            reject(new Error(`the egress question timed out after ${timeoutMs} ms`))
+          }, timeoutMs)
+        })
+        deadline.catch(() => undefined)
+        // The deadline aborts the request; the race bounds the wait even for a
+        // seam that ignores the signal. One budget covers both attempts.
+        const bounded = ((input) => {
+          const asked = decide(input)
+          asked.catch(() => undefined)
+          return Promise.race([asked, deadline])
+        }) as DecideFn
+        Object.defineProperty(bounded, 'supportedTypes', { value: decide.supportedTypes })
+        try {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const evaluated = await evaluateDecision({
+              decide: bounded,
+              spec: GUARD_EGRESS,
+              state,
+              signal: abort.signal,
+            })
+            record('decision_made', evaluated.event, evaluated.llmCall)
+            if (!evaluated.decision.abstained) {
+              const p = evaluated.decision.probs as Partial<Record<string, number>>
+              return {
+                kind: 'answered',
+                probs: {
+                  personal: p.personal ?? 0,
+                  company: p.company ?? 0,
+                  nothing_private: p.nothing_private ?? 0,
+                },
+              }
+            }
+            // A timeout spent the budget: no retry. A failure gets one.
+            if (timedOut) return { kind: 'timeout' }
+          }
+          return { kind: 'failed' }
+        } finally {
+          clearTimeout(timer)
+        }
+      }
+
+      const check = async (call: { name: string; args: Readonly<Record<string, unknown>> }) => {
+        const route = currentRunFrame()?.route ?? NO_ROUTE
+        const tool = egressToolLabel(call.name)
+
+        /** A tripwire: count it, close the route past N, record it, and answer
+         *  with the text for whether this refusal closed the route. */
+        const tripwire = (cause: 'decide' | 'unchecked', category?: 'personal' | 'company') => {
+          const count = (closures.counts.get(route) ?? 0) + 1
+          closures.counts.set(route, count)
+          const closes = count > maxRetries
+          if (closes) closures.closedRoutes.add(route)
+          record('egress_refused', {
+            tool,
+            route,
+            cause,
+            ...(category && { category }),
+            closes: closes ? 'route' : 'none',
+          } satisfies EgressRefusedEventData)
+          if (cause === 'unchecked') {
+            return closes ? EGRESS_TEXTS.uncheckedClosing : EGRESS_TEXTS.uncheckedOpen
+          }
+          if (category === 'company') {
+            return closes ? EGRESS_TEXTS.companyClosing : EGRESS_TEXTS.companyOpen
+          }
+          return closes ? EGRESS_TEXTS.personalClosing : EGRESS_TEXTS.personalOpen
+        }
+
+        /** Decide could not answer for this call: the directory matrix (D5). */
+        const unavailable = (
+          why: 'roster-mode' | 'down',
+          request: OutgoingRequest,
+          spans: readonly string[],
+        ): string | undefined => {
+          if (directory === 'loaded') {
+            if (why === 'roster-mode') return spans.length ? EGRESS_TEXTS.roster : undefined
+            const asked =
+              loadedDecideDown === 'ask' ||
+              carriesUrlQuery(request.texts) ||
+              request.block.length > EGRESS_SMALL_BLOCK_CHARS
+            if (asked) {
+              degraded.refusedUnchecked++
+              return tripwire('unchecked')
+            }
+            if (spans.length) return EGRESS_TEXTS.roster
+            degraded.rosterOnly++
+            return undefined
+          }
+          if (directory === 'unreadable') {
+            if (why === 'down') degraded.refusedUnchecked++
+            return tripwire('unchecked')
+          }
+          // `empty` or `none`: the payload roster vetoes first, then the person
+          // is asked, which refuses until the prompts land.
+          if (spans.length) return EGRESS_TEXTS.roster
+          if (why === 'down') degraded.refusedUnchecked++
+          return tripwire('unchecked')
+        }
+
+        const decideOne = async (): Promise<string | undefined> => {
+          if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
+          if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
+          if (damaged) return EGRESS_TEXTS.damagedRoster
+
+          const read = readOutgoing(call.args)
+          if (!read.ok) return read.refusal
+          const request = read.request
+          if (fetchTools.has(call.name)) {
+            const addresses = request.raw.flatMap(({ key, value }) =>
+              key?.toLowerCase() === 'url' ? [value, ...addressesIn(value)] : addressesIn(value),
+            )
+            if (addresses.some((a) => !given.some((text) => text.includes(a)))) {
+              return EGRESS_TEXTS.fetchAddress
+            }
+          }
+
+          const spans = roster ? roster.match(request.texts) : []
+          const mode = resolveByTier(config.mode ?? (config.decide ? 'filter' : 'roster'))
+          if (mode !== 'filter' || !config.decide) return unavailable('roster-mode', request, spans)
+
+          const hosts = destinationHosts(request.texts)
+          let state: string
+          try {
+            state = renderEgressState(
+              {
+                tool: call.name,
+                hosts,
+                spans,
+                latestUserMessage: latestUser,
+                lines: request.lines,
+              },
+              { drawNonce: config.drawNonce },
+            )
+          } catch {
+            // A state the question cannot be asked over (over the box's budget,
+            // or no nonce to draw): Decide is unavailable for this call.
+            degraded.failures++
+            return unavailable('down', request, spans)
+          }
+          const answer = await askEgress(state)
+          if (answer.kind !== 'answered') {
+            if (answer.kind === 'timeout') degraded.timeouts++
+            else degraded.failures++
+            return unavailable('down', request, spans)
+          }
+          const { probs } = answer
+          if (1 - probs.nothing_private >= threshold) {
+            // The feedback names the larger private label; a tie names personal.
+            return tripwire('decide', probs.company > probs.personal ? 'company' : 'personal')
+          }
+          if (spans.length) {
+            record('egress_audit', {
+              tool,
+              hosts,
+              spans: spans.map((s) => s.slice(0, EGRESS_SPAN_CAP)),
+              probs,
+              allowedBy: 'decide',
+            } satisfies EgressAuditEventData)
+          }
+          return undefined
+        }
+
+        // One route's checks run one at a time, in arrival (batch) order.
+        const previous = queues.get(route) ?? Promise.resolve()
+        const next = previous.then(decideOne)
+        queues.set(
+          route,
+          next.then(
+            () => undefined,
+            () => undefined,
+          ),
+        )
+        return next
+      }
+
+      const egressCheck = (call: { name: string; args: Readonly<Record<string, unknown>> }) =>
+        isLocal(call.name) ? undefined : check(call)
+
+      const observe = async (
+        call: { readonly name: string },
+        result: ToolCallResult,
+      ): Promise<undefined> => {
+        given.push(...stringsOf(result.data), ...(result.error ? [result.error] : []))
+        if (!roster || damaged || !isLocal(call.name)) return undefined
+        try {
+          roster.observe(result.data)
+        } catch {
+          // Delivered, not withheld: the gate guards what leaves, and this
+          // result never leaves. Every later outgoing call is refused.
+          damaged = true
+          warn('damagedRoster')
+        }
+        return undefined
+      }
+
+      try {
+        return await amendRunFrame({ egressChecks: [egressCheck], afterToolCall: [observe] }, () =>
+          pattern.fn(scope, view),
+        )
+      } finally {
+        if (degraded.timeouts + degraded.failures > 0) warn('checkDegraded', { ...degraded })
+      }
+    }
+
+    return {
+      ...pattern,
+      name: `withEgressGate(${pattern.name})`,
+      fn,
+      // Static introspection still sees the patterns nested inside the gate.
+      children: [pattern],
+    }
+  }
+}

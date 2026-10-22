@@ -3,6 +3,7 @@
  */
 import { inferenceEnv, applyLegacyInferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { embeddingProviderPassesEgress } from '@hames-ai/harness-patterns/stash/embeddings.server'
 import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
 
 assertServerOnImport()
@@ -164,10 +165,28 @@ export function assertInferenceDeploymentConfigured(): void {
   if (privateInferenceOnly()) assertPrivateTierConfigured()
 }
 
+/**
+ * Boot refuses an outside embedding provider (boundary guards, ruling W). The
+ * retriever's query goes to the embedder directly, never through the egress
+ * gate, and this app registers `general-next`, the agent with the gate,
+ * unconditionally, so the refusal is outright: `EMBEDDINGS_PROVIDER` must be
+ * `local` (or unset) or a provider declared trusted in code
+ * (`TRUSTED_EMBEDDING_PROVIDERS`). An env var cannot add one.
+ */
+export function assertEmbeddingProviderAllowed(): void {
+  if (!embeddingProviderPassesEgress(process.env.EMBEDDINGS_PROVIDER)) {
+    throw new Error(
+      'EMBEDDINGS_PROVIDER names an embedding service outside this deployment, and the ' +
+        "retriever's query reaches it without the egress check. Use 'local' (or unset it), " +
+        'or declare the provider trusted in code.',
+    )
+  }
+}
+
 /** P4 capability and executor share the deployment rule; invalid config refuses. */
 export function graphFileIngestEnabled(): boolean {
   try {
-    return privateInferenceOnly() && process.env.EMBEDDINGS_PROVIDER !== 'openrouter'
+    return privateInferenceOnly() && embeddingProviderPassesEgress(process.env.EMBEDDINGS_PROVIDER)
   } catch {
     return false
   }

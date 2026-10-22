@@ -190,6 +190,10 @@ def render(config):
     return "\n".join(lines + ["}", ""])
 
 
+def digest(config):
+    return hashlib.sha256(render(config).encode()).hexdigest()
+
+
 def expected(config):
     if config is None:
         return None
@@ -513,8 +517,13 @@ def table_state(entries):
 
 
 def install(entries, source):
+    # The exact bytes it publishes are the bytes it validates: the source is any
+    # operator's file, and a second read could return another one.
     content = source.read_text()
-    read_config(source, trusted=False)
+    try:
+        config = validated(json.loads(content))
+    except ValueError:
+        raise Refused("guard config unreadable or not JSON") from None
     files = ((INSTALLED_SCRIPT, Path(__file__).read_text()), (INSTALLED_CONFIG, content))
     for path, text in files:
         if path.exists() or path.is_symlink():
@@ -525,6 +534,7 @@ def install(entries, source):
     for path, text in files:
         if not path.exists():
             publish(entries, path, text)
+    print("render sha256 %s: compare it with the render you reviewed" % digest(config))
 
 
 def arm(entries, seconds, previous):
@@ -1216,7 +1226,7 @@ def smoke(config, config_path, record_path):
                 "probe 8 needs a port the host listens on for every address")
         report = {"installer_blob": hashlib.sha1(b"blob %d\0" % len(Path(__file__).read_bytes())
                                                  + Path(__file__).read_bytes()).hexdigest(),
-                  "render_sha256": hashlib.sha256(render(config).encode()).hexdigest(), "environments": {}}
+                  "render_sha256": digest(config), "environments": {}}
         try:
             for env in config["environments"]:
                 report["environments"][env["name"]] = probe_environment(config, env, facts, shared, deadline)
@@ -1264,6 +1274,7 @@ def main():
         if not any((args.check, args.install, args.apply, args.persist, args.confirm, args.remove,
                     args.deadman_restore, args.smoke, args.deadman is not None)):
             config = read_config(args.config, trusted=False)
+            print("# DRY RUN: render sha256 " + digest(config))
             print("# DRY RUN: nft -f - transaction; not applied")
             print(replacement(render(config)), end="")
             print("# DRY RUN: " + str(UNIT) + "; not installed")

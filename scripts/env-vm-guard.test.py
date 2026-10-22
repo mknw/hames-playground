@@ -1541,6 +1541,20 @@ class Persistence(Harness):
         self.assertEqual(self.invoke("--remove"), 1)
         self.assertIn(("inet", guard.TABLE), self.host.tables)
 
+    def test_install_validates_the_bytes_it_publishes_and_prints_their_digest(self):
+        good = self.source.read_text()
+        self.source.write_text(json.dumps(dict(self.cfg, extra=1)))
+        self.assertEqual(self.invoke("--install"), 1)
+        self.assertFalse(guard.INSTALLED_CONFIG.exists() or guard.INSTALLED_SCRIPT.exists())
+        self.source.write_text(good)
+        self.assertEqual(self.invoke("--install"), 0, self.err)
+        sha = hashlib.sha256(guard.render(self.cfg).encode()).hexdigest()
+        self.assertIn("render sha256 " + sha, self.out)
+        with patch.object(sys, "argv", [str(SOURCE), "--config", str(self.source)]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(guard.main(), 0)
+        self.assertIn("# DRY RUN: render sha256 " + sha, output.getvalue())
+
     def test_existing_or_foreign_files_are_never_overwritten(self):
         guard.INSTALLED_SCRIPT.write_text("foreign")
         guard.INSTALLED_SCRIPT.chmod(0o600)
@@ -2162,6 +2176,10 @@ MUTATIONS = {
     "O10-deadman-alone-over-drift": ('                        require(not drifted, "the live table drifted from its journaled render")\n', ""),
     # S7: an apply under --deadman over an equal table says that it armed nothing.
     "S7-equal-apply-silent": ('            print("NOTE: nothing written, no dead-man armed: there is nothing to --confirm")', "            pass"),
+    # O6: --install validates the exact bytes it publishes, and prints the render's digest.
+    "O6-install-unvalidated": ("        config = validated(json.loads(content))", "        config = json.loads(content)"),
+    "O6-install-digest-unprinted": ('    print("render sha256 %s: compare it with the render you reviewed" % digest(config))', "    pass"),
+    "O6-dry-run-digest-unprinted": ('            print("# DRY RUN: render sha256 " + digest(config))', "            pass"),
     # S3: a fired restore truncates the journal to the arm.
     "S3-restore-no-truncate": ("    del entries[index + 1:]\n", ""),
     # S4: --apply and --persist act on the installed config; probe 12 compares it with --config.

@@ -1,6 +1,6 @@
 # Environment VM network rules (plan)
 
-> **Status: §11 items 1 and 2 are built (installer, overlay, validator); nothing has run on a host.** It answers owner question 9 of
+> **Status: §11 items 1–3 are built (installer, dev overlay, validator, bootstrap smoke); nothing has run on a host.** It answers owner question 9 of
 > [#731](https://github.com/mknw/hames-playground/pull/731); the window needs the owner's explicit
 > GO and [§11](#11-what-has-to-land-before-the-window). SD-19, SD-20. **No SSH, `sshd`,
 > `authorized_keys` or public inbound-firewall change is part of it**: needing one is an escalation

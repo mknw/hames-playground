@@ -17,7 +17,7 @@ import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.
 import { withEgressGate } from '@hames-ai/harness-patterns/patterns/withEgressGate.server'
 import { callTool } from '@hames-ai/harness-patterns/mcp-client.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
-import { EGRESS_TEXTS, EGRESS_USER_CAP } from '@hames-ai/harness-patterns/egress-gate.server'
+import { EGRESS_USER_CAP } from '@hames-ai/harness-patterns/egress-gate.server'
 import type { DecideFn, ToolCallResult } from '@hames-ai/harness-patterns/types'
 import {
   EGRESS_GATE_FIXTURES,
@@ -94,7 +94,8 @@ describe('the egress-gate fixture rows', () => {
   )
 
   // MUTATION: drop the fetch-address rule, or the format-character refusal: a
-  // step-1 row reaches Decide.
+  // step-1 row reaches Decide. Hand a step-1 row the OTHER step-1 text (edit
+  // its `step1Text`): the exact-text assertion below reddens.
   it.each(
     EGRESS_GATE_FIXTURES.filter((r) => r.stage.includes('gate')).map((r) => [r.id, r] as const),
   )('%s: through the whole gate', async (_, row) => {
@@ -102,7 +103,7 @@ describe('the egress-gate fixture rows', () => {
     if (row.expect === 'step1') {
       expect(asked).toBe(0)
       expect(results.every((r) => !r.success)).toBe(true)
-      expect([EGRESS_TEXTS.fetchAddress, EGRESS_TEXTS.formatCharacter]).toContain(results[0].error)
+      expect(results[0].error).toBe(row.step1Text)
     } else {
       // Each call reaches the question (the live run grades its answers).
       expect(asked).toBe(Array.isArray(row.args) ? row.args.length : 1)

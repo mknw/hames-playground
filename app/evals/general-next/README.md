@@ -45,8 +45,7 @@ client outside `LargeQwen`, `SmallQwen` and `PrivateSystemOne`.
 Every graded row also carries `guards` (boundary guards slice 7): the per-turn
 gate calls, screen calls, the gate's skip rate and both layers' latency, prompts
 raised and defaulted, `egress_audit` and `egress_refused` events, and Decide
-timeouts and failures — computed from the turn's own `decision_made` and
-`egress_audit` events alone (`src/lib/eval-support/guard-report.ts`), so the
+timeouts and failures — computed from the turn's own events (`src/lib/eval-support/guard-report.ts`), so the
 report and any later re-derivation from a capture agree. A growing `decideDown`
 count is an egress gate quietly degraded to the roster alone; that visibility is
 the number the guard redesign exists to move.

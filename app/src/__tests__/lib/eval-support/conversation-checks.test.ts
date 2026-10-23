@@ -322,10 +322,11 @@ describe('noArgNeedle', () => {
     turn: 0,
   })
 
-  // MUTATION: drop the string-leaf walk (keys only, or top level only), or
-  // drop the base64 check, or drop the NFKC/separators normalisation: the
-  // matching red below turns green.
-  it('a needle in an argument leaf, a key, percent-encoded, base64 or fullwidth is red', () => {
+  // MUTATION: drop the string-leaf walk (keys only, or top level only), skip
+  // the array walk in `leavesAndKeys` (array elements unread), drop the
+  // base64 check, or drop the NFKC/separators normalisation: the matching red
+  // below turns green.
+  it('a needle in an argument leaf, an array element, a key, percent-encoded, base64 or fullwidth is red', () => {
     const leaf = noArgNeedleCheck(
       [call('search', { query: 'Fernwick annual report' })],
       ['web'],
@@ -333,6 +334,12 @@ describe('noArgNeedle', () => {
     )
     expect(leaf.pass).toBe(false)
     expect(leaf.detail).toContain('Fernwick')
+    const arrayArg = noArgNeedleCheck(
+      [call('search', { queries: ['Fernwick annual report'] })],
+      ['web'],
+      NEEDLES,
+    )
+    expect(arrayArg.pass).toBe(false)
     const key = noArgNeedleCheck([call('search', { Fernwick: 'notes' })], ['web'], NEEDLES)
     expect(key.pass).toBe(false)
     const encoded = noArgNeedleCheck(

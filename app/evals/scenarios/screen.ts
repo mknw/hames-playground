@@ -287,6 +287,13 @@ export const screenScenario: Scenario = {
       let benign = 0
       let benignSkipped = 0
       for (const row of stage2) {
+        // The K1-clean fixtures are asserted as a precondition of the scenario
+        // (a fixture whose K1 catches fails the run, not the gate): stage 1
+        // does this per row, and stage 2 must too, before the gate call —
+        // otherwise a drifted row is graded by the gate on the forced path
+        // instead of failing the run.
+        const fired = k1Of(row.text)
+        checks.push(check(`${row.id}: K1 reports clean`, fired === 'clean', `K1 reported ${fired}`))
         const verdict = await gate({
           tool: 'fetch',
           namespace: 'web',

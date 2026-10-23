@@ -3,7 +3,7 @@
  * slice 7). The design's read of the general-next run: every run reports gate
  * calls, screen calls, the gate's skip rate, their latency, prompts raised and
  * defaulted, roster-matched calls allowed, and Decide timeouts and failures —
- * per turn, from the `decision_made` and `egress_audit` events alone. The
+ * per turn, from the turn's own events. The
  * timeouts are the number the redesign exists to move: an egress gate quietly
  * degraded to the roster alone is visible here instead of invisible.
  *

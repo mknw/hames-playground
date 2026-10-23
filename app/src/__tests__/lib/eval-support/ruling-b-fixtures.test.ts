@@ -4,6 +4,8 @@
  * silently: the `k1` column is what the corpus reports, every `cover` is in the
  * text the screen is given, and the gate's rows reach it K1-clean.
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
@@ -36,6 +38,25 @@ describe("ruling B's fixture rows", () => {
   it('every stage-2 row reaches the gate K1-clean (a finding forces the screen instead)', () => {
     const fired = RULING_B_FIXTURES.filter((row) => row.stages.includes(2) && row.k1 !== 'clean')
     expect(fired.map((row) => row.id)).toEqual([])
+  })
+
+  // The stage-2 loop must re-assert this at run time, per row, before the gate
+  // call — the offline pins above hold for the committed rows, but a later
+  // edit that drifts a row K1-dirty must fail the live run, not be graded by
+  // the gate on the forced path. `src/` may not import `evals/`, so pin the
+  // call site by source, like the other live-scenario wiring pins.
+  //
+  // MUTATION: delete the stage-2 K1-clean assertion from the scenario's loop
+  // (`app/evals/scenarios/screen.ts`): this pin reddens, and a drifted row is
+  // then graded by the gate instead of failing the run.
+  it("the scenario's stage-2 loop asserts each row K1-clean before the gate call", () => {
+    const src = readFileSync(resolve(process.cwd(), 'evals/scenarios/screen.ts'), 'utf8')
+    const loop = src.slice(src.indexOf('for (const row of stage2)'))
+    const k1 = loop.indexOf('k1Of(row.text)')
+    const gate = loop.indexOf('await gate({')
+    expect(k1).toBeGreaterThan(-1)
+    expect(gate).toBeGreaterThan(k1)
+    expect(loop).toContain("fired === 'clean'")
   })
 
   // MUTATION: change one row's `cover` (e.g. `own3-resume-ranking`'s to

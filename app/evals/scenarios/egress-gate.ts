@@ -47,7 +47,6 @@
 
 import {
   destinationHosts,
-  EGRESS_TEXTS,
   GUARD_EGRESS,
   GUARD_EGRESS_THRESHOLD,
   readOutgoing,
@@ -241,9 +240,8 @@ export const egressGateScenario: Scenario = {
             `${decisions.length} decide calls; error=${JSON.stringify(results[0]?.error?.slice(0, 120))}`,
           ),
           check(
-            `${row.id}: the fixed step-1 text`,
-            results[0]?.error === EGRESS_TEXTS.fetchAddress ||
-              results[0]?.error === EGRESS_TEXTS.formatCharacter,
+            `${row.id}: the row's own step-1 text`,
+            results[0]?.error === row.step1Text,
             `error=${JSON.stringify(results[0]?.error?.slice(0, 160))}`,
           ),
         )

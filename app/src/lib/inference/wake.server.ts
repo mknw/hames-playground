@@ -138,7 +138,7 @@
  * ## Two things it deliberately does and does not account for
  *
  * **It stamps the warm clock** on the attempt that answers. The clock's standard
- * is an answered completion on the deployment naming `LARGE_LLM_MODEL_ID`, and that
+ * is an answered completion on the deployment naming `largeLlmModelId()`, and that
  * is exactly what this is — so without the stamp a turn arriving just after a
  * poll landed, but before the first BAML sample, paid a second poll and was shown
  * a multi-minute countdown that cleared in about a second.  Stamped from here
@@ -171,7 +171,8 @@
  * figure, not a per-conversation one — and that is not this module's call to
  * make.
  */
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
+import { inferenceEnv, largeLlmModelId } from '@hames-ai/harness-baml/inference-env.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/openrouter-eval.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   largeProvenWarm,
@@ -181,7 +182,7 @@ import {
   noteBoxCallStarting,
   type WakeBox,
 } from './cold-start.server'
-import { LARGE_LLM_MODEL_ID, noteLargeCallCompleted } from './large-activity.server'
+import { noteLargeCallCompleted } from './large-activity.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -454,7 +455,11 @@ const largeWake = createWake({
         Authorization: `Bearer ${inferenceEnv('LARGE_LLM_API_KEY') ?? ''}`,
       },
       body: JSON.stringify({
-        model: LARGE_LLM_MODEL_ID,
+        // ENV-AWARE, like the declared client: `LargeQwen`'s model id is
+        // `env.LARGE_LLM_MODEL` with the default applied at boot, and the wake
+        // is a hand-rolled fetch that has to name the SAME id the real call
+        // will — vLLM 400s any other, and so does OpenRouter.
+        model: largeLlmModelId(),
         messages: [{ role: 'user', content: LARGE_LLM_WAKE_PROMPT }],
         // The cheapest completion that still forces the weights to load. Not
         // zero: some servers reject `max_tokens: 0` before generation, which
@@ -492,11 +497,17 @@ export const resetLargeWake = largeWake.reset
 export const ensureSmallAwake = smallWake.ensure
 export const resetSmallWake = smallWake.reset
 
-/** Both subscriptions finish before returning, including cancellation on failure. */
+/** Both subscriptions finish before returning, including cancellation on failure.
+ *
+ *  The large poll is SKIPPED while the large endpoint is OpenRouter (the
+ *  eval-only switch, `openrouter-eval.server.ts`): a public per-token API has
+ *  no scale-to-zero box to wake, every poll attempt is a billed call, and the
+ *  first real call answers on the first attempt anyway. The SMALL box keeps
+ *  its poll untouched — `describe`/`decide` stay on it in every configuration. */
 export async function ensurePrivateTierAwake(): Promise<void> {
   const group = new AbortController()
   const wakes = [
-    ensureLargeAwake(Date.now(), group.signal),
+    ...(largeOnOpenRouter() ? [] : [ensureLargeAwake(Date.now(), group.signal)]),
     ensureSmallAwake(Date.now(), group.signal),
   ]
   try {

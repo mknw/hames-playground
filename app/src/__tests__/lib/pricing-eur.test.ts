@@ -10,17 +10,23 @@
  *     convert to EUR at a STATIC rate. A live FX lookup is not wanted; the pin
  *     here is that the conversion happens on the rates, so the `rates` audit
  *     field is the €/MTok that was really applied.
- *  2. **Time-priced clients** (`LargeQwen`) are `€/h × measured wall-clock`, and
- *     `undefined` — not zero — when nothing measured the call. A time bill with
- *     no time is not a free call.
- *  3. **Attribution is the client BAML SELECTED.** This is the property with
+ *  2. **Time-priced clients** (`SmallQwen` / `PrivateSystemOne`, the metered
+ *     small GPU) are `€/h × measured wall-clock`, and `undefined` — not zero —
+ *     when nothing measured the call. A time bill with no time is not a free
+ *     call.
+ *  3. **Provider-priced clients** (`JevDecide`, and since the OpenRouter eval
+ *     the two 27B leaves) are the provider's own reported `usage.cost`,
+ *     converted once at the static rate. The large box's wall-clock is the
+ *     WRONG model for a per-token public API; unknown (not zero) when the
+ *     provider reported nothing.
+ *  4. **Attribution is the client BAML SELECTED.** This is the property with
  *     teeth: a call that fell back to Anthropic on a self_deployed-tier turn must be
- *     priced by tokens, and a self-deployed call on an anthropic-tier turn by time.
- *     Get this wrong and the panel confidently prices the wrong bill.
- *  4. **Locally-served clients** are an exact €0.00 on a third basis, `local`,
+ *     priced by tokens, and a self-deployed call on an anthropic-tier turn by its own
+ *     basis. Get this wrong and the panel confidently prices the wrong bill.
+ *  5. **Locally-served clients** are an exact €0.00 on a third basis, `local`,
  *     rather than absent from both tables. Owner decision 2026-08-26: unknown
  *     means unmeasured, and a call with no marginal bill is not unmeasured.
- *  5. **One formatter, one symbol.** Every surface that renders a price imports
+ *  6. **One formatter, one symbol.** Every surface that renders a price imports
  *     `fmtEur`; there is no second copy to drift.
  *
  * The env overrides are covered here too, including the failure policy: a
@@ -45,8 +51,6 @@ import {
   canonicalClientName,
   estimateLlmCostEur,
 } from '../../lib/settings'
-import { LARGE_LLM_CLIENT_NAME } from '../../lib/inference/large-activity.server'
-
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
@@ -79,20 +83,83 @@ const ONE_MTOK_EACH = {
 
 describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
+    // The 27B leaves are NOT here any more: with the large endpoint on
+    // OpenRouter during the eval, a wall-clock bill is the wrong model for
+    // their calls — they price off the provider's own usage.cost (the
+    // provider-cost set below). This box's rate stays for the INFRASTRUCTURE
+    // accounting the eval charges separately.
     expect(TIME_PRICED_CLIENTS).toEqual({
-      [LARGE_LLM_CLIENT_NAME]: 1.819,
-      LargeQwenThink: 1.819,
       SmallQwen: 1.54,
       PrivateSystemOne: 1.54,
     })
   })
 
-  it('keeps every time-priced client out of the token and local sets', () => {
+  it('keeps every time-priced client out of the token, local and provider sets', () => {
     for (const name of Object.keys(TIME_PRICED_CLIENTS)) {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
       expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)
+      expect(PROVIDER_COST_CLIENTS.has(name), name).toBe(false)
     }
     expect(LOCAL_PRICED_CLIENTS.has('LocalGLM')).toBe(true)
+    // The 27B leaves left this table for the provider basis, and took the
+    // thinking twin with them — same model, same endpoint, same bill.
+    for (const name of ['LargeQwen', 'LargeQwenThink']) {
+      expect(Object.hasOwn(TIME_PRICED_CLIENTS, name), name).toBe(false)
+      expect(PROVIDER_COST_CLIENTS.has(name), name).toBe(true)
+    }
+  })
+})
+
+describe('provider pricing → EUR', () => {
+  it('prices the 27B leaves from the provider-reported cost, unknown when none was reported', () => {
+    for (const name of ['LargeQwen', 'LargeQwenThink', 'JevDecide']) {
+      const est = estimateLlmCostEur(ONE_MTOK_EACH, name, { providerCostUsd: 0.02 })!
+      expect(est.basis, name).toBe('provider')
+      expect(est.costEur, name).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD, 12)
+      expect(est.noCacheEur, name).toBe(est.costEur)
+      // Tokens and duration do not enter it: no invented per-MTok or per-hour
+      // figure on a basis the provider measured.
+      expect(est.rates, name).toBeUndefined()
+      expect(est.timeRate, name).toBeUndefined()
+    }
+  })
+
+  it('a provider-priced client with no reported cost is unknown, never free and never a time floor', () => {
+    // The OpenRouter probe verified usage.cost on every response; when a
+    // provider does NOT report one (a routed-away call, a malformed usage),
+    // the honest reading is unknown. In particular NOT the box's €/h floor:
+    // the call never touched the box, and a floor would understate a real
+    // spend as a fraction of a cent.
+    for (const name of ['LargeQwen', 'LargeQwenThink']) {
+      expect(estimateLlmCostEur(ONE_MTOK_EACH, name), name).toBeUndefined()
+      expect(
+        estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 6_300, eurPerHour: 1.819 }),
+        name,
+      ).toBeUndefined()
+      for (const bad of [-1, Number.NaN])
+        expect(
+          estimateLlmCostEur(ONE_MTOK_EACH, name, { providerCostUsd: bad }),
+          name,
+        ).toBeUndefined()
+    }
+  })
+
+  it('scales with EUR_PER_USD like every USD figure', () => {
+    const at1 = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+      providerCostUsd: 0.01,
+      eurPerUsd: 1,
+    })!
+    const atHalf = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+      providerCostUsd: 0.01,
+      eurPerUsd: 0.5,
+    })!
+    expect(atHalf.costEur).toBeCloseTo(at1.costEur / 2, 12)
+  })
+
+  it('a zero reported cost is a zero bill, not unknown', () => {
+    // `0` is a measurement the provider made; only an ABSENT one is unknown.
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', { providerCostUsd: 0 })!
+    expect(est).toMatchObject({ basis: 'provider', costEur: 0, noCacheEur: 0 })
   })
 })
 
@@ -164,42 +231,48 @@ describe('time pricing → EUR', () => {
   })
 
   it('is €/h × wall-clock, and tokens do not enter it', () => {
-    const oneHour = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, {
+    const oneHour = estimateLlmCostEur(NO_TOKENS, 'SmallQwen', {
       durationMs: 3_600_000,
-      eurPerHour: 1.819,
+      eurPerHour: 1.54,
     })!
     expect(oneHour.basis).toBe('time')
-    expect(oneHour.costEur).toBeCloseTo(1.819, 9)
+    expect(oneHour.costEur).toBeCloseTo(1.54, 9)
 
     // Same duration, a huge token count: identical cost. Tokens are free.
-    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, {
+    const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', {
       durationMs: 3_600_000,
-      eurPerHour: 1.819,
+      eurPerHour: 1.54,
     })!
     expect(withTokens.costEur).toBeCloseTo(oneHour.costEur, 12)
   })
 
   it('prices a realistic call in fractions of a cent', () => {
-    // The measured 4.1s single-call latency at the default rate.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 4_100 })!
-    expect(est.costEur).toBeCloseTo((4.1 / 3600) * DEFAULT_LARGE_LLM_EUR_PER_HOUR, 12)
-    expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR, durationMs: 4_100 })
+    // A describe-tier call on the metered small box, at the default rate.
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: 4_100 })!
+    expect(est.costEur).toBeCloseTo((4.1 / 3600) * DEFAULT_SMALL_LLM_EUR_PER_HOUR, 12)
+    expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_SMALL_LLM_EUR_PER_HOUR, durationMs: 4_100 })
   })
 
-  it('defaults to €1.819/h', () => {
+  it('the 27B box rate stays exported for the INFRASTRUCTURE accounting, not for calls', () => {
+    // DEFAULT_LARGE_LLM_EUR_PER_HOUR no longer prices any CALL: the 27B leaves
+    // are provider-priced. It survives as the box's rate for the eval's
+    // infrastructure accounting (scenario wall-clock on the boxes) and the
+    // operator override that feeds it.
     expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
-    const est = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, { durationMs: 3_600_000 })!
-    expect(est.costEur).toBeCloseTo(1.819, 9)
+    // No call on any client prices off it any more: the time set holds only
+    // the small box's clients, at the small rate.
+    for (const name of Object.keys(TIME_PRICED_CLIENTS))
+      expect(TIME_PRICED_CLIENTS[name]).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
   })
 
   it('offers no caching savings — caching cannot save wall-clock', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 5_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: 5_000 })!
     expect(est.noCacheEur).toBe(est.costEur)
     expect(est.rates).toBeUndefined()
   })
 
   it('an idle box costs nothing: zero duration is zero, not a minimum charge', () => {
-    const est = estimateLlmCostEur(NO_TOKENS, LARGE_LLM_CLIENT_NAME, { durationMs: 0 })!
+    const est = estimateLlmCostEur(NO_TOKENS, 'SmallQwen', { durationMs: 0 })!
     expect(est.costEur).toBe(0)
     expect(est.basis).toBe('time')
   })
@@ -208,16 +281,14 @@ describe('time pricing → EUR', () => {
     // A time bill with no time is not a free call. BAML reports no duration when
     // it measured none, and a 0 here would render as "this call cost nothing" on
     // a box that was demonstrably awake to answer it.
-    expect(estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME)).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen')).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: undefined }),
+      estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: undefined }),
     ).toBeUndefined()
     expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: Number.NaN }),
+      estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: Number.NaN }),
     ).toBeUndefined()
-    expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: -1 }),
-    ).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: -1 })).toBeUndefined()
   })
 })
 
@@ -236,11 +307,26 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('a time-priced client never gets token pricing, however many tokens it moved', () => {
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, LARGE_LLM_CLIENT_NAME, { durationMs: 1_000 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', { durationMs: 1_000 })!
     expect(est.basis).toBe('time')
     expect(est.rates).toBeUndefined()
     // Nothing anywhere near a per-MTok figure.
     expect(est.costEur).toBeLessThan(0.001)
+  })
+
+  it('a provider-priced client never gets wall-clock or token pricing', () => {
+    // The 27B eval's attribution rule with teeth: the provider reported the
+    // cost, so neither the box's €/h nor an invented per-MTok rate may price
+    // the call, however long it ran or however many tokens it moved.
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+      durationMs: 600_000,
+      eurPerHour: 1_000_000,
+      providerCostUsd: 0.01,
+    })!
+    expect(est.basis).toBe('provider')
+    expect(est.timeRate).toBeUndefined()
+    expect(est.rates).toBeUndefined()
+    expect(est.costEur).toBeCloseTo(0.01 * DEFAULT_EUR_PER_USD, 12)
   })
 
   it('a locally-served client is €0.00 on the local basis, never unknown', () => {
@@ -260,19 +346,34 @@ describe('attribution: the SELECTED client decides the model', () => {
     }
   })
 
-  it('every client the private tier routes a role to has a pricing basis, never "unknown"', async () => {
+  it('every client the private tier routes a role to has a pricing basis, never silently unknown when measurable', async () => {
     // Derived from the route map rather than listed, so a role added to the tier
-    // with a client in none of the four sets fails here.
+    // with a client in none of the four sets fails here. The provider-priced
+    // leaves are measurable only when the provider reported a cost — the
+    // owner's recorded consequence of the OpenRouter eval switch — so this
+    // prices them WITH the provider figure; the no-cost reading is pinned in
+    // the provider describe above.
     const { SELF_DEPLOYED_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
     const clients = new Set(Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE))
     expect(clients).toContain('PrivateSystemOne')
     for (const name of clients) {
-      expect(estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 4_000 }), name).toBeDefined()
+      const est = estimateLlmCostEur(ONE_MTOK_EACH, name, {
+        durationMs: 4_000,
+        providerCostUsd: 0.01,
+      })
+      expect(est, name).toBeDefined()
     }
     // The private systemone client shares the metered small box.
     expect(estimateLlmCostEur(ONE_MTOK_EACH, 'PrivateSystemOne', { durationMs: 4000 })?.basis).toBe(
       'time',
     )
+    // The 27B leaves answer on the provider basis, not the box's wall-clock.
+    expect(
+      estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+        durationMs: 4000,
+        providerCostUsd: 0.01,
+      })?.basis,
+    ).toBe('provider')
   })
 
   it('the local set and the two priced tables are disjoint', () => {
@@ -285,7 +386,10 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('the provider-cost set is the fourth basis and is disjoint from the other three (#418 T4)', () => {
-    expect([...PROVIDER_COST_CLIENTS]).toEqual(['JevDecide'])
+    // JevDecide was the first; the 27B leaves joined when the eval pointed
+    // LARGE_LLM_BASE_URL at OpenRouter and the box's wall-clock stopped being
+    // the right bill for their calls.
+    expect([...PROVIDER_COST_CLIENTS].sort()).toEqual(['JevDecide', 'LargeQwen', 'LargeQwenThink'])
     for (const name of PROVIDER_COST_CLIENTS) {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
       expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)
@@ -335,27 +439,29 @@ describe('persisted client names keep their pricing basis', () => {
   })
 
   it.each([
-    ['VerdaQwen', 'LargeQwen'],
-    ['VerdaQwenThink', 'LargeQwenThink'],
-    ['LocalQwenSmall', 'SmallQwen'],
-  ])('a stored %s step is time-priced exactly as %s is', (stored, current) => {
-    const old = estimateLlmCostEur(ONE_MTOK_EACH, stored, { durationMs: 4_000 })
-    expect(old, stored).toBeDefined()
-    expect(old!.basis).toBe('time')
-    expect(old).toEqual(estimateLlmCostEur(ONE_MTOK_EACH, current, { durationMs: 4_000 }))
+    ['VerdaQwen', 'LargeQwen', 'provider'],
+    ['VerdaQwenThink', 'LargeQwenThink', 'provider'],
+    ['LocalQwenSmall', 'SmallQwen', 'time'],
+  ] as const)('a stored %s step prices exactly as %s does', (stored, current, basis) => {
+    // Under the provider basis (the 27B leaves since the OpenRouter eval), a
+    // stored 27B name prices from the provider-reported cost — the SAME
+    // statement the old test made on the time basis. The alias must not
+    // change what a stored step costs to read, only the name that gets there.
+    const opts =
+      basis === 'provider' ? { providerCostUsd: 0.01, durationMs: 4_000 } : { durationMs: 4_000 }
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, stored, opts)).toEqual(
+      estimateLlmCostEur(ONE_MTOK_EACH, current, opts),
+    )
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, stored, opts)!.basis).toBe(basis)
   })
 
-  it('a stored VerdaQwenThink keeps the 27B rate, a stored LocalQwenSmall the small rate', () => {
-    expect(
-      estimateLlmCostEur(NO_TOKENS, 'VerdaQwenThink', { durationMs: 3_600_000 })!.costEur,
-    ).toBeCloseTo(DEFAULT_LARGE_LLM_EUR_PER_HOUR, 9)
-    expect(
-      estimateLlmCostEur(NO_TOKENS, 'LocalQwenSmall', { durationMs: 3_600_000 })!.costEur,
-    ).toBeCloseTo(DEFAULT_SMALL_LLM_EUR_PER_HOUR, 9)
-  })
-
-  it('a stored unmeasured step stays unknown, never free', () => {
+  it('a stored 27B step without a reported provider cost reads unknown — the recorded consequence', () => {
+    // The 27B leaves left the time basis when the large endpoint moved to
+    // OpenRouter: a pre-switch VerdaQwen step was STAMPED time-priced at write
+    // time and renders its stored figure, but a fresh estimate of such a call
+    // without a provider cost is unknown, never the box's wall-clock floor.
     expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwen')).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwenThink')).toBeUndefined()
   })
 
   it('the local basis is LocalGLM alone and is untouched by the alias', () => {

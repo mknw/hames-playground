@@ -77,14 +77,20 @@ const HOUR_MS = 3_600_000
 
 /** A collector as the adapters read it: one log, one selected attempt on
  *  `clientName`, with the token usage and the per-attempt duration a
- *  time-priced client is billed on. */
-function collectorOn(clientName: string, opts: { durationMs?: number } = {}): Collector {
+ *  time-priced client is billed on. `rawUsage` shapes the response body the
+ *  raw-usage reader sees (the provider-reported `usage.cost` rides there). */
+function collectorOn(
+  clientName: string,
+  opts: { durationMs?: number; rawUsage?: Record<string, number> } = {},
+): Collector {
   const call = {
     selected: true,
     provider: 'openai-generic',
     clientName,
     httpRequest: { body: { text: () => `{"messages":"${PROMPT_SENTINEL}"}` } },
-    httpResponse: null,
+    ...(opts.rawUsage
+      ? { httpResponse: { body: { json: () => ({ usage: opts.rawUsage }) } } }
+      : { httpResponse: null }),
     usage: { inputTokens: 1000, outputTokens: 100, cachedInputTokens: 0 },
     ...(opts.durationMs !== undefined ? { timing: { durationMs: opts.durationMs } } : {}),
   }
@@ -136,10 +142,11 @@ describe('screen call record', () => {
     expect(records[0].metrics).toMatchObject({ inputUncachedTokens: 1000, outputTokens: 100 })
   })
 
-  it('on a self_deployed-tier turn is priced on wall-clock, never as Anthropic tokens', async () => {
+  it('on the metered small box is priced on wall-clock, never as Anthropic tokens', async () => {
     // One hour of measured duration makes the time bill the rate itself, and
     // the same tokens priced as Anthropic would be a different (token) figure.
-    readings = collectorOn('LargeQwen', { durationMs: HOUR_MS })
+    // SmallQwen is the tier's remaining time-priced client.
+    readings = collectorOn('SmallQwen', { durationMs: HOUR_MS })
     const { createInjectionScreen } = await ops()
     await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink })
 
@@ -150,6 +157,22 @@ describe('screen call record', () => {
     expect(m.costEur).toBeCloseTo(m.timeRate!.eurPerHour, 6)
     // A token-priced figure would carry the per-MTok rates the time basis does not.
     expect(m.rates).toBeUndefined()
+  })
+
+  it('on a 27B client is priced from the provider-reported usage.cost, never wall-clock', async () => {
+    // The OpenRouter eval's basis: the provider's own bill for the call. The
+    // same hour of measured duration prices as the reported figure — neither
+    // the box's €/h nor an Anthropic token table.
+    readings = collectorOn('LargeQwen', { durationMs: HOUR_MS, rawUsage: { cost: 0.05 } })
+    const { createInjectionScreen } = await ops()
+    await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink })
+
+    const m = records[0].metrics!
+    expect(m.basis).toBe('provider')
+    expect(m.timePricedAttempts).toBeUndefined()
+    expect(m.rates).toBeUndefined()
+    expect(m.costEur).toBeGreaterThan(0)
+    expect(m.costEur!).toBeLessThan(0.05) // EUR, at a rate below 1 USD→EUR
   })
 
   it('on an Anthropic client is priced on tokens', async () => {
@@ -164,7 +187,7 @@ describe('screen call record', () => {
   })
 
   it('records a call that THREW after reaching the model — it was billed', async () => {
-    readings = collectorOn('LargeQwen', { durationMs: 2_000 })
+    readings = collectorOn('LargeQwen', { durationMs: 2_000, rawUsage: { cost: 0.01 } })
     failWith = new Error('screen unavailable')
     const { createInjectionScreen } = await ops()
 

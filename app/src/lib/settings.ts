@@ -286,14 +286,32 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalGLM'])
 
 /**
  * The fourth basis: clients whose price is what the PROVIDER reported on the
- * response — Jev's `usage.cost`, which is USD (#418 T4). Output tokens are free
- * and the docs state no per-input list price, so an invented per-MTok rate would
- * render as a confident figure; the reported figure converts once at
- * `EUR_PER_USD`, like every token-priced client. Neither time-priced (no
- * duration basis, so no `≥` floor) nor unknown (the provider measured it).
- * Disjoint from the other three sets (`pricing-eur.test.ts`).
+ * response — Jev's `usage.cost`, which is USD (#418 T4) — and, since the
+ * OpenRouter eval, the two 27B leaves.
+ *
+ * `LargeQwen` / `LargeQwenThink` moved here when the 27B eval pointed
+ * `LARGE_LLM_BASE_URL` at OpenRouter (`qwen/qwen3.8-27b`): a per-token public
+ * API has no GPU-hour bill, so the time basis (measured wall-clock × the box
+ * rate) was pricing calls the box never served. The provider's own `usage.cost`
+ * — present on every OpenRouter response, probe-verified — is the auditable
+ * figure, converted once at `EUR_PER_USD` like every USD number. THE
+ * CONSEQUENCE, on the record: on the GPU box, where vLLM reports no
+ * `usage.cost`, a 27B step now prices as UNKNOWN rather than carrying the
+ * time-floor `≥` — unknown beats a confident figure from the wrong model.
+ * SmallQwen / PrivateSystemOne keep the time basis: their endpoint is the
+ * metered small GPU, and that bill is wall-clock.
+ *
+ * Output tokens are free on the provider basis and the docs state no per-input
+ * list price, so an invented per-MTok rate would render as a confident figure;
+ * neither time-priced (no duration basis, so no `≥` floor) nor unknown when
+ * the provider reported a cost (the provider measured it). Disjoint from the
+ * other three sets (`pricing-eur.test.ts`).
  */
-export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
+export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set([
+  'JevDecide',
+  'LargeQwen',
+  'LargeQwenThink',
+])
 
 /** Anthropic cache pricing multipliers on the base input rate. */
 export const CACHE_WRITE_MULT = 1.25
@@ -338,10 +356,17 @@ export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 
 /** Default EUR/hour by selected client. Keys are pinned against the routing
  * vocabulary; server-side overrides are read per call in cost-rates.server.ts.
- * Keys are written as literals because this file is client-safe. */
+ * Keys are written as literals because this file is client-safe.
+ *
+ * The 27B leaves are NOT here any more — see {@link PROVIDER_COST_CLIENTS}:
+ * with the large endpoint on OpenRouter during the eval, a wall-clock bill is
+ * the wrong model for their calls, and the provider's own `usage.cost` is the
+ * auditable figure. `DEFAULT_LARGE_LLM_EUR_PER_HOUR` stays: it is the box's
+ * rate, and the eval's INFRASTRUCTURE accounting (scenario wall-clock on the
+ * boxes) still uses it — for the large box only while that box is actually
+ * being served (the runner drops its lines when the large endpoint is
+ * OpenRouter). */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
-  LargeQwen: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
-  LargeQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   SmallQwen: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }

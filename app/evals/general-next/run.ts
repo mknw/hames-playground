@@ -118,6 +118,16 @@ async function main() {
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
   clients.assertInferenceTier('self_deployed')
+  // The eval-only OpenRouter switch for the 27B roles: when LARGE_LLM_BASE_URL
+  // names an OpenRouter host, the consumer client layer routes the 27B roles
+  // through a registry client that adds `provider { zdr: true }` and resolves
+  // the model id from LARGE_LLM_MODEL; `describe`/`decide` fall through to the
+  // small box untouched. With the vars unset (hermetic mode, and every other
+  // run) this is a no-op and every rendered body is byte-identical to the
+  // declared client's. See packages/harness-baml/openrouter-eval.server.ts.
+  const { activateOpenRouterLargeOverride } =
+    await import('@hames-ai/harness-baml/openrouter-eval.server')
+  const openRouterLarge = activateOpenRouterLargeOverride()
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
   let wakeDetail: string | undefined
@@ -153,6 +163,7 @@ async function main() {
         {
           mode: live ? 'live' : 'hermetic',
           tier: 'self_deployed',
+          largeOnOpenRouter: openRouterLarge,
           candidate,
           selectionComplete: picked.length === scenarios.length,
           flipGate: flipGate(
@@ -191,7 +202,17 @@ async function main() {
     if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
-    if (active && live) budget.infrastructure(active, Date.now() - started, largeRate + smallRate)
+    if (active && live)
+      // The large box's wall-clock is charged only while the large endpoint is
+      // the box: under the OpenRouter switch there is no GPU to bill and the
+      // provider-reported call costs carry the 27B spend (observed above), so
+      // charging its hourly rate here would manufacture a floor for a box that
+      // is not running and eat the cap with it.
+      budget.infrastructure(
+        active,
+        Date.now() - started,
+        openRouterLarge ? smallRate : largeRate + smallRate,
+      )
   }
   const stop = () => {
     write()
@@ -236,11 +257,15 @@ async function main() {
         try {
           if (live) {
             budget.beginInfrastructure(active, started, [
-              {
-                box: 'self_deployed',
-                seconds: largeScaledownSeconds(),
-                eurPerHour: largeRate,
-              },
+              ...(openRouterLarge
+                ? []
+                : [
+                    {
+                      box: 'self_deployed',
+                      seconds: largeScaledownSeconds(),
+                      eurPerHour: largeRate,
+                    },
+                  ]),
               { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
             ])
             if (budget.stopped) stop()

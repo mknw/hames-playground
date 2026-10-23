@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { b } from '@hames-ai/harness-baml/baml_client'
+import { DEFAULT_LARGE_LLM_MODEL } from '@hames-ai/harness-baml/inference-env.server'
 import {
   PRIVATE_TIER_CLIENTS,
   THINKING_CLIENTS,
@@ -11,6 +12,7 @@ import {
 import {
   CLIENT_MAX_OUTPUT_TOKENS,
   MODEL_CONTEXT_WINDOWS,
+  PROVIDER_COST_CLIENTS,
   TIME_PRICED_CLIENTS,
 } from '../../../lib/settings'
 
@@ -18,6 +20,9 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 const env = {
   LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
   LARGE_LLM_API_KEY: 'synthetic-key',
+  // The id is env-overridable; the render resolves the DEFAULT — the same
+  // resolution production's unset path takes.
+  LARGE_LLM_MODEL: DEFAULT_LARGE_LLM_MODEL,
 }
 const opts = { client: 'LargeQwenThink', env }
 const tools = [
@@ -96,7 +101,10 @@ describe('dormant Planner thinking twin', () => {
     expect(source).toContain('PROVISIONAL / UNMEASURED')
     expect(CLIENT_MAX_OUTPUT_TOKENS.LargeQwenThink).toBe(cap)
     expect(MODEL_CONTEXT_WINDOWS.LargeQwenThink).toBe(MODEL_CONTEXT_WINDOWS.LargeQwen)
-    expect(TIME_PRICED_CLIENTS.LargeQwenThink).toBe(TIME_PRICED_CLIENTS.LargeQwen)
+    // The thinking twin follows its twin's PRICING basis: both 27B leaves are
+    // provider-priced since the OpenRouter eval (see PROVIDER_COST_CLIENTS).
+    expect(PROVIDER_COST_CLIENTS.has('LargeQwenThink')).toBe(true)
+    expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwenThink')).toBe(false)
     expect(PRIVATE_TIER_CLIENTS.has('LargeQwenThink')).toBe(true)
     expect([...THINKING_CLIENTS]).toEqual(['LargeQwenThink'])
     expect(Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE)).not.toContain('LargeQwenThink')

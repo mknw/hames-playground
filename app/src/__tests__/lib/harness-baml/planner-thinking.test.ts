@@ -104,6 +104,12 @@ beforeAll(async () => {
           prompt_tokens: 10,
           completion_tokens: reply.tokens ?? 20,
           total_tokens: 10 + (reply.tokens ?? 20),
+          // The provider-reported call cost in USD, OpenRouter-shaped (the
+          // probe verified `usage.cost` on every response). The 27B leaves
+          // price from it since the eval switch moved them to the provider
+          // basis; the input/output token names here are the legacy OpenAI
+          // ones, so the buckets still come from the Collector's usage.
+          cost: 0.01,
         },
       }),
     )
@@ -375,7 +381,12 @@ describe('Planner thinking mode', () => {
       })
       expect(requests).toHaveLength(2)
       expect(samples).toHaveLength(1)
-      expect(samples[0].metrics?.attempts).toBe(2)
+      // Both attempts billed when the retry also returned a 200 (usage and
+      // cost on both); on the 503 variant the retry reported no usage and no
+      // cost, and on the provider basis an attempt the provider priced
+      // nothing for is neither billed nor counted — which is why the 200
+      // shape used to be the only number here.
+      expect(samples[0].metrics?.attempts).toBe(status === 200 ? 2 : 1)
     },
   )
 
@@ -387,7 +398,7 @@ describe('Planner thinking mode', () => {
       expect(result.plan).toEqual({ ...ANSWER, reasoning: TRACE })
       expect(result.llmCall?.clientName).toBe('LargeQwenThink')
       expect(result.llmCall?.functionName).toBe('PlannerThinking')
-      expect(result.llmCall?.metrics?.basis).toBe('time')
+      expect(result.llmCall?.metrics?.basis).toBe('provider')
       expect(requests).toHaveLength(1)
       expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
       expect(JSON.stringify(requests[0].messages)).not.toContain('reasoning: string')
@@ -877,6 +888,9 @@ describe('Planner thinking mode', () => {
     replies.push({ content: '', status: 503 })
     await expect(run(call)).rejects.toThrow()
     expect(requests).toHaveLength(2)
-    expect(samples.at(-1)?.metrics).toMatchObject({ attempts: 1, basis: 'time' })
+    // The 503 reported no usage and no cost: on the provider basis the call
+    // spent nothing the provider measured, so its sample carries no metrics
+    // at all — the same honest absence a pre-flight failure has always had.
+    expect(samples.at(-1)?.metrics).toBeUndefined()
   })
 })

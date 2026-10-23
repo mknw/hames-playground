@@ -314,11 +314,22 @@ const bigDownload =
   bigApp.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
 
 describe('deploy/modal: the 27B box (Qwen27B)', () => {
-  it('serves the exact model name and window the LargeQwen client sends and assumes', () => {
+  it('serves the exact model name and window the LargeQwen client sends and assumes', async () => {
     expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
-    const clientModel = selfDeployedClient.match(/^\s*model "([^"]+)"$/m)?.[1]
-    expect(clientModel).toBeTruthy()
-    expect(bigApp).toContain(`QWEN27B_MODEL = "${clientModel}"`)
+    // The client's model id is env-overridable: the declaration is the env
+    // REFERENCE, and the DEFAULT it resolves to when the var is unset is the
+    // id this box must serve (one constant in inference-env.server.ts, pinned
+    // against the rendered wire body in self-deployed-body-shape.test.ts).
+    const clientModelRef = selfDeployedClient.match(/^\s*model env\.(\w+)$/m)?.[1]
+    expect(clientModelRef).toBe('LARGE_LLM_MODEL')
+    // Source-scan, not import: this file runs in jsdom and the constant's
+    // module is server-only. The DEFAULT the unset path sends is the id this
+    // box must serve; the literal is pinned here AND in
+    // self-deployed-body-shape.test.ts, so a changed default is red in both.
+    const envSource = read('../../../../packages/harness-baml/inference-env.server.ts')
+    const defaultModel = envSource.match(/DEFAULT_LARGE_LLM_MODEL = '([^']+)'/)?.[1]
+    expect(defaultModel).toBe('Qwen/Qwen3.8-27B-FP8')
+    expect(bigApp).toContain(`QWEN27B_MODEL = "${defaultModel}"`)
     const window = settings.match(/^\s*LargeQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
     expect(bigApp).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
     expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')

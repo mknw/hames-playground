@@ -107,6 +107,15 @@ it.each([
       plannerScenario: { id: 'planner', role: 'planner' },
       isThinkingPlannerRun: () => false,
     }
+    // Boundary guards slice 7: the egress-gate scenario and the fence-wording
+    // factory (the fence header is a parameter, derived at module scope).
+    modules['./scenarios/egress-gate'] = {
+      egressGateScenario: { id: 'egress-gate', role: 'decide' },
+    }
+    modules['./scenarios/fence-wording'] = {
+      createFenceWordingScenario: () => ({ id: 'fence-wording-live', role: 'controller' }),
+      currentFenceHeader: () => ({ label: 'legacy', header: '', footer: '' }),
+    }
     execute('run', modules, processStub)
     await vi.waitFor(() =>
       expect(writeReport.mock.calls.length + exit.mock.calls.length).toBeGreaterThan(0),

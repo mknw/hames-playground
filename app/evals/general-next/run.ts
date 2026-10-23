@@ -29,6 +29,7 @@ import {
 } from '../../src/lib/eval-support/live-preconditions'
 import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
+import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
@@ -265,7 +266,7 @@ async function main() {
             })
           const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
           capture?.add(active, trace, status === 'fail')
-          results.push({ ...active, status, checks })
+          results.push({ ...active, status, checks, guards: guardTurnCounts(trace.turns) })
         } catch (err) {
           capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
           results.push({

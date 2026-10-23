@@ -90,8 +90,9 @@ function argsParseAsObject(toolName: string, args: string): Check {
  *  degraded PARSE rather than an error, so nothing throws and nothing logs.
  *  Reported as a check because for LargeQwen it is pinned off deliberately
  *  (`chat_template_kwargs { enable_thinking false }`) and a redeploy is what
- *  would turn it back on. */
-function noThinkingLeak(collector: Collector): Check {
+ *  would turn it back on. Exported for the scenarios that drive the controller
+ *  over their own turn logs (`fence-wording`). */
+export function noThinkingLeak(collector: Collector): Check {
   const raw = rawCompletion(collector) ?? ''
   const leaked = /<\/think>/i.test(raw)
   return check(

@@ -14,7 +14,12 @@
  * Every rejected shape below is one the run-3 behaviour must NOT be widened into. */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// `conversation-checks` now reads the production O21 address extractor, whose
+// module self-asserts server-only; this suite runs under jsdom, so the assert
+// is mocked exactly as the sibling fixture tests do.
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,

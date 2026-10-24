@@ -19,10 +19,62 @@ export const LARGE_LLM_MODEL_ENV = 'LARGE_LLM_MODEL'
 export const DEFAULT_LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /** The model id a LargeQwen call puts on the wire: the env override when set
- *  and non-empty, else the default. The one reader for the wake ping and the
- *  eval-only OpenRouter registry, so no second copy of the resolution exists. */
+ *  and non-empty, else the default. The one reader for the wake ping, so no
+ *  second copy of the resolution exists. */
 export function largeLlmModelId(): string {
   return inferenceEnv(LARGE_LLM_MODEL_ENV) || DEFAULT_LARGE_LLM_MODEL
+}
+
+/** The env var that names the 27B route: `openrouter` sends the private tier's
+ *  27B roles to the declared OR twins (`LargeQwenOR` / `LargeQwenThinkOR`);
+ *  unset (or `modal`) keeps the scale-to-zero GPU box. The base URL is NEVER
+ *  sniffed for the route decision — an explicit switch only — because a host
+ *  is not a semantics decision and a mirrored host name (`.openrouter.ai`
+ *  aliases, trailing dots) is exactly the ambiguity an explicit var removes.
+ *  The setting is read per call through {@link largeLlmRoute}, so a test can
+ *  flip it with `vi.resetModules`-free env assignment. */
+export const LARGE_LLM_ROUTE_ENV = 'LARGE_LLM_ROUTE'
+
+export type LargeLlmRoute = 'modal' | 'openrouter'
+
+/** The resolved route. Unset and empty mean `modal` — the byte-identical
+ *  default; any other value REFUSES loudly rather than falling back, because
+ *  a typo'd route silently routing confidential traffic to the wrong kind of
+ *  endpoint is the one failure this var must never have. */
+export function largeLlmRoute(): LargeLlmRoute {
+  const raw = inferenceEnv(LARGE_LLM_ROUTE_ENV)
+  if (raw === undefined || raw === '') return 'modal'
+  if (raw === 'openrouter' || raw === 'modal') return raw
+  throw new Error(
+    `LARGE_LLM_ROUTE must be 'openrouter' or 'modal' (or unset for the modal default); got '${raw}'`,
+  )
+}
+
+/** True when the 27B roles take the OpenRouter route. The ONE route decision,
+ *  read by the tier's client resolution, the wake (no scale-to-zero box to
+ *  wake on this route) and the boot assert below. */
+export function largeOnOpenRouter(): boolean {
+  return largeLlmRoute() === 'openrouter'
+}
+
+/** Whether `LARGE_LLM_MODEL` was set explicitly in the environment BEFORE the
+ *  boot normalization applied the default — captured at this module's load and
+ *  re-captured by {@link applyLegacyInferenceEnv}. The OpenRouter route
+ *  REQUIRES an explicit id (`assertLargeLlmRouteConfigured`): the default is
+ *  the vLLM deployment's HF path, which OpenRouter refuses on every call, and
+ *  a refusal at boot beats a first turn that 400s mid-burst. */
+let largeLlmModelWasExplicit = process.env[LARGE_LLM_MODEL_ENV] !== undefined
+/** Whether THIS process's normalization applied the default itself — a later
+ *  normalization call must not mistake the applied default for an explicit
+ *  operator choice. */
+let defaultModelAppliedByUs = false
+
+export function assertLargeLlmRouteConfigured(): void {
+  if (largeLlmRoute() === 'openrouter' && !largeLlmModelWasExplicit)
+    throw new Error(
+      'LARGE_LLM_ROUTE=openrouter requires an explicit LARGE_LLM_MODEL: the default id ' +
+        `('${DEFAULT_LARGE_LLM_MODEL}') is the vLLM deployment's HF path, which OpenRouter refuses.`,
+    )
 }
 
 export const LEGACY_INFERENCE_ENV = {
@@ -81,7 +133,12 @@ export function applyLegacyInferenceEnv(): void {
   for (const [name, value] of resolved) {
     if (process.env[name] === undefined && value !== undefined) process.env[name] = value
   }
-  if (!process.env[LARGE_LLM_MODEL_ENV]) process.env[LARGE_LLM_MODEL_ENV] = DEFAULT_LARGE_LLM_MODEL
+  if (!process.env[LARGE_LLM_MODEL_ENV]) {
+    process.env[LARGE_LLM_MODEL_ENV] = DEFAULT_LARGE_LLM_MODEL
+    defaultModelAppliedByUs = true
+  } else if (!defaultModelAppliedByUs || process.env[LARGE_LLM_MODEL_ENV] !== DEFAULT_LARGE_LLM_MODEL) {
+    largeLlmModelWasExplicit = true
+  }
   if (process.env.INFERENCE_TIERS === 'private') {
     warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed', false)
   }

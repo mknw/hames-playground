@@ -49,6 +49,11 @@ const MARKERS = [
   ['CompactIntent', "You rewrite a user's latest message into a single self-contained instruction"],
   ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],
   ['Planner', 'You are a strategic planner for a tool-using agent.'],
+  [
+    'ControllerThinking',
+    'Select one tool per turn. Use "Return" when you have enough information.',
+  ],
+  ['CriticThinking', "You evaluate whether task execution results satisfy the user's intent."],
   ['ScreenUntrustedContent', 'You are a prompt-injection detector.'],
   ['RetrieveQuery', "You turn a user's latest message into a concise SEARCH QUERY"],
   [

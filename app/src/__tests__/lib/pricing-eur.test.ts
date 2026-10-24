@@ -388,8 +388,16 @@ describe('attribution: the SELECTED client decides the model', () => {
   it('the provider-cost set is the fourth basis and is disjoint from the other three (#418 T4)', () => {
     // JevDecide was the first; the 27B leaves joined when the eval pointed
     // LARGE_LLM_BASE_URL at OpenRouter and the box's wall-clock stopped being
-    // the right bill for their calls.
-    expect([...PROVIDER_COST_CLIENTS].sort()).toEqual(['JevDecide', 'LargeQwen', 'LargeQwenThink'])
+    // the right bill for their calls; the OpenRouter-route twins joined with
+    // the reasoning-config slice — same basis, the route changes the wire
+    // shape, never the pricing.
+    expect([...PROVIDER_COST_CLIENTS].sort()).toEqual([
+      'JevDecide',
+      'LargeQwen',
+      'LargeQwenOR',
+      'LargeQwenThink',
+      'LargeQwenThinkOR',
+    ])
     for (const name of PROVIDER_COST_CLIENTS) {
       expect(CLIENT_PRICING[name], name).toBeUndefined()
       expect(LOCAL_PRICED_CLIENTS.has(name), name).toBe(false)

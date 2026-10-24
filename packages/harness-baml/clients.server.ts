@@ -138,6 +138,13 @@ import type { ModelLimits, CostBasis } from '@hames-ai/harness-patterns/types'
 // tier module does — the direction the #225 extraction already ruled out for
 // host code, applied one hop closer to the package.
 import type { BamlClientOverride, ClientOverride } from './consumer-clients.server'
+import { largeOnOpenRouter } from './inference-env.server'
+import {
+  configuredReasoningPatterns,
+  reasoningEnabledFor,
+  type ReasoningPattern,
+  PRIVATE_REASONING_ROLES_ENV,
+} from './reasoning-roles.server'
 
 assertServerOnImport()
 applyLegacyInferenceEnv()
@@ -532,9 +539,13 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
 }
 
 /** The only functions designated to consume each trace-exposing leaf (#637).
- * Loop/actor counterparts still require G19 Q2's live measurement. */
+ * Both leaves serve the same three twins — the reasoning setting is
+ * provider-independent, so the twin FUNCTION is one and the leaf is chosen by
+ * the route (`LargeQwenThink` on the vLLM/modal route, `LargeQwenThinkOR` on
+ * the OpenRouter route). */
 export const THINKING_FUNCTIONS_BY_CLIENT: Readonly<Record<string, readonly string[]>> = {
-  LargeQwenThink: ['PlannerThinking'],
+  LargeQwenThink: ['PlannerThinking', 'ControllerThinking', 'CriticThinking'],
+  LargeQwenThinkOR: ['PlannerThinking', 'ControllerThinking', 'CriticThinking'],
 }
 
 /** Trace-exposing leaves, never chains: mode is verified against the collector's
@@ -543,8 +554,26 @@ export const THINKING_CLIENTS: ReadonlySet<string> = new Set(
   Object.keys(THINKING_FUNCTIONS_BY_CLIENT),
 )
 
-/** Only the planner has a trace-aware counterpart in this slice (#625 G19 Q7). */
-export const THINKING_ROLES: ReadonlySet<BamlRole> = new Set(['planner'])
+/** The roles whose patterns reasoning is CONFIGURED for — now derived from
+ * `PRIVATE_REASONING_ROLES` (see `reasoning-roles.server.ts`), no longer a
+ * hardcoded `{ planner }`. Unset, the set is EMPTY and nothing thinks: the
+ * unset posture is the pre-reasoning wire, byte-identical. A pattern that is
+ * named in the setting without a twin never reaches this set — the parse
+ * refuses it at module load instead. The pattern vocabulary coincides with
+ * `BamlRole` for exactly the three patterns that can appear here.
+ *
+ * The `screen` role exists so moving the injection screen is always a
+ * DELIBERATE line (SA-M5); the same logic now applies here — reasoning for
+ * `screen` is refused until a `ScreenUntrustedContent` twin exists, never
+ * silently routed onto a thinking leaf with the describe functions.
+ *
+ * A FUNCTION, not the constant it replaced: the configured set is read per
+ * call (like the tier and the route), so the guard and the routing can never
+ * disagree about what the setting says, and a test can flip the env without
+ * resetting modules. The empty set (unset) is the pre-reasoning posture. */
+export function THINKING_ROLES(): ReadonlySet<BamlRole> {
+  return new Set([...configuredReasoningPatterns()] as BamlRole[])
+}
 
 function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
   // Routing overrides must never replace implementation-owned accounting.
@@ -553,9 +582,12 @@ function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
   }
   if (
     THINKING_CLIENTS.has(bag.client) &&
-    (!THINKING_ROLES.has(role) || activeInferenceTier() !== 'self_deployed')
+    (!THINKING_ROLES().has(role) || activeInferenceTier() !== 'self_deployed')
   ) {
-    throw new Error(`Thinking client '${bag.client}' requires the planner role on the private tier`)
+    throw new Error(
+      `Thinking client '${bag.client}' requires the '${role}' pattern to be reasoning-configured ` +
+        `(${PRIVATE_REASONING_ROLES_ENV}) on the private tier`,
+    )
   }
 }
 
@@ -563,6 +595,10 @@ function assertThinkingOverride(role: BamlRole, bag: BamlClientOverride): void {
 export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
   ...Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE).filter((c): c is string => c !== undefined),
   ...THINKING_CLIENTS,
+  // The OpenRouter-route twin of `LargeQwen`. Its thinking counterpart is
+  // already here through `THINKING_CLIENTS`; the non-thinking twin must be
+  // named, or a route-switched controller call would attribute to Anthropic.
+  'LargeQwenOR',
 ])
 
 /**
@@ -595,8 +631,12 @@ export const PRIVATE_TIER_CLIENTS: ReadonlySet<string> = new Set([
  * to keep on the box.
  */
 export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly string[]>> = {
-  controller: ['LoopController', 'ActorController'],
-  critic: ['Critic'],
+  // `ControllerThinking` is the reasoning twin of `LoopController` — selected
+  // only when the `controller` pattern is reasoning-configured AND the tier is
+  // self_deployed. `ActorController` has no twin: enabling the `actor` pattern
+  // refuses at parse time until its own twin exists.
+  controller: ['LoopController', 'ActorController', 'ControllerThinking'],
+  critic: ['Critic', 'CriticThinking'],
   compactExecution: ['Synthesize'],
   router: ['Router'],
   planner: ['Planner', 'PlannerThinking'],
@@ -729,10 +769,47 @@ export function clientOverrideFor(role: BamlRole): BamlClientOverride | undefine
 /** The self-deployed client for `role` while the active tier says so, with no side
  *  effect — the shared half of {@link clientOverrideFor} and
  *  {@link resolveClientForRole}, which differ only in whether asking counts as
- *  a call. */
+ *  a call.
+ *
+ *  ROUTE- AND REASONING-AWARE since the reasoning-config slice. The map's
+ *  `LargeQwen` value names the 27B whatever the route; what a call actually
+ *  takes is resolved HERE, from two env-only switches that never consult each
+ *  other's opposite:
+ *  - `LARGE_LLM_ROUTE=openrouter` maps the 27B onto its declared OR twins
+ *    (`LargeQwenOR`, or `LargeQwenThinkOR` when the role's pattern is
+ *    reasoning-configured). The base URL is never sniffed.
+ *  - `PRIVATE_REASONING_ROLES` (per pattern, provider-independent) maps the
+ *    27B onto its THINK twin on either route — `LargeQwenThink` on the box,
+ *    `LargeQwenThinkOR` on OpenRouter.
+ *  The small box and the decision transport are never re-mapped: `SmallQwen`
+ *  and `PrivateSystemOne` have no route twins and no reasoning twins. */
 function selfDeployedClientFor(role: BamlRole): string | undefined {
   if (activeInferenceTier() !== 'self_deployed') return undefined
-  return SELF_DEPLOYED_CLIENT_BY_ROLE[role]
+  const base = SELF_DEPLOYED_CLIENT_BY_ROLE[role]
+  if (!base) return undefined
+  return largeClientForRole(base, reasoningEnabledFor(role as ReasoningPattern))
+}
+
+/** The route-scoped client a 27B map value resolves to. `thinking` selects the
+ *  THINK twin when the route has one; anything that is not the 27B passes
+ *  through unchanged. Pure — the tier and reasoning checks live with the
+ *  callers. */
+function largeClientForRole(base: string, thinking: boolean): string {
+  if (base !== 'LargeQwen') return base
+  if (largeOnOpenRouter()) return thinking ? 'LargeQwenThinkOR' : 'LargeQwenOR'
+  return thinking ? 'LargeQwenThink' : base
+}
+
+/** The route-resolved NON-thinking private-tier client for `role` — what a
+ *  reasoning twin's one corrective retry takes so it stays on the SAME box
+ *  and route as the attempt it replaces (the planner's retry rule, now
+ *  route-aware: `LargeQwenOR` on the OpenRouter route, `LargeQwen` on the
+ *  box). Never the Anthropic default, never the other route. */
+export function selfDeployedNonThinkingClientFor(role: BamlRole): string | undefined {
+  if (activeInferenceTier() !== 'self_deployed') return undefined
+  const base = SELF_DEPLOYED_CLIENT_BY_ROLE[role]
+  if (!base) return undefined
+  return largeClientForRole(base, false)
 }
 
 /**
@@ -826,10 +903,20 @@ function assertPrivateClient(role: BamlRole, options: unknown): void {
   activeInferenceTier() // also enforces reachability under this restriction
   const bag = options as Record<string, unknown> | undefined
   const client = bag?.client
-  const thinking = role === 'planner' && typeof client === 'string' && THINKING_CLIENTS.has(client)
+  // The allowed name is the ROUTE-RESOLVED private client for the role — the
+  // map value, or the OR/thinking twin the route and reasoning switches
+  // resolve it to — OR the route-resolved NON-thinking twin, which is what a
+  // reasoning twin's one corrective retry names (and what keeps that retry
+  // lawful under a private-only deployment). A thinking twin is allowed
+  // exactly when the role's pattern is reasoning-configured, because that is
+  // the only case `selfDeployedClientFor` names one; a registry or env bag is
+  // still refused outright, so a private-only deployment can never reach a
+  // public provider through a consumer layer.
+  const resolved = selfDeployedClientFor(role)
+  const retryFallback = selfDeployedNonThinkingClientFor(role)
   if (
     !bag ||
-    (client !== SELF_DEPLOYED_CLIENT_BY_ROLE[role] && !thinking) ||
+    (client !== resolved && client !== retryFallback) ||
     'clientRegistry' in bag ||
     'env' in bag
   ) {

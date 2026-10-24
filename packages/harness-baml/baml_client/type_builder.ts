@@ -33,6 +33,8 @@ export default class TypeBuilder {
     
     ControllerAction: ClassViewer<'ControllerAction', "reasoning" | "tool_name" | "tool_args" | "additional_calls" | "status" | "is_final">;
     
+    ControllerActionThinking: ClassViewer<'ControllerActionThinking', "tool_name" | "tool_args" | "additional_calls" | "status" | "is_final">;
+    
     CriticResult: ClassViewer<'CriticResult', "is_sufficient" | "explanation" | "suggested_approach">;
     
     DescribeBatchResult: ClassViewer<'DescribeBatchResult', "summaries">;
@@ -86,7 +88,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","SynthesisReference","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","ControllerActionThinking","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","SynthesisReference","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -104,6 +106,10 @@ export default class TypeBuilder {
         
         this.ControllerAction = this.tb.classViewer("ControllerAction", [
           "reasoning","tool_name","tool_args","additional_calls","status","is_final",
+        ]);
+        
+        this.ControllerActionThinking = this.tb.classViewer("ControllerActionThinking", [
+          "tool_name","tool_args","additional_calls","status","is_final",
         ]);
         
         this.CriticResult = this.tb.classViewer("CriticResult", [

@@ -221,6 +221,21 @@ class PlanResultThinking {
   n_steps int @description("Number of discrete steps in the plan")
 }
 
+/// Content-only controller action; the adapter restores `reasoning` from the
+/// parser trace (the reasoning twins' pattern — see `PlanResultThinking`).
+class ControllerActionThinking {
+  // Field-for-field `ControllerAction` minus `reasoning` — same optionality,
+  // same descriptions, same defaults — because the two envelopes must not
+  // disagree about anything but the reasoning field (#625's envelope rule:
+  // disagreeing demonstrations are defects). The comments on the original
+  // class carry the field history and are not repeated here.
+  tool_name string @description("Name of the tool to call, exactly as it appears in the available tools. Your instructions may also define a control-flow name that is not a tool — use one only when they describe it.")
+  tool_args string @description("Valid JSON object string with the tool's arguments, e.g. {\"query\": \"search term\"}. Keys and string values MUST be double-quoted.")
+  additional_calls ToolCallRequest[]? @description("More tool calls to execute in the SAME turn, after tool_name/tool_args. Only use this when your instructions describe multiple calls per turn — they also say whether calls run concurrently or in order. Omit it otherwise, and always omit it when tool_name is 'Return' or 'expandPreviousResult'.")
+  status string? @description("Short user-facing status message describing what you are doing. Omit it on the final Return turn if nothing is in progress.")
+  is_final bool? @description("Set to true on the turn where you consider the task complete, as your instructions define completion. On every other turn set it to false or omit it — an absent value is read as false and the loop continues.")
+}
+
 /// Routing decision
 class RoutingResult {
   intent string @description("Self-contained statement of what the user wants now, with back-references resolved from the history — never a bare 'try again' / 'the second one'")

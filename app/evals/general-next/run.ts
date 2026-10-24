@@ -118,16 +118,17 @@ async function main() {
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
   clients.assertInferenceTier('self_deployed')
-  // The eval-only OpenRouter switch for the 27B roles: when LARGE_LLM_BASE_URL
-  // names an OpenRouter host, the consumer client layer routes the 27B roles
-  // through a registry client that adds `provider { zdr: true }` and resolves
-  // the model id from LARGE_LLM_MODEL; `describe`/`decide` fall through to the
-  // small box untouched. With the vars unset (hermetic mode, and every other
-  // run) this is a no-op and every rendered body is byte-identical to the
-  // declared client's. See packages/harness-baml/openrouter-eval.server.ts.
-  const { activateOpenRouterLargeOverride } =
-    await import('@hames-ai/harness-baml/openrouter-eval.server')
-  const openRouterLarge = activateOpenRouterLargeOverride()
+  // The OpenRouter route for the 27B roles: when LARGE_LLM_ROUTE=openrouter,
+  // the tier's client resolution maps every 27B role onto its declared OR twin
+  // (`LargeQwenOR`, or `LargeQwenThinkOR` when the role's pattern is
+  // reasoning-configured via PRIVATE_REASONING_ROLES); `describe`/`decide`
+  // stay on the small box. There is no separate activation step: the route is
+  // resolved per call from the env at the same seam every private-tier call
+  // reads. With the vars unset (hermetic mode, and every other run) this
+  // reads false and every rendered body is byte-identical to the declared
+  // client's. See `inference-env.server.ts` (`largeLlmRoute`).
+  const { largeOnOpenRouter } = await import('@hames-ai/harness-baml/inference-env.server')
+  const openRouterLarge = largeOnOpenRouter()
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
   let wakeDetail: string | undefined

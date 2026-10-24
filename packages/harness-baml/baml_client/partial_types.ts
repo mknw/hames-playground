@@ -20,7 +20,7 @@ $ pnpm add @boundaryml/baml
 
 import type { Image, Audio, Pdf, Video } from "@boundaryml/baml"
 import type { Checked, Check } from "./types"
-import type {  Attempt,  CompactedMemory,  ControllerAction,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PlanResultThinking,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  SynthesisReference,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
+import type {  Attempt,  CompactedMemory,  ControllerAction,  ControllerActionThinking,  CriticResult,  DescribeBatchResult,  DescribeItemSummary,  DescribeTarget,  ExpandedRef,  ExtractedMemory,  FewShot,  LoopTurn,  MemoryMember,  Message,  PlanResult,  PlanResultThinking,  PriorResult,  ReferenceCandidate,  ReferenceSelection,  ReferenceSelectorResult,  RouteOption,  RoutingResult,  ScreenVerdict,  SynthesisReference,  ToolCall,  ToolCallRequest,  ToolDescription,  ToolResult } from "./types"
 import type * as types from "./types"
 
 /******************************************************************************
@@ -55,6 +55,17 @@ export namespace partial_types {
     */
     export interface ControllerAction {
       reasoning?: string | null
+      tool_name?: string | null
+      tool_args?: string | null
+      additional_calls?: ToolCallRequest[] | null
+      status?: string | null
+      is_final?: boolean | null
+    }
+    /**
+     * Content-only controller action; the adapter restores `reasoning` from the
+ * parser trace (the reasoning twins' pattern — see `PlanResultThinking`).
+    */
+    export interface ControllerActionThinking {
       tool_name?: string | null
       tool_args?: string | null
       additional_calls?: ToolCallRequest[] | null

@@ -187,8 +187,8 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
   const s = run()
   expect(s).toContain('flipGate: flipGate(')
   expect(s).toContain('budget.beginInfrastructure(active, started, [')
-  // The large box's lines are conditional: dropped while the large endpoint
-  // is OpenRouter (the eval-only switch) — there is no GPU to bill.
+  // The large box's lines are conditional: dropped while the route switch
+  // sends the 27B roles to OpenRouter — there is no GPU to bill.
   expect(s).toContain('seconds: largeScaledownSeconds()')
   expect(s).toContain('seconds: smallScaledownSeconds()')
   expect(s).toContain('openRouterLarge ? smallRate : largeRate + smallRate')
@@ -197,11 +197,9 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
     /floorHourlyRate\(\s*rates\.largeEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
   )
   expect(s).toContain('floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)')
-  // The OpenRouter switch is wired at the seam, before the budget exists.
-  expect(s.indexOf('activateOpenRouterLargeOverride()')).toBeGreaterThan(
-    s.indexOf('clients.assertInferenceTier'),
-  )
-  expect(s.indexOf('activateOpenRouterLargeOverride()')).toBeLessThan(s.indexOf('new SpendBudget('))
+  // The route switch is read at the seam, before the budget exists.
+  expect(s.indexOf('largeOnOpenRouter()')).toBeGreaterThan(s.indexOf('clients.assertInferenceTier'))
+  expect(s.indexOf('largeOnOpenRouter()')).toBeLessThan(s.indexOf('new SpendBudget('))
   expect(read('scripts/release-check.ts')).toContain('eval:general-next --live')
   expect(read('../docs/plan/decision-loop-agent.md')).toContain(
     'on the private tier only (owner amendment, 2026-10-15; #507 W4)',

@@ -128,6 +128,9 @@ beforeEach(() => {
   requests = []
   transports = []
   samples = []
+  // The reasoning setting is config-derived (PRIVATE_REASONING_ROLES) and read
+  // per call; the suite's allowed thinking paths need the planner configured.
+  process.env.PRIVATE_REASONING_ROLES = 'planner'
 })
 
 function run<T>(fn: () => Promise<T>, client = 'LargeQwenThink', tier = 'self_deployed') {
@@ -152,6 +155,7 @@ function run<T>(fn: () => Promise<T>, client = 'LargeQwenThink', tier = 'self_de
 }
 afterEach(() => {
   configureConsumerClients(undefined)
+  delete process.env.PRIVATE_REASONING_ROLES
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
 })
@@ -463,8 +467,12 @@ describe('Planner thinking mode', () => {
           await withRunFrame(
             { inference: { tier, ...(layer === 'per-run' ? { clientOverride: override } : {}) } },
             async () => {
-              expect(() => clientOverrideFor(role)).toThrow(/thinking.*planner.*private tier/i)
-              expect(() => resolveClientForRole(role)).toThrow(/thinking.*planner.*private tier/i)
+              expect(() => clientOverrideFor(role)).toThrow(
+                /thinking.*reasoning-configured.*private tier/i,
+              )
+              expect(() => resolveClientForRole(role)).toThrow(
+                /thinking.*reasoning-configured.*private tier/i,
+              )
             },
           )
         }

@@ -289,12 +289,10 @@ function ActorController(
 // Critic - Evaluates whether the actor's output satisfies the intent
 // ============================================================================
 
-function Critic(
-  intent: string,
-  attempts: Attempt[]
-) -> CriticResult {
-  client CriticAnthropic
-  prompt #"
+// Shared body for the reasoning twins (#625 pattern): the critic's prompt,
+// extracted verbatim from the original function so the twin and the original
+// cannot drift. Output format belongs to the calling function.
+template_string CriticBody(intent: string, attempts: Attempt[]) #"
     {{ _.role("system") }}
     You evaluate whether task execution results satisfy the user's intent.
     Be precise about what is missing. Be lenient with partial results after multiple attempts.
@@ -349,6 +347,36 @@ function Critic(
     {% if attempts|length >= 3 %}
     NOTE: {{ attempts|length }} attempts have been made. Accept partial results if they provide meaningful information.
     {% endif %}
+"#
+
+function Critic(
+  intent: string,
+  attempts: Attempt[]
+) -> CriticResult {
+  client CriticAnthropic
+  prompt #"
+    {{ CriticBody(intent, attempts) }}
+
+    {{ ctx.output_format }}
+  "#
+}
+
+// The critic's reasoning twin (#625 pattern, reasoning-config slice): the SAME
+// body, the trace taken from the response's separate reasoning field — never
+// from `content` — and an inline think-close in `content` REFUSED loudly (Q7).
+// `CriticResult` needs no content-only variant: it has no reasoning field of
+// its own, so there is nothing to duplicate and nothing for the adapter to
+// restore. Selected only when reasoning is configured for the `critic` pattern
+// (`PRIVATE_REASONING_ROLES`) and the active tier is self_deployed; on either
+// thinking leaf (`LargeQwenThink` on the vLLM route, `LargeQwenThinkOR` on the
+// OpenRouter route). `Critic` keeps its contract everywhere else.
+function CriticThinking(
+  intent: string,
+  attempts: Attempt[]
+) -> CriticResult {
+  client LargeQwenThink
+  prompt #"
+    {{ CriticBody(intent, attempts) }}
 
     {{ ctx.output_format }}
   "#

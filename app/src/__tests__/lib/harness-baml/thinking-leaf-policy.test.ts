@@ -48,11 +48,23 @@ describe('thinking leaf function policy', () => {
   const functions = Object.values(getBamlFiles()).flatMap((source) =>
     [...source.matchAll(/^function (\w+)\(/gm)].map((match) => match[1]),
   )
-  const originals = functions.filter((name) => name !== 'PlannerThinking')
+  const twins = ['ControllerThinking', 'CriticThinking', 'PlannerThinking']
+  const originals = functions.filter((name) => !twins.includes(name))
 
-  it('designates only the measured-scope planner counterpart for the thinking leaf', () => {
-    expect(THINKING_FUNCTIONS_BY_CLIENT).toEqual({ LargeQwenThink: ['PlannerThinking'] })
-    expect(functions.filter((name) => name.endsWith('Thinking'))).toEqual(['PlannerThinking'])
+  it('designates exactly the three reasoning twins for the two thinking leaves', () => {
+    // One twin FUNCTION per pattern, served by BOTH leaves — the reasoning
+    // setting is provider-independent, and the route only picks the leaf.
+    const designated = Object.fromEntries(
+      Object.entries(THINKING_FUNCTIONS_BY_CLIENT).map(([client, fns]) => [
+        client,
+        [...fns].sort(),
+      ]),
+    )
+    expect(designated).toEqual({
+      LargeQwenThink: twins,
+      LargeQwenThinkOR: twins,
+    })
+    expect(functions.filter((name) => name.endsWith('Thinking')).sort()).toEqual(twins)
   })
 
   it.each(originals)('refuses %s at both extractors and the accounting-only path', (name) => {

@@ -380,3 +380,33 @@ function LoopController(
     {{ ctx.output_format }}
   "#
 }
+
+// The controller's reasoning twin (#625 pattern, reasoning-config slice): the
+// SAME body, content-side reasoning guidance off, the trace taken from the
+// response's separate reasoning field — never from `content`. The adapter
+// restores `ControllerAction.reasoning` from that trace and REFUSES an inline
+// think-close in `content` loudly (Q7): a parser-equipped endpoint is
+// required, on either route (`LargeQwenThink` on the vLLM route,
+// `LargeQwenThinkOR` — native `reasoning` object — on the OpenRouter route).
+// Selected only when reasoning is configured for the `controller` pattern
+// (`PRIVATE_REASONING_ROLES`) and the active tier is self_deployed;
+// `LoopController` keeps its contract everywhere else.
+function ControllerThinking(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  turns: LoopTurn[],
+  context: string?,
+  turns_previous_runs: PriorResult[]?,
+  few_shots: FewShot[]?,
+  multi_call_mode: string?,
+  plan_context: string?,
+  return_style: string?
+) -> ControllerActionThinking {
+  client LargeQwenThink
+  prompt #"
+    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, false) }}
+
+    {{ ctx.output_format }}
+  "#
+}

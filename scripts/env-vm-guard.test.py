@@ -430,11 +430,13 @@ class Rules(unittest.TestCase):
         self.assertNotEqual(guard.model(changed), guard.expected(config()))
 
     def test_trace_groups_by_guard_traversal_not_trace_id(self):
-        # The captured live `nft monitor trace` of the failed W9 smoke (nft 1.1.6):
-        # five SYN retransmissions, each a prerouting id with no guard-table verdict
-        # and a separate forward id dropped by to_vm_refused. The guard's own
-        # traversal is the evidence; an id spanning hooks would read every packet
-        # twice — once with no verdict at all — and refuse every refusal.
+        # The captured live `nft monitor trace` of the failed W9 smoke (nft 1.1.6;
+        # the client and VM addresses parameterized to the DEV env and the lab MACs
+        # to synthetic ones — no instance values committed): five SYN
+        # retransmissions, each a prerouting id with no guard-table verdict and a
+        # separate forward id dropped by to_vm_refused. The guard's own traversal is
+        # the evidence; an id spanning hooks would read every packet twice — once
+        # with no verdict at all — and refuse every refusal.
         captured = (ROOT / "scripts/env-vm-guard-nft116-trace.txt").read_text()
         packets = guard.traced(captured)
         self.assertEqual(len(packets), 10)
@@ -443,6 +445,35 @@ class Rules(unittest.TestCase):
         self.assertTrue(all(p["verdicts"] == [("to_vm_refused", "drop")] for p in guard_ids))
         self.assertTrue(all(p["iif"] == "envapp-dev" for p in guard_ids))
         self.assertTrue(any(not p["verdicts"] for p in packets.values()))
+
+    def test_trace_tolerates_nft116_reused_trace_ids(self):
+        # The captured live `nft monitor trace` of the standalone 8-primary
+        # reproduction on nft 1.1.6 (diag-8-primary-monitor.txt on the host; the VM
+        # and primary addresses parameterized to the DEV env and the lab MACs to
+        # synthetic ones): five SYN retransmissions, of which the last two reuse the
+        # previous ones' trace ids, so the guard-reached id ccf30be1 carries two
+        # identical vm_to_host drops while the counter moved by five. The evidence
+        # is each id's DISTINCT verdicts and the traversal events — the raw list
+        # refused the live refusal, the ids undercounted its counter.
+        captured = (ROOT / "scripts/env-vm-guard-nft116-reuse.txt").read_text()
+        packets = guard.traced(captured)
+        self.assertEqual(len(packets), 8)
+        guard_ids = [p for p in packets.values() if p["verdicts"]]
+        self.assertEqual(len(guard_ids), 4)
+        self.assertTrue(all(set(p["verdicts"]) == {("vm_to_host", "drop")} for p in guard_ids))
+        self.assertTrue(all(p["iif"] == "envvm-dev" for p in guard_ids))
+        self.assertEqual(sorted(len(p["verdicts"]) for p in guard_ids), [1, 1, 1, 2])
+        # The live check passes with the counter's real change (five drops).
+        self.assertEqual(guard.evidence(packets, "vm_to_host", "envvm-dev", 5, "8-primary"), 5)
+
+    def test_a_mixed_verdict_for_one_trace_id_is_still_refused(self):
+        # The reuse tolerance must not loosen the check: one id whose traversals
+        # disagree (an accept and the probe's drop) is still not clean evidence.
+        packets = {"clean": {"iif": "envvm-dev", "verdicts": [("vm_to_host", "drop")]},
+                   "mixed": {"iif": "envvm-dev", "verdicts": [(None, "accept"), ("vm_to_host", "drop")]}}
+        with self.assertRaises(guard.Refused) as raised:
+            guard.evidence(packets, "vm_to_host", "envvm-dev", 3, "8-primary")
+        self.assertIn("not every packet was traced to its own rule's drop", str(raised.exception))
 
     def test_environment_names_fit_the_interface_limit(self):
         for name, ok in (("dev", True), ("a", True), ("release", True), ("abcdefgh", True),
@@ -652,6 +683,7 @@ class Host:
         self.next_port = 50000
         self.next_container = 0
         self.flushes = 0
+        self.reuse_ids, self.last_ids, self.reused = False, None, 0
 
     STATEFUL = ("tables", "instances", "projects", "networks", "containers", "bridges", "extra_routes", "units",
                 "extra_links", "incus_networks",
@@ -689,10 +721,12 @@ class Host:
                 return "forward", bridge
         return "forward", "eth0"
 
-    def deliver(self, pkt):
+    def deliver(self, pkt, reuse=None):
         """Prerouting (the trace table), then input or forward; True if it got through."""
         hook, oif = self.route(pkt["daddr"])
-        pkt = dict(pkt, oif=oif, id="%x" % next(self.trace_ids), stuck=self.stuck_counter,
+        ids = reuse or ("%x" % next(self.trace_ids), "%x" % next(self.trace_ids))
+        self.last_ids = ids
+        pkt = dict(pkt, oif=oif, id=ids[0], stuck=self.stuck_counter,
                    stuck_allow=self.allow_stuck)
         trace = [] if self.monitors and not self.no_trace else None
         if evaluate(self.tables, "prerouting", pkt, trace) == "drop":
@@ -701,7 +735,7 @@ class Host:
         # scripts/env-vm-guard-nft116-trace.txt): the forward id differs from the
         # prerouting id, so a per-id grouping that spans hooks reads every packet
         # twice — once with no verdict at all.
-        pkt = dict(pkt, id="%x" % next(self.trace_ids))
+        pkt = dict(pkt, id=ids[1])
         verdict = evaluate(self.tables, hook, pkt, trace)
         for line in trace or []:
             if " inet %s " % guard.TABLE in line:
@@ -717,7 +751,12 @@ class Host:
         """A TCP connect: a SYN and its retransmission if dropped, then the reply path."""
         syn = packet(iif, saddr, daddr, port, sport=sport)
         if not self.deliver(syn):
-            self.deliver(syn)
+            # nft 1.1.6 sometimes REUSES the first attempt's trace ids for the
+            # retransmission (captured live in
+            # scripts/env-vm-guard-nft116-reuse.txt): one guard-reached id then
+            # carries two identical (counter, drop) verdicts.
+            self.deliver(syn, self.last_ids if self.reuse_ids else None)
+            self.reused += self.reuse_ids
             return "TIMEOUT"
         hook, oif = self.route(daddr)
         back = packet(oif, daddr, saddr, sport, state="established", orig=(saddr, daddr, port))
@@ -1978,6 +2017,22 @@ class Smoke(Smoking, Harness):
         self.host.stuck_counter = True
         self.assert_fails("counter change differs")
 
+    def test_nft116_reused_trace_ids_still_refuse_cleanly(self):
+        # nft 1.1.6 sometimes reuses a retransmitted SYN's trace ids (captured live
+        # in scripts/env-vm-guard-nft116-reuse.txt): a refused probe's guard id then
+        # carries two identical drops and the counter moves by the traversal events.
+        # Every refusal must still pass its check, and a mixed-verdict id still not.
+        self.ready()
+        self.host.reuse_ids = True
+        self.assertEqual(self.smoke(), 0, self.err)
+        self.assertGreater(self.host.reused, 0, "the fake never reused a trace id")
+        results = self.results()
+        for label in ("3", "4", "5", "7", "8-gateway", "8-primary", "9", "10"):
+            self.assertEqual((results[label]["outcome"], results[label]["counter_change"]),
+                             ("refused", results[label]["traced"]), label)
+            self.assertGreaterEqual(results[label]["traced"], 1, label)
+        self.assertEqual(results["8c"]["dropped_by"], "nic-filter")
+
     def test_a_counter_rise_that_is_not_traced_fails(self):
         self.ready()
         self.host.no_trace = True
@@ -2255,8 +2310,8 @@ MUTATIONS = {
     "unit-gains-execstop": ("RemainAfterExit=yes\n", "RemainAfterExit=yes\nExecStop=/usr/sbin/nft delete table inet env_vm_guard\n"),
     "unit-not-isolated": ("ExecStart=/usr/bin/python3 -I /usr/local", "ExecStart=/usr/bin/python3 /usr/local"),
     # §11.1 bullet 9: timeout without its counter rise, untraced rise, ECONNREFUSED or a local error, past the bound; the stand-in's key.
-    "smoke-timeout-without-counter": ('    require(delta == len(guard), label + ": counter change differs from the traced packets")', "    pass"),
-    "smoke-untraced-rise": ('    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),', "    require(True,"),
+    "smoke-timeout-without-counter": ('    require(delta == traced, label + ": counter change differs from the traced packets")', "    pass"),
+    "smoke-untraced-rise": ('    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),', "    require(True,"),
     "smoke-any-ingress": ('    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")', "    pass"),
     "smoke-econnrefused-is-refusal": ('    require(outcome != "REFUSED", label + ": answered with a reset, so the packet arrived")', "    pass"),
     "smoke-local-error-is-refusal": ('    require(outcome in ("TIMEOUT", "UNDELIVERED", "SENT"), label + ": local error or unknown outcome (inconclusive)")', "    pass"),
@@ -2357,17 +2412,25 @@ MUTATIONS = {
         '}\nKEYS = {json.dumps(value, sort_keys=True): key for key, value in LEFT.items()}'),
     "readback-ignores-objects": ('        else:\n            result["other"].append(kind)\n    result["counters"].sort()', '        else:\n            pass\n    result["counters"].sort()'),
     "readback-ignores-rule-comment": ('        if body.get("comment") is not None and kind != "table":\n            result["other"].append(kind)', '        if False:\n            result["other"].append(kind)'),
-    # W9: nft 1.1.6 assigns a new trace id per hook traversal (captured live in
-    # scripts/env-vm-guard-nft116-trace.txt); grouping the smoke's evidence by
-    # trace id instead of by guard traversal reads every packet twice — once
-    # with no verdict at all — and refuses every refusal.
-    "smoke-trace-groups-by-trace-id": (
-        '    guard = [p for p in packets.values() if p["verdicts"]]\n'
-        '    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),\n'
-        '            label + ": not every packet was traced to its own rule\'s drop")\n'
-        '    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")\n'
-        '    require(delta == len(guard), label + ": counter change differs from the traced packets")',
-        '    guard = list(packets.values())'),
+    # W9, one level down from #764: on the same nft a trace id is sometimes REUSED
+    # across two hook traversals of a retransmitted SYN (captured live in
+    # scripts/env-vm-guard-nft116-reuse.txt), so one guard-reached id can carry two
+    # identical (counter, drop) verdicts. Comparing the raw list refuses the live
+    # refusal; counting ids undercounts the counter; tolerating mixed verdicts or
+    # evidence from ids that never reached the table loosens the check. Each is
+    # killed by the fixture test or the mixed-verdict test.
+    "smoke-verdict-list-not-set": (
+        '    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),',
+        '    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),'),
+    "smoke-verdict-mixed-tolerated": (
+        '    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),',
+        '    require(bool(guard) and all((counter, "drop") in p["verdicts"] for p in guard),'),
+    "smoke-traced-counts-ids": (
+        '    traced = sum(len(p["verdicts"]) for p in guard)',
+        '    traced = len(guard)'),
+    "smoke-evidence-spans-non-guard-ids": (
+        '    guard = [p for p in packets.values() if p["verdicts"]]\n    require(bool(guard)',
+        '    guard = list(packets.values())\n    require(bool(guard)'),
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),

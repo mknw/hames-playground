@@ -1000,6 +1000,17 @@ def traced(text):
     return packets
 
 
+def evidence(packets, counter, ingress, delta, label):
+    """The guard's own traversal is the evidence, and the counter counts its events."""
+    guard = [p for p in packets.values() if p["verdicts"]]
+    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),
+            label + ": not every packet was traced to its own rule's drop")
+    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")
+    traced = sum(len(p["verdicts"]) for p in guard)
+    require(delta == traced, label + ": counter change differs from the traced packets")
+    return traced
+
+
 def traced_probe(label, counter, match, send, deadline):
     """Quiet baseline, then the probe, with the trace flag set for its tuple alone."""
     remaining(deadline)
@@ -1030,15 +1041,13 @@ def refused(label, counter, match, send, deadline, ingress):
     # nft assigns a NEW trace id per hook traversal (captured live on nft 1.1.6,
     # scripts/env-vm-guard-nft116-trace.txt): the same SYN is a prerouting id and
     # a forward id, and only the traversal that reaches this table records
-    # verdicts. The evidence is the guard's own traversal — one per forwarded
-    # packet, so the counter's change is measured against those ids, not against
-    # every id the monitor printed.
-    guard = [p for p in packets.values() if p["verdicts"]]
-    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),
-            label + ": not every packet was traced to its own rule's drop")
-    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")
-    require(delta == len(guard), label + ": counter change differs from the traced packets")
-    return {"probe": label, "outcome": "refused", "rule": counter, "traced": len(guard),
+    # verdicts. On the same nft a trace id is sometimes REUSED across two hook
+    # traversals of a retransmitted SYN (captured live in
+    # scripts/env-vm-guard-nft116-reuse.txt), so one guard-reached id can carry
+    # two identical (counter, drop) verdicts: the evidence is the id's DISTINCT
+    # verdicts and the counter counts traversal events, not ids.
+    traced = evidence(packets, counter, ingress, delta, label)
+    return {"probe": label, "outcome": "refused", "rule": counter, "traced": traced,
             "counter_change": delta, "ingress": ingress}
 
 
@@ -1233,17 +1242,19 @@ def probe_environment(config, env, facts, shared, deadline):
             listener.close()
         require(outcome == "UNDELIVERED", "8c: a spoofed datagram was delivered to the host")
         # The guard's own traversal is the evidence (see refused: nft 1.1.6 assigns
-        # a new trace id per hook traversal). A datagram traced before the table
+        # a new trace id per hook traversal and sometimes reuses one across two
+        # traversals of a retransmitted SYN). A datagram traced before the table
         # but never reaching it, with an unchanged counter, died at the NIC filter.
         guard = [p for p in packets.values() if p["verdicts"]]
         if not guard and delta == 0:
             dropped_by = "nic-filter"
-        elif guard and all(p["verdicts"] == [("vm_to_host", "drop")] for p in guard) and delta == len(guard):
+        elif guard and all(set(p["verdicts"]) == {("vm_to_host", "drop")} for p in guard) \
+                and delta == sum(len(p["verdicts"]) for p in guard):
             dropped_by = "vm_to_host"
         else:
             dropped_by = "unattributed"
         results.append({"probe": "8c", "outcome": "not delivered", "dropped_by": dropped_by,
-                        "traced": len(guard), "counter_change": delta})
+                        "traced": sum(len(p["verdicts"]) for p in guard), "counter_change": delta})
         results.append(refused("9", "vm_to_metadata", "tcp sport %d" % SPORT["9"],
                                lambda: guest_run("tcp", "169.254.169.254", 80, SPORT["9"]), deadline, vm_bridge))
         # Probe 10's positive control: the host itself reaches the address.

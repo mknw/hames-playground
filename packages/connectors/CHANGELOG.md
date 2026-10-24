@@ -1,5 +1,97 @@
 # @hames-ai/connectors
 
+## 0.4.0
+
+### Minor Changes
+
+- dfffba2: **Breaking (pre-1.0, so a minor bump): what leaves is judged by a new egress gate, and `withPseudonymisedInputs` no longer checks or refuses outgoing calls.**
+  
+  - New: `withEgressGate(config)(pattern)` installs one `egressChecks` entry and one `afterToolCall` hook around the pattern it wraps, so every `callTool` inside it is covered on every tier. A call is egress unless its namespace is in `local` or its exact name in `localTools` (a `localTools` name that is in `catalog` refuses the run; `local`, `fetchTools` and `addressSources` are verified against `catalog` when the gate runs, and `fetchTools` without `addressSources` refuses construction). Per outgoing call: a closed turn or route, or a damaged roster, refuses with no model call; then deterministic refusals (undecodable percent-encoding, a Unicode format or default-ignorable character, a `PERSON_n` placeholder, a decoded block over 2 048 characters, never truncated, and for a tool in `fetchTools` an address-carrying or `url` argument that is not, whole, an address found in the user's latest message or in the data of a result from an `addressSources` namespace); then, in `'filter'` mode, the `guard.egress` question (`GUARD_EGRESS`, a `choice` over `personal`, `company`, `nothing_private`) asked over a state the gate renders with a per-call nonce, every quoted line prefixed `"> "`, a `Destination named in the request:` line per host (nested redirector hosts included) and the host roster's matched spans as evidence. At or above τe (0.3) on 1 − P(`nothing_private`) the call is refused with the larger private label's fixed text; below it the call goes out, and a roster match is recorded as an `egress_audit` event. In `'roster'` mode, or with Decide down, the directory status the roster reports decides (`loaded`, `empty`, `unreadable`, `none`; `loadedDecideDown: 'by-shape' | 'ask'`).
+  - The tripwire: a refusal on Decide's answer or for want of one is an `egress_refused` event, and refusal `maxOutgoingRetriesPostTripwire + 1` (default 0, so the first) closes that route's outgoing calls until the user's next message. The counts are derived from the turn's recorded refusals (`egressClosures`), so they survive a pause, and a route's checks run in batch order.
+  - New exports: `withEgressGate`, `egressClosures`, `GUARD_EGRESS`, `EGRESS_TEXTS` (every text the gate returns, none interpolated), `EGRESS_WARNINGS`, `EGRESS_WARNING_TASK`, `GUARD_EGRESS_THRESHOLD`, `GUARD_EGRESS_TIMEOUT_MS`, `EGRESS_MAX_BLOCK_CHARS`, `EGRESS_SMALL_BLOCK_CHARS`, `EGRESS_USER_CAP`, `EGRESS_SPAN_CAP`, `readOutgoing`, `destinationHosts`, `renderEgressState`, `EGRESS_CHECK_FAILED`, `LINE_BREAK` (from `guard-gate.server`), and the `EgressGateConfig`, `EgressRoster`, `EgressRosterSource`, `EgressDirectoryStatus`, `EgressMode`, `EgressClosures`, `OutgoingRequest`, `ReadOutgoing`, `EgressStateInput`, `EgressAuditEventData`, `EgressRefusedEventData` and `EgressProbabilities` types. New event types `egress_audit` and `egress_refused` (always committed, rendered metadata-free into LLM-facing views); a new `WarningTask`, `egress_check`; `WarningEventData.detail`.
+  - `RunFrame.route`: `decisionLoop` writes its route key around each child; it replaces on `amendRunFrame` like most slots.
+  - **Removed from `withPseudonymisedInputs`:** its `egressChecks` entry (K6), its `afterToolCall` roster extension and its refusal of web calls when the host filter is unavailable. A failed host filter still withholds earlier content; its warning no longer says web calls were refused. `WebPseudonymisation` loses `check` and `observe`.
+  - A throwing `egressChecks` entry now denies with `EGRESS_CHECK_FAILED` ("Refused: the check on outgoing requests failed, …") instead of "Tool call refused: outgoing privacy check unavailable."
+  - The shared fence neutraliser (`neutralizeFenceMarkers`) is replaced: it turns the marker words of both fence forms (`BEGIN|END UNTRUSTED CONTENT` and `BEGIN|END CONTENT UNDER REVIEW`) into `[fence]`, word-bounded, and no longer deletes the 40 characters after a marker from what the screen, the guard gate and the egress question read.
+  - Embeddings: `TRUSTED_EMBEDDING_PROVIDERS` (empty) and `embeddingProviderPassesEgress()` in `stash/embeddings.server`: `local`, unset, or a provider declared trusted in code.
+  - `@hames-ai/agents`: `AgentDeps.egressRoster` (optional); `general-next` wraps its decision loop in the egress gate (`'filter'` on both tiers, N = 0, `loadedDecideDown: 'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local: `neo4j`, `graph`, and the office sandbox's in-VM tools by name only while that box is booted `mcp-only`, `officeLocalTools()`).
+  - `@hames-ai/connectors`: `graph_file_ingest` refuses any embedding provider that does not pass `embeddingProviderPassesEgress` (an unregistered value as well as `openrouter`). No Graph result echoes a string the controller wrote, because `graph` is an address source: `graph_files_search` no longer returns `query` (`GraphFileSearchResult.query` is removed), and `graph_files_shared`'s empty-result note says "by the person named" instead of quoting `shared_by`.
+  
+  Migration: if you composed `withPseudonymisedInputs` for its outgoing check, wrap the pattern (or the whole loop) in `withEgressGate({ local, catalog: tools.all, decide, roster })` instead; a host `PseudonymiseForWeb` can drop `check` and `observe`, and a host roster for the gate implements `EgressRosterSource` (`{ directory, roster: { match, observe } }`). To keep the old "a roster match refuses by itself" behaviour, declare `mode: 'roster'`. A gate with `fetchTools` must also declare `addressSources`, the namespaces whose result data gives the controller addresses; leave out any whose tools compute their output from their arguments (a query engine, a code box). The cost, accepted: an address stored only there (for example a URL held only in Neo4j) is not fetchable until a search or another source returns it. Code that matched the old thrown-check text should match `EGRESS_CHECK_FAILED`.
+- 540c5a5: **Breaking (pre-1.0, so a minor bump): the injection guard's `screen` option is a config object, and its model screen can sit behind a gate.**
+  
+  - `screen` takes `{ run, mode?, gate?, onUnavailable?, exempt?, classify? }` instead of a bare `InjectionScreen`. `run` is the screen you passed before.
+  - `mode` is `'off' | 'shadow' | 'gated' | 'always'`, per tier: a bare value or a `ByTier` map such as `{ default: 'shadow', anthropic: 'always' }`, resolved per call against the registered `effectiveTier()` by the new `resolveByTier()`. Default: `'always'` for a screen alone, `'shadow'` when a `gate` is passed. A mode that asks a gate with none passed refuses construction, and so do a `run` that is not a function, a mode that is not one of the four (on any tier), a per-tier map with no `default` and an `onUnavailable` other than `'pass'` or `'withhold'`. Read per call, an unrecognised mode runs the screen and an unrecognised `onUnavailable` withholds.
+  - **Removed: `screenDespiteFindings`.** A deterministic finding now forces the screen in every mode but `'off'`, on the sanitized projection and with no gate call. A guard that declared a screen without that option used to skip the screen on any result with a finding; it now screens it, one more model call per such result.
+  - New: `createGuardGate(decide, settings?)` (its state is refused over `maxStateBytes`, default `GUARD_GATE_MAX_STATE_BYTES` = 32 000, which runs the screen) and `GUARD_SCREEN` (the `guard.screen` noul question), `guardGateSkipRate(events)`, `neutralizeFenceMarkers()` (the screen's fence neutraliser, now shared), `SCREEN_WITHHELD`, `resolveByTier()`, and the `ByTier`, `ScreenMode`, `GuardGate`, `GuardGateVerdict`, `IngressClass`, `IngressClassifier` and `InjectionScreenConfig` types. Each gate answer is a `decision_made` event keyed `guard.screen`.
+  - `onUnavailable: 'withhold'` replaces a payload whose screen threw with a fixed marker (`SCREEN_WITHHELD`, which tells the controller to answer without it); `'pass'`, the default, keeps today's behaviour.
+  - `exempt` names declared namespaces neither the gate nor the screen runs on; an undeclared one refuses construction. `classify` is the host's: an `'internal'` payload gets the deterministic layer only, unless it has a finding; without one every payload is external.
+  - `DecideInput` gains an optional `signal`, which `evaluateDecision` passes through and the systemone transport hands to its fetch, so a caller's deadline aborts the request. `LlmUsageSample` gains `decisionKey` for Decide calls.
+  - `ScreenUntrustedContent`'s definition of an injection now follows the gate's question (text aimed at the AI reading it), with the gate's behaviour list item for item; its signature is unchanged.
+  - `@hames-ai/connectors`: `registerGraphConnectorTools` takes an optional `homeDomains` supplier; the mail, calendar, shared-with-me and mail-attachment tools stamp each item and result with a non-enumerable `GRAPH_PROVENANCE` (`'home' | 'external' | 'unknown'`) computed from the raw addresses before shaping, read with `graphProvenance()`. No serialization carries it. Also new from `graph/graph-tools.server`: `isHomeAddress()` (a sender's domain matches only in its canonical spelling, so a spelling IDNA folds onto a home domain is not home), `provenanceOf()` and the `GraphProvenance` type.
+  - `@hames-ai/agents`: `AgentDeps.classifyIngress` (optional). `general-next`'s office and info guards declare the screen behind the gate, `{ default: 'shadow', anthropic: 'always' }`, with the host's classifier.
+  
+  Migration: replace `screen: myScreen` with `screen: { run: myScreen }` (behaviour on clean content is unchanged: `'always'`), and delete `screenDespiteFindings` (its behaviour is now the default). To keep a screen off results that already have a deterministic finding, there is no option: that is the change. A custom `DecideFn` should pass `input.signal` to its request when it has one.
+- f1d0942: **Breaking for hosts registering Graph tools:** supply a per-call `fileIngestAllowed`
+  predicate. File ingestion refuses before I/O unless that predicate positively
+  allows the call, and refuses OpenRouter embedding. The app requires both an
+  explicit private run frame and a private-only deployment until tier-flip release
+  is implemented. General-next advertises Graph file ingestion in its
+  office route only when the host enables the deployment capability, preserving original bytes for sandbox analysis and cited retrieval.
+- 2d24874: **Breaking:** retire the shared memory graph (the `memory` MCP server and its tools).
+  Personal memory is unchanged: `withMemory` stores and recalls per-user memories in
+  Postgres.
+  
+  - `@hames-ai/connectors`: `MCP_TOOL_CATALOG` / `mcpNamespace` no longer map the nine
+    memory-graph tools (`create_entities`, `create_relations`, `add_observations`,
+    `delete_entities`, `delete_relations`, `delete_observations`, `open_nodes`,
+    `search_nodes`, `read_graph`) to a `memory` namespace, so `Tools()` returns no `memory`
+    list. The catalog is 77 names across five namespaces.
+  - `@hames-ai/agents`: `general-next` no longer holds the memory graph's read tools, and its
+    info route's description and capability no longer mention a memory graph.
+    `isMemoryGraphResult` is no longer exported, `GraphElement.source` is
+    `'neo4j' | 'unknown'`, and the graph extractor no longer parses memory-graph results.
+  - `@hames-ai/harness-patterns`: `withPseudonymisedInputs` treats only `neo4j` as a local
+    namespace; a tool that still resolves to `memory` is egress-checked like any other.
+    `isReadOnlyTool` no longer lists `open_nodes`.
+  
+  Migration: remove the `memory` server from your gateway catalog and config, drop any
+  `tools.memory` read, and drop any import of `isMemoryGraphResult`. A gateway that still
+  serves those tools hands them to no agent shipped here. Decide separately what to do with
+  the old server's data volume before deleting it.
+
+### Patch Changes
+
+- Updated dependencies [be74388]
+- Updated dependencies [60836df]
+- Updated dependencies [959966b]
+- Updated dependencies [dfffba2]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [540c5a5]
+- Updated dependencies [49888cd]
+- Updated dependencies [467e9be]
+- Updated dependencies [3b967a8]
+- Updated dependencies [e7f697e]
+- Updated dependencies [7ec2dd2]
+- Updated dependencies [40d3627]
+- Updated dependencies [7034d6d]
+- Updated dependencies [f1d0942]
+- Updated dependencies [b1f162c]
+- Updated dependencies [2d24874]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [d0365ed]
+- Updated dependencies [ed4eed3]
+- Updated dependencies [d89bf08]
+- Updated dependencies [3896e47]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 > The published 0.3.0 tarball differs from the tag only in README.md (Neo4j egress wording, #241 G13); no code differs.

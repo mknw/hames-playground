@@ -99,6 +99,7 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
+  resolveThinkingTwin,
   classifyPrompt,
   promptText,
   type BamlFunctionName,
@@ -470,20 +471,24 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   async function serve(raw: string, res: http.ServerResponse): Promise<void> {
-    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number }
+    let body: {
+      model?: string
+      messages?: ChatMessage[]
+      max_tokens?: number
+      chat_template_kwargs?: { enable_thinking?: unknown }
+      reasoning?: { enabled?: unknown }
+    }
     try {
-      body = JSON.parse(raw || '{}') as {
-        model?: string
-        messages?: ChatMessage[]
-        max_tokens?: number
-      }
+      body = JSON.parse(raw || '{}') as typeof body
     } catch {
       json(res, 400, { error: { message: 'fake-llm: request body was not JSON' } })
       return
     }
     const model = body.model ?? '(no model)'
     const prompt = promptText(body.messages ?? [])
-    const fn = classifyPrompt(prompt)
+    // The reasoning twins share their original's prompt bytes; the request
+    // body's thinking-on shape is what recovers them (see resolveThinkingTwin).
+    const fn = resolveThinkingTwin(classifyPrompt(prompt), body)
 
     const record = (outcome: FakeCall['outcome'], delayedMs: number): void => {
       calls.push({ at: Date.now() - startedAt, model, fn, prompt, outcome, delayedMs })

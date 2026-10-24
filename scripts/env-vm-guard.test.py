@@ -429,6 +429,21 @@ class Rules(unittest.TestCase):
         expr["left"]["ct"]["key"] = "ip other"
         self.assertNotEqual(guard.model(changed), guard.expected(config()))
 
+    def test_trace_groups_by_guard_traversal_not_trace_id(self):
+        # The captured live `nft monitor trace` of the failed W9 smoke (nft 1.1.6):
+        # five SYN retransmissions, each a prerouting id with no guard-table verdict
+        # and a separate forward id dropped by to_vm_refused. The guard's own
+        # traversal is the evidence; an id spanning hooks would read every packet
+        # twice — once with no verdict at all — and refuse every refusal.
+        captured = (ROOT / "scripts/env-vm-guard-nft116-trace.txt").read_text()
+        packets = guard.traced(captured)
+        self.assertEqual(len(packets), 10)
+        guard_ids = [p for p in packets.values() if p["verdicts"]]
+        self.assertEqual(len(guard_ids), 5)
+        self.assertTrue(all(p["verdicts"] == [("to_vm_refused", "drop")] for p in guard_ids))
+        self.assertTrue(all(p["iif"] == "envapp-dev" for p in guard_ids))
+        self.assertTrue(any(not p["verdicts"] for p in packets.values()))
+
     def test_environment_names_fit_the_interface_limit(self):
         for name, ok in (("dev", True), ("a", True), ("release", True), ("abcdefgh", True),
                          ("abcdefghi", False), ("Dev", False), ("9dev", False), ("de v", False), ("", False),
@@ -682,6 +697,11 @@ class Host:
         trace = [] if self.monitors and not self.no_trace else None
         if evaluate(self.tables, "prerouting", pkt, trace) == "drop":
             return False
+        # nft assigns a NEW trace id per hook traversal (captured live on nft 1.1.6,
+        # scripts/env-vm-guard-nft116-trace.txt): the forward id differs from the
+        # prerouting id, so a per-id grouping that spans hooks reads every packet
+        # twice — once with no verdict at all.
+        pkt = dict(pkt, id="%x" % next(self.trace_ids))
         verdict = evaluate(self.tables, hook, pkt, trace)
         for line in trace or []:
             if " inet %s " % guard.TABLE in line:
@@ -2235,9 +2255,9 @@ MUTATIONS = {
     "unit-gains-execstop": ("RemainAfterExit=yes\n", "RemainAfterExit=yes\nExecStop=/usr/sbin/nft delete table inet env_vm_guard\n"),
     "unit-not-isolated": ("ExecStart=/usr/bin/python3 -I /usr/local", "ExecStart=/usr/bin/python3 /usr/local"),
     # §11.1 bullet 9: timeout without its counter rise, untraced rise, ECONNREFUSED or a local error, past the bound; the stand-in's key.
-    "smoke-timeout-without-counter": ('    require(delta == len(packets), label + ": counter change differs from the traced packets")', "    pass"),
-    "smoke-untraced-rise": ('    require(bool(packets) and all(p["verdicts"] == [(counter, "drop")] for p in packets.values()),', "    require(True,"),
-    "smoke-any-ingress": ('    require(all(p["iif"] == ingress for p in packets.values()), label + ": packets did not arrive where sent")', "    pass"),
+    "smoke-timeout-without-counter": ('    require(delta == len(guard), label + ": counter change differs from the traced packets")', "    pass"),
+    "smoke-untraced-rise": ('    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),', "    require(True,"),
+    "smoke-any-ingress": ('    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")', "    pass"),
     "smoke-econnrefused-is-refusal": ('    require(outcome != "REFUSED", label + ": answered with a reset, so the packet arrived")', "    pass"),
     "smoke-local-error-is-refusal": ('    require(outcome in ("TIMEOUT", "UNDELIVERED", "SENT"), label + ": local error or unknown outcome (inconclusive)")', "    pass"),
     "smoke-connect-not-stopped": ('    if outcome == "CONNECTED":\n', "    if False:\n"),
@@ -2262,7 +2282,7 @@ MUTATIONS = {
     "probe-1-counter-unchecked": ('        require(packet_counts()[allow] > before, "probe 1: the allow counter did not rise")', "        pass"),
     # The rest of section 6.
     "probe-8c-delivery-unchecked": ('        require(outcome == "UNDELIVERED", "8c: a spoofed datagram was delivered to the host")', "        pass"),
-    "probe-8c-always-nic": ("        if not packets and delta == 0:", "        if True:"),
+    "probe-8c-always-nic": ("        if not guard and delta == 0:", "        if True:"),
     "probe-8b-delivery-ignored": ('                except ConnectionRefusedError:\n                    return "DELIVERED"', '                except ConnectionRefusedError:\n                    return "UNDELIVERED"'),
     "probe-10-no-positive-control": ('        require(host_reaches(probes["publicAddress"], probes["publicPort"]),', "        require(True,"),
     "probe-8-no-listener-check": ('        require(listens(config["probes"]["hostPort"], bool(shared["link_local"])),', "        require(True,"),
@@ -2337,6 +2357,17 @@ MUTATIONS = {
         '}\nKEYS = {json.dumps(value, sort_keys=True): key for key, value in LEFT.items()}'),
     "readback-ignores-objects": ('        else:\n            result["other"].append(kind)\n    result["counters"].sort()', '        else:\n            pass\n    result["counters"].sort()'),
     "readback-ignores-rule-comment": ('        if body.get("comment") is not None and kind != "table":\n            result["other"].append(kind)', '        if False:\n            result["other"].append(kind)'),
+    # W9: nft 1.1.6 assigns a new trace id per hook traversal (captured live in
+    # scripts/env-vm-guard-nft116-trace.txt); grouping the smoke's evidence by
+    # trace id instead of by guard traversal reads every packet twice — once
+    # with no verdict at all — and refuses every refusal.
+    "smoke-trace-groups-by-trace-id": (
+        '    guard = [p for p in packets.values() if p["verdicts"]]\n'
+        '    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),\n'
+        '            label + ": not every packet was traced to its own rule\'s drop")\n'
+        '    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")\n'
+        '    require(delta == len(guard), label + ": counter change differs from the traced packets")',
+        '    guard = list(packets.values())'),
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),

@@ -265,8 +265,6 @@ client<llm> LargeQwenThink {
   options {
     base_url env.LARGE_LLM_BASE_URL
     api_key env.LARGE_LLM_API_KEY
-    base_url env.LARGE_LLM_BASE_URL
-    api_key env.LARGE_LLM_API_KEY
     model env.LARGE_LLM_MODEL
     chat_template_kwargs {
       enable_thinking true

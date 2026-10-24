@@ -57,9 +57,10 @@ import {
   clientOverrideFor,
   limitsFor,
   maxOutputTokensFor,
+  privateInferenceOnly,
+  selfDeployedNonThinkingClientFor,
   THINKING_CLIENTS,
   THINKING_FUNCTIONS_BY_CLIENT,
-  SELF_DEPLOYED_CLIENT_BY_ROLE,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
@@ -1169,29 +1170,206 @@ export function createLoopControllerAdapter(
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
-    const baseOpts = { ...clientOverrideFor('controller'), collector }
+    //
+    // REASONING TWIN: when the resolved override names a thinking leaf (the
+    // `controller` pattern reasoning-configured on the private tier —
+    // `PRIVATE_REASONING_ROLES`), the call goes to `ControllerThinking`, the
+    // planner twin's Q7 shape: the trace comes from the response's separate
+    // reasoning field, an inline think-close in `content` is REFUSED loudly,
+    // and the one corrective retry falls back to the non-thinking function on
+    // the SAME route (the transport-equality check proves it). Mirrors
+    // `createPlannerAdapter` below — read its branch for the full rationale.
+    const override = clientOverrideFor('controller')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'ControllerThinking' : 'LoopController'
+    const baseOpts = { ...override, collector }
+    const selectedCall = (source = collector) => {
+      const calls = (source.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
     let action: ControllerAction
     try {
-      action = await b.LoopController(
-        input.userMessage,
-        input.intent,
-        tools,
-        turns,
-        context,
-        priorResults,
-        fewShots,
-        input.multiCallMode,
-        input.planContext,
-        input.returnStyle,
-        baseOpts,
-      )
+      if (requestedThinking) {
+        const answer = await b.ControllerThinking(
+          input.userMessage,
+          input.intent,
+          tools,
+          turns,
+          context,
+          priorResults,
+          fewShots,
+          input.multiCallMode,
+          input.planContext,
+          input.returnStyle,
+          baseOpts,
+        )
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
+          throw new Error('ControllerThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by Q7.
+          throw new Error(
+            'ControllerThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          )
+        }
+        const trace = thinkingFrom(selectedCall())
+        // The trace IS the action's reasoning (the twin's envelope omits the
+        // field so the model never duplicates its thinking in content). Same
+        // restore rule as the planner twin.
+        action = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
+      } else {
+        action = await b.LoopController(
+          input.userMessage,
+          input.intent,
+          tools,
+          turns,
+          context,
+          priorResults,
+          fewShots,
+          input.multiCallMode,
+          input.planContext,
+          input.returnStyle,
+          baseOpts,
+        )
+      }
+      const llmCall = extractLLMCallData(collector, functionName, variables, startTime, action)
+      return { action, llmCall }
     } catch (e) {
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinkingFrom(selected)
+        if (trace.kind === 'trace' && error.llmCall) {
+          error.llmCall.parsedOutput = {
+            ...(error.llmCall.parsedOutput as object),
+            reasoning: trace.text,
+          }
+        }
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as an executable action.
+        try {
+          const tail = b.parse.ControllerThinking(split.tail) as unknown as Record<string, unknown>
+          if (error.llmCall) {
+            error.llmCall.parsedOutput = { ...(error.llmCall.parsedOutput as object), ...tail }
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'ControllerThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          error.llmCall,
+          e,
+        )
+      }
+      const noAnswer = e instanceof BamlValidationError && collectorReturnedNoText(collector)
+      // The retry is gated on REQUESTED thinking, not on the leaf the collector
+      // happened to select: a thinking leaf reached through a hidden registry
+      // chain is a policy violation (planParseRetry refuses it too), never a
+      // legitimate twin attempt owed a corrective retry.
+      if (
+        requestedThinking &&
+        (noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))
+      ) {
+        // ONE corrective retry, on the NON-thinking twin of the SAME route —
+        // same box and credentials on the modal route, same OpenRouter
+        // endpoint and model on the OR one. Never the original's Anthropic
+        // default; no public fallback; no further corrective retry here.
+        const retryClient = selfDeployedNonThinkingClientFor('controller')
+        if (!retryClient) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const retryCollector = new Collector('LoopController')
+        try {
+          const retryOpts = { ...override, collector: retryCollector, client: retryClient }
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          // SKIPPED under a private-only deployment: the pre-check renders
+          // through `b.request`, which the private-only guard refuses outright —
+          // and it is redundant there, because the seam has already refused any
+          // bag carrying a registry or env, so no third party could have
+          // redefined the transport between the two attempts.
+          if (!privateInferenceOnly()) {
+            const retryRequest = await b.request.LoopController(
+              input.userMessage,
+              input.intent,
+              tools,
+              turns,
+              context,
+              priorResults,
+              fewShots,
+              input.multiCallMode,
+              input.planContext,
+              input.returnStyle,
+              retryOpts,
+            )
+            const transport = (request: HTTPRequest | null | undefined) => {
+              if (!request) throw new Error('Controller retry cannot establish the same transport')
+              return JSON.stringify({
+                url: request.url,
+                method: request.method,
+                headers: Object.entries(request.headers)
+                  .map(([key, value]) => [key.toLowerCase(), value])
+                  .sort(([a], [b]) => a.localeCompare(b)),
+                model: (request.body.json() as { model?: string }).model,
+              })
+            }
+            if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+              throw new Error(
+                'Controller retry requires the same transport (endpoint, credentials and model)',
+              )
+            }
+          }
+          action = await b.LoopController(
+            input.userMessage,
+            input.intent,
+            tools,
+            turns,
+            context,
+            priorResults,
+            fewShots,
+            input.multiCallMode,
+            input.planContext,
+            input.returnStyle,
+            retryOpts,
+          )
+          if (selectedCall(retryCollector)?.clientName !== retryClient) {
+            throw new Error('Controller retry did not select the original private-tier client')
+          }
+          const llmCall = extractLLMCallData(
+            retryCollector,
+            'LoopController',
+            variables,
+            startTime,
+            action,
+          )
+          return { action, llmCall }
+        } catch (retryError) {
+          throw wrapAsLLMCallError(
+            retryError,
+            'LoopController',
+            variables,
+            startTime,
+            retryCollector,
+          )
+        }
+      }
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
       // response at all — not because the model can't do structured output.
       // ONE retry, guidance appended to `context` only when there is something
-      // to correct (per-call, transient); a second failure throws.
-      const plan = planParseRetry(e, collector, 'LoopController')
+      // to correct (per-call, transient); a second failure throws. In thinking
+      // mode this path is terminal (mirrors the planner: no guidance retry on
+      // a thinking attempt that parsed but mis-shaped).
+      const plan = requestedThinking ? null : planParseRetry(e, collector, 'LoopController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1222,11 +1400,14 @@ export function createLoopControllerAdapter(
           throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
         }
       }
-      throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
+      throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
     }
 
-    // Extract LLM call data if collector present
-    const llmCall = extractLLMCallData(collector, 'LoopController', variables, startTime, action)
+    // Extract LLM call data if collector present — OUTSIDE the catch, exactly
+    // where it always was: the leaf policy (`selected a thinking leaf`) is a
+    // TERMINAL refusal, and keeping it out of the catch is what keeps it out
+    // of every retry branch inside the try.
+    const llmCall = extractLLMCallData(collector, functionName, variables, startTime, action)
 
     return { action, llmCall }
   }
@@ -1432,34 +1613,45 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         onRetry?.(failedCall)
         const retryCollector = new Collector('Planner')
         try {
-          // SAME box and credentials. Never the original's Anthropic default;
-          // no public fallback, and no further corrective retry in this branch.
-          const retryClient = SELF_DEPLOYED_CLIENT_BY_ROLE.planner
+          // SAME box and route. Never the original's Anthropic default; no
+          // public fallback, and no further corrective retry in this branch.
+          // Route-resolved: `LargeQwenOR` on the OpenRouter route, `LargeQwen`
+          // on the box — the transport check below proves the two attempts
+          // name the same endpoint and model either way.
+          const retryClient = selfDeployedNonThinkingClientFor('planner')
+          if (!retryClient) throw new Error('Planner retry cannot resolve the private-tier client')
           const retryOpts = { ...override, collector: retryCollector, client: retryClient }
-          const retryRequest = await b.request.Planner(
-            user_message,
-            intent,
-            tools,
-            context,
-            retryOpts,
-          )
           // Compare actual rendered transport to the thinking attempt BEFORE
           // sending. A registry may redefine either name, including credentials.
-          const transport = (request: HTTPRequest | null | undefined) => {
-            if (!request) throw new Error('Planner retry cannot establish the same transport')
-            return JSON.stringify({
-              url: request.url,
-              method: request.method,
-              headers: Object.entries(request.headers)
-                .map(([key, value]) => [key.toLowerCase(), value])
-                .sort(([a], [b]) => a.localeCompare(b)),
-              model: (request.body.json() as { model?: string }).model,
-            })
-          }
-          if (transport(selected?.httpRequest) !== transport(retryRequest)) {
-            throw new Error(
-              'Planner retry requires the same transport (endpoint, credentials and model)',
+          // SKIPPED under a private-only deployment: the pre-check renders
+          // through `b.request`, which the private-only guard refuses outright —
+          // and it is redundant there, because the seam has already refused any
+          // bag carrying a registry or env, so no third party could have
+          // redefined the transport between the two attempts.
+          if (!privateInferenceOnly()) {
+            const retryRequest = await b.request.Planner(
+              user_message,
+              intent,
+              tools,
+              context,
+              retryOpts,
             )
+            const transport = (request: HTTPRequest | null | undefined) => {
+              if (!request) throw new Error('Planner retry cannot establish the same transport')
+              return JSON.stringify({
+                url: request.url,
+                method: request.method,
+                headers: Object.entries(request.headers)
+                  .map(([key, value]) => [key.toLowerCase(), value])
+                  .sort(([a], [b]) => a.localeCompare(b)),
+                model: (request.body.json() as { model?: string }).model,
+              })
+            }
+            if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+              throw new Error(
+                'Planner retry requires the same transport (endpoint, credentials and model)',
+              )
+            }
           }
           plan = await b.Planner(user_message, intent, tools, context, retryOpts)
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
@@ -1805,17 +1997,89 @@ export function createCriticAdapter(): CriticAdapterFn {
     // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
     // declares `CriticAnthropic`, overridden onto the self-hosted deployment
     // when `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `critic` role.
-    const criticOpts = { ...clientOverrideFor('critic'), collector }
+    //
+    // REASONING TWIN: when the resolved override names a thinking leaf (the
+    // `critic` pattern reasoning-configured on the private tier), the call
+    // goes to `CriticThinking` — the Q7 shape, mirroring the planner and
+    // controller twins: the trace comes from the response's separate reasoning
+    // field, an inline think-close in `content` is REFUSED loudly, and the
+    // trace (which `CriticResult` has no field for) rides the call record's
+    // `parsedOutput` for observability — the same place the planner's failure
+    // path records a retained trace. The critic has NO corrective retry on
+    // either branch today; that semantics is preserved here, not invented.
+    const override = clientOverrideFor('critic')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'CriticThinking' : 'Critic'
+    const criticOpts = { ...override, collector }
+    const selectedCall = () => {
+      const calls = (collector.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
     let result: CriticResult
     try {
-      result = await b.Critic(intent, attempts, criticOpts)
+      if (requestedThinking) {
+        result = await b.CriticThinking(intent, attempts, criticOpts)
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
+          throw new Error('CriticThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by Q7.
+          throw new Error(
+            'CriticThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          )
+        }
+      } else {
+        result = await b.Critic(intent, attempts, criticOpts)
+      }
     } catch (e) {
-      throw wrapAsLLMCallError(e, 'Critic', variables, startTime, collector)
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinkingFrom(selected)
+        if (trace.kind === 'trace' && error.llmCall) {
+          error.llmCall.parsedOutput = {
+            ...(error.llmCall.parsedOutput as object),
+            reasoning: trace.text,
+          }
+        }
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as a verdict.
+        try {
+          const tail = b.parse.CriticThinking(split.tail) as unknown as Record<string, unknown>
+          if (error.llmCall) {
+            error.llmCall.parsedOutput = { ...(error.llmCall.parsedOutput as object), ...tail }
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'CriticThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          error.llmCall,
+          e,
+        )
+      }
+      throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
     }
 
-    // Extract LLM call data if collector present
-    const llmCall = extractLLMCallData(collector, 'Critic', variables, startTime, result)
-
+    // Extract LLM call data if collector present — outside the catch, so the
+    // leaf policy stays a terminal refusal unreachable from any retry logic
+    // (the critic has none, but the invariant is the seam's, not the caller's).
+    const llmCall = extractLLMCallData(collector, functionName, variables, startTime, result)
+    if (requestedThinking) {
+      const trace = thinkingFrom(selectedCall())
+      if (trace.kind === 'trace' && llmCall) {
+        llmCall.parsedOutput = { ...(llmCall.parsedOutput as object), reasoning: trace.text }
+      }
+    }
     return { result, llmCall }
   }
 }

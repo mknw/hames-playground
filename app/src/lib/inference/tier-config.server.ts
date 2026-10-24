@@ -1,7 +1,11 @@
 /** Synchronous, I/O-free tier configuration. Boot can validate a restricted
  * deployment without registering routing policy or activating the default tier.
  */
-import { inferenceEnv, applyLegacyInferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
+import {
+  inferenceEnv,
+  applyLegacyInferenceEnv,
+  assertLargeLlmRouteConfigured,
+} from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { embeddingProviderPassesEgress } from '@hames-ai/harness-patterns/stash/embeddings.server'
 import { parseDecisionsUrl } from '@hames-ai/harness-baml/jev-decide.server'
@@ -70,6 +74,11 @@ export function assertLargeModelConfigured(): void {
         'so a root URL makes every call 404 on `<root>/chat/completions`.',
     )
   }
+  // The route switch has its own requirement: the OpenRouter route refuses the
+  // DEFAULT model id (the vLLM deployment's HF path, which OpenRouter 400s),
+  // so an explicit LARGE_LLM_MODEL is demanded at boot, not discovered on the
+  // first call.
+  assertLargeLlmRouteConfigured()
 }
 
 /**

@@ -93,7 +93,13 @@ export const hostInferencePolicy: InferenceTierPolicy = {
     // PrivateSystemOne keeps its separate readout and existing notice
     // policy: this change enrolls describe, not every client sharing its host.
     // Changing the decide transport or its failure policy is a separate change.
-    if (client === LARGE_LLM_CLIENT_NAME) noteBoxCallStarting('large')
+    // The THINK twin is the same box on the modal route, so a reasoning-
+    // configured turn owes the same notice; on the OpenRouter route the
+    // resolved name is `LargeQwenThinkOR`, which matches nothing here — there
+    // is no box to warm.
+    if (client === LARGE_LLM_CLIENT_NAME || client === 'LargeQwenThink') {
+      noteBoxCallStarting('large')
+    }
     if (client === SELF_DEPLOYED_CLIENT_BY_ROLE.describe) noteBoxCallStarting('small')
   },
 }

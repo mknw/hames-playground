@@ -203,6 +203,11 @@ Scripts: `scripts/sandbox-vm-survey.sh` · `scripts/sandbox-vm-spike.sh` ([neste
 
 ## Environment Variables
 
+The whole configuration surface — every variable an operator can set, with
+defaults, applicable providers and the failure mode when unset or wrong — is
+now one page: **[CONFIG.md](CONFIG.md)**. The table below keeps the
+most-reached variables; `app/.env.example` stays the operator checklist.
+
 | Variable                                              | Purpose                                                                                                                                                                                  |
 | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENROUTER_API_KEY`                                  | Unused: boot refuses its `openrouter` embedding provider; no BAML chain uses it, nor does the decide transport (`JEV_DECISIONS_API_KEY`)                                                 |

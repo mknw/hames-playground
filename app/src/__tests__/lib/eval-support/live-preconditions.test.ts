@@ -64,22 +64,24 @@ describe('private eval live preconditions', () => {
   // negative half is what makes the test discriminating: the same snapshot with
   // a non-OpenRouter large host passes WITHOUT the model id, so breaking the
   // guard (dropping the host check, or requiring the var unconditionally) goes red.
-  it.each([undefined, '', '   '])(
-    'refuses OpenRouter large endpoint with model id %j',
-    (modelId) => {
-      expect(() =>
-        assertLivePreconditions({
-          ...env,
-          LARGE_LLM_BASE_URL: 'https://openrouter.ai/v1',
-          LARGE_LLM_MODEL: modelId,
-        }),
-      ).toThrow(
-        'Live precondition: LARGE_LLM_MODEL is required when LARGE_LLM_BASE_URL points at OpenRouter',
-      )
-    },
-  )
-  it('does not require LARGE_LLM_MODEL when the large endpoint is not OpenRouter', () => {
+  it.each([undefined, '', '   '])('refuses the OpenRouter route with model id %j', (modelId) => {
+    expect(() =>
+      assertLivePreconditions({
+        ...env,
+        LARGE_LLM_ROUTE: 'openrouter',
+        LARGE_LLM_MODEL: modelId,
+      }),
+    ).toThrow('Live precondition: LARGE_LLM_MODEL is required when LARGE_LLM_ROUTE is openrouter')
+  })
+  it('does not require LARGE_LLM_MODEL when the route is not openrouter', () => {
     expect(() => assertLivePreconditions({ ...env, LARGE_LLM_MODEL: undefined })).not.toThrow()
+    expect(() =>
+      assertLivePreconditions({
+        ...env,
+        LARGE_LLM_ROUTE: 'modal',
+        LARGE_LLM_MODEL: undefined,
+      }),
+    ).not.toThrow()
   })
   it('refuses another embedding endpoint', () => {
     expect(() =>

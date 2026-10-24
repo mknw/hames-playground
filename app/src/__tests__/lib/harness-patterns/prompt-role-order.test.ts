@@ -217,6 +217,10 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   ],
   ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, o)],
   [
+    'CriticThinking',
+    (o) => () => b.request.CriticThinking('i', ATTEMPTS, { ...o, client: 'LargeQwenThink' }),
+  ],
+  [
     'Synthesize',
     (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, o),
   ],
@@ -228,6 +232,23 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         ...o,
         client: 'LargeQwenThink',
       }),
+  ],
+  [
+    'ControllerThinking',
+    (o) => () =>
+      b.request.ControllerThinking(
+        'q',
+        'i',
+        TOOLS,
+        TURNS,
+        'CONTEXT BLOCK',
+        PRIOR,
+        FEW_SHOTS,
+        'parallel',
+        'PLAN',
+        'answer',
+        { ...o, client: 'LargeQwenThink' },
+      ),
   ],
   ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],
   ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],

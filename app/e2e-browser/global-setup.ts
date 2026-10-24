@@ -177,6 +177,18 @@ export function browserServerEnv(
     // what makes it the default tier for a user who has never chosen.
     LARGE_LLM_BASE_URL: backend.llm.baseUrl,
     LARGE_LLM_API_KEY: 'e2e-browser-fake-key',
+    // The 27B route and reasoning switches are HERMETIC here, explicitly: the
+    // fake answers the box's wire shape, so the OpenRouter route (OR twins,
+    // native reasoning object) and a reasoning-configured pattern (the think
+    // twins) would change what the scenarios assert. Empty values are the
+    // documented "off" — and explicit child env wins over vinxi's dotenv
+    // load, so a developer's local flip (the .env a real deployment runs)
+    // cannot leak into this layer. Same reason `LARGE_LLM_MODEL` is pinned to
+    // empty: the boot normalization applies the DEFAULT id, which is what the
+    // fake's model assertions expect.
+    LARGE_LLM_ROUTE: '',
+    PRIVATE_REASONING_ROLES: '',
+    LARGE_LLM_MODEL: '',
     // The private tier's SECOND model (2026-08-26): `describe` runs on the 4B
     // `SmallQwen` over this var, and `selfDeployedConfigured()` asks about BOTH
     // endpoints — so without this line the switch renders its private

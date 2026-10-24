@@ -235,8 +235,18 @@ describe('private-tier request bodies', () => {
     // routed function rather than excluded).
     const { TIER_SWITCHED_FUNCTIONS } = await import('@hames-ai/harness-baml/clients.server')
     expect(CALLS.map(([name]) => name).sort()).toEqual(
-      // The dormant twin is pinned separately in planner-thinking-render.test.ts.
-      [...TIER_SWITCHED_FUNCTIONS].filter((n) => n !== 'Decide' && n !== 'PlannerThinking').sort(),
+      // The reasoning twins are pinned separately in planner-thinking-render.test.ts
+      // and openrouter-route-body-shape.test.ts — they render on the thinking
+      // leaves, not on the tier's non-thinking clients.
+      [...TIER_SWITCHED_FUNCTIONS]
+        .filter(
+          (n) =>
+            n !== 'Decide' &&
+            n !== 'PlannerThinking' &&
+            n !== 'ControllerThinking' &&
+            n !== 'CriticThinking',
+        )
+        .sort(),
     )
     expect(CALLS.map(([name]) => name)).toContain('ScreenUntrustedContent')
   })

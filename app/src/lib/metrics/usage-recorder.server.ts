@@ -52,6 +52,7 @@ import {
   type LlmUsageSample,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { noteLargeCallCompleted, LARGE_LLM_CLIENT_NAME } from '../inference/large-activity.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { noteSmallCallCompleted, settleColdStart } from '../inference/cold-start.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
@@ -95,13 +96,17 @@ export function tierOfSample(sample: LlmUsageSample): InferenceTier {
 /** Fold one finished call into the pending deltas. Exported for the tests —
  *  the observer registration is what production calls. */
 export function recordSample(sample: LlmUsageSample, at: number = Date.now()): void {
-  // The 27B and its thinking twin, NOT every `PRIVATE_TIER_CLIENTS` member, are
+  // The 27B and its thinking twins, NOT every `PRIVATE_TIER_CLIENTS` member, are
   // claims about the 27B specifically — it is awake, and this is how long its
   // cold start took. A 4B describe call is evidence of neither; it has its own
   // clock below. Tier attribution alone cannot prove either box is warm.
+  // GATED ON THE ROUTE: on the OpenRouter route the 27B calls name the OR
+  // twins and no box served them — stamping a GPU's warm clock from a
+  // per-token API's answers would invent warmth (and a cold-start reading)
+  // for hardware that answered nothing.
   if (
-    sample.clientName === LARGE_LLM_CLIENT_NAME ||
-    THINKING_CLIENTS.has(sample.clientName ?? '')
+    !largeOnOpenRouter() &&
+    (sample.clientName === LARGE_LLM_CLIENT_NAME || THINKING_CLIENTS.has(sample.clientName ?? ''))
   ) {
     noteLargeCallCompleted(at)
     // If this turn announced a cold start, this is the call that paid it, and

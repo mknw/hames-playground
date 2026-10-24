@@ -306,6 +306,9 @@ describe('createPlannerAdapter', () => {
       })
       return { plan: '1. Search', n_steps: 1 }
     })
+    // The reasoning setting is config-derived and read per call; this test's
+    // per-run thinking override is legitimate only with the planner configured.
+    process.env.PRIVATE_REASONING_ROLES = 'planner'
     const failure = await withRunFrame(
       {
         inference: {
@@ -315,6 +318,7 @@ describe('createPlannerAdapter', () => {
       },
       () => createPlannerAdapter([])('msg', 'intent'),
     ).catch((error: unknown) => error)
+    delete process.env.PRIVATE_REASONING_ROLES
     expect(failure).toBeInstanceOf(LLMCallError)
     expect(failure).toMatchObject({
       message: 'PlannerThinking did not select a known thinking client',

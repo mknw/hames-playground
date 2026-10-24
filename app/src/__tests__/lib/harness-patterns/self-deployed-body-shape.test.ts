@@ -43,6 +43,7 @@
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import type { LoopTurn, ToolDescription } from '@hames-ai/harness-baml/baml_client/types'
+import { DEFAULT_LARGE_LLM_MODEL } from '@hames-ai/harness-baml/inference-env.server'
 
 // This file renders requests in a jsdom environment; `clients.server.ts` is
 // imported for its derived function set only, never to route anything.
@@ -54,6 +55,10 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 const ENV = {
   LARGE_LLM_BASE_URL: 'https://example.invalid/deployment/v1',
   LARGE_LLM_API_KEY: 'offline-render-test',
+  // The model id the UNSET path puts on the wire: the default the boot
+  // normalization applies, imported — not restated — so a changed default is
+  // caught by the pins below rather than by a stale copy.
+  LARGE_LLM_MODEL: DEFAULT_LARGE_LLM_MODEL,
   SMALL_LLM_BASE_URL: 'https://example.invalid/small/v1',
   SMALL_LLM_API_KEY: 'offline-render-test',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
@@ -193,7 +198,7 @@ describe('private-tier request bodies', () => {
     const { SELF_DEPLOYED_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
       await import('@hames-ai/harness-baml/clients.server')
     const MODEL_OF: Record<string, string> = {
-      LargeQwen: 'Qwen/Qwen3.8-27B-FP8',
+      LargeQwen: DEFAULT_LARGE_LLM_MODEL,
       SmallQwen: 'qwen3.5-4b-instruct',
     }
     const expected = new Map<string, string>()
@@ -239,7 +244,13 @@ describe('private-tier request bodies', () => {
   it('names the served model id exactly', async () => {
     const body = (await CALLS[0][1]()).body.json() as Body
     // `GET /v1/models` reports one model and vLLM 400s any other id.
+    // TWO pins now, because the id is env-overridable: the LITERAL (this
+    // line — the DEFAULT path must fail here, not merely pass, if the default
+    // changes) and the constant the default is held in. The render resolves
+    // `env.LARGE_LLM_MODEL` through the bag's DEFAULT, so a drifted default
+    // fails the literal below rather than pinning itself.
     expect(body.model).toBe('Qwen/Qwen3.8-27B-FP8')
+    expect(DEFAULT_LARGE_LLM_MODEL).toBe('Qwen/Qwen3.8-27B-FP8')
     const { CLIENT_MAX_OUTPUT_TOKENS } = await import('../../../lib/settings')
     expect(body.max_tokens).toBe(CLIENT_MAX_OUTPUT_TOKENS.LargeQwen)
   })

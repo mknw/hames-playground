@@ -17,10 +17,11 @@
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { BamlRuntime, BamlCtxManager } from '@boundaryml/baml'
 import { BamlAsyncClient } from '@hames-ai/harness-baml/baml_client/async_client'
 import { getBamlFiles } from '@hames-ai/harness-baml/baml_client/inlinedbaml'
+import { DEFAULT_LARGE_LLM_MODEL } from '@hames-ai/harness-baml/inference-env.server'
 import type {
   Attempt,
   FewShot,
@@ -28,10 +29,21 @@ import type {
   ToolDescription,
 } from '@hames-ai/harness-baml/baml_client/types'
 
+// This file renders requests in a jsdom environment and imports the default
+// model constant from a server-only module; the assert is mocked the same way
+// `self-deployed-body-shape.test.ts` mocks it. The golden bodies pin the
+// DEFAULT path, so the render resolves the default constant — imported, never
+// restated: a changed default fails the golden bytes, which is the point.
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
+  assertServerOnImport: vi.fn(),
+  assertServer: vi.fn(),
+}))
+
 const ENV = {
   ANTHROPIC_API_KEY: 'offline-render-test',
   LARGE_LLM_BASE_URL: 'https://example.invalid/v1',
   LARGE_LLM_API_KEY: 'offline-render-test',
+  LARGE_LLM_MODEL: DEFAULT_LARGE_LLM_MODEL,
 }
 
 let b: typeof import('@hames-ai/harness-baml/baml_client').b

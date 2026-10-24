@@ -39,7 +39,7 @@
  * Restarting the app also resets the clock to "cold" while the box may still be
  * warm — same direction, same reasoning.
  */
-import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
+import { inferenceEnv, DEFAULT_LARGE_LLM_MODEL } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
@@ -48,18 +48,23 @@ assertServerOnImport()
 export const LARGE_LLM_CLIENT_NAME = 'LargeQwen'
 
 /**
- * The model id the deployment serves, copied from the `model` line on
- * `LargeQwen` in `baml_src/large-client.baml`.
+ * The DEFAULT model id the deployment serves — the value `LARGE_LLM_MODEL`
+ * takes when the env var is unset, held in ONE place
+ * (`@hames-ai/harness-baml/inference-env.server.ts`, which feeds BAML's
+ * `env.LARGE_LLM_MODEL` reference and applies the default at the routing
+ * seam's module load) and re-exported here under the name the wake tests pin
+ * against.
  *
- * A COPY, and the copy is the smaller evil. It exists for the wake ping
- * (`wake.server.ts`), which is a hand-rolled `fetch` rather than a BAML call —
- * it has to name a model, vLLM 400s any other id, and BAML exports nothing that
- * would let this be read from the declaration. `large-wake.test.ts` parses that
- * line out of the `.baml` file and pins it equal to this constant, so the
- * failure mode of a re-deployment under a new id is a red test rather than a
+ * The wake ping (`wake.server.ts`) resolves the EFFECTIVE id through
+ * `largeLlmModelId()` — env override first, this default second — because the
+ * wake is a hand-rolled `fetch` rather than a BAML call and has to name the
+ * same id the real call will. vLLM 400s any other id, and so does OpenRouter.
+ * `large-wake.test.ts` pins the `env.LARGE_LLM_MODEL` reference against the
+ * .baml declaration, and `self-deployed-body-shape.test.ts` pins this default
+ * value against the rendered wire body — so a changed default is red, not a
  * wake ping that 400s on every first turn of every session.
  */
-export const LARGE_LLM_MODEL_ID = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL_ID = DEFAULT_LARGE_LLM_MODEL
 
 /** Default scale-down delay, in seconds — the live deployment's setting. The
  *  committed default used to sit at 180 on the argument that a default tracking

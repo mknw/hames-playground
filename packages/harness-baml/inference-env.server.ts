@@ -5,6 +5,26 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 
 assertServerOnImport()
 
+/** The env var `LargeQwen` (and its thinking twin) read their model id from —
+ *  the `env.X` reference on the `model` line in `baml_src/large-client.baml`.
+ *  Overridable so a deployment change is an env edit; the DEFAULT below is
+ *  what keeps the unset path byte-identical to the literal that was pinned in
+ *  the .baml file. */
+export const LARGE_LLM_MODEL_ENV = 'LARGE_LLM_MODEL'
+
+/** The default model id: the Modal deployment's served id, the literal that
+ *  `baml_src/large-client.baml` carried before the id became env-overridable.
+ *  `self-deployed-body-shape.test.ts` pins BOTH the constant and the rendered
+ *  body, so a changed default is red, not silent. */
+export const DEFAULT_LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+
+/** The model id a LargeQwen call puts on the wire: the env override when set
+ *  and non-empty, else the default. The one reader for the wake ping and the
+ *  eval-only OpenRouter registry, so no second copy of the resolution exists. */
+export function largeLlmModelId(): string {
+  return inferenceEnv(LARGE_LLM_MODEL_ENV) || DEFAULT_LARGE_LLM_MODEL
+}
+
 export const LEGACY_INFERENCE_ENV = {
   USE_SELF_DEPLOYED_INFERENCE: 'USE_VERDA_INFERENCE',
   LARGE_LLM_BASE_URL: 'VERDA_INFERENCE_ENDPOINT',
@@ -43,7 +63,16 @@ export function inferenceEnv(name: string): string | undefined {
   return useLegacy ? process.env[oldName] : canonical
 }
 
-/** Boot normalization also feeds generated BAML's env.* references. No I/O. */
+/** Boot normalization also feeds generated BAML's env.* references. No I/O.
+ *
+ *  Besides the legacy-name migration it ALSO applies the LargeQwen model-id
+ *  DEFAULT: the .baml declaration reads `env.LARGE_LLM_MODEL`, and BAML
+ *  substitutes unset references as a literal `$NAME` placeholder rather than
+ *  erroring, so a process that never normalizes would put that placeholder on
+ *  the wire. Setting the default here — the module every routing path imports
+ *  first — is what makes the unset path byte-identical to the pinned literal.
+ *  An empty value is treated as unset: no endpoint serves an empty model id,
+ *  so an operator clearing the var means "back to the default", not garbage. */
 export function applyLegacyInferenceEnv(): void {
   // Resolve every name before assigning any: an assignment would make the pair look migrated.
   const resolved = Object.keys(LEGACY_INFERENCE_ENV).map(
@@ -52,6 +81,7 @@ export function applyLegacyInferenceEnv(): void {
   for (const [name, value] of resolved) {
     if (process.env[name] === undefined && value !== undefined) process.env[name] = value
   }
+  if (!process.env[LARGE_LLM_MODEL_ENV]) process.env[LARGE_LLM_MODEL_ENV] = DEFAULT_LARGE_LLM_MODEL
   if (process.env.INFERENCE_TIERS === 'private') {
     warn('INFERENCE_TIERS=private', 'INFERENCE_TIERS=self_deployed', false)
   }

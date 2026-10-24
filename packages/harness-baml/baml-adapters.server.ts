@@ -403,13 +403,19 @@ type CollectorCall = {
 
 /** Provider-side usage from a call's raw HTTP response. Needed because the
  *  Collector's Usage has no cache-WRITE bucket (only read); Anthropic reports
- *  `cache_creation_input_tokens` only in the response body. Best-effort. */
+ *  `cache_creation_input_tokens` only in the response body. Best-effort.
+ *
+ *  `cost` is the PROVIDER-REPORTED call cost in USD (the fourth basis's input;
+ *  OpenRouter reports it as `usage.cost` per call, alongside `cost_details`).
+ *  Read for every attempt but consumed only by clients in PROVIDER_COST_CLIENTS —
+ *  passing it to the estimator for any other client changes nothing. */
 function usageFromResponse(call: CollectorCall | undefined):
   | {
       input_tokens?: number
       output_tokens?: number
       cache_read_input_tokens?: number
       cache_creation_input_tokens?: number
+      cost?: number
     }
   | undefined {
   try {
@@ -420,6 +426,7 @@ function usageFromResponse(call: CollectorCall | undefined):
             output_tokens?: number
             cache_read_input_tokens?: number
             cache_creation_input_tokens?: number
+            cost?: number
           }
         }
       | undefined
@@ -449,15 +456,14 @@ const NO_TOKEN_USAGE: TokenBuckets = {
 /** One call's token buckets: raw response usage first (has the cache-write
  *  bucket), Collector usage as fallback (write reads as 0). Undefined when
  *  the call never produced usage (pre-flight failures). */
-function callTokenBuckets(call: CollectorCall | undefined):
-  | {
-      inputUncachedTokens: number
-      inputCacheReadTokens: number
-      inputCacheWriteTokens: number
-      outputTokens: number
-    }
-  | undefined {
-  const raw = usageFromResponse(call)
+function callTokenBuckets(call: CollectorCall | undefined) {
+  return callTokenBucketsFromRaw(usageFromResponse(call), call)
+}
+
+function callTokenBucketsFromRaw(
+  raw: ReturnType<typeof usageFromResponse>,
+  call: CollectorCall | undefined,
+): TokenBuckets | undefined {
   if (raw && (raw.input_tokens != null || raw.output_tokens != null)) {
     return {
       inputUncachedTokens: raw.input_tokens ?? 0,
@@ -539,8 +545,10 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         call.clientName !== undefined && Object.hasOwn(timeRates, call.clientName)
           ? timeRates[call.clientName]
           : undefined
+      const raw = usageFromResponse(call)
       const buckets =
-        callTokenBuckets(call) ?? (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
+        callTokenBucketsFromRaw(raw, call) ??
+        (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
@@ -551,6 +559,11 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         durationMs: measuredDurationMs(call),
         eurPerUsd,
         eurPerHour,
+        // The provider's own bill for the call, USD — consumed only by a
+        // client in PROVIDER_COST_CLIENTS (the estimator ignores it
+        // otherwise). A provider-basis call without one prices as unknown,
+        // never as free.
+        providerCostUsd: raw?.cost,
       })
       if (est) {
         costEur += est.costEur

@@ -177,11 +177,20 @@ client<llm> LargeQwen {
     // without it every call 404s on `<root>/chat/completions`.
     base_url env.LARGE_LLM_BASE_URL
     api_key env.LARGE_LLM_API_KEY
-    // The id `GET /v1/models` reports, i.e. the HF path vLLM was started with
-    // (no `--served-model-name` override on this deployment). Read live on
-    // 2026-08-25 and pinned here; exactly one model is served, and vLLM 400s a
-    // request naming any other id.
-    model "Qwen/Qwen3.8-27B-FP8"
+    // The id the deployment serves. ENV-OVERRIDABLE at `LARGE_LLM_MODEL`, with
+    // the DEFAULT held in `inference-env.server.ts` (`DEFAULT_LARGE_LLM_MODEL`,
+    // 'Qwen/Qwen3.8-27B-FP8') and applied to `process.env` at this module's
+    // load — so with the var unset the wire is byte-identical to the literal
+    // that was pinned here, and a deployment change is an env edit, not a
+    // regenerate. The value is the id `GET /v1/models` reports: the HF path
+    // vLLM was started with (no `--served-model-name` override), read live on
+    // 2026-08-25; exactly one model is served, and vLLM 400s a request naming
+    // any other id. BAML substitutes `env.X` at call time — verified offline
+    // for this exact option: the rendered body AND the collector's httpRequest
+    // both carry the substituted value. `large-wake.test.ts` pins the env
+    // REFERENCE against this declaration; `self-deployed-body-shape.test.ts`
+    // pins the DEFAULT value the unset path puts on the wire.
+    model env.LARGE_LLM_MODEL
     // THINKING OFF, AND THIS IS NOT A TUNING KNOB. Qwen3.8 is a thinking
     // model: its chat template opens a reasoning block unless the template is
     // told not to, and this deployment runs vLLM with no reasoning parser, so
@@ -256,7 +265,7 @@ client<llm> LargeQwenThink {
   options {
     base_url env.LARGE_LLM_BASE_URL
     api_key env.LARGE_LLM_API_KEY
-    model "Qwen/Qwen3.8-27B-FP8"
+    model env.LARGE_LLM_MODEL
     chat_template_kwargs {
       enable_thinking true
     }

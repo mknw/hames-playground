@@ -57,6 +57,30 @@ describe('private eval live preconditions', () => {
   it.each(['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY'])('requires %s without echoing it', (name) => {
     expect(() => assertLivePreconditions({ ...env, [name]: '' })).toThrow(name)
   })
+  // Pins the fail-closed OpenRouter precondition (live-preconditions.ts, the
+  // LARGE_LLM_MODEL check): a live run with the large endpoint on OpenRouter and
+  // no explicit model id is refused here, before any call — the default model id
+  // names the vLLM deployment's HF path, which OpenRouter 400s mid-burst. The
+  // negative half is what makes the test discriminating: the same snapshot with
+  // a non-OpenRouter large host passes WITHOUT the model id, so breaking the
+  // guard (dropping the host check, or requiring the var unconditionally) goes red.
+  it.each([undefined, '', '   '])(
+    'refuses OpenRouter large endpoint with model id %j',
+    (modelId) => {
+      expect(() =>
+        assertLivePreconditions({
+          ...env,
+          LARGE_LLM_BASE_URL: 'https://openrouter.ai/v1',
+          LARGE_LLM_MODEL: modelId,
+        }),
+      ).toThrow(
+        'Live precondition: LARGE_LLM_MODEL is required when LARGE_LLM_BASE_URL points at OpenRouter',
+      )
+    },
+  )
+  it('does not require LARGE_LLM_MODEL when the large endpoint is not OpenRouter', () => {
+    expect(() => assertLivePreconditions({ ...env, LARGE_LLM_MODEL: undefined })).not.toThrow()
+  })
   it('refuses another embedding endpoint', () => {
     expect(() =>
       assertLivePreconditions({ ...env, EMBEDDINGS_LOCAL_URL: 'https://embed.example.invalid' }),

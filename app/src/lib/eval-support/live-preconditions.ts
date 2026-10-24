@@ -39,6 +39,23 @@ export function assertLivePreconditions(env: Record<string, string | undefined>)
     if (!env[name]?.trim())
       throw new Error(`Live precondition: ${name} is missing in app/.env; escalate`)
   }
+  // The OpenRouter eval switch: with the large endpoint on OpenRouter the
+  // served model id MUST be set explicitly. The default (`DEFAULT_LARGE_LLM_MODEL`)
+  // names the vLLM deployment's HF path, which OpenRouter 400s on every call —
+  // a failure the first turn would surface, mid-burst, instead of here. Read
+  // from the SNAPSHOT (the merged env may not be installed into process.env yet).
+  const largeHost = (() => {
+    try {
+      return new URL(env.LARGE_LLM_BASE_URL ?? '').hostname.replace(/\.$/, '')
+    } catch {
+      return ''
+    }
+  })()
+  const largeIsOpenRouter = largeHost === 'openrouter.ai' || largeHost.endsWith('.openrouter.ai')
+  if (largeIsOpenRouter && !env.LARGE_LLM_MODEL?.trim())
+    throw new Error(
+      'Live precondition: LARGE_LLM_MODEL is required when LARGE_LLM_BASE_URL points at OpenRouter',
+    )
   if (env.EMBEDDINGS_PROVIDER !== undefined && env.EMBEDDINGS_PROVIDER !== 'local')
     throw new Error('Live precondition: EMBEDDINGS_PROVIDER must be local or unset')
   if (

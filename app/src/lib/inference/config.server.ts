@@ -35,7 +35,6 @@ import { LARGE_LLM_CLIENT_NAME } from './large-activity.server'
 import { noteBoxCallStarting } from './cold-start.server'
 import {
   SELF_DEPLOYED_CLIENT_BY_ROLE,
-  THINKING_CLIENTS,
   configureCostPricing,
   configureCostRates,
   configureInferencePolicy,
@@ -105,13 +104,15 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 // The cost ESTIMATOR stays host-side (its CLIENT_PRICING table is app pricing
 // config beside the client-safe UI that renders it — SA-C2 family); the
 // package's `computeEventMetrics` calls it through the seam. The time-priced
-// client-to-rate mapping rides along: it is what makes a usage-less attempt on the
-// scale-to-zero box price as a floor instead of being dropped.
+// client-to-rate mapping rides along: it is what makes a usage-less attempt on a
+// metered box price as a floor instead of being dropped. The 27B leaves are
+// deliberately ABSENT — they are provider-priced off `usage.cost` since the
+// OpenRouter eval (see PROVIDER_COST_CLIENTS in settings.ts), so a usage-less
+// attempt on them has no provider-reported cost to price and correctly reads
+// as unknown rather than as a GPU-hour floor for a call the box never served.
 configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
-    [LARGE_LLM_CLIENT_NAME]: largeEurPerHour,
-    ...Object.fromEntries([...THINKING_CLIENTS].map((client) => [client, largeEurPerHour])),
     SmallQwen: smallLlmEurPerHour,
     PrivateSystemOne: smallLlmEurPerHour,
   },

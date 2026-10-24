@@ -237,23 +237,38 @@ describe('the configuration the host registers is the configuration the resoluti
     )
   })
 
-  it('prices both metered clients independently in the same step', async () => {
+  it('prices a step spanning the provider and time bases independently', async () => {
+    // Each attempt under its OWN client's basis: the 27B leaf off the
+    // provider-reported cost, the metered 4B off wall-clock. Pricing either
+    // by the other's model would bill one of the two wrong.
     await loadWired()
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { DEFAULT_EUR_PER_USD } = await import(SETTINGS)
     const collector = {
       logs: [
         {
-          calls: ['LargeQwen', 'SmallQwen'].map((clientName) => ({
-            clientName,
-            timing: { durationMs: 2_000 },
-          })),
+          calls: [
+            {
+              clientName: 'LargeQwen',
+              httpResponse: {
+                body: {
+                  json: () => ({ usage: { input_tokens: 10, output_tokens: 2, cost: 0.02 } }),
+                },
+              },
+              timing: { durationMs: 2_000 },
+            },
+            {
+              clientName: 'SmallQwen',
+              timing: { durationMs: 2_000 },
+            },
+          ],
         },
       ],
     }
     const measured = computeEventMetrics(collector as never)!
-    expect(measured.costEur).toBeCloseTo(((1.819 + 1.54) * 2) / 3600, 12)
-    expect(measured.timePricedAttempts).toBe(2)
-    expect(measured.timeRate?.durationMs).toBe(4_000)
+    expect(measured.costEur).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD + (1.54 * 2) / 3600, 12)
+    expect(measured.timePricedAttempts).toBe(1)
+    expect(measured.timeRate?.durationMs).toBe(2_000)
   })
 
   it('retains the published single-client pricing registration', async () => {
@@ -261,7 +276,10 @@ describe('the configuration the host registers is the configuration the resoluti
     const { estimateLlmCostEur } = await import(SETTINGS)
     clients.configureCostPricing({
       estimate: estimateLlmCostEur,
-      timePricedClient: 'LargeQwen',
+      // The deprecated compat form: ONE client, and its rate source is the
+      // large-box reader regardless of which client is named — its documented
+      // shape since the multi-client map arrived.
+      timePricedClient: 'SmallQwen',
     })
     process.env.LARGE_LLM_EUR_PER_HOUR = '4'
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
@@ -270,7 +288,7 @@ describe('the configuration the host registers is the configuration the resoluti
         {
           calls: [
             {
-              clientName: 'LargeQwen',
+              clientName: 'SmallQwen',
               timing: { durationMs: 2_000 },
             },
           ],

@@ -259,11 +259,14 @@ describe('what goes on the wire', () => {
   })
 
   it('pins the model id against the .baml declaration', async () => {
-    // `LARGE_LLM_MODEL_ID` is a COPY of the `model` line on `LargeQwen` — the ping is
-    // a hand-rolled fetch, so it has to name a model and BAML exports nothing to
-    // read it from. vLLM 400s an unknown id, so drift would break the FIRST call
-    // of every session and nothing else. This is the pin that makes the copy
-    // safe.
+    // The `model` line on `LargeQwen` is `env.LARGE_LLM_MODEL` — the id became
+    // env-overridable so the OpenRouter eval can move it — and the ping is a
+    // hand-rolled fetch that resolves the SAME variable through the SAME
+    // reader (`largeLlmModelId()`), so the pin is that the declaration still
+    // names the env reference. The DEFAULT VALUE the unset path puts on the
+    // wire is pinned in `self-deployed-body-shape.test.ts` (both the literal
+    // and the constant); vLLM 400s an unknown id, so drift in either half
+    // breaks the FIRST call of every session and nothing else.
     const declared = readFileSync(
       path.resolve(process.cwd(), '../packages/harness-baml/baml_src/large-client.baml'),
       'utf8',
@@ -271,7 +274,28 @@ describe('what goes on the wire', () => {
       .split('\n')
       .filter((line) => !line.trimStart().startsWith('//'))
       .join('\n')
-    expect(declared).toContain(`model "${LARGE_LLM_MODEL_ID}"`)
+    expect(declared).toContain('model env.LARGE_LLM_MODEL')
+    // And the reader the ping uses IS the variable the declaration reads —
+    // one name, two consumers, so an override reaches both or neither.
+    const { largeLlmModelId, LARGE_LLM_MODEL_ENV } =
+      await import('@hames-ai/harness-baml/inference-env.server')
+    expect(LARGE_LLM_MODEL_ENV).toBe('LARGE_LLM_MODEL')
+    expect(largeLlmModelId()).toBe(LARGE_LLM_MODEL_ID)
+  })
+
+  it('resolves the env override when the deployment serves another id', async () => {
+    // The env-overridable half of the model id: a deployment change is an env
+    // edit, and the wake must move with the calls it fronts — the ping 400s
+    // exactly as a real call would if it kept the old id.
+    const saved = process.env.LARGE_LLM_MODEL
+    process.env.LARGE_LLM_MODEL = 'qwen/qwen3.8-27b'
+    try {
+      const { largeLlmModelId } = await import('@hames-ai/harness-baml/inference-env.server')
+      expect(largeLlmModelId()).toBe('qwen/qwen3.8-27b')
+    } finally {
+      if (saved === undefined) delete process.env.LARGE_LLM_MODEL
+      else process.env.LARGE_LLM_MODEL = saved
+    }
   })
 })
 

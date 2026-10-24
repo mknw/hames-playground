@@ -223,7 +223,16 @@ LEFT = {
     "ct original ip daddr": {"ct": {"key": "daddr", "family": "ip", "dir": "original"}},
     "ct original proto-dst": {"ct": {"key": "proto-dst", "dir": "original"}},
 }
-KEYS = {json.dumps(value, sort_keys=True): key for key, value in LEFT.items()}
+# nft 1.1.6 folds a directional ct expression's protocol into its key and drops
+# the family field: captured live as {"ct": {"dir": "original", "key":
+# "ip daddr"}} (the readback that refused the W3 --apply). The older shape above
+# stays: the test's own serializer emits it, and so do other nft versions. Same
+# model key either way.
+FOLDED = {
+    "ct original ip saddr": {"ct": {"dir": "original", "key": "ip saddr"}},
+    "ct original ip daddr": {"ct": {"dir": "original", "key": "ip daddr"}},
+}
+KEYS = {json.dumps(value, sort_keys=True): key for key, value in list(LEFT.items()) + list(FOLDED.items())}
 
 
 def statement_of(expr):

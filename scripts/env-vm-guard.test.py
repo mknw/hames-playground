@@ -409,6 +409,26 @@ class Rules(unittest.TestCase):
             edit(changed)
             self.assertNotEqual(guard.model(changed), guard.expected(self.cfg))
 
+    def test_readback_accepts_what_nft_1_1_6_emits(self):
+        # The captured live `nft -j list table` of the failed W3 --apply
+        # (journal capture w3-live.json on the host; the two dev addresses
+        # parameterized to this file's DEV env, everything else byte-faithful).
+        # nft 1.1.6 folds a directional ct expression's protocol into its key and
+        # drops `family`; without those aliases every readback-gated write on
+        # such a host refuses (and --confirm with it).
+        captured = json.loads((ROOT / "scripts/env-vm-guard-nft116-readback.json").read_text())
+        self.assertEqual(guard.model(captured), guard.expected(config()))
+        # The only difference from the older serialization this file's own
+        # serializer emits is those folded ct keys: both parse to one model.
+        readback = as_json("inet", guard.TABLE, installed(config())[("inet", guard.TABLE)], iter(range(1, 1000)))
+        self.assertEqual(guard.model(captured), guard.model(readback))
+        # A folded key replaced by one the model does not know still reads as different.
+        changed = copy.deepcopy(captured)
+        expr = next(e["match"] for item in changed["nftables"] if "rule" in item for e in item["rule"]["expr"]
+                    if e.get("match", {}).get("left", {}).get("ct", {}).get("key", "").startswith("ip "))
+        expr["left"]["ct"]["key"] = "ip other"
+        self.assertNotEqual(guard.model(changed), guard.expected(config()))
+
     def test_environment_names_fit_the_interface_limit(self):
         for name, ok in (("dev", True), ("a", True), ("release", True), ("abcdefgh", True),
                          ("abcdefghi", False), ("Dev", False), ("9dev", False), ("de v", False), ("", False),
@@ -2307,6 +2327,14 @@ MUTATIONS = {
     "transport-unbounded": ("                            timeout=timeout, check=False)", "                            timeout=None, check=False)"),
     "transport-failure-ignored": ('    require(result.returncode == 0, "host command failed or inconclusive; nothing further was changed")', "    pass"),
     "readback-ignores-op": ('body["op"] in ("==", "in"):', "True:"),
+    # W3: the readback must accept what nft 1.1.6 emits; dropping the folded ct
+    # aliases (captured live in the W3 readback) refuses every readback-gated
+    # write on such a host, and --confirm with it.
+    "readback-rejects-nft116-folded-ct": (
+        '    "ct original ip saddr": {"ct": {"dir": "original", "key": "ip saddr"}},\n'
+        '    "ct original ip daddr": {"ct": {"dir": "original", "key": "ip daddr"}},\n'
+        '}\nKEYS = {json.dumps(value, sort_keys=True): key for key, value in list(LEFT.items()) + list(FOLDED.items())}',
+        '}\nKEYS = {json.dumps(value, sort_keys=True): key for key, value in LEFT.items()}'),
     "readback-ignores-objects": ('        else:\n            result["other"].append(kind)\n    result["counters"].sort()', '        else:\n            pass\n    result["counters"].sort()'),
     "readback-ignores-rule-comment": ('        if body.get("comment") is not None and kind != "table":\n            result["other"].append(kind)', '        if False:\n            result["other"].append(kind)'),
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),

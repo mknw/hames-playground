@@ -79,6 +79,19 @@ export interface ControllerAction {
 }
 
 /**
+ * Content-only controller action; the adapter restores `reasoning` from the
+ * parser trace (the reasoning twins' pattern — see `PlanResultThinking`).
+ */
+export interface ControllerActionThinking {
+  tool_name: string
+  tool_args: string
+  additional_calls?: ToolCallRequest[] | null
+  status?: string | null
+  is_final?: boolean | null
+  
+}
+
+/**
  * Critic evaluation result
  */
 export interface CriticResult {

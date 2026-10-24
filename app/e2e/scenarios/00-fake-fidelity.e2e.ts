@@ -46,6 +46,7 @@ import { bootApp } from '../lib/app'
 import {
   ALL_BAML_FUNCTIONS,
   classifyPrompt,
+  resolveThinkingTwin,
   generatedFunctionNames,
   promptText,
   type ChatMessage,
@@ -98,6 +99,10 @@ beforeAll(async () => {
     (...args: unknown[]) =>
       req[fn](...args)
   const via = { client: 'LargeQwen' }
+  // The reasoning twins render on their leaf, not the tier's non-thinking
+  // client — the wire shape the adapter actually sends when a pattern is
+  // reasoning-configured.
+  const viaThink = { client: 'LargeQwenThink' }
   const tools = [{ name: 'search', description: 'Search', args_schema: '{}' }]
   const attempt = {
     n: 1,
@@ -144,6 +149,12 @@ beforeAll(async () => {
     CompactIntent: () => rq('CompactIntent')([], 'latest', via),
     Planner: () => rq('Planner')('m', 'i', tools, null, via),
     PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, via),
+    // The reasoning twins: same positional shapes as their originals, then the
+    // options bag — same counting rule as LoopController above — on the THINK
+    // leaf, which is the twin's own wire shape.
+    ControllerThinking: () =>
+      rq('ControllerThinking')('m', 'i', tools, [], null, null, null, null, null, null, viaThink),
+    CriticThinking: () => rq('CriticThinking')('i', [attempt], viaThink),
     ScreenUntrustedContent: () => rq('ScreenUntrustedContent')('web', 'content', via),
     RetrieveQuery: () => rq('RetrieveQuery')([], 'latest', via),
     ReferenceSelector: () => rq('ReferenceSelector')('i', [], [], via),
@@ -152,8 +163,8 @@ beforeAll(async () => {
 })
 
 describe('the fake recognises every BAML function', () => {
-  it('knows all sixteen functions including memory and the dormant planner twin', () => {
-    expect(declared).toHaveLength(16)
+  it('knows all eighteen functions including memory and the reasoning twins', () => {
+    expect(declared).toHaveLength(18)
     for (const name of ['ExtractMemory', 'CompactMemories']) {
       expect(declared).toContain(name)
       expect(ALL_BAML_FUNCTIONS).toContain(name)
@@ -231,7 +242,7 @@ describe('the fake recognises every BAML function', () => {
       expect(body.model, `${name} did not render through LargeQwen`).toBe(LARGE_LLM_MODEL)
       const text = promptText(body.messages ?? [])
       expect(text.length, `${name} rendered an empty prompt`).toBeGreaterThan(0)
-      expect(classifyPrompt(text)).toBe(name)
+      expect(resolveThinkingTwin(classifyPrompt(text), body as never)).toBe(name)
     })
   }
 })

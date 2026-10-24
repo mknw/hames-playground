@@ -283,3 +283,120 @@ client<llm> LargeQwenThink {
     }
   }
 }
+
+// ============================================================================
+// THE OPENROUTER TWINS — the route-scoped counterparts of the two clients
+// above, selected only when `LARGE_LLM_ROUTE=openrouter` (the explicit route
+// switch; the base URL is never sniffed). Everything else about them is the
+// same deployment contract as `LargeQwen` / `LargeQwenThink`: same
+// `env.LARGE_LLM_BASE_URL` / `env.LARGE_LLM_API_KEY` / `env.LARGE_LLM_MODEL`
+// references, same output cap and timeout, same no-caching posture (no
+// `allowed_role_metadata`, so the templates' `cache_control` breakpoints are
+// dropped, never forwarded).
+//
+// WHY THEY EXIST: the reasoning setting is PER HARNESS PATTERN and
+// PROVIDER-INDEPENDENT (owner clarification, binding) — one setting governs
+// the Modal/Verda box AND OpenRouter, and the host switch never changes or
+// duplicates it. The two routes differ only in HOW "think" / "don't think"
+// reaches the wire, and the difference must be invisible to the setting:
+//
+//   - THE NATIVE REASONING FIELD IS PRIMARY. These clients carry OpenAI's
+//     `reasoning` object, which OpenRouter honours for `qwen/qwen3.8-27b`
+//     (probed live): `reasoning { enabled: false }` suppresses reasoning
+//     generation outright (reasoning_tokens 0); `enabled: true` routes the
+//     trace to `choices[].message.reasoning` (+ `reasoning_details`), with
+//     `content` holding only the answer envelope. No `chat_template_kwargs`
+//     here, deliberately: OpenRouter ACCEPTS but does NOT HONOUR the
+//     `chat_template_kwargs { enable_thinking }` form (BAML's `openrouter`
+//     provider is `openai-generic` plus defaults, with no reasoning
+//     translation), so the kwarg route would silently NOT suppress thinking.
+//
+//   - THE vLLM ROUTE KEEPS THE KWARG, FOR NOW. `LargeQwen` /
+//     `LargeQwenThink` carry `chat_template_kwargs { enable_thinking }`
+//     because that is what the deployed vLLM demonstrably honours. Native
+//     reasoning-object acceptance on vLLM is UNVERIFIED — the probes hit
+//     OpenRouter only — so the kwarg translation stays in effect on that
+//     route until the owner-gated live check verifies the native form. This
+//     caveat is recorded in `docs/CONFIG.md`.
+//
+// THINKING-ON WIRE SHAPE (verified live against OpenRouter): `content` is a
+// leading blank-line pair followed by the answer envelope — it parses after a
+// strip, with no inline think-close in it — and the trace rides the
+// separate field, which `thinkingFrom` (`thinking-trace.ts`) already reads
+// (`OPENAI_TRACE_FIELDS`). The Q7 pattern is unchanged: an inline think-close
+// in `content` is REFUSED loudly; the trace is taken from the field only.
+//
+// ZERO DATA RETENTION, CARRIED OVER. `provider { zdr: true }` is the owner's
+// recorded choice for OpenRouter traffic (the #760 eval switch sent the same
+// block from its registry client); it rides the same verbatim-forwarding
+// mechanism as every unrecognised option. Pointing the private tier's heavy
+// roles at OpenRouter is a processor/transfer decision (SD-12), and this block
+// is part of how the decision is honoured on the wire.
+//
+// DORMANT LIKE THE OTHERS: never a `SELF_DEPLOYED_CLIENT_BY_ROLE` value in
+// themselves — the route resolution in `clients.server.ts` maps the map's
+// `LargeQwen` onto `LargeQwenOR` / `LargeQwenThinkOR` only while the route
+// switch says OpenRouter. With `LARGE_LLM_ROUTE` unset the declared clients
+// above are served exactly as before, byte-identical.
+client<llm> LargeQwenOR {
+  provider openai-generic
+  options {
+    base_url env.LARGE_LLM_BASE_URL
+    api_key env.LARGE_LLM_API_KEY
+    model env.LARGE_LLM_MODEL
+    // THE NATIVE REASONING OBJECT — the primary wire form. Forwarded verbatim
+    // by `openai-generic`, honoured by OpenRouter for this model: reasoning
+    // generation suppressed outright. NOT `chat_template_kwargs`: accepted
+    // but not honoured there.
+    reasoning {
+      enabled false
+    }
+    // The owner's zero-retention choice for OpenRouter traffic, carried over
+    // from the #760 eval switch. Verbatim into the body, like every
+    // unrecognised option.
+    provider {
+      zdr true
+    }
+    max_tokens 4096
+    temperature 0.2
+    http {
+      connect_timeout_ms 30000
+      // Mirror of `LargeQwen`'s warm-call budget: no scale-to-zero cold start
+      // on this route, but the same output cap, so the same decode arithmetic
+      // bounds a full-cap generation.
+      request_timeout_ms 180000
+    }
+  }
+}
+
+// The thinking twin of `LargeQwenThink` on the OpenRouter route: the model
+// card's thinking preset for sampling, the trace in the native field, and
+// `content` holding only the envelope. Same provisional 4096 / 180s pair as
+// its vLLM counterpart — G19 Q5's separately authorised eval sets the final
+// pair, and it moves on both routes together or not at all.
+client<llm> LargeQwenThinkOR {
+  provider openai-generic
+  options {
+    base_url env.LARGE_LLM_BASE_URL
+    api_key env.LARGE_LLM_API_KEY
+    model env.LARGE_LLM_MODEL
+    reasoning {
+      enabled true
+    }
+    provider {
+      zdr true
+    }
+    max_tokens 4096
+    temperature 1.0
+    top_p 0.95
+    top_k 20
+    min_p 0.0
+    presence_penalty 0.0
+    repetition_penalty 1.0
+    http {
+      connect_timeout_ms 30000
+      // Provisional: mirrors `LargeQwenThink` (4096 / 26 tok/s + allowance).
+      request_timeout_ms 180000
+    }
+  }
+}

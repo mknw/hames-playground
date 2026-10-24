@@ -436,7 +436,9 @@ describe('the switched-function set follows the routed roles', () => {
       'ActorController',
       'CompactIntent',
       'CompactMemories',
+      'ControllerThinking',
       'Critic',
+      'CriticThinking',
       'Decide',
       'ExtractMemory',
       'GenerateConversationTitle',
@@ -456,8 +458,9 @@ describe('the switched-function set follows the routed roles', () => {
     // because it really does run on both, so excluding it would understate the
     // Anthropic window by the one call that is slowest per character.
     expect(TIER_SWITCHED_FUNCTIONS.has('ScreenUntrustedContent')).toBe(true)
-    // The fifteen BAML functions and the systemone call move with the tier.
-    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(17)
+    // The seventeen BAML functions (the two reasoning twins included) and the
+    // systemone call move with the tier.
+    expect(TIER_SWITCHED_FUNCTIONS.size).toBe(19)
   })
 
   it('lists every function that declares the describe chain, not a subset', async () => {

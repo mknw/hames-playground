@@ -172,6 +172,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // wins. Reached through resolveClientForRole() while USE_SELF_DEPLOYED_INFERENCE=1.
   LargeQwen: 131_072,
   LargeQwenThink: 131_072, // Same parser-equipped private 27B box (#625).
+  // The OpenRouter-route twins (large-client.baml): the same model served by a
+  // public per-token API whose server-side ceiling is not this repo's to read.
+  // PROVISIONAL 131 072, mirroring the box — 'G19 Q5 sets the final pair' —
+  // the same separately authorised eval that settles the cap below.
+  LargeQwenOR: 131_072,
+  LargeQwenThinkOR: 131_072,
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -230,6 +236,11 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   // inequality is pinned by clients-self-deployed.test.ts.
   LargeQwen: 4_096,
   LargeQwenThink: 4_096, // Provisional / unmeasured; G19 Q5 eval sets the final pair.
+  // The OpenRouter-route twins mirror their box counterparts' provisional cap
+  // AND the timeout it is coupled to (180s in large-client.baml) — the pair
+  // moves together or not at all, on either route.
+  LargeQwenOR: 4_096,
+  LargeQwenThinkOR: 4_096,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -311,6 +322,11 @@ export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set([
   'JevDecide',
   'LargeQwen',
   'LargeQwenThink',
+  // The OpenRouter-route twins: same basis as their box counterparts — a
+  // per-token public API reports usage.cost and has no GPU-hour bill. The
+  // route changes the WIRE shape, never the pricing basis.
+  'LargeQwenOR',
+  'LargeQwenThinkOR',
 ])
 
 /** Anthropic cache pricing multipliers on the base input rate. */

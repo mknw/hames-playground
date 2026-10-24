@@ -102,6 +102,7 @@ import {
 // wiring a turn takes.
 import '../config.server'
 import { assertLargeModelConfigured, selfDeployedInferenceEnabled } from '../config.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import {
   clientOverrideFor,
   SELF_DEPLOYED_CLIENT_BY_ROLE,
@@ -109,7 +110,11 @@ import {
 import { observeLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { routeMessageOp } from '@hames-ai/harness-baml/routing.server'
 
-const EXPECTED_CLIENT = 'LargeQwen'
+// ROUTE-AWARE: the private tier's 27B roles resolve through the route switch,
+// so the client the smoke must assert is the one the ROUTE names — `LargeQwen`
+// on the box, `LargeQwenOR` on the OpenRouter route. Asserting a fixed literal
+// would fail the smoke on a correctly-configured route flip.
+const EXPECTED_CLIENT = largeOnOpenRouter() ? 'LargeQwenOR' : 'LargeQwen'
 
 /** A catalog small enough to read in the transcript, real enough to choose from. */
 const TOOLS: ToolDescription[] = [
@@ -616,7 +621,7 @@ export async function smokeDecide(): Promise<void> {
 async function main(): Promise<void> {
   console.log('🔒 self-deployed (self-hosted) smoke — confidential-compute route')
   await preflight()
-  console.log('   flag on, env configured, controller role → LargeQwen')
+  console.log(`   flag on, env configured, controller role → ${EXPECTED_CLIENT}`)
   console.log('   NOTE: a cold start can take minutes on the first call.')
   await critic()
   await controller()

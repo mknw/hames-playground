@@ -101,13 +101,62 @@ describe('dormant Planner thinking twin', () => {
     expect(source).toContain('PROVISIONAL / UNMEASURED')
     expect(CLIENT_MAX_OUTPUT_TOKENS.LargeQwenThink).toBe(cap)
     expect(MODEL_CONTEXT_WINDOWS.LargeQwenThink).toBe(MODEL_CONTEXT_WINDOWS.LargeQwen)
-    // The thinking twin follows its twin's PRICING basis: both 27B leaves are
-    // provider-priced since the OpenRouter eval (see PROVIDER_COST_CLIENTS).
+    // The thinking twin follows its twin's PRICING basis: all four 27B leaves
+    // are provider-priced (see PROVIDER_COST_CLIENTS).
     expect(PROVIDER_COST_CLIENTS.has('LargeQwenThink')).toBe(true)
+    expect(PROVIDER_COST_CLIENTS.has('LargeQwenThinkOR')).toBe(true)
     expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwenThink')).toBe(false)
     expect(PRIVATE_TIER_CLIENTS.has('LargeQwenThink')).toBe(true)
-    expect([...THINKING_CLIENTS]).toEqual(['LargeQwenThink'])
+    expect(PRIVATE_TIER_CLIENTS.has('LargeQwenOR')).toBe(true)
+    expect(PRIVATE_TIER_CLIENTS.has('LargeQwenThinkOR')).toBe(true)
+    expect([...THINKING_CLIENTS].sort()).toEqual(['LargeQwenThink', 'LargeQwenThinkOR'])
     expect(Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE)).not.toContain('LargeQwenThink')
     expect(SELF_DEPLOYED_CLIENT_BY_ROLE.planner).toBe('LargeQwen')
+  })
+})
+
+describe('controller and critic reasoning twins', () => {
+  const turns = [
+    {
+      n: 1,
+      tool_call: { tool: 'search', args: '{"query":"x"}' },
+      tool_result: { tool: 'search', result: 'rows', success: true },
+    },
+  ]
+
+  it('ControllerThinking renders the loop body on the thinking leaf, schema without reasoning', async () => {
+    const req = await b.request.ControllerThinking(
+      'q',
+      'i',
+      tools,
+      turns,
+      'schema',
+      null,
+      null,
+      null,
+      null,
+      null,
+      opts,
+    )
+    const body = req.body.json() as Record<string, unknown>
+    expect(body.model).toBe('Qwen/Qwen3.8-27B-FP8')
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(body.max_tokens).toBe(4096)
+    expect(req.body.text()).not.toContain('cache_control')
+    expect(req.body.text()).not.toContain('reasoning: string')
+    expect(
+      b.parse.ControllerThinking(
+        '{"tool_name":"search","tool_args":"{}","status":"s","is_final":false}',
+      ),
+    ).toMatchObject({ tool_name: 'search' })
+  })
+
+  it('CriticThinking renders byte-identical to Critic — only the leaf differs', async () => {
+    const original = (await b.request.Critic('i', [], opts)).body.text()
+    const twin = (await b.request.CriticThinking('i', [], opts)).body.text()
+    // The critic's result type has no reasoning field, so there is nothing to
+    // strip: same body template, same schema, only the client changes.
+    expect(twin).toBe(original)
+    expect(twin).toContain('enable_thinking')
   })
 })

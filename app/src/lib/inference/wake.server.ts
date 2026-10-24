@@ -172,7 +172,7 @@
  * make.
  */
 import { inferenceEnv, largeLlmModelId } from '@hames-ai/harness-baml/inference-env.server'
-import { largeOnOpenRouter } from '@hames-ai/harness-baml/openrouter-eval.server'
+import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   largeProvenWarm,
@@ -500,7 +500,7 @@ export const resetSmallWake = smallWake.reset
 /** Both subscriptions finish before returning, including cancellation on failure.
  *
  *  The large poll is SKIPPED while the large endpoint is OpenRouter (the
- *  eval-only switch, `openrouter-eval.server.ts`): a public per-token API has
+ *  route switch, `LARGE_LLM_ROUTE=openrouter`): a public per-token API has
  *  no scale-to-zero box to wake, every poll attempt is a billed call, and the
  *  first real call answers on the first attempt anyway. The SMALL box keeps
  *  its poll untouched — `describe`/`decide` stay on it in every configuration. */

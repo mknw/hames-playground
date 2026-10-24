@@ -1,5 +1,156 @@
 # @hames-ai/harness-baml
 
+## 0.4.0
+
+### Minor Changes
+
+- e6f6562: **The 27B model id is env-overridable, an eval-only OpenRouter route composes at the consumer client seam, and the 27B leaves price off the provider's reported cost.**
+  
+  - `LargeQwen` / `LargeQwenThink` declare `model env.LARGE_LLM_MODEL`. The DEFAULT (`DEFAULT_LARGE_LLM_MODEL`, `'Qwen/Qwen3.8-27B-FP8'`) is held in `inference-env.server.ts` and applied to `process.env` at the routing seam's module load, so the unset wire path is byte-identical to the previously pinned literal; an empty value normalizes to the default. `largeLlmModelId()` is the one reader — the wake ping resolves the same variable the declared client reads.
+  - New `openrouter-eval.server.ts`: when `LARGE_LLM_BASE_URL` names an OpenRouter host, `activateOpenRouterLargeOverride()` registers a consumer client layer (#374 D1) routing every role the tier map sends to the 27B through a per-call `ClientRegistry` client re-declared under the SAME name — the env-resolved model id plus `provider: { zdr: true }`, forwarded verbatim by the same `openai-generic` mechanism `chat_template_kwargs` rides. `describe`/`decide` are derived-absent (from `SELF_DEPLOYED_CLIENT_BY_ROLE`), so the small box keeps its traffic; the wake skips the large poll and a private-only deployment refuses any registry bag. With the vars unset the layer is inert and nothing on the wire changes.
+  - `computeEventMetrics` reads the provider-reported `usage.cost` (USD) off every attempt's raw response and passes it to the cost estimator, so a client in `PROVIDER_COST_CLIENTS` prices from the provider's own bill. The host's time-priced map now holds `SmallQwen` / `PrivateSystemOne` only; the 27B leaves price from `usage.cost` × `EUR_PER_USD`, and a call the provider priced nothing for reads unknown — never free, never a wall-clock floor for a box it never touched.
+- 540c5a5: **Breaking (pre-1.0, so a minor bump): the injection guard's `screen` option is a config object, and its model screen can sit behind a gate.**
+  
+  - `screen` takes `{ run, mode?, gate?, onUnavailable?, exempt?, classify? }` instead of a bare `InjectionScreen`. `run` is the screen you passed before.
+  - `mode` is `'off' | 'shadow' | 'gated' | 'always'`, per tier: a bare value or a `ByTier` map such as `{ default: 'shadow', anthropic: 'always' }`, resolved per call against the registered `effectiveTier()` by the new `resolveByTier()`. Default: `'always'` for a screen alone, `'shadow'` when a `gate` is passed. A mode that asks a gate with none passed refuses construction, and so do a `run` that is not a function, a mode that is not one of the four (on any tier), a per-tier map with no `default` and an `onUnavailable` other than `'pass'` or `'withhold'`. Read per call, an unrecognised mode runs the screen and an unrecognised `onUnavailable` withholds.
+  - **Removed: `screenDespiteFindings`.** A deterministic finding now forces the screen in every mode but `'off'`, on the sanitized projection and with no gate call. A guard that declared a screen without that option used to skip the screen on any result with a finding; it now screens it, one more model call per such result.
+  - New: `createGuardGate(decide, settings?)` (its state is refused over `maxStateBytes`, default `GUARD_GATE_MAX_STATE_BYTES` = 32 000, which runs the screen) and `GUARD_SCREEN` (the `guard.screen` noul question), `guardGateSkipRate(events)`, `neutralizeFenceMarkers()` (the screen's fence neutraliser, now shared), `SCREEN_WITHHELD`, `resolveByTier()`, and the `ByTier`, `ScreenMode`, `GuardGate`, `GuardGateVerdict`, `IngressClass`, `IngressClassifier` and `InjectionScreenConfig` types. Each gate answer is a `decision_made` event keyed `guard.screen`.
+  - `onUnavailable: 'withhold'` replaces a payload whose screen threw with a fixed marker (`SCREEN_WITHHELD`, which tells the controller to answer without it); `'pass'`, the default, keeps today's behaviour.
+  - `exempt` names declared namespaces neither the gate nor the screen runs on; an undeclared one refuses construction. `classify` is the host's: an `'internal'` payload gets the deterministic layer only, unless it has a finding; without one every payload is external.
+  - `DecideInput` gains an optional `signal`, which `evaluateDecision` passes through and the systemone transport hands to its fetch, so a caller's deadline aborts the request. `LlmUsageSample` gains `decisionKey` for Decide calls.
+  - `ScreenUntrustedContent`'s definition of an injection now follows the gate's question (text aimed at the AI reading it), with the gate's behaviour list item for item; its signature is unchanged.
+  - `@hames-ai/connectors`: `registerGraphConnectorTools` takes an optional `homeDomains` supplier; the mail, calendar, shared-with-me and mail-attachment tools stamp each item and result with a non-enumerable `GRAPH_PROVENANCE` (`'home' | 'external' | 'unknown'`) computed from the raw addresses before shaping, read with `graphProvenance()`. No serialization carries it. Also new from `graph/graph-tools.server`: `isHomeAddress()` (a sender's domain matches only in its canonical spelling, so a spelling IDNA folds onto a home domain is not home), `provenanceOf()` and the `GraphProvenance` type.
+  - `@hames-ai/agents`: `AgentDeps.classifyIngress` (optional). `general-next`'s office and info guards declare the screen behind the gate, `{ default: 'shadow', anthropic: 'always' }`, with the host's classifier.
+  
+  Migration: replace `screen: myScreen` with `screen: { run: myScreen }` (behaviour on clean content is unchanged: `'always'`), and delete `screenDespiteFindings` (its behaviour is now the default). To keep a screen off results that already have a deterministic finding, there is no option: that is the change. A custom `DecideFn` should pass `input.signal` to its request when it has one.
+- 7ec2dd2: Record the injection screen's and the describe tier's model calls as `model_call` events, and fix two boundary timestamps.
+  
+  - New `EventType` `'model_call'` with `ModelCallEventData` (`role: 'screen' | 'describe'`, `source?`, `items?`). The call's record rides on the event's `llmCall` / `metrics`, so every existing cost fold (`stepCostEur`, `foldEvents`, the panel's totals) includes it, priced on the client BAML actually selected. The record is redacted where the event is built (`createModelCallEvent`, `redactCall`, both exported; `redactCall` moved from `memory-store.server` and is still re-exported there): client, usage, duration and `metrics` survive; `variables`, the prompt and the output do not. `model_call` is in `ALWAYS_COMMIT_TYPES`.
+  - `InjectionScreen`, `DescribeFn` and `DescribeBatchFn` take an optional trailing `onCall?: CallRecordSink` (new exported type). `withInjectionGuard` records the screen call (a failed one too); `compactBulkData` records each summary call, batch and per-item retry. Screen rows are live; describe rows are appended after the answer has gone out, so they reach the panel and cost summaries on the conversation's next load. Recording is best effort: a recorder that throws is logged and never changes a verdict. An implementation that never calls the sink stays correct and its calls stay unrecorded.
+  - `@hames-ai/harness-baml`: `withUsageAccounting(name, run, onCall?)` hands the sink the call's record, built from the same collector that is accounted. `createInjectionScreen`, `describeToolResultOp` and `describeToolResultsBatchOp` pass it through. A sink that throws is logged and never replaces the call's own outcome.
+  - `withReferences` stamped `pattern_enter` after the wrapped pattern had run, and `parallel` stamped every branch's `pattern_enter` and `pattern_exit` at the merge, so the panel (which orders by `ts`) listed a boundary after the events it contains. Both now carry the time the work started (and, for `parallel`, each branch's own end).
+- 40d3627: One tier rule: a run frame's tier is the Anthropic tier only when it says exactly
+  `'anthropic'`; an absent or empty tier takes the host's default tier, a present but
+  unrecognised one is the self-deployed tier (refused when it is not reachable), and
+  routing and the guards now read that one answer.
+  
+  `@hames-ai/harness-patterns` adds `registerEffectiveTier(read)` and
+  `effectiveTier()` to `run-frame.server`. Core interprets no tier string: the tier
+  module registers the function that answers, and `effectiveTier()` returns what it
+  returns, or `undefined` when nothing is registered. `withPseudonymisedInputs` now
+  decides "explicit Anthropic" from `effectiveTier()` (falling back to the raw frame
+  tier only when nothing is registered).
+  
+  `@hames-ai/harness-baml` moves the tier vocabulary and readers into a new
+  `tier.server` module (`InferenceTier`, `InferenceTierPolicy`,
+  `configureInferencePolicy`, `assertInferenceTier`, `activeInferenceTier`,
+  `onExplicitAnthropicTier`, `privateInferenceOnly`); `clients.server` re-exports every
+  name, so import paths do not change. The module registers `activeInferenceTier` as
+  `effectiveTier()` at load.
+  
+  Migration for consumers (pre-1.0, so a minor bump):
+  
+  - `onExplicitAnthropicTier()` now answers from `activeInferenceTier()`: it throws on a
+    restricted deployment (it used to answer), and on a defaulted self-deployed tier
+    that is not reachable. A frame with an unrecognised tier is read as the
+    self-deployed tier, never as the Anthropic tier, so the decide call never reaches
+    Jev: it takes the private client when that tier is reachable, and is refused
+    before any request otherwise.
+  - A host whose policy's `defaultTier` is `'self_deployed'` now has that default
+    reachability-checked (`assertTierReachable`) on every read of a run that named no
+    tier, and the run is refused when the tier is not configured; it is never routed to
+    the Anthropic tier. A policy that names `'self_deployed'` as its default without an
+    `assertTierReachable` is refused for the same reason an explicit
+    `assertInferenceTier('self_deployed')` is.
+  - With no host policy registered, the package's fallback is unchanged: the Anthropic
+    tier. A library user with no self-deployed tier sees no difference, except that
+    `withPseudonymisedInputs` no longer rewrites a run that names no tier, and a frame
+    carrying a present but unrecognised tier is refused rather than routed.
+  - The host's tier policy is now held on a `Symbol.for('hames.harness-baml.tier-policy')`
+    holder, so every loaded copy of the package reads the one policy the host
+    configured. A test that wants the process-start state (no policy) after
+    `vi.resetModules()` must clear that holder too.
+- 7034d6d: Add an opt-in private planner thinking counterpart with parser-trace reasoning, a recorded same-endpoint retry without thinking, and a bounded reasoning field for downstream executor prompts.
+- 8ce163a: Support host-enforced private-only inference and refuse unguarded public BAML calls before requests are constructed.
+- e5b773d: **Per-pattern reasoning on the private tier: a provider-independent setting, OpenRouter-route twin clients, and reasoning twins for the controller and critic.**
+  
+  - New `PRIVATE_REASONING_ROLES` (comma-separated HARNESS PATTERN names; vocabulary `controller, actor, critic, synthesizer, router, planner, describe, screen`): a configured pattern's model calls run with model-side thinking ON while the active tier is self_deployed. One setting governs the Modal/Verda box AND the OpenRouter route — the route picks WHICH twin serves the call, never whether thinking happens. A pattern with no reasoning twin (e.g. `actor`) refuses at module load, as does an unknown token — fail-closed, never a silent no-op. Unset: no pattern thinks, and routing is byte-identical to the pre-reasoning posture. `THINKING_ROLES` is now config-derived (a per-call function, not the hardcoded `{ planner }` set).
+  - New declared OpenRouter-route twins in `large-client.baml`: `LargeQwenOR` (`reasoning { enabled false }`) and `LargeQwenThinkOR` (`reasoning { enabled true }`) — the NATIVE reasoning object, which OpenRouter honours for `qwen/qwen3.8-27b`, plus `provider { zdr: true }` carried over from the eval switch. No `chat_template_kwargs` on the OR clients: that form is accepted-but-NOT-honoured there. The vLLM route keeps the kwarg translation until native reasoning-object acceptance on vLLM is verified (unverified; owner-gated live check, recorded in `docs/CONFIG.md`).
+  - `LARGE_LLM_ROUTE` is now the ONE explicit route switch (`openrouter` | `modal` | unset=modal; anything else refuses, the base URL is never sniffed), replacing the eval registry's host-sniffing activation: `selfDeployedClientFor` resolves every 27B role onto its route's twin, `openrouter-eval.server.ts` is retired, and the wake poll / box-activity recording / eval wiring / live preconditions re-key on the switch. The OpenRouter route requires an explicit `LARGE_LLM_MODEL` at boot.
+  - New reasoning twins `ControllerThinking` (loop body, `ControllerActionThinking` content-only envelope) and `CriticThinking` (byte-identical critic body) mirror `PlannerThinking`'s Q7 leaf pattern: trace from the separate reasoning field only, an inline think-close in `content` refused loudly, one corrective retry on the non-thinking twin of the SAME route (`selfDeployedNonThinkingClientFor`). `THINKING_FUNCTIONS_BY_CLIENT` designates all three twins on BOTH leaves; `LargeQwenOR`/`LargeQwenThinkOR` join the settings mirrors (provisional 4096 / 131072) and the provider pricing basis.
+  - New `docs/CONFIG.md`: the whole application configuration surface — every env var and setting an operator can set, with defaults, applicable providers and failure modes.
+- d0365ed: BREAKING (shipped as a minor bump; the 1.0.0 decision is the owner's): rename the
+  built-in inference tier from `verda` to `self_deployed`, the BAML clients to
+  `LargeQwen` / `LargeQwenThink` (the 27B) and `SmallQwen` (was `LocalQwenSmall`; the
+  small box runs on Modal, so `Local` was a misnomer, and `LocalGLM` keeps its name),
+  and the exported routing and cost identifiers. `self_deployed` names the tier (two boxes); identifiers about the large
+  model alone take `large` (`largeEurPerHour`, `LARGE_LLM_MODEL_ID`, the `'large'`
+  wake box). The full old → new table, with each name's scope, is in
+  `docs/deployment/self-deployed-migration.md`.
+  
+  Migration for consumers: update imports, role maps (`VERDA_CLIENT_BY_ROLE` →
+  `SELF_DEPLOYED_CLIENT_BY_ROLE`), model tables, cost-rate registration
+  (`verdaEurPerHour` → `largeEurPerHour`), `VERDA_CLIENT_NAME` → `LARGE_LLM_CLIENT_NAME`,
+  `assertServedByVerda` → `assertServedByLarge`, per-call `client` overrides and run frames
+  together. Regenerate the BAML client from the renamed `large-client.baml`. A run frame still
+  carrying `'verda'` is read as `self_deployed` (and only that spelling).
+  
+  The reference host reads historical tier values, and stored `VerdaQwen` /
+  `VerdaQwenThink` / `LocalQwenSmall` client names, without rewriting rows. Migrate
+  27B settings to `LARGE_LLM_BASE_URL`, `LARGE_LLM_API_KEY`, `LARGE_LLM_EUR_PER_HOUR`,
+  `LARGE_LLM_SCALEDOWN_SECONDS` and `LARGE_LLM_WAKE_*`; use
+  `USE_SELF_DEPLOYED_INFERENCE=1` for the boot-time check that the tier is configured and
+  `INFERENCE_TIERS=self_deployed` for the restriction. Old environment names and
+  `INFERENCE_TIERS=private` remain accepted for one release with a boot warning; the
+  list of what is removed afterwards is in the migration doc. Verda control-plane
+  credentials retain their provider-specific names. UI copy continues to say Private.
+- 3896e47: Make Synthesize request numbered citations for supplied document locators and list their sources in a Sources legend. The default synthesizer derives a citation-only projection from retained retriever results and complete read-documents locator records, verifying multi-call producers against the call roster. Custom route ids do not receive text-derived citations; typed locator metadata on core records remains a separate owner API decision. The harness-patterns SPEC input table documents the companion's optional slots. Low-level Synthesize callers must pass the new optional references slot after memory_context and before the BAML options bag; pass null when no references exist. Requests without references retain their previous prompt text.
+- 03d15fc: Refuse thinking leaves selected through registry chains for functions without a designated thinking counterpart, retaining usage accounting and preventing corrective retries on the unsupported leaf.
+  
+  Behaviour change for custom controllers: `accountBamlCall`, `withUsageAccounting`, `extractLLMCallData` and `extractFailureLLMCallData` now throw a non-recoverable `LLMCallError` after accounting when the selected leaf or rendered request enables thinking for an undesignated function. `THINKING_FUNCTIONS_BY_CLIENT` is a new public export listing designated counterparts.
+  
+  Client overrides carrying `collector` are refused by both routing lookups; adapters and the title agent retain their own accounting collector.
+- 2e0e103: Add `@hames-ai/harness-baml/thinking-trace` (#625 S1): `thinkingFrom(call)` reads a model's thinking trace from a BAML collector call's raw response body (OpenAI-compatible `reasoning_content` or `reasoning`; Anthropic `thinking` blocks) and returns it verbatim or as a typed absence, and `splitAtLastThinkClose(raw)` cuts a no-parser response at its last `</think>`. Nothing calls either yet; no routing, BAML or client change.
+
+### Patch Changes
+
+- 3e816f9: `createActorControllerAdapter` now renders `input.availableTools` together with its own `toolNames`, so an actor pattern's allowlist no longer has to be declared twice. `general-next` drops its duplicate `toolNames`.
+- 4f0c766: Keep Return's plain-prose guidance in the loop prompt rather than the shared actor/loop action description.
+- d6b58f4: A turn whose every tool call failed and which then `Return`s an answer from context keeps that answer (#614). `compactExecution` thread mode carries the `Return` text as the new optional `CompactExecutionInput.returnText` beside the error history, and `defaultSynthesize` appends it as a final turn. A turn with any successful call is unchanged.
+- e4c744d: `LoopController`'s default (`returnStyle: 'summary'`) prompt now tells the controller to put the complete answer in `tool_args` when no tool call in the task has returned a result, i.e. it called none or every call failed (#615). A Return-only turn has no tool result for the synthesizer to compose from, and #612 hands that Return text on as the answer; before, the prompt said the Return was "NOT the user-facing answer", so whether the text held the answer depended on the model. A turn that called a tool is unchanged (the Return stays a brief summary, #149); `returnStyle: 'answer'` is unchanged. The regenerated `baml_client` ships with it.
+- fdaf3f8: Extract controller and planner prompt bodies into shared templates while preserving existing request bytes.
+- 372bb26: Record shared template_string bodies as labelled textual includes in promptTemplate so the observability Template tab shows the complete raw source without evaluating Jinja.
+- 0f0121a: Correct the Anthropic thinking documentation to distinguish Sonnet 5's default thinking from Sonnet 4.6 and Haiku 4.5's default of thinking off. Preserve all client options, fallback chains, and the controller's measured NoThink configuration.
+- Updated dependencies [be74388]
+- Updated dependencies [60836df]
+- Updated dependencies [959966b]
+- Updated dependencies [dfffba2]
+- Updated dependencies [d6b58f4]
+- Updated dependencies [c46aa3c]
+- Updated dependencies [540c5a5]
+- Updated dependencies [49888cd]
+- Updated dependencies [467e9be]
+- Updated dependencies [3b967a8]
+- Updated dependencies [e7f697e]
+- Updated dependencies [7ec2dd2]
+- Updated dependencies [40d3627]
+- Updated dependencies [7034d6d]
+- Updated dependencies [f1d0942]
+- Updated dependencies [b1f162c]
+- Updated dependencies [2d24874]
+- Updated dependencies [e4c744d]
+- Updated dependencies [a65a7b7]
+- Updated dependencies [3819eee]
+- Updated dependencies [1b84721]
+- Updated dependencies [e39d5a4]
+- Updated dependencies [d0365ed]
+- Updated dependencies [ed4eed3]
+- Updated dependencies [d89bf08]
+- Updated dependencies [3896e47]
+- Updated dependencies [55a780e]
+- Updated dependencies [8f8ebd0]
+  - @hames-ai/harness-patterns@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

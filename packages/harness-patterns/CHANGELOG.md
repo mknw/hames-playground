@@ -1,5 +1,222 @@
 # @hames-ai/harness-patterns
 
+## 0.4.0
+
+### Minor Changes
+
+- be74388: Tell the Decide step about the conversation's documents (#507). `decisionLoop` takes an optional `documents` source (`(signal) => Promise<DecisionDocuments>`), read once per run before iteration 1, and renders it into the state as a block between the conversation and "This turn so far": a capped list of every visible document's name, type and size when the host's source returns names, `N (names not shown)` when it returns a count only, and nothing when there are no visible documents (such a state is byte-identical to before). Core never reads a tier: the host decides what a run may reveal.
+  
+  - Names are untrusted text: cut to 80 code points before any rule runs, NFKC-normalised, separators and control characters replaced, invisible, default-ignorable and format characters removed, checked against the injection rule corpus and the state's own headers (a name that trips either is shown as `[name withheld]`), then JSON-quoted on one line. At most 10 names and 1,000 characters, then `+K more documents`. The guard's screen is never run for a name. The check is deterministic, not a confusables filter: a lookalike letter from another script is shown. `mimeType` is mapped through a fixed allowlist, never printed raw.
+  - A source that throws, times out (`documentsTimeoutMs`, default `DECISION_DOCUMENTS_TIMEOUT_MS` 30 000, aborts the source's signal) or returns a malformed value gives an explicit `unknown (could not be read)` line (never "none") and one `warning` event (new `WarningTask` `'decision_documents'`); the turn runs as before.
+  - `DecisionLoopStateInput.documents` hands the resolved value to a `state` override. New exports: `renderDocumentsBlock`, `DECISION_DOCUMENTS_TIMEOUT_MS`, and the `DecisionDocument`, `DecisionDocuments`, `DecisionDocumentsSource` and `ResolvedDecisionDocuments` types.
+  - `listDocumentSummariesStrict(sessionId, callTool?, signal?)` in `stash/document-store.server`: the strict list without the content, one `json_get` per document of just the members a description needs. A failed or unreadable read throws and never prunes; an index entry is pruned only after a successful read that found nothing.
+  - `@hames-ai/agents`: `AgentDeps.createDecisionDocuments` (optional); `general-next` passes it to its loop. Without it the state says nothing about documents.
+  - Cost: every turn of a conversation with documents waits on the read before the first decision, up to `documentsTimeoutMs`; on the default gateway transport it is one call per document in sequence, so linear in their number. Unmeasured; the measurement is a precondition of the live pass and of any default flip.
+  - SPEC: `decision_made`'s `data` carries `stateChars`, never the state text, but the call record holds it twice, in `rawInput` (the request body) and `variables.state`, both persisted with the conversation; deleting or hiding a document does not remove its name from earlier turns' stored states.
+- 60836df: **`decisionLoop` no longer sanitises or screens its own route records, and the API the unreleased `decision-loop` entry announced for that is removed before it ships (pre-1.0, so a minor bump).** Guards run where content enters or leaves; a record is built by code from the child's committed events (the model's own plan or Return, a stats line, or a tool-result body that already passed its route's guard) and is only capped. This removes the loop's own call into the run frame's guard, and the planner-only `screenOutput` option that narrowed it (`screenOutput` was added by the unreleased #713 change, whose changeset this entry replaces).
+  
+  - Removed exports (never in a published release; the migration note is for anyone on a pre-release build): `DECISION_LOOP_OUTPUT_KEY` and `WITHHELD_SCREEN_UNAVAILABLE` (from the package root and from `patterns`), and the route option `screenOutput`. The unguarded-output warning and its test-only `__resetDecisionLoopWarnings` are gone. A `screenOutput` property on a route is no longer read; TypeScript callers get an excess-property error.
+  - Removed behaviour: a screen outage no longer withholds a route record (S-d), and `RouteOutput.withheldEventIds` is no longer written. Records an older version persisted still carry `withheldEventIds`, and the loop still reads them back as a filter, so those events stay hidden from every later child.
+  - The `actorCritic` and `retriever` extractors, which quote tool-result bodies, now put each body back under the provenance fence it arrived in (the same tool and namespace, no regex pass, no screen) after the cap (the fence's own lines ride on top of the cap), so it reaches the decisions model and the next child's `plan_context` labelled. A body that arrived unfenced stays unfenced, and a fence is labelled only when the run's guard declares the tool it names. A failed route's text (a tool error or a thrown message) gets the same cap-then-fence treatment. An `actorCritic` batch is one fenced block per accepted result, no longer one JSON array.
+  - Record text the loop did not build (the plan's record, a Return, reasoning, failure text) renders into the decision state and the handoff as one JSON string, the handoff block gains an end line (`HANDOFF_END`), and the state's results heading says the results are data.
+  - New: `closeCutFences(text)` and `unspotlightParts(text)` from `@hames-ai/harness-patterns/guard`, the sibling of `unspotlight` that also returns the `tool` and `namespace` the header named. `extract(kind, events, max)` (the records module) now takes the cap as a required third argument and returns every text field already capped (`carryText` is the same cap for a thrown message).
+  - Migration: delete `DECISION_LOOP_OUTPUT_KEY` from any guard's `tools` and from imports, delete `screenOutput`, and move any screen you relied on for route records onto the routes' own guards (the tools a route reads). A guard around the whole loop no longer has anything of the loop's to guard; the GUIDE sample shows route guards and no orchestrator guard.
+  - `general-next` drops the key from its orchestrator guard and `screenOutput` from its `think` route; its office and info route guards keep their screens.
+- 959966b: Add `decisionLoop(routes, config)` (#507 S1): a loop over routes in which the systemone `decide` seam picks the next route each time round, until it picks `answer` (a choice that runs nothing, so the synthesizer answers once) or `maxIterations` is reached. Exports `DECISION_LOOP_MAX_ITERATIONS` (6) and the record/stat types.
+  
+  - Each child runs in its own synthetic context and `viewConfig`, with events of siblings it may not see (`siblingResults`, default none) and the loop's own records physically removed, and with fresh `data` (never `memories`, `memoryContext` or `intent`).
+  - A route's output is a record built by code from the child's committed events by route kind (`simpleLoop`, `actorCritic`, `retriever`, `planner`), never reading `content_sanitized`. Its `result` and `reasoning` are capped; the loop sanitizes and screens nothing of its own (tool bodies it quotes keep the fence they arrived in). A screen that threw at ingress is typed `screenUnavailable` on `SanitizeReport` and `SanitizeSummary`.
+  - `formatPlanContext(plan, handoff?)` renders earlier-step results under their own data heading, outside the PLAN section; `planner` reads `data.handoff` and `data.agentMap` into its existing `context` argument. With neither, both are byte-identical to before.
+  - A non-decision never dispatches a route: an irrecoverable visible error on iteration 1, a stop-as-answer on a later one. A failed route is a failed record and the loop decides again; a child's `error` events are committed as `recoverable`.
+  - New `PatternCapabilities.tools` (declared by `simpleLoop`, `actorCritic` and `withSandbox`, which now always declares its in-VM tool names and merges over the wrapped pattern's capabilities) and `collectToolNames`.
+  - Export `unspotlight(text)` from `@hames-ai/harness-patterns/guard`: strips one guard spotlight fence, for readers that excerpt fenced text. `decisionLoop` refuses routes that share a `patternId` (or use the loop's own).
+  - A `planner` route is offered once per turn: withheld straight after its own iteration and once a plan exists, so a decisions model that favours it cannot spend the bound on planning (#692). `allowReplan: true` on the route opts out (planner routes only; refused elsewhere). With only `answer` left the loop ends without asking.
+  - `decisionLoop` requires an explicit `patternId` (its records and withheld ids are matched by it across turns) and hides earlier turns' events by the route they were emitted inside, so patterns rebuilt each turn with generated ids cannot leak.
+- dfffba2: **Breaking (pre-1.0, so a minor bump): what leaves is judged by a new egress gate, and `withPseudonymisedInputs` no longer checks or refuses outgoing calls.**
+  
+  - New: `withEgressGate(config)(pattern)` installs one `egressChecks` entry and one `afterToolCall` hook around the pattern it wraps, so every `callTool` inside it is covered on every tier. A call is egress unless its namespace is in `local` or its exact name in `localTools` (a `localTools` name that is in `catalog` refuses the run; `local`, `fetchTools` and `addressSources` are verified against `catalog` when the gate runs, and `fetchTools` without `addressSources` refuses construction). Per outgoing call: a closed turn or route, or a damaged roster, refuses with no model call; then deterministic refusals (undecodable percent-encoding, a Unicode format or default-ignorable character, a `PERSON_n` placeholder, a decoded block over 2 048 characters, never truncated, and for a tool in `fetchTools` an address-carrying or `url` argument that is not, whole, an address found in the user's latest message or in the data of a result from an `addressSources` namespace); then, in `'filter'` mode, the `guard.egress` question (`GUARD_EGRESS`, a `choice` over `personal`, `company`, `nothing_private`) asked over a state the gate renders with a per-call nonce, every quoted line prefixed `"> "`, a `Destination named in the request:` line per host (nested redirector hosts included) and the host roster's matched spans as evidence. At or above τe (0.3) on 1 − P(`nothing_private`) the call is refused with the larger private label's fixed text; below it the call goes out, and a roster match is recorded as an `egress_audit` event. In `'roster'` mode, or with Decide down, the directory status the roster reports decides (`loaded`, `empty`, `unreadable`, `none`; `loadedDecideDown: 'by-shape' | 'ask'`).
+  - The tripwire: a refusal on Decide's answer or for want of one is an `egress_refused` event, and refusal `maxOutgoingRetriesPostTripwire + 1` (default 0, so the first) closes that route's outgoing calls until the user's next message. The counts are derived from the turn's recorded refusals (`egressClosures`), so they survive a pause, and a route's checks run in batch order.
+  - New exports: `withEgressGate`, `egressClosures`, `GUARD_EGRESS`, `EGRESS_TEXTS` (every text the gate returns, none interpolated), `EGRESS_WARNINGS`, `EGRESS_WARNING_TASK`, `GUARD_EGRESS_THRESHOLD`, `GUARD_EGRESS_TIMEOUT_MS`, `EGRESS_MAX_BLOCK_CHARS`, `EGRESS_SMALL_BLOCK_CHARS`, `EGRESS_USER_CAP`, `EGRESS_SPAN_CAP`, `readOutgoing`, `destinationHosts`, `renderEgressState`, `EGRESS_CHECK_FAILED`, `LINE_BREAK` (from `guard-gate.server`), and the `EgressGateConfig`, `EgressRoster`, `EgressRosterSource`, `EgressDirectoryStatus`, `EgressMode`, `EgressClosures`, `OutgoingRequest`, `ReadOutgoing`, `EgressStateInput`, `EgressAuditEventData`, `EgressRefusedEventData` and `EgressProbabilities` types. New event types `egress_audit` and `egress_refused` (always committed, rendered metadata-free into LLM-facing views); a new `WarningTask`, `egress_check`; `WarningEventData.detail`.
+  - `RunFrame.route`: `decisionLoop` writes its route key around each child; it replaces on `amendRunFrame` like most slots.
+  - **Removed from `withPseudonymisedInputs`:** its `egressChecks` entry (K6), its `afterToolCall` roster extension and its refusal of web calls when the host filter is unavailable. A failed host filter still withholds earlier content; its warning no longer says web calls were refused. `WebPseudonymisation` loses `check` and `observe`.
+  - A throwing `egressChecks` entry now denies with `EGRESS_CHECK_FAILED` ("Refused: the check on outgoing requests failed, …") instead of "Tool call refused: outgoing privacy check unavailable."
+  - The shared fence neutraliser (`neutralizeFenceMarkers`) is replaced: it turns the marker words of both fence forms (`BEGIN|END UNTRUSTED CONTENT` and `BEGIN|END CONTENT UNDER REVIEW`) into `[fence]`, word-bounded, and no longer deletes the 40 characters after a marker from what the screen, the guard gate and the egress question read.
+  - Embeddings: `TRUSTED_EMBEDDING_PROVIDERS` (empty) and `embeddingProviderPassesEgress()` in `stash/embeddings.server`: `local`, unset, or a provider declared trusted in code.
+  - `@hames-ai/agents`: `AgentDeps.egressRoster` (optional); `general-next` wraps its decision loop in the egress gate (`'filter'` on both tiers, N = 0, `loadedDecideDown: 'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local: `neo4j`, `graph`, and the office sandbox's in-VM tools by name only while that box is booted `mcp-only`, `officeLocalTools()`).
+  - `@hames-ai/connectors`: `graph_file_ingest` refuses any embedding provider that does not pass `embeddingProviderPassesEgress` (an unregistered value as well as `openrouter`). No Graph result echoes a string the controller wrote, because `graph` is an address source: `graph_files_search` no longer returns `query` (`GraphFileSearchResult.query` is removed), and `graph_files_shared`'s empty-result note says "by the person named" instead of quoting `shared_by`.
+  
+  Migration: if you composed `withPseudonymisedInputs` for its outgoing check, wrap the pattern (or the whole loop) in `withEgressGate({ local, catalog: tools.all, decide, roster })` instead; a host `PseudonymiseForWeb` can drop `check` and `observe`, and a host roster for the gate implements `EgressRosterSource` (`{ directory, roster: { match, observe } }`). To keep the old "a roster match refuses by itself" behaviour, declare `mode: 'roster'`. A gate with `fetchTools` must also declare `addressSources`, the namespaces whose result data gives the controller addresses; leave out any whose tools compute their output from their arguments (a query engine, a code box). The cost, accepted: an address stored only there (for example a URL held only in Neo4j) is not fetchable until a search or another source returns it. Code that matched the old thrown-check text should match `EGRESS_CHECK_FAILED`.
+- d6b58f4: A turn whose every tool call failed and which then `Return`s an answer from context keeps that answer (#614). `compactExecution` thread mode carries the `Return` text as the new optional `CompactExecutionInput.returnText` beside the error history, and `defaultSynthesize` appends it as a final turn. A turn with any successful call is unchanged.
+- c46aa3c: general-next's info route gains `context7` library docs and the memory graph's
+  targeted read tools (`search_nodes`, `open_nodes`) under the same injection
+  guard and web-route pseudonymisation boundary; memory write tools stay withheld.
+  `withPseudonymisedInputs` now treats `memory` as a local namespace beside
+  `neo4j`, keeps `context7` under the outgoing check, and stops extending its outgoing
+  literals from `context7` results (as already for web).
+- 540c5a5: **Breaking (pre-1.0, so a minor bump): the injection guard's `screen` option is a config object, and its model screen can sit behind a gate.**
+  
+  - `screen` takes `{ run, mode?, gate?, onUnavailable?, exempt?, classify? }` instead of a bare `InjectionScreen`. `run` is the screen you passed before.
+  - `mode` is `'off' | 'shadow' | 'gated' | 'always'`, per tier: a bare value or a `ByTier` map such as `{ default: 'shadow', anthropic: 'always' }`, resolved per call against the registered `effectiveTier()` by the new `resolveByTier()`. Default: `'always'` for a screen alone, `'shadow'` when a `gate` is passed. A mode that asks a gate with none passed refuses construction, and so do a `run` that is not a function, a mode that is not one of the four (on any tier), a per-tier map with no `default` and an `onUnavailable` other than `'pass'` or `'withhold'`. Read per call, an unrecognised mode runs the screen and an unrecognised `onUnavailable` withholds.
+  - **Removed: `screenDespiteFindings`.** A deterministic finding now forces the screen in every mode but `'off'`, on the sanitized projection and with no gate call. A guard that declared a screen without that option used to skip the screen on any result with a finding; it now screens it, one more model call per such result.
+  - New: `createGuardGate(decide, settings?)` (its state is refused over `maxStateBytes`, default `GUARD_GATE_MAX_STATE_BYTES` = 32 000, which runs the screen) and `GUARD_SCREEN` (the `guard.screen` noul question), `guardGateSkipRate(events)`, `neutralizeFenceMarkers()` (the screen's fence neutraliser, now shared), `SCREEN_WITHHELD`, `resolveByTier()`, and the `ByTier`, `ScreenMode`, `GuardGate`, `GuardGateVerdict`, `IngressClass`, `IngressClassifier` and `InjectionScreenConfig` types. Each gate answer is a `decision_made` event keyed `guard.screen`.
+  - `onUnavailable: 'withhold'` replaces a payload whose screen threw with a fixed marker (`SCREEN_WITHHELD`, which tells the controller to answer without it); `'pass'`, the default, keeps today's behaviour.
+  - `exempt` names declared namespaces neither the gate nor the screen runs on; an undeclared one refuses construction. `classify` is the host's: an `'internal'` payload gets the deterministic layer only, unless it has a finding; without one every payload is external.
+  - `DecideInput` gains an optional `signal`, which `evaluateDecision` passes through and the systemone transport hands to its fetch, so a caller's deadline aborts the request. `LlmUsageSample` gains `decisionKey` for Decide calls.
+  - `ScreenUntrustedContent`'s definition of an injection now follows the gate's question (text aimed at the AI reading it), with the gate's behaviour list item for item; its signature is unchanged.
+  - `@hames-ai/connectors`: `registerGraphConnectorTools` takes an optional `homeDomains` supplier; the mail, calendar, shared-with-me and mail-attachment tools stamp each item and result with a non-enumerable `GRAPH_PROVENANCE` (`'home' | 'external' | 'unknown'`) computed from the raw addresses before shaping, read with `graphProvenance()`. No serialization carries it. Also new from `graph/graph-tools.server`: `isHomeAddress()` (a sender's domain matches only in its canonical spelling, so a spelling IDNA folds onto a home domain is not home), `provenanceOf()` and the `GraphProvenance` type.
+  - `@hames-ai/agents`: `AgentDeps.classifyIngress` (optional). `general-next`'s office and info guards declare the screen behind the gate, `{ default: 'shadow', anthropic: 'always' }`, with the host's classifier.
+  
+  Migration: replace `screen: myScreen` with `screen: { run: myScreen }` (behaviour on clean content is unchanged: `'always'`), and delete `screenDespiteFindings` (its behaviour is now the default). To keep a screen off results that already have a deterministic finding, there is no option: that is the change. A custom `DecideFn` should pass `input.signal` to its request when it has one.
+- 467e9be: **Breaking (pre-1.0, so a minor bump): nested `withInjectionGuard`s no longer merge their options.** A tool is now sanitized with the options of the innermost guard that declares it, and a guard that does not declare a tool hands it to the enclosing guard, which applies its own. Coverage still unions: an inner guard can never un-guard a namespace or tool an outer guard declared.
+  
+  - Removed: the `strictestSpotlight` export, and the merge of `disableRules` (was an intersection), `rules` (was a union), `spotlight` (was the strictest), `screen` (was inherited) and `screenDespiteFindings` (was an OR) across nested guards.
+  - `ActiveInjectionGuard.options` is replaced by `optionsFor(tool)`, the options that govern that tool. A hand-built `ActiveInjectionGuard` needs the new member.
+  - Migration: an option you relied on an enclosing guard to supply (a `screen`, `spotlight: 'always'`, an extra rule) is now declared on each guard whose tools should have it. An inner `disableRules` or weaker `spotlight` no longer reaches the outer guard's tools, so nothing needs removing for that direction. This holds for tools the inner guard does not itself declare: a tool declared by two guards takes the inner guard's options.
+  - `general-next` declares its route guards' options itself: `spotlight: 'always'` on all three, the screen (with `screenDespiteFindings`) on the office and info guards, none on the documents guard. The orchestrator guard keeps the fence and loses its screen, so a retriever hit and a route-output record are no longer model-screened; every other guarded tool result is screened as before.
+- e7f697e: Add the out-of-run, non-blocking form of the human-in-the-loop request, and use it for memory confirmation. `proposeToHuman(ctx, request, { attended })` records a proposal in the context (replayed, never raised twice for one identity), `readProposals(ctx, now?)` lists the open ones from the whole log (a proposal outlives the turn that raised it), and `answerProposal(ctx, answers, { principal })` binds an answer to an open proposal with the option, flag and expiry checks a resume applies, all-or-nothing. `settleMemory` takes an optional `confirm` seam (`MemoryConfig.confirm`): an `ask` route then prepares the memories (vectors, read-only dedupe preview), proposes them as `memory.confirm` with counts and kinds only, and holds the payload under the request id, writing nothing; without the seam an `ask` still stores nothing. The report gains `proposed`, the skip reasons gain `already-proposed`. `applyMemoryProposal` writes what a person approved: only the flagged items, one transaction each, refusing an item whose target memory changed since the preview, a payload in another embedding space or a switched-off memory, and a no-op on retry. The organisational-graph target is unchanged: it never proposes and never writes.
+- 7ec2dd2: Record the injection screen's and the describe tier's model calls as `model_call` events, and fix two boundary timestamps.
+  
+  - New `EventType` `'model_call'` with `ModelCallEventData` (`role: 'screen' | 'describe'`, `source?`, `items?`). The call's record rides on the event's `llmCall` / `metrics`, so every existing cost fold (`stepCostEur`, `foldEvents`, the panel's totals) includes it, priced on the client BAML actually selected. The record is redacted where the event is built (`createModelCallEvent`, `redactCall`, both exported; `redactCall` moved from `memory-store.server` and is still re-exported there): client, usage, duration and `metrics` survive; `variables`, the prompt and the output do not. `model_call` is in `ALWAYS_COMMIT_TYPES`.
+  - `InjectionScreen`, `DescribeFn` and `DescribeBatchFn` take an optional trailing `onCall?: CallRecordSink` (new exported type). `withInjectionGuard` records the screen call (a failed one too); `compactBulkData` records each summary call, batch and per-item retry. Screen rows are live; describe rows are appended after the answer has gone out, so they reach the panel and cost summaries on the conversation's next load. Recording is best effort: a recorder that throws is logged and never changes a verdict. An implementation that never calls the sink stays correct and its calls stay unrecorded.
+  - `@hames-ai/harness-baml`: `withUsageAccounting(name, run, onCall?)` hands the sink the call's record, built from the same collector that is accounted. `createInjectionScreen`, `describeToolResultOp` and `describeToolResultsBatchOp` pass it through. A sink that throws is logged and never replaces the call's own outcome.
+  - `withReferences` stamped `pattern_enter` after the wrapped pattern had run, and `parallel` stamped every branch's `pattern_enter` and `pattern_exit` at the merge, so the panel (which orders by `ts`) listed a boundary after the events it contains. Both now carry the time the work started (and, for `parallel`, each branch's own end).
+- 40d3627: One tier rule: a run frame's tier is the Anthropic tier only when it says exactly
+  `'anthropic'`; an absent or empty tier takes the host's default tier, a present but
+  unrecognised one is the self-deployed tier (refused when it is not reachable), and
+  routing and the guards now read that one answer.
+  
+  `@hames-ai/harness-patterns` adds `registerEffectiveTier(read)` and
+  `effectiveTier()` to `run-frame.server`. Core interprets no tier string: the tier
+  module registers the function that answers, and `effectiveTier()` returns what it
+  returns, or `undefined` when nothing is registered. `withPseudonymisedInputs` now
+  decides "explicit Anthropic" from `effectiveTier()` (falling back to the raw frame
+  tier only when nothing is registered).
+  
+  `@hames-ai/harness-baml` moves the tier vocabulary and readers into a new
+  `tier.server` module (`InferenceTier`, `InferenceTierPolicy`,
+  `configureInferencePolicy`, `assertInferenceTier`, `activeInferenceTier`,
+  `onExplicitAnthropicTier`, `privateInferenceOnly`); `clients.server` re-exports every
+  name, so import paths do not change. The module registers `activeInferenceTier` as
+  `effectiveTier()` at load.
+  
+  Migration for consumers (pre-1.0, so a minor bump):
+  
+  - `onExplicitAnthropicTier()` now answers from `activeInferenceTier()`: it throws on a
+    restricted deployment (it used to answer), and on a defaulted self-deployed tier
+    that is not reachable. A frame with an unrecognised tier is read as the
+    self-deployed tier, never as the Anthropic tier, so the decide call never reaches
+    Jev: it takes the private client when that tier is reachable, and is refused
+    before any request otherwise.
+  - A host whose policy's `defaultTier` is `'self_deployed'` now has that default
+    reachability-checked (`assertTierReachable`) on every read of a run that named no
+    tier, and the run is refused when the tier is not configured; it is never routed to
+    the Anthropic tier. A policy that names `'self_deployed'` as its default without an
+    `assertTierReachable` is refused for the same reason an explicit
+    `assertInferenceTier('self_deployed')` is.
+  - With no host policy registered, the package's fallback is unchanged: the Anthropic
+    tier. A library user with no self-deployed tier sees no difference, except that
+    `withPseudonymisedInputs` no longer rewrites a run that names no tier, and a frame
+    carrying a present but unrecognised tier is refused rather than routed.
+  - The host's tier policy is now held on a `Symbol.for('hames.harness-baml.tier-policy')`
+    holder, so every loaded copy of the package reads the one policy the host
+    configured. A test that wants the process-start state (no policy) after
+    `vi.resetModules()` must clear that holder too.
+- 7034d6d: Add an opt-in private planner thinking counterpart with parser-trace reasoning, a recorded same-endpoint retry without thinking, and a bounded reasoning field for downstream executor prompts.
+- 2d24874: **Breaking:** retire the shared memory graph (the `memory` MCP server and its tools).
+  Personal memory is unchanged: `withMemory` stores and recalls per-user memories in
+  Postgres.
+  
+  - `@hames-ai/connectors`: `MCP_TOOL_CATALOG` / `mcpNamespace` no longer map the nine
+    memory-graph tools (`create_entities`, `create_relations`, `add_observations`,
+    `delete_entities`, `delete_relations`, `delete_observations`, `open_nodes`,
+    `search_nodes`, `read_graph`) to a `memory` namespace, so `Tools()` returns no `memory`
+    list. The catalog is 77 names across five namespaces.
+  - `@hames-ai/agents`: `general-next` no longer holds the memory graph's read tools, and its
+    info route's description and capability no longer mention a memory graph.
+    `isMemoryGraphResult` is no longer exported, `GraphElement.source` is
+    `'neo4j' | 'unknown'`, and the graph extractor no longer parses memory-graph results.
+  - `@hames-ai/harness-patterns`: `withPseudonymisedInputs` treats only `neo4j` as a local
+    namespace; a tool that still resolves to `memory` is egress-checked like any other.
+    `isReadOnlyTool` no longer lists `open_nodes`.
+  
+  Migration: remove the `memory` server from your gateway catalog and config, drop any
+  `tools.memory` read, and drop any import of `isMemoryGraphResult`. A gateway that still
+  serves those tools hands them to no agent shipped here. Decide separately what to do with
+  the old server's data volume before deleting it.
+- a65a7b7: `compactExecution` (thread mode) keeps the controller's answer on a Return-only turn (#610): when a `simpleLoop` controller answers without calling a tool, no tool iteration survives the terminal-`Return` drop and the synthesizer used to receive no turns. The loop now records its `Return` text as the new optional `returnText` on `SimpleLoopData` / `CompactExecutionData` (cleared by `continueSession` and at the start of each loop), and the synthesizer receives it as the response. An explicit `data.response` wins; a turn that called a tool is unchanged; an `actorCritic` `Return` never sets it. Affects agents that synthesize from a `simpleLoop` thread (`general`, `search`, `retriever-agent`, `microsoft-365`).
+- 3819eee: Record sandbox output provenance in stored documents and retrieved chunks. Exclude promoted documents from the General Agent Next web route's reference previews and expansions while keeping them available for document search and user answers.
+- 1b84721: `withSandbox({ id, syncWorkspace: true })` now copies a document a tool stored mid-run into `/work/in` straight after that call, instead of only when the route is next entered. Core gains two concatenating run-frame slots to do it without a tool-name list: `stashWriteObservers` (told by `storeDocument` once a document is durably stored) and `afterToolCall` (run by `callTool` after dispatch and guard, may replace the result). The copy is `hydrateWorkspace` for the sandbox's own session only; a write to another conversation's stash is ignored. It fails closed: if the copy throws or skips a file, the storing call's result becomes a failure saying the file is stored but not in the sandbox, and an `error` event is recorded. `callTool` guards a hook's replacement result like a dispatched one, `storeDocument` notifies observers with the id of the tool call it ran inside, and core gains `listDocumentsStrict` / `getDocumentStrict`, which throw on a failed read instead of answering "empty".
+- e39d5a4: Add the opt-in injection guard option screenDespiteFindings. It screens the
+  deterministically sanitized projection even after rule hits, preserving their
+  neutralizations and findings. Nested guards (superseded: see
+  guard-options-per-declaring-guard) keep this option enabled if either
+  guard requests it; screen failures remain recorded and non-fatal at this layer.
+  
+  Screen detections preserve an existing provenance fence instead of nesting a
+  second one, keeping downstream identity extraction correct.
+- ed4eed3: New `deleteSessionStash(sessionId)` in `stash/document-ingest.server`: removes a session's documents (including any the index no longer lists), chunk records, index entry and recorded embedding space, attempting every step and reporting any failure after. Supporting additions: `listSessionDocumentIds` in `stash/document-store.server`, and the `scan_all_keys` verb in the host's direct Redis transport.
+- d89bf08: `compactExecution` (#507 W4): the user's message is read past a `viewConfig.fromPatterns` scope (it is a `harness`-level event, so a scoped synthesizer received an empty `userMessage` and `intent`), and a new optional `threadTurns` widens only the scoped `thread` read, so a follow-up turn keeps the previous turn's committed `decisionLoop` records while the error read keeps its own window and an earlier turn's failed or withheld record is not carried forward. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set; the user message is read only from `harness`. `general-next` sets `threadTurns: 2`. The records stay sanitized and fenced, and a record withheld by a screen outage stays marker-only.
+- 8f8ebd0: Add `withPseudonymisedInputs` and its host `PseudonymiseForWeb` seam for #507 G14.
+  Rewrite and post-check earlier event-data copies and all inherited child data on
+  every run except an explicit Anthropic run, preserving provenance fences,
+  restricting copied events to the child's view and withholding residual identities
+  per string body. Missing or unavailable host wiring still fails closed. Check
+  outgoing arguments for every capability except declared local reads at `callTool`
+  through concatenating run-frame
+  `egressChecks`. `decisionLoop` supplies every preceding iteration's source
+  payloads as roster-only input to declaring routes, removed before inner dispatch.
+  Local results extend the outgoing literal check through `afterToolCall`.
+  ActorCritic output records unfence string leaves before JSON stringification;
+  literal checks normalise JSON escapes and bound compact names to single tokens.
+  `AgentDeps.pseudonymiseForWeb` lets hosts supply the ephemeral implementation.
+
+### Patch Changes
+
+- 49888cd: **The guards' operator switches: the host's `GUARD_*` variables reach the agents through one `AgentDeps.guards` field.**
+  
+  - New on `AgentDeps`: `guards?: AgentGuards` — `{ screenMode?, egressMode?, classifyIngress?, pseudonymiseForWeb? }`, the four fields the guard settings compose under. `screenMode` replaces `general-next`'s screen tier map (`ByTier<ScreenMode>`), `egressMode` sets the egress gate's `mode` (`ByTier<EgressMode>`; absent keeps `'filter'`), `classifyIngress` and `pseudonymiseForWeb` carry what their two old `AgentDeps` fields carried.
+  - **Breaking (pre-1.0, so a minor bump): `AgentDeps.classifyIngress` and `AgentDeps.pseudonymiseForWeb` are removed** — both move under `guards`, so the screen's gating has one `AgentDeps` path, not two. Hosts pass `guards: { classifyIngress, pseudonymiseForWeb }` instead of the two flat fields. With a `guards` bag present but no `pseudonymiseForWeb`, `general-next` composes its info route WITHOUT `withPseudonymisedInputs` (the `GUARD_PSEUDONYMISE=off` reading: the switch is off, not unconfigured); a bag with no `guards` field at all keeps the old shape — the wrapper is composed with no filter, which withholds inherited content rather than pass it through unfiltered (G14 D3).
+  - `AgentDeps.egressRoster` stays its own field: it is wiring the gate reads at run time, not a switch, and no `GUARD_*` variable turns the roster on or off.
+  - `@hames-ai/harness-patterns`: nothing changes — the switches set values its existing `ByTier` settings already take (`ScreenMode` for the screen, `EgressMode` for the gate), and a patch bump records that the package gained no surface in this slice.
+- 3b967a8: Retrieval and indexing now honour a document's `hidden` / `archived` flags. `searchDocuments` (and so the `redis` retriever backend) drops hits of hidden or archived documents, reading their current flags on each search and dropping a hit whose flags cannot be read or whose document record is absent (logged); it widens the index query, within a bound, so dropped hits do not leave the result short of `k`. `ensureSessionIngested` skips hidden and archived documents and now returns `{ skippedFlagged }` (it returned nothing before); the `redis` backend re-runs it on a later search while it has skipped any. Un-hiding makes a document retrievable again without re-indexing.
+- f1d0942: **Breaking for hosts registering Graph tools:** supply a per-call `fileIngestAllowed`
+  predicate. File ingestion refuses before I/O unless that predicate positively
+  allows the call, and refuses OpenRouter embedding. The app requires both an
+  explicit private run frame and a private-only deployment until tier-flip release
+  is implemented. General-next advertises Graph file ingestion in its
+  office route only when the host enables the deployment capability, preserving original bytes for sandbox analysis and cited retrieval.
+- b1f162c: Document the web-route privacy filter's per-leaf handling of JSON bodies and
+  its fail-closed refusal of a roster whose labelled identity the injection
+  screen had already neutralized (#507).
+- e4c744d: `LoopController`'s default (`returnStyle: 'summary'`) prompt now tells the controller to put the complete answer in `tool_args` when no tool call in the task has returned a result, i.e. it called none or every call failed (#615). A Return-only turn has no tool result for the synthesizer to compose from, and #612 hands that Return text on as the answer; before, the prompt said the Return was "NOT the user-facing answer", so whether the text held the answer depended on the model. A turn that called a tool is unchanged (the Return stays a brief summary, #149); `returnStyle: 'answer'` is unchanged. The regenerated `baml_client` ships with it.
+- d0365ed: BREAKING (shipped as a minor bump; the 1.0.0 decision is the owner's): rename the
+  built-in inference tier from `verda` to `self_deployed`, the BAML clients to
+  `LargeQwen` / `LargeQwenThink` (the 27B) and `SmallQwen` (was `LocalQwenSmall`; the
+  small box runs on Modal, so `Local` was a misnomer, and `LocalGLM` keeps its name),
+  and the exported routing and cost identifiers. `self_deployed` names the tier (two boxes); identifiers about the large
+  model alone take `large` (`largeEurPerHour`, `LARGE_LLM_MODEL_ID`, the `'large'`
+  wake box). The full old → new table, with each name's scope, is in
+  `docs/deployment/self-deployed-migration.md`.
+  
+  Migration for consumers: update imports, role maps (`VERDA_CLIENT_BY_ROLE` →
+  `SELF_DEPLOYED_CLIENT_BY_ROLE`), model tables, cost-rate registration
+  (`verdaEurPerHour` → `largeEurPerHour`), `VERDA_CLIENT_NAME` → `LARGE_LLM_CLIENT_NAME`,
+  `assertServedByVerda` → `assertServedByLarge`, per-call `client` overrides and run frames
+  together. Regenerate the BAML client from the renamed `large-client.baml`. A run frame still
+  carrying `'verda'` is read as `self_deployed` (and only that spelling).
+  
+  The reference host reads historical tier values, and stored `VerdaQwen` /
+  `VerdaQwenThink` / `LocalQwenSmall` client names, without rewriting rows. Migrate
+  27B settings to `LARGE_LLM_BASE_URL`, `LARGE_LLM_API_KEY`, `LARGE_LLM_EUR_PER_HOUR`,
+  `LARGE_LLM_SCALEDOWN_SECONDS` and `LARGE_LLM_WAKE_*`; use
+  `USE_SELF_DEPLOYED_INFERENCE=1` for the boot-time check that the tier is configured and
+  `INFERENCE_TIERS=self_deployed` for the restriction. Old environment names and
+  `INFERENCE_TIERS=private` remain accepted for one release with a boot warning; the
+  list of what is removed afterwards is in the migration doc. Verda control-plane
+  credentials retain their provider-specific names. UI copy continues to say Private.
+- 3896e47: Make Synthesize request numbered citations for supplied document locators and list their sources in a Sources legend. The default synthesizer derives a citation-only projection from retained retriever results and complete read-documents locator records, verifying multi-call producers against the call roster. Custom route ids do not receive text-derived citations; typed locator metadata on core records remains a separate owner API decision. The harness-patterns SPEC input table documents the companion's optional slots. Low-level Synthesize callers must pass the new optional references slot after memory_context and before the BAML options bag; pass null when no references exist. Requests without references retain their previous prompt text.
+- 55a780e: `compactExecution` `thread` mode honours `viewConfig.fromPatterns`: when the caller names patterns, the thread is every execution of those patterns within the view's turn window (the caller's `fromLastNTurns`, else the current turn), in log order, instead of the last pattern to enter. Under a wrapper whose children run in nested views, the old read selected a child outside the named set, found nothing, and silently dropped to `response` mode. Without `fromPatterns` nothing changes. Behaviour change for `general` (the only production caller with `fromPatterns`): on a HITL resume the paused `execute` re-enters with no new user message, so synthesis now reads both the pre-pause and post-resume iterations, where it used to read only the post-resume ones; likewise two named patterns that both act are both read. A name that matches no pattern in the window still yields no history and `response` mode (#507)
+
 ## 0.3.0
 
 > The published 0.3.0 tarball also contains #579 (memory confirmation, M6), merged after the tag; it is described under the next release.

@@ -195,7 +195,7 @@ function exchange(
 }
 
 /** One image import (POST /1.0/images): the two split-image parts Incus names
- * `metadata` and `rootfs`, streamed, never buffered, over the credential the
+ * `metadata` and `rootfs.img`, streamed, never buffered, over the credential the
  * caller hands in — the project-restricted one, never the manager credential.
  * Each part is read from the OPEN DESCRIPTOR its checks ran on, not re-opened
  * by path: a swap between check and stream cannot change what moves. */
@@ -739,7 +739,12 @@ export function createIncusEnvironment(options: IncusEnvironmentOptions): IncusE
         file: files!.metadata,
         limit: IMAGE_METADATA_MAX_BYTES,
       },
-      { label: 'disk', name: 'rootfs', file: files!.disk, limit: IMAGE_DISK_MAX_BYTES },
+      // The disk part's name is what Incus types the image by: `rootfs.img` is
+      // a virtual-machine image, plain `rootfs` a container one (cmd/incusd/
+      // images.go). A container-typed import passes the fingerprint pin and
+      // then refuses every VM create with "Asked for a VM but image is of type
+      // container" — found live in the W8 window, 2026-10-24.
+      { label: 'disk', name: 'rootfs.img', file: files!.disk, limit: IMAGE_DISK_MAX_BYTES },
     ]
     // Snapshot what the project already holds before the upload, so the
     // mismatch cleanup below deletes only the delta this import added.

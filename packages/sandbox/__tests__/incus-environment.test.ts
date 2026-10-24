@@ -278,10 +278,14 @@ beforeAll(async () => {
       if (url.pathname === '/1.0/images' && method === 'POST') {
         // Incus computes the fingerprint over the received bytes: metadata
         // tarball followed by the disk image, exactly as the pipeline defines it.
+        // The disk part must arrive named `rootfs.img`: that field name is what
+        // Incus types the image by (`rootfs` names a CONTAINER rootfs and makes
+        // every later VM create refuse; cmd/incusd/images.go). Mirroring the
+        // server, a wrong name is a 400, not a silent container import.
         const parts = splitImage(raw, String(req.headers['content-type'] ?? ''))
-        if (!parts.metadata || !parts.rootfs) return send(400)
+        if (!parts.metadata || !parts['rootfs.img']) return send(400)
         const assigned = createHash('sha256')
-          .update(Buffer.concat([parts.metadata, parts.rootfs]))
+          .update(Buffer.concat([parts.metadata, parts['rootfs.img']]))
           .digest('hex')
         images.add(assigned)
         return res.end(

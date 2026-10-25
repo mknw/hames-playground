@@ -62,6 +62,7 @@ import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { ENVELOPE_NEGATIVE_SHOT } from './fewshot-negative.server'
 
 // The 'use server' directive this file carried before the move was the only
 // thing keeping its exports off the client; this is the real guard, and the
@@ -147,6 +148,28 @@ const SANDBOX_FEW_SHOTS: FewShot[] = [
         "python3 - <<'PY'\nimport csv\nwith open('/work/in/data.csv') as f:\n    print(sum(1 for _ in f) - 1)\nPY",
     }),
   },
+  // #606 gate (runs 3-4): the failing scenarios are upload → inspect →
+  // analyze → deliverable, and neither shot above shows that chain. This one
+  // is the expressive multi-step session: the reasoning narrates the explore
+  // and inspect steps this action follows, and the demonstrated action is the
+  // transform-and-deliver step per WORKSPACE_NOTE — heredoc Python, deliverable
+  // written to /work/out, saved path reported. The domain is deliberately log
+  // processing, NOT the eval scenarios' fixtures (overfitting guard).
+  {
+    user: 'The server log from last night is in the workspace — pull out every line where a request timed out and save them to a file I can keep.',
+    reasoning:
+      'Multi-step session: first list /work/in to see what arrived, then inspect the file to confirm its format. This action is the transform-and-deliver step: a quoted heredoc reads the input, writes the deliverable under /work/out and prints the saved path. tool_args is a STRING containing JSON with keys double-quoted; keep is_final=false until a tool result confirms the saved path, then report the path.',
+    tool: 'sandbox_bash',
+    args: JSON.stringify({
+      command:
+        "python3 - <<'PY'\nfrom pathlib import Path\nlines = Path('/work/in/server.log').read_text().splitlines()\nhits = [line for line in lines if 'timed out' in line]\nPath('/work/out/timeouts.txt').write_text('\\n'.join(hits) + '\\n')\nprint('/work/out/timeouts.txt')\nPY",
+    }),
+  },
+  // The contrastive negative: one shot whose user line labels run 4's captured
+  // malformed form (native tool-call syntax) WRONG, with the corrected envelope
+  // of the same call rendered immediately below it. Shared with the office
+  // actor's list so the lesson cannot drift between the two.
+  ENVELOPE_NEGATIVE_SHOT,
 ]
 
 /** A sandbox tool-loop; the actor sees the in-VM `sandbox_*` tools via the ALS

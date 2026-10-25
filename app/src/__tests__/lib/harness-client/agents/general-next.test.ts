@@ -730,9 +730,14 @@ describe('general-next composition', () => {
         fewShots: { tool: string }[]
       }
       expect(fewShots.map((s) => s.tool)).toEqual(
-        ['graph_mail_recent', 'graph_files_search', 'sandbox_bash', 'sandbox_bash'].filter(
-          (name) => name !== unavailable,
-        ),
+        [
+          'graph_mail_recent',
+          'graph_files_search',
+          'sandbox_bash',
+          'sandbox_bash',
+          'sandbox_bash',
+          'sandbox_bash',
+        ].filter((name) => name !== unavailable),
       )
     },
   )

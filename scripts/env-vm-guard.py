@@ -921,8 +921,12 @@ if mode == "tcp":
     s = socket.socket(socket.AF_INET6 if six else socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(5)
     try:
-        # The counter's expected amount is the packets the probe sent: the connect
-        # retransmits its SYN once (TCP_SYNCNT=1), so exactly two SYNs leave.
+        # The counter's expected amount is the packets the probe sent. Measured
+        # 2026-10-25 on the kernels this runs on (host 7.0.0-38, guest 7.0.0-34):
+        # TCP_SYNCNT=1 emits three SYNs - the initial SYN plus two retransmissions
+        # about 1 s apart, the kernel aborting ~3 s in, inside this socket's 5 s
+        # timeout - and TCP_SYNCNT=0 is refused (EINVAL), so three is the smallest
+        # count a bounded connect can send.
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_SYNCNT, 1)
         s.bind(("", int(a[2])))
         index = [i for i, n in socket.if_nameindex() if n != "lo"][0] if six else 0
@@ -1073,9 +1077,9 @@ def probe_environment(config, env, facts, shared, deadline):
                     PACKET, *map(str, args)], timeout=remaining(deadline)).strip()
 
     # Every refusal probe sends a known number of packets - the counter's
-    # expected amount. A TCP refusal is a bounded connect (two SYNs) run by the
-    # host's python3 inside the sender's network namespace; an ICMP error or a
-    # spoofed datagram is one packet.
+    # expected amount. A TCP refusal is a bounded connect (three SYNs, measured)
+    # run by the host's python3 inside the sender's network namespace; an ICMP
+    # error or a spoofed datagram is one packet.
     def netns(label, container, *args):
         # By the namespace's own path: a pid could be reused during the quiet baseline.
         key = run(["docker", "inspect", "--format", "{{.NetworkSettings.SandboxKey}}", container]).strip()
@@ -1110,11 +1114,11 @@ def probe_environment(config, env, facts, shared, deadline):
         # its netns: the app image has no python and cannot bound its own SYNs.
         sleepers = {"3": sleeper(link_bridge), "4": sleeper(shared["app_network"])}
         try:
-            results.append(refused("3", "to_vm_refused", 2,
+            results.append(refused("3", "to_vm_refused", 3,
                                    lambda: netns("3", sleepers["3"], "tcp", guest, str(DOCKER_PORT), str(SPORT["3"])),
                                    deadline))
             results[-1]["sent_from"] = "the netns of a throwaway on the link bridge"
-            results.append(refused("4", "to_vm_refused", 2,
+            results.append(refused("4", "to_vm_refused", 3,
                                    lambda: netns("4", sleepers["4"], "tcp", guest, str(DOCKER_PORT), str(SPORT["4"])),
                                    deadline))
             results[-1]["sent_from"] = "the netns of a throwaway on " + shared["app_network"]
@@ -1128,24 +1132,24 @@ def probe_environment(config, env, facts, shared, deadline):
             results[-1]["sent_from"] = "the pinned address sent from that throwaway's netns on " + shared["app_network"]
             require(packet_counts()[allow] == counts, "probe 4b: a spoofed source reached the allow rule")
             # 5: the pinned sender itself, another port; 6: another environment's VM.
-            results.append(refused("5", "to_vm_refused", 2,
+            results.append(refused("5", "to_vm_refused", 3,
                                    lambda: netns("5", identity, "tcp", guest, str(DOCKER_PORT - 1), str(SPORT["5"])),
                                    deadline))
             # Probes 6 and 7 attribute per pair only once another environment's bridge exists.
             pairs = [e for e in config["environments"]
                      if e["name"] != name and facts[e["name"]]["gateway"] is not None]
             if pairs:
-                results.append(refused("6", "to_vm_refused", 2,
+                results.append(refused("6", "to_vm_refused", 3,
                                        lambda: netns("6", identity, "tcp", pairs[0]["guestAddress"],
                                                      str(DOCKER_PORT), str(SPORT["6"])), deadline))
             other = pairs[0]["guestAddress"] if pairs else probes["otherGuestAddress"]
-            results.append(refused("7", "vm_to_vm" if pairs else "vm_egress", 2,
+            results.append(refused("7", "vm_to_vm" if pairs else "vm_egress", 3,
                                    lambda: guest_run("tcp", other, DOCKER_PORT, SPORT["7"]), deadline))
             results[-1]["single_environment"] = not pairs
             gateway = str(fact["gateway"].ip)
             for label, target in (("8-gateway", gateway), ("8-primary", shared["primary"])) + \
                     ((("8-link-local", shared["link_local"][name]),) if shared["link_local"].get(name) else ()):
-                results.append(refused(label, "vm_to_host", 2,
+                results.append(refused(label, "vm_to_host", 3,
                                        lambda t=target, s=SPORT[label]: guest_run("tcp", t, probes["hostPort"], s),
                                        deadline))
             # 8b: an ICMP error about a host flow that is not toward the VM.
@@ -1210,16 +1214,16 @@ def probe_environment(config, env, facts, shared, deadline):
             require(dropped_by != "unattributed", "8c: the counter moved by %d, expected 0 or 1 (inconclusive)" % delta)
             results.append({"probe": "8c", "outcome": "not delivered", "dropped_by": dropped_by,
                             "counter_change": delta})
-            results.append(refused("9", "vm_to_metadata", 2,
+            results.append(refused("9", "vm_to_metadata", 3,
                                    lambda: guest_run("tcp", "169.254.169.254", 80, SPORT["9"]), deadline))
             # Probe 10's positive control: the host itself reaches the address.
             require(host_reaches(probes["publicAddress"], probes["publicPort"]),
                     "10: the host cannot reach the public address (inconclusive)")
-            results.append(refused("10", "vm_egress", 2,
+            results.append(refused("10", "vm_egress", 3,
                                    lambda: guest_run("tcp", probes["publicAddress"], probes["publicPort"], SPORT["10"]),
                                    deadline))
             for label, target in (("11-link", client), ("11-app", shared["app_peer"])):
-                results.append(refused(label, "vm_egress", 2,
+                results.append(refused(label, "vm_egress", 3,
                                        lambda t=target, s=SPORT[label]: guest_run("tcp", t, DOCKER_PORT, s),
                                        deadline))
         finally:
@@ -1299,8 +1303,8 @@ def smoke(config, config_path, record_path):
                                                  + Path(__file__).read_bytes()).hexdigest(),
                   "render_sha256": digest(config),
                   "counter_basis": "each probe's counter delta against a quiet baseline; "
-                                   "expected is the packets the probe sent (two SYNs per refused "
-                                   "connect, one per ICMP error or spoofed datagram)",
+                                   "expected is the packets the probe sent (three SYNs per refused "
+                                   "connect, measured; one per ICMP error or spoofed datagram)",
                   "environments": {}}
         for env in config["environments"]:
             report["environments"][env["name"]] = probe_environment(config, env, facts, shared, deadline)

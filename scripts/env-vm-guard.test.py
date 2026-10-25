@@ -450,11 +450,41 @@ class Rules(unittest.TestCase):
                     guard.counter_evidence(delta, events, label)
                 self.assertIn("counter moved by %d, expected %d" % (delta, events), str(raised.exception))
 
+    def test_the_bounded_connect_capture_pins_the_measured_syn_count(self):
+        # The measured shape behind the connect probes' expected amount of 3: a
+        # live probe-3 window (2026-10-25 12:31Z, the exact smoke shape - a
+        # throwaway sleeper on envapp-dev off the pinned address, the host's
+        # python3 connecting from its netns), captured by tcpdump on the sender's
+        # bridge while to_vm_refused moved by exactly 3 and nothing moved on
+        # envvm-dev (the drop happens at the forward hook, before the bridge
+        # emit). Exactly three SYNs of one flow - same seq, about 1 s apart - and
+        # nothing else in the window: no reply ever came, so every retransmission
+        # is pure timer work. Addresses are the synthetic DEV ranges; nothing
+        # else was touched. Mutation-verified: deleting one SYN line turns this
+        # test red, and reverting the expectations to 2 turns the smoke test red
+        # with the live failure shape "counter moved by 3, expected 2".
+        lines = [line for line in (ROOT / "scripts/env-vm-guard-bounded-connect.txt").read_text().splitlines()
+                 if line.strip()]
+        syns = [line for line in lines if "Flags [S]," in line]
+        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(len(syns), 3, lines)
+        self.assertEqual({re.search(r"IP (\S+) > (\S+):", line).groups() for line in syns},
+                         {("192.0.2.3.47103", "198.51.100.2.2376")}, lines)
+        self.assertEqual(len({re.search(r"seq (\d+)", line).group(1) for line in syns}), 1, lines)
+        stamps = [line.split()[0].rsplit(":", 1)[1] for line in syns]
+        gaps = [round(float(b) - float(a), 3) for a, b in zip(stamps, stamps[1:])]
+        self.assertTrue(all(0.9 <= gap <= 1.2 for gap in gaps), gaps)
+        self.assertEqual(guard.counter_evidence(3, 3, "3"), 3)
+
     def test_the_refusal_connect_sends_a_known_number_of_syns(self):
         # The counter's expected amount is the packets the probe sent, so the
-        # guest's and the netns connects must bound their own retransmissions:
-        # TCP_SYNCNT=1 means exactly two SYNs, and the kernel's abort after them
-        # (ETIMEDOUT) reports as the timeout it is, never as a local error.
+        # guest's and the netns connects must bound their own retransmissions.
+        # Measured 2026-10-25 on both kernels this runs on (host 7.0.0-38, guest
+        # 7.0.0-34): TCP_SYNCNT=1 emits three SYNs - the initial SYN plus two
+        # retransmissions about 1 s apart, the kernel aborting ~3 s in - and
+        # TCP_SYNCNT=0 is refused (EINVAL), so three is the smallest count a
+        # bounded connect can send. The kernel's abort after them (ETIMEDOUT)
+        # reports as the timeout it is, never as a local error.
         self.assertIn("s.setsockopt(socket.IPPROTO_TCP, socket.TCP_SYNCNT, 1)", guard.PACKET)
         self.assertIn('"TIMEOUT" if error.errno == errno.ETIMEDOUT', guard.PACKET)
 
@@ -700,10 +730,11 @@ class Host:
         return evaluate(self.tables, hook, pkt) == "accept"
 
     def connect(self, iif, saddr, daddr, port, sport, listening=True):
-        """A TCP connect: a SYN and its one retransmission if dropped, then the reply path."""
+        """A TCP connect: a SYN and its two retransmissions if dropped, then the reply path."""
         syn = packet(iif, saddr, daddr, port, sport=sport)
         if not self.deliver(syn):
-            self.deliver(syn)  # the retransmission: exactly two SYNs per refused connect
+            for _ in range(2):
+                self.deliver(syn)  # TCP_SYNCNT=1 is measured at three SYNs per refused connect
             return "TIMEOUT"
         hook, oif = self.route(daddr)
         back = packet(oif, daddr, saddr, sport, state="established", orig=(saddr, daddr, port))
@@ -1905,7 +1936,7 @@ class Smoke(Smoking, Harness):
             self.assertGreaterEqual(results[label]["counter_change"], 1, label)
         self.assertEqual(results["4b"]["counter_change"], 1, "a raw SYN is one packet")
         for label in ("3", "4", "5", "7", "8-gateway", "8-primary", "9", "10", "11-link", "11-app"):
-            self.assertEqual(results[label]["counter_change"], 2, label + ": a bounded connect is two SYNs")
+            self.assertEqual(results[label]["counter_change"], 3, label + ": a bounded connect is three SYNs")
         for label in ("8b", "8d", "8d-host"):
             self.assertEqual(results[label]["counter_change"], 1, label + ": an ICMP error is one packet")
         self.assertIn(APP_NET, results["4b"].get("sent_from", ""))
@@ -1974,7 +2005,7 @@ class Smoke(Smoking, Harness):
     def test_a_timeout_without_its_counter_rise_fails(self):
         self.ready()
         self.host.frozen = ("to_vm_refused",)
-        self.assert_fails("counter moved by 0, expected 2")
+        self.assert_fails("counter moved by 0, expected 3")
         self.host.frozen = ()
         self.assertEqual(self.smoke(), 0, self.err)
 
@@ -1984,7 +2015,7 @@ class Smoke(Smoking, Harness):
         # stops matching the packets the probe sent.
         self.ready()
         self.host.background = {"47103": ["to_vm_refused"]}
-        self.assert_fails("counter moved by 3, expected 2")
+        self.assert_fails("counter moved by 4, expected 3")
         self.host.background = {"47208": ["vm_to_host", "vm_to_host"]}
         self.assert_fails("8c: the counter moved by 2, expected 0 or 1")
         self.host.background = {}

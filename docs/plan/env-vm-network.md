@@ -525,19 +525,22 @@ refused, and so is a delivery directory whose name holds anything but letters, d
   as their owner's uid, with every capability dropped. The client key is delivered mode 0600 to
   its owner (`docs/PREVIEW.md:1330`); it is never copied and its mode is never widened. The
   record holds no file content.
-- **Bounds.** Each connect is bounded at 5 s and retransmits its SYN exactly once (`TCP_SYNCNT=1`
-  on the probe's own socket), so the sender aborts at about 3 s having sent exactly two SYNs —
-  which is what makes each probe's expected counter amount a known number rather than the guest
-  kernel's retransmission schedule. Each probe is preceded by a quiet baseline of the same
+- **Bounds.** Each connect is bounded at 5 s with `TCP_SYNCNT=1` on the probe's own socket.
+  Measured 2026-10-25 on both kernels this runs on (host 7.0.0-38, guest 7.0.0-34): that bound
+  emits three SYNs — the initial SYN plus two retransmissions about 1 s apart, the sender
+  aborting at about 3 s — and `TCP_SYNCNT=0` is refused (EINVAL), so three is the smallest
+  count a bounded connect can send; that is what makes each probe's expected counter amount a
+  known number rather than the guest kernel's retransmission schedule (`scripts/env-vm-guard-bounded-connect.txt`
+  pins the measured shape). Each probe is preceded by a quiet baseline of the same
   length. The whole smoke is bounded at 300 s, half the dead-man bound, and fails past it.
 
 **A refusal passes only if all of these hold:**
 
-1. the TCP connect **times out** (the sender's own stack gives up after its two SYNs), or for a
+1. the TCP connect **times out** (the sender's own stack gives up after its three SYNs), or for a
    datagram, nothing is delivered;
 2. the refusal path's **named counter** moved during the probe by exactly the number of packets
-   the probe sent — two SYNs for every refused connect, one for every ICMP error or spoofed
-   datagram — measured against a quiet baseline of the same length. The counters name their rule
+   the probe sent — three SYNs for every refused connect (measured; see Bounds), one for every
+   ICMP error or spoofed datagram — measured against a quiet baseline of the same length. The counters name their rule
    directly and carry no trace-id semantics: the counter's own name is the attribution, so no
    packet is traced on the host at all, and the smoke writes nothing into nft. (Owner ruling
    2026-10-25: the smoke ran live three times and each attempt failed on a distinct nft 1.1.6

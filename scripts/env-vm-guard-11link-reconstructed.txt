@@ -1,0 +1,79 @@
+# Probe 11-link's refusal path, as the final W9 attempt (2026-10-24T21:52Z, attempt 3 of 3)
+# met it on nft 1.1.6. RECONSTRUCTED, not a live capture: the lane tail-piped the smoke's
+# output, so no `nft monitor trace` capture of this attempt was preserved on the host or in
+# any journal - /root/env-vm-guard/changes.log records only the failure signature
+# "FAIL 11-link: not every packet was traced to its own rule's drop". The packet shape is the
+# one both live captures show for a refused connect on this host (five SYN retransmissions,
+# each a prerouting id with no guard-table verdict and a separate forward id dropped by the
+# probe's rule); the addresses and MACs are this file's synthetic DEV ranges and the ids and
+# ct ids are synthetic. It exists to pin the counter-delta logic, not the trace semantics.
+trace id 11aa0001 inet env_vm_guard_trace prerouting packet: iif "envvm-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61551 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0001 inet env_vm_guard_trace prerouting rule tcp sport 47111 meta nftrace set 1 (verdict continue)
+trace id 11aa0001 inet env_vm_guard_trace prerouting policy accept 
+trace id 11aa0001 ip raw PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61551 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0001 ip raw PREROUTING policy accept 
+trace id 11aa0001 ip nat PREROUTING conntrack: ct direction original ct state new ct id 900000001 
+trace id 11aa0001 ip nat PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61551 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0001 ip nat PREROUTING policy accept 
+trace id 11aa0001 bridge incus in.sandbox-dev_docker.eth0 conntrack: ct direction original ct state new ct status dnat-done ct id 900000001 
+trace id 11aa0001 bridge incus in.sandbox-dev_docker.eth0 packet: iif "tap11aa11aa" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61551 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0001 bridge incus in.sandbox-dev_docker.eth0 policy accept 
+trace id 11aa0001 inet env_vm_guard forward conntrack: ct direction original ct state new ct status dnat-done ct id 900000001 
+trace id 11aa0001 inet env_vm_guard forward packet: iif "envvm-dev" oif "envapp-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 63 ip id 61551 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0001 inet env_vm_guard forward rule iifname "envvm-*" counter name "vm_egress" drop (verdict drop)
+trace id 11aa0002 inet env_vm_guard_trace prerouting packet: iif "envvm-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61552 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0002 inet env_vm_guard_trace prerouting rule tcp sport 47111 meta nftrace set 1 (verdict continue)
+trace id 11aa0002 inet env_vm_guard_trace prerouting policy accept 
+trace id 11aa0002 ip raw PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61552 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0002 ip raw PREROUTING policy accept 
+trace id 11aa0002 ip nat PREROUTING conntrack: ct direction original ct state new ct id 900000002 
+trace id 11aa0002 ip nat PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61552 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0002 ip nat PREROUTING policy accept 
+trace id 11aa0002 bridge incus in.sandbox-dev_docker.eth0 conntrack: ct direction original ct state new ct status dnat-done ct id 900000002 
+trace id 11aa0002 bridge incus in.sandbox-dev_docker.eth0 packet: iif "tap11aa11aa" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61552 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0002 bridge incus in.sandbox-dev_docker.eth0 policy accept 
+trace id 11aa0002 inet env_vm_guard forward conntrack: ct direction original ct state new ct status dnat-done ct id 900000002 
+trace id 11aa0002 inet env_vm_guard forward packet: iif "envvm-dev" oif "envapp-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 63 ip id 61552 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0002 inet env_vm_guard forward rule iifname "envvm-*" counter name "vm_egress" drop (verdict drop)
+trace id 11aa0003 inet env_vm_guard_trace prerouting packet: iif "envvm-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61553 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0003 inet env_vm_guard_trace prerouting rule tcp sport 47111 meta nftrace set 1 (verdict continue)
+trace id 11aa0003 inet env_vm_guard_trace prerouting policy accept 
+trace id 11aa0003 ip raw PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61553 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0003 ip raw PREROUTING policy accept 
+trace id 11aa0003 ip nat PREROUTING conntrack: ct direction original ct state new ct id 900000003 
+trace id 11aa0003 ip nat PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61553 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0003 ip nat PREROUTING policy accept 
+trace id 11aa0003 bridge incus in.sandbox-dev_docker.eth0 conntrack: ct direction original ct state new ct status dnat-done ct id 900000003 
+trace id 11aa0003 bridge incus in.sandbox-dev_docker.eth0 packet: iif "tap11aa11aa" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61553 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0003 bridge incus in.sandbox-dev_docker.eth0 policy accept 
+trace id 11aa0003 inet env_vm_guard forward conntrack: ct direction original ct state new ct status dnat-done ct id 900000003 
+trace id 11aa0003 inet env_vm_guard forward packet: iif "envvm-dev" oif "envapp-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 63 ip id 61553 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0003 inet env_vm_guard forward rule iifname "envvm-*" counter name "vm_egress" drop (verdict drop)
+trace id 11aa0004 inet env_vm_guard_trace prerouting packet: iif "envvm-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61554 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0004 inet env_vm_guard_trace prerouting rule tcp sport 47111 meta nftrace set 1 (verdict continue)
+trace id 11aa0004 inet env_vm_guard_trace prerouting policy accept 
+trace id 11aa0004 ip raw PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61554 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0004 ip raw PREROUTING policy accept 
+trace id 11aa0004 ip nat PREROUTING conntrack: ct direction original ct state new ct id 900000004 
+trace id 11aa0004 ip nat PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61554 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0004 ip nat PREROUTING policy accept 
+trace id 11aa0004 bridge incus in.sandbox-dev_docker.eth0 conntrack: ct direction original ct state new ct status dnat-done ct id 900000004 
+trace id 11aa0004 bridge incus in.sandbox-dev_docker.eth0 packet: iif "tap11aa11aa" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61554 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0004 bridge incus in.sandbox-dev_docker.eth0 policy accept 
+trace id 11aa0004 inet env_vm_guard forward conntrack: ct direction original ct state new ct status dnat-done ct id 900000004 
+trace id 11aa0004 inet env_vm_guard forward packet: iif "envvm-dev" oif "envapp-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 63 ip id 61554 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0004 inet env_vm_guard forward rule iifname "envvm-*" counter name "vm_egress" drop (verdict drop)
+trace id 11aa0005 inet env_vm_guard_trace prerouting packet: iif "envvm-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61555 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0005 inet env_vm_guard_trace prerouting rule tcp sport 47111 meta nftrace set 1 (verdict continue)
+trace id 11aa0005 inet env_vm_guard_trace prerouting policy accept 
+trace id 11aa0005 ip raw PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61555 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0005 ip raw PREROUTING policy accept 
+trace id 11aa0005 ip nat PREROUTING conntrack: ct direction original ct state new ct id 900000005 
+trace id 11aa0005 ip nat PREROUTING packet: iif "envvm-dev" ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61555 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0005 ip nat PREROUTING policy accept 
+trace id 11aa0005 bridge incus in.sandbox-dev_docker.eth0 conntrack: ct direction original ct state new ct status dnat-done ct id 900000005 
+trace id 11aa0005 bridge incus in.sandbox-dev_docker.eth0 packet: iif "tap11aa11aa" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 64 ip id 61555 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0005 bridge incus in.sandbox-dev_docker.eth0 policy accept 
+trace id 11aa0005 inet env_vm_guard forward conntrack: ct direction original ct state new ct status dnat-done ct id 900000005 
+trace id 11aa0005 inet env_vm_guard forward packet: iif "envvm-dev" oif "envapp-dev" ether saddr 02:00:00:00:00:01 ether daddr 02:00:00:00:00:02 ip saddr 198.51.100.2 ip daddr 192.0.2.2 ip dscp cs0 ip ecn not-ect ip ttl 63 ip id 61555 ip protocol tcp ip length 60 tcp sport 47111 tcp dport 2376 tcp flags == syn tcp window 64240 
+trace id 11aa0005 inet env_vm_guard forward rule iifname "envvm-*" counter name "vm_egress" drop (verdict drop)

@@ -1,0 +1,3 @@
+12:31:27.430455 IP 192.0.2.3.47103 > 198.51.100.2.2376: Flags [S], seq 3616610268, win 64240, options [mss 1460,sackOK,TS val 2759146833 ecr 0,nop,wscale 10], length 0
+12:31:28.465186 IP 192.0.2.3.47103 > 198.51.100.2.2376: Flags [S], seq 3616610268, win 64240, options [mss 1460,sackOK,TS val 2759147868 ecr 0,nop,wscale 10], length 0
+12:31:29.489255 IP 192.0.2.3.47103 > 198.51.100.2.2376: Flags [S], seq 3616610268, win 64240, options [mss 1460,sackOK,TS val 2759148892 ecr 0,nop,wscale 10], length 0

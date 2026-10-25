@@ -428,15 +428,17 @@ describe('the synthetic sandbox as a transport', () => {
     }
     expect(carried.stdout).toContain('lantern-sales.csv')
     expect(carried.exit_code).toBe(0)
-    // Nothing read-only is recorded as a deliverable, and pipes are not inspection.
+    // Nothing read-only is recorded as a deliverable, but pipes ARE inspection: what the
+    // real container prints, the model prints (`cat f | wc -l` → `3\n`, calibrated).
     expect(trace.artifacts).toEqual([])
     expect(await out(`cat ${SALES} | wc -l`)).toMatchObject({
-      stdout: '',
+      stdout: '3\n',
       stderr: '',
       exit_code: 0,
     })
+    // The interpreter stage runs and is judged; the modelled `ls` still prints.
     expect(((await out(`ls /work/in && python3 -c "print(1)"`)) as { stdout: string }).stdout).toBe(
-      '',
+      'lantern-notes.md\nlantern-sales.csv\n',
     )
   })
 
@@ -461,24 +463,24 @@ describe('the synthetic sandbox as a transport', () => {
   // MUTATIONS: remove |\n from the split; restore the unconditional empty-part refusal.
   it.each(['\n', ';'])('runs inspections separated or terminated by %j', async (separator) => {
     const { call, trace } = make()
-    const listed = ['lantern-sales.csv', 'lantern-notes.md']
+    const listed = ['lantern-notes.md', 'lantern-sales.csv']
     const both = await call('sandbox_bash', {
       command: `ls /work/in${separator}head -n 1 ${SALES}`,
     })
     expect(both.data).toMatchObject({
-      stdout: [...listed, 'region,revenue'].join('\n'),
+      stdout: `${listed.join('\n')}\nregion,revenue`,
       exit_code: 0,
     })
     expect((await call('sandbox_bash', { command: `ls /work/in${separator}` })).data).toMatchObject(
       {
-        stdout: listed.join('\n'),
+        stdout: `${listed.join('\n')}\n`,
         exit_code: 0,
       },
     )
     // A newline, like `;`, continues after a failure and returns the last exit code.
     expect(
       (await call('sandbox_bash', { command: `cat /work/nope${separator}ls /work/in` })).data,
-    ).toMatchObject({ stdout: listed.join('\n'), exit_code: 0 })
+    ).toMatchObject({ stdout: `${listed.join('\n')}\n`, exit_code: 0 })
     expect(trace.artifacts).toEqual([])
   })
 

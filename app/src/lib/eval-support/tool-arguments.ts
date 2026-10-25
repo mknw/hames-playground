@@ -20,7 +20,11 @@ export function sandboxShapeError(args: Record<string, unknown>): string | undef
 }
 
 const EXECUTORS = new Set(['python3', 'python', 'pandoc', 'libreoffice', 'soffice'])
-const WRITERS = new Set(['cat', 'printf'])
+/** Writers able to leave a file when their stdout is redirected. `echo` joins `cat` and
+ * `printf`: same transcription, same grammar (owner ruling 2026-10-25 — the interface
+ * contract, not a command whitelist; the run-3 candidates that reached for `echo` when
+ * `printf` was withheld were writing the same file). */
+const WRITERS = new Set(['cat', 'printf', 'echo'])
 
 /** The program each segment of a shell line starts with, skipping `FOO=bar` prefixes. */
 const heads = (command: string): string[] =>
@@ -37,11 +41,14 @@ const heads = (command: string): string[] =>
     )
     .filter(Boolean)
 
-/** The live transport records requests; this grades a production-shaped shell
- * request, not Python execution: it must RUN something able to produce the output
- * (a converter or interpreter, or `cat`/`printf` redirected to a file) and the
- * command, or a script it runs, must name every file listed. Naming files is not
- * running them: `echo a b | cat` and a bare `printf 'a b'` do not pass. */
+/** The live transport records requests; this grades a production-shaped shell request by
+ * the INTERFACE CONTRACT, not a command whitelist: the command must run something able to
+ * produce the declared artifact — a converter or interpreter, or `cat`/`printf`/`echo`
+ * redirected to a file — and the artifact predicate validates the OUTPUT, which for the
+ * graders (who hold only the arguments and the scripts) resolves to the command, or a
+ * script it runs, naming every declared file. The synthetic sandbox judges the same way
+ * and additionally checks the produced artifact it records. Naming files is not running
+ * them: `echo a b | cat` and a bare `printf 'a b'` do not pass. */
 export const sandboxArgs =
   (files: string[]): ArgsPredicate =>
   (args, scripts = '') => {

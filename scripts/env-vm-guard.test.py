@@ -81,9 +81,6 @@ def statements(line):
         elif tokens[i:i + 3] == ["icmp", "type", "destination-unreachable"]:
             out.append(("icmp type", "destination-unreachable"))
             i += 3
-        elif tokens[i:i + 4] == ["meta", "nftrace", "set", "1"]:
-            out.append(("nftrace", "1"))
-            i += 4
         elif word in ("accept", "drop"):
             out.append((word, None))
             i += 1
@@ -188,8 +185,6 @@ def as_json(family, name, value, handles):
                     else:
                         right, op = (int(item) if item.isdigit() else item), "=="
                     expr.append({"match": {"op": op, "left": {kind: dict(body)}, "right": right}})
-                else:
-                    expr.append({"mangle": {"key": {"meta": {"key": "nftrace"}}, "value": 1}})
             items.append({"rule": {"family": family, "table": name, "chain": chain_name,
                                    "handle": next(handles), "expr": expr}})
     return {"nftables": items}
@@ -219,34 +214,24 @@ def matches(key, value, packet):
     raise AssertionError(key)
 
 
-def evaluate(tables, hook, packet, trace=None):
+def evaluate(tables, hook, pkt):
     """Every base chain on the hook, in priority order: a drop is final, an accept ends its chain."""
     chains = sorted(((c["prio"], key, name, c) for key, value in tables.items()
                      for name, c in value["chains"].items() if c["hook"] == hook), key=lambda x: (x[0], x[1]))
     for _, (family, table), name, chain in chains:
-        if packet.get("traced") and trace is not None:
-            trace.append('trace id %s %s %s %s packet: iif "%s" ip saddr %s ip daddr %s'
-                         % (packet["id"], family, table, name, packet.get("iif"), packet["saddr"], packet["daddr"]))
         verdict = None
         for rule in chain["rules"]:
-            if all(matches(k, v, packet) for k, v in rule["statements"]
-                   if k not in ("counter", "nftrace", "accept", "drop")):
+            if all(matches(k, v, pkt) for k, v in rule["statements"]
+                   if k not in ("counter", "accept", "drop")):
                 for k, v in rule["statements"]:
-                    if k == "counter" and not (packet.get("stuck") and packet.get("traced")) and \
-                            not (packet.get("stuck_allow") and v.startswith("app_to_vm_")):
+                    if k == "counter" and v not in pkt.get("frozen", ()) and \
+                            not (pkt.get("stuck_allow") and v.startswith("app_to_vm_")):
                         tables[(family, table)]["counters"][v] += 1
-                    if k == "nftrace":
-                        packet["traced"] = True
                 verdict = next((k for k, _ in rule["statements"] if k in ("accept", "drop")), "continue")
-                if packet.get("traced") and trace is not None:
-                    trace.append("trace id %s %s %s %s rule %s (verdict %s)" % (packet["id"], family, table, name,
-                                                                               rule["text"], verdict))
                 if verdict in ("accept", "drop"):
                     break
         if verdict == "drop":
             return "drop"
-        if verdict != "accept" and packet.get("traced") and trace is not None:
-            trace.append("trace id %s %s %s %s policy accept" % (packet["id"], family, table, name))
     return "accept"
 
 
@@ -264,6 +249,18 @@ def installed(cfg):
 def packet(iif, saddr, daddr, dport, oif=None, proto="tcp", state="new", orig=None, **extra):
     return {"iif": iif, "oif": oif, "saddr": saddr, "daddr": daddr, "dport": dport, "sport": 40000,
             "proto": proto, "state": state, "orig": orig, **extra}
+
+
+def capture_facts(path, counter, bridge):
+    """A captured run's own facts, in the counter's unit: the guard's drop events
+    on the probe's rule, counted as traversal events - never as trace ids - and
+    the ingresses the guard saw. Addresses and MACs in the captures are the
+    synthetic DEV ranges; nothing else was touched."""
+    text = (ROOT / path).read_text()
+    events = re.findall(r"inet %s \w+ rule [^\n]*counter name \"%s\" drop \(verdict drop\)" % (guard.TABLE, counter),
+                        text)
+    ingresses = set(re.findall(r"inet %s \w+ packet: iif \"([^\"]+)\"" % guard.TABLE, text))
+    return len(events), ingresses
 
 
 class Rules(unittest.TestCase):
@@ -429,51 +426,37 @@ class Rules(unittest.TestCase):
         expr["left"]["ct"]["key"] = "ip other"
         self.assertNotEqual(guard.model(changed), guard.expected(config()))
 
-    def test_trace_groups_by_guard_traversal_not_trace_id(self):
-        # The captured live `nft monitor trace` of the failed W9 smoke (nft 1.1.6;
-        # the client and VM addresses parameterized to the DEV env and the lab MACs
-        # to synthetic ones — no instance values committed): five SYN
-        # retransmissions, each a prerouting id with no guard-table verdict and a
-        # separate forward id dropped by to_vm_refused. The guard's own traversal is
-        # the evidence; an id spanning hooks would read every packet twice — once
-        # with no verdict at all — and refuse every refusal.
-        captured = (ROOT / "scripts/env-vm-guard-nft116-trace.txt").read_text()
-        packets = guard.traced(captured)
-        self.assertEqual(len(packets), 10)
-        guard_ids = [p for p in packets.values() if p["verdicts"]]
-        self.assertEqual(len(guard_ids), 5)
-        self.assertTrue(all(p["verdicts"] == [("to_vm_refused", "drop")] for p in guard_ids))
-        self.assertTrue(all(p["iif"] == "envapp-dev" for p in guard_ids))
-        self.assertTrue(any(not p["verdicts"] for p in packets.values()))
+    def test_counter_evidence_against_the_three_live_captures(self):
+        # The three live W9 attempts (2026-10-24 05:49Z, 20:47Z and 21:52Z) each
+        # failed the OLD trace-attribution evidence on a distinct nft 1.1.6 defect
+        # while the counters held: in every capture the guard's drop events on the
+        # probe's rule number exactly what its counter moved by. The captures pin
+        # the counter-delta logic - each live delta passes, a mutated delta is
+        # refused with its amounts named. The first two files are byte-faithful
+        # live captures (parameterized addresses and MACs); the third is
+        # reconstructed, because the final attempt's lane tail-piped the smoke's
+        # output and no monitor capture of 11-link was preserved anywhere - only
+        # the journaled failure signature.
+        for path, counter, bridge, label in (
+                ("scripts/env-vm-guard-nft116-trace.txt", "to_vm_refused", "envapp-dev", "3"),
+                ("scripts/env-vm-guard-nft116-reuse.txt", "vm_to_host", "envvm-dev", "8-primary"),
+                ("scripts/env-vm-guard-11link-reconstructed.txt", "vm_egress", "envvm-dev", "11-link")):
+            events, ingresses = capture_facts(path, counter, bridge)
+            self.assertEqual(ingresses, {bridge}, path)
+            self.assertEqual(events, 5, path)
+            self.assertEqual(guard.counter_evidence(events, events, label), events)
+            for delta in (events - 1, events + 1):
+                with self.assertRaises(guard.Refused) as raised:
+                    guard.counter_evidence(delta, events, label)
+                self.assertIn("counter moved by %d, expected %d" % (delta, events), str(raised.exception))
 
-    def test_trace_tolerates_nft116_reused_trace_ids(self):
-        # The captured live `nft monitor trace` of the standalone 8-primary
-        # reproduction on nft 1.1.6 (diag-8-primary-monitor.txt on the host; the VM
-        # and primary addresses parameterized to the DEV env and the lab MACs to
-        # synthetic ones): five SYN retransmissions, of which the last two reuse the
-        # previous ones' trace ids, so the guard-reached id ccf30be1 carries two
-        # identical vm_to_host drops while the counter moved by five. The evidence
-        # is each id's DISTINCT verdicts and the traversal events — the raw list
-        # refused the live refusal, the ids undercounted its counter.
-        captured = (ROOT / "scripts/env-vm-guard-nft116-reuse.txt").read_text()
-        packets = guard.traced(captured)
-        self.assertEqual(len(packets), 8)
-        guard_ids = [p for p in packets.values() if p["verdicts"]]
-        self.assertEqual(len(guard_ids), 4)
-        self.assertTrue(all(set(p["verdicts"]) == {("vm_to_host", "drop")} for p in guard_ids))
-        self.assertTrue(all(p["iif"] == "envvm-dev" for p in guard_ids))
-        self.assertEqual(sorted(len(p["verdicts"]) for p in guard_ids), [1, 1, 1, 2])
-        # The live check passes with the counter's real change (five drops).
-        self.assertEqual(guard.evidence(packets, "vm_to_host", "envvm-dev", 5, "8-primary"), 5)
-
-    def test_a_mixed_verdict_for_one_trace_id_is_still_refused(self):
-        # The reuse tolerance must not loosen the check: one id whose traversals
-        # disagree (an accept and the probe's drop) is still not clean evidence.
-        packets = {"clean": {"iif": "envvm-dev", "verdicts": [("vm_to_host", "drop")]},
-                   "mixed": {"iif": "envvm-dev", "verdicts": [(None, "accept"), ("vm_to_host", "drop")]}}
-        with self.assertRaises(guard.Refused) as raised:
-            guard.evidence(packets, "vm_to_host", "envvm-dev", 3, "8-primary")
-        self.assertIn("not every packet was traced to its own rule's drop", str(raised.exception))
+    def test_the_refusal_connect_sends_a_known_number_of_syns(self):
+        # The counter's expected amount is the packets the probe sent, so the
+        # guest's and the netns connects must bound their own retransmissions:
+        # TCP_SYNCNT=1 means exactly two SYNs, and the kernel's abort after them
+        # (ETIMEDOUT) reports as the timeout it is, never as a local error.
+        self.assertIn("s.setsockopt(socket.IPPROTO_TCP, socket.TCP_SYNCNT, 1)", guard.PACKET)
+        self.assertIn('"TIMEOUT" if error.errno == errno.ETIMEDOUT', guard.PACKET)
 
     def test_environment_names_fit_the_interface_limit(self):
         for name, ok in (("dev", True), ("a", True), ("release", True), ("abcdefgh", True),
@@ -521,19 +504,6 @@ class Rules(unittest.TestCase):
 
 
 # ----------------------------------------------------------- fake host
-
-
-class Monitor:
-    def __init__(self, host):
-        self.host, self.lines = host, []
-        host.monitors.append(self)
-
-    def terminate(self):
-        if self in self.host.monitors:
-            self.host.monitors.remove(self)
-
-    def communicate(self, timeout=None):
-        return "\n".join(self.lines) + "\n", None
 
 
 class Socket:
@@ -620,7 +590,7 @@ class Host:
     """A host with Docker, Incus, systemd and netfilter, all in memory."""
 
     def __init__(self, test, folder, two=False):
-        self.test, self.folder, self.calls, self.monitors = test, folder, [], []
+        self.test, self.folder, self.calls = test, folder, []
         self.payloads, self.errors = [], []
         self.clock = Clock()
         self.cfg = config(two, folder)
@@ -628,7 +598,6 @@ class Host:
             "FORWARD": {"hook": "forward", "prio": 0, "policy": "accept", "rules": []}}},
             ("inet", "incus"): {"comment": None, "counters": {}, "chains": {}}}
         self.handles = iter(range(1, 1_000_000))
-        self.trace_ids = iter(range(0x1000, 0x10000000))
         self.bridges = {"envvm-dev": "198.51.100.1/29", "envapp-dev": "192.0.2.1/29",
                         APP_BRIDGE: "192.0.2.65/26", "eth0": PRIMARY + "/24"}
         self.incus_networks = [{"name": "incusbr0", "config": {"ipv4.nat": "true"}},
@@ -663,27 +632,28 @@ class Host:
             self.networks["envapp-rel"] = {"Name": "envapp-rel", "Id": "r" * 64, "Driver": "bridge",
                                            "Internal": False, "Options": {"com.docker.network.bridge.name": "envapp-rel"},
                                            "Containers": {}}
-        self.containers = {"a" * 64: {"service": "app-dev", "image": "sha256:" + "c" * 64, "pid": "0",
+        self.containers = {"a" * 64: {"service": "app-dev", "image": "sha256:" + "c" * 64, "pid": "2001",
                                       "networks": {APP_NET: "192.0.2.67"}, "env": {}, "user": None, "mounts": []}}
         if two:
-            self.containers["b" * 64] = {"service": "app", "image": "sha256:" + "d" * 64, "pid": "0",
+            self.containers["b" * 64] = {"service": "app", "image": "sha256:" + "d" * 64, "pid": "2002",
                                          "networks": {APP_NET: "192.0.2.68"}, "env": {}, "user": None, "mounts": []}
         self.docker_rules_missing = False
         self.nic_filter = True
-        self.no_trace = False
-        self.stuck_counter = False
+        # Counters frozen for the probed packets: a refusal whose counter never moves.
+        self.frozen = ()
         self.outcome = {}
         self.cost = {}
+        # Background traffic during a probe window, keyed by the probe's source port.
+        self.background = {}
         self.public_reachable = True
         self.host_answer = self.exec_answer = "29.0.0\n"
-        self.misattribute = self.ingress = self.allow_stuck = self.force_icmp = self.force_datagram = False
+        self.allow_stuck = self.force_icmp = self.force_datagram = False
         self.ss = "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 [::]:22 [::]:*\n"
         self.icmp_delivered, self.datagrams, self.held = set(), set(), set()
         self.sandbox_key = None
         self.next_port = 50000
         self.next_container = 0
         self.flushes = 0
-        self.reuse_ids, self.last_ids, self.reused = False, None, 0
 
     STATEFUL = ("tables", "instances", "projects", "networks", "containers", "bridges", "extra_routes", "units",
                 "extra_links", "incus_networks",
@@ -721,42 +691,19 @@ class Host:
                 return "forward", bridge
         return "forward", "eth0"
 
-    def deliver(self, pkt, reuse=None):
-        """Prerouting (the trace table), then input or forward; True if it got through."""
+    def deliver(self, pkt):
+        """Prerouting, then input or forward; True if it got through."""
         hook, oif = self.route(pkt["daddr"])
-        ids = reuse or ("%x" % next(self.trace_ids), "%x" % next(self.trace_ids))
-        self.last_ids = ids
-        pkt = dict(pkt, oif=oif, id=ids[0], stuck=self.stuck_counter,
-                   stuck_allow=self.allow_stuck)
-        trace = [] if self.monitors and not self.no_trace else None
-        if evaluate(self.tables, "prerouting", pkt, trace) == "drop":
+        pkt = dict(pkt, oif=oif, frozen=self.frozen, stuck_allow=self.allow_stuck)
+        if evaluate(self.tables, "prerouting", pkt) == "drop":
             return False
-        # nft assigns a NEW trace id per hook traversal (captured live on nft 1.1.6,
-        # scripts/env-vm-guard-nft116-trace.txt): the forward id differs from the
-        # prerouting id, so a per-id grouping that spans hooks reads every packet
-        # twice — once with no verdict at all.
-        pkt = dict(pkt, id=ids[1])
-        verdict = evaluate(self.tables, hook, pkt, trace)
-        for line in trace or []:
-            if " inet %s " % guard.TABLE in line:
-                if self.misattribute:
-                    line = re.sub(r'counter name "\w+"', 'counter name "elsewhere"', line)
-                if self.ingress:
-                    line = re.sub(r'iif "[^"]+"', 'iif "%s"' % self.ingress, line)
-            for monitor in self.monitors:
-                monitor.lines.append(line)
-        return verdict == "accept"
+        return evaluate(self.tables, hook, pkt) == "accept"
 
     def connect(self, iif, saddr, daddr, port, sport, listening=True):
-        """A TCP connect: a SYN and its retransmission if dropped, then the reply path."""
+        """A TCP connect: a SYN and its one retransmission if dropped, then the reply path."""
         syn = packet(iif, saddr, daddr, port, sport=sport)
         if not self.deliver(syn):
-            # nft 1.1.6 sometimes REUSES the first attempt's trace ids for the
-            # retransmission (captured live in
-            # scripts/env-vm-guard-nft116-reuse.txt): one guard-reached id then
-            # carries two identical (counter, drop) verdicts.
-            self.deliver(syn, self.last_ids if self.reuse_ids else None)
-            self.reused += self.reuse_ids
+            self.deliver(syn)  # the retransmission: exactly two SYNs per refused connect
             return "TIMEOUT"
         hook, oif = self.route(daddr)
         back = packet(oif, daddr, saddr, sport, state="established", orig=(saddr, daddr, port))
@@ -771,7 +718,13 @@ class Host:
 
     def probe(self, label, iif, saddr, daddr, port, sport):
         outcome = self.connect(iif, saddr, daddr, port, sport, self.listening(daddr, port))
+        self.background_hit(sport)
         return self.outcome.get(str(sport), outcome)
+
+    def background_hit(self, sport):
+        # Background traffic arriving during the probe window, keyed by source port.
+        for counter in self.background.pop(str(sport), []):
+            self.tables[("inet", guard.TABLE)]["counters"][counter] += 1
 
     # --- commands
 
@@ -938,6 +891,7 @@ class Host:
             src, dst, dport, sport = rest[0], rest[1], int(rest[2]), int(rest[3])
             if not self.nic_filter and self.deliver(packet(vm, src, dst, dport, proto="udp", sport=sport)):
                 self.datagrams.add(dport)
+            self.background_hit(sport)
             return "SENT"
         raise AssertionError(mode)
 
@@ -946,11 +900,15 @@ class Host:
         self.test.assertIsNotNone(key, "nsenter outside Docker's namespaces: " + args[1])
         container = next(c for c in self.containers.values() if c["pid"] == key.group(1))
         self.test.assertEqual(args[2:6], ["/usr/bin/python3", "-I", "-c", guard.PACKET])
-        self.test.assertEqual(args[6], "syn")
-        src, dst, dport, sport = args[7], args[8], int(args[9]), int(args[10])
+        mode = args[6]
         network = next(iter(container["networks"]))
-        self.deliver(packet(self.bridge_of(network), src, dst, dport, sport=sport))
-        return self.outcome.get(str(sport), "SENT")
+        iif, source = self.bridge_of(network), next(iter(container["networks"].values()))
+        if mode == "syn":
+            src, dst, dport, sport = args[7], args[8], int(args[9]), int(args[10])
+            self.deliver(packet(iif, src, dst, dport, sport=sport))
+            return self.outcome.get(str(sport), "SENT")
+        self.test.assertEqual(mode, "tcp")
+        return self.probe(mode, iif, source, args[7], int(args[8]), int(args[9]))
 
     def cmd_ss(self, args, payload):
         self.test.assertEqual(args, ["ss", "-Hltn"])
@@ -987,15 +945,13 @@ class Host:
             link = next((n for n in container["networks"] if n.startswith("envapp-")), None)
             iif = self.bridge_of(link) if link else self.bridge_of(next(iter(container["networks"])))
             source = container["networks"][link] if link else next(iter(container["networks"].values()))
-            if args[3:5] == ["sh", "-c"]:
-                self.test.assertEqual(args[5], guard.DOCKER_VERSION)
-                host = container["env"].get("SANDBOX_DOCKER_HOST", "")
-                target = re.fullmatch(r"tcp://([0-9.]+):2376", host)
-                if target and self.connect(iif, source, target.group(1), 2376, self.ephemeral()) == "CONNECTED":
-                    return self.exec_answer
-                return (1, "")
-            self.test.assertEqual(args[3:6], ["node", "-e", guard.NODE_TCP])
-            return self.probe(args[8], iif, source, args[6], int(args[7]), int(args[8])) + "\n"
+            self.test.assertEqual(args[3:5], ["sh", "-c"])
+            self.test.assertEqual(args[5], guard.DOCKER_VERSION)
+            host = container["env"].get("SANDBOX_DOCKER_HOST", "")
+            target = re.fullmatch(r"tcp://([0-9.]+):2376", host)
+            if target and self.connect(iif, source, target.group(1), 2376, self.ephemeral()) == "CONNECTED":
+                return self.exec_answer
+            return (1, "")
         if args[1:3] == ["rm", "-f"]:
             self.test.assertTrue(args[3].startswith("x"), "removed a container the smoke did not start")
             for network in self.containers.pop(args[3])["networks"]:
@@ -1022,7 +978,7 @@ class Host:
             else:
                 values.setdefault(argv[i], []).append(argv[i + 1])
                 i += 2
-        image, rest = argv[i], argv[i + 1:]
+        image = argv[i]
         # Every throwaway and the stand-in: local image, no capability, read-only, no privilege.
         self.test.assertEqual(values.get("--pull"), ["never"])
         self.test.assertEqual(values.get("--cap-drop"), ["ALL"])
@@ -1035,19 +991,15 @@ class Host:
         network = values["--network"][0]
         self.test.assertNotEqual(network, "host")
         address = values.get("--ip", [None])[0] or "192.0.2.%d" % (70 + len(self.containers))
-        if "-d" in flags:
-            self.next_container += 1
-            ident = "x%063d" % self.next_container
-            env = dict(e.split("=", 1) for e in values.get("-e", []))
-            self.containers[ident] = {"service": None, "image": image, "pid": str(4000 + self.next_container),
-                                      "networks": {network: address}, "env": env, "user": values["--user"][0],
-                                      "mounts": values.get("--mount", [])}
-            self.networks[network]["Containers"][ident] = {"IPv4Address": address + "/29"}
-            return ident + "\n"
-        self.test.assertEqual(values["--user"], ["65534:65534"])
-        self.test.assertEqual(values["--entrypoint"], ["node"])
-        self.test.assertEqual(rest[:2], ["-e", guard.NODE_TCP])
-        return self.probe(rest[4], self.bridge_of(network), address, rest[2], int(rest[3]), int(rest[4])) + "\n"
+        self.test.assertIn("-d", flags, "every throwaway sleeps: the host's python3 uses its netns")
+        self.next_container += 1
+        ident = "x%063d" % self.next_container
+        env = dict(e.split("=", 1) for e in values.get("-e", []))
+        self.containers[ident] = {"service": None, "image": image, "pid": str(4000 + self.next_container),
+                                  "networks": {network: address}, "env": env, "user": values["--user"][0],
+                                  "mounts": values.get("--mount", [])}
+        self.networks[network]["Containers"][ident] = {"IPv4Address": address + "/29"}
+        return ident + "\n"
 
 
 # ---------------------------------------------------------- the harness
@@ -1084,7 +1036,8 @@ class Harness(unittest.TestCase):
         self.source = self.root / "source.json"
         self.source.write_text(json.dumps(self.cfg, indent=1))
         for p in (patch.object(guard, "OWNER", os.getuid()),patch.object(guard.subprocess, "run", side_effect=self.host),
-                  patch.object(guard.subprocess, "Popen", side_effect=lambda *a, **k: Monitor(self.host)),
+                  patch.object(guard.subprocess, "Popen",
+                               side_effect=AssertionError("no monitor: the smoke's evidence is the counters alone")),
                   patch.object(guard, "root"), patch.object(guard, "time", self.host.clock),
                   patch.object(guard, "host_udp", side_effect=lambda address: Socket(self.host, address)),
                   patch.object(guard, "host_tcp", side_effect=self.host.hold),
@@ -1847,7 +1800,6 @@ class Check(Harness):
             "route-overlap": lambda h: h.extra_routes.append({"dst": "198.51.100.0/24", "dev": "wg0"}),
             "pool-overlap": lambda h: guard.DAEMON.write_text(json.dumps({"default-address-pools": [{"base": "192.0.2.0/24", "size": 28}]})),
             "guest-outside-subnet": lambda h: h.bridges.update({"envvm-dev": "198.51.100.9/29"}),
-            "trace-table-left": lambda h: h.tables.update({("inet", guard.TRACE_TABLE): {"comment": None, "counters": {}, "chains": {}}}),
             "table-missing": lambda h: h.tables.pop(("inet", guard.TABLE)),
             "table-changed": lambda h: h.tables[("inet", guard.TABLE)]["chains"]["forward"]["rules"].pop(),
         }
@@ -1921,7 +1873,8 @@ class Smoking:
         if word:
             self.assertIn(word, self.err)
         self.assertFalse(self.record().exists(), "a failed smoke must not write the record")
-        self.assertNotIn(("inet", guard.TRACE_TABLE), self.host.tables, "trace table left behind")
+        self.assertFalse(any(c[0] == "nft" and ("-f" in c or c[1:3] == ["delete", "table"])
+                             for c in self.host.calls), "a failed smoke wrote to nft")
 
 
 class Smoke(Smoking, Harness):
@@ -1935,6 +1888,7 @@ class Smoke(Smoking, Harness):
         data = SOURCE.read_bytes()
         self.assertEqual(record["installer_blob"], hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest())
         self.assertEqual(record["render_sha256"], hashlib.sha256(guard.render(self.cfg).encode()).hexdigest())
+        self.assertIn("quiet baseline", record["counter_basis"])
         results = self.results()
         self.assertEqual(set(results), {"1", "2", "3", "4", "4b", "5", "7", "8-gateway", "8-primary",
                                         "8-link-local", "8b", "8c", "8d", "8d-host", "9", "10", "11-link", "11-app"})
@@ -1946,23 +1900,27 @@ class Smoke(Smoking, Harness):
                     "11-link": "vm_egress", "11-app": "vm_egress"}
         for label, rule in expected.items():
             self.assertEqual((results[label]["outcome"], results[label]["rule"]), ("refused", rule), label)
-            self.assertEqual(results[label]["counter_change"], results[label]["traced"], label)
-            self.assertGreaterEqual(results[label]["traced"], 1, label)
-        self.assertEqual(results["4b"]["ingress"], APP_BRIDGE)
+            # The counter is the evidence: it moved by exactly the expected amount.
+            self.assertEqual(results[label].get("expected"), results[label]["counter_change"], label)
+            self.assertGreaterEqual(results[label]["counter_change"], 1, label)
+        self.assertEqual(results["4b"]["counter_change"], 1, "a raw SYN is one packet")
+        for label in ("3", "4", "5", "7", "8-gateway", "8-primary", "9", "10", "11-link", "11-app"):
+            self.assertEqual(results[label]["counter_change"], 2, label + ": a bounded connect is two SYNs")
+        for label in ("8b", "8d", "8d-host"):
+            self.assertEqual(results[label]["counter_change"], 1, label + ": an ICMP error is one packet")
         self.assertIn(APP_NET, results["4b"].get("sent_from", ""))
-        self.assertEqual(results["3"]["ingress"], "envapp-dev")
+        self.assertIn(APP_NET, results["4"].get("sent_from", ""))
+        self.assertIn("link bridge", results["3"].get("sent_from", ""))
         self.assertIs(results["7"].get("single_environment"), True)
         self.assertEqual(results["8c"]["dropped_by"], "nic-filter")
-        self.assertNotIn(("inet", guard.TRACE_TABLE), self.host.tables)
         self.assertEqual(self.guard_model(), guard.expected(self.cfg))
-        for args, payload in self.host.payloads:
-            if args[0] == "nft" and ("-f" in args or "delete" in args):
-                self.assertTrue(guard.TRACE_TABLE in (payload or " ".join(args)), "the smoke edited the guard table")
-                self.assertNotIn("table inet %s\n" % guard.TABLE, payload or "")
+        # The smoke writes nothing into nft at all: no trace table, no edits.
+        self.assertEqual([c for c in self.host.calls if c[0] == "nft" and ("-f" in c or c[1:3] == ["delete", "table"])],
+                         [], "the smoke must not write to nft")
         self.assertFalse(any(c[:2] == ["docker", "run"] and "--cap-add" in c for c in self.host.calls))
         self.assertFalse(any(c[0] in ("pnpm", "corepack", "npx") or "dlx" in c for c in self.host.calls))
-        self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 2,
-                         "the stand-in and the 4b throwaway are removed")
+        self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 3,
+                         "the stand-in and the two netns sleepers are removed")
         self.assertLessEqual(self.host.clock.now - 1000, guard.SMOKE_BOUND)
 
     def test_stand_in_mounts_the_delivered_key_read_only_and_never_copies_or_widens_it(self):
@@ -2002,7 +1960,8 @@ class Smoke(Smoking, Harness):
         results = self.results()
         self.assertFalse(results["1"]["stand_in"])
         self.assertEqual(results["8c"]["dropped_by"], "vm_to_host")
-        self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 1)
+        self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 2,
+                         "only the two netns sleepers are removed")
 
     def test_a_failed_run_removes_an_earlier_record(self):
         self.ready()
@@ -2014,29 +1973,22 @@ class Smoke(Smoking, Harness):
 
     def test_a_timeout_without_its_counter_rise_fails(self):
         self.ready()
-        self.host.stuck_counter = True
-        self.assert_fails("counter change differs")
-
-    def test_nft116_reused_trace_ids_still_refuse_cleanly(self):
-        # nft 1.1.6 sometimes reuses a retransmitted SYN's trace ids (captured live
-        # in scripts/env-vm-guard-nft116-reuse.txt): a refused probe's guard id then
-        # carries two identical drops and the counter moves by the traversal events.
-        # Every refusal must still pass its check, and a mixed-verdict id still not.
-        self.ready()
-        self.host.reuse_ids = True
+        self.host.frozen = ("to_vm_refused",)
+        self.assert_fails("counter moved by 0, expected 2")
+        self.host.frozen = ()
         self.assertEqual(self.smoke(), 0, self.err)
-        self.assertGreater(self.host.reused, 0, "the fake never reused a trace id")
-        results = self.results()
-        for label in ("3", "4", "5", "7", "8-gateway", "8-primary", "9", "10"):
-            self.assertEqual((results[label]["outcome"], results[label]["counter_change"]),
-                             ("refused", results[label]["traced"]), label)
-            self.assertGreaterEqual(results[label]["traced"], 1, label)
-        self.assertEqual(results["8c"]["dropped_by"], "nic-filter")
 
-    def test_a_counter_rise_that_is_not_traced_fails(self):
+    def test_a_counter_delta_that_is_not_the_expected_amount_fails(self):
+        # Mixed-source movement in the probe window is inconclusive, never a pass:
+        # the background packet lands on the probe's own counter and the delta
+        # stops matching the packets the probe sent.
         self.ready()
-        self.host.no_trace = True
-        self.assert_fails("traced")
+        self.host.background = {"47103": ["to_vm_refused"]}
+        self.assert_fails("counter moved by 3, expected 2")
+        self.host.background = {"47208": ["vm_to_host", "vm_to_host"]}
+        self.assert_fails("8c: the counter moved by 2, expected 0 or 1")
+        self.host.background = {}
+        self.assertEqual(self.smoke(), 0, self.err)
 
     def test_a_reset_or_a_local_error_is_never_a_refusal(self):
         self.ready()
@@ -2056,23 +2008,13 @@ class Smoke(Smoking, Harness):
         with patch.object(self.host, "cmd_nsenter", side_effect=leaky):
             self.assert_fails("reached the allow rule")
 
-    def test_4b_enters_a_docker_namespace_by_its_path_never_by_pid(self):
+    def test_the_netns_sends_enter_a_docker_namespace_by_its_path_never_by_pid(self):
         self.ready()
         for key in ("/proc/4002/ns/net", "/var/run/docker/netns/../../proc/1/ns/net", ""):
             self.host.sandbox_key = key + "\n"
             with self.subTest(key=key):
-                self.assert_fails("probe 4b: throwaway has no network namespace")
+                self.assert_fails("no network namespace of Docker's")
                 self.assertFalse(any(c[0] == "nsenter" for c in self.host.calls))
-
-    def test_packets_traced_to_another_rule_fail(self):
-        self.ready()
-        self.host.misattribute = True
-        self.assert_fails("its own rule's drop")
-
-    def test_packets_must_arrive_where_the_probe_sent_them(self):
-        self.ready()
-        self.host.ingress = "eth0"
-        self.assert_fails("did not arrive where sent")
 
     def test_probe_1_needs_the_allow_counter_and_an_answer(self):
         self.ready()
@@ -2130,13 +2072,13 @@ class Smoke(Smoking, Harness):
         with patch.object(guard, "packet_counts", side_effect=slow):
             self.assert_fails("bound")
         # Past the bound after the last probe: the run still fails.
-        real_nft = self.host.cmd_nft
+        real_incus = self.host.cmd_incus
 
         def late(args, payload):
-            if args[1:3] == ["delete", "table"] and args[4] == guard.TRACE_TABLE:
+            if args[10:12] == ["tcp", "192.0.2.66"]:  # probe 11-app, the last send
                 self.host.clock.now += 400
-            return real_nft(args, payload)
-        with patch.object(self.host, "cmd_nft", side_effect=late):
+            return real_incus(args, payload)
+        with patch.object(self.host, "cmd_incus", side_effect=late):
             self.assert_fails("bound")
 
     def test_probe_2_needs_the_daemon_to_answer_the_host(self):
@@ -2309,14 +2251,19 @@ MUTATIONS = {
     "unit-loses-partof": ("PartOf=incus.service\n", ""),
     "unit-gains-execstop": ("RemainAfterExit=yes\n", "RemainAfterExit=yes\nExecStop=/usr/sbin/nft delete table inet env_vm_guard\n"),
     "unit-not-isolated": ("ExecStart=/usr/bin/python3 -I /usr/local", "ExecStart=/usr/bin/python3 /usr/local"),
-    # §11.1 bullet 9: timeout without its counter rise, untraced rise, ECONNREFUSED or a local error, past the bound; the stand-in's key.
-    "smoke-timeout-without-counter": ('    require(delta == traced, label + ": counter change differs from the traced packets")', "    pass"),
-    "smoke-untraced-rise": ('    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),', "    require(True,"),
-    "smoke-any-ingress": ('    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")', "    pass"),
+    # §11.1 bullet 9: a counter delta that is not the packets the probe sent, ECONNREFUSED or a local error, past the bound; the stand-in's key.
+    "smoke-counter-delta-unchecked": ('    require(delta == expected, label + ": counter moved by %d, expected %d (inconclusive)" % (delta, expected))', "    pass"),
+    "smoke-counter-delta-loosened": ('    require(delta == expected, label + ": counter moved by %d, expected %d (inconclusive)" % (delta, expected))',
+                                     '    require(delta >= expected, label + ": counter moved by %d, expected %d (inconclusive)" % (delta, expected))'),
+    "smoke-expected-unrecorded": ('    return {"probe": label, "outcome": "refused", "rule": counter, "counter_change": delta, "expected": expected}',
+                                  '    return {"probe": label, "outcome": "refused", "rule": counter, "counter_change": delta}'),
+    "probe-syn-budget-unbounded": ('        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_SYNCNT, 1)\n', ""),
+    "probe-etimedout-inconclusive": ('        print("TIMEOUT" if error.errno == errno.ETIMEDOUT else "ERROR %d" % error.errno)',
+                                     '        print("ERROR %d" % error.errno)'),
     "smoke-econnrefused-is-refusal": ('    require(outcome != "REFUSED", label + ": answered with a reset, so the packet arrived")', "    pass"),
     "smoke-local-error-is-refusal": ('    require(outcome in ("TIMEOUT", "UNDELIVERED", "SENT"), label + ": local error or unknown outcome (inconclusive)")', "    pass"),
     "smoke-connect-not-stopped": ('    if outcome == "CONNECTED":\n', "    if False:\n"),
-    "smoke-noisy-baseline": ('        require(packet_counts()[counter] == start, label + ": counter moved during the quiet baseline (inconclusive)")', "        pass"),
+    "smoke-noisy-baseline": ('    require(packet_counts()[counter] == start, label + ": counter moved during the quiet baseline (inconclusive)")', "    pass"),
     "smoke-past-bound": ("SMOKE_BOUND = 300", "SMOKE_BOUND = 3000"),
     "smoke-bound-unchecked": ('    require(left > 0, "smoke exceeded its %d s bound" % SMOKE_BOUND)', "    pass"),
     "smoke-final-bound-unchecked": ("        remaining(deadline)\n    # Only a passing run writes", "        pass\n    # Only a passing run writes"),
@@ -2327,7 +2274,8 @@ MUTATIONS = {
     "stand-in-runs-as-root": ('"--user", "%d:%d" % (key.st_uid, key.st_gid)', '"--user", "0:0"'),
     "stand-in-wrong-address": ('"--network", "envapp-" + env["name"], "--ip", env["clientAddress"],', '"--network", "envapp-" + env["name"],'),
     # A1: no container gains a capability; the host's python3 sends 4b from the throwaway's netns; the record says so.
-    "A1-4b-gains-net-raw": ('        sleeper = run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "65534:65534",', '        sleeper = run(["docker", "run", "-d", "--rm", *HARDENED, "--cap-add", "NET_RAW", "--user", "65534:65534",'),
+    "A1-4b-gains-net-raw": ('        return run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "65534:65534",',
+                            '        return run(["docker", "run", "-d", "--rm", *HARDENED, "--cap-add", "NET_RAW", "--user", "65534:65534",'),
     "A1-4b-host-netns": ('run(["nsenter", "--net=" + key, "/usr/bin/python3"', 'run(["/usr/bin/python3"'),
     "A1-4b-unrecorded": ('            results[-1]["sent_from"] = "the netns of a throwaway on " + shared["app_network"]', "            pass"),
     "A1-4b-allow-counter-unchecked": ('            require(packet_counts()[allow] == counts, "probe 4b: a spoofed source reached the allow rule")', "            pass"),
@@ -2337,13 +2285,15 @@ MUTATIONS = {
     "probe-1-counter-unchecked": ('        require(packet_counts()[allow] > before, "probe 1: the allow counter did not rise")', "        pass"),
     # The rest of section 6.
     "probe-8c-delivery-unchecked": ('        require(outcome == "UNDELIVERED", "8c: a spoofed datagram was delivered to the host")', "        pass"),
-    "probe-8c-always-nic": ("        if not guard and delta == 0:", "        if True:"),
-    "probe-8b-delivery-ignored": ('                except ConnectionRefusedError:\n                    return "DELIVERED"', '                except ConnectionRefusedError:\n                    return "UNDELIVERED"'),
+    "probe-8c-always-nic": ('        dropped_by = "nic-filter" if delta == 0 else ("vm_to_host" if delta == 1 else "unattributed")',
+                            '        dropped_by = "nic-filter"'),
+    "probe-8c-mixed-tolerated": ('        require(dropped_by != "unattributed", "8c: the counter moved by %d, expected 0 or 1 (inconclusive)" % delta)',
+                                 "        pass"),
+    "probe-8b-delivery-ignored": ('                    except ConnectionRefusedError:\n                        return "DELIVERED"', '                    except ConnectionRefusedError:\n                        return "UNDELIVERED"'),
     "probe-10-no-positive-control": ('        require(host_reaches(probes["publicAddress"], probes["publicPort"]),', "        require(True,"),
     "probe-8-no-listener-check": ('        require(listens(config["probes"]["hostPort"], bool(shared["link_local"])),', "        require(True,"),
     "probe-7-never-per-pair": ('facts[e["name"]]["gateway"] is not None]', "False]"),
     "probe-7-run-kind-unrecorded": ('        results[-1]["single_environment"] = not pairs', "        pass"),
-    "smoke-trace-table-left": ('            if ("inet", TRACE_TABLE) in tables():\n                run(["nft", "delete", "table", "inet", TRACE_TABLE])', "            pass"),
     "smoke-while-armed": ('        require(armed(entries) is None, "a dead-man is armed; the smoke refuses until it is confirmed")', "        pass"),
     "smoke-unit-unchecked": ('        require(safe_file(path) == content, "guard persistence file missing or changed")', "        pass"),
     "smoke-enablement-unchecked": ('    require(show(UNIT.name, "UnitFileState").get("UnitFileState") == "enabled", "guard unit is not enabled")', "    pass"),
@@ -2352,13 +2302,11 @@ MUTATIONS = {
     "throwaway-keeps-capabilities": ('HARDENED = ["--pull", "never", "--cap-drop", "ALL", ', 'HARDENED = ["--pull", "never", '),
     "throwaway-pulls": ('HARDENED = ["--pull", "never", ', 'HARDENED = ["--pull", "always", '),
     "throwaway-writable": ('"--security-opt", "no-new-privileges", "--read-only",', '"--security-opt", "no-new-privileges",'),
-    "throwaway-as-root": ('        return run(["docker", "run", "--rm", *HARDENED, "--user", "65534:65534", "--network", network,', '        return run(["docker", "run", "--rm", *HARDENED, "--network", network,'),
     "record-written-before-the-probes": ('    record_path.unlink(missing_ok=True)\n    with journal("read") as entries:',
                                          '    record_path.unlink(missing_ok=True)\n    record_path.write_text("{}")\n    with journal("read") as entries:'),
     "unit-names-another-incus-unit": ("Before=incus.service\nPartOf=incus.service", "Before=incusd.service\nPartOf=incusd.service"),
     "record-wrong-blob": ('hashlib.sha1(b"blob %d\\0" % len(', 'hashlib.sha1(b"blob %d" % len('),
     # --check's other reads (section 6, "What --check reads").
-    "check-trace-table": ('    require(("inet", TRACE_TABLE) not in tables(), "a smoke\'s trace table is still loaded")', "    pass"),
     "check-readback": ('    require(model(live()) == expected(config), "guard table missing or differs from the render")', "    pass"),
     "check-overdue-deadman": ('        require(pending["boot"] == boot() and now_us() <= limit, "a dead-man is overdue or outlived a reboot")', "        pass"),
     "check-second-instance": ('    require(all(len(members) == 1 for members in on_bridge.values()), "a second instance on an environment bridge")', "    pass"),
@@ -2412,25 +2360,10 @@ MUTATIONS = {
         '}\nKEYS = {json.dumps(value, sort_keys=True): key for key, value in LEFT.items()}'),
     "readback-ignores-objects": ('        else:\n            result["other"].append(kind)\n    result["counters"].sort()', '        else:\n            pass\n    result["counters"].sort()'),
     "readback-ignores-rule-comment": ('        if body.get("comment") is not None and kind != "table":\n            result["other"].append(kind)', '        if False:\n            result["other"].append(kind)'),
-    # W9, one level down from #764: on the same nft a trace id is sometimes REUSED
-    # across two hook traversals of a retransmitted SYN (captured live in
-    # scripts/env-vm-guard-nft116-reuse.txt), so one guard-reached id can carry two
-    # identical (counter, drop) verdicts. Comparing the raw list refuses the live
-    # refusal; counting ids undercounts the counter; tolerating mixed verdicts or
-    # evidence from ids that never reached the table loosens the check. Each is
-    # killed by the fixture test or the mixed-verdict test.
-    "smoke-verdict-list-not-set": (
-        '    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),',
-        '    require(bool(guard) and all(p["verdicts"] == [(counter, "drop")] for p in guard),'),
-    "smoke-verdict-mixed-tolerated": (
-        '    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),',
-        '    require(bool(guard) and all((counter, "drop") in p["verdicts"] for p in guard),'),
-    "smoke-traced-counts-ids": (
-        '    traced = sum(len(p["verdicts"]) for p in guard)',
-        '    traced = len(guard)'),
-    "smoke-evidence-spans-non-guard-ids": (
-        '    guard = [p for p in packets.values() if p["verdicts"]]\n    require(bool(guard)',
-        '    guard = list(packets.values())\n    require(bool(guard)'),
+    # W9's redesign (owner ruling 2026-10-25): the trace mechanism is gone. The
+    # counter evidence is pinned by the three live captures (counter_evidence
+    # tests above) and by the fake-host probes; the mutations above kill any
+    # loosening of the delta, the record or the SYN budget.
     "readback-ignores-table-comment": ('            result["comment"] = body.get("comment")', "            result[\"comment\"] = COMMENT"),
     # Review round 1 on #745 (S = the code review, O = the security review).
     "S1-smoke-stale-record-kept": ("    record_path.unlink(missing_ok=True)\n", ""),
@@ -2484,9 +2417,9 @@ MUTATIONS = {
     "S2-forward-reply-any-destination": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), '),
     "S2-forward-reply-any-bridge": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), ("ip daddr", client), '),
     "S2-forward-reply-any-client": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), ("oifname", app), '),
-    "S2-probe-8d-skipped": ('            for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),\n                                           ("8d-host", shared["primary"], "vm_to_host")):',
-                            '            for label, target, counter in ():'),
-    "S2-probe-8d-host-skipped": ('                                           ("8d-host", shared["primary"], "vm_to_host")):', '                                           ):'),
+    "S2-probe-8d-skipped": ('                for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),\n                                               ("8d-host", shared["primary"], "vm_to_host")):',
+                            '                for label, target, counter in ():'),
+    "S2-probe-8d-host-skipped": ('                                               ("8d-host", shared["primary"], "vm_to_host")):', '                                               ):'),
     "S2-probe-8d-embeds-nothing-live": ('lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT)', 'lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT - 1)'),
 }
 

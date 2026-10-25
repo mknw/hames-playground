@@ -171,11 +171,13 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       .split('\n')
       .filter((line) => line.trim().startsWith('{"reasoning":'))
       .map((line) => JSON.parse(line))
-    // Four domain shots and the existing mode-gated sequential batch.
+    // Six domain shots and the existing mode-gated sequential batch.
     expect(actions.map((a) => a.tool_name)).toEqual([
       'sandbox_write',
       'graph_mail_recent',
       'graph_files_search',
+      'sandbox_bash',
+      'sandbox_bash',
       'sandbox_bash',
       'sandbox_bash',
     ])
@@ -206,6 +208,48 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
     expect(command).toContain("Path('/work/out/sample-summary.md').write_text(")
     expect(command).toContain("print('/work/out/sample-summary.md')")
     expect(shot.is_final).toBe(false)
+  })
+
+  // #606 owner directive 2026-10-25: an expressive multi-step example and the
+  // contrastive envelope negative joined OFFICE_FEW_SHOTS. MUTATIONS: delete
+  // either new entry → red; restore → green.
+  it('carries the expressive multi-step example and the envelope-format negative', () => {
+    const prompt = examples[wire]
+    // The negative: run 4's captured native syntax, labeled WRONG, with the
+    // corrected envelope of the same call right beside it.
+    const wrong = prompt.split('\n- User: ').find((b) => b.includes('WRONG FORMAT'))!
+    expect(wrong).toContain(
+      '<function=sandbox_bash><parameter=command>ls /work/in</parameter></function>',
+    )
+    expect(wrong).toContain('the harness parses the JSON envelope only')
+    expect(wrong).toContain('native tool-call syntax is never valid here')
+    expect(
+      JSON.parse(
+        wrong
+          .split('\n')
+          .find((l) => l.includes('"tool_args"'))!
+          .trim(),
+      ).tool_args,
+    ).toContain('ls /work/in')
+    // The expressive example: heredoc pymupdf read, /work/out deliverable, path
+    // reported. tojson escapes < > ' inside tool_args, so the heredoc is
+    // asserted through the parsed envelope.
+    const expressive = prompt.split('\n- User: ').find((b) => b.includes('contract-outline.docx'))!
+    const command = JSON.parse(
+      prompt
+        .split('\n')
+        .filter((line) => line.trim().startsWith('{"reasoning":'))
+        .map((line) => JSON.parse(line))
+        .find((a) => a.tool_args.includes('contract.pdf'))!.tool_args,
+    ).command
+    expect(command).toContain("pymupdf.open('/work/in/contract.pdf')")
+    expect(command).toContain("out.save('/work/out/contract-outline.docx')")
+    expect(command).toContain("print('/work/out/contract-outline.docx')")
+    expect(expressive).toContain('Multi-step session')
+    // Overfitting guard: none of the eval fixtures' distinctive wording.
+    for (const banned of ['lantern', 'sales', 'total', 'upload', 'summary']) {
+      expect(expressive.toLowerCase()).not.toContain(banned)
+    }
   })
 
   // MUTATION: remove the deliverable sentence from the office contextPrefix.

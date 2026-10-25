@@ -31,6 +31,7 @@ import { withInfoDocumentReferences } from './info-document-references.server'
 import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
+import { ENVELOPE_NEGATIVE_SHOT } from './fewshot-negative.server'
 import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
@@ -73,6 +74,29 @@ const OFFICE_FEW_SHOTS: FewShot[] = [
         "python3 - <<'PY'\nimport csv\nfrom pathlib import Path\nrows = list(csv.DictReader(open('/work/in/sample-sales.csv')))\ntotal = sum(int(r['amount']) for r in rows)\nPath('/work/out/sample-summary.md').write_text(f'# Sample summary\\n\\nTotal: {total}\\n')\nprint('/work/out/sample-summary.md')\nPY",
     }),
   },
+  // #606 gate (runs 3-4): the failing scenarios are upload → inspect →
+  // analyze → deliverable, and no shot above narrates that chain. This one is
+  // the expressive multi-step session: the reasoning narrates the explore and
+  // inspect steps this action follows, and the demonstrated action is the
+  // extract-and-deliver step per WORKSPACE_NOTE — heredoc Python, deliverable
+  // written to /work/out, saved path reported. The domain is deliberately PDF
+  // → docx document processing, NOT the eval scenarios' fixtures (overfitting
+  // guard).
+  {
+    user: 'A client sent their contract as a PDF; it should have arrived in the workspace. Build an editable outline of its section headings.',
+    reasoning:
+      'Multi-step session: first list /work/in to see what arrived, then open the PDF to confirm it parses. This action is the extract-and-deliver step: a quoted heredoc reads the headings with pymupdf, writes the deliverable under /work/out with python-docx and prints the saved path. tool_args is a STRING containing JSON with keys double-quoted; keep is_final=false until a tool result confirms the saved path, then report the path.',
+    tool: 'sandbox_bash',
+    args: JSON.stringify({
+      command:
+        "python3 - <<'PY'\nimport pymupdf\nfrom docx import Document\npdf = pymupdf.open('/work/in/contract.pdf')\nout = Document()\nfor page in pdf:\n    for line in page.get_text().splitlines():\n        if line.strip().isupper():\n            out.add_paragraph(line)\nout.save('/work/out/contract-outline.docx')\nprint('/work/out/contract-outline.docx')\nPY",
+    }),
+  },
+  // The contrastive negative: one shot whose user line labels run 4's captured
+  // malformed form (native tool-call syntax) WRONG, with the corrected envelope
+  // of the same call rendered immediately below it. Shared with the standalone
+  // sandbox agent's list so the lesson cannot drift between the two.
+  ENVELOPE_NEGATIVE_SHOT,
 ]
 
 /**

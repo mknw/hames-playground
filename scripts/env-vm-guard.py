@@ -25,7 +25,6 @@ import tempfile
 import time
 
 TABLE = "env_vm_guard"
-TRACE_TABLE = "env_vm_guard_trace"
 COMMENT = "managed by env-vm-guard; do not edit"
 ANY_VM = "envvm-*"
 DOCKER_PORT = 2376
@@ -780,7 +779,6 @@ def check(config, entries):
     if pending is not None:
         limit = pending["armed_at"] + (pending["seconds"] + LOCK_WAIT + 60) * 1_000_000
         require(pending["boot"] == boot() and now_us() <= limit, "a dead-man is overdue or outlived a reboot")
-    require(("inet", TRACE_TABLE) not in tables(), "a smoke's trace table is still loaded")
     require(model(live()) == expected(config), "guard table missing or differs from the render")
     links = document("ip", "-j", "link", "show")
     addresses = document("ip", "-j", "-4", "addr", "show")
@@ -894,20 +892,17 @@ def check(config, entries):
 
 
 # ----------------------------------------------------------------- smoke
-# Every refusal must time out, be traced on the host to its own named rule,
-# and raise that rule's counter by exactly the traced packets (plan §6).
+# Every refusal must time out, and its refusal path's named counter must move
+# by exactly the packets the probe sent, against a quiet baseline. The
+# counters name their rule directly and have no trace-id semantics (plan §6;
+# owner ruling 2026-10-25 after three live trace-attribution failures).
 
-NODE_TCP = """const [host,port,localPort]=process.argv.slice(1);
-const s=require('node:net').connect({host,port:+port,localPort:+localPort});
-const done=w=>{s.destroy();console.log(w);process.exit(0)};
-s.setTimeout(5000,()=>done('TIMEOUT'));
-s.on('connect',()=>done('CONNECTED'));
-s.on('error',e=>done(e.code==='ECONNREFUSED'?'REFUSED':'ERROR '+e.code));"""
 DOCKER_VERSION = ('exec docker --host "$SANDBOX_DOCKER_HOST" --tlsverify --tlscacert "$SANDBOX_DOCKER_TLS_CA" '
                   '--tlscert "$SANDBOX_DOCKER_TLS_CERT" --tlskey "$SANDBOX_DOCKER_TLS_KEY" '
                   'version --format "{{.Server.Version}}"')
-# Run by the guest's python3, and by the host's inside a throwaway's netns (4b).
-PACKET = r"""import socket, struct, sys
+# Run by the guest's python3, and by the host's python3 inside a container's
+# netns (the app-side refusals and probe 4b).
+PACKET = r"""import errno, socket, struct, sys
 def csum(data):
     data += b"\0" * (len(data) % 2)
     total = sum(struct.unpack("!%dH" % (len(data) // 2), data))
@@ -926,6 +921,9 @@ if mode == "tcp":
     s = socket.socket(socket.AF_INET6 if six else socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(5)
     try:
+        # The counter's expected amount is the packets the probe sent: the connect
+        # retransmits its SYN once (TCP_SYNCNT=1), so exactly two SYNs leave.
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_SYNCNT, 1)
         s.bind(("", int(a[2])))
         index = [i for i, n in socket.if_nameindex() if n != "lo"][0] if six else 0
         s.connect((a[0], int(a[1]), 0, index) if six else (a[0], int(a[1])))
@@ -935,7 +933,8 @@ if mode == "tcp":
     except ConnectionRefusedError:
         print("REFUSED")
     except OSError as error:
-        print("ERROR", error.errno)
+        # The kernel's own abort after the one retransmission is the timeout it is.
+        print("TIMEOUT" if error.errno == errno.ETIMEDOUT else "ERROR %d" % error.errno)
 elif mode in ("syn", "spoof"):
     src, dst, dport, sport = a[0], a[1], int(a[2]), int(a[3])
     if mode == "syn":
@@ -954,13 +953,12 @@ elif mode == "icmp":
     socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP).sendto(body, (target, 0))
     print("SENT")
 """
-# A fixed, unique source port per probe: the trace and the record key on it.
+# A fixed source port per probe, so a later hand capture stays readable by probe.
 SPORT = {"3": 47103, "4": 47104, "4b": 47114, "5": 47105, "6": 47106, "7": 47107, "8-gateway": 47108,
          "8-primary": 47118, "8-link-local": 47128, "8c": 47208, "9": 47109, "10": 47110,
          "11-link": 47111, "11-app": 47121}
 HARDENED = ["--pull", "never", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
             "--pids-limit", "32", "--memory", "256m"]
-TRACE_LINE = re.compile(r"trace id (\S+) (\S+) (\S+) (\S+) (.*)$")
 
 
 def remaining(deadline):
@@ -977,78 +975,37 @@ def packet_counts():
     return counter_values(live())
 
 
-def traced(text):
-    """Trace ids seen, each with its ingress and its verdicts in the guard table."""
-    packets = {}
-    for line in text.splitlines():
-        match = TRACE_LINE.match(line.strip())
-        if not match:
-            continue
-        ident, family, table, _, rest = match.groups()
-        packet = packets.setdefault(ident, {"iif": None, "verdicts": []})
-        if family != "inet" or table != TABLE:
-            continue
-        if rest.startswith("packet: ") and packet["iif"] is None:
-            iif = re.search(r'\biif "([^"]+)"', rest)
-            packet["iif"] = iif.group(1) if iif else None
-        elif rest.startswith("rule "):
-            name = re.search(r'counter name "?([a-z0-9_]+)"?', rest)
-            verdict = re.search(r"\(verdict (\w+)\)$", rest)
-            packet["verdicts"].append((name.group(1) if name else None, verdict.group(1) if verdict else None))
-        elif rest.startswith("policy "):
-            packet["verdicts"].append((None, rest.split()[1]))
-    return packets
-
-
-def evidence(packets, counter, ingress, delta, label):
-    """The guard's own traversal is the evidence, and the counter counts its events."""
-    guard = [p for p in packets.values() if p["verdicts"]]
-    require(bool(guard) and all(set(p["verdicts"]) == {(counter, "drop")} for p in guard),
-            label + ": not every packet was traced to its own rule's drop")
-    require(all(p["iif"] == ingress for p in guard), label + ": packets did not arrive where sent")
-    traced = sum(len(p["verdicts"]) for p in guard)
-    require(delta == traced, label + ": counter change differs from the traced packets")
-    return traced
-
-
-def traced_probe(label, counter, match, send, deadline):
-    """Quiet baseline, then the probe, with the trace flag set for its tuple alone."""
+def counter_probe(label, counter, send, deadline):
+    """Quiet baseline, then the probe; the counter's delta is the whole record."""
     remaining(deadline)
-    trace = "table inet %s {\n    chain prerouting {\n        type filter hook prerouting priority raw; policy accept;\n        %s meta nftrace set 1\n    }\n}\n" % (TRACE_TABLE, match)
-    run(["nft", "-f", "-"], replacement(trace, TRACE_TABLE))
-    monitor = subprocess.Popen(["nft", "monitor", "trace"], stdout=subprocess.PIPE,
-                               stderr=subprocess.DEVNULL, text=True)
-    try:
-        start = packet_counts()[counter]
-        pause(QUIET)
-        require(packet_counts()[counter] == start, label + ": counter moved during the quiet baseline (inconclusive)")
-        outcome = send()
-        pause(1)
-        delta = packet_counts()[counter] - start
-    finally:
-        monitor.terminate()
-        output = monitor.communicate(timeout=5)[0]
-    return outcome, traced(output), delta
+    start = packet_counts()[counter]
+    pause(QUIET)
+    require(packet_counts()[counter] == start, label + ": counter moved during the quiet baseline (inconclusive)")
+    outcome = send()
+    pause(1)
+    return outcome, packet_counts()[counter] - start
 
 
-def refused(label, counter, match, send, deadline, ingress):
-    outcome, packets, delta = traced_probe(label, counter, match, send, deadline)
+def counter_evidence(delta, expected, label):
+    """The counter is the evidence (owner ruling 2026-10-25, after three live
+    attempts each failed on a distinct nft 1.1.6 trace-attribution defect): a
+    counter names its rule directly and has no trace-id semantics, so a probe's
+    pass is its counter's delta against a quiet baseline, exactly the packets
+    the probe sent. Any other movement is a mixed source: inconclusive, never a
+    pass."""
+    require(delta == expected, label + ": counter moved by %d, expected %d (inconclusive)" % (delta, expected))
+    return delta
+
+
+def refused(label, counter, expected, send, deadline):
+    outcome, delta = counter_probe(label, counter, send, deadline)
     if outcome == "CONNECTED":
         raise Refused(label + ": CONNECTED where a refusal is expected; stop the VM and the window")
     require(outcome != "REFUSED", label + ": answered with a reset, so the packet arrived")
-    # A raw SYN (4b) is SENT and has nothing to time out: the trace decides.
+    # A raw SYN (4b) is SENT and has nothing to time out: the counter decides.
     require(outcome in ("TIMEOUT", "UNDELIVERED", "SENT"), label + ": local error or unknown outcome (inconclusive)")
-    # nft assigns a NEW trace id per hook traversal (captured live on nft 1.1.6,
-    # scripts/env-vm-guard-nft116-trace.txt): the same SYN is a prerouting id and
-    # a forward id, and only the traversal that reaches this table records
-    # verdicts. On the same nft a trace id is sometimes REUSED across two hook
-    # traversals of a retransmitted SYN (captured live in
-    # scripts/env-vm-guard-nft116-reuse.txt), so one guard-reached id can carry
-    # two identical (counter, drop) verdicts: the evidence is the id's DISTINCT
-    # verdicts and the counter counts traversal events, not ids.
-    traced = evidence(packets, counter, ingress, delta, label)
-    return {"probe": label, "outcome": "refused", "rule": counter, "traced": traced,
-            "counter_change": delta, "ingress": ingress}
+    delta = counter_evidence(delta, expected, label)
+    return {"probe": label, "outcome": "refused", "rule": counter, "counter_change": delta, "expected": expected}
 
 
 def host_udp(address):
@@ -1115,9 +1072,21 @@ def probe_environment(config, env, facts, shared, deadline):
         return run(["incus", "exec", "--project", "sandbox-" + name, "docker", "--", "python3", "-I", "-c",
                     PACKET, *map(str, args)], timeout=remaining(deadline)).strip()
 
-    def throwaway(network, host, port, sport):
-        return run(["docker", "run", "--rm", *HARDENED, "--user", "65534:65534", "--network", network,
-                    "--entrypoint", "node", image, "-e", NODE_TCP, host, str(port), str(sport)],
+    # Every refusal probe sends a known number of packets - the counter's
+    # expected amount. A TCP refusal is a bounded connect (two SYNs) run by the
+    # host's python3 inside the sender's network namespace; an ICMP error or a
+    # spoofed datagram is one packet.
+    def netns(label, container, *args):
+        # By the namespace's own path: a pid could be reused during the quiet baseline.
+        key = run(["docker", "inspect", "--format", "{{.NetworkSettings.SandboxKey}}", container]).strip()
+        require(bool(re.fullmatch(r"/var/run/docker/netns/[A-Za-z0-9_-]+", key)),
+                label + ": throwaway has no network namespace of Docker's")
+        return run(["nsenter", "--net=" + key, "/usr/bin/python3", "-I", "-c", PACKET, *args],
+                   timeout=remaining(deadline)).strip()
+
+    def sleeper(network):
+        return run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "65534:65534",
+                    "--network", network, "--entrypoint", "sleep", image, "60"],
                    timeout=remaining(deadline)).strip()
 
     try:
@@ -1137,136 +1106,125 @@ def probe_environment(config, env, facts, shared, deadline):
         require(bool(host.strip()), "probe 2: the VM's Docker daemon did not answer the host")
         results.append({"probe": "2", "outcome": "answered", "rule": None})
 
-        def app_tcp(label, run_probe, ingress, port=DOCKER_PORT, target=guest):
-            sport = SPORT[label]
-            results.append(refused(label, "to_vm_refused", "tcp sport %d" % sport,
-                                   lambda: run_probe(target, port, sport), deadline, ingress))
-
-        # The pinned address is held (app-dev or the stand-in): Docker allocates another.
-        app_tcp("3", lambda h, p, s: throwaway(link_bridge, h, p, s), link_bridge)
-        app_tcp("4", lambda h, p, s: throwaway(shared["app_network"], h, p, s), shared["app_bridge"])
-        # 4b: no container gains a capability; the host's python3 sends the raw
-        # SYN from inside a sleeping throwaway's netns, so it leaves by that
-        # container's veth on the app network.
-        sleeper = run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "65534:65534",
-                       "--network", shared["app_network"], "--entrypoint", "sleep", image, "60"],
-                      timeout=remaining(deadline)).strip()
+        # A sleeper per network, held open while the host's python3 connects from
+        # its netns: the app image has no python and cannot bound its own SYNs.
+        sleepers = {"3": sleeper(link_bridge), "4": sleeper(shared["app_network"])}
         try:
-            # By the namespace's own path: a pid could be reused during the quiet baseline.
-            key = run(["docker", "inspect", "--format", "{{.NetworkSettings.SandboxKey}}", sleeper]).strip()
-            require(bool(re.fullmatch(r"/var/run/docker/netns/[A-Za-z0-9_-]+", key)),
-                    "probe 4b: throwaway has no network namespace of Docker's")
-            counts = packet_counts()[allow]
-
-            def raw_syn():
-                return run(["nsenter", "--net=" + key, "/usr/bin/python3", "-I", "-c", PACKET, "syn",
-                            client, guest, str(DOCKER_PORT), str(SPORT["4b"])], timeout=remaining(deadline)).strip()
-            results.append(refused("4b", "to_vm_refused", "tcp sport %d" % SPORT["4b"], raw_syn, deadline,
-                                   shared["app_bridge"]))
+            results.append(refused("3", "to_vm_refused", 2,
+                                   lambda: netns("3", sleepers["3"], "tcp", guest, str(DOCKER_PORT), str(SPORT["3"])),
+                                   deadline))
+            results[-1]["sent_from"] = "the netns of a throwaway on the link bridge"
+            results.append(refused("4", "to_vm_refused", 2,
+                                   lambda: netns("4", sleepers["4"], "tcp", guest, str(DOCKER_PORT), str(SPORT["4"])),
+                                   deadline))
             results[-1]["sent_from"] = "the netns of a throwaway on " + shared["app_network"]
+            # 4b: no container gains a capability; the host's python3 sends the raw
+            # SYN with the pinned client address from inside that sleeper's netns,
+            # so it leaves by the container's veth on the app network.
+            counts = packet_counts()[allow]
+            results.append(refused("4b", "to_vm_refused", 1,
+                                   lambda: netns("4b", sleepers["4"], "syn", client, guest,
+                                                 str(DOCKER_PORT), str(SPORT["4b"])), deadline))
+            results[-1]["sent_from"] = "the pinned address sent from that throwaway's netns on " + shared["app_network"]
             require(packet_counts()[allow] == counts, "probe 4b: a spoofed source reached the allow rule")
-        finally:
-            run(["docker", "rm", "-f", sleeper])
+            # 5: the pinned sender itself, another port; 6: another environment's VM.
+            results.append(refused("5", "to_vm_refused", 2,
+                                   lambda: netns("5", identity, "tcp", guest, str(DOCKER_PORT - 1), str(SPORT["5"])),
+                                   deadline))
+            # Probes 6 and 7 attribute per pair only once another environment's bridge exists.
+            pairs = [e for e in config["environments"]
+                     if e["name"] != name and facts[e["name"]]["gateway"] is not None]
+            if pairs:
+                results.append(refused("6", "to_vm_refused", 2,
+                                       lambda: netns("6", identity, "tcp", pairs[0]["guestAddress"],
+                                                     str(DOCKER_PORT), str(SPORT["6"])), deadline))
+            other = pairs[0]["guestAddress"] if pairs else probes["otherGuestAddress"]
+            results.append(refused("7", "vm_to_vm" if pairs else "vm_egress", 2,
+                                   lambda: guest_run("tcp", other, DOCKER_PORT, SPORT["7"]), deadline))
+            results[-1]["single_environment"] = not pairs
+            gateway = str(fact["gateway"].ip)
+            for label, target in (("8-gateway", gateway), ("8-primary", shared["primary"])) + \
+                    ((("8-link-local", shared["link_local"][name]),) if shared["link_local"].get(name) else ()):
+                results.append(refused(label, "vm_to_host", 2,
+                                       lambda t=target, s=SPORT[label]: guest_run("tcp", t, probes["hostPort"], s),
+                                       deadline))
+            # 8b: an ICMP error about a host flow that is not toward the VM.
+            flow = host_udp(shared["primary"])
+            try:
+                flow.connect((probes["publicAddress"], probes["publicPort"]))
+                flow.send(b"x")
+                hport = flow.getsockname()[1]
 
-        def exec_tcp(h, p, s):
-            return run(["docker", "exec", identity, "node", "-e", NODE_TCP, h, str(p), str(s)],
-                       timeout=remaining(deadline)).strip()
-        app_tcp("5", exec_tcp, link_bridge, port=DOCKER_PORT - 1)
-        # Probes 6 and 7 attribute per pair only once another environment's bridge exists.
-        pairs = [e for e in config["environments"] if e["name"] != name and facts[e["name"]]["gateway"] is not None]
-        if pairs:
-            app_tcp("6", exec_tcp, link_bridge, target=pairs[0]["guestAddress"])
-        other = pairs[0]["guestAddress"] if pairs else probes["otherGuestAddress"]
-        results.append(refused("7", "vm_to_vm" if pairs else "vm_egress", "tcp sport %d" % SPORT["7"],
-                               lambda: guest_run("tcp", other, DOCKER_PORT, SPORT["7"]), deadline, vm_bridge))
-        results[-1]["single_environment"] = not pairs
-        gateway = str(fact["gateway"].ip)
-        for label, target in (("8-gateway", gateway), ("8-primary", shared["primary"])) + \
-                ((("8-link-local", shared["link_local"][name]),) if shared["link_local"].get(name) else ()):
-            results.append(refused(label, "vm_to_host", "tcp sport %d" % SPORT[label],
-                                   lambda t=target, s=SPORT[label]: guest_run("tcp", t, probes["hostPort"], s),
-                                   deadline, vm_bridge))
-        # 8b: an ICMP error about a host flow that is not toward the VM.
-        flow = host_udp(shared["primary"])
-        try:
-            flow.connect((probes["publicAddress"], probes["publicPort"]))
-            flow.send(b"x")
-            hport = flow.getsockname()[1]
-
-            def icmp():
-                guest_run("icmp", shared["primary"], shared["primary"], probes["publicAddress"], "udp", hport,
-                          probes["publicPort"])
-                flow.setblocking(False)
-                try:
-                    flow.recv(16)
-                except ConnectionRefusedError:
-                    return "DELIVERED"
-                except BlockingIOError:
-                    pass
-                return "UNDELIVERED"
-            results.append(refused("8b", "vm_to_host", 'iifname "%s" icmp type destination-unreachable' % vm_bridge,
-                                   icmp, deadline, vm_bridge))
-        finally:
-            flow.close()
-        # 8d: an ICMP error about a live flow toward the VM, sent anywhere but that
-        # flow's client. Conntrack relates it by the tuple it embeds, so only the
-        # reply accepts' own binding refuses it. The host holds the flow: the guest
-        # sees app-dev's flow masqueraded, under a port it cannot predict.
-        held = host_tcp(gateway, guest, DOCKER_PORT)
-        try:
-            hport = held.getsockname()[1]
-            for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),
-                                           ("8d-host", shared["primary"], "vm_to_host")):
-                results.append(refused(label, counter, 'iifname "%s" icmp type destination-unreachable' % vm_bridge,
-                                       lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT),
-                                       deadline, vm_bridge))
-                results[-1]["embeds"] = "a flow the host holds open to the VM's Docker port"
-        finally:
-            held.close()
-        # 8c: a spoofed datagram may die at the NIC filter first (A9): it passes
-        # on non-delivery, and the record says which filter dropped it.
-        listener = host_udp(gateway)
-        try:
-            spoof = next(str(h) for h in fact["gateway"].network.hosts() if str(h) not in (gateway, guest))
-
-            def datagram():
-                guest_run("spoof", spoof, gateway, listener.getsockname()[1], SPORT["8c"])
-                listener.settimeout(CONNECT)
-                try:
-                    listener.recv(16)
-                    return "DELIVERED"
-                except socket.timeout:
+                def icmp():
+                    guest_run("icmp", shared["primary"], shared["primary"], probes["publicAddress"], "udp", hport,
+                              probes["publicPort"])
+                    flow.setblocking(False)
+                    try:
+                        flow.recv(16)
+                    except ConnectionRefusedError:
+                        return "DELIVERED"
+                    except BlockingIOError:
+                        pass
                     return "UNDELIVERED"
-            outcome, packets, delta = traced_probe("8c", "vm_to_host", "udp sport %d" % SPORT["8c"], datagram, deadline)
+                results.append(refused("8b", "vm_to_host", 1, icmp, deadline))
+            finally:
+                flow.close()
+            # 8d: an ICMP error about a live flow toward the VM, sent anywhere but that
+            # flow's client. Conntrack relates it by the tuple it embeds, so only the
+            # reply accepts' own binding refuses it. The host holds the flow: the guest
+            # sees app-dev's flow masqueraded, under a port it cannot predict.
+            held = host_tcp(gateway, guest, DOCKER_PORT)
+            try:
+                hport = held.getsockname()[1]
+                for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),
+                                               ("8d-host", shared["primary"], "vm_to_host")):
+                    results.append(refused(label, counter, 1,
+                                           lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT),
+                                           deadline))
+                    results[-1]["embeds"] = "a flow the host holds open to the VM's Docker port"
+            finally:
+                held.close()
+            # 8c: a spoofed datagram may die at the NIC filter first (A9): it passes
+            # on non-delivery, and the record says which filter dropped it.
+            listener = host_udp(gateway)
+            try:
+                spoof = next(str(h) for h in fact["gateway"].network.hosts() if str(h) not in (gateway, guest))
+
+                def datagram():
+                    guest_run("spoof", spoof, gateway, listener.getsockname()[1], SPORT["8c"])
+                    listener.settimeout(CONNECT)
+                    try:
+                        listener.recv(16)
+                        return "DELIVERED"
+                    except socket.timeout:
+                        return "UNDELIVERED"
+                outcome, delta = counter_probe("8c", "vm_to_host", datagram, deadline)
+            finally:
+                listener.close()
+            require(outcome == "UNDELIVERED", "8c: a spoofed datagram was delivered to the host")
+            # 8c is the exception: the NIC filter may drop the datagram before the
+            # table (A9), so it passes on non-delivery alone and the counter says which
+            # filter dropped it - unchanged means the NIC filter, up by the one
+            # datagram means vm_to_host, anything else is a mixed source.
+            dropped_by = "nic-filter" if delta == 0 else ("vm_to_host" if delta == 1 else "unattributed")
+            require(dropped_by != "unattributed", "8c: the counter moved by %d, expected 0 or 1 (inconclusive)" % delta)
+            results.append({"probe": "8c", "outcome": "not delivered", "dropped_by": dropped_by,
+                            "counter_change": delta})
+            results.append(refused("9", "vm_to_metadata", 2,
+                                   lambda: guest_run("tcp", "169.254.169.254", 80, SPORT["9"]), deadline))
+            # Probe 10's positive control: the host itself reaches the address.
+            require(host_reaches(probes["publicAddress"], probes["publicPort"]),
+                    "10: the host cannot reach the public address (inconclusive)")
+            results.append(refused("10", "vm_egress", 2,
+                                   lambda: guest_run("tcp", probes["publicAddress"], probes["publicPort"], SPORT["10"]),
+                                   deadline))
+            for label, target in (("11-link", client), ("11-app", shared["app_peer"])):
+                results.append(refused(label, "vm_egress", 2,
+                                       lambda t=target, s=SPORT[label]: guest_run("tcp", t, DOCKER_PORT, s),
+                                       deadline))
         finally:
-            listener.close()
-        require(outcome == "UNDELIVERED", "8c: a spoofed datagram was delivered to the host")
-        # The guard's own traversal is the evidence (see refused: nft 1.1.6 assigns
-        # a new trace id per hook traversal and sometimes reuses one across two
-        # traversals of a retransmitted SYN). A datagram traced before the table
-        # but never reaching it, with an unchanged counter, died at the NIC filter.
-        guard = [p for p in packets.values() if p["verdicts"]]
-        if not guard and delta == 0:
-            dropped_by = "nic-filter"
-        elif guard and all(set(p["verdicts"]) == {("vm_to_host", "drop")} for p in guard) \
-                and delta == sum(len(p["verdicts"]) for p in guard):
-            dropped_by = "vm_to_host"
-        else:
-            dropped_by = "unattributed"
-        results.append({"probe": "8c", "outcome": "not delivered", "dropped_by": dropped_by,
-                        "traced": sum(len(p["verdicts"]) for p in guard), "counter_change": delta})
-        results.append(refused("9", "vm_to_metadata", "tcp sport %d" % SPORT["9"],
-                               lambda: guest_run("tcp", "169.254.169.254", 80, SPORT["9"]), deadline, vm_bridge))
-        # Probe 10's positive control: the host itself reaches the address.
-        require(host_reaches(probes["publicAddress"], probes["publicPort"]),
-                "10: the host cannot reach the public address (inconclusive)")
-        results.append(refused("10", "vm_egress", "tcp sport %d" % SPORT["10"],
-                               lambda: guest_run("tcp", probes["publicAddress"], probes["publicPort"], SPORT["10"]),
-                               deadline, vm_bridge))
-        for label, target in (("11-link", client), ("11-app", shared["app_peer"])):
-            results.append(refused(label, "vm_egress", "tcp sport %d" % SPORT[label],
-                                   lambda t=target, s=SPORT[label]: guest_run("tcp", t, DOCKER_PORT, s),
-                                   deadline, vm_bridge))
+            for ident in sleepers.values():
+                run(["docker", "rm", "-f", ident])
     finally:
         if extra is not None:
             run(["docker", "rm", "-f", extra])
@@ -1339,13 +1297,13 @@ def smoke(config, config_path, record_path):
                 "probe 8 needs a port the host listens on for every address")
         report = {"installer_blob": hashlib.sha1(b"blob %d\0" % len(Path(__file__).read_bytes())
                                                  + Path(__file__).read_bytes()).hexdigest(),
-                  "render_sha256": digest(config), "environments": {}}
-        try:
-            for env in config["environments"]:
-                report["environments"][env["name"]] = probe_environment(config, env, facts, shared, deadline)
-        finally:
-            if ("inet", TRACE_TABLE) in tables():
-                run(["nft", "delete", "table", "inet", TRACE_TABLE])
+                  "render_sha256": digest(config),
+                  "counter_basis": "each probe's counter delta against a quiet baseline; "
+                                   "expected is the packets the probe sent (two SYNs per refused "
+                                   "connect, one per ICMP error or spoofed datagram)",
+                  "environments": {}}
+        for env in config["environments"]:
+            report["environments"][env["name"]] = probe_environment(config, env, facts, shared, deadline)
         remaining(deadline)
     # Only a passing run writes: bootstrap admits the overlay on a non-empty file.
     fd, name = tempfile.mkstemp(prefix=".record-", dir=record_path.parent)

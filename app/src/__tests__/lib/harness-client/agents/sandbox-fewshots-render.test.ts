@@ -134,8 +134,10 @@ describe.each([0, 1])('sandbox few-shots in the rendered actor prompt (wire %i)'
   })
 })
 
-// MUTATION: make rendering nondeterministic (e.g. embed a counter or Date.now
-// in a shot) → red.
+// MUTATION: make rendering nondeterministic → red. The mutation must reach
+// the per-call render (e.g. append a fresh counter or Date.now() to the
+// rendered prompt on each request) — a Date.now IN a shot cannot: the shot
+// strings are fixed at module import, so every render sees the same value.
 it('renders the same prompt bytes twice (determinism pin)', async () => {
   for (const client of ['AnthropicSonnet5', 'LargeQwen']) {
     const callArgs = [...renderArgs, { client, env: ENV }] as unknown as Parameters<

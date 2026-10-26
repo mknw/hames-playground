@@ -66,7 +66,7 @@ const FIXTURES: Record<string, unknown> = {
       },
     },
     USES: { type: 'relationship', count: 4 },
-    CONNECTS_TO: { type: 'relationship', count: 2 },
+    CONNECTS_TO: { type: 'relationship', count: 3 },
     RUNS_ON: { type: 'relationship', count: 2 },
     IMPLEMENTS: { type: 'relationship', count: 1 },
     EXPOSES: { type: 'relationship', count: 2 },

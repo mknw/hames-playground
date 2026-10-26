@@ -16,7 +16,12 @@
  *    pattern would then be answered with the total count instead of the triples;
  * 3. delete one direction of a reciprocal pair (e.g. `{ from: 'Dune', type: 'RUNS_ON',
  *    to: 'Alder' }`) — the reciprocity pin goes red and the expected answer would
- *    depend on whether the model reads the edges directed or undirected.
+ *    depend on whether the model reads the edges directed or undirected;
+ * 4. change the count row's anchor (`data: totalCount ? [{ count: 42 }]`, 42 → 43) — the
+ *    turn-1 anchor pin goes red (the pin names the branch expression, because the
+ *    driver's comment also quotes `[{ count: 42 }]`);
+ * 5. change any per-type `count` in the canned schema (e.g. CONNECTS_TO 3 → 99) — the
+ *    per-type count pin goes red, since it derives every count from the triples.
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -90,6 +95,19 @@ describe('07-follow-up-success graph fixture (owner option 2, probe-derived)', (
     expect(schema).toMatch(/type: 'node'/)
   })
 
+  it('every per-type relationship count in the canned schema is derived from the triples', () => {
+    const schema = driver.match(/get_neo4j_schema: \{([\s\S]*?)\n {2}\},/)?.[1] ?? ''
+    const declared = Object.fromEntries(
+      [...schema.matchAll(/(\w+): \{ type: 'relationship', count: (\d+) \}/g)].map((m) => [
+        m[1],
+        Number(m[2]),
+      ]),
+    )
+    const derived: Record<string, number> = {}
+    for (const { type } of triples) derived[type] = (derived[type] ?? 0) + 1
+    expect(declared).toEqual(derived)
+  })
+
   it('the exact expected turn-2 answer is the top-3 participants union computed from the canned data', () => {
     // The top three must be unambiguous: no tie may straddle the rank-3 boundary.
     expect(ranked[2].degree).toBeGreaterThan(ranked[3].degree)
@@ -109,7 +127,7 @@ describe('07-follow-up-success graph fixture (owner option 2, probe-derived)', (
   it('turn 1 keeps the existing total-count anchor', () => {
     expect(turnFacts[0]).toEqual(['42'])
     expect(messages[1]).toBe('Who is involved in the three most popular?')
-    expect(driver).toContain('[{ count: 42 }]')
+    expect(driver).toContain('data: totalCount ? [{ count: 42 }]')
   })
 
   it('the fixture does not hand the answer over: no pre-aggregated rows and no hub self-inclusion', () => {

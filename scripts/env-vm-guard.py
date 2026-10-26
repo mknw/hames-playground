@@ -1222,10 +1222,25 @@ def probe_environment(config, env, facts, shared, deadline):
             results.append(refused("10", "vm_egress", 3,
                                    lambda: guest_run("tcp", probes["publicAddress"], probes["publicPort"], SPORT["10"]),
                                    deadline))
-            for label, target in (("11-link", client), ("11-app", shared["app_peer"])):
+            # Probe 11: the guest reaches no container address. On Docker Engine
+            # 28+ the container-held targets are unprobeable (raw_prerouting_shadow
+            # above), so each probe targets a free address on the SAME bridge - the
+            # same connected route, the same vm_egress rule, and no Docker raw rule
+            # in front of it. The choice is recorded per probe.
+            require(raw_prerouting_shadow(client),
+                    "11: Docker's raw-PREROUTING isolation for the held client address is absent (inconclusive)")
+            results.append({"probe": "11-shadow", "outcome": "present", "rule": None,
+                            "raw_prerouting_drop_for": client})
+            link_free = free_probe_address(link_bridge, document("docker", "network", "inspect", link_bridge)[0])
+            app_free = free_probe_address(shared["app_bridge"],
+                                          document("docker", "network", "inspect", shared["app_network"])[0])
+            for label, target in (("11-link", link_free), ("11-app", app_free)):
                 results.append(refused(label, "vm_egress", 3,
                                        lambda t=target, s=SPORT[label]: guest_run("tcp", t, DOCKER_PORT, s),
                                        deadline))
+                results[-1]["sent_to"] = ("the free address %s on %s; no container holds it, so Docker's "
+                                          "raw-PREROUTING isolation does not shadow the guard"
+                                          % (target, {"11-link": link_bridge, "11-app": shared["app_bridge"]}[label]))
         finally:
             for ident in sleepers.values():
                 run(["docker", "rm", "-f", ident])
@@ -1278,6 +1293,45 @@ def shared_facts(config):
     return {"images": images, "app_network": network["Name"], "app_peer": peers[0], "primary": primary[0],
             "app_bridge": (network.get("Options") or {}).get("com.docker.network.bridge.name", "br-" + network["Id"][:12]),
             "link_local": link_local}
+
+
+def raw_prerouting_shadow(address):
+    """Whether Docker's raw-PREROUTING isolation covers a held address.
+
+    Read-only. Docker Engine 28+ (moby#52224) adds, while any container holds an
+    address, a raw-PREROUTING drop for it (`-d <container-ip>/32 ! -i <its-bridge>
+    -j DROP`), which sits before every inet hook: a guest's packets to a
+    container-held address die in Docker's raw layer and this guard's forward
+    chain never sees them, so no counter can move (window8b, 2026-10-25). Probe
+    11 targets a free address instead; this read records that the shadow was
+    live when it ran, and refuses when it is absent, because an Engine that no
+    longer installs it is a different platform than the one the re-scope was
+    derived on.
+    """
+    raw = run(["iptables-save", "-t", "raw"])
+    return any(re.search(r"^-A PREROUTING .*-d %s/32\b" % re.escape(address), line)
+               and "-j DROP" in line for line in raw.splitlines())
+
+
+def free_probe_address(bridge, network):
+    """An address on the bridge that no container holds, for probe 11.
+
+    The bridge's own subnet from the host's view, the first free address in
+    ascending order, so the choice is deterministic and the record's sent_to
+    fields name it. The bridge's own address is held too: a packet to it takes
+    the input path, never the forward hook, and a counter that cannot move is
+    inconclusive. Refuses when no address is free rather than probing one a
+    container holds.
+    """
+    mine = [a for link in document("ip", "-j", "-4", "addr", "show", bridge)
+            for a in link.get("addr_info", []) if a.get("family") == "inet"]
+    require(bool(mine), "probe 11: the bridge %s has no IPv4 address" % bridge)
+    interface = ipaddress.ip_interface("%s/%s" % (mine[0]["local"], mine[0]["prefixlen"]))
+    held = {c["IPv4Address"].split("/")[0] for c in (network.get("Containers") or {}).values()}
+    held.add(str(interface.ip))
+    free = [str(host) for host in interface.network.hosts() if str(host) not in held]
+    require(bool(free), "probe 11: no address on %s is free of containers; the probe cannot run" % bridge)
+    return free[0]
 
 
 def listens(port, six):

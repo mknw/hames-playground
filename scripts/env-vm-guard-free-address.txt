@@ -1,0 +1,34 @@
+# Probe 11's free-address pair, captured by the WINDOW8B diagnostic (2026-10-25;
+# guard journal /root/env-vm-guard/changes.log, DIAGNOSTIC entries 22:40Z and
+# 22:55Z; the counter reads and outcomes below are that repro's live reads).
+#
+# WITHOUT a container holding the pinned client address, the guest's connect to
+# it TIMES OUT and vm_egress moves by exactly the packets the probe sent - two
+# connects (three SYNs each, the measured TCP_SYNCNT=1 shape of
+# scripts/env-vm-guard-bounded-connect.txt) plus one datagram, +7 in all: the
+# guard sees and drops the flow when the client address is free.
+#
+# WITH the smoke's stand-in holding the address (as it does through probes 1-10),
+# the same connect moved NO guard counter: Docker Engine 28+ (moby#52224)
+# installs, while a container holds an address, a raw-PREROUTING drop for it
+# (`-d <container-ip>/32 ! -i <its-bridge> -j DROP`, observed live as
+# `ip daddr <addr> iifname != "envapp-dev" counter drop` in the ip raw table,
+# added on connect and removed on disconnect), which sits before every inet
+# hook. A container-held address is therefore unprobeable by the guard counter
+# on this Engine, which is why probes 11-link/11-app target an address on the
+# same bridge that no container holds (docs/plan/env-vm-network.md section 6).
+#
+# Addresses are the synthetic DEV ranges of every fixture here; the live repro
+# used the deployment's own addresses (guest 10.231.1.2 -> its pinned client
+# 10.231.101.2:2376). The per-packet lines are the measured bounded-connect
+# shape, not a packet capture: the live repro recorded the counter reads and the
+# outcomes, not the wire.
+vm_egress packets 26 bytes 1552
+TIMEOUT 198.51.100.2.47111 > 192.0.2.2.2376: Flags [S], seq 2018906876, win 64240 (connect 1 of 2)
+TIMEOUT 198.51.100.2.47111 > 192.0.2.2.2376: Flags [S], seq 2018906876, win 64240 (connect 1, retransmission)
+TIMEOUT 198.51.100.2.47111 > 192.0.2.2.2376: Flags [S], seq 2018906876, win 64240 (connect 1, retransmission)
+TIMEOUT 198.51.100.2.47121 > 192.0.2.2.2376: Flags [S], seq 2210324291, win 64240 (connect 2 of 2)
+TIMEOUT 198.51.100.2.47121 > 192.0.2.2.2376: Flags [S], seq 2210324291, win 64240 (connect 2, retransmission)
+TIMEOUT 198.51.100.2.47121 > 192.0.2.2.2376: Flags [S], seq 2210324291, win 64240 (connect 2, retransmission)
+SENT 198.51.100.2.41521 > 192.0.2.2.2376: UDP, length 1
+vm_egress packets 33 bytes 1972

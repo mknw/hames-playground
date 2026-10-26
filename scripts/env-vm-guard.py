@@ -1298,15 +1298,19 @@ def shared_facts(config):
 def raw_prerouting_shadow(address):
     """Whether Docker's raw-PREROUTING isolation covers a held address.
 
-    Read-only. Docker Engine 28+ (moby#52224) adds, while any container holds an
-    address, a raw-PREROUTING drop for it (`-d <container-ip>/32 ! -i <its-bridge>
-    -j DROP`), which sits before every inet hook: a guest's packets to a
-    container-held address die in Docker's raw layer and this guard's forward
-    chain never sees them, so no counter can move (window8b, 2026-10-25). Probe
-    11 targets a free address instead; this read records that the shadow was
-    live when it ran, and refuses when it is absent, because an Engine that no
-    longer installs it is a different platform than the one the re-scope was
-    derived on.
+    Read-only. Docker Engine 28+ adds, while any container holds an address, a
+    raw-PREROUTING drop for it (`-d <container-ip>/32 ! -i <its-bridge>
+    -j DROP`; introduced by moby#49325, Engine 28.0.0, and made per-container
+    rather than per-published-port by moby#49829), which sits before every inet
+    hook: a guest's packets to a container-held address die in Docker's raw
+    layer and this guard's forward chain never sees them, so no counter can
+    move (window8b, 2026-10-25). Probe 11 targets a free address instead; this
+    read records that the shadow was live when it ran, and refuses when it is
+    absent, because an Engine that no longer installs it is a different
+    platform than the one the re-scope was derived on. (moby#52224, open, would
+    replace the per-container rule with a per-subnet one and re-shadow free
+    addresses too — that landing would make this read and the free-address
+    re-scope moot.)
     """
     raw = run(["iptables-save", "-t", "raw"])
     return any(re.search(r"^-A PREROUTING .*-d %s/32\b" % re.escape(address), line)

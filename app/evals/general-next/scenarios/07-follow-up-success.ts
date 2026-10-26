@@ -14,9 +14,9 @@ export const scenario: ConversationScenario = {
   expectedTools: ['read_neo4j_cypher'],
   expectedArgs: { read_neo4j_cypher: projectCountArgs },
   expectedRoutes: ['info-retrieval'],
-  answerIncludes: ['Mira', 'Theo', 'Priya', 'Sana'],
+  answerIncludes: ['Dune', 'Ember', 'Fern', 'Gulf', 'Haven', 'Iris', 'Juniper'],
   artifacts: [],
   forbiddenTools: [],
   maxIterations: 6,
-  turnAnswerIncludes: [['42'], ['Mira', 'Theo', 'Priya', 'Sana']],
+  turnAnswerIncludes: [['42'], ['Dune', 'Ember', 'Fern', 'Gulf', 'Haven', 'Iris', 'Juniper']],
 }

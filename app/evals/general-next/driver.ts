@@ -15,30 +15,63 @@ import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
-// 07-follow-up-success second commit (owner option 2): canned per-entity graph data, so the
-// semantic follow-up "Who is involved in the three most popular?" is derivable. Every value
-// is SYNTHETIC, authored for this fixture — no real project or person. The table is
-// deliberately NOT ordered by popularity and carries no pre-computed top-3: the graded
-// facts (which three projects lead, whose names their participants union to) live only
-// here, and answering requires ranking the rows and unioning their participants. It must
-// not mirror the controller's degree-aggregation few-shot (a relationship-count
-// aggregation, ranked descending, capped): the callTool branch below answers only a
-// total-count ask with the count row and hands every other query the raw table, so
-// cribbing that example never yields the follow-up's answer.
-const GRAPH_PROJECTS = [
-  { name: 'Lantern Core', popularity: 9, participants: ['Mira', 'Theo'] },
-  { name: 'Lantern Docs', popularity: 4, participants: ['Theo', 'Sana'] },
-  { name: 'Lantern Web', popularity: 7, participants: ['Mira', 'Priya'] },
-  { name: 'Lantern Archive', popularity: 1, participants: ['Ines'] },
-  { name: 'Lantern Ops', popularity: 2, participants: ['Ravi'] },
+// 07-follow-up-success (owner option 2, rebuilt per the owner's shape-probe directive): the
+// per-entity structure is DERIVED from a read-only shape probe of the dev graph — labels,
+// relationship types, property vocabulary, the participant-bearing pattern (typed
+// relationships, not a property; there is no popularity property either, so popularity is
+// relationship degree) and the hub/isolated degree distribution — with every observable
+// identity replaced by invented common nouns before anything landed here (the probe read
+// no node names at all). The miniature keeps the scenario's Project label so the turn-1
+// total-count anchor stays derivable, and every top-tier entity's relationships are
+// reciprocal, so the follow-up's answer is the same whether the model reads them directed
+// or undirected. The triples below are raw graph data, never a pre-ranked or aggregated
+// result: "the three most popular" and "who is involved" must be computed from them, and
+// the shape deliberately does not mirror the controller's degree-aggregation few-shot
+// (a pre-aggregated {name, degree} table).
+const GRAPH_RELATIONSHIPS = [
+  { from: 'Alder', type: 'USES', to: 'Dune' },
+  { from: 'Dune', type: 'RUNS_ON', to: 'Alder' },
+  { from: 'Alder', type: 'CONNECTS_TO', to: 'Ember' },
+  { from: 'Ember', type: 'CONNECTS_TO', to: 'Alder' },
+  { from: 'Alder', type: 'EXPOSES', to: 'Fern' },
+  { from: 'Fern', type: 'USES', to: 'Alder' },
+  { from: 'Birch', type: 'IMPLEMENTS', to: 'Gulf' },
+  { from: 'Gulf', type: 'CONNECTS_TO', to: 'Birch' },
+  { from: 'Birch', type: 'USES', to: 'Haven' },
+  { from: 'Haven', type: 'RUNS_ON', to: 'Birch' },
+  { from: 'Cedar', type: 'EXPOSES', to: 'Iris' },
+  { from: 'Iris', type: 'USES', to: 'Cedar' },
+  { from: 'Cedar', type: 'FALLS_BACK_TO', to: 'Juniper' },
+  { from: 'Juniper', type: 'FALLS_BACK_TO', to: 'Cedar' },
 ]
 const FIXTURES: Record<string, unknown> = {
-  get_neo4j_schema: [
-    {
-      label: 'Project',
-      properties: { name: 'STRING', popularity: 'INTEGER', participants: 'LIST<STRING>' },
+  // The probed get_neo4j_schema shape (an object keyed by label and relationship type;
+  // property names and types are the probed vocabulary). No per-label count: a count on
+  // the schema would answer the turn-1 ask without the tool call and fail the scenario's
+  // arg grading.
+  get_neo4j_schema: {
+    Project: {
+      type: 'node',
+      properties: {
+        name: { indexed: false, type: 'STRING' },
+        observations: { indexed: false, type: 'LIST' },
+      },
+      relationships: {
+        USES: { direction: 'out', labels: ['Project'] },
+        CONNECTS_TO: { direction: 'out', labels: ['Project'] },
+        RUNS_ON: { direction: 'out', labels: ['Project'] },
+        IMPLEMENTS: { direction: 'out', labels: ['Project'] },
+        EXPOSES: { direction: 'out', labels: ['Project'] },
+        FALLS_BACK_TO: { direction: 'out', labels: ['Project'] },
+      },
     },
-  ],
+    USES: { type: 'relationship', count: 4 },
+    CONNECTS_TO: { type: 'relationship', count: 2 },
+    RUNS_ON: { type: 'relationship', count: 2 },
+    IMPLEMENTS: { type: 'relationship', count: 1 },
+    EXPOSES: { type: 'relationship', count: 2 },
+    FALLS_BACK_TO: { type: 'relationship', count: 2 },
+  },
   // 03-web-read (#775): the canned web result is the POPULAR package the scenario now
   // asks about. The seeded lantern-notes.md stays as the LOCAL decoy — its content does
   // not answer this question, so the state lists a wrong document rather than a route.
@@ -94,7 +127,7 @@ export async function createDriver(
         name === 'sandbox_bash'
           ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
           : name === 'get_neo4j_schema' || name === 'read_neo4j_cypher'
-            ? 'Synthetic knowledge graph: a total Project count and canned Project rows (name, popularity, participants).'
+            ? 'Synthetic knowledge graph: a total Project count and canned Project relationship triples.'
             : `Synthetic ${name}; returns fixed canned fixture data.`,
       inputSchema: {
         type: 'object',
@@ -133,14 +166,13 @@ export async function createDriver(
       // Argument-aware where the two graph facts diverge: a TOTAL-count ask over Project
       // (the same shape the scenarios' own arg predicate grades) keeps returning the
       // pre-existing anchor `[{ count: 42 }]`, unchanged for 02/08/13 and 07 turn 1. Every
-      // other query gets the raw per-entity table. The popularity/participants exclusion
-      // keeps a turn-2 property query that happens to carry a count-ish word (member_count)
-      // on the table branch; a degree few-shot crib (a relationship-count aggregation) lands
-      // on the count row, so cribbing the example never yields the follow-up's answer.
+      // other query gets the raw relationship triples. The traversal-pattern exclusion
+      // keeps every degree/participant query — including a degree-aggregation few-shot
+      // crib, whose shape must never be answered with the count row — on the triples.
       if (name === 'read_neo4j_cypher') {
         const query = typeof args.query === 'string' ? args.query : ''
-        const totalCount = projectCountArgs(args) && !/popularity|participan/i.test(query)
-        return { success: true, data: totalCount ? [{ count: 42 }] : GRAPH_PROJECTS }
+        const totalCount = projectCountArgs(args) && !/-\[|\]-|--/.test(query)
+        return { success: true, data: totalCount ? [{ count: 42 }] : GRAPH_RELATIONSHIPS }
       }
       return { success: true, data: FIXTURES[name] }
     },

@@ -586,7 +586,7 @@
         "How many Project nodes are in the knowledge graph?",
         "Who is involved in the three most popular?"
       ],
-      "expected": "42, then the participants of the three most popular projects: Mira, Theo, Priya and Sana.",
+      "expected": "42, then the participants of the three most popular projects: Dune, Ember, Fern, Gulf, Haven, Iris and Juniper.",
       "grader": [
         {
           "check": "orderedTools",
@@ -601,7 +601,7 @@
         {
           "check": "answerContains",
           "says": "module answerIncludes",
-          "facts": ["Mira", "Theo", "Priya", "Sana"]
+          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
         },
         {
           "check": "turnAnswerContains",
@@ -613,7 +613,7 @@
           "check": "turnAnswerContains",
           "says": "module turnAnswerIncludes",
           "turn": 2,
-          "facts": ["Mira", "Theo", "Priya", "Sana"]
+          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
         },
         {
           "check": "routeCompleted",

@@ -37,7 +37,12 @@
  * `cd`, heredoc bodies (a `<<` makes the whole line a producing request), and the stdout
  * of interpreter runs (the one shape whose output the synthetic layer cannot transcribe;
  * a credited run prints the scenario's own captured stdout instead). */
-import type { MCPToolDescription, ToolTransport } from '@hames-ai/harness-patterns'
+import type {
+  ConfiguredPattern,
+  MCPToolDescription,
+  ToolTransport,
+} from '@hames-ai/harness-patterns'
+import type { SandboxAttach } from '@hames-ai/agents'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { sandboxShapeError, type ArgsPredicate } from './tool-arguments'
 import type { ConversationScenario, ConversationTrace } from './conversation'
@@ -104,6 +109,42 @@ export function sandboxFileToolsFromGateway(gateway: MCPToolDescription[]): MCPT
       if (!tool) throw new Error(`Production tool metadata missing: ${native} (${exposed})`)
       return { ...tool, name: exposed }
     })
+}
+
+/** Every in-VM tool name a sandbox exposes, derived from the SAME registry production's
+ * `withSandbox` declares in `capabilities.tools` (`packages/sandbox/with-sandbox.server.ts:54`)
+ * — never restated, so the declaration and the synthetic transport cannot drift apart. */
+export const IN_VM_TOOL_NAMES: readonly string[] = V0_IN_VM_SERVERS.flatMap((server) =>
+  Object.values(server.tools),
+)
+
+/** The eval's stand-in for the production `withSandbox` dep. It mirrors production's
+ * capabilities merge — the in-VM tool names over the wrapped pattern's own declaration
+ * (`packages/sandbox/with-sandbox.server.ts:432-436`) — so `collectToolNames` sees the
+ * `sandbox_` tools and the egress gate's `localTools` treats in-VM calls as LOCAL rather
+ * than outgoing (ordiag finding 2026-10-26: the missing declaration emptied `localTools`,
+ * every `sandbox_*` call was refused as egress at τe, the route closed and the budget
+ * exhausted). The attach config is accepted and ignored: there is no VM to boot, the
+ * synthetic transport is scoped per turn through the run frame below.
+ *
+ * `amendRunFrame` is imported INSIDE `fn`, not at module top: this module is statically
+ * imported by unit tests that run under jsdom without mocking `assert.server`
+ * (`tool-catalog.test.ts`), and `run-frame.server` self-asserts server-only at load. */
+export function createSyntheticWithSandbox(
+  transport: ToolTransport,
+): <T>(config: SandboxAttach) => (pattern: ConfiguredPattern<T>) => ConfiguredPattern<T> {
+  return () => (pattern) => ({
+    ...pattern,
+    capabilities: {
+      ...pattern.capabilities,
+      tools: [...new Set([...(pattern.capabilities?.tools ?? []), ...IN_VM_TOOL_NAMES])],
+    },
+    children: [pattern],
+    fn: async (scope, view) => {
+      const { amendRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+      return amendRunFrame({ transports: [transport] }, () => pattern.fn(scope, view))
+    },
+  })
 }
 
 export interface SyntheticSandboxState {

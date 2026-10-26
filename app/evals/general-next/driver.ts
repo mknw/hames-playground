@@ -7,6 +7,7 @@ import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
+  createSyntheticWithSandbox,
 } from '../../src/lib/eval-support/synthetic-sandbox'
 import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
@@ -54,8 +55,7 @@ export async function createDriver(
 ): Promise<ConversationDriver> {
   // Runtime imports follow endpoint configuration; none of these run at module load.
   const { harness, continueSession } = await import('@hames-ai/harness-patterns')
-  const { withRunFrame, amendRunFrame } =
-    await import('@hames-ai/harness-patterns/run-frame.server')
+  const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
   const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
   const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
   let trace: ConversationTrace
@@ -134,12 +134,11 @@ export async function createDriver(
     // The egress gate's production roster, on the same `none` directory: every outgoing
     // call of every route is asked about (boundary guards slice 4).
     egressRoster: createEgressRoster({ directory: 'none' }),
-    withSandbox: () => (pattern) => ({
-      ...pattern,
-      children: [pattern],
-      fn: (scope, view) =>
-        amendRunFrame({ transports: [sandboxTransport] }, () => pattern.fn(scope, view)),
-    }),
+    // The production wrapper's capabilities merge, on the synthetic transport: the
+    // declared in-VM tool names are what `collectToolNames(office)` reads and the egress
+    // gate's `localTools` honours, so without them every `sandbox_*` call was judged
+    // outgoing and refused (ordiag finding, 2026-10-26).
+    withSandbox: createSyntheticWithSandbox(sandboxTransport),
     // The Decide step's view of the seeded documents (#507). The eval runs on the
     // private tier only, so this is the names-bearing shape the host's source gives
     // a `'self_deployed'` run; the host's own tier line and owner check are pinned at layers

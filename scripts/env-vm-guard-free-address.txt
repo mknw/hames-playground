@@ -9,9 +9,10 @@
 # guard sees and drops the flow when the client address is free.
 #
 # WITH the smoke's stand-in holding the address (as it does through probes 1-10),
-# the same connect moved NO guard counter: Docker Engine 28+ (moby#52224)
-# installs, while a container holds an address, a raw-PREROUTING drop for it
-# (`-d <container-ip>/32 ! -i <its-bridge> -j DROP`, observed live as
+# the same connect moved NO guard counter: Docker Engine 28+ (moby#49325,
+# Engine 28.0.0, made per-container rather than per-published-port by
+# moby#49829) installs, while a container holds an address, a raw-PREROUTING
+# drop for it (`-d <container-ip>/32 ! -i <its-bridge> -j DROP`, observed live as
 # `ip daddr <addr> iifname != "envapp-dev" counter drop` in the ip raw table,
 # added on connect and removed on disconnect), which sits before every inet
 # hook. A container-held address is therefore unprobeable by the guard counter

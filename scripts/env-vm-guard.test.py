@@ -482,8 +482,9 @@ class Rules(unittest.TestCase):
         # address FREE, the guest's connects to it time out and vm_egress moves by
         # exactly the packets sent - two connects of three SYNs plus one datagram,
         # +7 - while with the stand-in holding the address every guard counter
-        # stayed flat (Docker's raw-PREROUTING isolation, moby#52224, drops the
-        # packets before the guard's forward chain). The fixture pins the free
+        # stayed flat (Docker's raw-PREROUTING isolation — moby#49325 (Engine
+        # 28.0.0), made per-container by moby#49829 — drops the packets before
+        # the guard's forward chain). The fixture pins the free
         # half: the counter is reachable exactly when no container holds the
         # target, which is why probes 11-link/11-app target a free address.
         # Mutation-verified: dropping a SYN line or the datagram from the fixture,
@@ -749,8 +750,9 @@ class Host:
                                          "networks": {APP_NET: "192.0.2.68"}, "env": {}, "user": None, "mounts": []}
         self.docker_rules_missing = False
         self.nic_filter = True
-        # Docker Engine 28+ (moby#52224): while a container holds an address, a
-        # raw-PREROUTING drop for it. Probe 11's shadow read reads this table.
+        # Docker Engine 28+ (moby#49325, consolidated per-container by moby#49829):
+        # while a container holds an address, a raw-PREROUTING drop for it. Probe
+        # 11's shadow read reads this table.
         self.raw_isolation = True
         # Counters frozen for the probed packets: a refusal whose counter never moves.
         self.frozen = ()
@@ -2091,8 +2093,9 @@ class Smoke(Smoking, Harness):
                          "only the two netns sleepers are removed")
 
     def test_probe_11_targets_free_addresses_the_shadow_does_not_cover(self):
-        # Docker Engine 28+ (moby#52224) drops a guest's packets to any
-        # container-held address in its raw-PREROUTING layer, before the guard's
+        # Docker Engine 28+ (moby#49325, per-container via moby#49829) drops a
+        # guest's packets to any container-held address in its raw-PREROUTING
+        # layer, before the guard's
         # forward chain (window8b, 2026-10-25: with the stand-in holding the
         # client address every guard counter stayed flat; with the address free,
         # vm_egress +7 - scripts/env-vm-guard-free-address.txt). Probe 11
@@ -2581,8 +2584,9 @@ MUTATIONS = {
     "S6-entry-point-config-untrusted": ('json.loads(safe_file(Path(env["entryPointConfig"])))', 'json.loads(Path(env["entryPointConfig"]).read_text())'),
     "O7-delivery-directory-unchecked": ('    require(bool(re.fullmatch(r"/[A-Za-z0-9._/-]+", delivery["directory"])), "unsafe delivery directory name")\n', ""),
     # The probe-11 re-scope (owner option (i), 2026-10-26): Docker Engine 28+'s
-    # raw-PREROUTING container-IP isolation (moby#52224) shadows every
-    # container-held target before the guard's forward chain, so the probes
+    # raw-PREROUTING container-IP isolation (moby#49325, per-container via
+    # moby#49829) shadows every container-held target before the guard's forward
+    # chain, so the probes
     # target a free address on the same bridge. Reverting the targets to the held
     # pair, picking the bridge's own address, or dropping the selection's refusal
     # makes the counter unreachable or the probe misattributed; unasserting or

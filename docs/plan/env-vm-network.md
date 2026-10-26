@@ -591,9 +591,11 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
   which kind of run it was.
 - **Probe 11 targets an address no container holds, because container-held ones are unprobeable on
   Docker Engine 28+.** While any container holds an address, Docker installs a raw-PREROUTING drop
-  for it (`-d <container-ip>/32 ! -i <its-bridge> -j DROP`,
-  [moby#52224](https://github.com/moby/moby/issues/52224); measured live on Engine 29.9.1: added on
-  `docker run --ip`, removed on disconnect). The rule sits before every inet hook, so a guest's
+  for it (`-d <container-ip>/32 ! -i <its-bridge> -j DROP` — introduced by
+  [moby#49325](https://github.com/moby/moby/pull/49325) (Engine 28.0.0) and made per-container
+  rather than per-published-port by [moby#49829](https://github.com/moby/moby/pull/49829)
+  (Engine 28.2.0); measured live on Engine 29.9.1: added on `docker run --ip`, removed on
+  disconnect). The rule sits before every inet hook, so a guest's
   packets to a container-held address — the pinned client address the stand-in holds for probes 1–10,
   or any `app-network` member — die in Docker's raw layer and this table's `forward` chain never sees
   them: the 2026-10-25 window reproduced the shadowing live, every guard counter flat with the
@@ -605,7 +607,10 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
   client address is present while the probes run — the shadow is Docker's own hardening, never a
   substitute for the guard, and its absence is inconclusive, never a pass. Re-scoping the probe keeps
   the evidence honest: labelling Docker's drop as the refusal would test Docker's isolation, not the
-  guard's.
+  guard's. The forward threat: [moby#52224](https://github.com/moby/moby/issues/52224), open and
+  unmerged, would replace the per-container rule with a per-subnet raw drop — if it lands, free
+  addresses on the bridge subnet are shadowed too, and this probe's free-address re-scope would need
+  re-examination.
 - **Before app-dev joins the link network**, the stand-in holding the pinned address takes its
   place in probe 1. That is how the window proves the rule before it enables the overlay that
   needs the evidence (step W9).

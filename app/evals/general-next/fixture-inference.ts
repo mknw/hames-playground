@@ -107,8 +107,8 @@ export async function fixtureInference() {
                         query:
                           name === 'read_neo4j_cypher'
                             ? 'MATCH (p:Project) RETURN count(p) AS count'
-                            : 'Lantern',
-                        url: 'https://example.invalid/lantern',
+                            : 'Next.js release notes',
+                        url: 'https://example.invalid/nextjs',
                         libraryName: 'solid-js',
                         context7CompatibleLibraryID: '/solidjs/solid',
                       },

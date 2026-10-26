@@ -584,9 +584,9 @@
       },
       "turns": [
         "How many Project nodes are in the knowledge graph?",
-        "Double that number. Just give me the result."
+        "Who is involved in the three most popular?"
       ],
-      "expected": "42, then 84 from the earlier count.",
+      "expected": "42, then the participants of the three most popular projects: Mira, Theo, Priya and Sana.",
       "grader": [
         {
           "check": "orderedTools",
@@ -601,7 +601,7 @@
         {
           "check": "answerContains",
           "says": "module answerIncludes",
-          "facts": ["84"]
+          "facts": ["Mira", "Theo", "Priya", "Sana"]
         },
         {
           "check": "turnAnswerContains",
@@ -613,7 +613,7 @@
           "check": "turnAnswerContains",
           "says": "module turnAnswerIncludes",
           "turn": 2,
-          "facts": ["84"]
+          "facts": ["Mira", "Theo", "Priya", "Sana"]
         },
         {
           "check": "routeCompleted",

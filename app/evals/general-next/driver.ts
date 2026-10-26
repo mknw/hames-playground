@@ -4,6 +4,7 @@ import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
 import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
+import { projectCountArgs } from '../../src/lib/eval-support/tool-arguments'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
@@ -14,9 +15,30 @@ import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
+// 07-follow-up-success second commit (owner option 2): canned per-entity graph data, so the
+// semantic follow-up "Who is involved in the three most popular?" is derivable. Every value
+// is SYNTHETIC, authored for this fixture — no real project or person. The table is
+// deliberately NOT ordered by popularity and carries no pre-computed top-3: the graded
+// facts (which three projects lead, whose names their participants union to) live only
+// here, and answering requires ranking the rows and unioning their participants. It must
+// not mirror the controller's degree-aggregation few-shot (a relationship-count
+// aggregation, ranked descending, capped): the callTool branch below answers only a
+// total-count ask with the count row and hands every other query the raw table, so
+// cribbing that example never yields the follow-up's answer.
+const GRAPH_PROJECTS = [
+  { name: 'Lantern Core', popularity: 9, participants: ['Mira', 'Theo'] },
+  { name: 'Lantern Docs', popularity: 4, participants: ['Theo', 'Sana'] },
+  { name: 'Lantern Web', popularity: 7, participants: ['Mira', 'Priya'] },
+  { name: 'Lantern Archive', popularity: 1, participants: ['Ines'] },
+  { name: 'Lantern Ops', popularity: 2, participants: ['Ravi'] },
+]
 const FIXTURES: Record<string, unknown> = {
-  get_neo4j_schema: [{ label: 'Project', properties: { name: 'STRING' } }],
-  read_neo4j_cypher: [{ count: 42 }],
+  get_neo4j_schema: [
+    {
+      label: 'Project',
+      properties: { name: 'STRING', popularity: 'INTEGER', participants: 'LIST<STRING>' },
+    },
+  ],
   // 03-web-read (#775): the canned web result is the POPULAR package the scenario now
   // asks about. The seeded lantern-notes.md stays as the LOCAL decoy — its content does
   // not answer this question, so the state lists a wrong document rather than a route.
@@ -71,7 +93,9 @@ export async function createDriver(
       description:
         name === 'sandbox_bash'
           ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
-          : `Synthetic ${name}; returns fixed Lantern fixture data.`,
+          : name === 'get_neo4j_schema' || name === 'read_neo4j_cypher'
+            ? 'Synthetic knowledge graph: a total Project count and canned Project rows (name, popularity, participants).'
+            : `Synthetic ${name}; returns fixed canned fixture data.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -106,6 +130,18 @@ export async function createDriver(
               ? 'Graph is read-only; write refused.'
               : 'Synthetic service unavailable; retry on the next user turn.',
         }
+      // Argument-aware where the two graph facts diverge: a TOTAL-count ask over Project
+      // (the same shape the scenarios' own arg predicate grades) keeps returning the
+      // pre-existing anchor `[{ count: 42 }]`, unchanged for 02/08/13 and 07 turn 1. Every
+      // other query gets the raw per-entity table. The popularity/participants exclusion
+      // keeps a turn-2 property query that happens to carry a count-ish word (member_count)
+      // on the table branch; a degree few-shot crib (a relationship-count aggregation) lands
+      // on the count row, so cribbing the example never yields the follow-up's answer.
+      if (name === 'read_neo4j_cypher') {
+        const query = typeof args.query === 'string' ? args.query : ''
+        const totalCount = projectCountArgs(args) && !/popularity|participan/i.test(query)
+        return { success: true, data: totalCount ? [{ count: 42 }] : GRAPH_PROJECTS }
+      }
       return { success: true, data: FIXTURES[name] }
     },
   }

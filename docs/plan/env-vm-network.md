@@ -576,7 +576,7 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
 | 8d  | **VM → anywhere but the client:** guest → a public address, and → the host's primary address: an ICMP error that embeds a flow the host holds open to the VM's Docker port, so connection tracking relates it                                                         | refused                            | `vm_egress`; `vm_to_host`            |
 | 9   | **VM → metadata:** guest → `169.254.169.254:80`                                                                                                                                                                                                                       | refused                            | `vm_to_metadata`                     |
 | 10  | **VM → internet:** guest → a public address on 443 that the host itself reaches (the positive control)                                                                                                                                                                | refused                            | `vm_egress`                          |
-| 11  | VM → containers: guest → app-dev's link address, and a service on `app-network`                                                                                                                                                                                       | refused                            | `vm_egress`                          |
+| 11  | VM → containers: guest → an address on the link bridge that no container holds, and one on `app-network` (free addresses; see the shadowing note below)                                                                                                               | refused                            | `vm_egress`                          |
 | 12  | persistence: the unit enabled and ordered before the Incus daemon, files byte-identical to the reviewed copies, readback equal to the render, no flushing firewall manager, no dead-man armed                                                                         | pass                               | none                                 |
 
 - **The five required checks** (app-to-VM allowed; VM-to-VM, VM-to-host, VM-to-metadata and
@@ -589,13 +589,32 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
   so `vm_egress` counts it, not `vm_to_vm`. That proves nothing leaves the bridge, but not the
   per-pair rule. Per-pair attribution runs once a second environment exists, and the record says
   which kind of run it was.
+- **Probe 11 targets an address no container holds, because container-held ones are unprobeable on
+  Docker Engine 28+.** While any container holds an address, Docker installs a raw-PREROUTING drop
+  for it (`-d <container-ip>/32 ! -i <its-bridge> -j DROP`,
+  [moby#52224](https://github.com/moby/moby/issues/52224); measured live on Engine 29.9.1: added on
+  `docker run --ip`, removed on disconnect). The rule sits before every inet hook, so a guest's
+  packets to a container-held address — the pinned client address the stand-in holds for probes 1–10,
+  or any `app-network` member — die in Docker's raw layer and this table's `forward` chain never sees
+  them: the 2026-10-25 window reproduced the shadowing live, every guard counter flat with the
+  stand-in up, the same connect counted by `vm_egress` (+7) once the address was free. Probe 11
+  therefore targets, per bridge, the first address in the bridge's own subnet that no container
+  holds, selected at smoke runtime and named in the record's `sent_to` fields: the subnet's connected
+  route still delivers the packet, Docker's raw layer has no rule for it, and `vm_egress` remains the
+  evidence. The smoke also asserts, read-only (`iptables-save -t raw`), that the raw drop for the held
+  client address is present while the probes run — the shadow is Docker's own hardening, never a
+  substitute for the guard, and its absence is inconclusive, never a pass. Re-scoping the probe keeps
+  the evidence honest: labelling Docker's drop as the refusal would test Docker's isolation, not the
+  guard's.
 - **Before app-dev joins the link network**, the stand-in holding the pinned address takes its
   place in probe 1. That is how the window proves the rule before it enables the overlay that
   needs the evidence (step W9).
 - **The record** holds the installer's git blob id (`git log --find-object=<id>` names its
   commit; the installed copy has no git), the render's hash, each probe's outcome, its counter
   change and the expected amount it must equal, which filter dropped probe 8c, and whether it was
-  a single-environment run. It names the counter basis: a delta against a quiet baseline, where
+  a single-environment run. For probe 11 it also holds the free address each probe targeted, on
+  which bridge, and that Docker's raw-PREROUTING drop for the held client address was live when
+  they ran. It names the counter basis: a delta against a quiet baseline, where
   the expected amount is the packets the probe sent.
   `DEV_SANDBOX_FIREWALL_EVIDENCE` names it. Bootstrap only requires that file to exist and be
   non-empty (`scripts/bootstrap-vps.sh:517-523`), so the smoke removes any earlier record when it

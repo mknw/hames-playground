@@ -476,6 +476,85 @@ class Rules(unittest.TestCase):
         self.assertTrue(all(0.9 <= gap <= 1.2 for gap in gaps), gaps)
         self.assertEqual(guard.counter_evidence(3, 3, "3"), 3)
 
+    def test_the_free_address_capture_pins_the_reachable_counter(self):
+        # The WINDOW8B diagnostic (2026-10-25; the guard journal's DIAGNOSTIC
+        # entries at 22:40Z and 22:55Z) captured probe 11's pair: with the client
+        # address FREE, the guest's connects to it time out and vm_egress moves by
+        # exactly the packets sent - two connects of three SYNs plus one datagram,
+        # +7 - while with the stand-in holding the address every guard counter
+        # stayed flat (Docker's raw-PREROUTING isolation, moby#52224, drops the
+        # packets before the guard's forward chain). The fixture pins the free
+        # half: the counter is reachable exactly when no container holds the
+        # target, which is why probes 11-link/11-app target a free address.
+        # Mutation-verified: dropping a SYN line or the datagram from the fixture,
+        # or reverting the expected amount, turns this test red.
+        lines = [line for line in (ROOT / "scripts/env-vm-guard-free-address.txt").read_text().splitlines()
+                 if line.strip() and not line.startswith("#")]
+        before = int(re.search(r"vm_egress packets (\d+)", lines[0]).group(1))
+        after = int(re.search(r"vm_egress packets (\d+)", lines[-1]).group(1))
+        packets = lines[1:-1]
+        self.assertEqual({line.split()[0] for line in packets}, {"TIMEOUT", "SENT"}, lines)
+        syns = [line for line in packets if "Flags [S]" in line]
+        connects = {re.search(r"\(connect (\d)[, ]", line).group(1) for line in syns}
+        self.assertEqual(connects, {"1", "2"}, lines)
+        self.assertEqual({len([line for line in syns if line.startswith("TIMEOUT 198.51.100.2.%s" % {("1"): "47111", ("2"): "47121"}[c])]) for c in connects}, {3})
+        self.assertEqual({re.search(r"(\S+) > (\S+):", line).groups() for line in packets},
+                         {("198.51.100.2.47111", "192.0.2.2.2376"), ("198.51.100.2.47121", "192.0.2.2.2376"),
+                          ("198.51.100.2.41521", "192.0.2.2.2376")}, lines)
+        self.assertEqual(len([line for line in packets if "UDP" in line]), 1)
+        expected = 3 * len(connects) + 1
+        self.assertEqual(after - before, expected, lines)
+        self.assertEqual(guard.counter_evidence(after - before, expected, "11-link"), expected)
+        for delta in (expected - 1, expected + 1):
+            with self.assertRaises(guard.Refused) as raised:
+                guard.counter_evidence(delta, expected, "11-link")
+            self.assertIn("counter moved by %d, expected %d" % (delta, expected), str(raised.exception))
+
+    def test_the_free_address_selection_skips_every_held_address(self):
+        # Probe 11's target: the first address of the bridge's own subnet that no
+        # container holds - not the bridge's own address (a packet to it takes the
+        # input path, never the forward hook), not a container's, and not the
+        # network or broadcast address. Refuses when none is free rather than
+        # probing an address a container holds. Mutation-verified: dropping the
+        # held filter picks the bridge's own address and the smoke's counter stays
+        # at 0; replacing the refusal with a fallback does the same on a full
+        # subnet; reverting the smoke's targets to the held pair turns the
+        # record-level test red.
+        def chosen(bridge_addr, containers):
+            links = [{"ifname": "envapp-dev",
+                      "addr_info": [{"family": "inet", "local": bridge_addr.split("/")[0],
+                                     "prefixlen": int(bridge_addr.split("/")[1])}]}]
+            with patch.object(guard, "document", side_effect=lambda *a: links):
+                return guard.free_probe_address("envapp-dev", {"Containers": containers})
+
+        held = {"a": {"IPv4Address": "192.0.2.2/29"}}
+        self.assertEqual(chosen("192.0.2.1/29", held), "192.0.2.3")
+        self.assertEqual(chosen("192.0.2.1/29", {"a": {"IPv4Address": "192.0.2.3/29"}}), "192.0.2.2")
+        with self.assertRaises(guard.Refused) as raised:
+            chosen("192.0.2.1/30", {"a": {"IPv4Address": "192.0.2.2/30"}})
+        self.assertIn("no address on envapp-dev is free of containers", str(raised.exception))
+        links = []
+        with patch.object(guard, "document", side_effect=lambda *a: links):
+            with self.assertRaises(guard.Refused) as raised:
+                guard.free_probe_address("envapp-dev", {"Containers": {}})
+        self.assertIn("has no IPv4 address", str(raised.exception))
+
+    def test_the_raw_shadow_read_matches_docker_s_rule_shape(self):
+        # The non-counter half of the re-scope's evidence: while a container holds
+        # the client address, Docker's raw-PREROUTING drop for it is live - the
+        # read matches the rule by address and verdict, never by a substring of
+        # the address, and never an accept. Mutation-verified: unasserting the
+        # shadow in the smoke turns the raw-absent smoke test red.
+        raw = "*raw\n:PREROUTING ACCEPT [0:0]\n"
+        raw += "-A PREROUTING -d 192.0.2.2/32 ! -i envapp-dev -j DROP\n"
+        raw += "-A PREROUTING -d 192.0.2.66/32 ! -i br-0123456789ab -j DROP\nCOMMIT\n"
+        with patch.object(guard, "run", return_value=raw):
+            self.assertTrue(guard.raw_prerouting_shadow("192.0.2.2"))
+            self.assertFalse(guard.raw_prerouting_shadow("192.0.2.20"))
+            self.assertFalse(guard.raw_prerouting_shadow("192.0.2.4"))
+        with patch.object(guard, "run", return_value=raw.replace("-j DROP", "-j ACCEPT")):
+            self.assertFalse(guard.raw_prerouting_shadow("192.0.2.2"))
+
     def test_the_refusal_connect_sends_a_known_number_of_syns(self):
         # The counter's expected amount is the packets the probe sent, so the
         # guest's and the netns connects must bound their own retransmissions.
@@ -657,7 +736,8 @@ class Host:
                            "Options": {"com.docker.network.bridge.name": "envapp-dev"}, "Containers": {}},
             APP_NET: {"Name": APP_NET, "Id": APP_BRIDGE[3:] + "0" * 52, "Driver": "bridge", "Internal": False,
                       "Labels": {"com.docker.compose.network": "app-network"}, "Options": {},
-                      "Containers": {"p" * 64: {"IPv4Address": "192.0.2.66/26"}}}}
+                      "Containers": {"p" * 64: {"IPv4Address": "192.0.2.66/26"},
+                                     "a" * 64: {"IPv4Address": "192.0.2.67/26"}}}}
         if two:
             self.networks["envapp-rel"] = {"Name": "envapp-rel", "Id": "r" * 64, "Driver": "bridge",
                                            "Internal": False, "Options": {"com.docker.network.bridge.name": "envapp-rel"},
@@ -669,6 +749,9 @@ class Host:
                                          "networks": {APP_NET: "192.0.2.68"}, "env": {}, "user": None, "mounts": []}
         self.docker_rules_missing = False
         self.nic_filter = True
+        # Docker Engine 28+ (moby#52224): while a container holds an address, a
+        # raw-PREROUTING drop for it. Probe 11's shadow read reads this table.
+        self.raw_isolation = True
         # Counters frozen for the probed packets: a refusal whose counter never moves.
         self.frozen = ()
         self.outcome = {}
@@ -814,10 +897,11 @@ class Host:
     def cmd_ip(self, args, payload):
         if args[1:] == ["-j", "link", "show"]:
             return self.links()
-        if args[1:] == ["-j", "-4", "addr", "show"]:
+        if args[1:5] == ["-j", "-4", "addr", "show"] and len(args) <= 6:
+            device = args[5] if len(args) > 5 else None
             return [{"ifname": name, "addr_info": [{"family": "inet", "local": v.split("/")[0],
                                                     "prefixlen": int(v.split("/")[1])}]}
-                    for name, v in self.bridges.items()]
+                    for name, v in self.bridges.items() if device in (None, name)]
         if args[1:] == ["-j", "-4", "route", "show"]:
             return [{"dst": "default", "gateway": "203.0.113.1", "dev": "eth0"}] + \
                 [{"dst": str(ipaddress.ip_interface(v).network), "dev": name} for name, v in self.bridges.items()] + \
@@ -828,6 +912,14 @@ class Host:
         raise AssertionError("unexpected ip call: " + repr(args))
 
     def cmd_iptables_save(self, args, payload):
+        if args[1:] == ["-t", "raw"]:
+            lines = ["*raw", ":PREROUTING ACCEPT [0:0]"]
+            if self.raw_isolation:
+                for name, doc in self.networks.items():
+                    for container in (doc.get("Containers") or {}).values():
+                        lines.append("-A PREROUTING -d %s/32 ! -i %s -j DROP"
+                                     % (container["IPv4Address"].split("/")[0], self.bridge_of(name)))
+            return "\n".join(lines + ["COMMIT", ""])
         self.test.assertEqual(args, ["iptables-save", "-t", "filter"])
         lines = ["*filter", ":FORWARD ACCEPT [0:0]", "-A FORWARD -j DOCKER-USER", "-A FORWARD -j DOCKER-FORWARD"]
         if not self.docker_rules_missing:
@@ -1922,7 +2014,11 @@ class Smoke(Smoking, Harness):
         self.assertIn("quiet baseline", record["counter_basis"])
         results = self.results()
         self.assertEqual(set(results), {"1", "2", "3", "4", "4b", "5", "7", "8-gateway", "8-primary",
-                                        "8-link-local", "8b", "8c", "8d", "8d-host", "9", "10", "11-link", "11-app"})
+                                        "8-link-local", "8b", "8c", "8d", "8d-host", "9", "10",
+                                        "11-shadow", "11-link", "11-app"})
+        self.assertEqual(results["11-shadow"],
+                         {"probe": "11-shadow", "outcome": "present", "rule": None,
+                          "raw_prerouting_drop_for": DEV["clientAddress"]})
         self.assertTrue(results["1"]["stand_in"])
         expected = {"3": "to_vm_refused", "4": "to_vm_refused", "4b": "to_vm_refused", "5": "to_vm_refused",
                     "7": "vm_egress", "8-gateway": "vm_to_host", "8-primary": "vm_to_host",
@@ -1993,6 +2089,47 @@ class Smoke(Smoking, Harness):
         self.assertEqual(results["8c"]["dropped_by"], "vm_to_host")
         self.assertEqual([c for c in self.host.calls if c[:3] == ["docker", "rm", "-f"]].__len__(), 2,
                          "only the two netns sleepers are removed")
+
+    def test_probe_11_targets_free_addresses_the_shadow_does_not_cover(self):
+        # Docker Engine 28+ (moby#52224) drops a guest's packets to any
+        # container-held address in its raw-PREROUTING layer, before the guard's
+        # forward chain (window8b, 2026-10-25: with the stand-in holding the
+        # client address every guard counter stayed flat; with the address free,
+        # vm_egress +7 - scripts/env-vm-guard-free-address.txt). Probe 11
+        # therefore targets, per bridge, an address no container holds, selected
+        # at run time and named in the record; the held client address and the
+        # app-network member never appear as a target. Mutation-verified:
+        # reverting the targets to the held pair turns this test red, and so does
+        # dropping the held filter from the selection (the bridge's own address
+        # takes the input path and the counter stays at 0).
+        self.ready()
+        self.assertEqual(self.smoke(), 0, self.err)
+        results = self.results()
+        sends = {call[13]: call[11] for call in self.host.calls
+                 if len(call) > 13 and call[:1] == ["incus"] and call[10] == "tcp"}
+        # 192.0.2.3 is the first host of the link bridge's /29 past the bridge's
+        # own .1 and the held .2; 192.0.2.68 the first host of app-network's /26
+        # past .65 (the bridge), .66 and .67 (the members) and .73 (the sleeper).
+        self.assertEqual(sends["47111"], "192.0.2.3")
+        self.assertEqual(sends["47121"], "192.0.2.68")
+        self.assertNotIn(DEV["clientAddress"], sends.values())
+        self.assertNotIn("192.0.2.66", sends.values())
+        for label, address, bridge in (("11-link", "192.0.2.3", "envapp-dev"),
+                                       ("11-app", "192.0.2.68", APP_BRIDGE)):
+            self.assertIn("sent_to", results[label], label)
+            self.assertEqual(results[label]["sent_to"],
+                             "the free address %s on %s; no container holds it, so Docker's "
+                             "raw-PREROUTING isolation does not shadow the guard" % (address, bridge))
+
+    def test_the_smoke_refuses_without_docker_s_raw_shadow(self):
+        # The re-scope's precondition, asserted read-only: while the client
+        # address is held, Docker's raw-PREROUTING isolation is the second
+        # controller that keeps a container-held target unprobeable. An Engine
+        # without it is a different platform than the one the re-scope was
+        # derived on, so its absence is inconclusive - never a pass.
+        self.ready()
+        self.host.raw_isolation = False
+        self.assert_fails("raw-PREROUTING isolation")
 
     def test_a_failed_run_removes_an_earlier_record(self):
         self.ready()
@@ -2106,7 +2243,7 @@ class Smoke(Smoking, Harness):
         real_incus = self.host.cmd_incus
 
         def late(args, payload):
-            if args[10:12] == ["tcp", "192.0.2.66"]:  # probe 11-app, the last send
+            if len(args) > 13 and args[10] == "tcp" and args[13] == "47121":  # probe 11-app, the last send
                 self.host.clock.now += 400
             return real_incus(args, payload)
         with patch.object(self.host, "cmd_incus", side_effect=late):
@@ -2443,6 +2580,22 @@ MUTATIONS = {
     "O7-file-follows-symlink": ("os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK", "os.O_RDONLY | os.O_NONBLOCK"),
     "S6-entry-point-config-untrusted": ('json.loads(safe_file(Path(env["entryPointConfig"])))', 'json.loads(Path(env["entryPointConfig"]).read_text())'),
     "O7-delivery-directory-unchecked": ('    require(bool(re.fullmatch(r"/[A-Za-z0-9._/-]+", delivery["directory"])), "unsafe delivery directory name")\n', ""),
+    # The probe-11 re-scope (owner option (i), 2026-10-26): Docker Engine 28+'s
+    # raw-PREROUTING container-IP isolation (moby#52224) shadows every
+    # container-held target before the guard's forward chain, so the probes
+    # target a free address on the same bridge. Reverting the targets to the held
+    # pair, picking the bridge's own address, or dropping the selection's refusal
+    # makes the counter unreachable or the probe misattributed; unasserting or
+    # unrecording the shadow, or the choice, hollows the record.
+    "probe-11-held-targets": ('for label, target in (("11-link", link_free), ("11-app", app_free)):',
+                              'for label, target in (("11-link", client), ("11-app", shared["app_peer"])):'),
+    "probe-11-picks-held": ('for host in interface.network.hosts() if str(host) not in held]',
+                            'for host in interface.network.hosts()]'),
+    "probe-11-free-unchecked": ('    require(bool(free), "probe 11: no address on %s is free of containers; the probe cannot run" % bridge)\n',
+                                '    free = free or [str(interface.ip)]\n'),
+    "probe-11-shadow-unasserted": ('            require(raw_prerouting_shadow(client),\n                    "11: Docker\'s raw-PREROUTING isolation for the held client address is absent (inconclusive)")', "            pass"),
+    "probe-11-shadow-unrecorded": ('            results.append({"probe": "11-shadow", "outcome": "present", "rule": None,\n                            "raw_prerouting_drop_for": client})', "            pass"),
+    "probe-11-target-unrecorded": ('                results[-1]["sent_to"] = ("the free address %s on %s; no container holds it, so Docker\'s "\n                                          "raw-PREROUTING isolation does not shadow the guard"\n                                          % (target, {"11-link": link_bridge, "11-app": shared["app_bridge"]}[label]))', "                pass"),
     # S2 (PM: tighten): a reply to the host is never an ICMP error; a forwarded one goes to its client only; probe 8d.
     "S2-host-reply-related": ('("ct original ip daddr", guest), ("ct state", ("established",)), ("accept",)', '("ct original ip daddr", guest), ("ct state", REPLY), ("accept",)'),
     "S2-forward-reply-any-destination": ('("ip saddr", guest), ("oifname", app), ("ip daddr", client), ', '("ip saddr", guest), '),

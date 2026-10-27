@@ -83,8 +83,14 @@ keeps sending typed pings.
 Progress is already visible without them — `worker-show` and `terminal read` inspect a
 lane on demand, and the coordinator's `check --wait --types worker_done,escalation,question`
 blocks until something actionable arrives. A lane that wants to report mid-flight
-either has a question (`ask`) or is blocked (`escalation`); if it is neither, the work
-is not finished and there is nothing to say yet.
+either has a question (`ask`) or is blocked (`escalation`); silence is the absence of
+news, not evidence of progress — a quiet lane may be working, stuck or dead, and
+nothing in the mailbox says which. So every dispatch carries an **expected-by time**
+— dispatch time plus twice the expected duration — and an **outcome artifact** to
+check: the report file, PR comment or commit, or issue the task spec named as the
+deliverable. Once the expected-by time passes, the coordinator inspects the artifact
+and the lane (`worker-show` / `terminal read`) and acts on what it finds — the
+outcome, not the mailbox, decides.
 
 **Ack what you process.** `check` replays the Run's oldest unacked Delivery FIFO on
 every call (documented: "Replay until `--ack`") — an unacked `worker_done` makes every
@@ -236,7 +242,7 @@ docs prescribe the opposite (dispatch for tracking if needed, then send the prom
 manually).
 
 **A dispatch receipt is not a running lane.** After every dispatch or attach, confirm
-the agent is *generating* — the TUI spinner with a climbing token counter
+the agent is _generating_ — the TUI spinner with a climbing token counter
 ("Puttering… ↓ 12k tokens"), not merely a delivered prompt. `worker-start` exiting 0,
 a `dispatched` task row, and `dispatch_input: accepted` are receipts about the
 hand-off; every one of them was observed (2026-08-27) on a lane whose spec sat

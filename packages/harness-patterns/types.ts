@@ -1039,9 +1039,11 @@ export interface PatternCapabilities {
    *  its own value, never inherit the inner one. */
   resumable?: ResumableCapability
   /** Tool names below this pattern whose executor may pause for a person (a
-   *  write request). Construction refuses one in any allowlist whose path from
-   *  the root is not resumable all the way down, and `simpleLoop` refuses a
-   *  batch that contains one before dispatching any of its calls. */
+   *  write request). Construction refuses one, declared by any pattern, in any
+   *  allowlist whose path from the root is not resumable all the way down. At
+   *  run time the names reach a route's `simpleLoop` only through
+   *  `decisionLoop({ gatedTools })`, which refuses a batch holding one before
+   *  dispatching any of its calls. */
   gatedTools?: readonly string[]
 }
 

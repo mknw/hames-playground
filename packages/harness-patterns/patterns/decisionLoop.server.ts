@@ -144,7 +144,7 @@ export const DECISION_LOOP_RESULT_CHARS = 2000
  *  not measured here; the host may override it. */
 export const DECISION_DOCUMENTS_TIMEOUT_MS = 30_000
 
-const NO_EVENTS: ReadonlySet<ContextEvent> = new Set()
+const NO_EVENTS: ReadonlySet<string> = new Set()
 
 export interface DecisionLoopRoute<T> {
   readonly pattern: ConfiguredPattern<T>
@@ -708,7 +708,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         events: all.filter(
           (e) =>
             e.patternId !== loopId &&
-            !own.has(e) &&
+            (e.id === undefined || !own.has(e.id)) &&
             (e.id === undefined || !withheld.has(e.id)) &&
             !bracketHidden.has(e) &&
             (!hide.has(e.patternId) || e.type === 'pattern_enter' || e.type === 'pattern_exit'),
@@ -968,7 +968,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       rest: taken.rest,
       finished,
       childEvents: halvesOfPaused.flatMap((h) => h.events),
-      own: new Set(halvesOfPaused.flatMap((h) => h.bracket)),
+      // By id, not by object: a copy of the events made above the loop must
+      // not let the paused half back into the resumed child's view.
+      own: new Set(halvesOfPaused.flatMap((h) => h.bracket.flatMap((e) => (e.id ? [e.id] : [])))),
       wallMs: halvesOfPaused.reduce((sum, h) => sum + (h.exit?.wallMs ?? 0), 0),
       decision: decision
         ? ({

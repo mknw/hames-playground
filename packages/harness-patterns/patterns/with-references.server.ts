@@ -10,7 +10,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { trackEvent, resolveConfig, createScope, createEvent } from '../context.server'
+import { trackEvent, resolveConfig, createScope, createEvent, shouldTrack } from '../context.server'
 import { hitlPending } from '../hitl.server'
 import { resumableStep, takeResume, wrapperResumable } from '../resume.server'
 import type {
@@ -195,10 +195,15 @@ export function withReferences<T>(
   // core hosts no default import (#225 L3).
   const selector = config.selector
   // A resume replays the selection it recorded instead of asking the selector
-  // again (slice 6): the same refs, and no model call.
-  const resumable = wrapperResumable('withReferences', wrappedPattern)
+  // again (slice 6): the same refs, and no model call. Resumable only while it
+  // records that selection: one that does not would call the selector again.
+  const recordsSelection = shouldTrack('reference_attached', resolved.trackHistory)
+  const resumable = recordsSelection
+    ? wrapperResumable('withReferences', wrappedPattern)
+    : undefined
 
   const fn = (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    if (!resumable) return attach(scope, view, undefined)
     const recorded = takeResume(resumable.fingerprint)
       ?.events.filter((e) => e.patternId === scope.id && e.type === 'reference_attached')
       .at(-1)?.data as ReferenceAttachedEventData | undefined
@@ -371,6 +376,6 @@ export function withReferences<T>(
     config: resolved,
     estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1,
     children: [wrappedPattern],
-    capabilities: { resumable },
+    ...(resumable ? { capabilities: { resumable } } : {}),
   }
 }

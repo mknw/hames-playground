@@ -698,10 +698,13 @@ export function checkResume(
   // Slice 6: below a resumable top-level pattern the pause re-enters INSIDE
   // the run, so every pending request must carry one path, and that path must
   // still lead to its gate through the current composition. An absent, changed
-  // or non-resumable path is refused here, before any `resolve`. A top-level
-  // pattern that is not resumable keeps the 0.x re-entry from its start.
+  // or non-resumable path is refused here, before any `resolve`. A request
+  // that RECORDED a path is bound to it whatever the top-level pattern is now:
+  // a composition that stopped being resumable must not re-run the loop from
+  // its start after `resolve`. Only a pause that recorded no path, below a
+  // top-level pattern that is not resumable, keeps the 0.x re-entry.
   const top = at.patterns?.[startAt]
-  if (top && ownResumable(top)) {
+  if (top && (ownResumable(top) || pending.some((r) => r.continuation !== undefined))) {
     const path = pending[0].continuation
     const samePath = (r: HitlRequestEventData): boolean =>
       JSON.stringify(r.continuation) === JSON.stringify(path)

@@ -144,6 +144,12 @@ A drop-in (`incus-agent.service.d/host-agent.conf`) makes the unit run the
 agent the host serves on its config drive, which `incus-agent-setup` copies to
 `/run/incus_agent`, as upstream's own unit does. The distribution unit would
 otherwise run its packaged binary, so a 7.x host would talk to a 6.0.x agent.
+`incus-agent` is the only agent: customization masks `lxd-agent.service`
+(a `/dev/null` link in `/etc/systemd/system`). An Ubuntu base's
+`lxd-agent-loader` udev rule otherwise starts it on the LXD-compatible virtio
+port Incus also exposes. That unit's setup then launches a second Incus agent,
+which rewrites the running agent's binary and crash-loops on the vsock port.
+The inventory records `lxd_agent_masked`, and assembly refuses without it.
 Assembly refuses any recorded list outside the two supported layouts, and the
 existing manifest hashes that inventory. CLI arguments and
 the version-1 lock are unchanged, so reviewed locks can be reused with a fresh
@@ -274,10 +280,22 @@ boot use one store. Nothing is baked into the image's own daemon.json.
 A failed stage's stderr is appended to `failed-stage.log` (0600) in the private
 work directory; the error message itself stays fixed. Package/image inputs and
 temporary logs are removed from the guest after loading. Cloud-init state
-and machine identity are cleaned for cloning. SSH host keys and Docker engine
+and machine identity are cleaned for cloning. `/etc/machine-id` is left
+present and **empty**, never absent. The guest boots with a read-only root,
+and systemd cannot create a missing file there. Such a guest runs every boot
+with no machine ID, and networkd's DHCPv6 setup then fails the whole link,
+static seed included. An empty file is not a first boot: PID 1 over-mounts a
+fresh ID (on KVM, the instance's DMI product UUID), and
+`systemd-machine-id-commit` writes it to disk once `/` is writable. The build
+does not use cloud-init's `--machine-id` flag, because in the appliance, where
+no systemd runs, that flag deletes the file. SSH host keys and Docker engine
 identity files are removed after daemon shutdown. The guest inventory records
-`machine_id_state` and `ssh_host_keys`; assembly refuses a machine-id other than
-empty/`uninitialized` or any SSH host key. Socket activation remains owned by
+`machine_id_state` (`absent`, `empty`, `uninitialized`, `populated` or
+`symlink`), `dbus_machine_id` and `ssh_host_keys`. Assembly accepts only an
+empty machine-id, and only an absent `/var/lib/dbus/machine-id` or one linked
+to `/etc/machine-id`. systemd reads the D-Bus ID first, so a real file there
+would give every clone the same ID. Assembly also refuses any SSH host key.
+Socket activation remains owned by
 the provisioners; disabling a socket alone would not clear Docker
 service dependencies.
 
@@ -319,7 +337,8 @@ both unit-file directories, each missing common unit/target, and enable failure;
 mutations also prove selection and inventory recording cannot silently stop.
 It retains all 22 authored mutations and adds stage-entry refusals for image
 identity and disk checks, archive structure, private modes, environment and
-provenance, guest loads/tags/store, adoption and clone cleanup. Every mutation
+provenance, guest loads/tags/store, adoption and clone cleanup (each machine-id
+state, the D-Bus link and the LXD agent mask). Every mutation
 must cause an assertion failure in its named test, rather than an import or
 subprocess error. The root harness matrix also pins 12/63-character config-ID
 refusals and full equality when the first 12 hex characters match.

@@ -72,6 +72,12 @@ for unit in "$@" cloud-init.target; do
 done
 systemctl enable "$@"
 printf '%s\n' "$@" > enabled-units.txt
+# incus-agent is the only guest agent. Ubuntu's lxd-agent-loader wants
+# lxd-agent.service on the LXD-compatible virtio port Incus also exposes; its
+# setup starts a second incus-agent, which rewrites the running agent's binary
+# and then crash-loops on the vsock port. Masked (the running environments carry
+# this same link), not purged, and masked whether or not the base ships it.
+systemctl mask lxd-agent.service
 # Run the agent the HOST serves on its config drive (copied to /run/incus_agent
 # by incus-agent-setup), as upstream's own unit does: it matches the host's
 # Incus version, where the packaged binary is the distro's (6.0.x) build.
@@ -172,17 +178,40 @@ trap - EXIT
 rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json ./enabled-units.txt
 rm -rf ./repo-lists ./Packages ./local.list
 # Remove clone identity and cached cloud-init instance data, never site values.
-cloud-init clean --logs --machine-id
+cloud-init clean --logs
+# machine-id: EMPTY, never absent. The guest root is read-only when PID 1 sets
+# the ID, and systemd cannot create a missing file there, so the guest would run
+# every boot with no machine ID (networkd's DHCPv6 DUID then fails the whole
+# link). An empty file is not a first boot: PID 1 over-mounts a fresh ID and
+# systemd-machine-id-commit writes it once / is writable. (cloud-init's own
+# --machine-id deletes the file here: no systemd runs in the appliance.)
+rm -f /etc/machine-id
+: > /etc/machine-id
+chmod 444 /etc/machine-id
 rm -f /etc/ssh/ssh_host_*
 rm -f /var/lib/docker/engine-id /var/lib/docker/key.json
 python3 - <<'PY'
-import glob, json
+import glob, json, os
 from pathlib import Path
 with open('inventory.json') as stream:
     inventory = json.load(stream)
-# Newer cloud-init deletes the file; systemd regenerates an absent one at first boot.
+# Record every state distinctly: an absent file once read as '' and passed.
 machine_id = Path('/etc/machine-id')
-inventory['machine_id_state'] = machine_id.read_text().strip() if machine_id.exists() else ''
+if machine_id.is_symlink():
+    inventory['machine_id_state'] = 'symlink'
+elif not machine_id.exists():
+    inventory['machine_id_state'] = 'absent'
+elif machine_id.stat().st_size == 0:
+    inventory['machine_id_state'] = 'empty'
+else:
+    inventory['machine_id_state'] = 'uninitialized' if machine_id.read_text().strip() == 'uninitialized' else 'populated'
+# systemd takes the D-Bus ID first when /etc/machine-id is empty: a real file
+# here would hand every clone the same machine ID.
+dbus = '/var/lib/dbus/machine-id'
+inventory['dbus_machine_id'] = ('link' if os.path.islink(dbus) and os.readlink(dbus) == '/etc/machine-id'
+                                else 'absent' if not os.path.lexists(dbus) else 'other')
+lxd_agent = '/etc/systemd/system/lxd-agent.service'
+inventory['lxd_agent_masked'] = os.path.islink(lxd_agent) and os.readlink(lxd_agent) == '/dev/null'
 inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))
 with open('inventory.json', 'w') as stream:
     json.dump(inventory, stream, sort_keys=True)

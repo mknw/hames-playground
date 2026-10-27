@@ -327,7 +327,9 @@ def build(args):
             "guest preload inventory differs from lock")
     require(all(inventory["packages"].get(p["name"]) == p["version"] for p in lock["packages"]),
             "guest package versions differ from lock")
-    require(inventory["machine_id_state"] in ("", "uninitialized"), "guest machine identity not cleaned")
+    require(inventory["machine_id_state"] == "empty", "guest machine identity not left empty for first boot")
+    require(inventory.get("dbus_machine_id") in ("absent", "link"), "guest D-Bus machine identity not cleaned")
+    require(inventory.get("lxd_agent_masked") is True, "duplicate LXD agent not masked")
     require(inventory["ssh_host_keys"] == [], "guest SSH host keys not cleaned")
     require(inventory.get("enabled_units") in UNIT_LAYOUTS, "guest enabled units differ from a supported layout")
     disk_info(paths["qemu-img"], disk, lock, work)

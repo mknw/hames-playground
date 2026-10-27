@@ -38,13 +38,13 @@ The chat client sends `model: qwen3.5-4b-instruct`, which vLLM enforces, so the 
 
 ## Routes
 
-| Path                        | Upstream | Used by                                                          |
-| --------------------------- | -------- | ---------------------------------------------------------------- |
-| `POST /v1/chat/completions` | vLLM     | `describe` (summaries, titles, compaction)                       |
-| `GET /v1/models`            | vLLM     | smoke checks                                                     |
-| `POST /v1/systemone`        | shim     | `decide`                                                         |
-| `GET /health`               | shim     | the wake poll; re-checks the adapter is served                   |
-| `GET /status`               | file     | boot facts: restored-from-snapshot, phase timings, adapter check |
+| Path                        | Upstream | Used by                                                               |
+| --------------------------- | -------- | --------------------------------------------------------------------- |
+| `POST /v1/chat/completions` | vLLM     | `describe` (summaries, titles, compaction)                            |
+| `GET /v1/models`            | vLLM     | smoke checks                                                          |
+| `POST /v1/systemone`        | shim     | `decide`                                                              |
+| `GET /health`               | shim     | the wake poll; re-checks the adapter is served                        |
+| `GET /status`               | file     | boot facts: restored-from-snapshot, phase timings, adapter check, GPU |
 
 Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`, `/collective_rpc`, cache controls), which `VLLM_SERVER_DEV_MODE=1` registers unauthenticated, and the raw `/v1/completions` + `/tokenize` the shim uses, are reachable only on loopback inside the container. `app/src/__tests__/deploy/modal-pins.test.ts` pins the route list.
 
@@ -59,6 +59,14 @@ Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`,
 With `HAMES_MODAL_SNAPSHOT=0` the same steps run in one `@modal.enter`, with no sleep. That is the baseline `measure.py` compares against.
 
 GPU snapshots are a Modal **alpha** feature. vLLM 0.30's source keeps a LoRA through level-1 sleep, but hybrid linear-attention models (Qwen3.5 is one) are listed as a coverage gap in vLLM's own sleep/wake tracking — which is why step 3 re-checks the distribution instead of trusting `/health`.
+
+## GPU fallbacks
+
+`HAMES_MODAL_GPU` takes one type or an ordered list, e.g. `L4,A10`: Modal starts a container on the first listed type with capacity ([GPU fallbacks](https://modal.com/docs/guide/gpu#gpu-fallbacks)). One app, one URL, and no app setting changes. Three consequences:
+
+- **Snapshots are per GPU type.** Each type in the list takes its own ([2–3 per type](https://modal.com/docs/guide/memory-snapshots)), so the first cold starts that land on a type are full boots, however warm the other type is. Changing the list obsoletes every snapshot, as any redeploy does. The pre-sleep reference that step 3 compares against is in the snapshot, so a restore is always checked against a boot on its own GPU type.
+- **`/status` names the GPU** the container landed on (`gpu`, from `nvidia-smi`), and `smoke.py` prints it, so a measurement records which type it timed.
+- **Each type bills at its own rate**, while the app prices the box at one `SMALL_LLM_EUR_PER_HOUR`. A call served on a dearer type shows a lower floor than it cost, one on a cheaper type a higher one.
 
 ## What leaves the compute region, and what does not
 
@@ -80,7 +88,7 @@ Functions/classes expose `block_network`; [Sandboxes](https://modal.com/docs/sdk
 
 The [Servers guide](https://modal.com/docs/guide/servers#defining-a-server) identifies `@modal.web_server` as the analogous Function primitive: `@app.cls(block_network=True)` plus `@modal.web_server` is accepted client-side in the pinned SDK (`modal/app.py:1077–1085,1266`; `modal/_partial_function.py:497–548`), but ingress, health checks and GPU snapshots with that block remain unverified (the Sandbox API explicitly refuses open ports with `block_network`, `modal/sandbox.py:896–897`). Moving off `@app.server` would also change proxy authentication from the current Bearer header to `Modal-Key`/`Modal-Secret` and the [503/no-queue behavior](https://modal.com/docs/guide/servers#zero-to-one-scaling) the app relies on. A synthetic-only throwaway compatibility spike is a proposed follow-up requiring the owner's decision and authorization; none was built or run here.
 
-Both apps bake weights and Caddy during image build, before `HF_HUB_OFFLINE=1`; their vLLM argv uses local model directories (`hames_small_models.py:154–181,189–217`; `hames_private_27b.py:187–224`). Local health, sleep/wake and Caddy upstreams use loopback. These remove known runtime download needs, but do not prove that every dependency can boot offline.
+Both apps bake weights and Caddy during image build, before `HF_HUB_OFFLINE=1`; their vLLM argv uses local model directories (`hames_small_models.py:166–193,201–229`; `hames_private_27b.py:187–224`). Local health, sleep/wake and Caddy upstreams use loopback. These remove known runtime download needs, but do not prove that every dependency can boot offline.
 
 **Compensating check, not network containment (SD-14):** `modal-pins.test.ts` pins both vLLM media refusals, the shim's effective URL lock, offline/telemetry settings, build-time model pins and Caddy's loopback route list. `smoke.py` probes small-box chat `image_url` and `video_url` parts, plus the decision shim's top-level `image_url` and an image part nested in structured `state`; `smoke_27b.py` probes a chat `image_url` part. The structured-state shape follows the [pinned shim](https://huggingface.co/h2oai/h2o-lightning-4b/blob/b43f759b6385d21182f87c3829931ec3d4dfa98a/h2o_lightning_shim.py#L506) (`:506–528,547–597`), whose SHA256 matches `CARD_FILES_SHA256`. All probes use the shared `PROBE_URL` on a reserved `.invalid` HTTPS host: a fetch must fail, so fetch-then-refuse cannot pass as pre-fetch refusal. They require each specific pre-fetch refusal, rather than treating a generic error from a failed download as success. `test_behaviour.py` validates the outgoing requests and exercises those real smoke entry points with independent fixed HTTP fixtures, wrong statuses and each fetch-failure indicator separately. These checks cover the listed paths; they cannot contain arbitrary future outbound code or a compromised process. Reassess the Server API on an SDK upgrade (the `uv.lock` Modal 1.6.1 pin forces this review) or a documented Modal-supported solution.
 

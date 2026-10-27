@@ -17,7 +17,16 @@
  * better" fails here rather than shipping.
  */
 import { describe, it, expect } from 'vitest'
-import { formatCounts, mask, maskAll, maskGraphIds } from '../../../lib/org-graph/scripts/_redact'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  formatCounts,
+  mask,
+  maskAll,
+  maskError,
+  maskGraphIds,
+  maskMailAddresses,
+} from '../../../lib/org-graph/scripts/_redact'
 
 describe('mask', () => {
   it('replaces every run with the same three characters and keeps the separators', () => {
@@ -111,6 +120,92 @@ describe('maskGraphIds', () => {
     expect(maskGraphIds('could not read the database clock')).toBe(
       'could not read the database clock',
     )
+  })
+})
+
+describe('maskMailAddresses', () => {
+  it('replaces a plain address with the placeholder and keeps the rest', () => {
+    expect(maskMailAddresses("mail = 'someone@example.com'")).toBe("mail = '⟨address⟩'")
+  })
+
+  it('removes every address, including a multi-part domain', () => {
+    expect(maskMailAddresses('writing to jan.van.damme@example.test and jose@example.co.uk')).toBe(
+      'writing to ⟨address⟩ and ⟨address⟩',
+    )
+  })
+
+  it('masks a GUID-shaped local part as one address, not as id + domain', () => {
+    expect(maskMailAddresses('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@example.com')).toBe('⟨address⟩')
+  })
+
+  it('leaves a message with no address untouched', () => {
+    expect(maskMailAddresses('could not read the database clock')).toBe(
+      'could not read the database clock',
+    )
+  })
+
+  it('leaves a bare @ or an @-less token alone', () => {
+    expect(maskMailAddresses('a@b and @nobody and no one')).toBe('a@b and @nobody and no one')
+  })
+})
+
+describe('maskError', () => {
+  it('masks both an address and a Graph id out of one error message', () => {
+    // The two shapes an ingest failure actually quotes, in one message: a
+    // Graph failure embeds the request path (one employee's directory id),
+    // and a Neo4j uniqueness-violation message quotes the conflicting value.
+    const message =
+      '[graph] GET /users/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d failed; ' +
+      "Node(123) already exists with label `Member` and property `mail` = 'someone@example.com'"
+    const masked = maskError(message)
+    expect(masked).not.toContain('someone@example.com')
+    expect(masked).not.toContain('a1b2c3d4')
+    expect(masked).toContain('⟨address⟩')
+    expect(masked).toContain('⟨id⟩')
+  })
+
+  it('masks a GUID-shaped mail address as one address, not as id + domain', () => {
+    const message =
+      'Node(123) already exists with label `Member` and property `mail` = ' +
+      "'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@example.com'"
+    expect(maskError(message)).toContain('⟨address⟩')
+    expect(maskError(message)).not.toContain('⟨id⟩')
+  })
+
+  it('leaves an error message with no address or id untouched', () => {
+    expect(maskError('could not read the database clock')).toBe('could not read the database clock')
+  })
+
+  it('masks every address, not just the first', () => {
+    const message =
+      "Node(123) already exists with label `Member` and property `mail` = 'someone@example.com'; " +
+      "Node(456) already exists with label `Member` and property `mail` = 'other@example.com'"
+    expect(maskError(message)).not.toContain('someone@example.com')
+    expect(maskError(message)).not.toContain('other@example.com')
+  })
+})
+
+describe('maskError reachability', () => {
+  it('the ingest script error path goes through maskError', () => {
+    // The control is reachable, not merely present: the ingest script's catch
+    // is the one place an error message reaches the terminal, and it must go
+    // through the shared mask. A source-scan pin, not a mock: this script runs
+    // against the real tenant, so it has no test harness.
+    const source = readFileSync(
+      join(
+        import.meta.dirname,
+        '..',
+        '..',
+        '..',
+        'lib',
+        'org-graph',
+        'scripts',
+        'ingest-roster.ts',
+      ),
+      'utf8',
+    )
+    expect(source).toContain('maskError')
+    expect(source).not.toContain('maskGraphIds')
   })
 })
 

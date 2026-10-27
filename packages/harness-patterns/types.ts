@@ -1071,6 +1071,11 @@ export interface ContinuationSegment {
   /** `decisionLoop` only: the route it ran and the iteration it ran in. */
   readonly route?: string
   readonly iteration?: number
+  /** The OWN resumable fingerprint of the child this step runs next, `null`
+   *  when that child is not resumable; ABSENT on a step that dispatches the
+   *  gate itself. What `canPauseHere()` reads to know, at run time, that no
+   *  pattern between two steps is one that cannot resume (slice 10). */
+  readonly child?: string | null
 }
 
 // ============================================================================
@@ -1279,6 +1284,9 @@ export interface ToolResultEventData {
   /** A serial multi-call turn stopped before this call ran (its `error` says
    *  why). Recorded so a resume rebuilds the turn exactly (slice 6). */
   skipped?: true
+  /** Carried over from a held placeholder that asked for it: the call is
+   *  dispatched again on re-entry (boundary guards slice 10, O15). */
+  redispatch?: true
 }
 
 /** Data payload for controller_action event */
@@ -1759,6 +1767,11 @@ export interface HeldResult {
   readonly held: true
   readonly requestId: string
   readonly note: string
+  /** The held CALL is dispatched again when the run re-enters it, and its
+   *  result is what the loop reads: a call a person released (an outgoing
+   *  request, boundary guards slice 10 / O15) rather than a result they judged.
+   *  The gate that held it answers from the recorded decision on the way. */
+  readonly redispatch?: true
 }
 
 /** One answer to `resumeHarness`: a bare option id, or the id with the

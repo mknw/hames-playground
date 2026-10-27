@@ -332,17 +332,25 @@ export async function callTool(
   args: Record<string, unknown>,
 ): Promise<ToolCallResult> {
   let denial: string | undefined
+  let hold: HeldResult | undefined
   for (const check of currentRunFrame()?.egressChecks ?? []) {
     try {
-      const reason = await check({ name, args })
-      if (reason) denial ??= reason
+      const verdict = await check({ name, args })
+      if (typeof verdict === 'string' && verdict) denial ??= verdict
+      else if (verdict && typeof verdict === 'object' && isHeldResult(verdict.held)) {
+        hold ??= verdict.held
+      }
     } catch {
       // An unavailable check must not turn into an unchecked dispatch, and its
       // exception may quote the very arguments being withheld.
       denial ??= EGRESS_CHECK_FAILED
     }
   }
+  // A denial wins over a hold: a person is never asked about a call another
+  // check refused. A hold dispatches nothing; its placeholder is the result,
+  // and the loop pauses on it (boundary guards slice 10).
   if (denial) return { success: false, data: null, error: denial }
+  if (hold) return { success: true, data: hold }
   return withToolCallId(async (id) => {
     const guarded = await applyGuard(name, await dispatchTool(name, args))
     // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the

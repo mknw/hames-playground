@@ -15,10 +15,12 @@
  * The **error** path is the one that is not redacted by construction, because
  * the string does not originate here: a Graph failure message quotes the
  * request path, and on the memberships loop that path carries a member's Entra
- * object id. Still no name and no address, so the guarantee above holds
- * literally — but an opaque identifier for one employee is enough to make
- * "paste this into a PR" need a caveat, so the message goes through
- * `maskGraphIds` and does not.
+ * object id. A Neo4j uniqueness-violation message quotes the conflicting
+ * value, and one declared uniqueness constraint is on `mail` — so an error
+ * there would print one employee's address. Nothing about a person is left
+ * either way: the message goes through {@link maskError} (see `_redact.ts`),
+ * which masks both ids and addresses, so "paste this into a PR" needs no
+ * caveat.
  *
  * `--no-memberships` skips the per-member group reads. They are gated by a
  * one-request probe anyway (`probeGroupReadAccess`), so the flag is for when you
@@ -36,7 +38,7 @@ import { CONSTRAINT_NAMES } from '../ontology'
 import { loadDirectoryRoster } from '../roster-source.server'
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
 import { getEndpoints } from '../../config/endpoints'
-import { formatCounts, maskGraphIds } from './_redact'
+import { formatCounts, maskError } from './_redact'
 import { composeSecret } from '../../config/compose-credentials.server'
 
 function requireEnv(): void {
@@ -116,10 +118,7 @@ async function main(): Promise<void> {
 
 main()
   .catch((err) => {
-    console.error(
-      '\n✗ ingest failed:',
-      maskGraphIds(err instanceof Error ? err.message : String(err)),
-    )
+    console.error('\n✗ ingest failed:', maskError(err instanceof Error ? err.message : String(err)))
     process.exitCode = 1
   })
   .finally(() => resetDriver())

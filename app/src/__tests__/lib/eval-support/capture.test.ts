@@ -199,6 +199,186 @@ describe('captureTrace decision output cap', () => {
   })
 })
 
+describe('captureTrace critic verdicts and synthesis', () => {
+  const criticCall = (rawOutput?: string): LLMCallData => ({
+    functionName: 'Critic',
+    variables: {},
+    clientName: 'LargeQwen',
+    provider: 'openai-generic',
+    ...(rawOutput !== undefined && { rawOutput }),
+  })
+
+  it('records every critic verdict — a rejection on a passing scenario included', () => {
+    const rejected = event(
+      'critic_result',
+      {
+        result: {
+          is_sufficient: false,
+          explanation: 'the CSV was never written to /work/out',
+          suggested_approach: 'run sandbox_write first',
+        },
+      },
+      criticCall('{"is_sufficient":false}'),
+      'doc',
+    )
+    const accepted = event(
+      'critic_result',
+      { result: { is_sufficient: true, explanation: 'done' } },
+      criticCall(),
+      'doc',
+    )
+    expect(captureTrace(trace([rejected, accepted]), false).criticCalls).toEqual([
+      {
+        turn: 0,
+        patternId: 'doc',
+        functionName: 'Critic',
+        outcome: 'verdict',
+        verdict: false,
+        reason: 'the CSV was never written to /work/out',
+        suggestedApproach: 'run sandbox_write first',
+        client: 'LargeQwen',
+        provider: 'openai-generic',
+        rawOutput: '{"is_sufficient":false}',
+      },
+      {
+        turn: 0,
+        patternId: 'doc',
+        functionName: 'Critic',
+        outcome: 'verdict',
+        verdict: true,
+        reason: 'done',
+        client: 'LargeQwen',
+        provider: 'openai-generic',
+      },
+    ])
+  })
+
+  it('names the reasoning twin, and survives a verdict event without a call record', () => {
+    const twin = event(
+      'critic_result',
+      { result: { is_sufficient: true, explanation: 'ok' } },
+      {
+        ...criticCall(),
+        functionName: 'CriticThinking',
+      },
+    )
+    const bare = event('critic_result', { result: { is_sufficient: true, explanation: 'ok' } })
+    const rows = captureTrace(trace([twin, bare]), false).criticCalls
+    expect(rows.map((r) => r.functionName)).toEqual(['CriticThinking', 'Critic'])
+    expect(rows[1].client).toBeUndefined()
+    expect(rows[1].rawOutput).toBeUndefined()
+  })
+
+  it('records a failed critic call from its error event, and caps a runaway verdict body', () => {
+    const failed = event(
+      'error',
+      { error: 'BamlValidationError: missing is_sufficient', kind: 'llm_call' },
+      { ...criticCall(), functionName: 'CriticThinking' },
+      'doc',
+    )
+    expect(captureTrace(trace([failed]), false).criticCalls).toEqual([
+      {
+        turn: 0,
+        patternId: 'doc',
+        functionName: 'CriticThinking',
+        outcome: 'error',
+        error: 'BamlValidationError: missing is_sufficient',
+        verdict: null,
+        reason: '',
+        client: 'LargeQwen',
+        provider: 'openai-generic',
+      },
+    ])
+    const long = 'x'.repeat(CAPTURE_OUTPUT_MAX_CHARS + 1)
+    const [capped] = captureTrace(
+      trace([
+        event(
+          'critic_result',
+          { result: { is_sufficient: true, explanation: 'ok' } },
+          criticCall(long),
+        ),
+      ]),
+      false,
+    ).criticCalls
+    expect(capped.rawOutput).toContain('…[truncated, 1 more characters]')
+  })
+
+  it("records the synthesis, its serving client, and NOT the router's direct answer", () => {
+    const routerAnswer = event(
+      'assistant_message',
+      { content: 'synthetic direct answer', final: true },
+      { functionName: 'Router', variables: {}, rawOutput: 'synthetic direct answer' },
+    )
+    const synthesis = event(
+      'assistant_message',
+      { content: 'synthetic answer', final: true },
+      {
+        functionName: 'Synthesize',
+        variables: {},
+        clientName: 'LargeQwen',
+        provider: 'openai-generic',
+        rawOutput: 'synthetic answer',
+      },
+      'response-synth',
+    )
+    const intermediate = event('assistant_message', { content: 'Let me look into that…' })
+    expect(
+      captureTrace(trace([routerAnswer, intermediate, synthesis]), false).synthesizeCalls,
+    ).toEqual([
+      {
+        turn: 0,
+        patternId: 'response-synth',
+        functionName: 'Synthesize',
+        outcome: 'completion',
+        output: 'synthetic answer',
+        client: 'LargeQwen',
+        provider: 'openai-generic',
+        rawOutput: 'synthetic answer',
+      },
+    ])
+  })
+
+  it('records a failed synthesis from its error event', () => {
+    const failed = event(
+      'error',
+      { error: 'BamlTimeoutError', kind: 'llm_call' },
+      { functionName: 'Synthesize', variables: {}, clientName: 'LargeQwen' },
+      'response-synth',
+    )
+    expect(captureTrace(trace([failed]), false).synthesizeCalls).toEqual([
+      {
+        turn: 0,
+        patternId: 'response-synth',
+        functionName: 'Synthesize',
+        outcome: 'error',
+        error: 'BamlTimeoutError',
+        client: 'LargeQwen',
+      },
+    ])
+  })
+
+  // MUTATION: drop `cap()` from the synthesis output in capture.ts: red.
+  it('caps a runaway synthesis output like a controller completion', () => {
+    const long = 'y'.repeat(CAPTURE_OUTPUT_MAX_CHARS + 50)
+    const [row] = captureTrace(
+      trace([
+        event(
+          'assistant_message',
+          { content: long, final: true },
+          { functionName: 'Synthesize', variables: {}, rawOutput: long },
+        ),
+      ]),
+      false,
+    ).synthesizeCalls
+    expect(row.output).toHaveLength(
+      CAPTURE_OUTPUT_MAX_CHARS + '…[truncated, 50 more characters]'.length,
+    )
+    expect(row.rawOutput).toHaveLength(
+      CAPTURE_OUTPUT_MAX_CHARS + '…[truncated, 50 more characters]'.length,
+    )
+  })
+})
+
 describe('CaptureLog', () => {
   it('leaves a row for a scenario that threw, so a missing row never reads as no decisions', () => {
     const log = new CaptureLog()
@@ -213,6 +393,8 @@ describe('CaptureLog', () => {
         tier: 'self_deployed',
         decisions: [],
         controllerCalls: [],
+        criticCalls: [],
+        synthesizeCalls: [],
         error: 'BamlTimeoutError',
       },
     ])

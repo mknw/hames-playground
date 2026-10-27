@@ -29,6 +29,8 @@ import {
   type ConfiguredPattern,
   type ControllerFn,
   type CompactExecutionInput,
+  type LLMCallData,
+  type LLMCallRecord,
   type MemoryConfig,
 } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
@@ -137,7 +139,15 @@ const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
-  critic: vi.fn(async (_intent: string, _attempts: unknown[]) => ({
+  critic: vi.fn<
+    (
+      _intent: string,
+      _attempts: unknown[],
+    ) => Promise<{
+      result: { is_sufficient: boolean; explanation: string; suggested_approach?: string | null }
+      llmCall?: LLMCallData
+    }>
+  >(async (_intent: string, _attempts: unknown[]) => ({
     result: { is_sufficient: true, explanation: 'done' },
   })),
   screen: vi.fn(async (_input: { tool: string; content?: string }) => ({
@@ -145,7 +155,11 @@ const mocks = vi.hoisted(() => ({
     reason: 'clean',
     spans: [] as string[],
   })),
-  synthesize: vi.fn(async (_input: CompactExecutionInput) => ({ value: 'synthetic answer' })),
+  synthesize: vi.fn(
+    async (_input: CompactExecutionInput): Promise<{ value: string; call?: LLMCallRecord }> => ({
+      value: 'synthetic answer',
+    }),
+  ),
   planner: vi.fn(async (_message: string, _intent: string, _context?: string) => ({
     plan: { reasoning: 'plan', plan: 'Use the earlier result.', n_steps: 1 },
   })),
@@ -241,6 +255,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   composition.guardConfigs = []
   mocks.synthesize.mockResolvedValue({ value: 'synthetic answer' })
+  mocks.critic.mockResolvedValue({ result: { is_sufficient: true, explanation: 'done' } })
   gateway.names = [
     ...GRAPH,
     ...INFO,
@@ -650,6 +665,106 @@ describe('general-next composition', () => {
         'also when an earlier knowledge-graph or web lookup did not find it',
       )
       expect(decisions[1].probs).toMatchObject({ answer: 1, 'read-documents': 0 })
+    },
+  )
+
+  // #507 D6 eval capture: a scripted office run's capture holds WHY the critic rejected the
+  // first attempt and WHAT synthesis answered, with the client that served each. MUTATION:
+  // make `captureTrace` drop its critic rows, or read the verdict from somewhere other than
+  // the event's own `critic_result`: red.
+  it.each(['self_deployed'])(
+    'capture: a scripted office rejection records the critic verdicts and the synthesis (%s)',
+    async (tier) => {
+      const question = scenarioQuestion('11-mail-to-file.ts')
+      choices = ['office-data', 'answer']
+      mocks.actor
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'read mail',
+            tool_name: 'graph_mail_recent',
+            tool_args: '{}',
+            is_final: true,
+          },
+        })
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'summarised',
+            tool_name: 'graph_mail_recent',
+            tool_args: '{}',
+            is_final: true,
+          },
+        })
+      mocks.critic
+        .mockResolvedValueOnce({
+          result: {
+            is_sufficient: false,
+            explanation: 'the attempt read the mailbox but never stated the launch checklist',
+            suggested_approach: 'state the checklist items from the result',
+          },
+          llmCall: {
+            functionName: 'Critic',
+            variables: {},
+            clientName: 'LargeQwen',
+            provider: 'openai-generic',
+            rawOutput: '{"is_sufficient":false}',
+          },
+        })
+        .mockResolvedValueOnce({
+          result: { is_sufficient: true, explanation: 'done' },
+          llmCall: {
+            functionName: 'Critic',
+            variables: {},
+            clientName: 'LargeQwen',
+            provider: 'openai-generic',
+            rawOutput: '{"is_sufficient":true}',
+          },
+        })
+      mocks.synthesize.mockResolvedValueOnce({
+        value: 'Launch checklist: verify CSV export; publish notes.',
+        call: {
+          functionName: 'Synthesize',
+          variables: {},
+          clientName: 'SmallQwen',
+          provider: 'openai-generic',
+          rawOutput: 'Launch checklist: verify CSV export; publish notes.',
+        },
+      })
+      const result = await run(tier, deps, question)
+      const events = result.context.events
+      const trace: ConversationTrace = {
+        turns: [{ response: result.response, status: result.status, events }],
+        tools: [],
+        artifacts: [],
+        indexed: [],
+        retrievals: [],
+      }
+      const { criticCalls, synthesizeCalls } = captureTrace(trace, false)
+      // The rejection is on a scenario that would PASS — recorded all the same.
+      expect(criticCalls.map((c) => [c.turn, c.outcome, c.verdict])).toEqual([
+        [0, 'verdict', false],
+        [0, 'verdict', true],
+      ])
+      expect(criticCalls[0]).toMatchObject({
+        patternId: 'doc',
+        functionName: 'Critic',
+        reason: 'the attempt read the mailbox but never stated the launch checklist',
+        suggestedApproach: 'state the checklist items from the result',
+        client: 'LargeQwen',
+        rawOutput: '{"is_sufficient":false}',
+      })
+      expect(criticCalls[1].suggestedApproach).toBeUndefined()
+      expect(synthesizeCalls).toEqual([
+        {
+          turn: 0,
+          patternId: 'response-synth',
+          functionName: 'Synthesize',
+          outcome: 'completion',
+          output: 'Launch checklist: verify CSV export; publish notes.',
+          client: 'SmallQwen',
+          provider: 'openai-generic',
+          rawOutput: 'Launch checklist: verify CSV export; publish notes.',
+        },
+      ])
     },
   )
 

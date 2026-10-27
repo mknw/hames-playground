@@ -1,9 +1,9 @@
 /** Opt-in trace capture for the general-next eval (#507): what the live report cannot say.
  *
  * The report grades a conversation by its decision sequence and tool checks. It cannot say WHY
- * the decider chose `answer`, or what a controller wrote before an attempt failed, because the
- * events that hold it are discarded after grading. They are already on the trace: every
- * `decision_made` event carries the exact request body its call sent (`llmCall.rawInput`) and the
+ * the decider chose `answer`, what a controller wrote before an attempt failed, why a critic
+ * rejected one, or what synthesis did with the results, because the events that hold it are
+ * discarded after grading. They are already on the trace: every `decision_made` event carries the exact request body its call sent (`llmCall.rawInput`) and the
  * endpoint's answer (`rawOutput`), and every controller/actor call carries its raw completion.
  * So capture is a read of the trace, with no new seam, and it works in hermetic and live mode
  * alike.
@@ -57,10 +57,49 @@ export interface ControllerCapture {
   rawOutput?: string
 }
 
+export interface CriticCapture {
+  turn: number
+  patternId: string
+  functionName: string
+  /** `verdict` for a completed `critic_result` (recorded whether the verdict accepted or rejected
+   * — the rejection reason is what the diagnosis reads), `error` for a failed critic call. */
+  outcome: 'verdict' | 'error'
+  error?: string
+  /** The critic's `is_sufficient`; null when the event carried no parsed verdict. */
+  verdict: boolean | null
+  /** The critic's `explanation`. */
+  reason: string
+  suggestedApproach?: string | null
+  /** The client BAML selected for the call, when the event carried a call record. */
+  client?: string
+  provider?: string
+  rawOutput?: string
+}
+
+export interface SynthesizeCapture {
+  turn: number
+  patternId: string
+  functionName: string
+  /** `completion` for the final synthesis, `error` for a failed synthesis call. */
+  outcome: 'completion' | 'error'
+  error?: string
+  /** The synthesized response as the event recorded it. */
+  output?: string
+  client?: string
+  provider?: string
+  rawOutput?: string
+}
+
 export interface ScenarioCapture {
   decisions: DecideCapture[]
   /** Raw controller/actor outputs: error events always; every call when the scenario failed. */
   controllerCalls: ControllerCapture[]
+  /** Every critic verdict and failed critic call, whether the scenario passed or not: a rejection
+   * on a passing scenario is exactly what the diagnosis needs to see. */
+  criticCalls: CriticCapture[]
+  /** Every synthesis and failed synthesis call. The router's direct answer is not synthesis and
+   * is not here. */
+  synthesizeCalls: SynthesizeCapture[]
   /** Set when the scenario threw before it could be graded: the rows above are then empty by
    * absence of a trace, not by absence of decisions. */
   error?: string
@@ -75,6 +114,55 @@ const cap = (text: string | undefined): string | undefined =>
     : text
 
 const CONTROLLER_FUNCTIONS = new Set(['LoopController', 'ActorController'])
+// The critic's BAML function and its reasoning twin (the twin the private tier can resolve the
+// critic role onto); `Synthesize` is the only synthesis function.
+const CRITIC_FUNCTIONS = new Set(['Critic', 'CriticThinking'])
+const SYNTHESIZE_FUNCTIONS = new Set(['Synthesize'])
+
+const clientOf = (event: ContextEvent): { client?: string; provider?: string } => {
+  const client = event.llmCall?.clientName
+  const provider = event.llmCall?.provider
+  return {
+    ...(client !== undefined && { client }),
+    ...(provider !== undefined && { provider }),
+  }
+}
+
+function criticOf(event: ContextEvent, turn: number): CriticCapture {
+  const data = isRecord(event.data) ? event.data : {}
+  const result = isRecord(data.result) ? data.result : {}
+  const verdict = typeof result.is_sufficient === 'boolean' ? result.is_sufficient : null
+  const reason = typeof result.explanation === 'string' ? result.explanation : ''
+  const suggested = typeof result.suggested_approach === 'string' ? result.suggested_approach : null
+  const message = event.type === 'error' && typeof data.error === 'string' ? data.error : undefined
+  return {
+    turn,
+    patternId: event.patternId,
+    functionName: event.llmCall?.functionName ?? 'Critic',
+    outcome: event.type === 'error' ? 'error' : 'verdict',
+    ...(message !== undefined && { error: message }),
+    verdict,
+    reason,
+    ...(suggested !== null && { suggestedApproach: suggested }),
+    ...clientOf(event),
+    ...(event.llmCall?.rawOutput !== undefined && { rawOutput: cap(event.llmCall.rawOutput) }),
+  }
+}
+
+function synthesizeOf(event: ContextEvent, turn: number): SynthesizeCapture {
+  const data = isRecord(event.data) ? event.data : {}
+  const message = event.type === 'error' && typeof data.error === 'string' ? data.error : undefined
+  return {
+    turn,
+    patternId: event.patternId,
+    functionName: event.llmCall?.functionName ?? 'Synthesize',
+    outcome: event.type === 'error' ? 'error' : 'completion',
+    ...(message !== undefined && { error: message }),
+    ...(typeof data.content === 'string' && { output: cap(data.content) }),
+    ...clientOf(event),
+    ...(event.llmCall?.rawOutput !== undefined && { rawOutput: cap(event.llmCall.rawOutput) }),
+  }
+}
 
 function decideOf(event: ContextEvent, turn: number, decision: number): DecideCapture {
   const data = isRecord(event.data) ? event.data : {}
@@ -116,7 +204,12 @@ function decideOf(event: ContextEvent, turn: number, decision: number): DecideCa
 }
 
 export function captureTrace(trace: ConversationTrace, failed: boolean): ScenarioCapture {
-  const capture: ScenarioCapture = { decisions: [], controllerCalls: [] }
+  const capture: ScenarioCapture = {
+    decisions: [],
+    controllerCalls: [],
+    criticCalls: [],
+    synthesizeCalls: [],
+  }
   trace.turns.forEach((t, turn) => {
     let decision = 0
     for (const event of t.events) {
@@ -125,19 +218,42 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
         continue
       }
       const fn = event.llmCall?.functionName
-      if (!fn || !CONTROLLER_FUNCTIONS.has(fn)) continue
-      const isError = event.type === 'error' || event.type === 'loop_recovery'
-      if (!isError && !failed) continue
-      const message =
-        isRecord(event.data) && typeof event.data.error === 'string' ? event.data.error : undefined
-      capture.controllerCalls.push({
-        turn,
-        patternId: event.patternId,
-        functionName: fn,
-        outcome: event.type === 'loop_recovery' ? 'recovery' : isError ? 'error' : 'completion',
-        ...(message !== undefined && { error: message }),
-        ...(event.llmCall?.rawOutput !== undefined && { rawOutput: cap(event.llmCall.rawOutput) }),
-      })
+      if (fn && CONTROLLER_FUNCTIONS.has(fn)) {
+        const isError = event.type === 'error' || event.type === 'loop_recovery'
+        if (!isError && !failed) continue
+        const message =
+          isRecord(event.data) && typeof event.data.error === 'string'
+            ? event.data.error
+            : undefined
+        capture.controllerCalls.push({
+          turn,
+          patternId: event.patternId,
+          functionName: fn,
+          outcome: event.type === 'loop_recovery' ? 'recovery' : isError ? 'error' : 'completion',
+          ...(message !== undefined && { error: message }),
+          ...(event.llmCall?.rawOutput !== undefined && {
+            rawOutput: cap(event.llmCall.rawOutput),
+          }),
+        })
+        continue
+      }
+      if (
+        event.type === 'critic_result' ||
+        (event.type === 'error' && fn !== undefined && CRITIC_FUNCTIONS.has(fn))
+      ) {
+        capture.criticCalls.push(criticOf(event, turn))
+        continue
+      }
+      if (
+        (event.type === 'assistant_message' &&
+          (isRecord(event.data) ? event.data.final === true : false) &&
+          fn !== undefined &&
+          SYNTHESIZE_FUNCTIONS.has(fn)) ||
+        (event.type === 'error' && fn !== undefined && SYNTHESIZE_FUNCTIONS.has(fn))
+      ) {
+        capture.synthesizeCalls.push(synthesizeOf(event, turn))
+        continue
+      }
     }
   })
   return capture
@@ -152,7 +268,14 @@ export class CaptureLog {
   /** A scenario that threw (a timeout, an escaped BamlTimeoutError) has no trace: without a row,
    * a missing entry would read as "no decisions". */
   addError(key: SpendKey, error: string): void {
-    this.entries.push({ ...key, decisions: [], controllerCalls: [], error })
+    this.entries.push({
+      ...key,
+      decisions: [],
+      controllerCalls: [],
+      criticCalls: [],
+      synthesizeCalls: [],
+      error,
+    })
   }
   toJSON() {
     return {

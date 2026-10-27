@@ -23,6 +23,7 @@ import {
   INGRESS_TEXTS,
   inferServer,
   ownResumable,
+  ROUTE_SCOPE_HEADING,
   serializeContext,
   withRunFrame,
   type ConfiguredPattern,
@@ -97,6 +98,9 @@ const gateway = vi.hoisted(() => ({
   names: [] as string[],
   result: 'synthetic result' as unknown,
   calls: [] as string[],
+  /** Tools whose call fails with an `Error: …` text result — the MCP shape the
+   *  client demotes to a failed tool_result (mcp-client.server.ts). */
+  failingTools: [] as string[],
 }))
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
@@ -107,6 +111,15 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }))
     callTool = vi.fn(async ({ name }: { name: string }) => {
       gateway.calls.push(name)
+      if (gateway.failingTools.includes(name))
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: Synthetic service unavailable; retry on the next user turn.',
+            },
+          ],
+        }
       return {
         content: [
           {
@@ -127,11 +140,16 @@ const mocks = vi.hoisted(() => ({
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
   critic: vi.fn<
-    () => Promise<{
+    (
+      _intent: string,
+      _attempts: unknown[],
+    ) => Promise<{
       result: { is_sufficient: boolean; explanation: string; suggested_approach?: string | null }
       llmCall?: LLMCallData
     }>
-  >(async () => ({ result: { is_sufficient: true, explanation: 'done' } })),
+  >(async (_intent: string, _attempts: unknown[]) => ({
+    result: { is_sufficient: true, explanation: 'done' },
+  })),
   screen: vi.fn(async (_input: { tool: string; content?: string }) => ({
     injection_detected: false,
     reason: 'clean',
@@ -248,6 +266,7 @@ beforeEach(() => {
   ]
   gateway.result = 'synthetic result'
   gateway.calls = []
+  gateway.failingTools = []
   choices = ['info-retrieval', 'answer']
   sticky = undefined
   states = []
@@ -396,11 +415,15 @@ describe('general-next composition', () => {
 
   // p87 (owner, 2026-10-22): exact calculation on numbers in the user's LATEST message is
   // sandbox work; a follow-up over an earlier turn's number is not (the child cannot see it).
+  // FIX08B (owner ruling in #606, run-7 diagnosis): a route whose result reports the lookup
+  // could not be done is answered, not re-dispatched — the 08 turn-1 failure was the decider
+  // sending info-retrieval back six times over a child that had already reported the failure.
   // MUTATIONS, each red: drop or reword the office-data clause (restoring "numbers the user
-  // typed" or unscoped "arithmetic"); append anything to the answer text, or restore the
-  // negated "never answered before" form; add "multiplies" to another route.
+  // typed" or unscoped "arithmetic"); drop or reword the failure clause; append anything to
+  // the answer text, or restore the negated "never answered before" form; add "multiplies"
+  // to another route.
   const P87_ANSWER =
-    "Generate the answer for the user now, from the conversation and any results so far. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
+    "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
   it.each(['anthropic', 'self_deployed'])(
     'p87: names exact calculation as office-data work, and no other route (%s)',
     async (tier) => {
@@ -430,6 +453,60 @@ describe('general-next composition', () => {
     },
   )
 
+  // FIX08B / run-7 diagnosis (#606): scenario 08 turn 1. The info child COMPLETED — the
+  // state records `1. info-retrieval — succeeded (… 1 error …)`, `succeeded` because the
+  // child finished, not because the lookup worked — and its Return honestly reports the
+  // lookup could not be done. The state therefore shows no failed step, so the answer
+  // criterion is the only place the decider can be told to answer with that reported
+  // failure instead of dispatching the route again (run 7 re-dispatched six times and
+  // never answered). This replays the 08 turn-1 shape offline: the graph tool call fails,
+  // the child returns the honest failure, and the second Decide request must carry the
+  // clause on `answer`. MUTATION: drop or reword the failure clause in
+  // general-next.server.ts: red.
+  const GRAPH_FAILURE_RETURN =
+    'The count could not be done: the graph returned a transient unavailable error. Please try again once the graph is available.'
+  it.each(['anthropic', 'self_deployed'])(
+    '08 shape: the Decide after a route whose result reports the lookup could not be done carries the answer-with-the-failure clause (%s)',
+    async (tier) => {
+      gateway.failingTools = ['read_neo4j_cypher']
+      choices = ['info-retrieval', 'answer']
+      mocks.controller
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'count',
+            tool_name: 'read_neo4j_cypher',
+            tool_args: '{"query":"MATCH (p:Project) RETURN count(p) AS n"}',
+            is_final: false,
+          },
+        })
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'done',
+            tool_name: 'Return',
+            tool_args: GRAPH_FAILURE_RETURN,
+            is_final: true,
+          },
+        })
+      const patterns = await agent.createPatterns('synthetic-session', deps)
+      await withRunFrame({ inference: { tier } }, () =>
+        harness(...patterns)('Count the Project nodes in the knowledge graph.'),
+      )
+      const second = decideRequests()[1]
+      // The premise: the state frames the completed child as `succeeded` even though its
+      // tool call failed, and carries the failure text verbatim — the shape that drew the
+      // decider back to the route.
+      expect(second.state).toContain('1. info-retrieval — succeeded')
+      expect(second.state).toContain('1 error')
+      expect(second.state).toContain(GRAPH_FAILURE_RETURN)
+      expect(second.questions.next_step.criteria.answer).toContain(
+        'its result reports the lookup could not be done',
+      )
+      expect(second.questions.next_step.criteria.answer).toContain(
+        'instead of dispatching the route again',
+      )
+    },
+  )
+
   // E4/#507 scenario 13 (live pass 3 and run 2): Decide chose info-retrieval, the
   // info child could not get the notes (it only searches the graph and web), and
   // the SECOND Decide chose answer: read-documents was never selected. Replays
@@ -455,13 +532,20 @@ describe('general-next composition', () => {
       readFileSync(`evals/general-next/scenarios/${file}`, 'utf8'),
     )![1]
   const decideRequests = () =>
-    requests.mock.calls.map(
-      (call) =>
-        JSON.parse(String(call[1].body)) as {
+    requests.mock.calls
+      .map((call) => JSON.parse(String(call[1].body)))
+      .filter(
+        (
+          body,
+        ): body is {
           state: string
           questions: { next_step: { criteria: Record<string, string> } }
-        },
-    )
+        } =>
+          // The guard gate's `guard.screen` question rides the same decide seam
+          // whenever a tool result needs screening; only the loop's own
+          // `next_step` question is a decision over the routes.
+          (body as { questions?: { next_step?: unknown } }).questions?.next_step !== undefined,
+      )
 
   it.each(
     ['anthropic', 'self_deployed'].flatMap((tier) =>
@@ -1223,6 +1307,67 @@ describe('general-next composition', () => {
     expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toEqual(['graph_mail_recent'])
     expect(mocks.screen.mock.calls[0][0].content).toContain('recommend sending the archive')
   })
+
+  // FIX14 (#606 run 7): the office route's critic, the route's sole exit
+  // authority, judged 14's attempts against the whole message and rejected each
+  // complete one for "index it for this chat" until the route's bound ran out;
+  // 17 passed only on a lenient critic sample. Both requests now reach the
+  // critic WHOLE, followed by the office route's own entry; the info route's
+  // controller still reads the raw message. MUTATIONS, each red here:
+  // actorCritic back to `scope.data.intent ?? userContent`; drop `routeScope`
+  // from decisionLoop's child data; make the intent the scope alone; hand the
+  // actor the bare task while the critic gets the scoped one.
+  it.each([
+    [
+      '14-analysis-index-follow-up',
+      'I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.',
+    ],
+    [
+      '17-mail-analysis-follow-up',
+      'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
+    ],
+  ])(
+    'FIX14: %s — the office critic judges the request scoped to office-data',
+    async (_id, message) => {
+      choices = ['info-retrieval', 'office-data', 'answer']
+      mocks.actor.mockResolvedValue({
+        action: {
+          reasoning: 'read mail',
+          tool_name: 'graph_mail_recent',
+          tool_args: '{}',
+          is_final: true,
+        },
+      })
+      const result = await run('anthropic', deps, message)
+
+      expect(mocks.critic).toHaveBeenCalledTimes(1)
+      const intent = mocks.critic.mock.calls[0][0]
+      const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
+      expect(request).toBe(message)
+      expect(scope).toMatch(/^- office-data: Read Microsoft 365 mail and file metadata; /)
+      expect(scope).toContain('\n  Can: Read Microsoft 365 mail and file metadata; ')
+      const tools = scope.split('\n').find((line) => line.startsWith('  Tools: '))!
+      expect(tools).toContain('graph_mail_recent')
+      expect(tools).toContain('sandbox_bash')
+      expect(scope).not.toContain('info-retrieval')
+      expect(scope.split('\n').at(-1)).toBe(
+        'Do and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.',
+      )
+      // The office actor reads the same intent; the info controller the raw message.
+      expect(mocks.actor.mock.calls[0][0].intent).toBe(intent)
+      expect(mocks.controller.mock.calls[0][0].intent).toBe(message)
+      // The shape does not regress: the accepted route is a success, the turn answers.
+      expect(
+        result.context.events
+          .filter((e) => e.patternId === 'orchestrator' && e.type === 'tool_result')
+          .map((e) => e.data),
+      ).toMatchObject([
+        { tool: 'info-retrieval', success: true },
+        { tool: 'office-data', success: true },
+      ])
+      expect(result.response).toBe('synthetic answer')
+    },
+  )
 
   it('G14: only info declares the filter; a private run calls the supplied host', async () => {
     const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)

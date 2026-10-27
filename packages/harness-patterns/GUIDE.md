@@ -161,7 +161,12 @@ what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. That data does carry the conversation before the
 user's latest message (the decisions model's own lines, minus that message,
 each capped and quoted), under its own data heading in `plan_context`, so a
-follow-up such as "the same count" reaches the route with its referent. And a decision that is not a decision — an error, an
+follow-up such as "the same count" reaches the route with its referent. An
+`actorCritic` route is also handed its route scope (its own agent-map entry and
+the rule that the rest of the request is other steps' work), which the pattern
+appends to the intent its actor and critic read: the critic is that route's only
+exit, and judged against the whole message it rejects complete work for a part
+no tool of the route performs. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
 not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
@@ -191,7 +196,11 @@ residual bodies become `[withheld: private identity]` (per leaf inside a JSON
 body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
-module or table is imported into core. `decisionLoop` gives the wrapper roster
+module or table is imported into core. When the host knows why it cannot build
+the filter, it throws `RosterUnavailable('directory-empty' | 'directory-unreadable'
+| 'roster-damaged')`; the `web_privacy` warning's `detail.reason` names it, and
+any other throw reads `filter-failed` — the wrapper never keeps an error's text,
+which can name a person. `decisionLoop` gives the wrapper roster
 input from every earlier iteration, even beyond the handoff window, and from
 every earlier turn's results, every route included (an earlier answer in the
 child's conversation block can name a person only a hidden route read), without

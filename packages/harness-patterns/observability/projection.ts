@@ -2,9 +2,9 @@
  * Event-stream projections for the observability timeline.
  *
  * Everything the panel renders is a projection of the event stream; these are
- * the pure ones — row preview text, the lane an event belongs in, and the
- * tool_call/tool_result merge. Split out of `ObservabilityPanel.tsx`
- * (#226 B5) with no behaviour change.
+ * the pure ones — row preview text, the lane an event belongs in, whether it is
+ * a guard's, and the tool_call/tool_result merge. Split out of
+ * `ObservabilityPanel.tsx` (#226 B5) with no behaviour change.
  */
 
 import type {
@@ -18,6 +18,8 @@ import type {
   PlanCreatedEventData,
   ContentSanitizedEventData,
   DecisionMadeEventData,
+  EgressAuditEventData,
+  EgressRefusedEventData,
   ModelCallEventData,
   WarningEventData,
   LoopRecoveryEventData,
@@ -25,7 +27,61 @@ import type {
   HitlResponseEventData,
 } from '../types'
 
+/** The guard an event records (boundary guards), named as the row says it. */
+type Guard = 'injection' | 'egress' | 'privacy'
+
+/**
+ * Which guard an event belongs to, from the marker its type declares — the
+ * decision key, the model-call role, the warning task — never from wording.
+ * The key literals are the ones `GUARD_SCREEN` and `GUARD_EGRESS` declare:
+ * this module is client-safe and cannot import those server modules.
+ */
+function guardOf(type: EventType, data: unknown): Guard | undefined {
+  switch (type) {
+    case 'content_sanitized':
+      return 'injection'
+    case 'model_call':
+      return (data as Partial<ModelCallEventData> | undefined)?.role === 'screen'
+        ? 'injection'
+        : undefined
+    case 'decision_made': {
+      const key = (data as Partial<DecisionMadeEventData> | undefined)?.key
+      return key === 'guard.screen' ? 'injection' : key === 'guard.egress' ? 'egress' : undefined
+    }
+    case 'egress_audit':
+    case 'egress_refused':
+      return 'egress'
+    case 'warning': {
+      const task = (data as Partial<WarningEventData> | undefined)?.task
+      return task === 'egress_check' ? 'egress' : task === 'web_privacy' ? 'privacy' : undefined
+    }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Whether an event is a guard's: the injection guard's sanitized content, its
+ * screen call and the gate that decides whether the screen runs; the egress
+ * gate's question, audit, refusal and warnings; the privacy filter's (K5)
+ * warning. The panel gives these their own lane, so `getEventLane` keeps its
+ * two-lane signature.
+ */
+export function isGuardEvent(type: EventType, data: unknown): boolean {
+  return guardOf(type, data) !== undefined
+}
+
+/** A row's preview. A guard's event leads with the guard's name, so a row says
+ *  which control acted before what it did. */
 export function getEventPreview(type: EventType, data: unknown): string {
+  const action = actionPreview(type, data)
+  const guard = guardOf(type, data)
+  if (!guard) return action
+  const head = `${guard} · ${action}`
+  return head.length > 50 ? head.slice(0, 50) + '...' : head
+}
+
+function actionPreview(type: EventType, data: unknown): string {
   switch (type) {
     case 'tool_call': {
       const d = data as ToolCallEventData
@@ -95,7 +151,24 @@ export function getEventPreview(type: EventType, data: unknown): string {
     }
     case 'warning': {
       const d = data as WarningEventData
-      return d.message.length > 50 ? d.message.slice(0, 50) + '...' : d.message
+      // The privacy filter says why and how much it withheld, from its
+      // code-built detail; a warning recorded before it did keeps its sentence.
+      const reason = d.task === 'web_privacy' ? d.detail?.reason : undefined
+      const head =
+        reason === undefined ? d.message : `withheld ${d.detail?.events ?? '?'} events (${reason})`
+      return head.length > 50 ? head.slice(0, 50) + '...' : head
+    }
+    case 'egress_audit': {
+      // Counts the matched names, never quotes them: a span names a person (SD-3).
+      const d = data as Partial<EgressAuditEventData>
+      const names = d.spans?.length ?? 0
+      return `${d.tool}: let out by ${d.allowedBy}, ${names} name${names === 1 ? '' : 's'}`
+    }
+    case 'egress_refused': {
+      // A category is Decide's, so it stands for the cause; `unchecked` has none.
+      const d = data as Partial<EgressRefusedEventData>
+      const closes = d.closes === 'route' || d.closes === 'turn' ? `closes ${d.closes}` : undefined
+      return `${d.tool}: refused (${[d.category ?? d.cause, closes].filter(Boolean).join(', ')})`
     }
     case 'loop_recovery': {
       // The class and the round, which is what tells a recovery from a

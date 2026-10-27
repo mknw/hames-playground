@@ -352,9 +352,12 @@ describe('model_call event', () => {
   })
 
   // Mutation: blank `head` in the `model_call` case of `getEventPreview` → the
-  // panel lists the row with no role and nothing it read.
+  // panel lists the row with no role and nothing it read. A screen call is the
+  // injection guard's, so its row leads with the guard (#795).
   it('labels its panel row with the role and what it read', () => {
-    expect(getEventPreview('model_call', { role: 'screen', source: 'web/x' })).toBe('screen web/x')
+    expect(getEventPreview('model_call', { role: 'screen', source: 'web/x' })).toBe(
+      'injection · screen web/x',
+    )
     expect(getEventPreview('model_call', { role: 'describe', items: 3 })).toBe('describe ×3')
     expect(getEventPreview('model_call', { role: 'describe' })).toBe('describe')
   })

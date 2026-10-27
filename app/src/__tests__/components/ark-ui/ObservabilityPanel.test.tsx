@@ -7,8 +7,8 @@
  *     cost accounting, including the legacy fallback to `llmCall.usage` for
  *     events recorded before metrics existed.
  *  2. Timeline construction — a `tool_call` and its `tool_result` merge into a
- *     single row by `callId`; pattern enter/exit become dividers; everything
- *     else lands in the Interface or Tools lane.
+ *     single row by `callId`; pattern enter/exit become dividers; a guard's
+ *     event lands in the Guardrails lane, everything else in Interface or Tools.
  *  3. The drill-down — clicking a row opens the detail overlay, which picks a
  *     renderer per event type and, for LLM-backed events, a Prompt/Output tab
  *     pair over the captured BAML template, variables and rendered messages.
@@ -396,6 +396,25 @@ describe('ObservabilityPanel — timeline construction', () => {
     const [userRow, toolRow] = rows(container).map((r) => r.parentElement!)
     expect(userRow.previousElementSibling).toBeNull() // first (interface) column
     expect(toolRow.previousElementSibling).not.toBeNull() // second (tools) column
+  })
+
+  // #795. Mutation: route on getEventLane alone (drop isGuardEvent) → the guard
+  // warning renders in the Tools column, beside every other side task's.
+  it("puts a guard's event in the third, Guardrails, lane and a side task's warning in Tools", () => {
+    const events = [
+      ev('warning', { task: 'egress_check', message: 'the company directory could not be read' }),
+      ev('warning', { task: 'title', message: 'no title' }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+
+    expect(container.textContent).toContain('Guardrails')
+    const [guardCell, sideTaskCell] = rows(container).map((r) => r.parentElement!)
+    // Three columns: the guard's is the last, the side task's the middle one.
+    expect(guardCell.nextElementSibling).toBeNull()
+    expect(guardCell.previousElementSibling!.previousElementSibling).not.toBeNull()
+    expect(sideTaskCell.nextElementSibling).not.toBeNull()
+    expect(sideTaskCell.previousElementSibling).not.toBeNull()
+    expect(guardCell.textContent).toContain('egress · the company directory')
   })
 
   it('drops a malformed event with no type instead of throwing', () => {
@@ -1226,6 +1245,18 @@ describe('ObservabilityPanel — neutralized tool results', () => {
     const row = chips(container)
     expect(row).toHaveLength(1)
     expect(row[0].textContent).toContain('2 findings neutralized')
+  })
+
+  // #795. Mutation: leave the chip inside the Tools cell → it shares the call's
+  // cell and its column is not the last.
+  it("puts the result's chip in the Guardrails column of the tool row, not in the Tools cell", () => {
+    const { container } = render(() => <ObservabilityPanel events={guardedPair()} />)
+    const toolCell = rows(container).at(-1)!
+    const [chip] = chips(container)
+    expect(toolCell.contains(chip)).toBe(false)
+    const column = chip.parentElement!
+    expect(column.nextElementSibling).toBeNull()
+    expect(column.previousElementSibling!.contains(toolCell)).toBe(true)
   })
 
   it('shows the finding count and rules above the result body', () => {

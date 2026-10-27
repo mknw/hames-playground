@@ -1205,6 +1205,42 @@ describe('the directory matrix', () => {
       detail: { timeouts: 0, failures: 2, rosterOnly: 2, refusedUnchecked: 0 },
     })
   })
+
+  const directoryWarnings = (events: ContextEvent[]) =>
+    ofType<WarningEventData>(events, 'warning').filter(
+      (w) => w.message === EGRESS_WARNINGS.directoryMissing,
+    )
+
+  // MUTATION: warn at the gate's entry again (before any call): this turn makes
+  // only a local call, and its warning would say outside requests were checked.
+  it('a turn with no outgoing call records no directory warning and logs nothing', async () => {
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const events = await run({ mode: 'roster', roster: fakeRoster([NAME], 'empty') }, async () => {
+      expect(await callTool('read_neo4j_cypher', { query: 'RETURN 1' })).toMatchObject({
+        success: true,
+      })
+    })
+    expect(directoryWarnings(events)).toEqual([])
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  // MUTATION: seed the latch `false` instead of reading the turn's events: the
+  // resumed invocation warns a second time. Or read every event instead of the
+  // turn's: the earlier turn's warning silences this one.
+  it('the directory warning is once per TURN: a resumed invocation stays quiet, a new turn warns', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const config = { mode: 'roster' as const, roster: fakeRoster([NAME], 'empty') }
+    const outgoing = async () => {
+      await via('info', () => callTool('web_search', { query: 'solar panels' }))
+    }
+    const first = await run(config, outgoing)
+    expect(directoryWarnings(first)).toHaveLength(1)
+    // Resumed: the paused invocation's warning is already in this turn.
+    expect(directoryWarnings(await run(config, outgoing, { prior: first }))).toEqual([])
+    // The next turn: that warning sits before its user message.
+    const next = [...first, createEvent('user_message', 'harness', { content: 'next question' })]
+    expect(directoryWarnings(await run(config, outgoing, { prior: next }))).toHaveLength(1)
+  })
 })
 
 describe("Decide's failures", () => {

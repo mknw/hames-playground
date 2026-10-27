@@ -2349,19 +2349,20 @@ only what a person chooses [F4].
 whose `code` names it — before anything is recorded and before `resolve` runs,
 so the blob is untouched and still resumable with a correct answer.
 
-| Step | Check                                                                                 | `code`               |
-| ---- | ------------------------------------------------------------------------------------- | -------------------- |
-| 1    | the context is `paused`                                                               | `not-paused`         |
-| 2    | it waits on something: `readHitl(ctx).pending`, the current run's unanswered requests | `no-pending`         |
-| 2b   | no waiting request is past its `expiresAt` [F5]                                       | `expired`            |
-| 2c   | every waiting request was raised on the tier this resume runs on [C1]                 | `tier-changed`       |
-| 3    | every answer names a waiting request — checked against `pending`, never the journal   | `unknown-request`    |
-| 4    | every waiting request is answered, in this one call                                   | `missing-answer`     |
-| 5    | the choice is an option of THAT request event                                         | `invalid-choice`     |
-| 5    | that option is available                                                              | `unavailable-option` |
-| 5    | its flags are that option's flags, and booleans                                       | `invalid-flag`       |
-| 5    | every `required` flag is set `true` by the answer itself (a default does not confirm) | `required-flag`      |
-| 6    | the top-level pattern names equal the request's `resumeAt.names`, the whole list [m4] | `chain-changed`      |
+| Step | Check                                                                                                                                                 | `code`               |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| 1    | the context is `paused`                                                                                                                               | `not-paused`         |
+| 2    | it waits on something: `readHitl(ctx).pending`, the current run's unanswered requests                                                                 | `no-pending`         |
+| 2b   | no waiting request is past its `expiresAt` [F5]                                                                                                       | `expired`            |
+| 2c   | every waiting request was raised on the tier this resume runs on [C1]                                                                                 | `tier-changed`       |
+| 3    | every answer names a waiting request — checked against `pending`, never the journal                                                                   | `unknown-request`    |
+| 4    | every waiting request is answered, in this one call                                                                                                   | `missing-answer`     |
+| 5    | the choice is an option of THAT request event                                                                                                         | `invalid-choice`     |
+| 5    | that option is available                                                                                                                              | `unavailable-option` |
+| 5    | its flags are that option's flags, and booleans                                                                                                       | `invalid-flag`       |
+| 5    | every `required` flag is set `true` by the answer itself (a default does not confirm)                                                                 | `required-flag`      |
+| 6    | the top-level pattern names equal the request's `resumeAt.names`, the whole list [m4]                                                                 | `chain-changed`      |
+| 6b   | below a resumable top-level pattern: one `continuation` on every waiting request, still leading to its gate through the current composition (slice 6) | `chain-changed`      |
 
 **Then, in order.**
 
@@ -2396,10 +2397,12 @@ so the blob is untouched and still resumable with a correct answer.
 10. A chosen option with `stopsRun` ends the run `done`, with the response
     `Stopped at your request (<kind>).`, and re-enters nothing.
 11. Otherwise `runChain(…, { startAt: resumeAt.index })`: the patterns before it
-    are skipped (their events and data are already in the context), and the
-    paused top-level pattern runs again from its start. A gate it reaches
-    replays its answer from the journal. The run may pause again at a new gate,
-    by the same path.
+    are skipped (their events and data are already in the context). Below a
+    resumable top-level pattern the run continues INSIDE it along the recorded
+    continuation ([Resume inside a route](#resume-inside-a-route)); any other
+    top-level pattern runs again from its start, and a gate it reaches replays
+    its answer from the journal. The run may pause again at a new gate, by the
+    same path.
 
 Before step 10, the **legacy-blob scrub** deletes `ctx.data.approved`, as
 `continueSession` does; both stay until 1.0 [F9]. A 0.1.x paused blob holds no
@@ -2407,6 +2410,73 @@ Before step 10, the **legacy-blob scrub** deletes `ctx.data.approved`, as
 
 The `hitl_response` events a resume or a supersede appends are **not emitted
 live**: their wire shape belongs to the host's resume stream (#433 S7/S8).
+
+### Resume inside a route
+
+A pause inside a nested pattern (a `decisionLoop` route, the `simpleLoop` in
+it) used to resume by running the paused TOP-LEVEL pattern from its start: the
+loop began with no records and the route with an empty turn log, so the run
+started again rather than continuing. Slice 6 (decision-loop-agent.md)
+re-enters inside the pattern that paused, "as if it had not stopped".
+
+- **`resumable`** (`PatternCapabilities.resumable`): `{ fingerprint, next? }`.
+  The fingerprint is a sha256 of the pattern's kind, its `patternId` and the
+  configuration its replay depends on; `next(segment)` names the DIRECT child the
+  next step of the path must be (a wrapper's inner pattern, a `decisionLoop`'s
+  route), and is absent on the pattern that dispatches the gate. Declared by
+  `decisionLoop`, `simpleLoop` (only when it records `controller_action`,
+  `tool_call` and `tool_result`, commits them, and has an explicit `patternId`),
+  `withReferences`, `withInjectionGuard`, `withEgressGate` and
+  `withPseudonymisedInputs`. Not by `actorCritic`, `withSandbox`, `parallel`,
+  `routes` or `chain` in v1. A capability that is the very object a child
+  declares was copied by spreading and counts as absent (`ownResumable`).
+- **The continuation.** Each resumable pattern appends its segment to the run
+  frame's `continuation` while it runs (`decisionLoop`'s carries the route and
+  the iteration); `askHuman` records it on the request. `checkResume` follows
+  it through the current composition before any `resolve`
+  (`followContinuation`): each segment's fingerprint, each step a direct child
+  of the one before, ending at a pattern with no `next`. Anything else is
+  `chain-changed`, so removing or renaming the paused route while keeping the
+  top-level names runs no `resolve`. A pause below a top-level pattern that is
+  not resumable keeps the re-entry from its start.
+- **Re-entry.** `runChain` hands the top-level pattern the run frame's `resume`
+  slot: the path, and the events its paused invocation recorded (every bracket
+  it ran under in this run). Each pattern takes its own segment, rebuilds its
+  state from those events without calling a model, and hands the rest of the
+  path to the child it paused in; every other child runs with none.
+  - `decisionLoop` rebuilds each finished iteration's record from its child's
+    committed bracket (the same `recordOf` the live path uses), the latest plan,
+    the roster inputs and the latest decision; it makes no decide call for the
+    paused iteration and re-enters that route with the child data the records
+    reproduce. Its children's `pattern_enter` carries `iteration`, so a route
+    that ran twice in a turn resumes the invocation that paused, and a paused
+    child's `pattern_exit` says `paused` and carries `wallMs`: that iteration's
+    record and stats span both halves, its wall time without the wait.
+  - `simpleLoop` rebuilds its turn log, turn count and recovery streak from its
+    rounds' events through ONE projection that the live rounds use as well, so
+    the next controller input of a resumed run equals that of a run that never
+    paused, given the same outcome. No earlier tool is dispatched again: the
+    held call's entry carries its outcome.
+  - `withReferences` re-attaches its recorded `reference_attached` selection
+    (recorded by default) instead of calling the selector.
+  - The stateless wrappers pass the resume through. The egress gate's tripwire
+    count is derived from the turn's recorded refusals, so it continues across
+    the pause.
+  - A resumed invocation's own pre-pause events reach it as the replay, never
+    through its view: a resumed route's view leaves out its paused brackets, and
+    a loop's prior-results window and reference expansion leave out its own
+    events, as they did live.
+- **Gated names.** `gatedTools` (a `decisionLoop` option, and a capability any
+  pattern may declare for its subtree) names tools whose executor may pause.
+  `refuseUnresumableGates`, run by `decisionLoop` at construction and by the
+  three entry points from the root, refuses a gated name in any allowlist whose
+  path is not resumable all the way down (a loop that does not record its
+  history declares no `resumable`, so it is refused too). The names reach a
+  route's `simpleLoop` through the run frame's `gatedTools`, and it refuses a
+  batch that holds one before dispatching any of its calls, under every
+  `multiToolCalls` mode.
+- **A host's own wrapper** joins the path with `wrapperResumable(kind, inner)`
+  and `resumableStep(kind, capability, fn)`.
 
 ### humanGate() and confirm()
 

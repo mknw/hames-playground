@@ -82,6 +82,7 @@ import {
 import { isDegradedToolSurface } from '../gateway-health.server'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
+import { resumableStep, wrapperResumable } from '../resume.server'
 import { inferServer } from '../tools.server'
 import type {
   ByTier,
@@ -414,7 +415,16 @@ export function withEgressGate(config: EgressGateConfig) {
     typeof tool === 'string' && addressSources.has(inferServer(tool))
 
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
-    const fn = async (
+    // Its tripwire count and closures are derived from the turn's recorded
+    // refusals, never held here, so a resume passes straight through it
+    // (slice 6) and the count continues across the pause.
+    const resumable = wrapperResumable('withEgressGate', pattern)
+    const fn = (
+      scope: PatternScope<T>,
+      view: Parameters<typeof pattern.fn>[1],
+    ): Promise<PatternScope<T>> =>
+      resumableStep('withEgressGate', resumable, () => gated(scope, view))
+    const gated = async (
       scope: PatternScope<T>,
       view: Parameters<typeof pattern.fn>[1],
     ): Promise<PatternScope<T>> => {
@@ -714,6 +724,7 @@ export function withEgressGate(config: EgressGateConfig) {
       ...pattern,
       name: `withEgressGate(${pattern.name})`,
       fn,
+      capabilities: { ...pattern.capabilities, resumable },
       // Static introspection still sees the patterns nested inside the gate.
       children: [pattern],
     }

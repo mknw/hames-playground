@@ -72,11 +72,13 @@ import {
 } from './context.server'
 import { redactReport, sanitizeUntrusted } from './injection-guard'
 import { emitLive } from './live-event-context.server'
+import { followContinuation, ownResumable } from './pattern-capabilities'
 import { activeRunFrame, currentRunFrame } from './run-frame.server'
 import type {
   AssistantMessageEventData,
   ConfiguredPattern,
   ContextEvent,
+  ContinuationSegment,
   EventView,
   HeldResult,
   HitlAnswers,
@@ -411,6 +413,8 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
     ...(request.expiresInMs !== undefined ? { expiresAt: Date.now() + request.expiresInMs } : {}),
     blocking: true,
     resumeAt: { index: position.index, names: position.names },
+    // The resumable patterns down to this gate (slice 6), checked on resume.
+    ...(frame.continuation.length > 0 ? { continuation: frame.continuation } : {}),
     ...(tier !== undefined ? { tier } : {}),
   }
   const event = mintHitlEvent('hitl_request', position.patternId, data)
@@ -621,8 +625,17 @@ export function checkResume(
     readonly names: readonly string[]
     readonly tier: string | undefined
     readonly now: number
+    /** The current top-level patterns: a pause below a RESUMABLE one must
+     *  still lead to its gate through them (slice 6). */
+    readonly patterns?: readonly ConfiguredPattern<any>[]
   },
-): { readonly accepted: readonly AcceptedAnswer[]; readonly startAt: number } {
+): {
+  readonly accepted: readonly AcceptedAnswer[]
+  readonly startAt: number
+  /** The recorded path to re-enter through, when the top-level pattern is
+   *  resumable; absent for a top-level pattern that re-runs from its start. */
+  readonly continuation?: readonly ContinuationSegment[]
+} {
   if (ctx.status !== 'paused') {
     throw new HitlAnswerError('not-paused', `the context is '${ctx.status}', not paused`)
   }
@@ -681,6 +694,24 @@ export function checkResume(
       'chain-changed',
       "the agent's top-level patterns are not the ones this run paused in",
     )
+  }
+  // Slice 6: below a resumable top-level pattern the pause re-enters INSIDE
+  // the run, so every pending request must carry one path, and that path must
+  // still lead to its gate through the current composition. An absent, changed
+  // or non-resumable path is refused here, before any `resolve`. A top-level
+  // pattern that is not resumable keeps the 0.x re-entry from its start.
+  const top = at.patterns?.[startAt]
+  if (top && ownResumable(top)) {
+    const path = pending[0].continuation
+    const samePath = (r: HitlRequestEventData): boolean =>
+      JSON.stringify(r.continuation) === JSON.stringify(path)
+    if (!path || !pending.every(samePath) || !followContinuation(top, path)) {
+      throw new HitlAnswerError(
+        'chain-changed',
+        'the patterns between the top-level pattern and the paused gate are not the ones this run paused in',
+      )
+    }
+    return { accepted, startAt, continuation: path }
   }
   return { accepted, startAt }
 }

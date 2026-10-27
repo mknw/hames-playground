@@ -58,7 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ByTier, ContextEvent, ToolCallResult } from './types'
+import type { ByTier, ContextEvent, ContinuationSegment, ToolCallResult } from './types'
 
 assertServerOnImport()
 
@@ -162,6 +162,26 @@ export interface RunFrame {
    *  the egress gate counts its refusals per route by this label, and records
    *  it on each refusal event so the count survives a pause. */
   route?: string
+  /** The resumable patterns this code runs inside, outermost first (slice 6).
+   *  Each one supplies the path with its own segment appended; `askHuman`
+   *  records it on the request. */
+  continuation?: readonly ContinuationSegment[]
+  /** Set while a resume re-enters a paused invocation (slice 6): the rest of
+   *  the recorded path below the pattern that set it, and the events that
+   *  invocation recorded before its pause. `null` clears it for a child that is
+   *  not on the path. */
+  resume?: ResumeSlot | null
+  /** Gated tool names declared above this code; unions with the enclosing. */
+  gatedTools?: readonly string[]
+}
+
+/** What a resumed invocation is handed (slice 6). */
+export interface ResumeSlot {
+  /** The path below the pattern that set the slot; its first segment is the
+   *  pattern that should take it. */
+  readonly continuation: readonly ContinuationSegment[]
+  /** The events the paused invocation recorded, in order, outcomes substituted. */
+  readonly events: readonly ContextEvent[]
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -196,6 +216,11 @@ export interface ActiveRunFrame {
   readonly egressChecks: readonly EgressCheck[]
   /** The innermost `decisionLoop` route this code runs inside, if any. */
   readonly route?: string
+  /** Never undefined: an empty frozen array outside any resumable pattern. */
+  readonly continuation: readonly ContinuationSegment[]
+  readonly resume?: ResumeSlot
+  /** Never undefined: an empty frozen array where nothing declares one. */
+  readonly gatedTools: readonly string[]
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -335,6 +360,9 @@ function build(frame: RunFrame): ActiveRunFrame {
     afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
     egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
     route: frame.route,
+    continuation: frame.continuation ? Object.freeze([...frame.continuation]) : NO_HOOKS,
+    resume: frame.resume ?? undefined,
+    gatedTools: frame.gatedTools ? Object.freeze([...frame.gatedTools]) : NO_HOOKS,
   }
 }
 
@@ -414,6 +442,11 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     check runs; any denial denies, so an inner scope cannot remove one.
  *   - `route` REPLACES, like everything else: a nested `decisionLoop`'s child
  *     runs under its own route's label, and leaving it restores the outer one.
+ *   - `continuation` REPLACES: a resumable pattern supplies the whole path, the
+ *     enclosing one plus its own segment (`resume.server.ts`).
+ *   - `resume` REPLACES, and `null` clears it: a pattern on a resumed path
+ *     hands its child the rest of the path, and any other child none.
+ *   - `gatedTools` UNION: a name declared gated above stays gated below.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -455,6 +488,13 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
       : open.egressChecks,
     route: partial.route ?? open.route,
+    continuation: partial.continuation
+      ? Object.freeze([...partial.continuation])
+      : open.continuation,
+    resume: partial.resume === null ? undefined : (partial.resume ?? open.resume),
+    gatedTools: partial.gatedTools
+      ? Object.freeze([...new Set([...open.gatedTools, ...partial.gatedTools])])
+      : open.gatedTools,
   }
   return store.run(amended, fn)
 }

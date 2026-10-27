@@ -633,6 +633,8 @@ Each of these is pinned.
 
 ### Resume inside a route (slice 6)
 
+> **Built 2026-10-27.** Three readings of this section the build made, each stated in its PR: (1) the continuation check applies below a top-level pattern that declares `resumable`; a pause below one that does not keeps the 0.x re-entry from its start, so a custom `configurePattern` gate is unchanged; (2) a resumed invocation's own pre-pause events reach it as its replay, never through its view, so `withPseudonymisedInputs` rewrites what the route reads exactly as it did live and the resumed controller sees its own earlier results as it saw them; (3) `withReferences` records its selection by default, and that event now serializes as counts only. SPEC's [Resume inside a route](../../packages/harness-patterns/SPEC.md#resume-inside-a-route) is the contract.
+
 The context already holds what a resume needs (ADR-0009):
 
 - at a pause, the paused child's events are committed together with the loop's (`packages/harness-patterns/patterns/decisionLoop.server.ts:549-566`);

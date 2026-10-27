@@ -17,7 +17,9 @@ import {
 import { normalizeControllerAction } from '../controller-action'
 import type { LoopTurn, PriorResult, ExpandedRef } from '../types'
 import type {
+  ContextEvent,
   ControllerAction,
+  LoopRecoveryEventData,
   SimpleLoopConfig,
   PatternScope,
   EventView,
@@ -30,13 +32,15 @@ import { EXPAND_TOOL_NAME } from '../types'
 
 import type { ErrorEventData, MultiCallMode, ReturnStyle } from '../types'
 import { runBatch, combineOutcomes } from '../parallel-tools.server'
-import type { SubCall } from '../parallel-tools.server'
+import type { SubCall, SubCallOutcome } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
-import { trackEvent, resolveConfig, generateId } from '../context.server'
+import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.server'
 import { hitlPending } from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
+import { currentRunFrame } from '../run-frame.server'
+import { onPath, resumableFingerprint, takeResume } from '../resume.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import {
   isRecoverableLLMFailure,
@@ -114,10 +118,11 @@ function resolveRefsAndCapture(
   args: Record<string, unknown>,
   view: EventView,
   maxResultChars: number,
+  excluded: ReadonlySet<string> = NONE,
 ): { resolved: Record<string, unknown>; expansions: ExpandedRef[] } {
   const resolved = { ...args }
   const expansions: ExpandedRef[] = []
-  const allEvents = view.fromAll().get()
+  const allEvents = visible(view.fromAll().get(), excluded)
   for (const [key, value] of Object.entries(resolved)) {
     if (typeof value === 'string' && value.startsWith('ref:')) {
       const eventId = value.slice(4)
@@ -138,6 +143,302 @@ function resolveRefsAndCapture(
     }
   }
   return { resolved, expansions }
+}
+
+// ============================================================================
+// The turn log: one projection of a round's events (resume inside a route)
+// ============================================================================
+
+const NONE: ReadonlySet<string> = new Set()
+
+/** The events a view offers, without the ones a resumed invocation recorded
+ *  itself: live, a loop never saw its own events through its view. */
+function visible(events: ContextEvent[], excluded: ReadonlySet<string>): ContextEvent[] {
+  return excluded.size === 0 ? events : events.filter((e) => !e.id || !excluded.has(e.id))
+}
+
+/**
+ * One consumed round, as its events record it (slice 6). The live path builds
+ * one from the event data it has just tracked, and a resume rebuilds every
+ * round from the events the paused invocation recorded; both hand it to
+ * {@link projectRound}, so the turn log a controller reads cannot differ
+ * between an uninterrupted run and a resumed one.
+ */
+interface LoopRound {
+  readonly n: number
+  readonly action?: ControllerAction
+  readonly recovery?: LoopRecoveryEventData
+  readonly calls: readonly {
+    readonly call: ToolCallEventData
+    readonly result?: ToolResultEventData
+  }[]
+}
+
+/** What a projection reads besides the round. */
+interface Projection {
+  readonly view: EventView
+  readonly excluded: ReadonlySet<string>
+  readonly maxResultChars: number
+  readonly resultOmit: SimpleLoopConfig['resultOmit']
+}
+
+const truncateTo = (s: string, max: number): string =>
+  s.length > max ? s.slice(0, max) + '…[truncated]' : s
+
+/** The `expandPreviousResult` round: its resolutions against the view, the
+ *  events it records and its turn-log entry. Pure, so the live path and a
+ *  resume compute the same thing. */
+function expandRound(action: ControllerAction, p: Projection) {
+  const refIds = parseExpandRefs(action.tool_args)
+  const allEvents = visible(p.view.fromAll().get(), p.excluded)
+  // `tool` is the ORIGIN tool of the referenced result — carried so the
+  // per-tool `resultOmit` projection can key off it below.
+  type Resolution = {
+    ref_id: string
+    success: boolean
+    result: unknown
+    error?: string
+    tool: string | null
+  }
+  const resolutions: Resolution[] = refIds.map((refId) => {
+    const refEvent = allEvents.find((e) => e.id === refId)
+    const refData = refEvent?.type === 'tool_result' ? (refEvent.data as ToolResultEventData) : null
+    const usable = refData && !refData.hidden && !refData.archived
+    return usable
+      ? { ref_id: refId, success: true, result: refData.result, tool: refData.tool ?? null }
+      : {
+          ref_id: refId,
+          success: false,
+          result: null,
+          tool: null,
+          error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`,
+        }
+  })
+
+  const noRefs = refIds.length === 0
+  const success = !noRefs && resolutions.some((r) => r.success)
+  const failureErrors = resolutions.filter((r) => !r.success).map((r) => r.error)
+  const error = noRefs
+    ? `expandPreviousResult: no ref_id parsed from tool_args (${action.tool_args})`
+    : failureErrors.length > 0
+      ? failureErrors.join('; ')
+      : undefined
+
+  // For backward compatibility, a single-ref call returns the bare result;
+  // multi-ref calls return a map keyed by ref_id (failures surface as
+  // { __error: "..." }).
+  const result: unknown =
+    refIds.length === 1
+      ? resolutions[0].result
+      : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+          acc[r.ref_id] = r.success ? r.result : { __error: r.error }
+          return acc
+        }, {})
+
+  // tool_call args mirror the input shape: scalar for one ref, list for many.
+  const trackedArgs = refIds.length === 1 ? { ref_id: refIds[0] } : { ref_ids: refIds }
+
+  // `resultOmit` applies PER RESOLUTION, keyed by each ref's ORIGIN tool
+  // (projecting the ref-id-keyed combined map wholesale would use the wrong key
+  // space). The tracked event stays raw.
+  const project = (r: Resolution): unknown =>
+    omitResultFields(r.result, r.tool ? p.resultOmit?.[r.tool] : undefined)
+  const turnResult: unknown =
+    refIds.length === 1
+      ? resolutions[0].success
+        ? project(resolutions[0])
+        : resolutions[0].result
+      : resolutions.reduce<Record<string, unknown>>((acc, r) => {
+          acc[r.ref_id] = r.success ? project(r) : { __error: r.error }
+          return acc
+        }, {})
+  const expansions = resolutions
+    .filter((r) => r.success)
+    .map((r) => {
+      const projected = project(r)
+      return {
+        ref_id: r.ref_id,
+        content: truncateTo(
+          typeof projected === 'string' ? projected : JSON.stringify(projected),
+          p.maxResultChars,
+        ),
+      }
+    })
+  const entry: LoopTurn = {
+    n: 0,
+    reasoning: action.reasoning,
+    status: action.status,
+    tool_call: { tool: EXPAND_TOOL_NAME, args: action.tool_args },
+    tool_result: {
+      tool: EXPAND_TOOL_NAME,
+      result: truncateTo(JSON.stringify(turnResult), p.maxResultChars),
+      success,
+      error: error ?? null,
+    },
+    ...(expansions.length > 0 ? { expansions } : {}),
+  }
+  return { trackedArgs, result, success, error, entry }
+}
+
+/** A call's expansions, recomputed from the arguments it was dispatched with.
+ *  A call refused at the precheck kept its raw `tool_args` string and expanded
+ *  nothing. */
+function expansionsOf(call: ToolCallEventData, p: Projection): ExpandedRef[] {
+  const args = call.args
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return []
+  return resolveRefsAndCapture(
+    args as Record<string, unknown>,
+    p.view,
+    p.maxResultChars,
+    p.excluded,
+  ).expansions
+}
+
+/** A multi-call turn's outcomes, from its recorded results, in call order. */
+function batchOutcomes(round: LoopRound): SubCallOutcome[] {
+  return round.calls.map(({ call, result }, i) => ({
+    index: i + 1,
+    tool: result?.tool ?? call.tool,
+    success: result?.success ?? false,
+    result: result?.result ?? undefined,
+    error: result?.error,
+    ...(result?.skipped ? { skipped: true } : {}),
+  }))
+}
+
+/** Did the round dispatch a tool (it breaks a run of unusable answers), count
+ *  as an unusable answer, or neither? */
+function roundEffect(round: LoopRound): 'dispatched' | 'unusable' | 'none' {
+  const a = round.action
+  if (!a) return 'unusable' // an unparseable answer
+  if (a.additional_calls && a.additional_calls.length > 0) {
+    const dispatched = round.calls.some(
+      ({ call, result }) => typeof call.args === 'object' && call.args !== null && !result?.skipped,
+    )
+    if (dispatched) return 'dispatched'
+    return batchOutcomes(round).some((o) => o.success) ? 'none' : 'unusable'
+  }
+  if (a.tool_name === EXPAND_TOOL_NAME) return 'none'
+  return round.calls.length > 0 ? 'dispatched' : 'unusable'
+}
+
+/**
+ * The turn-log entry of one consumed round, or undefined for a round that ends
+ * the loop. THE one builder: every branch of the loop and the resume both call
+ * it, so the next controller input of a resumed run equals that of a run that
+ * never paused, given the same outcome.
+ */
+function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
+  const { n, action, recovery } = round
+  // The model answered and its answer would not parse: the round's result is
+  // the feedback, after an empty action.
+  if (!action) {
+    return {
+      n,
+      tool_result: {
+        tool: '',
+        result: '',
+        success: false,
+        error: recovery?.feedback ?? recovery?.error ?? '',
+      },
+    }
+  }
+  if (action.is_final || action.tool_name === 'Return') return undefined
+  const head = {
+    n,
+    reasoning: action.reasoning,
+    status: action.status,
+    tool_call: { tool: action.tool_name, args: action.tool_args },
+  }
+  // Nothing ran: the refusal or the argument feedback is the round's result.
+  if (round.calls.length === 0) {
+    return {
+      ...head,
+      tool_result: {
+        tool: action.tool_name,
+        result: '',
+        success: false,
+        error: recovery?.error ?? '',
+      },
+    }
+  }
+  if (action.additional_calls && action.additional_calls.length > 0) {
+    // Controller-facing combined map: per-tool resultOmit projection and
+    // per-call truncation (a batch shares ONE turn's context budget — each call
+    // gets an equal slice, floor 500 chars), then a whole-map truncate.
+    const outcomes = batchOutcomes(round)
+    const perCallCap = Math.max(500, Math.floor(p.maxResultChars / outcomes.length))
+    const { combined, anySucceeded, errors } = combineOutcomes(outcomes, (o) => {
+      const projected = omitResultFields(o.result, p.resultOmit?.[o.tool])
+      const s = typeof projected === 'string' ? projected : JSON.stringify(projected)
+      return s.length > perCallCap ? s.slice(0, perCallCap) + '…[truncated]' : s
+    })
+    const expansions = round.calls.flatMap(({ call }) => expansionsOf(call, p))
+    return {
+      ...head,
+      additional_calls: action.additional_calls,
+      tool_result: {
+        tool: action.tool_name,
+        result: truncateTo(JSON.stringify(combined), p.maxResultChars),
+        success: anySucceeded,
+        error: anySucceeded ? null : errors.join('; '),
+      },
+      ...(expansions.length > 0 ? { expansions } : {}),
+    }
+  }
+  if (action.tool_name === EXPAND_TOOL_NAME) return { ...expandRound(action, p).entry, n }
+  // `resultOmit` projects the CONTROLLER's view only: the event keeps the
+  // complete result for compactExecution and the citation extractors.
+  const { call, result } = round.calls[0]
+  const resultStr = JSON.stringify(
+    omitResultFields(result?.result, p.resultOmit?.[action.tool_name]),
+  )
+  const expansions = expansionsOf(call, p)
+  return {
+    ...head,
+    tool_result: {
+      tool: action.tool_name,
+      result: truncateTo(resultStr, p.maxResultChars),
+      success: result?.success ?? false,
+      error: result?.error ?? null,
+    },
+    ...(expansions.length > 0 ? { expansions } : {}),
+  }
+}
+
+/** The kinds of event a round records, under the loop's own id. */
+const ROUND_EVENTS = new Set(['controller_action', 'tool_call', 'tool_result', 'loop_recovery'])
+
+/** Every round the paused invocation consumed, in order, from its own events. */
+function roundsOf(events: readonly ContextEvent[], patternId: string): LoopRound[] {
+  type Building = {
+    n: number
+    action?: ControllerAction
+    recovery?: LoopRecoveryEventData
+    calls: { call: ToolCallEventData; result?: ToolResultEventData }[]
+  }
+  const rounds: Building[] = []
+  for (const e of events) {
+    if (e.patternId !== patternId || !ROUND_EVENTS.has(e.type)) continue
+    const current = rounds[rounds.length - 1]
+    if (e.type === 'controller_action') {
+      const d = e.data as ControllerActionEventData
+      rounds.push({ n: d.turn ?? rounds.length, action: d.action, calls: [] })
+    } else if (e.type === 'loop_recovery') {
+      const d = e.data as LoopRecoveryEventData
+      // An unparseable answer is a round of its own: it records no action.
+      if (d.failure === 'unparseable_output' || !current || current.n !== d.turn) {
+        rounds.push({ n: d.turn, recovery: d, calls: [] })
+      } else current.recovery = d
+    } else if (e.type === 'tool_call' && current) {
+      current.calls.push({ call: e.data as ToolCallEventData })
+    } else if (e.type === 'tool_result' && current) {
+      const d = e.data as ToolResultEventData
+      const pair = current.calls.find((c) => c.call.callId === d.callId && !c.result)
+      if (pair) pair.result = d
+    }
+  }
+  return rounds
 }
 
 export interface SimpleLoopData {
@@ -227,7 +528,34 @@ export function simpleLoop<T extends SimpleLoopData>(
 ): ConfiguredPattern<T> {
   const resolved = resolveConfig('simpleLoop', config)
 
-  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+  // Resumable (slice 6) only when a resume can rebuild this loop: its rounds
+  // are recorded and committed under an id that is the same in the next turn's
+  // composition. A loop that does not record them declares nothing, so
+  // construction refuses a gated tool in it (`refuseUnresumableGates`).
+  const recordsRounds =
+    config?.patternId !== undefined &&
+    (['controller_action', 'tool_call', 'tool_result'] as const).every((type) =>
+      shouldTrack(type, resolved.trackHistory),
+    ) &&
+    (resolved.commitStrategy === 'always' || resolved.commitStrategy === 'on-success')
+  const fingerprint = resumableFingerprint('simpleLoop', resolved.patternId, {
+    tools: tools.filter((name) => !isAgentWithheldTool(name)).sort(),
+  })
+
+  const fn = (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    if (!recordsRounds) return body(scope, view, undefined)
+    // Taken BEFORE `onPath`, which clears the slot for the code below.
+    const replay = takeResume(fingerprint)?.events
+    return onPath({ pattern: 'simpleLoop', fingerprint }, undefined, () =>
+      body(scope, view, replay),
+    )
+  }
+
+  const body = async (
+    scope: PatternScope<T>,
+    view: EventView,
+    replay: readonly ContextEvent[] | undefined,
+  ): Promise<PatternScope<T>> => {
     // Nothing to decide with (#276). A loop whose tool list is empty BECAUSE
     // the gateway is unreachable used to run its full turn budget, call
     // nothing, and hand an empty execution to the synthesizer, which answered
@@ -260,6 +588,17 @@ export function simpleLoop<T extends SimpleLoopData>(
       config?.maxConsecutiveRecoveries,
     )
     const streak = recoveryStreak(maxConsecutiveRecoveries)
+    // A resumed invocation's own events reach it as the replay, never through
+    // its view: live, a loop never saw its own events there (slice 6).
+    const excluded: ReadonlySet<string> = new Set(
+      (replay ?? []).flatMap((e) => (e.id ? [e.id] : [])),
+    )
+    const projection: Projection = {
+      view,
+      excluded,
+      maxResultChars: settings.maxResultChars,
+      resultOmit: config?.resultOmit,
+    }
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -292,14 +631,13 @@ export function simpleLoop<T extends SimpleLoopData>(
     let turnWindowRefs: PriorResult[] = []
     if (config?.rememberPriorTurns !== false) {
       const turnCount = config?.priorTurnCount ?? settings.priorTurnCount
-      const priorEvents = view
-        .fromLastNTurns(turnCount)
-        .ofType('tool_result')
-        .get()
-        .filter((e) => {
-          const d = e.data as ToolResultEventData
-          return !!e.id && !d.hidden && !d.archived && (d.success || config?.includeFailedResults)
-        })
+      const priorEvents = visible(
+        view.fromLastNTurns(turnCount).ofType('tool_result').get(),
+        excluded,
+      ).filter((e) => {
+        const d = e.data as ToolResultEventData
+        return !!e.id && !d.hidden && !d.archived && (d.success || config?.includeFailedResults)
+      })
       turnWindowRefs = priorEvents.map((e) => {
         const d = e.data as ToolResultEventData
         const rawResult = typeof d.result === 'string' ? d.result : JSON.stringify(d.result)
@@ -373,8 +711,30 @@ export function simpleLoop<T extends SimpleLoopData>(
         shot.tool === 'Return' || shot.tool === EXPAND_TOOL_NAME || isAllowedTool(shot.tool),
     )
 
+    // Slice 6: re-entering a pause, the rounds this invocation already consumed
+    // are rebuilt from its own events through the ONE projection the live
+    // rounds use, with the held call's outcome in place. No model is called for
+    // them, no tool is dispatched again, and the turn count and the recovery
+    // streak continue across the pause against `maxTurns`.
+    let firstTurn = 0
+    for (const round of roundsOf(replay ?? [], resolved.patternId)) {
+      const entry = projectRound(round, projection)
+      if (entry) turns.push(entry)
+      const effect = roundEffect(round)
+      if (effect === 'dispatched') streak.dispatched()
+      else if (effect === 'unusable') streak.unusableAnswer()
+      if (
+        round.action &&
+        entry &&
+        (round.action.tool_name === EXPAND_TOOL_NAME || entry.tool_result?.success)
+      ) {
+        scope.data = { ...scope.data, turn: round.n, lastAction: round.action }
+      }
+      firstTurn = round.n + 1
+    }
+
     try {
-      for (let turn = 0; turn < maxTurns; turn++) {
+      for (let turn = firstTurn; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
         // (the client this call will actually use, not a hardcoded chain name).
         // Per-call limits (Lane A5): the seam answers for the model THIS call
@@ -453,16 +813,15 @@ export function simpleLoop<T extends SimpleLoopData>(
           // the shape `controller-history-format.test.ts` pins as parseable.
           if (isRecoverableLLMFailure(controllerError)) {
             if (!streak.unusableAnswer()) {
-              const feedback = unparseableOutputFeedback(controllerError)
-              turns.push({
-                n: turn,
-                tool_result: { tool: '', result: '', success: false, error: feedback },
-              })
-              trackLoopRecovery(
-                scope,
-                { failure: 'unparseable_output', error: controllerError.message, turn, maxTurns },
-                controllerError.llmCall,
-              )
+              const recovery: LoopRecoveryEventData = {
+                failure: 'unparseable_output',
+                error: controllerError.message,
+                turn,
+                maxTurns,
+                feedback: unparseableOutputFeedback(controllerError),
+              }
+              trackLoopRecovery(scope, recovery, controllerError.llmCall)
+              turns.push(projectRound({ n: turn, recovery, calls: [] }, projection)!)
               continue
             }
             // One unusable answer past the cap: fatal, by the path below.
@@ -515,124 +874,26 @@ export function simpleLoop<T extends SimpleLoopData>(
         // (control-flow tools cannot be batched).
         if (action.tool_name === EXPAND_TOOL_NAME && !action.additional_calls?.length) {
           const callId = generateId('tc')
-          const refIds = parseExpandRefs(action.tool_args)
-
-          const allEvents = view.fromAll().get()
-          // `tool` is the ORIGIN tool of the referenced result — carried so the
-          // per-tool `resultOmit` projection can key off it below.
-          type Resolution = {
-            ref_id: string
-            success: boolean
-            result: unknown
-            error?: string
-            tool: string | null
+          const expanded = expandRound(action, projection)
+          const call: ToolCallEventData = {
+            callId,
+            tool: EXPAND_TOOL_NAME,
+            args: expanded.trackedArgs,
           }
-          const resolutions: Resolution[] = refIds.map((refId) => {
-            const refEvent = allEvents.find((e) => e.id === refId)
-            const refData =
-              refEvent?.type === 'tool_result' ? (refEvent.data as ToolResultEventData) : null
-            const usable = refData && !refData.hidden && !refData.archived
-            return usable
-              ? { ref_id: refId, success: true, result: refData.result, tool: refData.tool ?? null }
-              : {
-                  ref_id: refId,
-                  success: false,
-                  result: null,
-                  tool: null,
-                  error: `ref_id "${refId}" not found in tool_result events (or excluded as hidden/archived)`,
-                }
-          })
-
-          const noRefs = refIds.length === 0
-          const overallSuccess = !noRefs && resolutions.some((r) => r.success)
-          const failureErrors = resolutions.filter((r) => !r.success).map((r) => r.error)
-          const errorMsg = noRefs
-            ? `expandPreviousResult: no ref_id parsed from tool_args (${action.tool_args})`
-            : failureErrors.length > 0
-              ? failureErrors.join('; ')
-              : undefined
-
-          // For backward compatibility, a single-ref call returns the bare
-          // result; multi-ref calls return a map keyed by ref_id (failures
-          // surface as { __error: "..." }).
-          const combinedResult: unknown =
-            refIds.length === 1
-              ? resolutions[0].result
-              : resolutions.reduce<Record<string, unknown>>((acc, r) => {
-                  acc[r.ref_id] = r.success ? r.result : { __error: r.error }
-                  return acc
-                }, {})
-
-          // tool_call args mirror the input shape: scalar for one ref, list
-          // for many. Keeps observability faithful to what the LLM produced.
-          const trackedArgs = refIds.length === 1 ? { ref_id: refIds[0] } : { ref_ids: refIds }
-
-          trackEvent(
-            scope,
-            'tool_call',
-            { callId, tool: EXPAND_TOOL_NAME, args: trackedArgs } as ToolCallEventData,
-            resolved.trackHistory,
-          )
-          trackEvent(
-            scope,
-            'tool_result',
-            {
-              callId,
-              tool: EXPAND_TOOL_NAME,
-              result: combinedResult,
-              success: overallSuccess,
-              error: errorMsg,
-            } as ToolResultEventData,
-            resolved.trackHistory,
-          )
+          const result: ToolResultEventData = {
+            callId,
+            tool: EXPAND_TOOL_NAME,
+            result: expanded.result,
+            success: expanded.success,
+            error: expanded.error,
+          }
+          trackEvent(scope, 'tool_call', call, resolved.trackHistory)
+          trackEvent(scope, 'tool_result', result, resolved.trackHistory)
 
           // Record as a turn — same shape as a real tool, plus expansions[]
           // (one entry per *successfully* resolved ref) so the per-turn
           // rendering and `expanded_in_turn` annotation work.
-          //
-          // `resultOmit` applies here PER RESOLUTION, keyed by each ref's
-          // ORIGIN tool (projecting the ref-id-keyed combined map wholesale
-          // would use the wrong key space). The tracked event above stays raw.
-          const MAX_RESULT_CHARS = settings.maxResultChars
-          const truncate = (s: string) =>
-            s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
-          const project = (r: Resolution): unknown =>
-            omitResultFields(r.result, r.tool ? config?.resultOmit?.[r.tool] : undefined)
-          const turnResult: unknown =
-            refIds.length === 1
-              ? resolutions[0].success
-                ? project(resolutions[0])
-                : resolutions[0].result
-              : resolutions.reduce<Record<string, unknown>>((acc, r) => {
-                  acc[r.ref_id] = r.success ? project(r) : { __error: r.error }
-                  return acc
-                }, {})
-          const truncated = truncate(JSON.stringify(turnResult))
-          const expansions = resolutions
-            .filter((r) => r.success)
-            .map((r) => {
-              const projected = project(r)
-              return {
-                ref_id: r.ref_id,
-                content: truncate(
-                  typeof projected === 'string' ? projected : JSON.stringify(projected),
-                ),
-              }
-            })
-
-          turns.push({
-            n: turn,
-            reasoning: action.reasoning,
-            status: action.status,
-            tool_call: { tool: EXPAND_TOOL_NAME, args: action.tool_args },
-            tool_result: {
-              tool: EXPAND_TOOL_NAME,
-              result: truncated,
-              success: overallSuccess,
-              error: errorMsg ?? null,
-            },
-            ...(expansions.length > 0 ? { expansions } : {}),
-          })
+          turns.push(projectRound({ n: turn, action, calls: [{ call, result }] }, projection)!)
 
           scope.data = { ...scope.data, turn, lastAction: action }
           // Continue to next turn — let the controller use the resolved data.
@@ -653,9 +914,6 @@ export function simpleLoop<T extends SimpleLoopData>(
             ...action.additional_calls,
           ]
           const MAX_RESULT_CHARS = settings.maxResultChars
-          const truncate = (s: string) =>
-            s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + '…[truncated]' : s
-          const allExpansions: ExpandedRef[] = []
           const callIds: string[] = []
           const trackedArgs: unknown[] = []
           // The repair note for the sub-call at the same index, so a
@@ -674,10 +932,27 @@ export function simpleLoop<T extends SimpleLoopData>(
             trackedRepairs.push(repair)
           }
           const subCalls: SubCall[] = []
+          // A gated name waits for a person, and a batch cannot be paused part
+          // way (slice 6): an action holding one together with any other call
+          // is refused whole, before any of its calls is dispatched — under
+          // every `multiToolCalls` mode, since 'off' still runs a batch.
+          const gated = new Set(currentRunFrame()?.gatedTools ?? [])
+          const gatedCall = allCalls.find((c) => gated.has(c.tool_name))?.tool_name
 
           for (const c of allCalls) {
             const callId = generateId('tc')
             callIds.push(callId)
+            if (gatedCall !== undefined) {
+              track(c.tool_args)
+              subCalls.push({
+                tool: c.tool_name,
+                precheckError:
+                  c.tool_name === gatedCall
+                    ? `${gatedCall} waits for the person's decision, so it must be the only call of its turn — issue it alone`
+                    : `not run: this turn also called ${gatedCall}, which must be the only call of its turn`,
+              })
+              continue
+            }
             // Control-flow tools are singular-only by design: Return ends the
             // loop before any tool runs, expand resolves synchronously against
             // the event store — neither composes with a batch.
@@ -715,12 +990,12 @@ export function simpleLoop<T extends SimpleLoopData>(
               })
               continue
             }
-            const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(
+            const { resolved: resolvedArgs } = resolveRefsAndCapture(
               callArgs,
               view,
               MAX_RESULT_CHARS,
+              excluded,
             )
-            allExpansions.push(...expansions)
             track(callArgs, callRepair)
             subCalls.push({
               tool: c.tool_name,
@@ -763,20 +1038,14 @@ export function simpleLoop<T extends SimpleLoopData>(
 
           // All tool_call events land before dispatch — the panel pairs
           // call/result by callId, so completion order doesn't matter.
-          subCalls.forEach((sc, i) =>
-            trackEvent(
-              scope,
-              'tool_call',
-              {
-                callId: callIds[i],
-                batchId,
-                tool: sc.tool,
-                args: trackedArgs[i],
-                ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
-              } as ToolCallEventData,
-              resolved.trackHistory,
-            ),
-          )
+          const callData = subCalls.map((sc, i): ToolCallEventData => ({
+            callId: callIds[i],
+            batchId,
+            tool: sc.tool,
+            args: trackedArgs[i],
+            ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
+          }))
+          for (const data of callData) trackEvent(scope, 'tool_call', data, resolved.trackHistory)
 
           const outcomes = await runBatch(subCalls, multiMode)
           // A batch breaks a run of unusable answers only if something in it was
@@ -787,53 +1056,36 @@ export function simpleLoop<T extends SimpleLoopData>(
           const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
           if (dispatched) streak.dispatched()
 
-          outcomes.forEach((o, i) =>
-            trackEvent(
-              scope,
-              'tool_result',
-              {
-                callId: callIds[i],
-                batchId,
-                tool: o.tool,
-                result: o.result ?? null,
-                success: o.success,
-                error: o.error,
-                ...(o.sanitized ? { sanitized: o.sanitized } : {}),
-              } as ToolResultEventData,
-              resolved.trackHistory,
-            ),
-          )
+          const resultData = outcomes.map((o, i): ToolResultEventData => ({
+            callId: callIds[i],
+            batchId,
+            tool: o.tool,
+            result: o.result ?? null,
+            success: o.success,
+            error: o.error,
+            ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+            ...(o.skipped ? { skipped: true } : {}),
+          }))
+          for (const data of resultData)
+            trackEvent(scope, 'tool_result', data, resolved.trackHistory)
 
           // The stop check after a batch (#433): a call in it is waiting for a
           // person. The held placeholders are tracked above, so a resume can
           // substitute them; no error is recorded, because nothing failed.
           if (hitlPending()) return scope
 
-          // Controller-facing combined map: per-tool resultOmit projection and
-          // per-call truncation (a batch shares ONE turn's context budget —
-          // each call gets an equal slice, floor 500 chars), then a whole-map
-          // truncate as the final guard.
-          const perCallCap = Math.max(500, Math.floor(MAX_RESULT_CHARS / outcomes.length))
-          const { combined, anySucceeded, errors } = combineOutcomes(outcomes, (o) => {
-            const projected = omitResultFields(o.result, config?.resultOmit?.[o.tool])
-            const s = typeof projected === 'string' ? projected : JSON.stringify(projected)
-            return s.length > perCallCap ? s.slice(0, perCallCap) + '…[truncated]' : s
-          })
-
-          turns.push({
-            n: turn,
-            reasoning: action.reasoning,
-            status: action.status,
-            tool_call: { tool: action.tool_name, args: action.tool_args },
-            additional_calls: action.additional_calls,
-            tool_result: {
-              tool: action.tool_name,
-              result: truncate(JSON.stringify(combined)),
-              success: anySucceeded,
-              error: anySucceeded ? null : errors.join('; '),
+          // The turn's entry, by the one projection a resume uses as well.
+          const entry = projectRound(
+            {
+              n: turn,
+              action,
+              calls: callData.map((call, i) => ({ call, result: resultData[i] })),
             },
-            ...(allExpansions.length > 0 ? { expansions: allExpansions } : {}),
-          })
+            projection,
+          )!
+          turns.push(entry)
+          const anySucceeded = outcomes.some((o) => o.success)
+          const errors = combineOutcomes(outcomes).errors
 
           // Partial failure → continue (the controller sees per-call __error
           // entries and can retry just those). ALL failed → the same, since
@@ -905,20 +1157,17 @@ export function simpleLoop<T extends SimpleLoopData>(
             recoveryCapHit = true
             break
           }
-          turns.push({
-            n: turn,
-            reasoning: action.reasoning,
-            status: action.status,
-            tool_call: { tool: action.tool_name, args: action.tool_args },
-            tool_result: { tool: action.tool_name, result: '', success: false, error: refused },
-          })
-          trackLoopRecovery(
-            scope,
-            { failure: 'tool_not_allowed', error: refused, tool: action.tool_name, turn, maxTurns },
-            // The BAML call SUCCEEDED: the tool name the model chose is the
-            // defect, so the response that named it is the evidence.
-            controllerLlmCall,
-          )
+          const recovery: LoopRecoveryEventData = {
+            failure: 'tool_not_allowed',
+            error: refused,
+            tool: action.tool_name,
+            turn,
+            maxTurns,
+          }
+          // The BAML call SUCCEEDED: the tool name the model chose is the
+          // defect, so the response that named it is the evidence.
+          trackLoopRecovery(scope, recovery, controllerLlmCall)
+          turns.push(projectRound({ n: turn, action, recovery, calls: [] }, projection)!)
           continue
         }
 
@@ -950,27 +1199,18 @@ export function simpleLoop<T extends SimpleLoopData>(
             recoveryCapHit = true
             break
           }
-          turns.push({
-            n: turn,
-            reasoning: action.reasoning,
-            status: action.status,
-            tool_call: { tool: action.tool_name, args: action.tool_args },
-            tool_result: { tool: action.tool_name, result: '', success: false, error: feedback },
-          })
-          trackLoopRecovery(
-            scope,
-            {
-              failure: 'invalid_tool_args',
-              error: feedback,
-              tool: action.tool_name,
-              turn,
-              maxTurns,
-            },
-            // Unparseable or truncated `tool_args` is a failure OF the
-            // response, and the reason is only ever visible in the raw text —
-            // a cut-off heredoc, a bare string where JSON was required.
-            controllerLlmCall,
-          )
+          const recovery: LoopRecoveryEventData = {
+            failure: 'invalid_tool_args',
+            error: feedback,
+            tool: action.tool_name,
+            turn,
+            maxTurns,
+          }
+          // Unparseable or truncated `tool_args` is a failure OF the response,
+          // and the reason is only ever visible in the raw text — a cut-off
+          // heredoc, a bare string where JSON was required.
+          trackLoopRecovery(scope, recovery, controllerLlmCall)
+          turns.push(projectRound({ n: turn, action, recovery, calls: [] }, projection)!)
           continue
         }
 
@@ -979,25 +1219,21 @@ export function simpleLoop<T extends SimpleLoopData>(
 
         // Resolve ref: pointers in args (expands to full tool result data from prior events)
         // and capture the substitutions so they render in the next prompt iteration.
-        const MAX_RESULT_CHARS = settings.maxResultChars
-        const { resolved: resolvedArgs, expansions } = resolveRefsAndCapture(
+        const { resolved: resolvedArgs } = resolveRefsAndCapture(
           args,
           view,
-          MAX_RESULT_CHARS,
+          settings.maxResultChars,
+          excluded,
         )
 
         // Track tool call event (with original args for readability)
-        trackEvent(
-          scope,
-          'tool_call',
-          {
-            callId,
-            tool: action.tool_name,
-            args,
-            ...(argsRepair ? { repaired: argsRepair } : {}),
-          } as ToolCallEventData,
-          resolved.trackHistory,
-        )
+        const call: ToolCallEventData = {
+          callId,
+          tool: action.tool_name,
+          args,
+          ...(argsRepair ? { repaired: argsRepair } : {}),
+        }
+        trackEvent(scope, 'tool_call', call, resolved.trackHistory)
 
         // Execute tool with resolved args. A dispatch ends any run of unusable
         // answers, whatever the tool then returns.
@@ -1033,19 +1269,15 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Track tool result event. `result.data` is already the sanitized
         // content when a `withInjectionGuard` wrapper neutralized it in
         // callTool; `sanitized` carries the audit trail alongside it.
-        trackEvent(
-          scope,
-          'tool_result',
-          {
-            callId,
-            tool: action.tool_name,
-            result: result.data,
-            success: result.success,
-            error: result.error,
-            ...(result.sanitized ? { sanitized: result.sanitized } : {}),
-          } as ToolResultEventData,
-          resolved.trackHistory,
-        )
+        const resultData: ToolResultEventData = {
+          callId,
+          tool: action.tool_name,
+          result: result.data,
+          success: result.success,
+          error: result.error,
+          ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+        }
+        trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
 
         // The stop check after a single call (#433): the call is waiting for a
         // person, and its held placeholder is tracked above. Stop with NO error
@@ -1053,32 +1285,13 @@ export function simpleLoop<T extends SimpleLoopData>(
         // budget was not exhausted either.
         if (hitlPending()) return scope
 
-        // Record completed turn for LoopController history.
-        // `resultOmit` projects the CONTROLLER's view only — this sits after the
-        // full-fidelity trackEvent above, so the event store (and with it the
-        // compactExecution and citation extractors) keeps the complete result.
-        // Truncate result to avoid overflowing reasoning models on subsequent turns.
-        const resultStr = JSON.stringify(
-          omitResultFields(result.data, config?.resultOmit?.[action.tool_name]),
+        // Record completed turn for LoopController history, by the one
+        // projection a resume uses as well. `resultOmit` projects the
+        // CONTROLLER's view only — the event above keeps the complete result
+        // for compactExecution and the citation extractors.
+        turns.push(
+          projectRound({ n: turn, action, calls: [{ call, result: resultData }] }, projection)!,
         )
-        turns.push({
-          n: turn,
-          reasoning: action.reasoning,
-          // Carried so the assistant turn log can replay a complete
-          // ControllerAction rather than one missing required fields.
-          status: action.status,
-          tool_call: { tool: action.tool_name, args: action.tool_args },
-          tool_result: {
-            tool: action.tool_name,
-            result:
-              resultStr.length > MAX_RESULT_CHARS
-                ? resultStr.slice(0, MAX_RESULT_CHARS) + '…[truncated]'
-                : resultStr,
-            success: result.success,
-            error: result.error ?? null,
-          },
-          ...(expansions.length > 0 ? { expansions } : {}),
-        })
 
         // A failed tool call is the round's observation, not the end of the
         // loop (#437 slice 1, #425 C1): the turn above already carries the
@@ -1184,6 +1397,10 @@ export function simpleLoop<T extends SimpleLoopData>(
     estimateTurns: (s) => resolveTurnBudget('maxToolTurns', config?.maxTurns, s.maxToolTurns),
     // The allowlist this loop will accept (minus what no agent may call), for
     // static introspection — the planner's agent map reads it (#507).
-    capabilities: { tools: tools.filter((name) => !isAgentWithheldTool(name)) },
+    capabilities: {
+      tools: tools.filter((name) => !isAgentWithheldTool(name)),
+      // It dispatches the gate itself, so it ends a continuation: no `next`.
+      ...(recordsRounds ? { resumable: { fingerprint } } : {}),
+    },
   }
 }

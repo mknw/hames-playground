@@ -66,12 +66,16 @@ import { assertServerOnImport } from '../assert.server'
 import type {
   ConfiguredPattern,
   ContextEvent,
+  ContinuationSegment,
   DecideFn,
+  Decision,
+  DecisionMadeEventData,
   DecisionLabel,
   DecisionSpec,
   ErrorEventData,
   EventView,
   PatternConfig,
+  PatternExitEventData as PatternExitData,
   PatternScope,
   PlanResult,
   UnifiedContext,
@@ -82,6 +86,7 @@ import { getErrorHint } from '../error-hints'
 import { hitlPending } from '../hitl.server'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { onPath, resumableFingerprint, takeResume, type TakenResume } from '../resume.server'
 import { trimToFit } from '../token-budget.server'
 import { createEventView } from './event-view.server'
 import {
@@ -112,7 +117,7 @@ import {
   type ResolvedDecisionDocuments,
 } from './decisionLoop-documents.server'
 import type { PlannerData } from './planner.server'
-import { harnessPseudonymisesInputs } from '../pattern-capabilities'
+import { harnessPseudonymisesInputs, refuseUnresumableGates } from '../pattern-capabilities'
 import { WEB_ROSTER_INPUT, type WebRosterInput } from './withPseudonymisedInputs.server'
 
 assertServerOnImport()
@@ -138,6 +143,8 @@ export const DECISION_LOOP_RESULT_CHARS = 2000
  *  source's own comment (12-21 s for a handful of documents through the gateway),
  *  not measured here; the host may override it. */
 export const DECISION_DOCUMENTS_TIMEOUT_MS = 30_000
+
+const NO_EVENTS: ReadonlySet<ContextEvent> = new Set()
 
 export interface DecisionLoopRoute<T> {
   readonly pattern: ConfiguredPattern<T>
@@ -195,6 +202,11 @@ export interface DecisionLoopConfig extends PatternConfig {
   readonly documents?: DecisionDocumentsSource
   /** Timeout of `documents` in ms (default {@link DECISION_DOCUMENTS_TIMEOUT_MS}). */
   readonly documentsTimeoutMs?: number
+  /** Tool names in its routes whose executor may pause for a person (a write
+   *  request; slice 6). Construction refuses one offered on a path that cannot
+   *  be resumed inside the run, and a route's `simpleLoop` refuses a batch that
+   *  holds one. */
+  readonly gatedTools?: readonly string[]
 }
 
 export interface DecisionLoopData extends TypedDecisionData, PlannerData {}
@@ -233,6 +245,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     state: stateOverride,
     documents: documentsSource,
     documentsTimeoutMs: documentsTimeoutConfig,
+    gatedTools = [],
     ...patternConfig
   } = config
 
@@ -340,6 +353,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     ...patternConfig,
   })
   const loopId = resolved.patternId
+  // Resumable (slice 6) while its committed events hold the child brackets a
+  // resume rebuilds the records from. The fingerprint covers what a re-entry
+  // depends on: the routes it can re-enter and the names it gates.
+  const resumable = resolved.commitStrategy === 'always' || resolved.commitStrategy === 'on-success'
+  const fingerprint = resumableFingerprint('decisionLoop', loopId, {
+    routes: names,
+    gatedTools: [...gatedTools].sort(),
+  })
 
   // Visibility is decided PER patternId, so an id that two routes both emit
   // under — two routes given one id, one pattern object reused in two routes —
@@ -458,7 +479,67 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     }
   }
 
-  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+  /** The record of one finished iteration, from its child's committed events
+   *  (every half of it, when it paused and resumed). THE one builder: the live
+   *  path and a resume's rebuild both call it. */
+  const recordOf = (
+    label: string,
+    iteration: number,
+    childEvents: ContextEvent[],
+    wallMs: number,
+    thrown: string | undefined,
+  ): RouteOutput => {
+    const kind = kinds.get(label)!
+    const leafId = leafIds.get(label)!
+    const stats = computeStats(kind, childEvents, leafId, wallMs)
+    const extracted =
+      thrown !== undefined
+        ? ({
+            ok: false,
+            failure: 'the step threw an error',
+            text: carryText(thrown, maxChars),
+          } as const)
+        : extract(
+            kind,
+            childEvents.filter((e) => e.patternId === leafId),
+            maxChars,
+          )
+    return extracted.ok
+      ? {
+          iteration,
+          route: label,
+          status: 'succeeded',
+          stats,
+          result: extracted.result,
+          reasoning: extracted.reasoning,
+          ...(kind === 'planner'
+            ? {
+                plan: {
+                  text: extracted.result,
+                  steps: extracted.planSteps ?? stats.planSteps ?? 0,
+                },
+              }
+            : {}),
+        }
+      : {
+          iteration,
+          route: label,
+          status: 'failed',
+          stats,
+          result: extracted.text,
+          reasoning: '',
+          failure: extracted.failure,
+        }
+  }
+
+  const fn = (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> =>
+    body(scope, view, resumable ? takeResume(fingerprint) : undefined)
+
+  const body = async (
+    scope: PatternScope<T>,
+    view: EventView,
+    taken: TakenResume | undefined,
+  ): Promise<PatternScope<T>> => {
     const outerCtx = (view as unknown as { ctx: UnifiedContext }).ctx
     const records: RouteOutput[] = []
     // Roster-only source payloads from EVERY iteration, even after its summary
@@ -479,78 +560,110 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     let latestPlan: { text: string; steps: number } | undefined
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
-    for (let iteration = 1; iteration <= maxIterations; iteration++) {
-      // The options THIS decision offers: a guarded planner is absent straight
-      // after itself and once a plan exists. Only `answer` left means nothing to ask.
-      const offered = labels.filter(
-        (l) =>
-          !guardedPlanners.has(l.id) ||
-          (latestPlan === undefined && records[records.length - 1]?.route !== l.id),
-      )
-      if (offered.length === 1) {
-        ended = 'answer'
-        break
+    // Slice 6: re-entering a pause, the records of every finished iteration are
+    // rebuilt from their children's committed brackets by `recordOf`, as live;
+    // the paused iteration is re-entered with no decide call, its route handed
+    // the rest of the path and the events its first half recorded.
+    const paused = taken ? replayIterations(taken) : undefined
+    if (paused) {
+      for (const done of paused.finished) {
+        const record = recordOf(done.route, done.iteration, done.events, done.wallMs, done.thrown)
+        records.push(record)
+        rosterPayloads.push(done.events.filter((e) => e.type === 'tool_result').map((e) => e.data))
+        if (record.plan) latestPlan = record.plan
       }
-      const optionIds = offered.map((l) => l.id)
-      const spec: DecisionSpec = {
-        key: DECISION_LOOP_KEY,
-        question: 'Which step should run next?',
-        labels: offered,
-      }
-
-      // 1. State and decision. Any failure to get a usable decision stops here.
-      let state = ''
-      let stateError: string | undefined
-      try {
-        state = renderState(
-          {
-            conversation: conversationTurns(view),
-            records,
-            lastN,
-            iteration,
-            ...(documents !== undefined ? { documents } : {}),
-          },
-          decideFn,
-        )
-      } catch (e) {
-        stateError = `decisionLoop state builder failed: ${e instanceof Error ? e.message : String(e)}`
-      }
-      if (stateError !== undefined) {
-        recordError(scope, stateError, iteration)
-        ended = 'stopped'
-        break
-      }
-
-      const before = scope.events.length
-      const decision = await decide(
-        scope,
-        { decide: decideFn, spec, state },
-        {
-          trackHistory: resolved.trackHistory,
-          errorSeverity: iteration === 1 ? 'irrecoverable' : 'recoverable',
-        },
-      )
-      scope.data = {
-        ...scope.data,
-        decisions: { ...scope.data.decisions, [DECISION_LOOP_KEY]: decision },
-      }
-
-      // NEVER act on a label unless there is a usable decision: not on an
-      // abstention for any reason, not on a null label, not on a label outside
-      // the options. (The old fallback-label dispatch is exactly what this is
-      // not.)
-      const label = decision.label
-      if (decision.abstained || label === null || !optionIds.includes(label)) {
-        const recorded = scope.events.slice(before).some((e) => e.type === 'error')
-        if (!recorded) {
-          recordError(scope, `Decision '${DECISION_LOOP_KEY}' returned no usable option`, iteration)
+      if (paused.decision) {
+        scope.data = {
+          ...scope.data,
+          decisions: { ...scope.data.decisions, [DECISION_LOOP_KEY]: paused.decision },
         }
-        ended = 'stopped'
-        break
       }
-      if (label === DECISION_LOOP_ANSWER) {
-        ended = 'answer'
-        break
+    }
+
+    for (let iteration = paused?.iteration ?? 1; iteration <= maxIterations; iteration++) {
+      const resuming = paused !== undefined && iteration === paused.iteration
+      let label: string
+      if (resuming) {
+        // Decided before the pause: the same route, with no model call.
+        label = paused.route
+      } else {
+        // The options THIS decision offers: a guarded planner is absent straight
+        // after itself and once a plan exists. Only `answer` left means nothing to ask.
+        const offered = labels.filter(
+          (l) =>
+            !guardedPlanners.has(l.id) ||
+            (latestPlan === undefined && records[records.length - 1]?.route !== l.id),
+        )
+        if (offered.length === 1) {
+          ended = 'answer'
+          break
+        }
+        const optionIds = offered.map((l) => l.id)
+        const spec: DecisionSpec = {
+          key: DECISION_LOOP_KEY,
+          question: 'Which step should run next?',
+          labels: offered,
+        }
+
+        // 1. State and decision. Any failure to get a usable decision stops here.
+        let state = ''
+        let stateError: string | undefined
+        try {
+          state = renderState(
+            {
+              conversation: conversationTurns(view),
+              records,
+              lastN,
+              iteration,
+              ...(documents !== undefined ? { documents } : {}),
+            },
+            decideFn,
+          )
+        } catch (e) {
+          stateError = `decisionLoop state builder failed: ${e instanceof Error ? e.message : String(e)}`
+        }
+        if (stateError !== undefined) {
+          recordError(scope, stateError, iteration)
+          ended = 'stopped'
+          break
+        }
+
+        const before = scope.events.length
+        const decision = await decide(
+          scope,
+          { decide: decideFn, spec, state },
+          {
+            trackHistory: resolved.trackHistory,
+            errorSeverity: iteration === 1 ? 'irrecoverable' : 'recoverable',
+          },
+        )
+        scope.data = {
+          ...scope.data,
+          decisions: { ...scope.data.decisions, [DECISION_LOOP_KEY]: decision },
+        }
+
+        // NEVER act on a label unless there is a usable decision: not on an
+        // abstention for any reason, not on a null label, not on a label outside
+        // the options. (The old fallback-label dispatch is exactly what this is
+        // not.)
+        const chosen = decision.label
+        if (decision.abstained || chosen === null || !optionIds.includes(chosen)) {
+          const recorded = scope.events.slice(before).some((e) => e.type === 'error')
+          if (!recorded) {
+            recordError(
+              scope,
+              `Decision '${DECISION_LOOP_KEY}' returned no usable option`,
+              iteration,
+            )
+          }
+          ended = 'stopped'
+          break
+        }
+        if (chosen === DECISION_LOOP_ANSWER) {
+          ended = 'answer'
+          break
+        }
+        label = chosen
       }
 
       // 2. Run the route in a child scope.
@@ -561,11 +674,15 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         pattern: pattern.name,
         route: label,
         decisionLoop: loopId,
+        iteration,
       })
       scope.events.push(enter)
       emitLive(enter)
 
       const hide = hidden.get(label)!
+      // A resumed child's own first half reaches it as its replay, never
+      // through its view: live, a child never saw its own events there.
+      const own = resuming ? paused.own : NO_EVENTS
       const all = [...outerCtx.events, ...scope.events]
       // By ROUTE NAME as well as by id: every child is bracketed by an enter
       // (carrying this loop's id and the route) and an exit, and a pattern built
@@ -591,6 +708,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         events: all.filter(
           (e) =>
             e.patternId !== loopId &&
+            !own.has(e) &&
             (e.id === undefined || !withheld.has(e.id)) &&
             !bracketHidden.has(e) &&
             (!hide.has(e.patternId) || e.type === 'pattern_enter' || e.type === 'pattern_exit'),
@@ -628,9 +746,27 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       try {
         // The child runs under its route's label (the route key, code-written
         // here, never by content): the egress gate counts refusals per route by
-        // it. Outside a run frame (a pattern driven directly) there is no slot.
+        // it. It is one step of the resumable path (slice 6), carrying the route
+        // and the iteration, so a route that ran twice in the turn resumes the
+        // invocation that paused. Outside a run frame there is no slot.
         const run = () => pattern.fn(childScope, childView)
-        finished = await (currentRunFrame() ? amendRunFrame({ route: label }, run) : run())
+        const step: ContinuationSegment = {
+          pattern: 'decisionLoop',
+          fingerprint,
+          route: label,
+          iteration,
+        }
+        const slot =
+          resuming && paused.rest.length > 0
+            ? { continuation: paused.rest, events: paused.childEvents }
+            : undefined
+        const inRoute = () =>
+          amendRunFrame({ route: label, ...(gatedTools.length > 0 ? { gatedTools } : {}) }, run)
+        finished = await (currentRunFrame()
+          ? resumable
+            ? onPath(step, slot, inRoute)
+            : inRoute()
+          : run())
       } catch (e) {
         thrown = e
       }
@@ -641,63 +777,40 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
 
       // Committed copy: the child's own `error` events stay inside its enter/exit
       // but as `recoverable`, or `runChain` would end the turn on them.
-      scope.events.push(
-        ...childEvents.map((e): ContextEvent =>
-          e.type === 'error'
-            ? { ...e, data: { ...(e.data as ErrorEventData), severity: 'recoverable' } }
-            : e,
-        ),
+      const committed = childEvents.map((e): ContextEvent =>
+        e.type === 'error'
+          ? { ...e, data: { ...(e.data as ErrorEventData), severity: 'recoverable' } }
+          : e,
       )
+      scope.events.push(...committed)
+      const thrownMessage =
+        thrown === undefined ? undefined : thrown instanceof Error ? thrown.message : String(thrown)
+      const waiting = hitlPending()
       const exit = createEvent('pattern_exit', childId, {
-        status: thrown === undefined ? 'completed' : 'error',
+        status: waiting ? 'paused' : thrown === undefined ? 'completed' : 'error',
+        wallMs,
+        ...(thrownMessage !== undefined ? { error: thrownMessage } : {}),
       })
       scope.events.push(exit)
       emitLive(exit)
 
-      if (hitlPending()) return scope
+      // The paused iteration writes no record: its stats and record span both
+      // halves, and are written when it finishes after the resume.
+      if (waiting) return scope
 
       // 3. The record: from committed events only, capped. No sanitising, no screen.
-      const kind = kinds.get(label)!
-      const leafId = leafIds.get(label)!
-      const ownEvents = childEvents.filter((e) => e.patternId === leafId)
-      const stats = computeStats(kind, childEvents, leafId, wallMs)
-      const extracted =
-        thrown !== undefined
-          ? ({
-              ok: false,
-              failure: 'the step threw an error',
-              text: carryText(thrown instanceof Error ? thrown.message : String(thrown), maxChars),
-            } as const)
-          : extract(kind, ownEvents, maxChars)
-
-      const record: RouteOutput = extracted.ok
-        ? {
-            iteration,
-            route: label,
-            status: 'succeeded',
-            stats,
-            result: extracted.result,
-            reasoning: extracted.reasoning,
-            ...(kind === 'planner'
-              ? {
-                  plan: {
-                    text: extracted.result,
-                    steps: extracted.planSteps ?? stats.planSteps ?? 0,
-                  },
-                }
-              : {}),
-          }
-        : {
-            iteration,
-            route: label,
-            status: 'failed',
-            stats,
-            result: extracted.text,
-            reasoning: '',
-            failure: extracted.failure,
-          }
+      const iterationEvents = resuming ? [...paused.childEvents, ...committed] : committed
+      const record = recordOf(
+        label,
+        iteration,
+        iterationEvents,
+        (resuming ? paused.wallMs : 0) + wallMs,
+        thrownMessage,
+      )
       records.push(record)
-      rosterPayloads.push(childEvents.filter((e) => e.type === 'tool_result').map((e) => e.data))
+      rosterPayloads.push(
+        iterationEvents.filter((e) => e.type === 'tool_result').map((e) => e.data),
+      )
       if (record.plan) latestPlan = record.plan
 
       // The record as events: the controller_action / tool_result pair
@@ -752,7 +865,130 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     return scope
   }
 
-  return {
+  /**
+   * What a resume needs to re-enter this loop, read from the events its paused
+   * invocation recorded: each finished iteration's child events (its bracket's
+   * contents without the loop's own events), its wall time and how it ended;
+   * the paused iteration's route, events and wall time; the latest decision.
+   * Events that do not describe the recorded pause are a corrupt blob, and a
+   * guess would run the wrong route: it throws.
+   */
+  const replayIterations = (taken: TakenResume) => {
+    const { route, iteration } = taken.segment
+    if (
+      route === undefined ||
+      !Object.hasOwn(routes, route) ||
+      !Number.isInteger(iteration) ||
+      iteration! < 1 ||
+      iteration! > maxIterations
+    ) {
+      throw new Error('decisionLoop: the recorded pause names no route and iteration of this loop')
+    }
+    type Half = {
+      route: string
+      iteration: number
+      events: ContextEvent[]
+      bracket: ContextEvent[]
+      exit?: PatternExitData
+    }
+    const halves: Half[] = []
+    let current: Half | undefined
+    let depth = 0
+    let decision: DecisionMadeEventData | undefined
+    let decisionId: string | undefined
+    for (const e of taken.events) {
+      if (!current) {
+        const d = e.data as { decisionLoop?: string; route?: string; iteration?: number }
+        if (e.type === 'pattern_enter' && d?.decisionLoop === loopId && d.route !== undefined) {
+          current = {
+            route: d.route,
+            iteration: d.iteration ?? -1,
+            events: [],
+            bracket: [e],
+          }
+          depth = 1
+        } else if (e.patternId === loopId && e.type === 'decision_made') {
+          const made = e.data as DecisionMadeEventData
+          if (made.key === DECISION_LOOP_KEY) {
+            decision = made
+            decisionId = e.id
+          }
+        }
+        continue
+      }
+      current.bracket.push(e)
+      const id = current.bracket[0].patternId
+      if (e.patternId === id && e.type === 'pattern_enter') depth++
+      if (e.patternId === id && e.type === 'pattern_exit' && --depth === 0) {
+        current.exit = e.data as PatternExitData
+        halves.push(current)
+        current = undefined
+        continue
+      }
+      // The loop's own events (the egress gate's, under this scope) are not
+      // the child's.
+      if (e.patternId !== loopId) current.events.push(e)
+    }
+
+    const finished: {
+      route: string
+      iteration: number
+      events: ContextEvent[]
+      wallMs: number
+      thrown: string | undefined
+    }[] = []
+    for (let i = 1; i < iteration!; i++) {
+      const of = halves.filter((h) => h.iteration === i)
+      const last = of[of.length - 1]
+      if (!last || last.exit?.status === 'paused' || of.some((h) => h.route !== last.route)) {
+        throw new Error(`decisionLoop: iteration ${i} of the recorded pause did not finish`)
+      }
+      finished.push({
+        route: last.route,
+        iteration: i,
+        events: of.flatMap((h) => h.events),
+        wallMs: of.reduce((sum, h) => sum + (h.exit?.wallMs ?? 0), 0),
+        thrown: last.exit?.status === 'error' ? (last.exit.error ?? '') : undefined,
+      })
+    }
+    const halvesOfPaused = halves.filter((h) => h.iteration === iteration)
+    const lastHalf = halvesOfPaused[halvesOfPaused.length - 1]
+    if (
+      !lastHalf ||
+      lastHalf.exit?.status !== 'paused' ||
+      halvesOfPaused.some((h) => h.route !== route)
+    ) {
+      throw new Error(
+        `decisionLoop: iteration ${iteration} of the recorded pause did not pause in '${route}'`,
+      )
+    }
+    return {
+      route,
+      iteration: iteration!,
+      rest: taken.rest,
+      finished,
+      childEvents: halvesOfPaused.flatMap((h) => h.events),
+      own: new Set(halvesOfPaused.flatMap((h) => h.bracket)),
+      wallMs: halvesOfPaused.reduce((sum, h) => sum + (h.exit?.wallMs ?? 0), 0),
+      decision: decision
+        ? ({
+            key: decision.key,
+            label: decision.label,
+            top: decision.top,
+            probs: decision.probs,
+            margin: decision.margin,
+            ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
+            abstained: decision.abstained,
+            ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+            ...(decision.method !== undefined ? { method: decision.method } : {}),
+            calibrated: decision.calibrated,
+            ...(decisionId !== undefined ? { eventId: decisionId } : {}),
+          } as Decision)
+        : undefined,
+    }
+  }
+
+  const pattern: ConfiguredPattern<T> = {
     name: 'decisionLoop',
     fn,
     config: resolved,
@@ -761,6 +997,24 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     // would size the bar for a run that never happens.
     estimateTurns: () => maxIterations,
     children: names.map((n) => routes[n].pattern),
-    capabilities: { decisionKeys: [DECISION_LOOP_KEY] },
+    capabilities: {
+      decisionKeys: [DECISION_LOOP_KEY],
+      ...(resumable
+        ? {
+            resumable: {
+              fingerprint,
+              next: (segment) =>
+                segment.route !== undefined && Object.hasOwn(routes, segment.route)
+                  ? routes[segment.route].pattern
+                  : undefined,
+            },
+          }
+        : {}),
+      ...(gatedTools.length > 0 ? { gatedTools } : {}),
+    },
   }
+  // A gated name offered where a pause could not be resumed is refused here,
+  // where it is declared (the harness entry points walk from the root as well).
+  refuseUnresumableGates([pattern])
+  return pattern
 }

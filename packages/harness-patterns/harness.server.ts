@@ -28,6 +28,7 @@ import {
   generateId,
 } from './context.server'
 import { checkResume, readHitl, recordAnswers, supersedeHitl } from './hitl.server'
+import { refuseUnresumableGates } from './pattern-capabilities'
 import { withRunFrame, currentRunFrame, activeRunFrame, type RunFrame } from './run-frame.server'
 import { runtimeConfig } from './runtime-config.server'
 
@@ -299,6 +300,7 @@ export interface Harness<T extends HarnessData & Record<string, unknown>> {
 export function harness<T extends HarnessData & Record<string, unknown>>(
   ...patterns: ConfiguredPattern<T>[]
 ): Harness<T> {
+  refuseUnresumableGates(patterns)
   const run = async (
     input: string,
     sessionId?: string,
@@ -425,14 +427,16 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
   answers: HitlAnswers,
   opts: ResumeOptions = {},
 ): Promise<HarnessResultScoped<T>> {
+  refuseUnresumableGates(patterns)
   return enterRun(opts.frame, opts.onEvent, async (listener) => {
     const ctx = deserializeContext<T>(serializedContext)
 
     // Steps 1–6 only CHECK. A refusal throws before anything below runs.
-    const { accepted, startAt } = checkResume(ctx, answers, {
+    const { accepted, startAt, continuation } = checkResume(ctx, answers, {
       names: patterns.map((p) => p.name),
       tier: activeRunFrame().inference?.tier,
       now: Date.now(),
+      patterns,
     })
 
     const startTime = Date.now()
@@ -471,8 +475,13 @@ export async function resumeHarness<T extends HarnessData & Record<string, unkno
 
     try {
       // 11. Re-enter the paused top-level pattern; the ones before it already
-      //     ran, and their events and data are in the context.
-      await runChain(ctx, patterns, listener, { startAt })
+      //     ran, and their events and data are in the context. Below a
+      //     resumable one the run continues INSIDE it, along the recorded path
+      //     (slice 6); any other re-runs from its start.
+      await runChain(ctx, patterns, listener, {
+        startAt,
+        ...(continuation ? { continuation } : {}),
+      })
 
       // How this turn ended — one shared decision, see `settleTurn`.
       const settled = settleTurn(ctx, eventsBefore)
@@ -502,6 +511,7 @@ export async function continueSession<T extends HarnessData & Record<string, unk
   onEvent?: (event: ContextEvent) => void,
   frame?: RunFrame,
 ): Promise<HarnessResultScoped<T>> {
+  refuseUnresumableGates(patterns)
   return enterRun(frame, onEvent, async (listener) => {
     // Restore context from serialized state
     const ctx = deserializeContext<T>(serializedContext)

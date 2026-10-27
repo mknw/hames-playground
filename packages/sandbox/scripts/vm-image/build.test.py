@@ -99,7 +99,8 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(getattr(self, "customized", False), "inventory read before customization")
             Path(argv[-1]).write_text(json.dumps({"images": {f: self.pin for f in vm.FLAVOURS},
                 "packages": {p["name"]: p["version"] for p in self.lock["packages"]},
-                "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "uninitialized", "ssh_host_keys": []}))
+                "enabled_units": vm.UNIT_LAYOUTS[1], "docker_driver": "overlay2", "machine_id_state": "empty",
+                "dbus_machine_id": "link", "lxd_agent_masked": True, "ssh_host_keys": []}))
             return b""
         self.fail("unapproved builder command")
 
@@ -342,9 +343,18 @@ class Pipeline(unittest.TestCase):
                 path.write_text(json.dumps(value))
             return result
         self.fake = boundary
-        with self.assertRaisesRegex(RuntimeError, message):
-            self.build()
-        self.assertFalse((self.work / 'manifest.json').exists())
+        try:
+            with self.assertRaisesRegex(RuntimeError, message):
+                self.build()
+            self.assertFalse((self.work / 'manifest.json').exists())
+        finally:
+            self.fake = original
+
+    def inventory_states_refused(self, changes, message):
+        for index, change in enumerate(changes):
+            with self.subTest(index=index):
+                self.work = self.root / f'work-{index}'  # each build needs a fresh work directory
+                self.inventory_refused(change, message)
 
     def test_build_wrong_guest_image_refused(self):
         self.inventory_refused(lambda v: v['images'].update(base='sha256:' + 'f' * 64), 'preload inventory')
@@ -359,7 +369,18 @@ class Pipeline(unittest.TestCase):
         self.inventory_refused(lambda v: v['packages'].update({'docker.io': 'wrong'}), 'package versions')
 
     def test_build_unclean_machine_id_refused(self):
-        self.inventory_refused(lambda v: v.update(machine_id_state='a' * 32), 'machine identity')
+        # 'absent' boots with no machine ID on a read-only root; only an empty file is safe.
+        self.inventory_states_refused([lambda v, s=state: v.update(machine_id_state=s)
+                                       for state in ('absent', 'uninitialized', 'populated', 'symlink')],
+                                      'machine identity')
+
+    def test_build_dbus_machine_id_refused(self):
+        self.inventory_states_refused([lambda v: v.update(dbus_machine_id='other'),
+                                       lambda v: v.pop('dbus_machine_id')], 'D-Bus machine identity')
+
+    def test_build_lxd_agent_unmasked_refused(self):
+        self.inventory_states_refused([lambda v: v.update(lxd_agent_masked=False),
+                                       lambda v: v.pop('lxd_agent_masked')], 'LXD agent')
 
     def test_build_ssh_host_keys_refused(self):
         self.inventory_refused(lambda v: v.update(ssh_host_keys=['ssh_host_ed25519_key']), 'SSH host keys')
@@ -639,7 +660,7 @@ class Pipeline(unittest.TestCase):
         agent.write_text('#!/bin/sh\nexit 0\n')
         agent.chmod(0o700)
         systemctl = guest / 'bin/systemctl'
-        systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > systemctl-call\nexit '
+        systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> systemctl-call\nexit '
                              + str(enable_status) + '\n')
         systemctl.chmod(0o700)
         child = self.shell_section('# The package/base', '# Provisioning owns', guest)
@@ -649,7 +670,8 @@ class Pipeline(unittest.TestCase):
         child, work, expected = self.guest_units(['cloud-init.service'], 'lib/systemd/system')
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'systemctl-call').is_file())
-        self.assertEqual((work / 'systemctl-call').read_text().splitlines(), ['enable', *expected])
+        self.assertEqual((work / 'systemctl-call').read_text().splitlines(),
+                         ['enable', *expected, 'mask', 'lxd-agent.service'])
         self.assertTrue((work / 'enabled-units.txt').is_file())
         self.assertEqual((work / 'enabled-units.txt').read_text().splitlines(), expected)
 
@@ -657,7 +679,8 @@ class Pipeline(unittest.TestCase):
         child, work, expected = self.guest_units(['cloud-init-main.service', 'cloud-init-network.service'])
         self.assertEqual(child.returncode, 0, child.stderr)
         self.assertTrue((work / 'systemctl-call').is_file())
-        self.assertEqual((work / 'systemctl-call').read_text().splitlines(), ['enable', *expected])
+        self.assertEqual((work / 'systemctl-call').read_text().splitlines(),
+                         ['enable', *expected, 'mask', 'lxd-agent.service'])
         self.assertTrue((work / 'enabled-units.txt').is_file())
         self.assertEqual((work / 'enabled-units.txt').read_text().splitlines(), expected)
 
@@ -704,6 +727,21 @@ class Pipeline(unittest.TestCase):
         self.assertNotEqual(child.returncode, 0)
         self.assertFalse((work / 'enabled-units.txt').exists())
 
+    def test_guest_masks_the_duplicate_lxd_agent(self):
+        for status in (0, 1):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                self.root = Path(directory)
+                guest = self.fake_root()
+                systemctl = guest / 'bin/systemctl'
+                systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> systemctl-call\nexit ' + str(status) + '\n')
+                systemctl.chmod(0o700)
+                child = self.shell_section('# incus-agent is the only guest agent', '# Run the agent the HOST serves', guest)
+                call = guest / 'opt/vm-image/systemctl-call'
+                self.assertTrue(call.is_file())
+                self.assertEqual(call.read_text().splitlines(), ['mask', 'lxd-agent.service'])
+                # A failed mask aborts assembly rather than shipping the crash-loop.
+                self.assertEqual(child.returncode != 0, status != 0, child.stderr)
+
     def test_guest_cleanup_and_clone_inventory(self):
         guest = self.fake_root()
         work = guest / 'opt/vm-image'
@@ -718,14 +756,30 @@ class Pipeline(unittest.TestCase):
         # executed separately below with its literal filesystem paths remapped.
         import shlex
         cloud = guest / 'bin/cloud-init'
-        cloud.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > cloud-call\nprintf 'uninitialized\\n' > "
-                         + shlex.quote(str(guest / 'etc/machine-id')) + '\n')
+        cloud.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > cloud-call\n")
         cloud.chmod(0o700)
         prelude = "python3() { cat > inventory-script; }"
-        child = self.shell_section('trap - EXIT', '# Agent-rendered NoCloud seeds', guest, prelude)
-        self.assertEqual(child.returncode, 0, child.stderr)
+        machine_id = guest / 'etc/machine-id'
+        elsewhere = guest / 'etc/other-id'
+        for old_id in ('file', 'symlink'):
+            with self.subTest(old_id=old_id):
+                machine_id.unlink()
+                if old_id == 'symlink':  # a link must not be written through
+                    elsewhere.write_text('b' * 32)
+                    machine_id.symlink_to(elsewhere)
+                else:
+                    machine_id.write_text('a' * 32)
+                child = self.shell_section('trap - EXIT', '# Agent-rendered NoCloud seeds', guest, prelude)
+                self.assertEqual(child.returncode, 0, child.stderr)
+                # Present, empty, regular and read-only: never absent, never the old ID.
+                self.assertFalse(machine_id.is_symlink())
+                self.assertTrue(machine_id.is_file())
+                self.assertEqual(machine_id.read_bytes(), b'')
+                self.assertEqual(machine_id.stat().st_mode & 0o777, 0o444)
+                machine_id.chmod(0o644)
+        self.assertEqual(elsewhere.read_text(), 'b' * 32)
         self.assertTrue((work / 'cloud-call').is_file())
-        self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs --machine-id')
+        self.assertEqual((work / 'cloud-call').read_text().strip(), 'clean --logs')
         for name in ('input.deb', 'base.tar', 'dockerd.log', 'assembly-daemon.json', 'enabled-units.txt'):
             self.assertFalse((work / name).exists(), name)
         self.assertEqual(list((guest / 'etc/ssh').glob('ssh_host_*')), [])
@@ -735,22 +789,42 @@ class Pipeline(unittest.TestCase):
         script = re_scripts((vm.HERE / 'customize.sh').read_text())[2]
         import re
         script = re.sub(r'/(?:etc|var)/', lambda m: str(guest) + m.group(), script)
+        dbus = guest / 'var/lib/dbus/machine-id'
+        dbus.parent.mkdir(parents=True)
+        lxd = guest / 'etc/systemd/system/lxd-agent.service'
+        lxd.parent.mkdir(parents=True)
+        def inventory():
+            exec(compile(script, 'clone-inventory', 'exec'), {})
+            return json.loads(Path('inventory.json').read_text())
         old = Path.cwd()
         try:
             os.chdir(work)
-            exec(compile(script, 'clone-inventory', 'exec'), {})
-            inventory = json.loads(Path('inventory.json').read_text())
-            self.assertEqual(inventory.get('machine_id_state'), 'uninitialized')
-            self.assertEqual(inventory.get('ssh_host_keys'), [])
-            (guest / 'etc/machine-id').write_text('')
-            exec(compile(script, 'clone-inventory', 'exec'), {})
-            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
-            (guest / 'etc/machine-id').unlink()  # cloud-init 26 removes it outright
-            exec(compile(script, 'clone-inventory', 'exec'), {})
-            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], '')
-            (guest / 'etc/machine-id').write_text('a' * 32)
-            exec(compile(script, 'clone-inventory', 'exec'), {})
-            self.assertEqual(json.loads(Path('inventory.json').read_text())['machine_id_state'], 'a' * 32)
+            machine_id.write_text('')
+            dbus.symlink_to(machine_id)  # the base's own link, remapped like the script
+            lxd.symlink_to('/dev/null')
+            value = inventory()
+            self.assertEqual(value.get('machine_id_state'), 'empty')
+            self.assertEqual(value.get('dbus_machine_id'), 'link')
+            self.assertIs(value.get('lxd_agent_masked'), True)
+            self.assertEqual(value.get('ssh_host_keys'), [])
+            for content, state in (('uninitialized\n', 'uninitialized'), ('a' * 32 + '\n', 'populated')):
+                machine_id.write_text(content)
+                self.assertEqual(inventory().get('machine_id_state'), state)
+            machine_id.unlink()  # what cloud-init --machine-id leaves in the appliance
+            self.assertEqual(inventory().get('machine_id_state'), 'absent')
+            machine_id.symlink_to(elsewhere)
+            self.assertEqual(inventory().get('machine_id_state'), 'symlink')
+            dbus.unlink()
+            self.assertEqual(inventory().get('dbus_machine_id'), 'absent')
+            dbus.write_text('c' * 32)  # a real D-Bus ID every clone would inherit
+            self.assertEqual(inventory().get('dbus_machine_id'), 'other')
+            dbus.unlink()
+            dbus.symlink_to(elsewhere)
+            self.assertEqual(inventory().get('dbus_machine_id'), 'other')
+            lxd.unlink()
+            self.assertIs(inventory().get('lxd_agent_masked'), False)
+            lxd.symlink_to(elsewhere)
+            self.assertIs(inventory().get('lxd_agent_masked'), False)
         finally:
             os.chdir(old)
 
@@ -1048,7 +1122,10 @@ def mutations():
         ("work directory world accessible", 'self.root.mkdir(mode=0o700)', 'self.root.mkdir(mode=0o777); os.chmod(self.root, 0o777)', "test_work_and_files_private_modes"),
         ("written file world readable", '        path.chmod(0o600)\n        return path\n\n    def copy', '        path.chmod(0o644)\n        return path\n\n    def copy', "test_work_and_files_private_modes"),
         ("staged file world readable", '        path.chmod(0o600)\n        require(digest(path)', '        path.chmod(0o644)\n        require(digest(path)', "test_work_and_files_private_modes"),
-        ("machine identity inventory ignored", 'inventory["machine_id_state"] in ("", "uninitialized")', 'True', "test_build_unclean_machine_id_refused"),
+        ("machine identity inventory ignored", 'inventory["machine_id_state"] == "empty"', 'True', "test_build_unclean_machine_id_refused"),
+        ("absent machine-id admitted again", 'inventory["machine_id_state"] == "empty"', 'inventory["machine_id_state"] in ("empty", "absent")', "test_build_unclean_machine_id_refused"),
+        ("D-Bus machine identity inventory ignored", 'inventory.get("dbus_machine_id") in ("absent", "link")', 'True', "test_build_dbus_machine_id_refused"),
+        ("duplicate LXD agent mask unchecked", 'inventory.get("lxd_agent_masked") is True', 'True', "test_build_lxd_agent_unmasked_refused"),
         ("SSH identity inventory ignored", 'inventory["ssh_host_keys"] == []', 'True', "test_build_ssh_host_keys_refused"),
         ("save containerd uses manifest as config", '"image_id": config}', '"image_id": actual}', "test_save_containerd_uses_archive_config"),
         ("save containerd bare manifest accepted as config", 'None if manifest_pin else pin', 'None', "test_save_containerd_manifest_not_accepted_as_config"),
@@ -1120,8 +1197,20 @@ def mutations():
         ('guest unit enable failure ignored', 'systemctl enable "$@"', 'systemctl enable "$@" || true', 'test_guest_unit_enable_failure_refused'),
         ('guest selected unit list omitted', 'printf \'%s\\n\' "$@" > enabled-units.txt', ':', 'test_guest_new_cloud_init_units'),
         ('guest enabled unit inventory omitted', "'enabled_units': units.read().splitlines()", "'enabled_units': []", 'test_all_images_loaded_from_archives_without_pull'),
-        ("guest machine state inventory omitted", "inventory['machine_id_state'] = machine_id.read_text().strip() if machine_id.exists() else ''", "pass", "test_guest_cleanup_and_clone_inventory"),
-        ("guest uncleaned machine-id read as absent", "machine_id.read_text().strip() if machine_id.exists() else ''", "''", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine state inventory omitted", "if machine_id.is_symlink():\n    inventory['machine_id_state'] = 'symlink'", "if True:\n    pass", "test_guest_cleanup_and_clone_inventory"),
+        ("guest absent machine-id recorded as empty", "elif not machine_id.exists():\n    inventory['machine_id_state'] = 'absent'", "elif not machine_id.exists():\n    inventory['machine_id_state'] = 'empty'", "test_guest_cleanup_and_clone_inventory"),
+        ("guest populated machine-id recorded as empty", "elif machine_id.stat().st_size == 0:", "elif True:", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine-id symlink recorded as its target", "if machine_id.is_symlink():", "if False:", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine-id left absent", ": > /etc/machine-id\nchmod 444 /etc/machine-id\n", "", "test_guest_cleanup_and_clone_inventory"),
+        ("guest old machine-id kept", "rm -f /etc/machine-id\n: > /etc/machine-id\n", "", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine-id written through a symlink", "rm -f /etc/machine-id\n", "", "test_guest_cleanup_and_clone_inventory"),
+        ("guest machine-id left writable", "chmod 444 /etc/machine-id\n", "", "test_guest_cleanup_and_clone_inventory"),
+        ("guest D-Bus identity inventory omitted", "inventory['dbus_machine_id'] = (", "inventory['dbus_ignored'] = (", "test_guest_cleanup_and_clone_inventory"),
+        ("guest real D-Bus machine-id admitted", "else 'absent' if not os.path.lexists(dbus) else 'other')", "else 'absent')", "test_guest_cleanup_and_clone_inventory"),
+        ("guest foreign D-Bus link admitted", "os.path.islink(dbus) and os.readlink(dbus) == '/etc/machine-id'", "os.path.islink(dbus)", "test_guest_cleanup_and_clone_inventory"),
+        ("guest duplicate LXD agent not masked", "systemctl mask lxd-agent.service", ":", "test_guest_masks_the_duplicate_lxd_agent"),
+        ("guest LXD agent mask failure ignored", "systemctl mask lxd-agent.service", "systemctl mask lxd-agent.service || true", "test_guest_masks_the_duplicate_lxd_agent"),
+        ("guest LXD agent mask inventory forged", "inventory['lxd_agent_masked'] = os.path.islink(lxd_agent) and os.readlink(lxd_agent) == '/dev/null'", "inventory['lxd_agent_masked'] = True", "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH key inventory omitted", "inventory['ssh_host_keys'] = sorted(glob.glob('/etc/ssh/ssh_host_*'))", "pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker data root changed", '--data-root /var/lib/docker', '--data-root /tmp/wrong-store', "test_guest_dockerd_uses_runtime_store"),
         ("guest archive load changed to pull", "'load', '--input', path", "'pull', path", "test_all_images_loaded_from_archives_without_pull"),
@@ -1149,7 +1238,7 @@ def mutations():
         ("guest package services not suppressed", "printf '#!/bin/sh\\nexit 101\\n' > /usr/sbin/policy-rc.d", ':', "test_guest_policy_rc_blocks_package_services"),
         ("guest daemon config adopted", 'test ! -e /etc/docker/daemon.json', ':', "test_guest_daemon_config_adoption_refused"),
         ("guest input cleanup omitted", 'rm -f ./*.deb ./*.tar ./dockerd.log ./assembly-daemon.json', ':', "test_guest_cleanup_and_clone_inventory"),
-        ("guest clone cleanup omitted", 'cloud-init clean --logs --machine-id', ':', "test_guest_cleanup_and_clone_inventory"),
+        ("guest clone cleanup omitted", 'cloud-init clean --logs', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest SSH host keys retained", 'rm -f /etc/ssh/ssh_host_*', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest Docker identity retained", 'rm -f /var/lib/docker/engine-id /var/lib/docker/key.json', ':', "test_guest_cleanup_and_clone_inventory"),
         ("guest iptables enabled", '--iptables=false', '--iptables=true', "test_guest_dockerd_uses_runtime_store"),

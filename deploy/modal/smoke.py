@@ -96,7 +96,7 @@ def main() -> int:
     check(
         "box ready, adapter check passed after boot",
         box.get("adapter_check") == "ok",
-        f"ready after {boot['cold_start_s']}s, restored from snapshot: {box.get('restored')},"
+        f"ready after {boot['cold_start_s']}s on {box.get('gpu')}, restored from snapshot: {box.get('restored')},"
         f" reference drift {box.get('reference_drift')}",
     )
 

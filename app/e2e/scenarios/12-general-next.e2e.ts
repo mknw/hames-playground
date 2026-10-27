@@ -80,6 +80,30 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
     expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(true)
   })
 
+  // FIX08 (#606 run 6, scenario 08): the decisions model read the earlier turn
+  // and the route it chose did not, so "the same count" was a guess. Layer 2's
+  // own claim, "the second turn saw the first", on the request the route's
+  // controller actually sent. MUTATION: drop `conversation` from decisionLoop's
+  // child data — turn 2's controller request no longer carries turn 1.
+  it("a follow-up's controller request carries the previous turn", async () => {
+    await app.setTier('anthropic')
+    const sessionId = newSessionId('general-next-follow-up')
+    const turn = (message: string) =>
+      app.runTurnOverSse({ sessionId, agentId: 'general-next', message })
+    expect((await turn('How many Project nodes are in the knowledge graph?')).status).toBe(200)
+    const afterFirst = app.fakeLlm.calls.length
+    const second = await turn('That failed earlier. Please try the same count again now.')
+    expect(second.status).toBe(200)
+    const controller = app.fakeLlm.calls
+      .slice(afterFirst)
+      .find((c) => c.fn === 'LoopController')?.prompt
+    expect(controller, 'turn 2 sent no LoopController request').toBeDefined()
+    expect(controller).toContain('Earlier conversation')
+    expect(controller).toContain('User: "How many Project nodes are in the knowledge graph?"')
+    expect(controller).toContain(`Assistant: "${FAKE_ANSWER_MARK}: the graph reports 42 nodes."`)
+    expect(controller).toContain('INSTRUCTIONS: That failed earlier. Please try the same count')
+  })
+
   it('P5: shows a visible error when the private decisions shim is absent', async () => {
     await app.setTier('self_deployed')
     const previous = process.env.SMALL_LLM_DECISIONS_URL

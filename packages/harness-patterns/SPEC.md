@@ -911,6 +911,21 @@ critic _trigger_ here, never an exit. With `N > 1`, `maxRetries` bounds actor
 turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
 critic can never be disabled.
 
+**The intent, and a route's scope (#606 run 7).** The actor and the critic read
+ONE `intent`: `data.intent`, else the user's latest message, followed (when
+`data.routeScope` is set) by a blank line and that scope. `decisionLoop` sets
+`routeScope` for an `actorCritic` route (see _A child_ under `decisionLoop`): the
+route's own agent-map entry under `ROUTE_SCOPE_HEADING`, then the rule that the
+rest of the request is other steps' work and the reply is written after the last
+step. Without it the critic, the loop's sole exit authority, judged an office
+route against the user's whole message and rejected every complete attempt for
+"index it for this chat", which no office tool performs, until the route's bound
+ran out. The scope follows the task and never replaces it, so the critic still
+judges the user's own request. Outside a `decisionLoop` nothing is appended and
+the intent is byte-identical to before. The scope is host-written text (the route
+key, its description, `capability` and tool names); no tool result reaches the
+actor or the critic through it.
+
 ### `parallel(...patterns)`
 
 Execute multiple patterns concurrently via `Promise.allSettled`, then merge results.
@@ -1374,10 +1389,17 @@ conversation while that result stays in context, and a sender can trigger it on
 purpose through the display name. No references attach, the plan, the earlier conversation and all result bodies disappear, and
 only an allowlisted handoff containing route/status/stats lines remains in child
 data. A `warning` with task
-`web_privacy` records "earlier results withheld: privacy filter unavailable".
+`web_privacy` records "earlier results withheld: privacy filter unavailable",
+and its `detail` says why and how much, every value code-built: `reason` is
+`not-configured` (no `pseudonymise`), the `reason` of a host-thrown
+`RosterUnavailable` when it is `directory-empty`, `directory-unreadable` or
+`roster-damaged`, and `filter-failed` for any other failure; `events` counts the
+earlier events of the child's view it did not get, and `fields` its inherited
+data fields. No error's message or name is read.
 The child still runs on the user's message; it refuses no call itself (the
 egress gate judges every outgoing one). The app's `createWebPseudonymiser`
-requires a readable, non-empty directory by default; `{ directory: 'none' }` is
+requires a readable, non-empty directory by default, and throws
+`RosterUnavailable` naming which it lacked; `{ directory: 'none' }` is
 an explicit code-only choice for deployments without an org graph.
 
 The app merges the fixed-order directory first with identities from the view
@@ -1473,9 +1495,13 @@ every one; `empty` and `none` veto on a match and refuse the rest; `unreadable`
 refuses. Every refusal on Decide's answer, and the `empty`, `none` and asked
 `loaded` cells with Decide down, is where the design asks the person: with
 `askPerson`, see [Asking the person](#asking-the-person-at-the-boundaries-boundary-guards-slice-10);
-without it, or with nobody to ask, they refuse. An `empty` or `unreadable` directory, a
-damaged roster and a degraded turn (with its counts in `detail`) each record a
-`warning` with task `egress_check` and a fixed message.
+without it, or with nobody to ask, they refuse. A damaged roster and a degraded
+turn (with its counts in `detail`) each record a `warning` with task
+`egress_check` and a fixed message. So does an `empty` or `unreadable`
+directory, once per turn and at the turn's first outgoing check, never before
+it: its fallback says outside requests were still checked, which a turn that
+makes none would contradict. A resumed invocation reads the turn's events and
+does not warn again.
 
 **The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default 0). A refusal on
 Decide's answer or for want of one is a tripwire and an `egress_refused` event:
@@ -2037,8 +2063,16 @@ results. `siblingResults` names the patternIds it may see; **the default is none
 an id no route's pattern emits under is refused at construction. Visibility is per patternId, so two routes that emit under one id (or a route under the loop's own id) are refused at construction too: they would read each other's events. Events are also hidden by the ROUTE they were emitted inside (every child is bracketed by an enter/exit carrying the route name), so a pattern rebuilt each turn with a generated `patternId` cannot leak an earlier turn's work; for the same reason `patternId` is REQUIRED on the loop itself (its records, and the withheld ids an older version persisted on them, are matched by it across turns). The user's
 message is not a route event and always stays. Child `data` is built fresh:
 the latest plan (`data.plan`), the separately headed handoff
-(`data.handoff`), the earlier conversation (`data.conversation`, below) and,
-for a planner route only, the agent map (`data.agentMap`).
+(`data.handoff`), the earlier conversation (`data.conversation`, below),
+for a planner route only the agent map (`data.agentMap`) and, for an
+`actorCritic` route only, its route scope (`data.routeScope`): that route's own
+agent-map entry under `ROUTE_SCOPE_HEADING` (exported), then the line "Do and
+judge only the part of the request above that this step can do. Other steps do
+the rest, and the reply to the user is written after the last step: a part this
+step cannot do is not missing from its results." The pattern appends it to the
+intent its actor and its critic both read (see `actorCritic`), so the route's
+exit authority judges the route's share of the request rather than the whole of
+it (#606 run 7, scenario 14). No other kind reads it, and no other kind is handed it.
 Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
 flows back; only the route output does. `hitl_*` events a child pushes are dropped
 (`dropHitl`) before the next child's view is built.
@@ -2051,6 +2085,10 @@ also holds every earlier turn's `tool_result` payloads, every route's (the
 loop's own records aside): an earlier final answer in the conversation block
 can name a person only a route this child may not see read, such as a mail
 sender, and the roster must hold that person for the block to be rewritten.
+Under such a route a `routeScope` is child data like the rest: the wrapper
+rewrites it, and its fail-closed path drops it (the critic then reads the
+message alone, as before the scope existed). `general-next` wraps only its
+`simpleLoop` web route, so no scope passes through the wrapper there.
 
 **The handoff reaches a child through `plan_context`** — the existing string
 channel, so no BAML signature changes. `formatPlanContext(plan, handoff?, conversation?)` puts
@@ -3758,7 +3796,7 @@ Events read (ViewConfig default: fromLast, trackHistory: 'tool_result')
 
 BAML Inputs (ActorController):
   user_message    : string           ← ctx.input
-  intent          : string           ← extracted from routing or ctx.input
+  intent          : string           ← data.intent or the user message, + data.routeScope in a decisionLoop route
   tools           : ToolDescription[]← MCP listTools()
   attempts        : Attempt[]        ← assembled from scope events per attempt
   multi_call_mode : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls

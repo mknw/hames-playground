@@ -3,12 +3,20 @@
  *
  * These were only reachable through a mounted `ObservabilityPanel` before the
  * split (#226 B5). Tested directly here: the row preview per event type, the
- * Interface/Tools lane assignment, and the tool_call → tool_result merge,
- * including the cases the panel's DOM tests can only reach indirectly.
+ * Interface/Tools lane assignment, which events are a guard's, and the
+ * tool_call → tool_result merge, including the cases the panel's DOM tests can
+ * only reach indirectly.
  */
 import { describe, it, expect } from 'vitest'
 import type { ContextEvent, EventType } from '../../types'
-import { buildTimelineItems, getEventLane, getEventPreview } from '../../observability/projection'
+import {
+  buildTimelineItems,
+  getEventLane,
+  getEventPreview,
+  isGuardEvent,
+} from '../../observability/projection'
+import { GUARD_EGRESS } from '../../egress-gate.server'
+import { GUARD_SCREEN } from '../../guard-gate.server'
 
 let seq = 0
 const ev = (type: EventType, data: unknown, extra: Partial<ContextEvent> = {}): ContextEvent => ({
@@ -120,17 +128,17 @@ describe('getEventPreview', () => {
 
   it('keys a sanitized preview on findings, so an empty screen reads as an outage', () => {
     expect(getEventPreview('content_sanitized', { tool: 'fetch', findings: [] })).toBe(
-      'fetch: screen unavailable',
+      'injection · fetch: screen unavailable',
     )
   })
 
   it('lists the distinct rules that fired, de-duplicated', () => {
     expect(
       getEventPreview('content_sanitized', {
-        tool: 'fetch',
+        tool: 'get',
         findings: [{ rule: 'imperative' }, { rule: 'imperative' }, { rule: 'exfil' }],
       }),
-    ).toBe('fetch: 3 neutralized (imperative, exfil)')
+    ).toBe('injection · get: 3 neutralized (imperative, exfil)')
   })
 
   it('truncates an oversized rule list', () => {
@@ -173,6 +181,112 @@ describe('getEventPreview', () => {
     ).toBe('unparseable_output · 1/6')
   })
 
+  // Boundary guards: a guard's row names the guard, then what it did.
+  // Mutation: return the action alone (drop the guard prefix) → every row below
+  // reads like the Tools lane's, which is the complaint this fixes.
+  it("leads a guard's preview with the guard's name", () => {
+    const decision = { question: 'Q', abstained: false, stateChars: 9 }
+    expect(
+      getEventPreview('decision_made', {
+        ...decision,
+        key: GUARD_SCREEN.key,
+        type: 'noul',
+        label: 'false',
+        pTrue: 0.12,
+      }),
+    ).toBe('injection · guard.screen: false (p=0.12)')
+    expect(
+      getEventPreview('decision_made', { ...decision, key: GUARD_EGRESS.key, label: 'personal' }),
+    ).toBe('egress · guard.egress: personal')
+    expect(getEventPreview('model_call', { role: 'screen', source: 'web/fetch' })).toBe(
+      'injection · screen web/fetch',
+    )
+    expect(
+      getEventPreview('warning', {
+        task: 'egress_check',
+        message: 'the company directory could not be read',
+        fallback: 'x',
+      }),
+    ).toBe('egress · the company directory could not be read')
+    // Not a guard's: unchanged.
+    expect(getEventPreview('decision_made', { ...decision, key: 'route', label: 'web' })).toBe(
+      'route: web',
+    )
+    expect(getEventPreview('model_call', { role: 'describe', items: 3 })).toBe('describe ×3')
+  })
+
+  // Mutation: quote `spans` in the audit preview → a person's name on the row.
+  it('previews an egress audit by counting the matched names, never quoting them', () => {
+    const audit = {
+      tool: 'web_search',
+      hosts: ['news.example'],
+      spans: ['Ravi Example', 'Mira Cedar'],
+      probs: { personal: 0.1, company: 0.1, nothing_private: 0.8 },
+      allowedBy: 'decide',
+    }
+    expect(getEventPreview('egress_audit', audit)).toBe(
+      'egress · web_search: let out by decide, 2 names',
+    )
+    expect(getEventPreview('egress_audit', { ...audit, spans: ['Ravi Example'] })).toBe(
+      'egress · web_search: let out by decide, 1 name',
+    )
+  })
+
+  // Mutation: drop `category` or `closes` → a refusal that closed the route
+  // reads the same as one that did not; drop the `cause` fallback → an
+  // unchecked refusal reads `refused ()`.
+  it('previews an egress refusal by its cause, category and what it closed', () => {
+    const refused = { tool: 'fetch', route: 'info' }
+    expect(
+      getEventPreview('egress_refused', {
+        ...refused,
+        cause: 'decide',
+        category: 'company',
+        closes: 'route',
+      }),
+    ).toBe('egress · fetch: refused (company, closes route)')
+    expect(
+      getEventPreview('egress_refused', {
+        ...refused,
+        cause: 'decide',
+        category: 'personal',
+        closes: 'none',
+      }),
+    ).toBe('egress · fetch: refused (personal)')
+    expect(
+      getEventPreview('egress_refused', { ...refused, cause: 'unchecked', closes: 'none' }),
+    ).toBe('egress · fetch: refused (unchecked)')
+  })
+
+  // Mutation: preview the K5 warning by its sentence alone → the row never says
+  // why the privacy filter was unavailable.
+  it("previews the privacy filter's warning by what it withheld and why", () => {
+    const warning = {
+      task: 'web_privacy',
+      message: 'earlier results withheld: privacy filter unavailable',
+      fallback: 'This step ran without earlier results.',
+    }
+    expect(
+      getEventPreview('warning', {
+        ...warning,
+        detail: { reason: 'directory-empty', events: 12, fields: 3 },
+      }),
+    ).toBe('privacy · withheld 12 events (directory-empty)')
+    // Recorded before the warning carried a reason: its sentence.
+    expect(getEventPreview('warning', warning)).toBe(
+      'privacy · earlier results withheld: privacy filter...',
+    )
+  })
+
+  it('caps a guard preview at the same 50 characters', () => {
+    const preview = getEventPreview('egress_refused', {
+      tool: 't'.repeat(60),
+      cause: 'unchecked',
+      closes: 'none',
+    })
+    expect(preview).toBe(`egress · ${'t'.repeat(41)}...`)
+  })
+
   it('gives pattern boundaries and unknown types no preview', () => {
     expect(getEventPreview('pattern_enter', {})).toBe('')
     expect(getEventPreview('pattern_exit', {})).toBe('')
@@ -208,6 +322,39 @@ describe('getEventLane', () => {
     ] as EventType[]) {
       expect(getEventLane(type)).toBe('tools')
     }
+  })
+})
+
+describe('isGuardEvent', () => {
+  // Mutation: drop any one arm of `guardOf` → that guard's row falls back to the
+  // Tools lane; key the decision on anything but the declared key → a rename of
+  // GUARD_SCREEN or GUARD_EGRESS reddens this test instead of emptying the lane.
+  it("claims every guard's record by its declared marker", () => {
+    const guards: Array<[EventType, unknown]> = [
+      ['content_sanitized', { tool: 'fetch', findings: [] }],
+      ['egress_audit', { tool: 'fetch', spans: [] }],
+      ['egress_refused', { tool: 'fetch', cause: 'decide', closes: 'none' }],
+      ['decision_made', { key: GUARD_SCREEN.key, label: 'true' }],
+      ['decision_made', { key: GUARD_EGRESS.key, label: 'personal' }],
+      ['model_call', { role: 'screen', source: 'web/fetch' }],
+      ['warning', { task: 'egress_check', message: 'm', fallback: 'f' }],
+      ['warning', { task: 'web_privacy', message: 'm', fallback: 'f' }],
+    ]
+    for (const [type, data] of guards) expect(isGuardEvent(type, data), type).toBe(true)
+  })
+
+  it('leaves every other event, including the same types without a guard marker', () => {
+    const others: Array<[EventType, unknown]> = [
+      ['decision_made', { key: 'next_step', label: 'answer' }],
+      ['model_call', { role: 'describe', items: 2 }],
+      ['warning', { task: 'title', message: 'm', fallback: 'f' }],
+      ['warning', undefined],
+      ['tool_call', { tool: 'fetch' }],
+      ['tool_result', { tool: 'fetch', success: true }],
+      ['error', { error: 'x' }],
+      ['user_message', { content: 'hi' }],
+    ]
+    for (const [type, data] of others) expect(isGuardEvent(type, data), type).toBe(false)
   })
 })
 

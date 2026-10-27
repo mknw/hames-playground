@@ -5,10 +5,11 @@
  *  directory status, the spans an outgoing request names, and its extension
  *  from local results). */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import type {
-  EgressDirectoryStatus,
-  EgressRosterSource,
-  PseudonymiseForWeb,
+import {
+  RosterUnavailable,
+  type EgressDirectoryStatus,
+  type EgressRosterSource,
+  type PseudonymiseForWeb,
 } from '@hames-ai/harness-patterns'
 import { splitAtFenceLines, unspotlight } from '@hames-ai/harness-patterns/guard'
 import { extractRoster } from '../privacy/graph-roster'
@@ -322,7 +323,7 @@ const harvest = (payloads: unknown) => {
     ),
   )
   // Fail closed: K5 withholds earlier content; the egress gate refuses egress.
-  if (damaged) throw new Error('An identity field was neutralized: the roster is incomplete')
+  if (damaged) throw new RosterUnavailable('roster-damaged')
   return found
     .map((entry) => ({
       ...entry,
@@ -352,10 +353,18 @@ export function createWebPseudonymiser({
   directory = 'required',
 }: { directory?: 'required' | 'none' } = {}): PseudonymiseForWeb {
   return async (payloads, latestUserMessage) => {
-    const members = directory === 'none' ? [] : await loadDirectoryRoster()
+    let members: Awaited<ReturnType<typeof loadDirectoryRoster>> = []
+    if (directory !== 'none') {
+      try {
+        members = await loadDirectoryRoster()
+      } catch {
+        // The error can name a person: only the reason leaves.
+        throw new RosterUnavailable('directory-unreadable')
+      }
+    }
     const { directoryRoster, table } = buildRoster(payloads, members)
     if (directory !== 'none' && directoryRoster.length === 0) {
-      throw new Error('Web privacy requires a non-empty directory')
+      throw new RosterUnavailable('directory-empty')
     }
     // Match literals even inside markup: apply intentionally preserves tag
     // names/unquoted attributes and is therefore not an outgoing predicate.

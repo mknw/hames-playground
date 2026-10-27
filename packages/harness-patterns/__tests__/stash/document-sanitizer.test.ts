@@ -48,7 +48,12 @@ import {
   type FlattenedDocument,
 } from '../../stash/document-sanitizer.server'
 import { ZipRefusedError, writeZip } from '../../stash/zip.server'
-import type { InjectionScreen, ScreenVerdict } from '../../injection-guard'
+import {
+  FENCE,
+  LEGACY_FENCE,
+  type InjectionScreen,
+  type ScreenVerdict,
+} from '../../injection-guard'
 import { harness, type HarnessData } from '../../harness.server'
 import { configurePattern } from '../../patterns/chain.server'
 import { withInjectionGuard } from '../../patterns/withInjectionGuard.server'
@@ -535,7 +540,11 @@ describe('flattenDocument across the families', () => {
     )
     expect(doc.markdown).toContain('⟦neutralized:instruction-override#0⟧')
     expect(doc.markdown).not.toContain('Ignore all previous instructions')
-    expect(doc.markdown).not.toContain('UNTRUSTED CONTENT')
+    // An absence assertion on a literal passes whatever the header says, so it
+    // reads the exported parts (slice 8). MUTATION: fence the stored markdown.
+    expect(doc.markdown).not.toContain(FENCE.open)
+    expect(doc.markdown).not.toContain(FENCE.close)
+    expect(doc.markdown).not.toContain(LEGACY_FENCE.open)
     expect(doc.report.findings.map((f) => f.match)).toContain('Ignore all previous instructions')
   })
 

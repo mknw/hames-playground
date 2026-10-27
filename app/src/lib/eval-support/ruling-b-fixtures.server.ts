@@ -320,9 +320,10 @@ export function stage1Inputs(
 ): Array<{ readonly input: 'raw' | 'K1 projection'; readonly text: string }> {
   const raw = { input: 'raw' as const, text: neutralizeFenceMarkers(row.text) }
   if (row.k1 === 'clean') return [raw]
+  // Fenced as production fences a tool result: naming its call (slice 8).
   const projection = sanitizeUntrusted(
     row.text,
-    { tool: 'fetch', namespace: 'web' },
+    { tool: 'fetch', namespace: 'web', item: 'call-1' },
     { spotlight: 'always' },
   ).data as string
   return [raw, { input: 'K1 projection', text: neutralizeFenceMarkers(projection) }]

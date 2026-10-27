@@ -994,7 +994,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async ScreenUntrustedContent(
-        source: string,content: string,
+        source: string,content: string,boundary: string,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.ScreenVerdict> {
           try {
@@ -1008,7 +1008,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.ScreenUntrustedContent(
-          source,content,
+          source,content,boundary,
           __baml_options__
           );
 
@@ -1032,7 +1032,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "ScreenUntrustedContent",
             {
-            "source": source,"content": content
+            "source": source,"content": content,"boundary": boundary
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -2304,7 +2304,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             ScreenUntrustedContent(
-            source: string,content: string,
+            source: string,content: string,boundary: string,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.ScreenVerdict, types.ScreenVerdict>
               {
@@ -2353,7 +2353,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "ScreenUntrustedContent",
                 {
-                "source": source,"content": content
+                "source": source,"content": content,"boundary": boundary
                 },
                 undefined,
                 this.ctxManager.cloneContext(),

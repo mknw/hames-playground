@@ -54,6 +54,7 @@ export const AgentSelector = (props: AgentSelectorProps) => {
       {/* Trigger Button */}
       <button
         type="button"
+        data-testid="agent-selector-trigger"
         onClick={() => !props.disabled && setIsOpen(!isOpen())}
         disabled={props.disabled}
         flex="~ items-center gap-2"

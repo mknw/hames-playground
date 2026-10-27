@@ -10,6 +10,7 @@
  *   - the sidebar surface: listing, bulk delete, load, title regeneration.
  */
 
+import { DEFAULT_AGENT_ID } from '../../../lib/harness-client/agent-ids'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -155,7 +156,7 @@ describe('processMessage / processMessageWithAgent', () => {
       mode: 'interactive',
       sessionId: 'sess-1',
       userId: 'bypass-user',
-      agentId: 'search',
+      agentId: DEFAULT_AGENT_ID,
       message: 'hello world, this is long',
     })
     expect(result.response).toBe('ran:interactive')

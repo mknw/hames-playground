@@ -15,6 +15,7 @@
 import { test, expect } from '../lib/fixtures'
 import { FAKE_TITLE } from '../lib/env'
 import {
+  chooseAgent,
   expectFakeAnswer,
   open,
   replies,
@@ -39,6 +40,10 @@ test('a sent message gets an assistant reply on screen, and the sidebar picks th
   // would pass on a sidebar that renders nothing at all.
   await expect(page.getByText('No conversations yet. Send a message to start.')).toBeVisible()
 
+  // The flip made `general-next` the default; this scenario asserts `search`'s Router chain
+  // below, so it says so. Picked AFTER the empty-state check: choosing an agent adds a
+  // placeholder row to the sidebar.
+  await chooseAgent(page, 'Search Agent')
   await send(page, QUESTION)
 
   // What the user typed is echoed as their own turn.

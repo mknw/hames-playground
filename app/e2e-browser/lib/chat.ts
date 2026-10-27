@@ -253,6 +253,20 @@ export async function letTheBoxGoCold(page: Page): Promise<void> {
 }
 
 /**
+ * Pick an agent through the picker, as a user does, and wait until the trigger names it.
+ *
+ * Needed since the #507 flip made `general-next` the default: scenarios written against the
+ * Router → Synthesize chain of the `search` agent say so explicitly instead of inheriting
+ * whichever agent a new chat opens with.
+ */
+export async function chooseAgent(page: Page, name: string): Promise<void> {
+  const trigger = page.getByTestId('agent-selector-trigger')
+  await trigger.click()
+  await page.getByRole('button', { name: new RegExp(`^${name}`) }).click()
+  await expect(trigger).toContainText(name)
+}
+
+/**
  * Open the app on a clean slate.
  *
  * `localStorage` is seeded BEFORE the first script runs (`addInitScript`), not
@@ -263,7 +277,7 @@ export async function letTheBoxGoCold(page: Page): Promise<void> {
 export async function open(
   page: Page,
   appUrl: string,
-  options: { theme?: 'light' | 'dark' } = {},
+  options: { theme?: 'light' | 'dark'; agent?: string } = {},
 ): Promise<void> {
   if (options.theme) {
     await page.addInitScript((theme) => {
@@ -272,4 +286,5 @@ export async function open(
   }
   await page.goto(appUrl)
   await expect(composer(page)).toBeVisible()
+  if (options.agent) await chooseAgent(page, options.agent)
 }

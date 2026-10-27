@@ -98,7 +98,7 @@ A live pass proves: the model refuses the requested graph write without attempti
 
 ### 07-follow-up-success — Refer back to a successful turn
 
-**RUNNABLE NOW · must** · recorded `general` baseline
+**RUNNABLE NOW · should** · pending must (owner 2026-10-27) · recorded `general` baseline
 
 User: “How many Project nodes are in the knowledge graph?”
 
@@ -116,7 +116,7 @@ A live pass proves: the model answers the follow-up from the canned graph fixtur
 
 ### 08-follow-up-failure — Retry after an explicitly failed turn
 
-**RUNNABLE NOW · must**
+**RUNNABLE NOW · should** · pending must (owner 2026-10-27)
 
 User: “Count the Project nodes in the knowledge graph.”
 
@@ -204,7 +204,7 @@ A live pass proves: the model combines Project count 42 with target 50 and repor
 
 ### 14-analysis-index-follow-up — Compute, convert to markdown, then retrieve in a later turn
 
-**RUNNABLE NOW · must**
+**RUNNABLE NOW · should** · pending must (owner 2026-10-27)
 
 User: “I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.”
 
@@ -507,14 +507,14 @@ Positive and negative cases per tool, derived the way the validator derives them
 | `04-library-docs`                       | +    | should   | existing | info         | library-docs                                | explain, research-public                         | single           | several        | answer                         | none                                   | en                     | none                    | small         |
 | `05-memory-lookup`                      | +    | should   | existing | answer       | user-memory                                 | lookup-fact                                      | follow-up        | none           | answer                         | none                                   | en                     | none                    | small         |
 | `06-read-only`                          | −    | must     | existing | answer       | knowledge-graph                             | act-on-system                                    | single           | none           | refusal                        | structural-absence                     | en                     | none                    | small         |
-| `07-follow-up-success`                  | +    | must     | existing | info         | knowledge-graph, conversation               | lookup-fact, analyse                             | follow-up        | one            | answer                         | none                                   | en                     | none                    | small         |
-| `08-follow-up-failure`                  | +    | must     | existing | info         | knowledge-graph                             | lookup-fact, repair                              | failure-recovery | one            | answer                         | none                                   | en                     | none                    | small         |
+| `07-follow-up-success`                  | +    | should   | existing | info         | knowledge-graph, conversation               | lookup-fact, analyse                             | follow-up        | one            | answer                         | none                                   | en                     | none                    | small         |
+| `08-follow-up-failure`                  | +    | should   | existing | info         | knowledge-graph                             | lookup-fact, repair                              | failure-recovery | one            | answer                         | none                                   | en                     | none                    | small         |
 | `09-upload-summary`                     | +    | must     | existing | office       | uploads                                     | summarise, create-deliverable                    | single           | one            | created-file                   | none                                   | en                     | none                    | small         |
 | `10-csv-analysis`                       | +    | must     | existing | office       | uploads                                     | analyse, create-deliverable                      | single           | one            | answer, created-file           | none                                   | en                     | none                    | small         |
 | `11-mail-to-file`                       | +    | must     | existing | office       | mail                                        | create-deliverable                               | single           | several        | created-file                   | none                                   | en                     | none                    | small         |
 | `12-retrieve-citation`                  | +    | must     | existing | docs         | uploads                                     | lookup-fact                                      | single           | one            | answer, citation               | none                                   | en                     | none                    | small         |
 | `13-two-sources`                        | +    | must     | existing | info, docs   | knowledge-graph, uploads                    | analyse                                          | single           | several-routes | answer, citation               | none                                   | en                     | none                    | small         |
-| `14-analysis-index-follow-up`           | +    | must     | existing | office, docs | uploads                                     | analyse, create-deliverable                      | follow-up        | several-routes | created-file, citation         | none                                   | en                     | none                    | small         |
+| `14-analysis-index-follow-up`           | +    | should   | existing | office, docs | uploads                                     | analyse, create-deliverable                      | follow-up        | several-routes | created-file, citation         | none                                   | en                     | none                    | small         |
 | `15-graph-file-summary`                 | +    | should   | existing | office       | m365-files                                  | summarise, create-deliverable                    | single           | several        | created-file                   | none                                   | en                     | none                    | small         |
 | `16-graph-files-analysis`               | +    | nice     | existing | office, docs | m365-files                                  | analyse, create-deliverable                      | follow-up        | several-routes | created-file, citation         | none                                   | en                     | none                    | small         |
 | `17-mail-analysis-follow-up`            | +    | must     | existing | office, docs | mail, uploads                               | analyse, create-deliverable                      | follow-up        | several-routes | created-file, citation         | none                                   | en                     | none                    | small         |

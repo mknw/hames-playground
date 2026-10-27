@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { it, expect } from 'vitest'
-import { flipGate } from '../../../lib/eval-support/flip-gate'
+import { flipGate, PENDING_MUSTS } from '../../../lib/eval-support/flip-gate'
 import { GENERAL_BASELINE } from '../../../lib/eval-support/general-baseline'
 import type {
   ConversationScenario,
@@ -25,6 +25,7 @@ it('requires live, complete evidence, all candidate musts and no regression on t
   expect(flipGate(true, true, 'general-next', scenarios, rows, recorded)).toEqual({
     eligible: true,
     reasons: [],
+    pendingMusts: [],
   })
   expect(flipGate(false, true, 'general-next', scenarios, rows, recorded).eligible).toBe(false)
   expect(flipGate(true, false, 'general-next', scenarios, rows, recorded).eligible).toBe(false)
@@ -107,6 +108,84 @@ it('the shipped record covers exactly the baseline-flagged scenarios', () => {
 
 // The shipped record end to end: a candidate that fails a recorded-pass baseline
 // scenario is refused, one that fails the recorded-fail scenario is not.
+// A pending must (#808–#810, owner ruling 2026-10-27) does not block the flip: a
+// failing run leaves it eligible, but the report must still carry the pending list.
+it('lists a pending must that failed instead of blocking, and a passing one is not listed', () => {
+  const pending = (id: string) =>
+    [{ id, priority: 'must', baseline: false }] as ConversationScenario[]
+  const result = flipGate(true, true, 'general-next', pending('07-follow-up-success'), [], {})
+  expect(result.eligible).toBe(true)
+  expect(result.reasons).toEqual([])
+  expect(result.pendingMusts).toEqual(['07-follow-up-success (#808)'])
+  expect(
+    flipGate(true, true, 'general-next', pending('08-follow-up-failure'), [], {}).pendingMusts,
+  ).toEqual(['08-follow-up-failure (#809)'])
+  const passing = [
+    {
+      agent: 'general-next',
+      scenario: '07-follow-up-success',
+      status: 'pass',
+      tier: 'self_deployed',
+      checks: [],
+    },
+  ] as ConversationResult[]
+  expect(
+    flipGate(true, true, 'general-next', pending('07-follow-up-success'), passing, {}).pendingMusts,
+  ).toEqual([])
+})
+
+// A must that is NOT pending still blocks: only the record's entries are relieved.
+it('a must that is not pending still blocks; a pending one is listed', () => {
+  expect(
+    flipGate(
+      true,
+      true,
+      'general-next',
+      [
+        { id: '17-mail-analysis-follow-up', priority: 'must', baseline: false },
+      ] as ConversationScenario[],
+      [],
+      {},
+    ).reasons,
+  ).toContain('Candidate must pass 17-mail-analysis-follow-up')
+  expect(
+    flipGate(
+      true,
+      true,
+      'general-next',
+      [
+        { id: '17-mail-analysis-follow-up', priority: 'must', baseline: false },
+      ] as ConversationScenario[],
+      [],
+      {},
+    ).pendingMusts,
+  ).toEqual([])
+})
+
+// The pending-must record pins the shipped modules: it names exactly the must-priority
+// scenarios whose module carries `pendingMustIssue`, with the same issue number. Read
+// from the modules' source so a new flag without a record entry (or the reverse) reddens.
+//
+// MUTATION: add or drop an entry in PENDING_MUSTS (flip-gate.ts), or add/drop a
+// `pendingMustIssue` flag on a must module without the matching record change → reddens.
+// MUTATION: a pending module that drops `must` for its priority reddens on the third check.
+const pendingFromModules = readdirSync(DIR)
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => readFileSync(resolve(DIR, f), 'utf8'))
+  .map((src) => ({
+    id: /\bid: '([^']+)'/.exec(src)![1],
+    priority: /\bpriority: '([a-z]+)'/.exec(src)![1],
+    issue: /\bpendingMustIssue: (\d+)/.exec(src)?.[1],
+  }))
+it('PENDING_MUSTS names exactly the must modules flagged pending, by issue number', () => {
+  const flagged = pendingFromModules.filter((s) => s.issue)
+  expect(flagged.length).toBeGreaterThan(0)
+  expect(Object.keys(PENDING_MUSTS).sort()).toEqual(flagged.map((s) => s.id).sort())
+  for (const s of flagged) expect(PENDING_MUSTS[s.id]).toBe(Number(s.issue))
+  // A pending row that loses its priority is stale: it must still be a must.
+  for (const s of flagged) expect(s.priority).toBe('should')
+})
+
 it('bars on a recorded pass and not on a recorded fail', () => {
   const only = (id: string) =>
     [{ id, baseline: true, priority: 'should' }] as ConversationScenario[]

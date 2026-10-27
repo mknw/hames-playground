@@ -139,10 +139,11 @@ configured in
 
 ### How the shipped agents are composed
 
-`general-next` is the selectable decision-loop agent. It replaced `general`, which
-was removed (see [the package's changelog](https://github.com/mknw/hames-playground/blob/main/packages/agents/CHANGELOG.md) for the package's history,
-and [the decision-loop design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md) for why `general` gave way);
-the default remains `search`. It requires `deps.withSandbox` and
+`general-next` is the decision-loop agent, and the reference app's default: a new chat
+opens on it. It replaced `general`, which was removed (see
+[the changelog](https://github.com/mknw/hames-playground/blob/main/packages/agents/CHANGELOG.md) for the migration, and
+[the decision-loop design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md)
+for why `general` gave way). It requires `deps.withSandbox` and
 `deps.createRedisBackend`, and accepts `deps.guards` — the host's guard
 settings, from the `GUARD_*` operator switches (below) — plus
 `deps.egressRoster` for the egress gate. It chooses among Microsoft 365 work, Neo4j/web lookup,
@@ -199,9 +200,8 @@ The reference host reads these four in
 [`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts).
 
 `general-next` also opts into optional memory. Only its final synthesis receives recalled
-memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Rollout details — turn-results materialisation stays disabled, and the
-default-agent switch is gated on the design's acceptance evidence — are
-recorded in the
+memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It became the default agent on an owner
+ruling (2026-10-27) rather than on the design's flip gate. See the
 [decision-loop design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md).
 
 These excerpts show how the shipped agents are built. Each definition's `createPatterns` composes patterns from

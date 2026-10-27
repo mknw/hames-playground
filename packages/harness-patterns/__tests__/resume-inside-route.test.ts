@@ -16,7 +16,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { harness, resumeHarness, continueSession } from '../harness.server'
 import { askHuman, held, HitlAnswerError, readHitl } from '../hitl.server'
 import { followContinuation, refuseUnresumableGates } from '../pattern-capabilities'
-import { resumableFingerprint } from '../resume.server'
+import { resumableFingerprint, resumableStep, wrapperResumable } from '../resume.server'
+import { WEB_ROSTER_INPUT, type WebRosterInput } from '../patterns/withPseudonymisedInputs.server'
 import { actorCritic } from '../patterns/actorCritic.server'
 import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.server'
 import { planner, type PlannerData } from '../patterns/planner.server'
@@ -32,7 +33,9 @@ import {
   type ControllerFn,
   type ControllerInput,
   type DecideFn,
+  type EventView,
   type HitlOption,
+  type HitlRequestEventData,
   type ToolResultEventData,
 } from '../types'
 
@@ -591,4 +594,270 @@ describe('slice 6 · gated names only where a pause can be resumed', () => {
       expect(results.every((r) => r.success === false)).toBe(true)
     },
   )
+})
+
+// ============================================================================
+// Fix round 1 (#791 review): B1 and the pins for the surviving mutations
+// ============================================================================
+
+/** A resumable pass-through around a route that records what it was handed
+ *  at each entry: the roster-only child input and the tool results its view
+ *  offers. */
+function capture(inner: ConfiguredPattern<Data>, seen: { roster: unknown[]; view: string[] }[]) {
+  const resumable = wrapperResumable('capture', inner)
+  return {
+    ...inner,
+    name: `capture(${inner.name})`,
+    children: [inner],
+    capabilities: { ...inner.capabilities, pseudonymisedInputs: true as const, resumable },
+    fn: (scope: Parameters<typeof inner.fn>[0], view: EventView) =>
+      resumableStep('capture', resumable, () => {
+        seen.push({
+          roster: [
+            ...((scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined)?.payloads ?? []),
+          ],
+          view: view
+            .fromAll()
+            .ofType('tool_result')
+            .get()
+            .map((e) => (e.data as ToolResultEventData).tool),
+        })
+        return inner.fn(scope, view)
+      }),
+  } satisfies ConfiguredPattern<Data>
+}
+
+describe('fix round 1 · a recorded continuation is always bound', () => {
+  // B1. MUTATION: revert the guard to `ownResumable(top)` only → the resume is
+  // accepted, `resolve` runs and the loop re-runs from iteration 1 → red.
+  it('a composition whose top-level pattern stopped being resumable is chain-changed before resolve', async () => {
+    const frame = frameOf([])
+    const mk = (commitStrategy: string) =>
+      agent(
+        {
+          work: loopOf(
+            scripted([act('plain_read'), act('gated_write'), act('Return', {}, { tool_args: 'd' })])
+              .fn,
+          ),
+        },
+        scriptedDecide(['work', DECISION_LOOP_ANSWER]).fn,
+        { commitStrategy, gatedTools: [] },
+      )
+    const p1 = await harness<Data>(...mk('always'))('q', 's', undefined, undefined, frame)
+    const [r1] = readHitl(p1.context).pending
+    expect(r1.continuation).toBeDefined()
+    const resolve = vi.fn(async () => undefined)
+    const out = await resumeHarness<Data>(
+      p1.serialized,
+      mk('last'),
+      { [r1.requestId]: 'approve' },
+      { frame, resolve },
+    ).then(
+      (r) => `resumed:${r.status}`,
+      (e: HitlAnswerError) => `refused:${e.code}`,
+    )
+    expect(out).toBe('refused:chain-changed')
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  // X2 and X3. MUTATIONS: drop `tools` from simpleLoop's fingerprint, or
+  // `gatedTools` from decisionLoop's → the changed composition is accepted → red.
+  it.each([
+    [
+      'the route loop allowlist',
+      () =>
+        agent(
+          {
+            work: simpleLoop<Data>(
+              readThenWriteThenReturn().fn,
+              ['gated_write', 'plain_read', 'x'],
+              {
+                patternId: 'work',
+                maxTurns: 6,
+              },
+            ),
+          },
+          scriptedDecide(['work', DECISION_LOOP_ANSWER]).fn,
+        ),
+    ],
+    [
+      'the gated-name list',
+      () =>
+        agent(
+          { work: loopOf(readThenWriteThenReturn().fn) },
+          scriptedDecide(['work', DECISION_LOOP_ANSWER]).fn,
+          { gatedTools: ['gated_write', 'another'] },
+        ),
+    ],
+  ])('a change to %s between the pause and the resume is chain-changed', async (_what, changed) => {
+    const frame = frameOf([])
+    const paused = await harness<Data>(
+      ...agent(
+        { work: loopOf(readThenWriteThenReturn().fn) },
+        scriptedDecide(['work', DECISION_LOOP_ANSWER]).fn,
+      ),
+    )('q', 's', undefined, undefined, frame)
+    const [request] = readHitl(paused.context).pending
+    const resolve = vi.fn(async () => undefined)
+    const code = await resumeHarness<Data>(
+      paused.serialized,
+      changed(),
+      { [request.requestId]: 'approve' },
+      { frame, resolve },
+    ).then(
+      () => 'accepted',
+      (e: HitlAnswerError) => e.code,
+    )
+    expect(code).toBe('chain-changed')
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  // X4. MUTATION: drop `!pending.every(samePath)` → two requests recorded on
+  // different paths are resumed down the first one → red.
+  it('two waiting requests on different paths are chain-changed', async () => {
+    const frame = frameOf([])
+    const patterns = agent(
+      { work: loopOf(readThenWriteThenReturn().fn) },
+      scriptedDecide(['work', DECISION_LOOP_ANSWER]).fn,
+    )
+    const paused = await harness<Data>(...patterns)('q', 's', undefined, undefined, frame)
+    const ctx = JSON.parse(paused.serialized) as { events: { type: string; data: unknown }[] }
+    const original = ctx.events.find((e) => e.type === 'hitl_request')!
+    const data = original.data as HitlRequestEventData
+    const other = '00000000-0000-4000-8000-0000000000aa'
+    ctx.events.push({
+      ...original,
+      data: {
+        ...data,
+        requestId: other,
+        key: `${data.key}-other`,
+        continuation: data.continuation!.map((seg, i) =>
+          i === 0 ? { ...seg, iteration: 2 } : seg,
+        ),
+      },
+    })
+    const resolve = vi.fn(async () => undefined)
+    const code = await resumeHarness<Data>(
+      JSON.stringify(ctx),
+      patterns,
+      { [data.requestId]: 'approve', [other]: 'approve' },
+      { frame, resolve },
+    ).then(
+      () => 'accepted',
+      (e: HitlAnswerError) => e.code,
+    )
+    expect(code).toBe('chain-changed')
+    expect(resolve).not.toHaveBeenCalled()
+  })
+})
+
+describe('fix round 1 · what the rebuild restores', () => {
+  const twoRoutes = (seen: { roster: unknown[]; view: string[] }[], control = false) => ({
+    patterns: agent(
+      {
+        other: simpleLoop<Data>(
+          scripted([act('plain_read'), act('Return', {}, { tool_args: 'other done' })]).fn,
+          ['plain_read'],
+          { patternId: 'other', maxTurns: 3 },
+        ),
+        work: capture(loopOf(readThenWriteThenReturn().fn), seen),
+      },
+      scriptedDecide(['other', 'work', DECISION_LOOP_ANSWER]).fn,
+    ),
+    frame: frameOf([], control),
+  })
+
+  // X1 (SD-9). MUTATION: drop the finished iterations' `rosterPayloads.push`
+  // in the replay → the resumed route's roster input misses the results of the
+  // iteration that ran before the pause → red.
+  it("a resumed route's roster input equals the control run's", async () => {
+    const control: { roster: unknown[]; view: string[] }[] = []
+    const c = twoRoutes(control, true)
+    await harness<Data>(...c.patterns)('q', 's', undefined, undefined, c.frame)
+
+    const resumed: { roster: unknown[]; view: string[] }[] = []
+    const r = twoRoutes(resumed)
+    const paused = await harness<Data>(...r.patterns)('q', 's', undefined, undefined, r.frame)
+    const [request] = readHitl(paused.context).pending
+    await resumeHarness<Data>(
+      paused.serialized,
+      r.patterns,
+      { [request.requestId]: 'approve' },
+      {
+        frame: r.frame,
+      },
+    )
+
+    // The records themselves, without the ids each run generates.
+    const shape = (roster: unknown[]) =>
+      (roster as ToolResultEventData[]).map(({ tool, result, success }) => ({
+        tool,
+        result,
+        success,
+      }))
+    expect(control).toHaveLength(1)
+    expect(resumed).toHaveLength(2)
+    expect(shape(control[0].roster)).toEqual([
+      { tool: 'plain_read', result: { rows: ['row-1'] }, success: true },
+    ])
+    expect(shape(resumed[1].roster)).toEqual(shape(control[0].roster))
+  })
+
+  // X5. MUTATION: drop the paused brackets' exclusion from the resumed child's
+  // view (`own`) → the child's view offers its own pre-pause results → red.
+  it("a resumed route's view leaves out its own pre-pause events, as the control run's did", async () => {
+    const control: { roster: unknown[]; view: string[] }[] = []
+    const c = twoRoutes(control, true)
+    await harness<Data>(...c.patterns)('q', 's', undefined, undefined, c.frame)
+
+    const resumed: { roster: unknown[]; view: string[] }[] = []
+    const r = twoRoutes(resumed)
+    const paused = await harness<Data>(...r.patterns)('q', 's', undefined, undefined, r.frame)
+    const [request] = readHitl(paused.context).pending
+    await resumeHarness<Data>(
+      paused.serialized,
+      r.patterns,
+      { [request.requestId]: 'approve' },
+      {
+        frame: r.frame,
+      },
+    )
+
+    expect(resumed[1].view).toEqual(control[0].view)
+    expect(resumed[1].view).not.toContain('gated_write')
+  })
+
+  // X6. MUTATION: skip restoring `decisions.next_step` → a loop that hits its
+  // bound right after the resumed iteration carries no decision → red.
+  it('the latest decision is restored when the loop ends straight after the resumed iteration', async () => {
+    const control = await harness<Data>(
+      ...agent({ work: loopOf(readThenWriteThenReturn().fn) }, scriptedDecide(['work']).fn, {
+        maxIterations: 1,
+      }),
+    )('q', 's', undefined, undefined, frameOf([], true))
+    const { resumed } = await pauseAndApprove(
+      agent({ work: loopOf(readThenWriteThenReturn().fn) }, scriptedDecide(['work']).fn, {
+        maxIterations: 1,
+      }),
+      [],
+    )
+    const decision = (d: Data) =>
+      (d.decisions as Record<string, { label: string; probs: unknown }> | undefined)?.next_step
+    expect(decision(resumed.data)).toMatchObject({ label: 'work' })
+    expect(decision(resumed.data)?.probs).toEqual(decision(control.data)?.probs)
+  })
+
+  // N3. MUTATION: declare `resumable` on withReferences whatever it records →
+  // one that does not record its selection reads as resumable → red.
+  it('withReferences is resumable only while it records its selection', () => {
+    const inner = loopOf(scripted([]).fn)
+    const recording = withReferences<Data>(inner, { patternId: 'work', selector: vi.fn() as never })
+    const quiet = withReferences<Data>(inner, {
+      patternId: 'work',
+      selector: vi.fn() as never,
+      trackHistory: false,
+    })
+    expect(recording.capabilities?.resumable).toBeDefined()
+    expect(quiet.capabilities?.resumable).toBeUndefined()
+  })
 })

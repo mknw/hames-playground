@@ -2222,8 +2222,10 @@ The life of one decision:
 3. The host stores the blob, shows the question, and collects an answer.
 4. `resumeHarness(serialized, patterns, answers, opts)` checks the answers
    against what the run waits on, records them, substitutes each held result
-   with its outcome, and re-enters the paused top-level pattern — whose gate
-   now replays the answer instead of asking.
+   with its outcome, and re-enters the paused top-level pattern: inside it,
+   along the recorded path, below a resumable one ([Resume inside a
+   route](#resume-inside-a-route)); otherwise from its start, where its gate
+   replays the answer instead of asking.
 5. Or the person sends a new message instead, and `continueSession`
    SUPERSEDES what was waiting; or nobody answers in time, and `expireHitl`
    closes it.
@@ -2469,12 +2471,19 @@ re-enters inside the pattern that paused, "as if it had not stopped".
 - **Gated names.** `gatedTools` (a `decisionLoop` option, and a capability any
   pattern may declare for its subtree) names tools whose executor may pause.
   `refuseUnresumableGates`, run by `decisionLoop` at construction and by the
-  three entry points from the root, refuses a gated name in any allowlist whose
-  path is not resumable all the way down (a loop that does not record its
-  history declares no `resumable`, so it is refused too). The names reach a
-  route's `simpleLoop` through the run frame's `gatedTools`, and it refuses a
-  batch that holds one before dispatching any of its calls, under every
-  `multiToolCalls` mode.
+  three entry points from the root, refuses a gated name, wherever it is
+  declared, in any allowlist whose path is not resumable all the way down (a
+  loop that does not record its history declares no `resumable`, so it is
+  refused too). At run time the names reach a route's `simpleLoop` only through
+  `decisionLoop({ gatedTools })`, by the run frame's `gatedTools`, and it
+  refuses a batch that holds one before dispatching any of its calls, under
+  every `multiToolCalls` mode.
+- **What `checkResume` cannot see.** It checks the path against the
+  composition, not against the blob's events. A blob whose events do not
+  describe the recorded pause is refused when the pattern re-enters
+  (`decisionLoop` throws rather than guess a route) — after `resolve` has run.
+  The blob is server-held, owner-scoped state (P1a), so this is the corrupt-
+  record case, not an answer path.
 - **A host's own wrapper** joins the path with `wrapperResumable(kind, inner)`
   and `resumableStep(kind, capability, fn)`.
 

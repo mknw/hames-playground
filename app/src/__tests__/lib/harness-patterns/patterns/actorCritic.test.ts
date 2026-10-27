@@ -873,3 +873,73 @@ describe('actorCritic critic feedback reaches the next attempt', () => {
     expect(criticSnapshots[1][1].feedback).toBeUndefined()
   })
 })
+
+describe('actorCritic: the intent its actor and critic read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    callToolMock.mockResolvedValue({ success: true, data: { result: 'ok' } })
+  })
+
+  /** One accepted attempt over `data`; returns the actor's and the critic's intents. */
+  async function intentsFor(data: Record<string, unknown>) {
+    const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const actor = vi.fn(async (_input: ActorInput) => ({
+      action: mockAction({ tool_name: 'code-mode', tool_args: '{"script":"run()"}' }),
+      llmCall: undefined,
+    }))
+    const critic = vi.fn(async (_intent: string) => ({
+      result: mockCriticResult({ is_sufficient: true }),
+      llmCall: undefined,
+    }))
+    const pattern = actorCritic(actor as never, critic as never, ['code-mode'], {
+      patternId: 'intent',
+    })
+    const ctx = {
+      sessionId: 'test',
+      createdAt: Date.now(),
+      events: [
+        {
+          type: 'user_message' as const,
+          ts: Date.now(),
+          patternId: 'harness',
+          data: { content: 'total the invoices and save the report' },
+        },
+      ],
+      status: 'running' as const,
+      data: {},
+      input: 'total the invoices and save the report',
+    }
+    await runInFrame(() => pattern.fn(createScope('test', data), createEventView(ctx)))
+    return { actor: actor.mock.calls[0][0].intent, critic: critic.mock.calls[0][0] }
+  }
+
+  // Outside a decisionLoop nothing changes: no scope, the raw message (or a
+  // routed `data.intent`) is the intent. MUTATION: always append a scope line.
+  it('is the user message, or data.intent, when no route scope is given', async () => {
+    expect(await intentsFor({})).toEqual({
+      actor: 'total the invoices and save the report',
+      critic: 'total the invoices and save the report',
+    })
+    expect(await intentsFor({ intent: 'routed intent' })).toEqual({
+      actor: 'routed intent',
+      critic: 'routed intent',
+    })
+  })
+
+  // FIX14. MUTATIONS: ignore `routeScope` (the critic judges the raw message);
+  // replace the task with the scope (the request is lost); scope the critic's
+  // intent but not the actor's, or the reverse.
+  it('appends a route scope to the task, for the actor and the critic alike', async () => {
+    const scope = 'THIS STEP: only the totals'
+    expect(await intentsFor({ routeScope: scope })).toEqual({
+      actor: `total the invoices and save the report\n\n${scope}`,
+      critic: `total the invoices and save the report\n\n${scope}`,
+    })
+    expect(await intentsFor({ intent: 'routed intent', routeScope: scope })).toEqual({
+      actor: `routed intent\n\n${scope}`,
+      critic: `routed intent\n\n${scope}`,
+    })
+  })
+})

@@ -353,6 +353,7 @@ export {
   DECISION_LOOP_ANSWER,
   DECISION_LOOP_RESULT_CHARS,
   DECISION_DOCUMENTS_TIMEOUT_MS,
+  ROUTE_SCOPE_HEADING,
   renderDocumentsBlock,
   collectToolNames,
   retriever,

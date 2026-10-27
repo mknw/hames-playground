@@ -26,8 +26,10 @@
  * those results). The user's message is not a route event and always stays. Its
  * `data` is built fresh: the latest plan, the separately headed
  * handoff, the conversation before the latest message (the decisions model's
- * own lines, under a heading of its own) and, for a planner route, the agent
- * map. Never `memories`, `memoryContext` or `intent`. Nothing a child writes to
+ * own lines, under a heading of its own), for a planner route the agent map and,
+ * for an actorCritic route, its route scope (its own agent-map entry: its critic
+ * judges the part of the request the route can do, not the whole message).
+ * Never `memories`, `memoryContext` or `intent`. Nothing a child writes to
  * `data` flows back.
  *
  * ## What comes back
@@ -218,17 +220,40 @@ export interface DecisionLoopData extends TypedDecisionData, PlannerData {}
 // The agent map (static, built once)
 // ============================================================================
 
+function agentMapEntry<T>(name: string, route: DecisionLoopRoute<T>): string {
+  const tools = collectToolNames(route.pattern)
+  return [
+    `- ${name}: ${route.description}`,
+    ...(route.capability ? [`  Can: ${route.capability}`] : []),
+    ...(tools.length > 0 ? [`  Tools: ${tools.join(', ')}`] : []),
+  ].join('\n')
+}
+
 function buildAgentMap<T>(routes: Record<string, DecisionLoopRoute<T>>): string {
   return Object.entries(routes)
-    .map(([name, route]) => {
-      const tools = collectToolNames(route.pattern)
-      return [
-        `- ${name}: ${route.description}`,
-        ...(route.capability ? [`  Can: ${route.capability}`] : []),
-        ...(tools.length > 0 ? [`  Tools: ${tools.join(', ')}`] : []),
-      ].join('\n')
-    })
+    .map(([name, route]) => agentMapEntry(name, route))
     .join('\n')
+}
+
+/** The heading of the route scope an `actorCritic` route's child is handed. */
+export const ROUTE_SCOPE_HEADING = 'THIS STEP — one step of a larger turn'
+
+/**
+ * What an `actorCritic` route's child is scoped to (`data.routeScope`): its own
+ * agent-map entry, and the rule that the rest of the request is not its work.
+ * The pattern appends it to the intent its actor and its critic both read. The
+ * critic is the loop's sole exit authority, and with the user's whole message as
+ * its intent it rejected complete attempts for a part no tool of the route
+ * performs ("index it for this chat"; the reply itself) until the route's bound
+ * ran out (#606 run 7, scenario 14). Host-written text only: the route key, its
+ * description, its capability and its tool names.
+ */
+function renderRouteScope<T>(name: string, route: DecisionLoopRoute<T>): string {
+  return [
+    `${ROUTE_SCOPE_HEADING}:`,
+    agentMapEntry(name, route),
+    'Do and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.',
+  ].join('\n')
 }
 
 // ============================================================================
@@ -340,6 +365,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     names.filter((n) => kinds.get(n) === 'planner' && !routes[n].allowReplan),
   )
   const agentMap = buildAgentMap(routes)
+  const routeScopes = new Map(
+    names
+      .filter((n) => kinds.get(n) === 'actorCritic')
+      .map((n) => [n, renderRouteScope(n, routes[n])]),
+  )
 
   // Records and the withheld ids an older version persisted on them are matched
   // by the loop's own patternId, and a loop is built anew every turn: a generated
@@ -763,6 +793,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         ...(handoffText ? { handoff: handoffText } : {}),
         ...(earlierConversation ? { conversation: earlierConversation } : {}),
         ...(kinds.get(label) === 'planner' ? { agentMap } : {}),
+        ...(routeScopes.has(label) ? { routeScope: routeScopes.get(label) } : {}),
         ...(harnessPseudonymisesInputs([pattern])
           ? {
               [WEB_ROSTER_INPUT]: {

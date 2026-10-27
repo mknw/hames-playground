@@ -359,7 +359,7 @@ async function createPatterns(
         {
           decide: createDecideAdapter(),
           answer:
-            "Generate the answer for the user now, from the conversation and any results so far. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",
+            "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",
           handoff: { lastN: 2 },
           maxIterations: 6,
           patternId: 'orchestrator',

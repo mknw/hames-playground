@@ -94,6 +94,9 @@ const gateway = vi.hoisted(() => ({
   names: [] as string[],
   result: 'synthetic result' as unknown,
   calls: [] as string[],
+  /** Tools whose call fails with an `Error: …` text result — the MCP shape the
+   *  client demotes to a failed tool_result (mcp-client.server.ts). */
+  failingTools: [] as string[],
 }))
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
@@ -104,6 +107,15 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }))
     callTool = vi.fn(async ({ name }: { name: string }) => {
       gateway.calls.push(name)
+      if (gateway.failingTools.includes(name))
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Error: Synthetic service unavailable; retry on the next user turn.',
+            },
+          ],
+        }
       return {
         content: [
           {
@@ -234,6 +246,7 @@ beforeEach(() => {
   ]
   gateway.result = 'synthetic result'
   gateway.calls = []
+  gateway.failingTools = []
   choices = ['info-retrieval', 'answer']
   sticky = undefined
   states = []
@@ -372,11 +385,15 @@ describe('general-next composition', () => {
 
   // p87 (owner, 2026-10-22): exact calculation on numbers in the user's LATEST message is
   // sandbox work; a follow-up over an earlier turn's number is not (the child cannot see it).
+  // FIX08B (owner ruling in #606, run-7 diagnosis): a route whose result reports the lookup
+  // could not be done is answered, not re-dispatched — the 08 turn-1 failure was the decider
+  // sending info-retrieval back six times over a child that had already reported the failure.
   // MUTATIONS, each red: drop or reword the office-data clause (restoring "numbers the user
-  // typed" or unscoped "arithmetic"); append anything to the answer text, or restore the
-  // negated "never answered before" form; add "multiplies" to another route.
+  // typed" or unscoped "arithmetic"); drop or reword the failure clause; append anything to
+  // the answer text, or restore the negated "never answered before" form; add "multiplies"
+  // to another route.
   const P87_ANSWER =
-    "Generate the answer for the user now, from the conversation and any results so far. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
+    "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number"
   it.each(['anthropic', 'self_deployed'])(
     'p87: names exact calculation as office-data work, and no other route (%s)',
     async (tier) => {
@@ -406,6 +423,60 @@ describe('general-next composition', () => {
     },
   )
 
+  // FIX08B / run-7 diagnosis (#606): scenario 08 turn 1. The info child COMPLETED — the
+  // state records `1. info-retrieval — succeeded (… 1 error …)`, `succeeded` because the
+  // child finished, not because the lookup worked — and its Return honestly reports the
+  // lookup could not be done. The state therefore shows no failed step, so the answer
+  // criterion is the only place the decider can be told to answer with that reported
+  // failure instead of dispatching the route again (run 7 re-dispatched six times and
+  // never answered). This replays the 08 turn-1 shape offline: the graph tool call fails,
+  // the child returns the honest failure, and the second Decide request must carry the
+  // clause on `answer`. MUTATION: drop or reword the failure clause in
+  // general-next.server.ts: red.
+  const GRAPH_FAILURE_RETURN =
+    'The count could not be done: the graph returned a transient unavailable error. Please try again once the graph is available.'
+  it.each(['anthropic', 'self_deployed'])(
+    '08 shape: the Decide after a route whose result reports the lookup could not be done carries the answer-with-the-failure clause (%s)',
+    async (tier) => {
+      gateway.failingTools = ['read_neo4j_cypher']
+      choices = ['info-retrieval', 'answer']
+      mocks.controller
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'count',
+            tool_name: 'read_neo4j_cypher',
+            tool_args: '{"query":"MATCH (p:Project) RETURN count(p) AS n"}',
+            is_final: false,
+          },
+        })
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'done',
+            tool_name: 'Return',
+            tool_args: GRAPH_FAILURE_RETURN,
+            is_final: true,
+          },
+        })
+      const patterns = await agent.createPatterns('synthetic-session', deps)
+      await withRunFrame({ inference: { tier } }, () =>
+        harness(...patterns)('Count the Project nodes in the knowledge graph.'),
+      )
+      const second = decideRequests()[1]
+      // The premise: the state frames the completed child as `succeeded` even though its
+      // tool call failed, and carries the failure text verbatim — the shape that drew the
+      // decider back to the route.
+      expect(second.state).toContain('1. info-retrieval — succeeded')
+      expect(second.state).toContain('1 error')
+      expect(second.state).toContain(GRAPH_FAILURE_RETURN)
+      expect(second.questions.next_step.criteria.answer).toContain(
+        'its result reports the lookup could not be done',
+      )
+      expect(second.questions.next_step.criteria.answer).toContain(
+        'instead of dispatching the route again',
+      )
+    },
+  )
+
   // E4/#507 scenario 13 (live pass 3 and run 2): Decide chose info-retrieval, the
   // info child could not get the notes (it only searches the graph and web), and
   // the SECOND Decide chose answer: read-documents was never selected. Replays
@@ -431,13 +502,20 @@ describe('general-next composition', () => {
       readFileSync(`evals/general-next/scenarios/${file}`, 'utf8'),
     )![1]
   const decideRequests = () =>
-    requests.mock.calls.map(
-      (call) =>
-        JSON.parse(String(call[1].body)) as {
+    requests.mock.calls
+      .map((call) => JSON.parse(String(call[1].body)))
+      .filter(
+        (
+          body,
+        ): body is {
           state: string
           questions: { next_step: { criteria: Record<string, string> } }
-        },
-    )
+        } =>
+          // The guard gate's `guard.screen` question rides the same decide seam
+          // whenever a tool result needs screening; only the loop's own
+          // `next_step` question is a decision over the routes.
+          (body as { questions?: { next_step?: unknown } }).questions?.next_step !== undefined,
+      )
 
   it.each(
     ['anthropic', 'self_deployed'].flatMap((tier) =>

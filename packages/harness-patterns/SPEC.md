@@ -1119,7 +1119,8 @@ too) as `guard.sanitize(tool, data, { item })`, and the retriever passes each hi
 `docId`; a filename is content, so it is never one. `fenceItemId()` reduces it to
 `[A-Za-z0-9._:-]` and 64 characters inside `spotlight()` itself, so no caller can
 write a raw id, and the header leaves out `, <item>` when the id is absent or
-nothing is left. `sanitizeUntrusted(data, { tool, namespace, item? })` and
+nothing is left. The namespace and tool go through the same character class, without
+the cap, so a tool name cannot carry a sentinel or a line break into the header. `sanitizeUntrusted(data, { tool, namespace, item? })` and
 `applyScreenVerdict` take it the same way. The header's parts are exported
 (`FENCE`), and every reader builds its match from them: `unspotlight`,
 `unspotlightParts` (which returns the `item` when the header named one),
@@ -2098,8 +2099,8 @@ forged header, so it stays unlabelled. A failed route's text (a tool error, a
 thrown message) takes the same cap-then-fence path. An `actorCritic` batch is one
 block per accepted result, each under its own result's fence (a batch can mix tools); the retriever's lines
 are one block under the fence its hits arrived in, the filename in each line
-inside it; that one fence names the hits' `docId` only when every fenced hit named
-the same one. A body that arrived unfenced (a guard declared with the default
+inside it; that one fence names the hits' `docId` only when every hit arrived
+fenced and named the same one. A body that arrived unfenced (a guard declared with the default
 `spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents
 a label. The plan, a `simpleLoop` Return, reasoning and the stats are not fenced, and not sanitised either. Owner acceptance owed: Record text the loop did not build (the plan's record, a `simpleLoop` Return, reasoning, and failure text, a fenced tool error with its fence) goes into the Decide state and the handoff as ONE JSON string: every word kept, newlines escaped, so it cannot start a line that reads as the state's own structure. The plan stays raw under PLAN, an actorCritic or retriever body stays raw (inside its fence when it has one), and code-built lines go through as they are. A reader that rewrites this text (the web-route pseudonymiser) decodes each such string before matching. A carried body that came back unfenced (no guard declares its tool, its guard found nothing under `spotlight: 'on-detection'`, or its header names another tool) is raw too, newlines included, and nothing quotes it; every guard in `general-next` is `'always'`, so it is not reachable there. The handoff block ends with `HANDOFF_END`, so a context that follows it is not read as data. A fence cut off by the cap inside a failure text is closed (`closeCutFences`), and a label is restored only from a header naming the result's own tool.
 

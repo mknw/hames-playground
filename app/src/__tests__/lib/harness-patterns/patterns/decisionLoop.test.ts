@@ -1417,13 +1417,20 @@ describe('decisionLoop — label trust, failure text and caps (review round 1)',
   })
 
   // A retriever block is ONE fence over several hits: it names a document only
-  // when every hit named the same one. MUTATIONS: keep the first hit's item
-  // whatever the others say (the mixed case names d1); drop it always (the
-  // shared case loses d1).
+  // when every hit arrived fenced and named the same one. MUTATIONS: keep the
+  // first hit's item whatever the others say (the mixed case names d1); drop it
+  // always (the shared case loses d1); ignore a hit that arrived unfenced (the
+  // unfenced case names d1 over d2's text; code review round 1, N1).
   it.each([
-    ['every hit names the same document: the block names it', ['d1', 'd1'], 'd1'],
-    ['the hits name different documents: the block names none', ['d1', 'd2'], undefined],
-  ])('a retriever block: %s', async (_case, docs, expected) => {
+    ['every hit names the same document: the block names it', ['d1', 'd1'], [true, true], 'd1'],
+    [
+      'the hits name different documents: the block names none',
+      ['d1', 'd2'],
+      [true, true],
+      undefined,
+    ],
+    ['one hit arrived unfenced: the block names none', ['d1', 'd2'], [true, false], undefined],
+  ])('a retriever block: %s', async (_case, docs, fencedEach, expected) => {
     const retr = fake('retriever', 'retr-p', (s) => {
       trackEvent(
         s,
@@ -1438,7 +1445,9 @@ describe('decisionLoop — label trust, failure text and caps (review round 1)',
             matches: docs.map((docId, i) => ({
               backend: 'redis',
               id: `c${i}`,
-              content: spotlight(`chunk ${i}`, 'retriever', 'retriever', docId),
+              content: fencedEach[i]
+                ? spotlight(`chunk ${i}`, 'retriever', 'retriever', docId)
+                : `chunk ${i}`,
               source: `${docId}.md`,
               docId,
               chunkIndex: i,
@@ -2257,10 +2266,14 @@ describe('decisionLoop — fix round 1', () => {
       namespace: 'web',
       item: 'call-8',
     })
-    expect(unspotlightParts(spotlight('x', 'a/b', 'graph'))).toMatchObject({
-      tool: 'a/b',
-      namespace: 'graph',
-    })
+    // A slash inside the tool: the namespace is the part before the FIRST one.
+    // Built in the legacy form, because the current writer reduces a tool name to
+    // `[A-Za-z0-9._:-]` and can no longer write one.
+    expect(
+      unspotlightParts(
+        `${LEGACY_FENCE.open}graph/a/b${LEGACY_FENCE.sentence}${LEGACY_FENCE.headerEnd}\nx\n${LEGACY_FENCE.close}`,
+      ),
+    ).toMatchObject({ tool: 'a/b', namespace: 'graph' })
     expect(unspotlightParts('plain text')).toBeUndefined()
     expect(unspotlightParts(`${FENCE.open}no close`)).toBeUndefined()
     // a header with no readable source is a fence `unspotlight` strips but cannot label

@@ -662,11 +662,15 @@ export function fenceItemId(raw: string | undefined): string | undefined {
 /** Header/footer wrapped around neutralized external text ({@link FENCE}). Uses
  *  the guard-owned sentinels, which `sentinel-escape` has already removed from
  *  the content, so the fence cannot be closed early from inside. `item` is
- *  reduced by {@link fenceItemId} here, so no caller can write a raw id. */
+ *  reduced by {@link fenceItemId} here, so no caller can write a raw id; the
+ *  namespace and tool go through the same character class (without the cap),
+ *  so a tool name carrying a sentinel or a line break cannot close the fence
+ *  from inside its own header. Every name in the tool catalog already fits it. */
 export function spotlight(text: string, tool: string, namespace: string, item?: string): string {
   const id = fenceItemId(item)
+  const field = (s: string) => s.replace(FENCE_ITEM_DROP, '')
   return (
-    `${FENCE.open}${namespace}/${tool}${id ? FENCE.itemSeparator + id : ''}${FENCE.headerEnd}\n` +
+    `${FENCE.open}${field(namespace)}/${field(tool)}${id ? FENCE.itemSeparator + id : ''}${FENCE.headerEnd}\n` +
     `${text}\n${FENCE.close}`
   )
 }

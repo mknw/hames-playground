@@ -11,6 +11,8 @@ import { withRunFrame, amendRunFrame } from '../run-frame.server'
 import { registerTransport } from '../tool-transport.server'
 import { callTool } from '../mcp-client.server'
 import { createInjectionGuard } from '../patterns/withInjectionGuard.server'
+import { spotlight } from '../injection-guard'
+import { inferServer } from '../tools.server'
 import {
   storeDocument,
   listDocumentsStrict,
@@ -309,6 +311,28 @@ describe('a hook replacement is guarded like any result (#599 F1)', () => {
       )
     },
   )
+
+  // The replacement's second guard pass fences it under the SAME call's id
+  // (code review round 1, N2: the `sameCall` normaliser above erases that
+  // field). MUTATION: `applyGuard(name, result, '')` on the replacement pass.
+  it('a replacement is fenced under the id of the call its hook ran for', async () => {
+    let id: string | undefined
+    const r = await withRunFrame({ transports: [t], guard: guard() }, () =>
+      amendRunFrame(
+        {
+          afterToolCall: [
+            async (c: { id: string }) => {
+              id = c.id
+              return { success: true, data: 'all good' }
+            },
+          ],
+        },
+        () => callTool('probe', {}),
+      ),
+    )
+    expect(id).toMatch(/^call-\d+$/)
+    expect(String(r.data)).toBe(spotlight('all good', 'probe', inferServer('probe'), id))
+  })
 
   it('a hook returning the supplied object UNCHANGED gets no second guard pass', async () => {
     const r1 = await withRunFrame({ transports: [t], guard: guard() }, () => callTool('probe', {}))

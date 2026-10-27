@@ -321,9 +321,11 @@ function extractRetriever(events: ContextEvent[], max: number): Extracted {
   // the header, not the chunk); the block goes back under the fence the hits came
   // in, once, so the filename in each line is inside it too. Each hit's fence
   // names its own document, and one fence cannot name several: the block keeps
-  // the item id only when every fenced hit named the same one (each line still
-  // names its `[doc …]` where the hit has a locator).
+  // the item id only when every hit arrived fenced and named the same one (each
+  // line still names its `[doc …]` where the hit has a locator). A hit that
+  // arrived unfenced names nothing, so the block names no item either.
   let label: FenceLabel | undefined
+  let unlabelled = false
   const lines = matches.map((m) => {
     const where =
       m.docId !== undefined && m.startOffset !== undefined && m.endOffset !== undefined
@@ -333,13 +335,14 @@ function extractRetriever(events: ContextEvent[], max: number): Extracted {
     if (parts && parts.tool === 'retriever' && guards(parts.tool)) {
       if (!label) label = { tool: parts.tool, namespace: parts.namespace, item: parts.item }
       else if (label.item !== parts.item) label = { tool: label.tool, namespace: label.namespace }
-    }
+    } else unlabelled = true
     const excerpt = (parts?.body ?? unspotlight(m.content))
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, EXCERPT_CHARS)
     return `- ${m.source ?? m.id}${where}: ${excerpt}`
   })
+  if (label && unlabelled) label = { tool: label.tool, namespace: label.namespace }
   const docs = new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size
   return {
     ok: true,

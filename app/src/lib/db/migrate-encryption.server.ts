@@ -131,6 +131,13 @@ export const ENCRYPTED_TABLES: readonly TableSpec[] = [
     jsonbColumns: [],
   },
   {
+    // Blocking-request payloads (decision-loop-agent slice 8).
+    table: 'hitl_payloads',
+    pk: 'payload_ref',
+    textColumns: ['payload'],
+    jsonbColumns: [],
+  },
+  {
     // Memory (#419 M4). `content` and `evidence` are the personal text the
     // store pipeline writes; `embedding` is the owner's declared plaintext
     // exception (D2 — embeddings are NOT encrypted), so it is absent here by

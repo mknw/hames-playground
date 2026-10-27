@@ -1238,6 +1238,12 @@ export interface ToolCallEventData {
    *  this the only record that a tool ran on rebuilt arguments is that it ran.
    *  Absent on the overwhelming majority of calls. */
   repaired?: import('./json-repair').JsonRepairNote
+  /** The LOGICAL identity of this call (decision-loop-agent slice 8): sha256 of
+   *  the run, the resumable path to the loop, the loop's turn and the call's
+   *  position in that turn's action. A retry of the same call recomputes it, in
+   *  any process; a deliberate repeat sits at another turn or position. Set by
+   *  `simpleLoop` inside a HITL run. */
+  callKey?: string
 }
 
 /** Data payload for tool_result event */
@@ -1711,6 +1717,40 @@ export type HitlOutcome<C extends string = string> =
       readonly by: HitlDecidedBy
     }
   | { readonly status: 'pending'; readonly requestId: string }
+
+/**
+ * The host's store for a blocking request's payload (decision-loop-agent slice
+ * 8), supplied on the run frame (`hitlPayloads`): what the person is shown
+ * rides here, encrypted, never on an event. Bound to the owner and the
+ * conversation by the host that built it, so core never names either.
+ */
+export interface HitlPayloadStore {
+  /**
+   * Hold `payload` for the logical call `callKey` and the request's `kind`.
+   * INSERT-ONLY: a call and kind with no row gets one under a fresh
+   * `payloadRef` (`inserted: true`); a retry with the same payload gets that
+   * row back; the same call and kind with a DIFFERENT payload is refused
+   * (`rebound`), and the row is left as it was. Another kind under the same
+   * call is its own row: an outgoing call released by a person can still have
+   * its result flagged.
+   */
+  hold(input: {
+    readonly callKey: string
+    readonly kind: string
+    readonly payload: unknown
+    readonly expiresAt: number
+  }): Promise<
+    { readonly payloadRef: string; readonly inserted: boolean } | { readonly rebound: true }
+  >
+  /** Drop a row a call inserted when no request was left waiting on it (the
+   *  unattended rule decided at once). Idempotent. */
+  drop(payloadRef: string): Promise<void>
+}
+
+/** What {@link askHumanHolding} answers: a decision, or a refusal to rebind a
+ *  logical call to a different payload. */
+export type HoldingOutcome<C extends string = string> =
+  HitlOutcome<C> | { readonly status: 'rebound' }
 
 /** What a gated tool executor returns while the run waits: the placeholder,
  *  never the content. A resume substitutes the outcome for it, sanitized, and

@@ -40,6 +40,7 @@ const ENCRYPTED_TABLES = [
   'skills',
   'hitl_requests',
   'hitl_quarantine',
+  'hitl_payloads',
   'memories',
 ] as const
 
@@ -69,6 +70,7 @@ const OWNER: Record<string, string> = {
   skills: 'lib/db/skills.server.ts',
   hitl_requests: 'lib/db/hitl.server.ts',
   hitl_quarantine: 'lib/db/hitl.server.ts',
+  hitl_payloads: 'lib/db/hitl.server.ts',
   memories: 'lib/db/memories.server.ts',
   auth_sessions: 'lib/auth/session-store.server.ts',
   users: 'lib/auth/users.server.ts',

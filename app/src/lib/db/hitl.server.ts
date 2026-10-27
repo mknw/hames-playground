@@ -1,12 +1,14 @@
 /**
  * HITL transport — Server Only.
  *
- * SQL for the two tables a human-in-the-loop decision needs beside the
+ * SQL for the three tables a human-in-the-loop decision needs beside the
  * conversation blob (#433 S7): `hitl_requests` (the answer in transit, the
- * proposal payloads, the inbox index) and `hitl_quarantine` (the held file of
- * an un-decided provenance request, F2). This module is the ONE place
- * production code runs SQL against them — `encryption-coverage.test.ts` pins
- * that, and pins that both tables' content columns are encrypted here.
+ * proposal payloads, the inbox index), `hitl_quarantine` (the held file of an
+ * un-decided provenance request, F2) and `hitl_payloads` (a blocking request's
+ * payload, bound to its logical call; decision-loop-agent slice 8). This module
+ * is the ONE place production code runs SQL against them —
+ * `encryption-coverage.test.ts` pins that, and pins that every table's content
+ * columns are encrypted here.
  *
  * NEVER AUTHORITATIVE (ADR-0009): the decision state is the blob's `hitl_*`
  * events. `readHitl(blob).pending` is what a resume validates answers
@@ -16,6 +18,8 @@
  * Owner scope on every statement, like every repository here: a foreign id is
  * a no-op, never a probe for whether an id exists.
  */
+import { randomUUID } from 'node:crypto'
+import { canonicalJson } from '@hames-ai/harness-patterns/hitl.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { decryptFieldOrNull, encryptFieldOrNull } from './crypto.server'
 import { query, withTransaction, type TxQuery } from './client.server'
@@ -507,6 +511,12 @@ export async function deleteHitlRowsForConversations(
     userId,
     [...conversationIds],
   ])
+  // A held payload is what a person was about to be shown from this
+  // conversation; it goes with it (slice 8).
+  await tx.query(`DELETE FROM hitl_payloads WHERE user_id = $1 AND session_id = ANY($2)`, [
+    userId,
+    [...conversationIds],
+  ])
 }
 
 /**
@@ -604,6 +614,121 @@ export async function deleteQuarantine(requestId: string, userId: string): Promi
 }
 
 // ============================================================================
+// Blocking-request payloads (decision-loop-agent slice 8)
+// ============================================================================
+//
+// One row per LOGICAL call (`call_key`, see `simpleLoop`): the payload a person
+// will be shown before that call proceeds. Rows are never updated. The request
+// event names the row by `payload_ref` only, and the dialog reads it back
+// through an owner-gated read; nothing here decides anything (ADR-0009).
+
+/** One held payload, decoded. */
+export interface HitlPayloadRow {
+  readonly payloadRef: string
+  readonly sessionId: string
+  readonly kind: string
+  readonly expiresAt: Date
+  readonly payload: unknown
+}
+
+/**
+ * Hold a payload for one logical call and request kind, INSERT-ONLY (the
+ * `HitlPayloadStore` contract). Rows are never updated: no `UPDATE
+ * hitl_payloads` exists in this module, and a pin holds it there.
+ *
+ * - no row for `(owner, conversation, callKey, kind)`: insert one under a
+ *   fresh `payloadRef` → `inserted: true`;
+ * - a row with the same canonical payload (a retry of the same call): that
+ *   row's `payloadRef` → `inserted: false`;
+ * - a row with another payload: `rebound`, and the row is left as it was — a
+ *   logical call is never rebound to another payload of the same kind.
+ *
+ * Two concurrent inserts for one call: the loser's insert conflicts on the
+ * unique key and does nothing, then reads the winner's row and is judged by the
+ * same rule. One row, one request. The comparison is made here on the
+ * decrypted canonical JSON, so no digest of the payload is stored in the clear.
+ */
+export async function holdHitlPayload(input: {
+  readonly userId: string
+  readonly sessionId: string
+  readonly callKey: string
+  readonly kind: string
+  readonly payload: unknown
+  readonly expiresAt: Date
+}): Promise<{ payloadRef: string; inserted: boolean } | { rebound: true }> {
+  const json = canonicalJson(input.payload)
+  const payloadRef = randomUUID()
+  const { rowCount } = await query(
+    `INSERT INTO hitl_payloads
+       (payload_ref, user_id, session_id, call_key, kind, expires_at, payload)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (user_id, session_id, call_key, kind) DO NOTHING`,
+    [
+      payloadRef,
+      input.userId,
+      input.sessionId,
+      input.callKey,
+      input.kind,
+      input.expiresAt,
+      encryptFieldOrNull(json),
+    ],
+  )
+  if ((rowCount ?? 0) > 0) return { payloadRef, inserted: true }
+  const { rows } = await query<{ payload_ref: string; payload: string }>(
+    `SELECT payload_ref, payload FROM hitl_payloads
+      WHERE user_id = $1 AND session_id = $2 AND call_key = $3 AND kind = $4`,
+    [input.userId, input.sessionId, input.callKey, input.kind],
+  )
+  if (rows.length === 0) {
+    // The winner's row was swept or purged between the two statements: the
+    // call has no payload to reuse and must not be handed one it never held.
+    throw new Error('[hitl] the held payload for this call is gone')
+  }
+  const stored = decryptFieldOrNull(rows[0].payload, 'hitl_payloads.payload')
+  return stored === json ? { payloadRef: rows[0].payload_ref, inserted: false } : { rebound: true }
+}
+
+/** One held payload of the caller's, not past its expiry, or null (unknown,
+ *  someone else's, purged or expired: the same null). */
+export async function getHitlPayload(
+  payloadRef: string,
+  userId: string,
+): Promise<HitlPayloadRow | null> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT payload_ref, session_id, kind, expires_at, payload FROM hitl_payloads
+      WHERE payload_ref = $1 AND user_id = $2 AND expires_at > NOW()`,
+    [payloadRef, userId],
+  )
+  if (rows.length === 0) return null
+  const r = rows[0]
+  return {
+    payloadRef: r.payload_ref as string,
+    sessionId: r.session_id as string,
+    kind: r.kind as string,
+    expiresAt: r.expires_at as Date,
+    payload: decryptJson(r.payload as string, 'hitl_payloads.payload'),
+  }
+}
+
+/** Delete held payloads by ref, owner-scoped — and conversation-scoped when
+ *  a conversation is named (the store's drop is bound to one). Idempotent: the
+ *  purge on close, and the drop of a row no request was left waiting on. */
+export async function deleteHitlPayloads(
+  payloadRefs: readonly string[],
+  userId: string,
+  sessionId?: string,
+): Promise<number> {
+  if (payloadRefs.length === 0) return 0
+  const { rowCount } = await query(
+    sessionId === undefined
+      ? `DELETE FROM hitl_payloads WHERE user_id = $1 AND payload_ref = ANY($2)`
+      : `DELETE FROM hitl_payloads WHERE user_id = $1 AND payload_ref = ANY($2) AND session_id = $3`,
+    sessionId === undefined ? [userId, [...payloadRefs]] : [userId, [...payloadRefs], sessionId],
+  )
+  return rowCount ?? 0
+}
+
+// ============================================================================
 // The expiry sweep
 // ============================================================================
 
@@ -617,32 +742,45 @@ export const HITL_SWEEP_INTERVAL_MS = 60 * 60 * 1000
  *
  * - the quarantine's expired rows are DELETED whole — the row is the payload,
  *   and an expired request can only resolve to "not kept";
+ * - expired held payloads (`hitl_payloads`) are DELETED whole, for the same
+ *   reason;
  * - expired `hitl_requests` rows lose their payload and close `expired`
  *   (`pending` proposals and `answered`-in-transit rows alike).
  *
  * The blob's own expiry (the closing events) is `expireHitl`, lazily, by the
  * host on read — this sweep touches no conversation row.
  */
-export async function sweepExpiredHitl(): Promise<{ quarantine: number; payloads: number }> {
+export async function sweepExpiredHitl(): Promise<{
+  quarantine: number
+  payloads: number
+  held: number
+}> {
   const gone = await query(`DELETE FROM hitl_quarantine WHERE expires_at <= NOW()`)
+  // A held payload whose request never closed — the turn died between holding
+  // it and committing the request, or nobody answered — leaves at its expiry.
+  const dropped = await query(`DELETE FROM hitl_payloads WHERE expires_at <= NOW()`)
   const purged = await query(
     `UPDATE hitl_requests
         SET payload = NULL, status = 'expired', updated_at = NOW()
       WHERE expires_at <= NOW()
         AND (payload IS NOT NULL OR status IN ('pending', 'answering', 'answered'))`,
   )
-  return { quarantine: gone.rowCount ?? 0, payloads: purged.rowCount ?? 0 }
+  return {
+    quarantine: gone.rowCount ?? 0,
+    payloads: purged.rowCount ?? 0,
+    held: dropped.rowCount ?? 0,
+  }
 }
 
 let sweepTimer: ReturnType<typeof setInterval> | null = null
 
 async function sweepOnce(): Promise<void> {
   try {
-    const { quarantine, payloads } = await sweepExpiredHitl()
-    if (quarantine > 0 || payloads > 0) {
+    const { quarantine, payloads, held } = await sweepExpiredHitl()
+    if (quarantine > 0 || payloads > 0 || held > 0) {
       console.log(
         `[hitl] expiry sweep dropped ${quarantine} quarantined document(s) and ` +
-          `purged ${payloads} expired request payload(s)`,
+          `${held} held payload(s), and purged ${payloads} expired request payload(s)`,
       )
     }
   } catch (err) {

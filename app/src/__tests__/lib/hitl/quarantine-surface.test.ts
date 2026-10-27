@@ -75,6 +75,10 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
     expect(offenders.sort()).toEqual([
       'lib/harness-client/turn.server.ts',
       'lib/hitl/actions.server.ts',
+      // Decision-loop-agent slice 8: the held payloads' store, purge and the
+      // resolve dispatch — host code the turn runner calls, taking an owner,
+      // never a 'use server' module.
+      'lib/hitl/payloads.server.ts',
       // #419 M6: the memory proposals' payload rows, held and offered by host
       // code behind its own gated RPC door (confirm-actions → proposals).
       // M7's erase RPCs purge the pending proposals with the memories.

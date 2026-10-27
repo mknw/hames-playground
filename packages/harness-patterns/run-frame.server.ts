@@ -58,7 +58,13 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ByTier, ContextEvent, ContinuationSegment, ToolCallResult } from './types'
+import type {
+  ByTier,
+  ContextEvent,
+  ContinuationSegment,
+  HitlPayloadStore,
+  ToolCallResult,
+} from './types'
 
 assertServerOnImport()
 
@@ -173,6 +179,13 @@ export interface RunFrame {
   resume?: ResumeSlot | null
   /** Gated tool names declared above this code; unions with the enclosing. */
   gatedTools?: readonly string[]
+  /** The logical identity of the tool call this code runs inside
+   *  (decision-loop-agent slice 8), set by `simpleLoop` around each dispatch. */
+  callKey?: string
+  /** The host's store for blocking requests' payloads, bound to this run's
+   *  owner and conversation (slice 8). Supplied by the host around its main
+   *  run, beside `hitl`. */
+  hitlPayloads?: HitlPayloadStore
 }
 
 /** What a resumed invocation is handed (slice 6). */
@@ -221,6 +234,8 @@ export interface ActiveRunFrame {
   readonly resume?: ResumeSlot
   /** Never undefined: an empty frozen array where nothing declares one. */
   readonly gatedTools: readonly string[]
+  readonly callKey?: string
+  readonly hitlPayloads?: HitlPayloadStore
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -363,6 +378,8 @@ function build(frame: RunFrame): ActiveRunFrame {
     continuation: frame.continuation ? Object.freeze([...frame.continuation]) : NO_HOOKS,
     resume: frame.resume ?? undefined,
     gatedTools: frame.gatedTools ? Object.freeze([...frame.gatedTools]) : NO_HOOKS,
+    callKey: frame.callKey,
+    hitlPayloads: frame.hitlPayloads,
   }
 }
 
@@ -447,6 +464,7 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *   - `resume` REPLACES, and `null` clears it: a pattern on a resumed path
  *     hands its child the rest of the path, and any other child none.
  *   - `gatedTools` UNION: a name declared gated above stays gated below.
+ *   - `callKey` and `hitlPayloads` REPLACE.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -495,6 +513,8 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
     gatedTools: partial.gatedTools
       ? Object.freeze([...new Set([...open.gatedTools, ...partial.gatedTools])])
       : open.gatedTools,
+    callKey: partial.callKey ?? open.callKey,
+    hitlPayloads: partial.hitlPayloads ?? open.hitlPayloads,
   }
   return store.run(amended, fn)
 }

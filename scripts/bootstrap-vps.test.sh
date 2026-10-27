@@ -284,6 +284,13 @@ clone_tests() {
     ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
   done
   echo 'synthetic firewall evidence record' >"$dir/firewall-evidence.txt"
+  # Release's record is read for structure: a guard smoke record whose
+  # environments hold release's probes. The bad ones are each refused.
+  printf '%s\n' '{"render_sha256": "synthetic", "environments": {"dev": [{"probe": "1"}], "release": [{"probe": "1"}]}}' >"$dir/release-evidence.json"
+  printf '%s\n' '{"render_sha256": "synthetic", "environments": {"dev": [{"probe": "1"}]}}' >"$dir/dev-only-evidence.json"
+  printf '%s\n' '{"environments": {"dev": [{"probe": "1"}], "release": []}}' >"$dir/release-unprobed-evidence.json"
+  printf '%s\n' '{"environments": [{"release": [{"probe": "1"}]}]}' >"$dir/release-listed-evidence.json"
+  printf '%s\n' '["release"]' >"$dir/release-array-evidence.json"
   : >"$dir/firewall-empty.txt"
 
   for file in release dev; do
@@ -391,7 +398,7 @@ p.write_text(json.dumps(c))
 PY
     fi
     if [[ $1 == *:docker-compose.release-sandbox-vm.yaml ]]; then
-      printf 'RELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${3-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
+      printf 'RELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${3-$dir/release-evidence.json}" >>"$dir/release/.env"
       python3 - "$dir/render.json" "$dir/tls-release" <<'PY'
 import json, pathlib, sys
 p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); app=c['services']['app']
@@ -404,10 +411,13 @@ p.write_text(json.dumps(c))
 PY
     fi
   }
+  # An optional third argument is the refusal message the right gate prints,
+  # for gates whose input a later gate would also refuse.
   clone_refused() {
     local label=$1 result status
     result=$(clone_boot "${2:-boot}" 2>&1); status=$?
-    if ((status != 0)) && ! grep -Ev 'compose config --format json$' "$dir/calls" | grep -q .; then
+    if ((status != 0)) && ! grep -Ev 'compose config --format json$' "$dir/calls" | grep -q . &&
+      [[ -z ${3:-} || $result == *"$3"* ]]; then
       pass "clones refuses $label before changes"
     else flunk "clones accepted $label (rc=$status)" "$result"; fi
     [[ $result != *synthetic-secret* ]] || flunk "clones leaked renderer error"
@@ -456,13 +466,23 @@ PY
     "$both:docker-compose.release-sandbox-vm.yaml" "$base:docker-compose.release-sandbox-vm.yaml"; do
     clone_reset
     printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
-    printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\nRELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "$dir/firewall-evidence.txt" "$dir/firewall-evidence.txt" >>"$dir/release/.env"
+    printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\nRELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "$dir/firewall-evidence.txt" "$dir/release-evidence.json" >>"$dir/release/.env"
     clone_refused "release's VM overlay alone, first, beside the dev socket, twice or without clones ($shape)"
   done
-  for evidence in '' "$dir/firewall-empty.txt" firewall-evidence.txt "$dir/absent.txt"; do
+  for evidence in '' "$dir/firewall-empty.txt" release-evidence.json "$dir/absent.txt"; do
     clone_reset
     clone_select "$both" "$dir/firewall-evidence.txt" "$evidence"
-    clone_refused "the release VM overlay without its firewall evidence file (${evidence:-unset})"
+    # The structural read below would refuse these too: the message names the gate.
+    clone_refused "the release VM overlay without its firewall evidence file (${evidence:-unset})" boot \
+      'requires RELEASE_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file'
+  done
+  # A non-empty file is not enough for release: dev's record, one written before
+  # release joined the guard config, or anything not shaped like the record.
+  for evidence in firewall-evidence.txt dev-only-evidence.json release-unprobed-evidence.json \
+    release-listed-evidence.json release-array-evidence.json; do
+    clone_reset
+    clone_select "$both" "$dir/firewall-evidence.txt" "$dir/$evidence"
+    clone_refused "a release evidence record that did not probe release ($evidence)"
   done
   # Dev's record is still required when release's overlay follows dev's.
   for evidence in '' "$dir/firewall-empty.txt"; do
@@ -783,6 +803,12 @@ mutants = [
     ('release-vm-firewall-evidence-empty', '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path && -s $path ]]',
      '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path ]]'),
     ('release-vm-evidence-reads-dev-input', 'path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)', 'path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)'),
+    # #777 security review: release's record must have probed release.
+    ('release-evidence-structure-unread', "sys.exit(0 if isinstance(probes, list) and probes else 1)' \"$path\" 2>/dev/null ||",
+     "sys.exit(0)' \"$path\" 2>/dev/null ||"),
+    ('release-evidence-any-environment', 'probes = environments.get("release") if', 'probes = environments.get("dev") if'),
+    ('release-evidence-unprobed-accepted', 'isinstance(probes, list) and probes else 1', 'isinstance(probes, list) else 1'),
+    ('release-evidence-non-json-accepted', 'except (OSError, ValueError):\n    sys.exit(1)', 'except (OSError, ValueError):\n    sys.exit(0)'),
     ('dev-vm-evidence-by-suffix', '  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then\n    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)',
      '  if [[ $files == *:docker-compose.dev-sandbox-vm.yaml ]]; then\n    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)'),
     ('vm-guard-check-dev-shape-only', '  guard_out=""\n  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then',

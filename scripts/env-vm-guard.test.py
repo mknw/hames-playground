@@ -1132,6 +1132,8 @@ class Host:
 
 class Harness(unittest.TestCase):
     two = False
+    # The config's environment order, reversed: no pin may depend on dev coming first.
+    second_first = False
 
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -1149,6 +1151,8 @@ class Harness(unittest.TestCase):
         guard.BOOT_ID.write_text("boot-1\n")
         self.host = Host(self, self.root, self.two)
         self.cfg = self.host.cfg
+        if self.second_first:
+            self.cfg["environments"].reverse()
         tls = self.root / "tls"
         tls.mkdir(mode=0o700)
         for part in ("ca", "cert", "key"):
@@ -2341,6 +2345,12 @@ class SmokeTwoEnvironments(Smoking, Harness):
                 self.assertIs(results["7"]["single_environment"], False)
 
 
+class SmokeTwoEnvironmentsSecondFirst(SmokeTwoEnvironments):
+    # #777 security review: the same pins with release listed before dev, so a
+    # positional pairing (environments[1:]) is caught whichever comes first.
+    second_first = True
+
+
 class Docs(unittest.TestCase):
     def test_the_plan_names_only_modes_the_installer_has(self):
         plan = (ROOT / "docs/plan/env-vm-network.md").read_text()
@@ -2652,6 +2662,8 @@ MUTATIONS = {
     # #648 release as the second environment: per-pair attribution in both directions.
     "per-pair-first-environment-only": ('            pairs = [e for e in config["environments"]\n                     if e["name"] != name',
                                         '            pairs = [e for e in config["environments"][1:]\n                     if e["name"] != name'),
+    "per-pair-last-environment-only": ('            pairs = [e for e in config["environments"]\n                     if e["name"] != name',
+                                       '            pairs = [e for e in config["environments"][:-1]\n                     if e["name"] != name'),
     "S2-probe-8d-embeds-nothing-live": ('lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT)', 'lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT - 1)'),
 }
 

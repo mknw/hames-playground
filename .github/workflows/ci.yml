@@ -610,7 +610,8 @@ jobs:
   clone-mutations:
     name: shell · clone mutations
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # #777 (release VM, 38 -> 45 bootstrap mutants) took 23m28s against the old 25.
+    timeout-minutes: 40
     defaults:
       run:
         working-directory: .

@@ -456,7 +456,8 @@ env_problems() {
 # -----------------------------------------------------------------------------
 # Only the persisted root .env selects the shape; a shell export cannot silently
 # drop a clone. Accept exactly §12's file order, with at most one of its dev
-# sandbox overlays: the owner socket opt-in or dev's own environment VM.
+# sandbox overlays: the owner socket opt-in or dev's own environment VM; then,
+# after dev's VM overlay only, release's own environment VM overlay.
 compose_files() {
   local files key
   # Compose accepts alternate assignment spellings that env_get cannot read.
@@ -521,8 +522,8 @@ clone_preflight() {
   # Only the operator can prove each VM's Docker port is reachable from that
   # clone's link network alone (envapp-<clone>, the app at its pinned address;
   # §12 and docs/plan/env-vm-network.md); each overlay waits for its record.
-  # Their content is not read. Matched by exact shape, never by suffix: a
-  # release overlay after dev's must not drop dev's own evidence check.
+  # Matched by exact shape, never by suffix: a release overlay after dev's must
+  # not drop dev's own evidence check. Dev's record is not read.
   if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
     path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)
     [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The dev environment VM overlay requires DEV_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
@@ -530,6 +531,18 @@ clone_preflight() {
   if [[ $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
     path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)
     [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The release environment VM overlay requires RELEASE_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+    # Release's record is the guard smoke's own machine-written JSON, read for
+    # its structure only: it must hold probes for the release environment. Dev's
+    # record, or one written before release joined the guard config, does not.
+    python3 -I -c 'import json, sys
+try:
+    record = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(1)
+environments = record.get("environments") if isinstance(record, dict) else None
+probes = environments.get("release") if isinstance(environments, dict) else None
+sys.exit(0 if isinstance(probes, list) and probes else 1)' "$path" 2>/dev/null ||
+      { printf '%s\n' "RELEASE_SANDBOX_FIREWALL_EVIDENCE is not a guard smoke record that probed the release environment (§12)" >&2; return 1; }
   fi
   # The render leaves out services of any other profile, so the validator could
   # never see them: the pinned files may declare only the app profile.

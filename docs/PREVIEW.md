@@ -1486,7 +1486,8 @@ evidence. Each step mirrors dev's [above](#dev-sandbox-on-its-own-environment-vm
    `app`. That is a firewall rule change: it adds release's own allow and reply
    rules, and nothing else ([plan §2.1](plan/env-vm-network.md#21-the-guard-table)),
    so review it before it is persisted. `--apply` refuses while any environment
-   VM runs, so dev's VM is stopped for the apply, under the dead-man. Then run
+   VM runs, so every environment VM — dev's and the release VM just provisioned
+   in step 1 — is stopped for the apply, under the dead-man. Then run
    the guard smoke: its one record covers both environments, and the
    VM-to-VM probes now attribute each pair.
 3. **Set the release-only inputs** in the root `.env`, as literal values:
@@ -1501,8 +1502,11 @@ evidence. Each step mirrors dev's [above](#dev-sandbox-on-its-own-environment-vm
    | `RELEASE_SANDBOX_LINK_ADDRESS`      | The release app's pinned IPv4 address on the `envapp-release` network |
 
    As for dev, the preflight refuses the overlay until the evidence file exists
-   and is not empty, and never reads it. Dev's own inputs and evidence stay
-   required.
+   and is not empty. Release's file is also read, for its structure only: it
+   must be a guard smoke record whose `environments` hold probes for `release`,
+   so dev's record, or one written before release joined the guard config, is
+   refused. Dev's own inputs and evidence stay required, and dev's record is
+   still not read.
 
 4. **Append the overlay after dev's**:
    `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml`.

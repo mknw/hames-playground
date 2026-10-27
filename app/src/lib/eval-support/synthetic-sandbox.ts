@@ -668,6 +668,26 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     return credited
   }
 
+  /** The bare names a successful `sandbox_read` returned earlier in THIS turn: the trace
+   * entry for the call being judged is pushed after the verdict, so every same-turn read
+   * in the trace is an earlier one. Bare names, as the scenario predicates declare them
+   * (R6DIAG row 14: the run-6 script transcribed notes it had read with `sandbox_read`).
+   * Only `sandbox_read` is credited: it is the one read that returns a file's whole
+   * content, which is what a transcription needs. */
+  const readThisTurn = (): string[] => {
+    const trace = state.trace()
+    if (!trace) return []
+    return [
+      ...new Set(
+        trace.tools
+          .filter((t) => t.turn === state.turn() && t.name === 'sandbox_read' && t.success)
+          .map((t) =>
+            typeof t.args.path === 'string' ? (t.args.path.split('/').at(-1) ?? '') : '',
+          ),
+      ),
+    ].filter(Boolean)
+  }
+
   /** The producing-request path, shared by heredoc lines and unparseable commands: the
    * scenario's captured run stands in for the interpreter, and the predicate over the
    * command plus the scripts it runs decides. Returns the predicate's verdict too — a
@@ -678,7 +698,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
   ): { result: Result; valid: boolean } => {
     const scenario = state.scenario()
     const predicate = scenario.expectedArgs?.sandbox_bash as ArgsPredicate | undefined
-    if (!predicate?.(args, scripts)) return { result: shell(''), valid: false }
+    if (!predicate?.(args, scripts, readThisTurn())) return { result: shell(''), valid: false }
     const made = scenario.sandboxRun?.files ?? {}
     for (const file of scenario.artifacts)
       record(file, made[file] ?? state.documents.get('lantern-notes.md') ?? '')
@@ -756,6 +776,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
           (state.scenario().expectedArgs?.sandbox_bash as ArgsPredicate | undefined)?.(
             args,
             scriptsOf(),
+            readThisTurn(),
           ) ?? false
         if (predicateResult) {
           lastJudge = true

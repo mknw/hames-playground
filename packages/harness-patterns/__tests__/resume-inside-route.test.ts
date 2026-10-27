@@ -601,9 +601,12 @@ describe('slice 6 · gated names only where a pause can be resumed', () => {
 // ============================================================================
 
 /** A resumable pass-through around a route that records what it was handed
- *  at each entry: the roster-only child input and the tool results its view
- *  offers. */
-function capture(inner: ConfiguredPattern<Data>, seen: { roster: unknown[]; view: string[] }[]) {
+ *  at each entry: the roster-only child input, the tool results its view
+ *  offers and the earlier-conversation block (#785). */
+function capture(
+  inner: ConfiguredPattern<Data>,
+  seen: { roster: unknown[]; view: string[]; conversation?: unknown }[],
+) {
   const resumable = wrapperResumable('capture', inner)
   return {
     ...inner,
@@ -621,6 +624,7 @@ function capture(inner: ConfiguredPattern<Data>, seen: { roster: unknown[]; view
             .ofType('tool_result')
             .get()
             .map((e) => (e.data as ToolResultEventData).tool),
+          conversation: scope.data.conversation,
         })
         return inner.fn(scope, view)
       }),
@@ -845,6 +849,50 @@ describe('fix round 1 · what the rebuild restores', () => {
       (d.decisions as Record<string, { label: string; probs: unknown }> | undefined)?.next_step
     expect(decision(resumed.data)).toMatchObject({ label: 'work' })
     expect(decision(resumed.data)?.probs).toEqual(decision(control.data)?.probs)
+  })
+
+  // Merging #785 into slice 6. MUTATIONS: drop the conversation read on the
+  // resumed iteration → its child gets no earlier-conversation block → red.
+  // Drop the `resumedIds` exclusion from `earlierPayloads` → the resumed
+  // child's roster also holds its own pre-pause results, which the control
+  // run's never did → red (and X1 above).
+  it('a resumed route in a later turn gets the earlier conversation and roster the control run did', async () => {
+    const routes = (seen: { roster: unknown[]; view: string[]; conversation?: unknown }[]) =>
+      agent(
+        { work: capture(loopOf(readThenWriteThenReturn().fn), seen) },
+        scriptedDecide([DECISION_LOOP_ANSWER, 'work', DECISION_LOOP_ANSWER]).fn,
+      )
+    const firstTurn = async (patterns: ConfiguredPattern<Data>[], control: boolean) =>
+      (
+        await harness<Data>(...patterns)(
+          'the first question',
+          's',
+          undefined,
+          undefined,
+          frameOf([], control),
+        )
+      ).serialized
+
+    const control: { roster: unknown[]; view: string[]; conversation?: unknown }[] = []
+    const c = routes(control)
+    await continueSession<Data>(
+      await firstTurn(c, true),
+      c,
+      'change it',
+      undefined,
+      frameOf([], true),
+    )
+
+    const resumed: { roster: unknown[]; view: string[]; conversation?: unknown }[] = []
+    const r = routes(resumed)
+    await pauseAndApprove(r, [], undefined, await firstTurn(r, false))
+
+    expect(control).toHaveLength(1)
+    expect(resumed).toHaveLength(2)
+    expect(control[0].conversation).toContain('the first question')
+    expect(resumed[1].conversation).toEqual(control[0].conversation)
+    const tools = (roster: unknown[]) => (roster as ToolResultEventData[]).map((d) => d.tool)
+    expect(tools(resumed[1].roster)).toEqual(tools(control[0].roster))
   })
 
   // N3. MUTATION: declare `resumable` on withReferences whatever it records →

@@ -8,8 +8,11 @@
  * demo has to prove a *specific* real name was replaced — it goes through
  * {@link mask}, which keeps enough structure to recognise a match and not
  * enough to name a person. Error paths additionally go through
- * {@link maskGraphIds}, because a Graph error message quotes the request path
- * and that path can carry a directory id.
+ * {@link maskError}, which composes {@link maskGraphIds} (a Graph error
+ * message quotes the request path, and that path can carry a directory id)
+ * with {@link maskMailAddresses} (a Neo4j uniqueness-violation message quotes
+ * the conflicting value, and one declared uniqueness constraint is on a mail
+ * address — the one identity a Graph id mask cannot cover).
  *
  * This is output hygiene, not a security control: the graph and the substitution
  * table still hold the cleartext, and are meant to.
@@ -54,6 +57,38 @@ export function mask(value: string): string {
  */
 export function maskGraphIds(value: string): string {
   return value.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '⟨id⟩')
+}
+
+/**
+ * Mail addresses out of a free-text string — `mail = 'someone@example.com'` →
+ * `mail = '⟨address⟩'`.
+ *
+ * For error paths. A Neo4j uniqueness-violation message quotes the conflicting
+ * value, and the ontology declares a uniqueness constraint on `Member.mail`, so
+ * an ingest failure on that constraint would print one employee's address
+ * verbatim — the one shape the ingest script's redaction guarantee could not
+ * hold on until this mask existed.
+ */
+export function maskMailAddresses(value: string): string {
+  return value.replace(
+    /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}]+(?:[.-][\p{L}\p{N}]+)*\.[\p{L}]{2,}/gu,
+    '⟨address⟩',
+  )
+}
+
+/**
+ * The shared error-path mask — every free-text error message an org-graph
+ * script might print goes through this before anything reaches the terminal.
+ *
+ * Mail addresses first, then Graph ids; the order is load-bearing. A mail
+ * address whose local part happens to be GUID-shaped would otherwise be
+ * matched by the id mask first and leave the domain leaking as
+ * `⟨id⟩@example.com`; masking addresses first removes the whole literal, so
+ * the id mask can only ever meet a real id. The success path never calls this:
+ * it carries only counts, property names and reason codes by construction.
+ */
+export function maskError(value: string): string {
+  return maskGraphIds(maskMailAddresses(value))
 }
 
 /** A list of literals, masked and comma-joined — for "these needles fired". */

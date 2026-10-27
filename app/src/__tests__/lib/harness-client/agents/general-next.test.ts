@@ -749,6 +749,17 @@ describe('general-next composition', () => {
     expect(collectToolNames(patterns[0])).not.toContain('resolve-library-id')
   })
 
+  // Building was never the failure: the egress gate checks its namespaces when a
+  // turn runs, and refused this one on every turn (app-path scenario 12 was red).
+  // MUTATION: declare `addressSources: ['web', 'context7', 'graph']` unconditionally.
+  it('S3b: a gateway without context7 still RUNS a turn: context7 is no address source', async () => {
+    gateway.names = [...GRAPH, 'get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch']
+    const result = await run()
+    expect(composition.egress.addressSources).toEqual(['web', 'graph'])
+    expect(result.status).not.toBe('error')
+    expect(result.response).toBe('synthetic answer')
+  })
+
   it('P4: the office actor is GIVEN Graph readers and guarded ingest by exact name', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     // The adapter renders the pattern's own allowlist (#613), so the names are

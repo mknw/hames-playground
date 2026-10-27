@@ -667,10 +667,12 @@ export function simpleLoop<T extends SimpleLoopData>(
     // every tool-catalog cache read into a write (#122). Absent when no
     // planner ran — the loop then behaves exactly as it did before.
     // #507: an orchestrating pattern's earlier-step results ride the SAME string,
-    // under a separate data heading — never inside the PLAN section.
+    // under a separate data heading — never inside the PLAN section; so does the
+    // conversation before the latest message, under a third.
     const planContext = formatPlanContext(
       (scope.data as PlannerData).plan,
       (scope.data as PlannerData).handoff,
+      (scope.data as PlannerData).conversation,
     )
 
     // THE ALLOWLIST, as one predicate. A tool withheld from agents

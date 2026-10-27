@@ -26,7 +26,7 @@ db/
 
 ### `processMessage(sessionId, message)`
 
-Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'search')`.
+Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, DEFAULT_AGENT_ID)` (`agent-ids.ts`; `general-next`).
 
 ### `processMessageStreaming(sessionId, message, agentId, onEvent)`
 

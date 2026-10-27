@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../mocks/namespace-catalog'
 import { useFlagDrivenDefaultTier } from '../../../mocks/flag-default-tier'
-import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
+import { canonicalAgentId, DEFAULT_AGENT_ID } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
   continueSession,
@@ -1758,6 +1758,19 @@ describe('general-next composition', () => {
     expect(mocks.synthesize).not.toHaveBeenCalled()
   })
 
+  // #507 flip, review finding 2: the flip makes the Anthropic-tier decisions endpoint a
+  // requirement of every new chat; unset, the turn must end visibly and call nothing.
+  it('P5b: an unconfigured Anthropic decisions endpoint ends visibly before any route or synthesis', async () => {
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    const result = await run('anthropic')
+    expect(result.status).toBe('error')
+    expect(result.context.error).toContain('JEV_DECISIONS_URL')
+    expect(requests).not.toHaveBeenCalled()
+    expect(mocks.controller).not.toHaveBeenCalled()
+    expect(mocks.actor).not.toHaveBeenCalled()
+    expect(mocks.synthesize).not.toHaveBeenCalled()
+  })
+
   it('M7: also opts into memory and gives recalled data only to synthesis', async () => {
     const memory = { owner: () => null, enabled: () => false } as unknown as MemoryConfig
     const patterns = await agent.createPatterns('synthetic-session', { ...deps, memory })
@@ -1850,21 +1863,31 @@ describe('general-next composition', () => {
     },
   )
 
-  // `general` was removed 2026-10-21 and its id folds into this agent. The default
-  // is untouched: `search` stays the default and maps to itself.
+  // `general` was removed 2026-10-21 and its id folds into this agent, which is also the
+  // one default: a new chat and every caller that names no agent open on it (#606).
   //
   // MUTATION: delete the `general: 'general-next'` entry from RENAMED_AGENT_IDS
-  // (agent-ids.ts) and the first assertion reddens.
-  it('registers the candidate with its app-side glyph while the default stays search', () => {
+  // (agent-ids.ts) and the first canonicalAgentId assertion reddens; set
+  // DEFAULT_AGENT_ID back to 'search', or spell a literal default at any site, and
+  // the default assertions redden.
+  it('registers general-next with its app-side glyph, folds general into it, and makes it the one default agent id', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
     expect(canonicalAgentId('general')).toBe('general-next')
     expect(canonicalAgentId('general-next')).toBe('general-next')
     expect(canonicalAgentId('search')).toBe('search')
-    expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
-    const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
-    expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")
-    expect(actions).toContain("agentId: string = 'search'")
+    expect(DEFAULT_AGENT_ID).toBe('general-next')
+    // Every site that names no agent reads the one constant and spells no literal id.
+    for (const file of [
+      'src/routes/index.tsx',
+      'src/components/ark-ui/ChatInterface.tsx',
+      'src/lib/harness-client/actions.server.ts',
+      'src/routes/api/events.ts',
+    ]) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toContain('DEFAULT_AGENT_ID')
+      expect(source, file).not.toMatch(/['"]search['"]\)|= 'search'|\?\? 'search'/)
+    }
   })
 })
 

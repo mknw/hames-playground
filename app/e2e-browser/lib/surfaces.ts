@@ -108,7 +108,7 @@ async function oneCompletedTurn(
   appUrl: string,
   theme: 'dark' | 'light',
 ): Promise<void> {
-  await open(page, appUrl, { theme })
+  await open(page, appUrl, { theme, agent: 'Search Agent' })
   await send(page, 'how many nodes are in the graph?')
   await waitForReplies(page, 1)
   await waitForIdle(page)

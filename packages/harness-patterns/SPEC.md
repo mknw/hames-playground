@@ -2190,7 +2190,7 @@ by type: `trackHistory ['decision_made', 'controller_action', 'tool_result']`,
 failure is stamped at the event).
 
 The reference host's `general-next` composition (#507 S3) uses this loop; it replaced
-the removed `general` agent and the default agent is unchanged. Its `orchestrator` chooses among
+the removed `general` agent and is the default agent. Its `orchestrator` chooses among
 `office-data` (guarded Microsoft 365 tools and an office sandbox),
 `info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web

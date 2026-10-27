@@ -58,6 +58,10 @@ function refusal(name: string): string {
 export interface ActorCriticData {
   attempt?: number
   intent?: string
+  /** What this run is scoped to when it is one step of a larger turn, appended
+   *  to the intent its actor and critic read. `decisionLoop` writes it for an
+   *  actorCritic route; absent, the intent is the task alone. */
+  routeScope?: string
   lastAction?: ControllerAction
   lastResult?: unknown
   feedback?: string
@@ -296,7 +300,12 @@ export function actorCritic<T extends ActorCriticData>(
         // is the method that does, as `planner` uses.
         const userMessage = view.fromAll().ofType('user_message').last(1).get()[0]
         const userContent = userMessage ? (userMessage.data as { content: string }).content : ''
-        const intent = scope.data.intent ?? userContent
+        // A route's scope follows the task, never replaces it: the critic is the
+        // loop's sole exit authority, and judging a route against the user's
+        // whole message rejected complete attempts for parts only other steps
+        // perform (#606 run 7, scenario 14). The actor reads the same intent.
+        const task = scope.data.intent ?? userContent
+        const intent = scope.data.routeScope ? `${task}\n\n${scope.data.routeScope}` : task
 
         // Call actor. We pass `attempt + 1` (1-indexed for the prompt) and
         // maxRetries so the actor's prompt can surface "Attempt N of M" and

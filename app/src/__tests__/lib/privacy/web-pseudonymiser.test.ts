@@ -92,6 +92,7 @@ import type {
   SelectorFn,
   ToolCallResult,
   UnifiedContext,
+  WarningEventData,
 } from '@hames-ai/harness-patterns/types'
 import type { DecisionLoopData } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
 
@@ -1225,9 +1226,19 @@ describe('withholding and outgoing checks', () => {
   // Boundary guards slice 4: K5's half withholds earlier content and refuses
   // NOTHING (mutation: keep the K5-local refusal of web calls); whether the call
   // leaves is the egress gate's, whose directory matrix is pinned on its own.
-  it.each(['missing', 'roster', 'table', 'directory', 'empty', 'apply'] as const)(
-    'fails closed on %s without a turn error, and leaves the call to the egress gate',
-    async (failure) => {
+  // #795: the warning names why, from the host's RosterUnavailable through
+  // core's wrapper (mutation: throw a plain Error for the directory → its reason
+  // reads filter-failed).
+  it.each([
+    ['missing', 'not-configured'],
+    ['roster', 'filter-failed'],
+    ['table', 'filter-failed'],
+    ['directory', 'directory-unreadable'],
+    ['empty', 'directory-empty'],
+    ['apply', 'filter-failed'],
+  ] as const)(
+    'fails closed on %s (reason %s) without a turn error, and leaves the call to the egress gate',
+    async (failure, reason) => {
       if (failure === 'roster')
         vi.spyOn(roster, 'extractRoster').mockImplementation(() => {
           throw new Error('sensitive roster failure')
@@ -1249,7 +1260,8 @@ describe('withholding and outgoing checks', () => {
       expect(seen[0].planContext).toContain('Steps so far:')
       expect(seen[0].planContext).not.toMatch(/PLAN|Otto|useful body|Latest results/)
       expect(scope.events.some((e) => e.type === 'error')).toBe(false)
-      expect(scope.events.filter((e) => e.type === 'warning')).toHaveLength(1)
+      const warnings = scope.events.filter((e) => e.type === 'warning')
+      expect(warnings.map((e) => (e.data as WarningEventData).detail?.reason)).toEqual([reason])
       expect(JSON.stringify(scope.events)).not.toContain('sensitive')
       vi.restoreAllMocks()
       vi.mocked(loadDirectoryRoster).mockResolvedValue([DIRECTORY])
@@ -1614,7 +1626,12 @@ describe('pre-flip LOWs (R-1, screened identity)', () => {
       ),
     )
     expect(outgoing).not.toHaveBeenCalled()
-    expect(scope.events.some((e) => e.type === 'warning')).toBe(true)
+    // K5's reason, and the gate's damage cause: both code-built names.
+    const warnings = scope.events
+      .filter((e) => e.type === 'warning')
+      .map((e) => e.data as WarningEventData)
+    expect(warnings.find((w) => w.task === 'web_privacy')?.detail?.reason).toBe('roster-damaged')
+    expect(warnings.find((w) => w.task === 'egress_check')?.detail?.cause).toBe('RosterUnavailable')
     expect(JSON.stringify(scope.events)).not.toContain('Willow')
   })
 })

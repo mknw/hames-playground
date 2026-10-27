@@ -44,6 +44,35 @@ export type PseudonymiseForWeb = (
   latestUserMessage: string,
 ) => Promise<WebPseudonymisation>
 
+/** Why the host's roster could not be built, as far as the host knows it. */
+export type RosterUnavailableReason = 'directory-empty' | 'directory-unreadable' | 'roster-damaged'
+
+/** Why the privacy filter was unavailable, as the `web_privacy` warning's
+ *  `detail.reason` names it: no `pseudonymise` supplied, a host
+ *  {@link RosterUnavailable}, or any other failure. */
+export type WebPrivacyUnavailableReason =
+  'not-configured' | RosterUnavailableReason | 'filter-failed'
+
+/**
+ * What a host's `pseudonymise` (or roster source) throws when it knows WHY the
+ * roster cannot be built. The wrapper keeps only `reason`, and only when it is
+ * one of the three; it never reads the message or the name of any error.
+ */
+export class RosterUnavailable extends Error {
+  readonly reason: RosterUnavailableReason
+  constructor(reason: RosterUnavailableReason) {
+    super(`the roster is unavailable: ${reason}`)
+    this.name = 'RosterUnavailable'
+    this.reason = reason
+  }
+}
+
+const ROSTER_REASONS: ReadonlySet<string> = new Set([
+  'directory-empty',
+  'directory-unreadable',
+  'roster-damaged',
+] satisfies RosterUnavailableReason[])
+
 export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseForWeb }) {
   return <T extends PlannerData & Record<string, unknown>>(
     pattern: ConfiguredPattern<T>,
@@ -65,6 +94,7 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       const input = scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined
       let rewritten: UnifiedContext | undefined
       let filter: WebPseudonymisation | undefined
+      let reason: WebPrivacyUnavailableReason = 'not-configured'
       // The ONE tier rule: the registered tier module's answer (an absent or
       // empty frame tier is the host's default, a present but unrecognised one is
       // the self-deployed tier, refused when unreachable; routing reads the same); the
@@ -104,11 +134,16 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
           delete data[WEB_ROSTER_INPUT]
           scope.data = rewrite(data)
         }
-      } catch {
+      } catch (error) {
         // A host error can contain identity literals. Only the fixed warning
-        // below is recorded; no exception text reaches a model or the store.
+        // below is recorded, with a reason from a fixed set: no exception text
+        // (message or name) reaches a model or the store.
         filter = undefined
         rewritten = undefined
+        reason =
+          error instanceof RosterUnavailable && ROSTER_REASONS.has(error.reason)
+            ? error.reason
+            : 'filter-failed'
       } finally {
         // Every path, including explicit Anthropic and a throwing host. Never
         // move this after inner dispatch: the payloads may be excluded siblings.
@@ -117,6 +152,10 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       if (explicitAnthropic) return pattern.fn(scope, view)
 
       if (!filter || !rewritten) {
+        // What the child would have read, counted before it is replaced: the
+        // earlier events of its view and its inherited data fields.
+        const events = view.get().filter((e) => e !== latestUser).length
+        const fields = Object.values(scope.data).filter((v) => v !== undefined).length
         scope.data = { handoff: input?.steps || undefined } as T
         // Withhold earlier content, including summaries and expansion payloads.
         // Calls are NOT refused here: the egress gate judges every outgoing call.
@@ -128,6 +167,7 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
             task: 'web_privacy',
             message: 'earlier results withheld: privacy filter unavailable',
             fallback: 'This step ran without earlier results.',
+            detail: { reason, events, fields },
           } satisfies WarningEventData,
           true,
         )

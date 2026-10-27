@@ -31,6 +31,7 @@ import {
   DECISION_LOOP_ANSWER,
   DECISION_LOOP_KEY,
   DECISION_LOOP_MAX_ITERATIONS,
+  ROUTE_SCOPE_HEADING,
   type DecisionLoopData,
   type DecisionLoopRoute,
 } from '@hames-ai/harness-patterns/patterns/decisionLoop.server'
@@ -487,6 +488,84 @@ describe('decisionLoop — what a child receives', () => {
     expect(planContexts[0]).toContain(`${CONVERSATION_HEADING} (`)
     expect(planContexts[0]).toContain(
       'User: "How many Project nodes are in the knowledge graph?"\nAssistant: "There are 42 Project nodes."',
+    )
+  })
+
+  // FIX14 (#606 run 7, scenario 14): the office route's critic judged its
+  // attempts against the user's WHOLE message and rejected every complete one
+  // for "index it for this chat", which no office tool performs. MUTATIONS,
+  // each red here: actorCritic back to `scope.data.intent ?? userContent`
+  // (critic and actor get the raw message); drop `routeScope` from the child's
+  // data in decisionLoop (same); make the intent the scope alone (the request
+  // is gone); hand the critic a different intent from the actor's.
+  it("an actorCritic route's critic and actor read the user's request scoped to that route, not the raw message", async () => {
+    const MESSAGE =
+      'I uploaded synthetic-notes.md and synthetic-sales.csv. Analyse sales against the notes, save synthetic-analysis.md, index it for this chat, and offer to answer questions about it.'
+    const { decide } = scriptedDecide(['office', 'answer'])
+    const actorIntents: string[] = []
+    const actor = vi.fn(async (input: { intent: string }) => {
+      actorIntents.push(input.intent)
+      return {
+        action: {
+          reasoning: 'r',
+          tool_name: 'search',
+          tool_args: '{}',
+          is_final: true,
+        } as ControllerAction,
+      }
+    })
+    const critic = vi.fn(async (_intent: string) => ({
+      result: { is_sufficient: true, explanation: 'ok' },
+    }))
+    const office = actorCritic<Data>(actor as never, critic as never, ['search'], {
+      patternId: 'doc',
+    })
+    const routes = {
+      office: route(office, {
+        description: 'Run code over uploaded files and save deliverables in the sandbox',
+        capability: 'compute and create files in the sandbox',
+      }),
+      lookup: route(returning('info-p', 'looked up')),
+    }
+    const ctx = await run([build(routes, decide)], { input: MESSAGE })
+    expect(critic).toHaveBeenCalledTimes(1)
+    const intent = critic.mock.calls[0][0]
+    expect(intent).toBe(
+      [
+        MESSAGE,
+        '',
+        `${ROUTE_SCOPE_HEADING}:`,
+        '- office: Run code over uploaded files and save deliverables in the sandbox',
+        '  Can: compute and create files in the sandbox',
+        '  Tools: search',
+        'Do and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.',
+      ].join('\n'),
+    )
+    // Its own entry only: no other route's work is named as this step's.
+    expect(intent).not.toContain('lookup')
+    expect(actorIntents).toEqual([intent])
+    // The child completes and the loop answers: the record is a success.
+    const record = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
+    expect(record).toMatchObject({ tool: 'office', success: true })
+  })
+
+  // MUTATION: hand `routeScope` to every child kind in decisionLoop — the
+  // simpleLoop child's data gains the key (the FRESH-data pin above goes red as
+  // well). Only actorCritic reads it, so the key stays where it is read.
+  it('only an actorCritic route is handed a route scope; a simpleLoop child keeps the raw message', async () => {
+    const { decide } = scriptedDecide(['lookup', 'office', 'answer'])
+    const seen: Record<string, unknown>[] = []
+    const lookup = fake('simpleLoop', 'info-p', (s) => {
+      seen.push({ ...s.data })
+      trackEvent(s, 'controller_action', returnAction('looked up'), true)
+    })
+    const office = fake('actorCritic', 'doc', (s) => {
+      seen.push({ ...s.data })
+    })
+    await run([build({ lookup: route(lookup), office: route(office) }, decide)])
+    expect(seen[0]).not.toHaveProperty('routeScope')
+    expect(seen[1].routeScope).toBe(
+      `${ROUTE_SCOPE_HEADING}:\n- office: does doc\nDo and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.`,
     )
   })
 

@@ -279,6 +279,22 @@ export function egressClosures(events: readonly ContextEvent[]): EgressClosures 
   return closures
 }
 
+/** Whether this turn already recorded its directory warning (everything after
+ *  the last `user_message`, the slice `egressClosures` reads): a resume re-runs
+ *  the gate, and the turn warns once. */
+function directoryWarned(events: readonly ContextEvent[]): boolean {
+  const start = events.findLastIndex((e) => e.type === 'user_message')
+  return events.slice(start + 1).some((e) => {
+    const d = e.data as Partial<WarningEventData> | undefined
+    return (
+      e.type === 'warning' &&
+      d?.task === EGRESS_WARNING_TASK &&
+      (d.message === EGRESS_WARNINGS.directoryMissing ||
+        d.message === EGRESS_WARNINGS.directoryUnreadable)
+    )
+  })
+}
+
 /** Every string a value carries (leaves and keys), for the given-address corpus. */
 function stringsOf(value: unknown, out: string[] = [], depth = 0): string[] {
   if (depth > 64) return out
@@ -552,14 +568,12 @@ export function withEgressGate(config: EgressGateConfig) {
         }
       }
       if (damaged) warn('damagedRoster', { cause: damaged })
-      else if (directory === 'empty' || directory === 'unreadable') {
-        // Loud: a server log line (no content) as well as the turn's warning.
-        console.warn(
-          `[withEgressGate] the company directory is ${directory}: outgoing requests are ` +
-            `checked without it this turn.`,
-        )
-        warn(directory === 'empty' ? 'directoryMissing' : 'directoryUnreadable')
-      }
+      // An empty or unreadable directory is announced at the turn's FIRST
+      // OUTGOING check (in `check`), not here: its fallback says outside
+      // requests were still checked, which is false on a turn that makes none.
+      // Read from the turn's events, so a resumed invocation stays quiet; set
+      // when it fires, because this invocation's record is not in them yet.
+      let directoryAnnounced = directoryWarned(ctx.events)
 
       const degraded: Degraded = { timeouts: 0, failures: 0, rosterOnly: 0, refusedUnchecked: 0 }
       const queues = new Map<string | null, Promise<unknown>>()
@@ -617,6 +631,17 @@ export function withEgressGate(config: EgressGateConfig) {
       const check = async (call: { name: string; args: Readonly<Record<string, unknown>> }) => {
         const route = currentRunFrame()?.route ?? NO_ROUTE
         const tool = egressToolLabel(call.name)
+
+        // `check` sees outgoing calls only (`egressCheck` drops local ones).
+        if ((directory === 'empty' || directory === 'unreadable') && !directoryAnnounced) {
+          directoryAnnounced = true
+          // Loud: a server log line (no content) as well as the turn's warning.
+          console.warn(
+            `[withEgressGate] the company directory is ${directory}: outgoing requests are ` +
+              `checked without it this turn.`,
+          )
+          warn(directory === 'empty' ? 'directoryMissing' : 'directoryUnreadable')
+        }
 
         /** A tripwire: count it, close the route past N, record it, and answer
          *  with the text for whether this refusal closed the route. */

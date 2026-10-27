@@ -24,6 +24,13 @@ vi.mock('@solidjs/router', () => ({
 }))
 
 // The header inbox's RPC: same story as the strip's — nothing pending here.
+// The inbox also lists conversations whose run waits on a decision
+// (decision-loop-agent slice 9); none here.
+vi.mock('~/lib/hitl/actions.server', () => ({
+  listBlockingInbox: async () => [],
+  listBlockingRequests: async () => [],
+  answerHitl: async () => [],
+}))
 vi.mock('~/lib/memory/confirm-actions.server', () => ({
   listMemoryInbox: () => Promise.resolve([]),
 }))

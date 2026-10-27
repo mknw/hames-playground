@@ -72,6 +72,10 @@ export interface TurnRequest {
   agentId: string
   settings: HarnessSettings
   signal: AbortSignal
+  /** `resume` continues a paused run (decision-loop-agent slice 9) after its
+   *  answers were recorded: no message is sent, and the server reads the
+   *  answers from the store. The stream that follows is an ordinary turn's. */
+  mode?: 'interactive' | 'resume'
 }
 
 /**
@@ -158,12 +162,14 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
 
   try {
     const response = await openChatStream(
-      {
-        sessionId: request.sessionId,
-        message: request.message,
-        agentId: request.agentId,
-        settings: request.settings,
-      },
+      request.mode === 'resume'
+        ? { sessionId: request.sessionId, settings: request.settings, mode: 'resume' }
+        : {
+            sessionId: request.sessionId,
+            message: request.message,
+            agentId: request.agentId,
+            settings: request.settings,
+          },
       request.signal,
     )
 

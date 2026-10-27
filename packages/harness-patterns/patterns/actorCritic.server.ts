@@ -136,11 +136,12 @@ export function actorCritic<T extends ActorCriticData>(
     // this pattern's `currentData`. Formatted once — it cannot change between
     // attempts — and passed to the actor as its trailing `planContext`
     // argument. Absent when no planner ran.
-    // #507: earlier-step results ride the same string under a data heading,
-    // outside the PLAN section (see `formatPlanContext`).
+    // #507: earlier-step results and the earlier conversation ride the same
+    // string under data headings, outside the PLAN section (see `formatPlanContext`).
     const planContext = formatPlanContext(
       (scope.data as PlannerData).plan,
       (scope.data as PlannerData).handoff,
+      (scope.data as PlannerData).conversation,
     )
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []

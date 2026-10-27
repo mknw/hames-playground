@@ -574,6 +574,57 @@ describe('decisionLoop handoff roster (D1/E1/E2)', () => {
   )
 })
 
+describe('the earlier conversation reaches the web route rewritten (FIX08)', () => {
+  /** Turn 1 read a mail through the doc route, which the info route may not see,
+   *  and its answer named the sender; turn 2 sends the info route a follow-up. */
+  async function followUpRun(pseudonymise: PseudonymiseForWeb | undefined) {
+    let planContext: string | undefined
+    const info = simpleLoop<Data>(
+      async (input) => {
+        planContext = input.planContext
+        return {
+          action: { reasoning: 'done', tool_name: 'Return', tool_args: 'ok', is_final: true },
+        }
+      },
+      [],
+      { patternId: 'info', rememberPriorTurns: false },
+    )
+    const loop = decisionLoop<Data>(
+      {
+        doc: { pattern: fakeRoute('doc', 'unused'), description: 'mail' },
+        info: { pattern: withPseudonymisedInputs({ pseudonymise })(info), description: 'lookup' },
+      },
+      { patternId: 'orchestrator', decide: choice(['info']), answer: 'answer' },
+    )
+    const ctx = createContext<Data>('Read my latest mail.')
+    ctx.events.push(
+      createEvent('tool_result', 'doc', { tool: 'graph_mail', result: MAIL, success: true }),
+      createEvent('assistant_message', 'response-synth', {
+        content: `${EXTERNAL.name} asked for the quote; ${DIRECTORY.displayName} is copied.`,
+        final: true,
+      }),
+      createEvent('user_message', 'harness', { content: 'Look up the company he works for.' }),
+    )
+    await withRunFrame(frame('self_deployed'), () => runChain(ctx, [loop]))
+    return planContext
+  }
+
+  // MUTATION: drop `earlierPayloads` from the roster input in decisionLoop (the
+  // sender then reaches the web route in clear: no table entry, nothing withheld).
+  it('a sender only a hidden route read in turn 1 is rewritten in turn 2', async () => {
+    const prompt = await followUpRun(createWebPseudonymiser())
+    expect(prompt).toContain('Earlier conversation')
+    expect(prompt).toMatch(/PERSON_\d+ asked for the quote; PERSON_\d+ is copied/)
+    expect(prompt).not.toMatch(/Otto|Willow|Mira|Cedar/)
+    expect(prompt).not.toContain('[withheld')
+  })
+
+  // MUTATION: carry `conversation` into the fail-closed data in withPseudonymisedInputs.
+  it('fail closed: with no filter the earlier conversation is withheld with the rest', async () => {
+    expect(await followUpRun(undefined)).toBeUndefined()
+  })
+})
+
 describe('the egress roster against the real gate (boundary guards, slice 4)', () => {
   // The pseudonymiser's fence split (`mapContent`) is a copy of `spotlight()`'s
   // header; this pin is the one that names the binding.

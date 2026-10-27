@@ -6,17 +6,48 @@
 import pg from 'pg'
 import { BYPASS_USER_ID, TEST_DATABASE_URL } from './env'
 
+/** The request a seeded conversation waits on; a graph write unless a kind
+ *  with its own copy is named (boundary guards slice 10). */
+export interface SeededRequest {
+  readonly kind: string
+  readonly question: string
+  readonly options: readonly Record<string, unknown>[]
+  readonly defaultOption: string
+  readonly summary: Record<string, unknown>
+}
+
+const GRAPH_WRITE: SeededRequest = {
+  kind: 'graph-write',
+  question: 'Change the knowledge graph?',
+  options: [
+    { id: 'approve', label: 'Approve this change', tone: 'danger' },
+    { id: 'reject', label: 'Reject', unattended: true },
+  ],
+  defaultOption: 'reject',
+  summary: { route: 'knowledge-edit' },
+}
+
 export async function seedPaused(
   id: string,
   requestId: string,
   payload: unknown,
+  title: string | null = null,
+  request: SeededRequest = GRAPH_WRITE,
+): Promise<void> {
+  await seedPausedMany(id, [{ requestId, payload, request }], title)
+}
+
+/** A paused conversation waiting on several requests, answered one after
+ *  another in the dialog (#803 review B2/B3). */
+export async function seedPausedMany(
+  id: string,
+  requests: readonly { requestId: string; payload: unknown; request?: SeededRequest }[],
   title: string | null = null,
 ): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
   await client.connect()
   try {
     const eventId = `ev-${id}`
-    const payloadRef = `ref-${requestId}`
     const events = [
       {
         id: eventId,
@@ -25,31 +56,28 @@ export async function seedPaused(
         patternId: 'harness',
         data: { content: 'Change the synthetic record.' },
       },
-      {
-        id: `${eventId}-r`,
+      ...requests.map(({ requestId, request = GRAPH_WRITE }, i) => ({
+        id: `${eventId}-r${i}`,
         type: 'hitl_request',
-        ts: 2,
+        ts: 2 + i,
         patternId: 'orchestrator',
         data: {
           v: 1,
           requestId,
           runId: eventId,
-          key: `graph-write:${requestId}`,
-          kind: 'graph-write',
-          question: 'Change the knowledge graph?',
-          options: [
-            { id: 'approve', label: 'Approve this change', tone: 'danger' },
-            { id: 'reject', label: 'Reject', unattended: true },
-          ],
-          defaultOption: 'reject',
+          key: `${request.kind}:${requestId}`,
+          kind: request.kind,
+          question: request.question,
+          options: request.options,
+          defaultOption: request.defaultOption,
           unattended: 'apply-default',
-          summary: { route: 'knowledge-edit' },
+          summary: request.summary,
           blocking: true,
-          payloadRef,
+          payloadRef: `ref-${requestId}`,
           expiresAt: Date.now() + 23 * 3_600_000,
           resumeAt: { index: 0, names: ['synthetic'] },
         },
-      },
+      })),
     ]
     const context = { sessionId: id, status: 'paused', input: '', data: {}, createdAt: 1, events }
     await client.query(
@@ -57,11 +85,20 @@ export async function seedPaused(
        VALUES ($1, $2, 'search', $3::jsonb, $4, 'paused')`,
       [id, BYPASS_USER_ID, JSON.stringify(context), title],
     )
-    await client.query(
-      `INSERT INTO hitl_payloads (payload_ref, user_id, session_id, call_key, kind, expires_at, payload)
-       VALUES ($1, $2, $3, $4, 'graph-write', NOW() + INTERVAL '1 day', $5)`,
-      [payloadRef, BYPASS_USER_ID, id, `call-${requestId}`, JSON.stringify(payload)],
-    )
+    for (const { requestId, payload, request = GRAPH_WRITE } of requests) {
+      await client.query(
+        `INSERT INTO hitl_payloads (payload_ref, user_id, session_id, call_key, kind, expires_at, payload)
+         VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '1 day', $6)`,
+        [
+          `ref-${requestId}`,
+          BYPASS_USER_ID,
+          id,
+          `call-${requestId}`,
+          request.kind,
+          JSON.stringify(payload),
+        ],
+      )
+    }
   } finally {
     await client.end()
   }

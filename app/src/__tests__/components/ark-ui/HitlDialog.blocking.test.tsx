@@ -136,6 +136,25 @@ describe('the blocking dialog', () => {
     expect(q('hitl-blocking-state')!.textContent).toContain('Nothing was decided')
   })
 
+  // #803 copy review item 6. MUTATION: drop the reason line (back to a
+  // tooltip only) → a keyboard or touch user cannot learn why → red.
+  it('says why an option cannot be chosen, in a line the button references', async () => {
+    mount({
+      request: view({
+        options: [
+          { id: 'approve', label: 'Approve', unavailable: 'the change is too large' },
+          { id: 'reject', label: 'Reject' },
+        ],
+      }),
+    })
+    await tick()
+    const approve = q('hitl-blocking-option-approve')!
+    expect((approve as HTMLButtonElement).disabled).toBe(true)
+    const line = document.getElementById(approve.getAttribute('aria-describedby')!)
+    expect(line?.textContent).toBe('Approve: the change is too large')
+    expect(approve.hasAttribute('title')).toBe(false)
+  })
+
   it('a read failure offers Retry, and never an option', async () => {
     const { onRetry } = mount({ state: 'failed' })
     await tick()

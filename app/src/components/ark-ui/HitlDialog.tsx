@@ -26,7 +26,7 @@
 import { Checkbox } from '@ark-ui/solid/checkbox'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { createUniqueId, For, Show, type JSX } from 'solid-js'
+import { createEffect, createUniqueId, For, on, Show, type JSX } from 'solid-js'
 import type { MemoryProposalView } from '~/lib/memory/proposals.server'
 import { visibleFormatChars, type BlockingRequestView } from '~/lib/hitl/blocking-view'
 
@@ -380,14 +380,22 @@ export function payloadText(payload: unknown): string {
 }
 
 const STATE_COPY: Record<Exclude<BlockingDialogState, 'ready'>, string> = {
-  loading: 'Loading the request…',
-  failed: 'The request could not be read.',
-  expired: 'This request has expired. Nothing was decided.',
-  superseded: 'This request was replaced by a newer message. Nothing was decided.',
+  loading: 'Loading…',
+  failed: 'The decision could not be loaded.',
+  expired: 'This decision has expired. Nothing was decided.',
+  superseded: 'This decision was replaced by a newer message. Nothing was decided.',
 }
 
 function BlockingDialog(props: BlockingDialogProps) {
   let safe: HTMLButtonElement | undefined
+  const reasons = createUniqueId()
+  const reasonId = (optionId: string) => `${reasons}-${optionId}`
+  /** The second press of a double-click is the same gesture as the first:
+   *  after a step it would land on the next request's button unread. */
+  const choose = (e: MouseEvent, optionId: string) => {
+    if (e.detail > 1) return
+    props.onChoose(optionId)
+  }
   const r = () => props.request
   const closedOnly = () => props.state === 'expired' || props.state === 'superseded'
   const summaryLine = () => {
@@ -397,8 +405,24 @@ function BlockingDialog(props: BlockingDialogProps) {
       props.position && props.position.count > 1
         ? `Decision ${props.position.index + 1} of ${props.position.count}. `
         : ''
-    return `${where}Nothing continues until you choose.`
+    return `${where}The agent is paused until you choose.`
   }
+  // `initialFocusEl` applies when the dialog OPENS. Moving to the next
+  // request, or a read finishing while it is open, replaces the button that
+  // had focus: the new safe action takes it, so a keyboard or screen-reader
+  // user is never left on the page body.
+  createEffect(
+    on(
+      () => [props.open, props.state, props.request?.requestId] as const,
+      ([open]) => {
+        if (!open) return
+        setTimeout(() => {
+          if (safe?.isConnected && !safe.disabled) safe.focus()
+        }, 0)
+      },
+      { defer: true },
+    ),
+  )
   return (
     <DialogShell
       open={props.open}
@@ -462,7 +486,7 @@ function BlockingDialog(props: BlockingDialogProps) {
                       }}
                     >
                       {req().payload === null
-                        ? 'The held content is no longer available.'
+                        ? 'The content this decision is about is no longer available.'
                         : payloadText(req().payload)}
                     </pre>
                   </div>
@@ -516,49 +540,68 @@ function BlockingDialog(props: BlockingDialogProps) {
           }
         >
           {(req) => (
-            <For each={req().options}>
-              {(option) => {
-                const isDefault = option.id === req().defaultOption
-                const danger = option.tone === 'danger'
-                return isDefault ? (
-                  <button
-                    type="button"
-                    data-testid={`hitl-blocking-option-${option.id}`}
-                    data-default=""
-                    ref={(el) => (safe = el)}
-                    cyber-button=""
-                    onClick={() => props.onChoose(option.id)}
-                    disabled={props.busy || !!option.unavailable}
-                    title={option.unavailable}
-                    p="x-3 y-1.5"
-                    text="xs"
-                    ring="2 transparent focus:ui-accent/40"
-                    style={{ 'min-height': '24px' }}
+            <div flex="~ col" items="end" gap="1" w="full">
+              <div flex="~" gap="2" justify="end" style={{ 'flex-wrap': 'wrap' }}>
+                <For each={req().options}>
+                  {(option) => {
+                    const isDefault = option.id === req().defaultOption
+                    const danger = option.tone === 'danger'
+                    return isDefault ? (
+                      <button
+                        type="button"
+                        data-testid={`hitl-blocking-option-${option.id}`}
+                        data-default=""
+                        ref={(el) => (safe = el)}
+                        cyber-button=""
+                        onClick={(e) => choose(e, option.id)}
+                        disabled={props.busy || !!option.unavailable}
+                        aria-describedby={option.unavailable ? reasonId(option.id) : undefined}
+                        p="x-3 y-1.5"
+                        text="xs"
+                        ring="2 transparent focus:ui-accent/40"
+                        style={{ 'min-height': '24px' }}
+                      >
+                        {visibleFormatChars(option.label)}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid={`hitl-blocking-option-${option.id}`}
+                        onClick={(e) => choose(e, option.id)}
+                        disabled={props.busy || !!option.unavailable}
+                        aria-describedby={option.unavailable ? reasonId(option.id) : undefined}
+                        p="x-3 y-1.5"
+                        text={danger ? 'xs ui-danger' : 'xs ui-text-secondary'}
+                        bg={
+                          danger
+                            ? 'ui-danger/10 hover:ui-danger/20'
+                            : 'transparent hover:ui-bg-hover'
+                        }
+                        border={danger ? '1 ui-danger' : '1 ui-border-secondary'}
+                        rounded="md"
+                        ring="2 transparent focus:ui-accent/40"
+                        style={{ 'min-height': '24px' }}
+                      >
+                        {visibleFormatChars(option.label)}
+                      </button>
+                    )
+                  }}
+                </For>
+              </div>
+              {/* Why an option cannot be chosen, where everyone can read it:
+                  a tooltip reaches neither the keyboard nor touch. */}
+              <For each={req().options.filter((o) => o.unavailable)}>
+                {(option) => (
+                  <span
+                    id={reasonId(option.id)}
+                    data-testid={`hitl-blocking-unavailable-${option.id}`}
+                    text="xs ui-text-secondary"
                   >
-                    {visibleFormatChars(option.label)}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    data-testid={`hitl-blocking-option-${option.id}`}
-                    onClick={() => props.onChoose(option.id)}
-                    disabled={props.busy || !!option.unavailable}
-                    title={option.unavailable}
-                    p="x-3 y-1.5"
-                    text={danger ? 'xs ui-danger' : 'xs ui-text-secondary'}
-                    bg={
-                      danger ? 'ui-danger/10 hover:ui-danger/20' : 'transparent hover:ui-bg-hover'
-                    }
-                    border={danger ? '1 ui-danger' : '1 ui-border-secondary'}
-                    rounded="md"
-                    ring="2 transparent focus:ui-accent/40"
-                    style={{ 'min-height': '24px' }}
-                  >
-                    {visibleFormatChars(option.label)}
-                  </button>
-                )
-              }}
-            </For>
+                    {visibleFormatChars(`${option.label}: ${option.unavailable}`)}
+                  </span>
+                )}
+              </For>
+            </div>
           )}
         </Show>
       }

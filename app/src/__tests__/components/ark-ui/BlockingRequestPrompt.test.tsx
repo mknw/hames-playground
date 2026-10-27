@@ -14,7 +14,8 @@ vi.mock('~/lib/hitl/actions.server', () => ({
 
 const { installDomObservers } = await import('../../mocks/dom-observers')
 const { render, fireEvent } = await import('@solidjs/testing-library')
-const { BlockingRequestPrompt } = await import('../../../components/ark-ui/BlockingRequestPrompt')
+const { BlockingRequestPrompt, STEP_GUARD_MS } =
+  await import('../../../components/ark-ui/BlockingRequestPrompt')
 const reviewStore = await import('../../../lib/hitl/review-store')
 
 beforeAll(() => installDomObservers())
@@ -74,6 +75,8 @@ describe('the blocking-request prompt', () => {
     await tick()
     expect(answerHitl).not.toHaveBeenCalled()
     expect(q('hitl-blocking-dialog')!.textContent).toContain('Decide b?')
+    // A press after the step's guard: a deliberate one, not the same gesture.
+    await tick(STEP_GUARD_MS)
     fireEvent.click(q('hitl-blocking-option-reject')!)
     await tick()
     expect(answerHitl).toHaveBeenCalledTimes(1)
@@ -113,7 +116,7 @@ describe('the blocking-request prompt', () => {
     listBlockingRequests.mockRejectedValueOnce(new Error('down')).mockResolvedValue([view('a')])
     mount()
     await tick()
-    expect(q('hitl-blocking-card')!.textContent).toContain('could not be read')
+    expect(q('hitl-blocking-card')!.textContent).toContain('The decisions could not be loaded.')
     fireEvent.click(q('hitl-blocking-card-retry')!)
     await tick()
     expect(q('hitl-blocking-review')).not.toBeNull()
@@ -127,7 +130,7 @@ describe('the blocking-request prompt', () => {
     await tick()
     const live = q('hitl-blocking-live')!
     expect(live.getAttribute('aria-live')).toBe('polite')
-    expect(live.textContent).toBe('Approval needed: one decision')
+    expect(live.textContent).toBe('One decision needed')
     expect(q('hitl-blocking-dialog')).toBeNull()
   })
 
@@ -136,6 +139,89 @@ describe('the blocking-request prompt', () => {
     mount({ busy: true })
     await tick()
     expect(q('hitl-blocking-card')).toBeNull()
+  })
+
+  // #803 review B2. MUTATION: drop the refocus on a request change → focus
+  // is left on the page body after the step → red.
+  it('the next request’s safe action takes focus after a step', async () => {
+    listBlockingRequests.mockResolvedValue([view('a'), view('b')])
+    mount()
+    await tick()
+    fireEvent.click(q('hitl-blocking-review')!)
+    await tick(80)
+    fireEvent.click(q('hitl-blocking-option-approve')!)
+    await tick(80)
+    expect(q('hitl-blocking-dialog')!.textContent).toContain('Decide b?')
+    expect(document.activeElement).toBe(q('hitl-blocking-option-reject'))
+  })
+
+  // #803 review B3. MUTATIONS: drop the double-click guard → the second press
+  // answers b → red; drop the step guard → a held key's second press answers
+  // b → red.
+  it('a double-press, or a repeat right after a step, answers nothing unseen', async () => {
+    listBlockingRequests.mockResolvedValue([view('a'), view('b')])
+    answerHitl.mockResolvedValue([])
+    mount()
+    await tick()
+    fireEvent.click(q('hitl-blocking-review')!)
+    await tick()
+    fireEvent.click(q('hitl-blocking-option-approve')!, { detail: 1 })
+    await tick()
+    fireEvent.click(q('hitl-blocking-option-approve')!, { detail: 2 })
+    // A key repeat: a fresh press (detail 0) inside the guard.
+    fireEvent.click(q('hitl-blocking-option-approve')!, { detail: 0 })
+    await tick()
+    expect(answerHitl).not.toHaveBeenCalled()
+    expect(q('hitl-blocking-dialog')!.textContent).toContain('Decide b?')
+    // A double-click's second press after the window is still not an answer.
+    await tick(STEP_GUARD_MS)
+    fireEvent.click(q('hitl-blocking-option-approve')!, { detail: 2 })
+    await tick()
+    expect(answerHitl).not.toHaveBeenCalled()
+  })
+
+  // #803 review B4. MUTATION: drop the expiry timer → the open dialog keeps a
+  // live option past the deadline → red.
+  it('an open dialog stops offering a live option at the deadline', async () => {
+    listBlockingRequests.mockResolvedValue([view('a', { expiresAt: Date.now() + 150 })])
+    mount()
+    await tick()
+    fireEvent.click(q('hitl-blocking-review')!)
+    await tick()
+    expect(q('hitl-blocking-option-approve')).not.toBeNull()
+    await tick(300)
+    expect(q('hitl-blocking-option-approve')).toBeNull()
+    expect(q('hitl-blocking-state')!.textContent).toContain('This decision has expired.')
+  })
+
+  // #803 review N2. MUTATION: keep the position after a re-read → a request
+  // still waiting reads as superseded → red.
+  it('after a partial failure the request still waiting is the one shown', async () => {
+    listBlockingRequests.mockResolvedValue([view('a'), view('b')])
+    answerHitl.mockResolvedValue([
+      { requestId: 'a', outcome: 'answered' },
+      { requestId: 'b', outcome: 'invalid-choice' },
+    ])
+    mount()
+    await tick()
+    fireEvent.click(q('hitl-blocking-review')!)
+    await tick()
+    fireEvent.click(q('hitl-blocking-option-approve')!)
+    await tick(STEP_GUARD_MS)
+    listBlockingRequests.mockResolvedValue([view('a', { recorded: 'approve' }), view('b')])
+    fireEvent.click(q('hitl-blocking-option-reject')!)
+    await tick()
+    expect(q('hitl-blocking-dialog')!.textContent).toContain('Decide b?')
+    expect(q('hitl-blocking-option-reject')).not.toBeNull()
+  })
+
+  // #803 copy review item 7. MUTATION: count every request → a recorded one
+  // is counted as still needed → red.
+  it('the card counts the decisions still to make', async () => {
+    listBlockingRequests.mockResolvedValue([view('a', { recorded: 'approve' }), view('b')])
+    mount()
+    await tick()
+    expect(q('hitl-blocking-card')!.textContent).toContain('One decision needed')
   })
 
   // MUTATION: ignore the inbox's ask → the header's "Decision needed" opens

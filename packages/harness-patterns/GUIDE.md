@@ -161,7 +161,12 @@ what it is allowed to (`siblingResults`, default none) and starts with fresh
 data, never `memories`. That data does carry the conversation before the
 user's latest message (the decisions model's own lines, minus that message,
 each capped and quoted), under its own data heading in `plan_context`, so a
-follow-up such as "the same count" reaches the route with its referent. And a decision that is not a decision — an error, an
+follow-up such as "the same count" reaches the route with its referent. An
+`actorCritic` route is also handed its route scope (its own agent-map entry and
+the rule that the rest of the request is other steps' work), which the pattern
+appends to the intent its actor and critic read: the critic is that route's only
+exit, and judged against the whole message it rejects complete work for a part
+no tool of the route performs. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
 not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's

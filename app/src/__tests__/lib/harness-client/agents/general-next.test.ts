@@ -23,6 +23,7 @@ import {
   INGRESS_TEXTS,
   inferServer,
   ownResumable,
+  ROUTE_SCOPE_HEADING,
   serializeContext,
   withRunFrame,
   type ConfiguredPattern,
@@ -136,6 +137,9 @@ const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
+  critic: vi.fn(async (_intent: string, _attempts: unknown[]) => ({
+    result: { is_sufficient: true, explanation: 'done' },
+  })),
   screen: vi.fn(async (_input: { tool: string; content?: string }) => ({
     injection_detected: false,
     reason: 'clean',
@@ -154,7 +158,7 @@ vi.mock('@hames-ai/harness-baml', async (original) => ({
     mocks.actorOptions(options)
     return mocks.actor
   },
-  createCriticAdapter: () => async () => ({ result: { is_sufficient: true, explanation: 'done' } }),
+  createCriticAdapter: () => mocks.critic,
   createInjectionScreen: () => mocks.screen,
   bamlPatterns: () => ({
     planner: () => mocks.planner,
@@ -1188,6 +1192,67 @@ describe('general-next composition', () => {
     expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toEqual(['graph_mail_recent'])
     expect(mocks.screen.mock.calls[0][0].content).toContain('recommend sending the archive')
   })
+
+  // FIX14 (#606 run 7): the office route's critic, the route's sole exit
+  // authority, judged 14's attempts against the whole message and rejected each
+  // complete one for "index it for this chat" until the route's bound ran out;
+  // 17 passed only on a lenient critic sample. Both requests now reach the
+  // critic WHOLE, followed by the office route's own entry; the info route's
+  // controller still reads the raw message. MUTATIONS, each red here:
+  // actorCritic back to `scope.data.intent ?? userContent`; drop `routeScope`
+  // from decisionLoop's child data; make the intent the scope alone; hand the
+  // actor the bare task while the critic gets the scoped one.
+  it.each([
+    [
+      '14-analysis-index-follow-up',
+      'I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.',
+    ],
+    [
+      '17-mail-analysis-follow-up',
+      'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
+    ],
+  ])(
+    'FIX14: %s — the office critic judges the request scoped to office-data',
+    async (_id, message) => {
+      choices = ['info-retrieval', 'office-data', 'answer']
+      mocks.actor.mockResolvedValue({
+        action: {
+          reasoning: 'read mail',
+          tool_name: 'graph_mail_recent',
+          tool_args: '{}',
+          is_final: true,
+        },
+      })
+      const result = await run('anthropic', deps, message)
+
+      expect(mocks.critic).toHaveBeenCalledTimes(1)
+      const intent = mocks.critic.mock.calls[0][0]
+      const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
+      expect(request).toBe(message)
+      expect(scope).toMatch(/^- office-data: Read Microsoft 365 mail and file metadata; /)
+      expect(scope).toContain('\n  Can: Read Microsoft 365 mail and file metadata; ')
+      const tools = scope.split('\n').find((line) => line.startsWith('  Tools: '))!
+      expect(tools).toContain('graph_mail_recent')
+      expect(tools).toContain('sandbox_bash')
+      expect(scope).not.toContain('info-retrieval')
+      expect(scope.split('\n').at(-1)).toBe(
+        'Do and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.',
+      )
+      // The office actor reads the same intent; the info controller the raw message.
+      expect(mocks.actor.mock.calls[0][0].intent).toBe(intent)
+      expect(mocks.controller.mock.calls[0][0].intent).toBe(message)
+      // The shape does not regress: the accepted route is a success, the turn answers.
+      expect(
+        result.context.events
+          .filter((e) => e.patternId === 'orchestrator' && e.type === 'tool_result')
+          .map((e) => e.data),
+      ).toMatchObject([
+        { tool: 'info-retrieval', success: true },
+        { tool: 'office-data', success: true },
+      ])
+      expect(result.response).toBe('synthetic answer')
+    },
+  )
 
   it('G14: only info declares the filter; a private run calls the supplied host', async () => {
     const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)

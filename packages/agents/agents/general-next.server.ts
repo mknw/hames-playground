@@ -1,4 +1,6 @@
-/** #507 S3: the decision-loop candidate, kept beside general until rollout. */
+/** #507 S3: the decision-loop agent. It replaced the removed `general` and is the reference
+ * app's default agent. Its display name, 'General Agent · Next', is kept on purpose for now: renaming it moves the
+ * browser e2e's chat-view baselines, so the rename is its own owner call. */
 import {
   actorCritic,
   collectToolNames,

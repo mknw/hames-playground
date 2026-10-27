@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../../mocks/namespace-catalog'
 import { useFlagDrivenDefaultTier } from '../../../mocks/flag-default-tier'
-import { canonicalAgentId } from '../../../../lib/harness-client/agent-ids'
+import { canonicalAgentId, DEFAULT_AGENT_ID } from '../../../../lib/harness-client/agent-ids'
 import {
   collectToolNames,
   continueSession,
@@ -29,6 +29,8 @@ import {
   type ConfiguredPattern,
   type ControllerFn,
   type CompactExecutionInput,
+  type LLMCallData,
+  type LLMCallRecord,
   type MemoryConfig,
 } from '@hames-ai/harness-patterns'
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
@@ -137,7 +139,15 @@ const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
-  critic: vi.fn(async (_intent: string, _attempts: unknown[]) => ({
+  critic: vi.fn<
+    (
+      _intent: string,
+      _attempts: unknown[],
+    ) => Promise<{
+      result: { is_sufficient: boolean; explanation: string; suggested_approach?: string | null }
+      llmCall?: LLMCallData
+    }>
+  >(async (_intent: string, _attempts: unknown[]) => ({
     result: { is_sufficient: true, explanation: 'done' },
   })),
   screen: vi.fn(async (_input: { tool: string; content?: string }) => ({
@@ -145,7 +155,11 @@ const mocks = vi.hoisted(() => ({
     reason: 'clean',
     spans: [] as string[],
   })),
-  synthesize: vi.fn(async (_input: CompactExecutionInput) => ({ value: 'synthetic answer' })),
+  synthesize: vi.fn(
+    async (_input: CompactExecutionInput): Promise<{ value: string; call?: LLMCallRecord }> => ({
+      value: 'synthetic answer',
+    }),
+  ),
   planner: vi.fn(async (_message: string, _intent: string, _context?: string) => ({
     plan: { reasoning: 'plan', plan: 'Use the earlier result.', n_steps: 1 },
   })),
@@ -241,6 +255,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   composition.guardConfigs = []
   mocks.synthesize.mockResolvedValue({ value: 'synthetic answer' })
+  mocks.critic.mockResolvedValue({ result: { is_sufficient: true, explanation: 'done' } })
   gateway.names = [
     ...GRAPH,
     ...INFO,
@@ -650,6 +665,106 @@ describe('general-next composition', () => {
         'also when an earlier knowledge-graph or web lookup did not find it',
       )
       expect(decisions[1].probs).toMatchObject({ answer: 1, 'read-documents': 0 })
+    },
+  )
+
+  // #507 D6 eval capture: a scripted office run's capture holds WHY the critic rejected the
+  // first attempt and WHAT synthesis answered, with the client that served each. MUTATION:
+  // make `captureTrace` drop its critic rows, or read the verdict from somewhere other than
+  // the event's own `critic_result`: red.
+  it.each(['self_deployed'])(
+    'capture: a scripted office rejection records the critic verdicts and the synthesis (%s)',
+    async (tier) => {
+      const question = scenarioQuestion('11-mail-to-file.ts')
+      choices = ['office-data', 'answer']
+      mocks.actor
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'read mail',
+            tool_name: 'graph_mail_recent',
+            tool_args: '{}',
+            is_final: true,
+          },
+        })
+        .mockResolvedValueOnce({
+          action: {
+            reasoning: 'summarised',
+            tool_name: 'graph_mail_recent',
+            tool_args: '{}',
+            is_final: true,
+          },
+        })
+      mocks.critic
+        .mockResolvedValueOnce({
+          result: {
+            is_sufficient: false,
+            explanation: 'the attempt read the mailbox but never stated the launch checklist',
+            suggested_approach: 'state the checklist items from the result',
+          },
+          llmCall: {
+            functionName: 'Critic',
+            variables: {},
+            clientName: 'LargeQwen',
+            provider: 'openai-generic',
+            rawOutput: '{"is_sufficient":false}',
+          },
+        })
+        .mockResolvedValueOnce({
+          result: { is_sufficient: true, explanation: 'done' },
+          llmCall: {
+            functionName: 'Critic',
+            variables: {},
+            clientName: 'LargeQwen',
+            provider: 'openai-generic',
+            rawOutput: '{"is_sufficient":true}',
+          },
+        })
+      mocks.synthesize.mockResolvedValueOnce({
+        value: 'Launch checklist: verify CSV export; publish notes.',
+        call: {
+          functionName: 'Synthesize',
+          variables: {},
+          clientName: 'SmallQwen',
+          provider: 'openai-generic',
+          rawOutput: 'Launch checklist: verify CSV export; publish notes.',
+        },
+      })
+      const result = await run(tier, deps, question)
+      const events = result.context.events
+      const trace: ConversationTrace = {
+        turns: [{ response: result.response, status: result.status, events }],
+        tools: [],
+        artifacts: [],
+        indexed: [],
+        retrievals: [],
+      }
+      const { criticCalls, synthesizeCalls } = captureTrace(trace, false)
+      // The rejection is on a scenario that would PASS — recorded all the same.
+      expect(criticCalls.map((c) => [c.turn, c.outcome, c.verdict])).toEqual([
+        [0, 'verdict', false],
+        [0, 'verdict', true],
+      ])
+      expect(criticCalls[0]).toMatchObject({
+        patternId: 'doc',
+        functionName: 'Critic',
+        reason: 'the attempt read the mailbox but never stated the launch checklist',
+        suggestedApproach: 'state the checklist items from the result',
+        client: 'LargeQwen',
+        rawOutput: '{"is_sufficient":false}',
+      })
+      expect(criticCalls[1].suggestedApproach).toBeUndefined()
+      expect(synthesizeCalls).toEqual([
+        {
+          turn: 0,
+          patternId: 'response-synth',
+          functionName: 'Synthesize',
+          outcome: 'completion',
+          output: 'Launch checklist: verify CSV export; publish notes.',
+          client: 'SmallQwen',
+          provider: 'openai-generic',
+          rawOutput: 'Launch checklist: verify CSV export; publish notes.',
+        },
+      ])
     },
   )
 
@@ -1758,6 +1873,19 @@ describe('general-next composition', () => {
     expect(mocks.synthesize).not.toHaveBeenCalled()
   })
 
+  // #507 flip, review finding 2: the flip makes the Anthropic-tier decisions endpoint a
+  // requirement of every new chat; unset, the turn must end visibly and call nothing.
+  it('P5b: an unconfigured Anthropic decisions endpoint ends visibly before any route or synthesis', async () => {
+    vi.stubEnv('JEV_DECISIONS_URL', '')
+    const result = await run('anthropic')
+    expect(result.status).toBe('error')
+    expect(result.context.error).toContain('JEV_DECISIONS_URL')
+    expect(requests).not.toHaveBeenCalled()
+    expect(mocks.controller).not.toHaveBeenCalled()
+    expect(mocks.actor).not.toHaveBeenCalled()
+    expect(mocks.synthesize).not.toHaveBeenCalled()
+  })
+
   it('M7: also opts into memory and gives recalled data only to synthesis', async () => {
     const memory = { owner: () => null, enabled: () => false } as unknown as MemoryConfig
     const patterns = await agent.createPatterns('synthetic-session', { ...deps, memory })
@@ -1850,21 +1978,31 @@ describe('general-next composition', () => {
     },
   )
 
-  // `general` was removed 2026-10-21 and its id folds into this agent. The default
-  // is untouched: `search` stays the default and maps to itself.
+  // `general` was removed 2026-10-21 and its id folds into this agent, which is also the
+  // one default: a new chat and every caller that names no agent open on it (#606).
   //
   // MUTATION: delete the `general: 'general-next'` entry from RENAMED_AGENT_IDS
-  // (agent-ids.ts) and the first assertion reddens.
-  it('registers the candidate with its app-side glyph while the default stays search', () => {
+  // (agent-ids.ts) and the first canonicalAgentId assertion reddens; set
+  // DEFAULT_AGENT_ID back to 'search', or spell a literal default at any site, and
+  // the default assertions redden.
+  it('registers general-next with its app-side glyph, folds general into it, and makes it the one default agent id', () => {
     const registry = readFileSync('src/lib/harness-client/registry.server.ts', 'utf8')
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
     expect(canonicalAgentId('general')).toBe('general-next')
     expect(canonicalAgentId('general-next')).toBe('general-next')
     expect(canonicalAgentId('search')).toBe('search')
-    expect(readFileSync('src/routes/index.tsx', 'utf8')).toContain("createSignal<string>('search')")
-    const actions = readFileSync('src/lib/harness-client/actions.server.ts', 'utf8')
-    expect(actions).toContain("return processMessageWithAgent(sessionId, message, 'search')")
-    expect(actions).toContain("agentId: string = 'search'")
+    expect(DEFAULT_AGENT_ID).toBe('general-next')
+    // Every site that names no agent reads the one constant and spells no literal id.
+    for (const file of [
+      'src/routes/index.tsx',
+      'src/components/ark-ui/ChatInterface.tsx',
+      'src/lib/harness-client/actions.server.ts',
+      'src/routes/api/events.ts',
+    ]) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toContain('DEFAULT_AGENT_ID')
+      expect(source, file).not.toMatch(/['"]search['"]\)|= 'search'|\?\? 'search'/)
+    }
   })
 })
 

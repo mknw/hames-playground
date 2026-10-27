@@ -12,6 +12,7 @@
  * would make and then check what the *other* children are handed.
  */
 
+import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup } from '@solidjs/testing-library'
 import { createSignal, type JSX } from 'solid-js'
@@ -586,12 +587,12 @@ describe('chat route — support panel wiring', () => {
     await mount()
     // Before the chat view has reported anything: the default agent, and no
     // answer yet — which the panel reads as "leave the tab alone".
-    expect(support.agentId).toBe('search')
+    expect(support.agentId).toBe(DEFAULT_AGENT_ID)
     expect(support.sandboxAvailable).toBeUndefined()
 
-    chat.onSelectedAgentChange('search', { usesSandbox: false })
+    chat.onSelectedAgentChange(DEFAULT_AGENT_ID, { usesSandbox: false })
     await tick()
-    expect(support.agentId).toBe('search')
+    expect(support.agentId).toBe(DEFAULT_AGENT_ID)
     expect(support.sandboxAvailable).toBe(false)
 
     chat.onSelectedAgentChange('sandbox', { usesSandbox: true })
@@ -728,7 +729,7 @@ describe('chat route — support panel wiring', () => {
 
   it('tracks the agent the chat view reports, for the agent-aware panels', async () => {
     await mount()
-    expect(support.agentId).toBe('search')
+    expect(support.agentId).toBe(DEFAULT_AGENT_ID)
     chat.onSelectedAgentChange('sandbox')
     await tick()
     expect(support.agentId).toBe('sandbox')

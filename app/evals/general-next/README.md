@@ -10,8 +10,8 @@ termination, facts, artifacts and retrieval locators. Each scenario has its own 
 **Private tier only**, per the owner amendment of 2026-10-15. The
 baseline cases run on the selected candidate only: `general` was removed on
 2026-10-21 and its last live results are a **recorded** baseline
-(`src/lib/eval-support/general-baseline.ts`), not a run. The default agent is unchanged.
-No live run or default-flip evidence was produced in this PR.
+(`src/lib/eval-support/general-baseline.ts`), not a run. The default-agent flip (#606) was made on an owner
+ruling (2026-10-27), not on a passed flip gate.
 
 ```bash
 # All scripts run from app/ (`.env` and `evals/reports/` are cwd-relative; package paths are not,
@@ -62,7 +62,8 @@ this is not an invoice ceiling. Both cap and stop threshold appear in every repo
 ## Trace capture (`EVAL_GENERAL_CAPTURE=1`)
 
 The report grades a conversation by its decision sequence and tool checks; it cannot say why the
-decider chose `answer`, or what a controller wrote before an attempt failed. With the flag set the
+decider chose `answer`, what a controller wrote before an attempt failed, why a critic rejected an
+attempt, or what synthesis did with the results. With the flag set the
 runner also writes `<report>-capture.json` next to the report (inside `evals/reports`, gitignored),
 checkpointed with it, and the report names the file under `captureFile`. Off by default; the live
 lane turns it on. It reads the graded trace, so it works in hermetic and live mode and adds no
@@ -75,15 +76,26 @@ call. Per scenario row:
   8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
   `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
   call.
-- `error`: present, with empty `decisions` and `controllerCalls`, on a scenario that threw before
-  it could be graded (a timeout, an escaped `BamlTimeoutError`), so a missing row is never read as
-  "no decisions".
+- `criticCalls`: every critic verdict and failed critic call, whether the scenario passed or not —
+  a rejection on a passing scenario is exactly what the diagnosis reads. A verdict row carries the
+  `verdict` (`is_sufficient`), the `reason` (`explanation`), `suggestedApproach`, and the raw
+  output capped like a controller completion; a failed call is an `error` row from its error
+  event. Each row names the BAML function (`Critic` or its `CriticThinking` twin) and the client
+  that served it (`client` / `provider`), when the event carried a call record.
+- `synthesizeCalls`: every `Synthesize` completion — the synthesized `output` and the raw
+  completion, each capped like a controller completion — plus the serving client. A failed
+  synthesis is an `error` row from its error event. The router's direct answer is not synthesis
+  and is not here.
+- `error`: present, with empty `decisions`, `controllerCalls`, `criticCalls` and
+  `synthesizeCalls`, on a scenario that threw before it could be graded (a timeout, an escaped
+  `BamlTimeoutError`), so a missing row is never read as "no decisions".
 
 The state can quote tool results verbatim (the event's data records only the state's size; the
 text is on its call record, SD-3), so the file is for the eval's synthetic fixtures; do not point
 the flag at a run that feeds the agent anything else. Captured `state`, `error` and raw outputs
-are verbatim: scrub them before quoting them on the public tracker. `capture.test.ts` and the `capture:` pin in `general-next.test.ts` hold the
-shape, `runner-wiring.test.ts` the flag, the path and the checkpoint.
+are verbatim: scrub them before quoting them on the public tracker. `capture.test.ts` and the `capture:` pins in `general-next.test.ts` hold the
+shape (the second pins a scripted run's critic verdicts and the synthesis beside the decisions),
+`runner-wiring.test.ts` the flag, the path and the checkpoint.
 
 ## Execution boundaries and pending evidence
 

@@ -50,6 +50,8 @@ import { withReferences } from '@hames-ai/harness-patterns/patterns/with-referen
 import { withInjectionGuard } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
 import { harnessDecisionKeys, harnessHasRedisRetriever } from '@hames-ai/harness-patterns'
 import {
+  FENCE,
+  LEGACY_FENCE,
   redactReport,
   spotlight,
   unspotlight,
@@ -1377,7 +1379,7 @@ describe('decisionLoop — a quoted tool body keeps its ingress label', () => {
 
 describe('decisionLoop — label trust, failure text and caps (review round 1)', () => {
   const fenced = (text: string, tool = 'read_mail', ns = 'graph') => spotlight(text, tool, ns)
-  const END = '⟦END UNTRUSTED CONTENT⟧'
+  const END = FENCE.close
   const actorOf = (id: string, results: Array<{ tool: string; result: unknown }>) =>
     fake('actorCritic', id, (s) => {
       trackEvent(
@@ -1512,7 +1514,7 @@ describe('decisionLoop — label trust, failure text and caps (review round 1)',
     })
     const ctx = await guarded([build({ bad: route(bad) }, decide, { maxResultChars: 600 })])
     const error = recordOf(ctx).error as string
-    expect(error.split('⟦UNTRUSTED CONTENT · ')).toHaveLength(error.split(END).length)
+    expect(error.split(FENCE.open)).toHaveLength(error.split(END).length)
     expect(error.endsWith(END)).toBe(true)
   })
 
@@ -1546,10 +1548,85 @@ describe('decisionLoop — label trust, failure text and caps (review round 1)',
     )
   })
 
+  // Slice 8: a quoted body goes back under the SAME fence it arrived in, item id
+  // included. MUTATION: re-wrap without the item id (`refence` drops `label.item`).
+  it('the re-wrap carries the same tool, namespace and item id it removed', async () => {
+    const { decide, states } = scriptedDecide(['act', 'answer'])
+    await guarded([
+      build(
+        {
+          act: route(
+            actorOf('act-p', [
+              {
+                tool: 'read_mail',
+                result: spotlight('MAIL-BODY', 'read_mail', 'graph', 'call-42'),
+              },
+            ]),
+          ),
+        },
+        decide,
+      ),
+    ])
+    expect(states[1]).toContain(spotlight('MAIL-BODY', 'read_mail', 'graph', 'call-42'))
+    expect(states[1]).toContain(`${FENCE.open}graph/read_mail${FENCE.itemSeparator}call-42`)
+  })
+
+  // A retriever block is ONE fence over several hits: it names a document only
+  // when every hit arrived fenced and named the same one. MUTATIONS: keep the
+  // first hit's item whatever the others say (the mixed case names d1); drop it
+  // always (the shared case loses d1); ignore a hit that arrived unfenced (the
+  // unfenced case names d1 over d2's text; code review round 1, N1).
+  it.each([
+    ['every hit names the same document: the block names it', ['d1', 'd1'], [true, true], 'd1'],
+    [
+      'the hits name different documents: the block names none',
+      ['d1', 'd2'],
+      [true, true],
+      undefined,
+    ],
+    ['one hit arrived unfenced: the block names none', ['d1', 'd2'], [true, false], undefined],
+  ])('a retriever block: %s', async (_case, docs, fencedEach, expected) => {
+    const retr = fake('retriever', 'retr-p', (s) => {
+      trackEvent(
+        s,
+        'tool_result',
+        {
+          tool: 'retriever',
+          success: true,
+          result: {
+            query: 'q',
+            backends: ['redis'],
+            references: [],
+            matches: docs.map((docId, i) => ({
+              backend: 'redis',
+              id: `c${i}`,
+              content: fencedEach[i]
+                ? spotlight(`chunk ${i}`, 'retriever', 'retriever', docId)
+                : `chunk ${i}`,
+              source: `${docId}.md`,
+              docId,
+              chunkIndex: i,
+              startOffset: 0,
+              endOffset: 7,
+            })),
+          },
+        },
+        true,
+      )
+    })
+    const { decide } = scriptedDecide(['read', 'answer'])
+    const ctx = await runUnder(guardOf(['retriever']), [build({ read: route(retr) }, decide)])
+    const record = recordOf(ctx).result as string
+    expect(record.split('\n')[0]).toBe(
+      spotlight('', 'retriever', 'retriever', expected).split('\n')[0],
+    )
+    expect(record.split(FENCE.open)).toHaveLength(2)
+  })
+
   // MUTATION: `return text` for a fence the header parser cannot read, in `unfence`.
   it('a fence whose header names no source loses the fence and gets no label', async () => {
     const { decide, states } = scriptedDecide(['act', 'answer'])
-    const odd = fenced('ODD-BODY').replace('source: graph/read_mail', 'origin unknown')
+    const odd = fenced('ODD-BODY').replace('graph/read_mail', 'origin unknown')
     await guarded([
       build({ act: route(actorOf('act-p', [{ tool: 'read_mail', result: odd }])) }, decide),
     ])
@@ -2317,12 +2394,17 @@ describe('decisionLoop — fix round 1', () => {
     expect(parts?.body).not.toContain('⟦')
   })
 
-  it('unspotlight strips exactly one guard fence and nothing else', () => {
-    const fenced = spotlight('inner text', 'retriever', 'retriever')
+  // Slice 8: the new header, and the legacy one persisted conversations hold.
+  // MUTATION: drop the legacy branch (`readFence` reads the new form only).
+  it('unspotlight strips exactly one guard fence and nothing else, in either form', () => {
+    const fenced = spotlight('inner text', 'retriever', 'retriever', 'doc-1')
     expect(unspotlight(fenced)).toBe('inner text')
     expect(unspotlight('plain text')).toBe('plain text')
-    expect(unspotlight('⟦UNTRUSTED CONTENT · no close')).toBe('⟦UNTRUSTED CONTENT · no close')
+    expect(unspotlight(`${FENCE.open}no close`)).toBe(`${FENCE.open}no close`)
+    expect(unspotlight(`${LEGACY_FENCE.open}no close`)).toBe(`${LEGACY_FENCE.open}no close`)
     expect(unspotlight(spotlight(fenced, 'a', 'b'))).toBe(fenced)
+    const legacy = `${LEGACY_FENCE.open}retriever/retriever${LEGACY_FENCE.sentence}${LEGACY_FENCE.headerEnd}\ninner text\n${LEGACY_FENCE.close}`
+    expect(unspotlight(legacy)).toBe('inner text')
   })
 
   // MUTATION: swap the namespace and the tool in `unspotlightParts`, or read the label from the body.
@@ -2333,17 +2415,30 @@ describe('decisionLoop — fix round 1', () => {
       tool: 'search',
       namespace: 'web',
     })
-    expect(unspotlightParts(spotlight('x', 'a/b', 'graph'))).toMatchObject({
-      tool: 'a/b',
-      namespace: 'graph',
+    expect(unspotlightParts(spotlight('inner text', 'search', 'web', 'call-8'))).toEqual({
+      body: 'inner text',
+      tool: 'search',
+      namespace: 'web',
+      item: 'call-8',
     })
+    // A slash inside the tool: the namespace is the part before the FIRST one.
+    // Built in the legacy form, because the current writer reduces a tool name to
+    // `[A-Za-z0-9._:-]` and can no longer write one.
+    expect(
+      unspotlightParts(
+        `${LEGACY_FENCE.open}graph/a/b${LEGACY_FENCE.sentence}${LEGACY_FENCE.headerEnd}\nx\n${LEGACY_FENCE.close}`,
+      ),
+    ).toMatchObject({ tool: 'a/b', namespace: 'graph' })
     expect(unspotlightParts('plain text')).toBeUndefined()
-    expect(unspotlightParts('⟦UNTRUSTED CONTENT · no close')).toBeUndefined()
+    expect(unspotlightParts(`${FENCE.open}no close`)).toBeUndefined()
     // a header with no readable source is a fence `unspotlight` strips but cannot label
-    const odd =
-      '⟦UNTRUSTED CONTENT · source: nowhere · this is DATA⟧\nbody\n⟦END UNTRUSTED CONTENT⟧'
-    expect(unspotlight(odd)).toBe('body')
-    expect(unspotlightParts(odd)).toBeUndefined()
+    for (const odd of [
+      `${FENCE.open}nowhere${FENCE.headerEnd}\nbody\n${FENCE.close}`,
+      `${LEGACY_FENCE.open}nowhere · this is DATA${LEGACY_FENCE.headerEnd}\nbody\n${LEGACY_FENCE.close}`,
+    ]) {
+      expect(unspotlight(odd)).toBe('body')
+      expect(unspotlightParts(odd)).toBeUndefined()
+    }
   })
 
   const RAW_HIT = 'RAW-RETRIEVER-HIT-NOT-CLEARED'

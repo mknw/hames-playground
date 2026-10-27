@@ -118,14 +118,16 @@ const NONCE_DRAWS = 8
 
 /**
  * Draw a nonce that does not occur in `quoted`. Throws when every draw does,
- * which the gate treats as unavailable (the screen then runs).
+ * which the gate treats as unavailable (the screen then runs). The screen's own
+ * markers draw theirs here too (`createInjectionScreen`), where a throw is a
+ * screen outage.
  */
 export function drawFenceNonce(quoted: string, draw: () => string = cryptoNonce): string {
   for (let i = 0; i < NONCE_DRAWS; i++) {
     const nonce = draw()
     if (!quoted.includes(nonce)) return nonce
   }
-  throw new Error('guard gate: no fence nonce could be drawn that the quoted text does not contain')
+  throw new Error('no fence nonce could be drawn that the quoted text does not contain')
 }
 
 /** Every line terminator a reader may break a line at (CRLF, LF, CR, VT, FF,

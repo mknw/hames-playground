@@ -41,11 +41,13 @@ function leaveReadings(bag: { collector: Collector }): void {
   Object.defineProperty(bag.collector, 'logs', { get: () => source.logs })
 }
 
-const mockScreen = vi.fn(async (_source: string, _body: string, bag: { collector: Collector }) => {
-  leaveReadings(bag)
-  if (failWith) throw failWith
-  return { injection_detected: false, reason: 'clean', spans: [] }
-})
+const mockScreen = vi.fn(
+  async (_source: string, _body: string, _boundary: string, bag: { collector: Collector }) => {
+    leaveReadings(bag)
+    if (failWith) throw failWith
+    return { injection_detected: false, reason: 'clean', spans: [] }
+  },
+)
 const mockDescribe = vi.fn(
   async (
     _tool: string,

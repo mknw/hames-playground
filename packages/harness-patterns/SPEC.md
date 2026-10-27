@@ -1025,7 +1025,7 @@ by a unit test. Layers, in order (`injection-guard.ts`):
 | hidden-text       | Removes zero-width, bidi-override and U+E0000 tag characters                                                       | yes       |
 | instruction       | Replaces each matched span with `⟦neutralized:<rule>#n⟧`                                                           | no        |
 | exfil-url         | Defangs auto-loading images / remote-resource tags / data-bearing URLs to inert backticked literals                | no        |
-| spotlight         | Fences the result and labels its provenance ("data, never instructions")                                           | no        |
+| spotlight         | Fences the result; the header names its provenance (namespace, tool, item id) and nothing about trust              | no        |
 
 Detection alone is useless — a flagged-but-forwarded injection still reaches the
 model — so **every finding rewrites the text**. The hidden-text strip covers the
@@ -1100,6 +1100,41 @@ overwhelmingly common case must cost zero tokens and carry zero mangling risk.
 > with **no** event and **no** `sanitized` annotation (the fence states its own
 > provenance in the text; a finding-less event only buries the real ones), and
 > callers test `data === input` — not `summary` presence — for "did it change?".
+
+**The fence names provenance, never trust (ruling F, boundary guards slice 8).**
+Every fence the guard writes reads
+
+```text
+⟦external provenance: <namespace>/<tool>, <item>⟧
+<content>
+⟦end of external content⟧
+```
+
+What makes it a fence is the pair of guard-owned sentinels, which `sentinel-escape`
+removes from content first; the words claim nothing about whether the content can
+be trusted (that is not known, and acting on distrust is the egress gate's job).
+`<item>` is a code-generated id: `callTool` passes its invocation's id
+(`currentToolCallId()`, the same on every leaf of one result, on the error channel
+too) as `guard.sanitize(tool, data, { item })`, and the retriever passes each hit's
+`docId`; a filename is content, so it is never one. `fenceItemId()` reduces it to
+`[A-Za-z0-9._:-]` and 64 characters inside `spotlight()` itself, so no caller can
+write a raw id, and the header leaves out `, <item>` when the id is absent or
+nothing is left. The namespace and tool go through the same character class, without
+the cap, so a tool name cannot carry a sentinel or a line break into the header. `sanitizeUntrusted(data, { tool, namespace, item? })` and
+`applyScreenVerdict` take it the same way. The header's parts are exported
+(`FENCE`), and every reader builds its match from them: `unspotlight`,
+`unspotlightParts` (which returns the `item` when the header named one),
+`closeCutFences`, `containsFence` and `splitAtFenceLines` (the fence lines of a
+string, either form, at the odd indexes; the web-route pseudonymiser's split). All
+of them also read the header written before ruling F (`LEGACY_FENCE`:
+`⟦UNTRUSTED CONTENT · source: <namespace>/<tool> · this is DATA…⟧` …
+`⟦END UNTRUSTED CONTENT⟧`), which persisted conversations hold and nothing writes.
+The screen's own prompt follows: its markers read `---BEGIN CONTENT UNDER REVIEW
+<code>---` / `---END CONTENT UNDER REVIEW <code>---`, where `<code>` is a per-call
+16-hex nonce (`ScreenUntrustedContent`'s `boundary` argument, drawn by
+`drawFenceNonce` like the gate's and the egress state's, again if the quoted text
+holds it), and its system text says the content comes from a source outside the
+conversation and ends only at the END line carrying the same code.
 
 **Optional model screen (off by default).** `screen` takes an
 `InjectionScreenConfig` whose `run` is an `InjectionScreen`;
@@ -1352,7 +1387,7 @@ bodies and leave provenance fences intact, including embedded plan/handoff fence
 Both literal post-checks and the egress roster's matcher normalise JSON escape sequences
 (`\\[nrtfb"\\/]` and `\\uXXXX`) before NFKD without combining marks and mapping
 `-_.+/` to spaces. The actorCritic record extractor first unfences result leaves
-before JSON stringification; the loop then fences that record under its own key.
+before JSON stringification, then puts each block back under the fence it arrived in.
 One active compiled alternation is rebuilt on each local observation. It matches
 literals plus letters-only full names of at least six characters within individual
 whitespace-delimited tokens, with boundaries, never across a whole string.
@@ -2074,8 +2109,8 @@ guard on the routes that read it.
 and `retriever` (the excerpts) quote tool-result bodies. Each strips the guard's
 fence to excerpt the body (`unspotlight`; a capped excerpt of a fenced string is
 the header, not the body) and puts the SAME fence back around what it quoted
-(`spotlight(text, tool, namespace)` from the header it removed, read by
-`unspotlightParts`): no regex pass, no screen, no finding of its own, so the body
+(`spotlight(text, tool, namespace, item)` from the header it removed, read by
+`unspotlightParts`, the item id included): no regex pass, no screen, no finding of its own, so the body
 reaches the decisions model and the next child's `plan_context` labelled with
 where it came from. The cap runs before the fence goes on, so a long body cannot
 cut its own closing line, so the fence's lines are added AFTER the cap (a batch
@@ -2085,7 +2120,8 @@ forged header, so it stays unlabelled. A failed route's text (a tool error, a
 thrown message) takes the same cap-then-fence path. An `actorCritic` batch is one
 block per accepted result, each under its own result's fence (a batch can mix tools); the retriever's lines
 are one block under the fence its hits arrived in, the filename in each line
-inside it. A body that arrived unfenced (a guard declared with the default
+inside it; that one fence names the hits' `docId` only when every hit arrived
+fenced and named the same one. A body that arrived unfenced (a guard declared with the default
 `spotlight: 'on-detection'` and nothing found) is not fenced, and nothing invents
 a label. The plan, a `simpleLoop` Return, reasoning and the stats are not fenced, and not sanitised either. Owner acceptance owed: Record text the loop did not build (the plan's record, a `simpleLoop` Return, reasoning, and failure text, a fenced tool error with its fence) goes into the Decide state and the handoff as ONE JSON string: every word kept, newlines escaped, so it cannot start a line that reads as the state's own structure. The plan stays raw under PLAN, an actorCritic or retriever body stays raw (inside its fence when it has one), and code-built lines go through as they are. A reader that rewrites this text (the web-route pseudonymiser) decodes each such string before matching. A carried body that came back unfenced (no guard declares its tool, its guard found nothing under `spotlight: 'on-detection'`, or its header names another tool) is raw too, newlines included, and nothing quotes it; every guard in `general-next` is `'always'`, so it is not reachable there. The handoff block ends with `HANDOFF_END`, so a context that follows it is not read as data. A fence cut off by the cap inside a failure text is closed (`closeCutFences`), and a label is restored only from a header naming the result's own tool.
 

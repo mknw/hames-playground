@@ -372,7 +372,7 @@
         "scale": "small"
       },
       "turns": ["Find the Next.js release notes and read the page. What changed in version 15.5?"],
-      "expected": "Version 15.5 makes Turbopack the default bundler; cite https://example.invalid/nextjs.",
+      "expected": "Version 15.5 makes Turbopack the default bundler; cite https://nextjs.org/blog/next-15-5.",
       "grader": [
         {
           "check": "orderedTools",
@@ -392,7 +392,7 @@
         {
           "check": "answerContains",
           "says": "module answerIncludes",
-          "facts": ["Turbopack", "https://example.invalid/nextjs"]
+          "facts": ["Turbopack", "https://nextjs.org/blog/next-15-5"]
         },
         {
           "check": "routeCompleted",

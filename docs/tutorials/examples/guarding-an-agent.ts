@@ -109,7 +109,7 @@ const { data, report } = sanitizeUntrusted(
 
 report.findings.length; // → 1
 report.neutralized; // → true
-data; // → the fenced, neutralized string
+data; // → the fenced, neutralized string: ⟦external provenance: web/web_search⟧ …
 
 console.log("[§3] findings:", report.findings.length);
 console.log("[§3] neutralized:", report.neutralized);

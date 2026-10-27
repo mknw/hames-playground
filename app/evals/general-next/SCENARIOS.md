@@ -46,7 +46,7 @@ A live pass proves: the model requests a Project count with a valid Cypher query
 
 User: “Find the Next.js release notes and read the page. What changed in version 15.5?”
 
-Expected assistant: Version 15.5 makes Turbopack the default bundler; cite https://example.invalid/nextjs. The seeded `lantern-notes.md` stays as a present-but-wrong local decoy (#775): it does not answer this ask.
+Expected assistant: Version 15.5 makes Turbopack the default bundler; cite https://nextjs.org/blog/next-15-5. The seeded `lantern-notes.md` stays as a present-but-wrong local decoy (#775): it does not answer this ask.
 
 Expected routes: `info-retrieval`. Expected tools: `search`, `fetch`.
 

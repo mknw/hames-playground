@@ -75,7 +75,7 @@ const FIXTURES: Record<string, unknown> = {
   // 03-web-read (#775): the canned web result is the POPULAR package the scenario now
   // asks about. The seeded lantern-notes.md stays as the LOCAL decoy — its content does
   // not answer this question, so the state lists a wrong document rather than a route.
-  search: [{ title: 'Next.js release notes', url: 'https://example.invalid/nextjs' }],
+  search: [{ title: 'Next.js release notes', url: 'https://nextjs.org/blog/next-15-5' }],
   fetch: 'Next.js version 15.5 makes Turbopack the default bundler for development.',
   'resolve-library-id': { libraryId: '/solidjs/solid' },
   'get-library-docs': 'const [count, setCount] = createSignal(0)',

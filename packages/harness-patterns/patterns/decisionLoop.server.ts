@@ -122,7 +122,11 @@ import {
   type ResolvedDecisionDocuments,
 } from './decisionLoop-documents.server'
 import type { PlannerData } from './planner.server'
-import { harnessPseudonymisesInputs, refuseUnresumableGates } from '../pattern-capabilities'
+import {
+  harnessPseudonymisesInputs,
+  ownResumable,
+  refuseUnresumableGates,
+} from '../pattern-capabilities'
 import { WEB_ROSTER_INPUT, type WebRosterInput } from './withPseudonymisedInputs.server'
 
 assertServerOnImport()
@@ -820,6 +824,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           fingerprint,
           route: label,
           iteration,
+          child: ownResumable(pattern)?.fingerprint ?? null,
         }
         const slot =
           resuming && paused.rest.length > 0

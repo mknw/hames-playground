@@ -33,6 +33,7 @@ import {
   purgeClosedPayloads,
   resolveHitlAnswer,
 } from '../../../lib/hitl/payloads.server'
+import { INGRESS_FLAG_KIND, INGRESS_TEXTS } from '@hames-ai/harness-patterns'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
 const sid = (name: string) => `test-held-${name}-${SUFFIX}`
@@ -293,5 +294,73 @@ describe('the table is insert-only, and the resolve is chosen by kind', () => {
     const resolve = resolveHitlAnswer('alice')
     const request = { requestId: 'req-proto', kind: 'toString' } as never
     expect(await resolve(request, { choice: 'x', flags: {} })).toBeUndefined()
+  })
+
+  // Boundary guards slice 10. MUTATION: drop the `ingress-flag` resolver →
+  // the default one runs, and the person's choice never becomes the result →
+  // red.
+  it('a flagged result becomes what the person chose, read from its own row, by its owner only', async (ctx) => {
+    skipWithoutDatabase(ctx, dbAvailable)
+    const sessionId = sid('flag')
+    const held = await holdHitlPayload({
+      userId: 'alice',
+      sessionId,
+      callKey: 'k-flag',
+      kind: INGRESS_FLAG_KIND,
+      payload: {
+        namespace: 'web',
+        tool: 'fetch',
+        content: 'the page, flagged passage kept',
+        screened: 'the page, [flagged]',
+        spans: ['flagged passage'],
+      },
+      expiresAt: soon(),
+    })
+    const ref = (held as { payloadRef: string }).payloadRef
+    const request = {
+      requestId: 'req-flag',
+      kind: INGRESS_FLAG_KIND,
+      payloadRef: ref,
+      summary: { namespace: 'web', tool: 'fetch' },
+    } as never
+    const answer = (choice: string) => ({ choice, flags: {} })
+    expect(await resolveHitlAnswer('alice')(request, answer('use-unchanged'))).toBe(
+      'the page, flagged passage kept',
+    )
+    expect(await resolveHitlAnswer('alice')(request, answer('use-sanitized'))).toBe(
+      'the page, [flagged]',
+    )
+    expect(await resolveHitlAnswer('alice')(request, answer('leave-out'))).toBe(
+      INGRESS_TEXTS.leftOut('fetch'),
+    )
+    // Another owner's read finds no row: the result is left out, never shown.
+    expect(await resolveHitlAnswer('mallory')(request, answer('use-unchanged'))).toBe(
+      INGRESS_TEXTS.leftOut('fetch'),
+    )
+    // A row of another kind is never released as a result. MUTATION: drop the
+    // kind check → the write's held statement becomes the result → red.
+    const other = await holdHitlPayload({
+      userId: 'alice',
+      sessionId,
+      callKey: 'k-write',
+      kind: 'graph-write',
+      payload: { content: 'MATCH (n) DETACH DELETE n' },
+      expiresAt: soon(),
+    })
+    const misbound = {
+      ...(request as object),
+      payloadRef: (other as { payloadRef: string }).payloadRef,
+    }
+    expect(await resolveHitlAnswer('alice')(misbound as never, answer('use-unchanged'))).toBe(
+      INGRESS_TEXTS.leftOut('fetch'),
+    )
+  })
+
+  it('an egress release has no side effect in the host', async (ctx) => {
+    skipWithoutDatabase(ctx, dbAvailable)
+    const request = { requestId: 'req-egress', kind: 'egress-release' } as never
+    expect(await resolveHitlAnswer('alice')(request, { choice: 'accept', flags: {} })).toBe(
+      undefined,
+    )
   })
 })

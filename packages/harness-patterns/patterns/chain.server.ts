@@ -7,6 +7,7 @@
 import { assertServerOnImport } from '../assert.server'
 import { activeRunFrame, amendRunFrame, type ResumeSlot } from '../run-frame.server'
 import { bracketContents, currentRunEvents } from '../resume.server'
+import { ownResumable } from '../pattern-capabilities'
 import type {
   UnifiedContext,
   ContextEvent,
@@ -189,10 +190,13 @@ async function runPatterns<T extends Record<string, unknown>>(
       try {
         // 4. Execute pattern — on a resume, inside it (slice 6). The slot is
         //    computed before this pattern's new enter event is in the bracket.
-        const result =
-          continuation && i === startAt
-            ? await amendRunFrame({ resume: resumed }, () => pattern.fn(scope, view))
-            : await pattern.fn(scope, view)
+        // Every top-level pattern runs under its own root fingerprint, which
+        // `canPauseHere()` checks the path's first step against (slice 10).
+        const root = ownResumable(pattern)?.fingerprint ?? null
+        const result = await amendRunFrame(
+          { continuationRoot: root, ...(resumed ? { resume: resumed } : {}) },
+          () => pattern.fn(scope, view),
+        )
 
         // 5. Commit events based on strategy
         const beforeLen = ctx.events.length

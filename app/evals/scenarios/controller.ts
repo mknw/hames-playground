@@ -60,7 +60,7 @@ const TOOLS: ToolDescription[] = [
 /** `tool_args` must be a JSON OBJECT string for every tool call — the loop
  *  JSON.parses it before dispatching. `Return` is the documented exception:
  *  its args are plain prose. */
-function argsParseAsObject(toolName: string, args: string): Check {
+export function argsParseAsObject(toolName: string, args: string): Check {
   if (toolName === 'Return') {
     return check(
       'tool_args (Return) is prose',

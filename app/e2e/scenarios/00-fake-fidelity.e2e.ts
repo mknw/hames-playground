@@ -155,7 +155,9 @@ beforeAll(async () => {
     ControllerThinking: () =>
       rq('ControllerThinking')('m', 'i', tools, [], null, null, null, null, null, null, viaThink),
     CriticThinking: () => rq('CriticThinking')('i', [attempt], viaThink),
-    ScreenUntrustedContent: () => rq('ScreenUntrustedContent')('web', 'content', via),
+    // `boundary` (the markers' per-call code) sits before the bag (slice 8).
+    ScreenUntrustedContent: () =>
+      rq('ScreenUntrustedContent')('web', 'content', '0123456789abcdef', via),
     RetrieveQuery: () => rq('RetrieveQuery')([], 'latest', via),
     ReferenceSelector: () => rq('ReferenceSelector')('i', [], [], via),
     GenerateConversationTitle: () => rq('GenerateConversationTitle')('m', via),

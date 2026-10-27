@@ -353,7 +353,7 @@ export async function callTool(
   if (denial) return { success: false, data: null, error: denial }
   if (hold) return { success: true, data: hold }
   return withToolCallId(async (id) => {
-    const guarded = await applyGuard(name, await dispatchTool(name, args))
+    const guarded = await applyGuard(name, await dispatchTool(name, args), id)
     // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
     // result, and a replacement is new content the guard has not seen, so it is
     // put through the same guard pass as a dispatched result. "Changed" is
@@ -373,7 +373,7 @@ export async function callTool(
       result = out
       changed = true
     }
-    return changed ? applyGuard(name, result) : result
+    return changed ? applyGuard(name, result, id) : result
   })
 }
 
@@ -396,7 +396,13 @@ function sameContent(a: ToolCallResult, b: ToolCallResult): boolean {
   }
 }
 
-async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCallResult> {
+/** `id` is the `callTool` invocation's own ({@link withToolCallId}): every fence
+ *  the guard writes on this result names it as the item id. */
+async function applyGuard(
+  name: string,
+  result: ToolCallResult,
+  id: string,
+): Promise<ToolCallResult> {
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from
   // a gateway health probe and a tool-catalog refresh, neither of which is a
   // run, and an absent guard is this chokepoint's opt-in sentinel.
@@ -409,13 +415,13 @@ async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCal
   // rewrite off `summary` would have thrown that fence away and forwarded the
   // raw payload.
   if (result.success) {
-    const { data, summary } = await guard.sanitize(name, result.data)
+    const { data, summary } = await guard.sanitize(name, result.data, { item: id })
     if (data === result.data && !summary) return result
     return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
   }
 
   if (typeof result.error !== 'string' || result.error.length === 0) return result
-  const { data: cleanedError, summary } = await guard.sanitize(name, result.error)
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, { item: id })
   if (cleanedError === result.error && !summary) return result
   return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
 }

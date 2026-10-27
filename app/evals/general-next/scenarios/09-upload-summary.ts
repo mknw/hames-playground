@@ -13,7 +13,7 @@ export const scenario: ConversationScenario = {
   expectedTools: ['sandbox_bash'],
   // Output only: the notes' content reaches the actor through the read-documents handoff, so a
   // correct script embeds it and never names the file. Naming the input would grade a habit.
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-summary.docx']) },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-summary.docx') },
   expectedRoutes: ['office-data'],
   answerIncludes: ['lantern-summary.docx', '2030-04-12'],
   artifacts: ['lantern-summary.docx'],

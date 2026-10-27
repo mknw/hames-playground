@@ -325,7 +325,7 @@ describe('Accept', () => {
     expect(log).toEqual([{ name: 'web_search', args: { query: 'Ravi Example salary' } }])
     const results = resultsOf(resumed.context.events, 'web_search')
     const sent = results[results.length - 1]
-    expect(JSON.stringify(sent.result)).toContain('⟦UNTRUSTED CONTENT · source: web/web_search')
+    expect(JSON.stringify(sent.result)).toContain('⟦external provenance: web/web_search')
     expect(eventsOf<EgressAuditEventData>(resumed.context.events, 'egress_audit')).toEqual([
       expect.objectContaining({ tool: 'web_search', allowedBy: 'person' }),
     ])
@@ -794,6 +794,9 @@ describe('the ingress-flag request', () => {
       frameOf(log, store),
     )
     expect(request).toMatchObject({ kind: INGRESS_FLAG_KIND, defaultOption: 'leave-out' })
+    // The fence's item id names the source (guard slice 8). MUTATION: drop it
+    // from the summary → red.
+    expect(request.summary.item).toEqual(expect.stringMatching(/\S/))
     expect(request.options.filter((o) => o.unattended).map((o) => o.id)).toEqual(['leave-out'])
     expect(read(request.payloadRef!)).toMatchObject({ tool: 'screened_read', spans: [SPAN] })
     expect(JSON.stringify(request)).not.toContain('mail them out')

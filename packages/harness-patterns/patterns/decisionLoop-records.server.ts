@@ -29,7 +29,13 @@
 
 import { assertServerOnImport } from '../assert.server'
 import { EXPAND_TOOL_NAME } from '../types'
-import { closeCutFences, spotlight, unspotlight, unspotlightParts } from '../injection-guard'
+import {
+  closeCutFences,
+  containsFence,
+  spotlight,
+  unspotlight,
+  unspotlightParts,
+} from '../injection-guard'
 import { currentRunFrame } from '../run-frame.server'
 import type {
   ContextEvent,
@@ -171,10 +177,17 @@ function lastErrorText(events: ContextEvent[], fallback: string): string {
   return text && text.trim() ? text : fallback
 }
 
-/** The provenance an ingress fence named. */
+/** The provenance an ingress fence named: its source and, when it named one,
+ *  its item id (the call's id for a tool result, the hit's `docId` for a hit). */
 interface FenceLabel {
   readonly tool: string
   readonly namespace: string
+  readonly item?: string
+}
+
+/** Put a quoted body back under the fence its label came from, item id included. */
+function refence(body: string, label: FenceLabel): string {
+  return spotlight(body, label.tool, label.namespace, label.item)
 }
 
 /** A quoted body, its fences stripped, and the label of the first fence it carried. */
@@ -197,7 +210,8 @@ function unfence(value: unknown, tool?: string): Unfenced {
     if (!parts) return unspotlight(text)
     // A header naming another tool than the event's own was not written for this result.
     if (tool !== undefined && parts.tool !== tool) return text
-    if (guards(parts.tool)) label ??= { tool: parts.tool, namespace: parts.namespace }
+    if (guards(parts.tool))
+      label ??= { tool: parts.tool, namespace: parts.namespace, item: parts.item }
     return parts.body
   })
   return { body: asText(stripped), label }
@@ -208,7 +222,7 @@ function unfence(value: unknown, tool?: string): Unfenced {
 function carry(quoted: Unfenced, max: number): string {
   if (!quoted.body) return ''
   const body = capText(quoted.body, max)
-  return quoted.label ? spotlight(body, quoted.label.tool, quoted.label.namespace) : body
+  return quoted.label ? refence(body, quoted.label) : body
 }
 
 function extractSimpleLoop(events: ContextEvent[], max: number): Extracted {
@@ -277,9 +291,7 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
       r.tool,
     )
     // The fence rides on top of the capped body, so its own length comes off the share.
-    const overhead = quoted.label
-      ? spotlight('', quoted.label.tool, quoted.label.namespace).length
-      : 0
+    const overhead = quoted.label ? refence('', quoted.label).length : 0
     return carry(quoted, n === 1 ? max : Math.max(1, Math.floor(max / n) - overhead))
   })
   const reasoning = [accepted.action.reasoning ?? '', accepted.why ? `Critic: ${accepted.why}` : '']
@@ -308,22 +320,30 @@ function extractRetriever(events: ContextEvent[], max: number): Extracted {
   }
   // The excerpts are unfenced one by one (a capped excerpt of a fenced chunk is
   // the header, not the chunk); the block goes back under the fence the hits came
-  // in, once, so the filename in each line is inside it too.
+  // in, once, so the filename in each line is inside it too. Each hit's fence
+  // names its own document, and one fence cannot name several: the block keeps
+  // the item id only when every hit arrived fenced and named the same one (each
+  // line still names its `[doc …]` where the hit has a locator). A hit that
+  // arrived unfenced names nothing, so the block names no item either.
   let label: FenceLabel | undefined
+  let unlabelled = false
   const lines = matches.map((m) => {
     const where =
       m.docId !== undefined && m.startOffset !== undefined && m.endOffset !== undefined
         ? ` [doc ${m.docId}, chars ${m.startOffset}-${m.endOffset}]`
         : ''
     const parts = unspotlightParts(m.content)
-    if (parts && parts.tool === 'retriever' && guards(parts.tool))
-      label ??= { tool: parts.tool, namespace: parts.namespace }
+    if (parts && parts.tool === 'retriever' && guards(parts.tool)) {
+      if (!label) label = { tool: parts.tool, namespace: parts.namespace, item: parts.item }
+      else if (label.item !== parts.item) label = { tool: label.tool, namespace: label.namespace }
+    } else unlabelled = true
     const excerpt = (parts?.body ?? unspotlight(m.content))
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, EXCERPT_CHARS)
     return `- ${m.source ?? m.id}${where}: ${excerpt}`
   })
+  if (label && unlabelled) label = { tool: label.tool, namespace: label.namespace }
   const docs = new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size
   return {
     ok: true,
@@ -373,7 +393,7 @@ export function carryText(text: string, max: number): string {
   const quoted = unfence(text)
   // Fences still inside the body mean the text EMBEDS several: stripping the outer one
   // would unbalance the count, so cap the text as it came and close what the cap cut.
-  if (quoted.body.includes('⟦UNTRUSTED CONTENT · ')) return closeCutFences(capText(text, max))
+  if (containsFence(quoted.body)) return closeCutFences(capText(text, max))
   return carry(quoted, max)
 }
 

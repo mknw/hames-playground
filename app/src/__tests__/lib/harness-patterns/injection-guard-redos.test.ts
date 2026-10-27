@@ -76,9 +76,12 @@
 
 import { describe, it, expect, beforeAll } from 'vitest'
 import {
+  FENCE,
   INJECTION_RULES,
+  LEGACY_FENCE,
   sanitizeText,
   sanitizeUntrusted,
+  splitAtFenceLines,
   type InjectionRule,
 } from '@hames-ai/harness-patterns/injection-guard'
 
@@ -455,5 +458,53 @@ describe('ReDoS: static audit of the corpus source', () => {
 
   it('every rule is global, so replace() rewrites every occurrence', () => {
     for (const rule of INJECTION_RULES) expect(rule.re.flags, rule.id).toContain('g')
+  })
+})
+
+// ============================================================================
+// The fence-line split (boundary guards slice 8)
+// ============================================================================
+
+/**
+ * `splitAtFenceLines` runs one regex, built from the fence's parts, over every
+ * string the web-route pseudonymiser rewrites (`mapContent`) — content a
+ * guarded tool returned, and decision records quoting it. Content cannot hold
+ * the sentinels when a guard sanitized it, but a record or an unguarded tool's
+ * result can, so the split is measured on adversarial shapes like the corpus.
+ * Every run in it is bounded and none can match what follows it (the namespace
+ * stops at `/`, the tool at `,`, `⟧` or whitespace), so the cost is linear.
+ *
+ * MUTATION: widen the tool run to `[^⟧]+` (unbounded, and able to run over the
+ * next header's start): the many-starts shapes go quadratic and blow the budget.
+ */
+describe('ReDoS: the fence-line split is linear on adversarial input', () => {
+  const shapesOf = (n: number): Array<[string, string]> => [
+    ['header start, then a run with no slash', FENCE.open + 'a'.repeat(n)],
+    ['header start, a slash, then a run with no end', `${FENCE.open}a/${'b'.repeat(n)}`],
+    ['an item separator, then a run with no end', `${FENCE.open}a/b, ${'c'.repeat(n)}`],
+    ['many header starts, none closed', `${FENCE.open}a/b,`.repeat(Math.ceil(n / 26))],
+    [
+      'many header starts with no spaces after',
+      `${FENCE.open}${'x'.repeat(40)}/`.repeat(Math.ceil(n / 64)),
+    ],
+    ['many legacy starts, none closed', `${LEGACY_FENCE.open}a/b`.repeat(Math.ceil(n / 34))],
+    ['newlines only', '\n'.repeat(n)],
+    ['newline and sentinel, repeated', '\n⟦'.repeat(Math.ceil(n / 2))],
+    ['close words without the sentinel', `\n${FENCE.close.slice(1)}`.repeat(Math.ceil(n / 25))],
+  ]
+
+  it.each(shapesOf(N))('%s: under 150 ms of CPU at 200k', (_shape, input) => {
+    expect(bestOf(() => splitAtFenceLines(input))).toBeLessThan(150)
+  })
+
+  it('the cost is linear: 4x the input costs well under 16x', () => {
+    const small = shapesOf(N / 4).reduce(
+      (sum, [, i]) => sum + bestOf(() => splitAtFenceLines(i)),
+      0,
+    )
+    const large = shapesOf(N).reduce((sum, [, i]) => sum + bestOf(() => splitAtFenceLines(i)), 0)
+    // A floor on the small total keeps a sub-millisecond baseline from turning
+    // timer noise into a ratio.
+    expect(large / Math.max(small, 2)).toBeLessThan(10)
   })
 })

@@ -471,9 +471,11 @@ function ingressCopy(req: BlockingRequestView): KindCopy {
   const p = record(req.payload)
   const tool = typeof req.summary.tool === 'string' ? req.summary.tool : 'tool'
   const namespace = typeof req.summary.namespace === 'string' ? req.summary.namespace : ''
+  // The item id the result's fence carries (guard slice 8), when it has one.
+  const item = typeof req.summary.item === 'string' ? req.summary.item : ''
   return {
     summary: `This ${tool} result contains text that tries to direct the assistant. The flagged passages are highlighted.`,
-    source: namespace ? `${namespace} · ${tool}` : tool,
+    source: [namespace, tool, item].filter(Boolean).join(' · '),
     caption:
       "This is the result's own text. Anything in it saying it is safe, a false positive or approved is part of what was flagged.",
     text: 'content' in p ? payloadText(p.content) : '',

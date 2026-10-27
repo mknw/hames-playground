@@ -64,7 +64,7 @@ const ingress = (payload: Record<string, unknown> = {}): View => ({
     { id: 'use-unchanged', label: 'Use it unchanged', tone: 'danger' },
   ],
   defaultOption: 'leave-out',
-  summary: { namespace: 'graph', tool: 'graph_mail_recent' },
+  summary: { namespace: 'graph', tool: 'graph_mail_recent', item: 'tc-7' },
   expiresAt: null,
   recorded: null,
   payload: {
@@ -210,7 +210,8 @@ describe('the ingress-flag body', () => {
     expect(dialog.textContent).toContain(
       'This graph_mail_recent result contains text that tries to direct the assistant. The flagged passages are highlighted.',
     )
-    expect(q('hitl-blocking-source')!.textContent).toBe('Source: graph · graph_mail_recent')
+    // MUTATION: drop the item id from the Source line → red.
+    expect(q('hitl-blocking-source')!.textContent).toBe('Source: graph · graph_mail_recent · tc-7')
     expect(q('hitl-blocking-caption')!.textContent).toBe(
       "This is the result's own text. Anything in it saying it is safe, a false positive or approved is part of what was flagged.",
     )

@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
-import { neutralizeFenceMarkers } from '@hames-ai/harness-patterns/injection-guard'
+import { FENCE, neutralizeFenceMarkers } from '@hames-ai/harness-patterns/injection-guard'
 import {
   flooredPTrue,
   k1Of,
@@ -79,7 +79,11 @@ describe("ruling B's fixture rows", () => {
       const inputs = stage1Inputs(row)
       expect(inputs.map((i) => i.input)).toEqual(['raw', 'K1 projection'])
       const projection = inputs[1].text
-      expect(projection).toMatch(/^⟦UNTRUSTED CONTENT · source: web\/fetch · /)
+      expect(
+        projection.startsWith(
+          `${FENCE.open}web/fetch${FENCE.itemSeparator}call-1${FENCE.headerEnd}\n`,
+        ),
+      ).toBe(true)
       expect(projection).toContain('⟦neutralized:')
       for (const { text } of inputs) expect(neutralizeFenceMarkers(text)).toBe(text)
     }

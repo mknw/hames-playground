@@ -15,7 +15,7 @@ export const scenario: ConversationScenario = {
   expectedArgs: {
     graph_files_search: (a) => typeof a.query === 'string' && /Lantern/i.test(a.query),
     graph_file_ingest: (a) => typeof a.item_id === 'string' && a.item_id.trim().length > 0,
-    sandbox_bash: sandboxArgs(['lantern-variance.md']),
+    sandbox_bash: sandboxArgs('lantern-variance.md'),
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['Hosting'],

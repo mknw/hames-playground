@@ -57,7 +57,7 @@ const csv = {
   messages: [
     'Use the uploaded lantern-sales.csv to total revenue by region. Save lantern-totals.csv and tell me the grand total.',
   ],
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-sales.csv', 'lantern-totals.csv']) },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-totals.csv', 'lantern-sales.csv') },
   artifacts: ['lantern-totals.csv'],
   sandboxRun: {
     stdout: 'North,47\nSouth,19\nTotal,66',
@@ -68,7 +68,7 @@ const summary = {
   messages: [
     'I uploaded lantern-notes.md. Write a short Word summary called lantern-summary.docx and give me the download link.',
   ],
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-summary.docx']) },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-summary.docx') },
   artifacts: ['lantern-summary.docx'],
 } as unknown as ConversationScenario
 
@@ -77,11 +77,11 @@ const analysis = {
     'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
   ],
   expectedArgs: {
-    sandbox_bash: sandboxArgs([
+    sandbox_bash: sandboxArgs(
+      'lantern-launch-analysis.md',
       'lantern-notes.md',
       'lantern-sales.csv',
-      'lantern-launch-analysis.md',
-    ]),
+    ),
   },
   artifacts: ['lantern-launch-analysis.md'],
 } as unknown as ConversationScenario
@@ -526,6 +526,32 @@ describe('the synthetic sandbox as a transport', () => {
     )
   })
 
+  // R6DIAG row 14: run 6's script transcribed notes it had read with `sandbox_read` — the
+  // executor held the input's content, so the run is a computation, not a silent no-op.
+  // MUTATION: stop passing `readThisTurn()` at the two predicate call sites in
+  // synthetic-sandbox.ts — both tests here go red.
+  it('credits an input the executor read through sandbox_read earlier in the same turn', async () => {
+    const { call, trace } = make(analysis)
+    expect((await call('sandbox_read', { path: '/work/in/lantern-notes.md' })).success).toBe(true)
+    // The script names the CSV it reads and the output it writes — but never the notes.
+    const script =
+      "rows = open('/work/in/lantern-sales.csv').read()\nopen('/work/out/lantern-launch-analysis.md', 'w').write(rows)\n"
+    await call('sandbox_write', { path: '/work/run.py', content: script })
+    expect((await call('sandbox_bash', { command: 'python3 /work/run.py' })).success).toBe(true)
+    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: true })
+    expect(trace.artifacts).toEqual(['lantern-launch-analysis.md'])
+  })
+
+  it('refuses the same script when nothing read the un-named input either', async () => {
+    const { call, trace } = make(analysis)
+    const script =
+      "rows = open('/work/in/lantern-sales.csv').read()\nopen('/work/out/lantern-launch-analysis.md', 'w').write(rows)\n"
+    await call('sandbox_write', { path: '/work/run.py', content: script })
+    expect((await call('sandbox_bash', { command: 'python3 /work/run.py' })).success).toBe(true)
+    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: false })
+    expect(trace.artifacts).toEqual([])
+  })
+
   it('drops the actor’s written files when a new run starts', async () => {
     const { call, newRun } = make()
     await call('sandbox_write', { path: '/work/a.py', content: 'x' })
@@ -558,7 +584,7 @@ it('replays the requests and predicates of scenarios 14 and 17 as they are writt
   const seventeen = read('17-mail-analysis-follow-up.ts')
   expect(seventeen).toContain(analysis.messages[0])
   expect(seventeen.replace(/\s+/g, ' ')).toContain(
-    "sandboxArgs([ 'lantern-notes.md', 'lantern-sales.csv', 'lantern-launch-analysis.md', ])",
+    "sandboxArgs( 'lantern-launch-analysis.md', 'lantern-notes.md', 'lantern-sales.csv', )",
   )
   expect(seventeen).toContain("artifacts: ['lantern-launch-analysis.md']")
 })
@@ -567,11 +593,11 @@ it('replays the requests and predicates of scenarios 09 and 10 as they are writt
   const read = (f: string) => readFileSync(resolve(`evals/general-next/scenarios/${f}`), 'utf8')
   const ten = read('10-csv-analysis.ts')
   expect(ten).toContain(csv.messages[0])
-  expect(ten).toContain("sandboxArgs(['lantern-sales.csv', 'lantern-totals.csv'])")
+  expect(ten).toContain("sandboxArgs('lantern-totals.csv', 'lantern-sales.csv')")
   expect(ten).toContain("artifacts: ['lantern-totals.csv']")
   expect(ten).toContain("stdout: 'North,47\\nSouth,19\\nTotal,66'")
   const nine = read('09-upload-summary.ts')
   expect(nine).toContain(summary.messages[0])
-  expect(nine).toContain("sandboxArgs(['lantern-summary.docx'])")
+  expect(nine).toContain("sandboxArgs('lantern-summary.docx')")
   expect(nine).toContain("artifacts: ['lantern-summary.docx']")
 })

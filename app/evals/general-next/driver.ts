@@ -44,6 +44,28 @@ const GRAPH_RELATIONSHIPS = [
   { from: 'Cedar', type: 'FALLS_BACK_TO', to: 'Juniper' },
   { from: 'Juniper', type: 'FALLS_BACK_TO', to: 'Cedar' },
 ]
+// The miniature graph's node rows (R6DIAG row 07): a node-property query (RETURN p.name,
+// p.observations) used to get the relationship triples too, and the controller concluded
+// "the graph might be structured differently than the schema suggests". These are the
+// schema's Project nodes — one per distinct triple endpoint, so a node read and a
+// relationship read describe the same graph — with invented, deterministic, identity-free
+// observations: nothing here carries a graded fact or a relationship endpoint, so the
+// expected answers stay derivable from GRAPH_RELATIONSHIPS alone.
+const GRAPH_NODES = [
+  'Alder',
+  'Birch',
+  'Cedar',
+  'Dune',
+  'Ember',
+  'Fern',
+  'Gulf',
+  'Haven',
+  'Iris',
+  'Juniper',
+].map((name) => ({
+  name,
+  observations: ['Provisioned at fixture setup', 'No recorded findings'],
+}))
 const FIXTURES: Record<string, unknown> = {
   // The probed get_neo4j_schema shape (an object keyed by label and relationship type;
   // property names and types are the probed vocabulary). No per-label count: a count on
@@ -127,7 +149,7 @@ export async function createDriver(
         name === 'sandbox_bash'
           ? 'Run a shell command. Inputs: /work/in/lantern-notes.md and /work/in/lantern-sales.csv. Outputs: /work/out.'
           : name === 'get_neo4j_schema' || name === 'read_neo4j_cypher'
-            ? 'Synthetic knowledge graph: a total Project count and canned Project relationship triples.'
+            ? 'Synthetic knowledge graph: a total Project count, Project node rows and canned Project relationship triples.'
             : `Synthetic ${name}; returns fixed canned fixture data.`,
       inputSchema: {
         type: 'object',
@@ -163,16 +185,22 @@ export async function createDriver(
               ? 'Graph is read-only; write refused.'
               : 'Synthetic service unavailable; retry on the next user turn.',
         }
-      // Argument-aware where the two graph facts diverge: a TOTAL-count ask over Project
-      // (the same shape the scenarios' own arg predicate grades) keeps returning the
-      // pre-existing anchor `[{ count: 42 }]`, unchanged for 02/08/13 and 07 turn 1. Every
-      // other query gets the raw relationship triples. The traversal-pattern exclusion
-      // keeps every degree/participant query — including a degree-aggregation few-shot
-      // crib, whose shape must never be answered with the count row — on the triples.
+      // Argument-aware where the three graph facts diverge: a TOTAL-count ask over
+      // Project (the same shape the scenarios' own arg predicate grades) keeps returning
+      // the pre-existing anchor `[{ count: 42 }]`, unchanged for 02/08/13 and 07 turn 1.
+      // A node-property query reads the miniature graph's node rows; a relationship or
+      // degree query — anything with a traversal pattern, or without property access —
+      // keeps the raw relationship triples. The traversal-pattern exclusion keeps every
+      // degree/participant query — including a degree-aggregation few-shot crib, whose
+      // shape must never be answered with the count row — on the triples.
       if (name === 'read_neo4j_cypher') {
         const query = typeof args.query === 'string' ? args.query : ''
         const totalCount = projectCountArgs(args) && !/-\[|\]-|--/.test(query)
-        return { success: true, data: totalCount ? [{ count: 42 }] : GRAPH_RELATIONSHIPS }
+        const nodeQuery = /\w+\.\w+/.test(query) && !/-\[|\]-|--/.test(query)
+        return {
+          success: true,
+          data: totalCount ? [{ count: 42 }] : nodeQuery ? GRAPH_NODES : GRAPH_RELATIONSHIPS,
+        }
       }
       return { success: true, data: FIXTURES[name] }
     },

@@ -112,7 +112,7 @@ Expected routes: `info-retrieval`. Expected tools: `read_neo4j_cypher`.
 
 Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries each of Dune, Ember, Fern, Gulf, Haven, Iris and Juniper; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
-A live pass proves: the model answers the follow-up from the canned graph fixture's per-entity relationship data — the three most popular projects by relationship degree and the union of their participants — in the same conversation.
+A live pass proves: the model answers the follow-up from the canned graph fixture's per-entity relationship data — the three most popular projects by relationship degree and the union of their participants — in the same conversation. The fixture answers by query shape: a node-property query (e.g. `RETURN p.name, p.observations`) gets the miniature graph's node rows; relationship and degree queries get the triples.
 
 ### 08-follow-up-failure — Retry after an explicitly failed turn
 

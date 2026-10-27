@@ -14,7 +14,7 @@ export const scenario: ConversationScenario = {
   expectedArgs: {
     graph_files_search: (a) => typeof a.query === 'string' && /Lantern/i.test(a.query),
     graph_file_ingest: (a) => typeof a.item_id === 'string' && a.item_id.trim().length > 0,
-    sandbox_bash: sandboxArgs(['lantern-brief-summary.docx']),
+    sandbox_bash: sandboxArgs('lantern-brief-summary.docx'),
   },
   expectedRoutes: ['office-data'],
   answerIncludes: ['lantern-brief-summary.docx'],

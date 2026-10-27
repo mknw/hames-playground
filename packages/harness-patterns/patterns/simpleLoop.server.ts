@@ -25,6 +25,7 @@ import type {
   EventView,
   ConfiguredPattern,
   ToolCallEventData,
+  ToolCallResult,
   ToolResultEventData,
   ControllerActionEventData,
 } from '../types'
@@ -36,7 +37,7 @@ import type { SubCall, SubCallOutcome } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.server'
 import { createHash } from 'node:crypto'
-import { currentRunId, hitlPending } from '../hitl.server'
+import { currentRunId, hitlPending, isHeldResult } from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
@@ -626,6 +627,38 @@ export function simpleLoop<T extends SimpleLoopData>(
       callKey !== undefined
         ? amendRunFrame({ callKey, batch }, () => callTool(name, args))
         : callTool(name, args)
+    /**
+     * The `onToolResult` hook, on a result before its event is committed.
+     * Failures are non-fatal: an error event, and the original result kept. A
+     * held placeholder is never handed to it: a hook that rewrote one would
+     * hide it from the resume, and the call a person releases gets the hook
+     * when it runs on re-entry (#804 review N1).
+     */
+    const hookResult = async (
+      tool: string,
+      result: ToolCallResult,
+      callId: string | undefined,
+      args: Record<string, unknown>,
+      turn: number,
+    ): Promise<void> => {
+      if (!config?.onToolResult || isHeldResult(result.data)) return
+      try {
+        const hooked = await config.onToolResult(tool, result, { callId, args })
+        if (hooked && 'data' in hooked && hooked.data !== undefined) result.data = hooked.data
+      } catch (hookErr) {
+        const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+        trackEvent(
+          scope,
+          'error',
+          {
+            error: `onToolResult hook failed for ${tool}: ${message}`,
+            severity: 'recoverable',
+            turn,
+          } as ErrorEventData,
+          true,
+        )
+      }
+    }
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -787,6 +820,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         )
         // The gate that held it answers from the recorded decision on the way.
         const result = await dispatch(call.tool, resolvedArgs, call.callKey)
+        await hookResult(call.tool, result, call.callId, resolvedArgs, again.n)
         const resultData: ToolResultEventData = {
           callId: call.callId,
           tool: call.tool,
@@ -1084,31 +1118,8 @@ export function simpleLoop<T extends SimpleLoopData>(
               tool: c.tool_name,
               run: async () => {
                 const result = await dispatch(c.tool_name, resolvedArgs, callKeys[position], true)
-                // onToolResult hook per sub-call — same non-fatal contract as
-                // the singular path.
-                if (config?.onToolResult) {
-                  try {
-                    const hookResult = await config.onToolResult(c.tool_name, result, {
-                      callId,
-                      args: resolvedArgs,
-                    })
-                    if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
-                      result.data = hookResult.data
-                    }
-                  } catch (hookErr) {
-                    const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
-                    trackEvent(
-                      scope,
-                      'error',
-                      {
-                        error: `onToolResult hook failed for ${c.tool_name}: ${message}`,
-                        severity: 'recoverable',
-                        turn,
-                      } as ErrorEventData,
-                      true,
-                    )
-                  }
-                }
+                // onToolResult hook per sub-call — same contract as the singular path.
+                await hookResult(c.tool_name, result, callId, resolvedArgs, turn)
                 return {
                   success: result.success,
                   result: result.data,
@@ -1327,30 +1338,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         const result = await dispatch(action.tool_name, resolvedArgs, callKey)
 
         // onToolResult hook: enrich/transform result before the event is committed.
-        // Failures here are non-fatal — log an error event, keep the original result.
-        if (config?.onToolResult) {
-          try {
-            const hookResult = await config.onToolResult(action.tool_name, result, {
-              callId,
-              args: resolvedArgs,
-            })
-            if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
-              result.data = hookResult.data
-            }
-          } catch (hookErr) {
-            const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
-            trackEvent(
-              scope,
-              'error',
-              {
-                error: `onToolResult hook failed for ${action.tool_name}: ${message}`,
-                severity: 'recoverable',
-                turn,
-              } as ErrorEventData,
-              true,
-            )
-          }
-        }
+        await hookResult(action.tool_name, result, callId, resolvedArgs, turn)
 
         // Track tool result event. `result.data` is already the sanitized
         // content when a `withInjectionGuard` wrapper neutralized it in

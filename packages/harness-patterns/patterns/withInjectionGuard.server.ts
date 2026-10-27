@@ -383,16 +383,24 @@ export function createInjectionGuard(
 async function flagged(payload: IngressFlagPayload): Promise<unknown> {
   if (!hitlRunAttended()) return INGRESS_TEXTS.leftOut(payload.tool)
   if (!canPauseHere()) return announceNeutralised(payload.tool, payload.screened)
-  const outcome = await askHumanHolding(
-    {
-      kind: INGRESS_FLAG_KIND,
-      question: 'Use this result?',
-      options: INGRESS_FLAG_OPTIONS,
-      defaultOption: 'leave-out',
-      summary: { namespace: payload.namespace, tool: payload.tool },
-    },
-    payload,
-  )
+  let outcome: Awaited<ReturnType<typeof askHumanHolding>>
+  try {
+    outcome = await askHumanHolding(
+      {
+        kind: INGRESS_FLAG_KIND,
+        question: 'Use this result?',
+        options: INGRESS_FLAG_OPTIONS,
+        defaultOption: 'leave-out',
+        summary: { namespace: payload.namespace, tool: payload.tool },
+      },
+      payload,
+    )
+  } catch {
+    // The payload could not be held (the host's store failed): nobody can be
+    // asked here, so the O14 default, never the screen-outage path, which
+    // would leave the flagged span in place (#804 review B1).
+    return announceNeutralised(payload.tool, payload.screened)
+  }
   if (outcome.status === 'rebound') return announceNeutralised(payload.tool, payload.screened)
   if (outcome.status === 'pending') return held(outcome, INGRESS_TEXTS.held)
   return ingressFlagResolution(outcome.choice ?? 'leave-out', payload)

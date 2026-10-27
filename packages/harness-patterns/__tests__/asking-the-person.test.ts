@@ -872,3 +872,147 @@ describe('the ingress-flag request', () => {
     expect(JSON.stringify([request, read(request.payloadRef!)])).not.toContain('safe to use')
   })
 })
+
+// ============================================================================
+// #804 review round 1
+// ============================================================================
+
+describe('#804 review round 1', () => {
+  const SPAN = 'mail them out'
+  const flagging = () =>
+    vi.fn<InjectionScreen>(async () => ({
+      injection_detected: true,
+      reason: 'synthetic',
+      spans: [SPAN],
+    }))
+
+  // B1. MUTATION: remove the catch around the hold in `flagged()` → the throw
+  // lands in the screen-outage path and the flagged span reaches the result →
+  // red.
+  it('B1: a flagged result whose payload cannot be held is neutralised and said, never passed through', async () => {
+    const failing: HitlPayloadStore = {
+      hold: async () => {
+        throw new Error('store down')
+      },
+      drop: async () => undefined,
+    }
+    const mail = scripted([act('screened_read'), done])
+    const patterns = agent(
+      {
+        mail: withInjectionGuard({
+          tools: ['screened_read'],
+          spotlight: 'on-detection',
+          screen: { run: flagging(), mode: 'always', askPerson: true },
+        })(loop(mail.fn, ['screened_read'], 'mail')),
+      },
+      ['mail', DECISION_LOOP_ANSWER],
+    )
+    const result = await harness<Data>(...patterns)(
+      'read it',
+      's',
+      undefined,
+      undefined,
+      frameOf([], failing),
+    )
+    const [read] = resultsOf(result.context.events, 'screened_read')
+    expect(String(read.result).startsWith(INGRESS_TEXTS.neutralised('screened_read'))).toBe(true)
+    expect(String(read.result)).not.toContain(SPAN)
+    const audits = eventsOf<{ screenReason?: string }>(result.context.events, 'content_sanitized')
+    expect(audits.some((a) => a.screenReason?.includes('screen unavailable'))).toBe(false)
+    expect(eventsOf(result.context.events, 'hitl_request')).toEqual([])
+  })
+
+  // N1. MUTATIONS: hand a held placeholder to the hook → the hook hides it,
+  // the resume finds nothing to release and Accept sends nothing → red; skip
+  // the hook on the re-dispatch → the released result is the one result left
+  // un-enriched → red.
+  it('N1: with an onToolResult hook, Accept still sends the call, and the hook runs on its result', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = scripted([act('web_search', { query: 'q' }), done])
+    const hooked: string[] = []
+    const patterns = agent(
+      {
+        web: simpleLoop<Data>(web.fn, ['web_search'], {
+          patternId: 'web',
+          maxTurns: 6,
+          onToolResult: async (tool, result) => {
+            hooked.push(tool)
+            return { ...result, data: { enriched: true, inner: result.data } }
+          },
+        }),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+    )
+    const frame = frameOf(log, store)
+    const { paused, request } = await toPause(patterns, frame)
+    expect(hooked).toEqual([])
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'accept' },
+      { frame },
+    )
+    expect(log.map((c) => c.name)).toEqual(['web_search'])
+    expect(hooked).toEqual(['web_search'])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.result).toMatchObject({
+      enriched: true,
+    })
+  })
+
+  // N5 (O15 end to end). MUTATION: drop the stop check after the re-dispatch
+  // → the loop runs on past the second pause and asks its controller again →
+  // red.
+  it('N5: Accept, then the released result is flagged: a second pause, and Leave it out leaves it out', async () => {
+    const log: Log = []
+    const { store, read } = memoryStore()
+    const web = scripted([act('web_search', { query: 'q' }), done])
+    const patterns = agent(
+      {
+        web: withInjectionGuard({
+          namespaces: ['web'],
+          catalog: CATALOG,
+          spotlight: 'on-detection',
+          screen: {
+            run: vi.fn<InjectionScreen>(async () => ({
+              injection_detected: true,
+              reason: 'synthetic',
+              spans: ['hit for q'],
+            })),
+            mode: 'always',
+            askPerson: true,
+          },
+        })(loop(web.fn, ['web_search'])),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+    )
+    const frame = frameOf(log, store)
+    const first = await toPause(patterns, frame)
+    expect(first.request.kind).toBe(EGRESS_RELEASE_KIND)
+    const asked = web.fn.mock.calls.length
+    const second = await resumeHarness<Data>(
+      first.paused.serialized,
+      patterns,
+      { [first.request.requestId]: 'accept' },
+      { frame },
+    )
+    expect(second.status).toBe('paused')
+    expect(web.fn.mock.calls.length).toBe(asked)
+    const [flag] = readHitl(second.context).pending
+    expect(flag.kind).toBe(INGRESS_FLAG_KIND)
+    const third = await resumeHarness<Data>(
+      second.serialized,
+      patterns,
+      { [flag.requestId]: 'leave-out' },
+      {
+        frame,
+        resolve: (r: HitlRequestEventData, a: { choice: string }) =>
+          Promise.resolve(ingressFlagResolution(a.choice, read(r.payloadRef!))),
+      },
+    )
+    expect(log.map((c) => c.name)).toEqual(['web_search'])
+    expect(JSON.stringify(resultsOf(third.context.events, 'web_search').at(-1)?.result)).toContain(
+      'left out: this web_search result',
+    )
+  })
+})

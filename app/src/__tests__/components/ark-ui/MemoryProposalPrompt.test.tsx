@@ -34,6 +34,11 @@ vi.mock('~/lib/memory/confirm-actions.server', () => ({
   answerMemoryProposal: (...a: unknown[]) => answerMemoryProposal(...a) as unknown,
 }))
 
+// The dialog's scrolling body is Ark's ScrollArea, which constructs a
+// ResizeObserver jsdom lacks.
+const { installDomObservers } = await import('../../mocks/dom-observers')
+installDomObservers()
+
 const { render, fireEvent } = await import('@solidjs/testing-library')
 const { createSignal } = await import('solid-js')
 const { MemoryProposalPrompt, PROPOSAL_POLL_MS } =

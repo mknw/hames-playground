@@ -25,6 +25,9 @@
 import { deserializeContext, readHitl, type HitlRequestEventData } from '@hames-ai/harness-patterns'
 import { loadSession } from '../harness-client/session.server'
 import { isAnswerShape, recordHitlAnswer, type HitlAnswerValue } from '../db/hitl.server'
+import { listConversations } from '../db/conversations.server'
+import { listBlockingRequestViews } from './blocking.server'
+import type { BlockingInboxEntry, BlockingRequestView } from './blocking-view'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
 
@@ -158,4 +161,25 @@ async function answerOne(
     answer: value,
   })
   return { requestId, outcome: recorded ? 'answered' : 'already-answered' }
+}
+
+/**
+ * The requests a paused conversation of the caller's waits on, with each one's
+ * held payload — the owner-gated read the approval dialog renders
+ * (decision-loop-agent slice 9). Someone else's conversation, or one that does
+ * not wait, is an empty list: never a probe for whether an id exists.
+ */
+export async function listBlockingRequests(sessionId: string): Promise<BlockingRequestView[]> {
+  const user = await requireUser()
+  if (typeof sessionId !== 'string' || !sessionId) return []
+  return listBlockingRequestViews(sessionId, user.id)
+}
+
+/** The caller's conversations that wait on them, newest first, for the header
+ *  inbox. Ids and titles only: what waits is read when the dialog opens. */
+export async function listBlockingInbox(): Promise<BlockingInboxEntry[]> {
+  const user = await requireUser()
+  return (await listConversations(user.id))
+    .filter((c) => c.status === 'paused')
+    .map((c) => ({ sessionId: c.id, title: c.title }))
 }

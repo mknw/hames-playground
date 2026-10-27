@@ -167,6 +167,20 @@ describe('runTurn — the request', () => {
     })
   })
 
+  // Decision-loop-agent slice 9. MUTATION: send the message (or the agent) on
+  // a resume → the server's resume carries a body it must not read → red.
+  it('a resume posts the session, settings and mode, and no message or agent', async () => {
+    const rec = recorder()
+    await runTurn(request({ mode: 'resume', message: '' }), rec.sink)
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({
+      sessionId: 's1',
+      settings: { maxConcurrentRuns: 3 },
+      mode: 'resume',
+    })
+  })
+
   it('announces the run once, on the first frame, however many follow', async () => {
     fetchMock.mockResolvedValue(sseResponse([controllerAction({ tool_name: 'a' }), done()]))
     const rec = recorder()

@@ -27,6 +27,7 @@
  */
 import { createHash } from 'node:crypto'
 import { assertServerOnImport } from './assert.server'
+import { ownResumable } from './pattern-capabilities'
 import { amendRunFrame, currentRunFrame, type ResumeSlot } from './run-frame.server'
 import type {
   ConfiguredPattern,
@@ -112,7 +113,13 @@ export function resumableStep<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const taken = takeResume(capability.fingerprint)
-  return onPath({ pattern: kind, fingerprint: capability.fingerprint }, childResume(taken), fn)
+  const segment: ContinuationSegment = { pattern: kind, fingerprint: capability.fingerprint }
+  const inner = capability.next?.(segment)
+  return onPath(
+    { ...segment, child: inner ? (ownResumable(inner)?.fingerprint ?? null) : null },
+    childResume(taken),
+    fn,
+  )
 }
 
 /**

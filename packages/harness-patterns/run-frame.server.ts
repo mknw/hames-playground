@@ -62,6 +62,7 @@ import type {
   ByTier,
   ContextEvent,
   ContinuationSegment,
+  HeldResult,
   HitlPayloadStore,
   ToolCallResult,
 } from './types'
@@ -107,7 +108,12 @@ export interface InferenceSlot {
 export type EgressCheck = (call: {
   readonly name: string
   readonly args: Readonly<Record<string, unknown>>
-}) => string | void | Promise<string | void>
+}) => EgressVerdict | Promise<EgressVerdict>
+
+/** A denial (its feedback), nothing (the call goes), or the call HELD for a
+ *  person (boundary guards slice 10): `callTool` returns the placeholder as
+ *  the call's result, dispatches nothing, and the loop pauses on it. */
+export type EgressVerdict = string | void | { readonly held: HeldResult }
 
 /** One stash document write, as an observer sees it: which conversation's stash
  *  and which document. Never the content. */
@@ -186,6 +192,12 @@ export interface RunFrame {
    *  owner and conversation (slice 8). Supplied by the host around its main
    *  run, beside `hitl`. */
   hitlPayloads?: HitlPayloadStore
+  /** The OWN resumable fingerprint of the top-level pattern this code runs
+   *  under, `null` when it has none. Set by `runChain` (slice 10). */
+  continuationRoot?: string | null
+  /** The call this code runs inside is one of a multi-call turn, which cannot
+   *  pause part way. Set by `simpleLoop` around each dispatch (slice 10). */
+  batch?: boolean
 }
 
 /** What a resumed invocation is handed (slice 6). */
@@ -236,6 +248,8 @@ export interface ActiveRunFrame {
   readonly gatedTools: readonly string[]
   readonly callKey?: string
   readonly hitlPayloads?: HitlPayloadStore
+  readonly continuationRoot?: string | null
+  readonly batch?: boolean
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -380,6 +394,8 @@ function build(frame: RunFrame): ActiveRunFrame {
     gatedTools: frame.gatedTools ? Object.freeze([...frame.gatedTools]) : NO_HOOKS,
     callKey: frame.callKey,
     hitlPayloads: frame.hitlPayloads,
+    continuationRoot: frame.continuationRoot,
+    batch: frame.batch,
   }
 }
 
@@ -464,7 +480,7 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *   - `resume` REPLACES, and `null` clears it: a pattern on a resumed path
  *     hands its child the rest of the path, and any other child none.
  *   - `gatedTools` UNION: a name declared gated above stays gated below.
- *   - `callKey` and `hitlPayloads` REPLACE.
+ *   - `callKey`, `hitlPayloads`, `continuationRoot` and `batch` REPLACE.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -515,6 +531,9 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       : open.gatedTools,
     callKey: partial.callKey ?? open.callKey,
     hitlPayloads: partial.hitlPayloads ?? open.hitlPayloads,
+    continuationRoot:
+      partial.continuationRoot !== undefined ? partial.continuationRoot : open.continuationRoot,
+    batch: partial.batch ?? open.batch,
   }
   return store.run(amended, fn)
 }

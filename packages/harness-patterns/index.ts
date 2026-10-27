@@ -76,6 +76,8 @@ export type {
   LoopRecoveryFailure,
 
   // Human in the loop (#433)
+  ContinuationSegment,
+  ResumableCapability,
   HitlFlag,
   HitlOption,
   HitlUnattended,
@@ -242,7 +244,21 @@ export {
   harnessDecisionKeys,
   harnessUsesMemory,
   harnessPseudonymisesInputs,
+  ownResumable,
+  followContinuation,
+  refuseUnresumableGates,
 } from './pattern-capabilities'
+
+// Resume inside a route (slice 6): how a host's own wrapper joins the path.
+export {
+  resumableFingerprint,
+  wrapperResumable,
+  resumableStep,
+  takeResume,
+  childResume,
+  onPath,
+  type TakenResume,
+} from './resume.server'
 
 // ============================================================================
 // Harness

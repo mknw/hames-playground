@@ -198,7 +198,7 @@ This differs from the sketch's `skip_to_synthesizer: synthesizer(…)` route, be
 
 The planner produces text only and runs no tool. It writes child-local `data.plan`, but nothing copies that raw data back. Instead its committed `plan_created` event (`packages/harness-patterns/patterns/planner.server.ts:196-211`) is extracted and sanitized as a route-output record; only that record supplies the PLAN section of later children's `plan_context`, until a later `think` replaces it. This reconciles replanning context with the child-data isolation rule.
 
-**Amended by #692:** a `planner` route is not offered straight after itself, nor once a plan exists this turn (live evidence: `think` chosen six of six iterations in one run, and twice in a row in another). A later `think` replacing the plan is therefore opt-in per route (`allowReplan`), not the default; `general-next` does not opt in. See SPEC's "What is offered". The guard reads only this run's records and latest plan, so it follows whatever the loop holds: today a resume re-enters the loop with neither (resume step 11); once slice 6 rebuilds them, a plan made before the pause keeps the planner withheld.
+**Amended by #692:** a `planner` route is not offered straight after itself, nor once a plan exists this turn (live evidence: `think` chosen six of six iterations in one run, and twice in a row in another). A later `think` replacing the plan is therefore opt-in per route (`allowReplan`), not the default; `general-next` does not opt in. See SPEC's "What is offered". The guard reads only this run's records and latest plan, so it follows whatever the loop holds: slice 6 rebuilds both on a resume, so a plan made before the pause keeps the planner withheld.
 
 **The planner needs a map of the agent.** It is given one, built at construction from the route table and the `children` introspection the capability probes already walk:
 
@@ -633,6 +633,8 @@ Because procedures are refused before the person is asked, every effect of the s
 Each of these is pinned.
 
 ### Resume inside a route (slice 6)
+
+> **Built 2026-10-27.** Three readings of this section the build made, each stated in its PR: (1) the continuation check applies below a top-level pattern that declares `resumable`; a pause below one that does not keeps the 0.x re-entry from its start, so a custom `configurePattern` gate is unchanged; (2) a resumed invocation's own pre-pause events reach it as its replay, never through its view, so `withPseudonymisedInputs` rewrites what the route reads exactly as it did live and the resumed controller sees its own earlier results as it saw them; (3) `withReferences` records its selection by default, and that event now serializes as counts only. SPEC's [Resume inside a route](../../packages/harness-patterns/SPEC.md#resume-inside-a-route) is the contract.
 
 The context already holds what a resume needs (ADR-0009):
 

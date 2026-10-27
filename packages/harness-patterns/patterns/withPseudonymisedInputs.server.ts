@@ -6,8 +6,11 @@
 import { assertServerOnImport } from '../assert.server'
 import { trackEvent } from '../context.server'
 import { currentRunFrame, effectiveTier } from '../run-frame.server'
+import { resumableStep, wrapperResumable } from '../resume.server'
 import type {
   ConfiguredPattern,
+  EventView,
+  PatternScope,
   UnifiedContext,
   UserMessageEventData,
   WarningEventData,
@@ -44,11 +47,19 @@ export type PseudonymiseForWeb = (
 export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseForWeb }) {
   return <T extends PlannerData & Record<string, unknown>>(
     pattern: ConfiguredPattern<T>,
-  ): ConfiguredPattern<T> => ({
-    ...pattern,
-    children: [pattern],
-    capabilities: { ...pattern.capabilities, pseudonymisedInputs: true },
-    fn: async (scope, view) => {
+  ): ConfiguredPattern<T> => {
+    // Its roster and its rewrite are rebuilt each invocation from the view and
+    // the child data the loop reproduces, so a resume passes straight through
+    // it (slice 6).
+    const resumable = wrapperResumable('withPseudonymisedInputs', pattern)
+    return {
+      ...pattern,
+      children: [pattern],
+      capabilities: { ...pattern.capabilities, pseudonymisedInputs: true, resumable },
+      fn: (scope, view) =>
+        resumableStep('withPseudonymisedInputs', resumable, () => filtered(scope, view)),
+    }
+    async function filtered(scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> {
       const ctx = (view as unknown as { ctx: UnifiedContext }).ctx
       const latestUser = ctx.events.findLast((e) => e.type === 'user_message')
       const input = scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined
@@ -123,6 +134,6 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       }
       const childView = createEventView(rewritten, pattern.config.viewConfig, scope.id)
       return pattern.fn(scope, childView)
-    },
-  })
+    }
+  }
 }

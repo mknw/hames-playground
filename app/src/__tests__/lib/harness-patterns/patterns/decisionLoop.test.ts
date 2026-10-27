@@ -551,7 +551,7 @@ describe('decisionLoop — what a child receives', () => {
 
   // MUTATION: hand `routeScope` to every child kind in decisionLoop — the
   // simpleLoop child's data gains the key (the FRESH-data pin above goes red as
-  // well), and its controller's intent would no longer be the user's message.
+  // well). Only actorCritic reads it, so the key stays where it is read.
   it('only an actorCritic route is handed a route scope; a simpleLoop child keeps the raw message', async () => {
     const { decide } = scriptedDecide(['lookup', 'office', 'answer'])
     const seen: Record<string, unknown>[] = []

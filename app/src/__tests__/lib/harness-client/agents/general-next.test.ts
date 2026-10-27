@@ -1109,8 +1109,8 @@ describe('general-next composition', () => {
   // critic WHOLE, followed by the office route's own entry; the info route's
   // controller still reads the raw message. MUTATIONS, each red here:
   // actorCritic back to `scope.data.intent ?? userContent`; drop `routeScope`
-  // from decisionLoop's child data; hand it to every route kind (the info
-  // controller's intent changes); make the intent the scope alone.
+  // from decisionLoop's child data; make the intent the scope alone; hand the
+  // actor the bare task while the critic gets the scoped one.
   it.each([
     [
       '14-analysis-index-follow-up',

@@ -69,7 +69,10 @@ export { EventViewImpl, createEventView } from './event-view.server'
 
 export {
   withPseudonymisedInputs,
+  RosterUnavailable,
   type PseudonymiseForWeb,
+  type RosterUnavailableReason,
+  type WebPrivacyUnavailableReason,
   type WebPseudonymisation,
 } from './withPseudonymisedInputs.server'
 

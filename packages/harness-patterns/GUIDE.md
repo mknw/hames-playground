@@ -191,7 +191,11 @@ residual bodies become `[withheld: private identity]` (per leaf inside a JSON
 body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
-module or table is imported into core. `decisionLoop` gives the wrapper roster
+module or table is imported into core. When the host knows why it cannot build
+the filter, it throws `RosterUnavailable('directory-empty' | 'directory-unreadable'
+| 'roster-damaged')`; the `web_privacy` warning's `detail.reason` names it, and
+any other throw reads `filter-failed` — the wrapper never keeps an error's text,
+which can name a person. `decisionLoop` gives the wrapper roster
 input from every earlier iteration, even beyond the handoff window, and from
 every earlier turn's results, every route included (an earlier answer in the
 child's conversation block can name a person only a hidden route read), without

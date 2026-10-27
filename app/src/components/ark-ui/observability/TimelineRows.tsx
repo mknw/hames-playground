@@ -1,7 +1,9 @@
 /**
- * Timeline rows — the two-lane grid: lane headers, the empty state, pattern
+ * Timeline rows — the three-lane grid: lane headers, the empty state, pattern
  * enter/exit dividers, a single-event row and a merged tool_call+tool_result
- * row. Split out of `ObservabilityPanel.tsx` (#226 B5).
+ * row. Split out of `ObservabilityPanel.tsx` (#226 B5). The third lane,
+ * Guardrails, holds every event `isGuardEvent` claims and a guarded result's
+ * chip, so a guard that acted is seen as a guard (#795).
  */
 
 import { Show } from 'solid-js'
@@ -12,7 +14,11 @@ import type {
   ToolResultEventData,
 } from '@hames-ai/harness-patterns'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
-import { getEventLane, getEventPreview } from '@hames-ai/harness-patterns/observability/projection'
+import {
+  getEventLane,
+  getEventPreview,
+  isGuardEvent,
+} from '@hames-ai/harness-patterns/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
 // ============================================================================
@@ -28,7 +34,7 @@ export const LaneHeaders = () => (
   >
     {/* Interface Lane Header */}
     <div
-      w="1/2"
+      w="1/3"
       p="2"
       flex="~"
       items="center"
@@ -43,10 +49,26 @@ export const LaneHeaders = () => (
     </div>
 
     {/* Tools Lane Header */}
-    <div w="1/2" p="2" flex="~" items="center" justify="center" gap="2">
+    <div
+      w="1/3"
+      p="2"
+      flex="~"
+      items="center"
+      justify="center"
+      gap="2"
+      border="r ui-border-secondary"
+    >
       <div w="2" h="2" rounded="full" bg="ui-accent" />
       <span text="xs ui-text-primary" font="medium">
         Tools
+      </span>
+    </div>
+
+    {/* Guardrails Lane Header — the orange the timeline spends on a guard firing */}
+    <div w="1/3" p="2" flex="~" items="center" justify="center" gap="2">
+      <div w="2" h="2" rounded="full" bg="orange-400" />
+      <span text="xs ui-text-primary" font="medium">
+        Guardrails
       </span>
     </div>
   </div>
@@ -148,7 +170,7 @@ export const EventRow = (props: {
 
   const iconClass = eventIconClasses[type]
   const preview = getEventPreview(type, data)
-  const lane = getEventLane(type)
+  const lane = isGuardEvent(type, data) ? 'guards' : getEventLane(type)
   const color = eventColors[type]
 
   const NodeContent = () => (
@@ -223,15 +245,22 @@ export const EventRow = (props: {
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
+      <div w="1/3" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
         <Show when={lane === 'interface'}>
           <NodeContent />
         </Show>
       </div>
 
-      {/* Tools Lane (right) */}
-      <div w="1/2" flex="~" justify="center" items="center">
+      {/* Tools Lane (middle) */}
+      <div w="1/3" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
         <Show when={lane === 'tools'}>
+          <NodeContent />
+        </Show>
+      </div>
+
+      {/* Guardrails Lane (right) */}
+      <div w="1/3" flex="~" justify="center" items="center">
+        <Show when={lane === 'guards'}>
           <NodeContent />
         </Show>
       </div>
@@ -268,10 +297,10 @@ export const ToolPairRow = (props: {
       style={{ 'background-color': props.bgTint ?? 'transparent' }}
     >
       {/* Interface Lane (left) - empty for tool pairs */}
-      <div w="1/2" flex="~" justify="center" items="center" border="r ui-border-secondary/30" />
+      <div w="1/3" flex="~" justify="center" items="center" border="r ui-border-secondary/30" />
 
-      {/* Tools Lane (right) */}
-      <div w="1/2" flex="~" justify="center" items="center">
+      {/* Tools Lane (middle) */}
+      <div w="1/3" flex="~" justify="center" items="center" border="r ui-border-secondary/30">
         <div
           flex="~ col"
           items="center"
@@ -315,10 +344,12 @@ export const ToolPairRow = (props: {
           >
             {preview()}
           </div>
-          <Show when={sanitized()}>
-            {(summary) => <SanitizedChip summary={summary()} compact />}
-          </Show>
         </div>
+      </div>
+
+      {/* Guardrails Lane (right) - the guard's mark on this result (SA-H10) */}
+      <div w="1/3" flex="~" justify="center" items="center">
+        <Show when={sanitized()}>{(summary) => <SanitizedChip summary={summary()} compact />}</Show>
       </div>
     </div>
   )

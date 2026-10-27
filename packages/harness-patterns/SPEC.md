@@ -1374,10 +1374,17 @@ conversation while that result stays in context, and a sender can trigger it on
 purpose through the display name. No references attach, the plan, the earlier conversation and all result bodies disappear, and
 only an allowlisted handoff containing route/status/stats lines remains in child
 data. A `warning` with task
-`web_privacy` records "earlier results withheld: privacy filter unavailable".
+`web_privacy` records "earlier results withheld: privacy filter unavailable",
+and its `detail` says why and how much, every value code-built: `reason` is
+`not-configured` (no `pseudonymise`), the `reason` of a host-thrown
+`RosterUnavailable` when it is `directory-empty`, `directory-unreadable` or
+`roster-damaged`, and `filter-failed` for any other failure; `events` counts the
+earlier events of the child's view it did not get, and `fields` its inherited
+data fields. No error's message or name is read.
 The child still runs on the user's message; it refuses no call itself (the
 egress gate judges every outgoing one). The app's `createWebPseudonymiser`
-requires a readable, non-empty directory by default; `{ directory: 'none' }` is
+requires a readable, non-empty directory by default, and throws
+`RosterUnavailable` naming which it lacked; `{ directory: 'none' }` is
 an explicit code-only choice for deployments without an org graph.
 
 The app merges the fixed-order directory first with identities from the view
@@ -1471,9 +1478,12 @@ down, `loadedDecideDown: 'by-shape'` (default) refuses a call with a URL query o
 a block over 200 characters and leaves any other to the roster, `'ask'` refuses
 every one; `empty` and `none` veto on a match and refuse the rest; `unreadable`
 refuses. These refusals are where the design asks the person; until the prompts
-land they refuse, with nobody asked. An `empty` or `unreadable` directory, a
-damaged roster and a degraded turn (with its counts in `detail`) each record a
-`warning` with task `egress_check` and a fixed message.
+land they refuse, with nobody asked. A damaged roster and a degraded turn (with
+its counts in `detail`) each record a `warning` with task `egress_check` and a
+fixed message. So does an `empty` or `unreadable` directory, once per turn and
+at the turn's first outgoing check, never before it: its fallback says outside
+requests were still checked, which a turn that makes none would contradict. A
+resumed invocation reads the turn's events and does not warn again.
 
 **The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default 0). A refusal on
 Decide's answer or for want of one is a tripwire and an `egress_refused` event:

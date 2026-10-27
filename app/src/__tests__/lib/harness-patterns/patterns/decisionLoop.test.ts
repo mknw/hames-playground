@@ -461,6 +461,33 @@ describe('decisionLoop — what a child receives', () => {
     return ctx
   }
 
+  // MUTATION: drop `(scope.data as PlannerData).conversation` from actorCritic's
+  // `formatPlanContext` call — the office route's actor no longer sees turn 1.
+  it("turn 2's actorCritic child sees turn 1 in its actor's planContext", async () => {
+    const { decide } = scriptedDecide(['doc', 'answer'])
+    const planContexts: Array<string | undefined> = []
+    const actor = vi.fn(async (input: { planContext?: string }) => {
+      planContexts.push(input.planContext)
+      return {
+        action: {
+          reasoning: 'r',
+          tool_name: 'search',
+          tool_args: '{}',
+          is_final: true,
+        } as ControllerAction,
+      }
+    })
+    const critic = vi.fn(async () => ({ result: { is_sufficient: true, explanation: 'ok' } }))
+    const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
+      patternId: 'doc',
+    })
+    await runInFrame(() => runChain(followUp(), [build({ doc: route(doc) }, decide)]))
+    expect(planContexts[0]).toContain(`${CONVERSATION_HEADING} (`)
+    expect(planContexts[0]).toContain(
+      'User: "How many Project nodes are in the knowledge graph?"\nAssistant: "There are 42 Project nodes."',
+    )
+  })
+
   // FIX08 (#606 run 6, scenario 08): the decisions model read turn 1 and the
   // child it chose did not. MUTATIONS, each red here: drop `conversation` from
   // the child's data in decisionLoop; drop the conversation block from

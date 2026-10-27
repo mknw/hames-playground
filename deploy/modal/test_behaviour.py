@@ -211,7 +211,9 @@ class SmallModelsBehaviour(unittest.TestCase):
         answered = subprocess.CompletedProcess([], 0, stdout="NVIDIA A10\n")
         with mock.patch.object(m.subprocess, "run", return_value=answered) as run:
             self.assertEqual(m._gpu_name(), "NVIDIA A10")
-        self.assertEqual(run.call_args.args[0][0], "nvidia-smi")
+        self.assertEqual(run.call_args, mock.call(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10, check=True))
         for error in (FileNotFoundError(), subprocess.CalledProcessError(9, "nvidia-smi"),
                       subprocess.TimeoutExpired("nvidia-smi", 10)):
             with mock.patch.object(m.subprocess, "run", side_effect=error):
@@ -223,17 +225,25 @@ class SmallModelsBehaviour(unittest.TestCase):
         box.vllm, box.shim, box.public_ready = mock.Mock(), mock.Mock(), threading.Event()
         readings = {m.SUMMARIZER_MODEL: {"x": math.log(0.6)}, m.DECIDER_MODEL: {"x": math.log(0.4)}}
         box.reference, box.boot = readings, {"snapshot_wall": 0.0}
+        clock = [0.0]
+
+        def gpu_name():
+            clock[0] += 100  # a slow nvidia-smi
+            return "NVIDIA A10"
+
         with tempfile.TemporaryDirectory() as status_dir, \
                 mock.patch.object(m, "STATUS_DIR", Path(status_dir)), \
                 mock.patch.object(m, "_http", lambda *a, **k: (200, {})), \
                 mock.patch.object(m, "_wait_ok", lambda *a, **k: 0.0), \
                 mock.patch.object(m, "_reference_logprobs", lambda model, prompt: readings[model]), \
-                mock.patch.object(m, "_gpu_name", lambda: "NVIDIA A10"), \
+                mock.patch.object(m.time, "monotonic", lambda: clock[0]), \
+                mock.patch.object(m, "_gpu_name", gpu_name), \
                 mock.patch.object(m.subprocess, "Popen", lambda *a, **k: mock.Mock()), \
                 contextlib.redirect_stdout(io.StringIO()):
             box._serve()
             status = json.loads((Path(status_dir) / "status.json").read_text())
         self.assertEqual(status["gpu"], "NVIDIA A10")
+        self.assertLess(status["wake_s"], 100)  # the GPU read is not in wake_s
 
 
 def _chat(content="", **message):

@@ -571,7 +571,7 @@ env?: Record<string, string | undefined>
       }
       
   async ScreenUntrustedContent(
-  source: string,content: string,
+  source: string,content: string,boundary: string,
   __baml_options__?: BamlCallOptions<never>
   ): Promise<HTTPRequest> {
     try {
@@ -590,7 +590,7 @@ env?: Record<string, string | undefined>
       return await this.runtime.buildRequest(
       "ScreenUntrustedContent",
       {
-      "source": source,"content": content
+      "source": source,"content": content,"boundary": boundary
       },
       this.ctxManager.cloneContext(),
       __baml_options__?.tb?.__tb(),
@@ -1171,7 +1171,7 @@ env?: Record<string, string | undefined>
           }
           
       async ScreenUntrustedContent(
-      source: string,content: string,
+      source: string,content: string,boundary: string,
       __baml_options__?: BamlCallOptions<never>
       ): Promise<HTTPRequest> {
         try {
@@ -1190,7 +1190,7 @@ env?: Record<string, string | undefined>
           return await this.runtime.buildRequest(
           "ScreenUntrustedContent",
           {
-          "source": source,"content": content
+          "source": source,"content": content,"boundary": boundary
           },
           this.ctxManager.cloneContext(),
           __baml_options__?.tb?.__tb(),

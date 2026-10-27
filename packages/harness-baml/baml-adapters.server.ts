@@ -43,6 +43,7 @@ import {
   neutralizeFenceMarkers,
   type InjectionScreen,
 } from '@hames-ai/harness-patterns/injection-guard'
+import { drawFenceNonce } from '@hames-ai/harness-patterns/guard-gate.server'
 import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
 import {
@@ -2208,8 +2209,19 @@ describeToolResultsBatchOp.limits = () => limitsFor('describe')
  * injections are placed to be read first, so the head is what gets screened —
  * and the deterministic corpus, which has no such bound, still covers the whole
  * thing. The truncation is reported in the verdict reason rather than hidden.
+ *
+ * The prompt's two markers carry a per-call `boundary`: 16 hex characters from
+ * the platform's cryptographic source, drawn AFTER the quoted text is final and
+ * drawn again if that text holds it (`drawFenceNonce`, the guard gate's and the
+ * egress state's own). Text written before the call cannot know it, so it
+ * cannot close the fence in any spelling, which the marker neutraliser cannot
+ * promise (it catches plain spellings only). A text no draw avoids throws, and
+ * the guard records the screen as unavailable. `drawNonce` is a test seam.
  */
-export function createInjectionScreen(options?: { maxChars?: number }): InjectionScreen {
+export function createInjectionScreen(options?: {
+  maxChars?: number
+  drawNonce?: () => string
+}): InjectionScreen {
   const maxChars = options?.maxChars ?? 20_000
 
   return async ({ tool, namespace, content, onCall }) => {
@@ -2224,6 +2236,7 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // shared neutraliser the guard gate's state uses too (its comment has the
     // reasons and the backtracking history).
     const body = neutralizeFenceMarkers(head)
+    const boundary = drawFenceNonce(body, options?.drawNonce)
 
     const { b } = await import('./guarded-client.server')
     const source = `${namespace}/${tool}`
@@ -2245,13 +2258,14 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // and Planner sites: `withUsageAccounting` always supplies `{ collector }`,
     // so the merged bag is never empty and the trailing slot is never an
     // `{}` standing in for "passed nothing". The generated
-    // `ScreenUntrustedContent(source, content, __baml_options__?)` reads
-    // `__options__.client` into a `ClientRegistry` primary, which is the same
-    // seam every other routed call uses.
+    // `ScreenUntrustedContent(source, content, boundary, __baml_options__?)`
+    // reads `__options__.client` into a `ClientRegistry` primary, which is the
+    // same seam every other routed call uses. `boundary` sits BEFORE the bag:
+    // dropping it here would hand the bag to the nonce slot.
     const verdict = await withUsageAccounting(
       'ScreenUntrustedContent',
       (opts) =>
-        b.ScreenUntrustedContent(source, body, {
+        b.ScreenUntrustedContent(source, body, boundary, {
           ...clientOverrideFor('screen'),
           ...opts,
         }),

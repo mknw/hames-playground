@@ -361,8 +361,10 @@ async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
     // and wrapping a filename in a multi-line spotlight fence would break the
     // citation label AND the filename-to-docId match that drives the inline
     // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
-    // poisoned filename is still neutralized without collateral damage.
-    const scannedContent = await guard.sanitize('retriever', hit.content)
+    // poisoned filename is still neutralized without collateral damage. The
+    // content's fence names the hit's `docId` as its item id; a hit with none
+    // (a web hit) names no item, and the filename is never one (it is content).
+    const scannedContent = await guard.sanitize('retriever', hit.content, { item: hit.docId })
     const scannedSource =
       hit.source === undefined
         ? undefined

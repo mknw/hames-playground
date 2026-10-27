@@ -122,10 +122,15 @@ describe('the route switch — explicit, never sniffed', () => {
 
 describe('the declared OR twins — body shapes', () => {
   it('LargeQwenOR carries the native reasoning object, zdr, and no kwarg', async () => {
-    const req = await b.request.ScreenUntrustedContent('web/fetch', 'page text', {
-      client: 'LargeQwenOR',
-      env: OR_ENV,
-    })
+    const req = await b.request.ScreenUntrustedContent(
+      'web/fetch',
+      'page text',
+      '0123456789abcdef',
+      {
+        client: 'LargeQwenOR',
+        env: OR_ENV,
+      },
+    )
     expect(req.url).toBe(`${OPENROUTER_BASE}/chat/completions`)
     const body = req.body.json() as Body
     expect(body.model).toBe(OPENROUTER_MODEL)
@@ -138,10 +143,15 @@ describe('the declared OR twins — body shapes', () => {
   })
 
   it('LargeQwenThinkOR mirrors its box twin sampling, thinking on natively', async () => {
-    const req = await b.request.ScreenUntrustedContent('web/fetch', 'page text', {
-      client: 'LargeQwenThinkOR',
-      env: OR_ENV,
-    })
+    const req = await b.request.ScreenUntrustedContent(
+      'web/fetch',
+      'page text',
+      '0123456789abcdef',
+      {
+        client: 'LargeQwenThinkOR',
+        env: OR_ENV,
+      },
+    )
     const body = req.body.json() as Body
     expect(body.model).toBe(OPENROUTER_MODEL)
     expect(body.reasoning).toEqual({ enabled: true })
@@ -165,12 +175,12 @@ describe('the declared OR twins — body shapes', () => {
     // must be equal except `model` (the eval id), the reasoning REPRESENTATION
     // (native object vs template kwarg) and the provider block.
     const renderBox = () =>
-      b.request.ScreenUntrustedContent('web/fetch', 'page text', {
+      b.request.ScreenUntrustedContent('web/fetch', 'page text', '0123456789abcdef', {
         client: 'LargeQwen',
         env: MODAL_ENV,
       })
     const renderOR = () =>
-      b.request.ScreenUntrustedContent('web/fetch', 'page text', {
+      b.request.ScreenUntrustedContent('web/fetch', 'page text', '0123456789abcdef', {
         client: 'LargeQwenOR',
         env: OR_ENV,
       })
@@ -199,13 +209,18 @@ describe('the declared OR twins — body shapes', () => {
   it('resolves the model id from the env default when the var is unset', async () => {
     delete process.env.LARGE_LLM_MODEL
     applyLegacyInferenceEnv()
-    const req = await b.request.ScreenUntrustedContent('web/fetch', 'page text', {
-      client: 'LargeQwenOR',
-      env: {
-        LARGE_LLM_BASE_URL: OPENROUTER_BASE,
-        LARGE_LLM_API_KEY: 'offline-render-test',
+    const req = await b.request.ScreenUntrustedContent(
+      'web/fetch',
+      'page text',
+      '0123456789abcdef',
+      {
+        client: 'LargeQwenOR',
+        env: {
+          LARGE_LLM_BASE_URL: OPENROUTER_BASE,
+          LARGE_LLM_API_KEY: 'offline-render-test',
+        },
       },
-    })
+    )
     expect((req.body.json() as Body).model).toBe(DEFAULT_LARGE_LLM_MODEL)
   })
 

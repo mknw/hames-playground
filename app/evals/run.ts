@@ -57,18 +57,23 @@ import { screenScenario } from './scenarios/screen'
 import { isThinkingPlannerRun, plannerScenario } from './scenarios/planner'
 import { reliabilityScenario } from './scenarios/reliability'
 import { egressGateScenario } from './scenarios/egress-gate'
-import { createFenceWordingScenario, currentFenceHeader } from './scenarios/fence-wording'
+import {
+  createFenceWordingScenario,
+  currentFenceHeader,
+  LEGACY_FENCE_HEADER,
+} from './scenarios/fence-wording'
 
 /** Declaration order is report order. Cheap structural checks first so a
  *  misconfigured run fails in a second rather than after twenty calls. The
  *  fence-wording scenario takes the fence HEADER as a parameter (boundary
- *  guards slice 7): on this tree it derives the header the guard writes today;
- *  slice 8's branch registers the provenance variant beside the legacy one
- *  with the same fixtures and samples. */
+ *  guards slice 7), and slice 8 registers it twice: the provenance header the
+ *  guard writes, and the legacy one it wrote before ruling F, with the same
+ *  fixtures and samples, read side by side (N7). */
 export const SCENARIOS: Scenario[] = [
   truncationDetectionScenario,
   screenScenario,
   egressGateScenario,
+  createFenceWordingScenario(LEGACY_FENCE_HEADER),
   createFenceWordingScenario(currentFenceHeader()),
   routerScenario,
   plannerScenario,

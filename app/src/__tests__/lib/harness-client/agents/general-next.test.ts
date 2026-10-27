@@ -21,6 +21,7 @@ import {
   harnessUsesMemory,
   harnessUsesSyncWorkspace,
   inferServer,
+  ownResumable,
   serializeContext,
   withRunFrame,
   type ConfiguredPattern,
@@ -617,11 +618,51 @@ describe('general-next composition', () => {
     expect([...new Set(all.flatMap((p) => Object.keys(p.capabilities ?? {})))].sort()).toEqual([
       'decisionKeys',
       'pseudonymisedInputs',
+      'resumable',
       'retrievalBackends',
       'tools',
       'workspaceSync',
     ])
     expect(all.every((p) => !/humanGate|confirm/.test(p.name))).toBe(true)
+  })
+
+  // Resume inside a route (slice 6): a pause can be resumed inside a route
+  // only where every pattern from the root down declares its OWN resumable
+  // capability. The info route (where the outgoing tools are) is resumable all
+  // the way; the office route runs through withSandbox and actorCritic, which
+  // are not. MUTATION: drop `resumable` from withPseudonymisedInputs (or let it
+  // inherit the inner pattern's by spreading) → the info path breaks → red.
+  it('the path to the info loop is resumable all the way down; the office route is not', async () => {
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    const pathTo = (name: string): ConfiguredPattern<AgentData>[] => {
+      const path: ConfiguredPattern<AgentData>[] = []
+      const find = (p: ConfiguredPattern<AgentData>): boolean => {
+        path.push(p)
+        if (p.name === name) return true
+        if ((p.children ?? []).some(find)) return true
+        path.pop()
+        return false
+      }
+      find(patterns[0])
+      return path
+    }
+    const info = pathTo('simpleLoop')
+    expect(info.map((p) => [p.name.split('(')[0], ownResumable(p) !== undefined])).toEqual([
+      ['withInjectionGuard', true],
+      ['withEgressGate', true],
+      ['decisionLoop', true],
+      ['withInjectionGuard', true],
+      // withPseudonymisedInputs, which keeps its inner pattern's name.
+      ['withInfoDocumentReferences', true],
+      ['withInfoDocumentReferences', true],
+      ['withReferences', true],
+      ['simpleLoop', true],
+    ])
+    const office = pathTo('actorCritic')
+    expect(office.filter((p) => ownResumable(p) === undefined).map((p) => p.name)).toEqual([
+      'withSandbox(actorCritic)',
+      'actorCritic',
+    ])
   })
 
   it('pins the settled decision configuration and the info wrapper order', async () => {

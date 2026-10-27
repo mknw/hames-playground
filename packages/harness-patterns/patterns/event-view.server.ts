@@ -20,6 +20,7 @@ import type {
   ContentSanitizedEventData,
   WarningEventData,
   LoopRecoveryEventData,
+  ReferenceAttachedEventData,
   HitlRequestEventData,
   HitlResponseEventData,
   DecisionMadeEventData,
@@ -578,6 +579,14 @@ function formatEventData(event: ContextEvent): string {
       // re-serve untrusted content to the next prompt by a side door (#420).
       const data = event.data as WarningEventData
       return `${data.task}: ${data.message}`
+    }
+    case 'reference_attached': {
+      // METADATA ONLY — never the candidates' summaries or the selector's
+      // reasoning. Summaries are previews of tool results from untrusted
+      // sources, and the reasoning was written by a model that read them; the
+      // default branch below would serve both to the next prompt.
+      const data = event.data as ReferenceAttachedEventData
+      return `${data.selected.length} of ${data.candidates.length} earlier result(s) attached${data.skipped ? ` (${data.skipped})` : ''}`
     }
     case 'loop_recovery': {
       // METADATA ONLY — never `data.error`. It can be a tool's error text from

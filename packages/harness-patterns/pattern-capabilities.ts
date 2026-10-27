@@ -21,7 +21,12 @@
  * (`agentUsesRedisRetriever` / `agentUsesSyncWorkspace`).
  */
 
-import type { ConfiguredPattern, PatternConfig } from './types'
+import type {
+  ConfiguredPattern,
+  ContinuationSegment,
+  PatternConfig,
+  ResumableCapability,
+} from './types'
 
 /** True when a pattern's resolved config is a `retriever` (it stamps
  *  `patternId: 'retriever'`). */
@@ -115,4 +120,85 @@ export function harnessPseudonymisesInputs<T>(
       (p) => p.capabilities?.pseudonymisedInputs === true || harnessPseudonymisesInputs(p.children),
     ) ?? false
   )
+}
+
+/**
+ * A pattern's OWN resumable capability (slice 6). Most wrappers build
+ * themselves by spreading the pattern they wrap, which copies its
+ * `capabilities` — `resumable` included — onto a wrapper that implements none
+ * of it. A capability that is the very object one of its children declares was
+ * copied that way, and counts as absent: such a wrapper is not resumable, and
+ * a path through it is not either.
+ */
+export function ownResumable<T>(pattern: ConfiguredPattern<T>): ResumableCapability | undefined {
+  const capability = pattern.capabilities?.resumable
+  if (!capability) return undefined
+  return pattern.children?.some((c) => c.capabilities?.resumable === capability)
+    ? undefined
+    : capability
+}
+
+/**
+ * Does a recorded continuation still lead from `top` to a gate (resume inside a
+ * route, slice 6)? Each segment must match its pattern's own fingerprint, each
+ * next pattern must be a DIRECT child of the one before it, and the path must
+ * end at a pattern that raises or dispatches the gate itself. `checkResume`
+ * refuses anything else as `chain-changed`, before any `resolve`.
+ */
+export function followContinuation<T>(
+  top: ConfiguredPattern<T>,
+  continuation: readonly ContinuationSegment[],
+): boolean {
+  let node: ConfiguredPattern<T> | undefined = top
+  for (let i = 0; i < continuation.length; i++) {
+    const segment = continuation[i]
+    const capability: ResumableCapability | undefined = node ? ownResumable(node) : undefined
+    if (!node || !capability || capability.fingerprint !== segment.fingerprint) return false
+    const last = i === continuation.length - 1
+    if (last) return capability.next === undefined
+    const next: ConfiguredPattern<T> | undefined = capability.next?.(segment)
+    if (!next || !node.children?.includes(next)) return false
+    node = next
+  }
+  return false
+}
+
+/**
+ * Refuse, at construction, a gated tool name (`capabilities.gatedTools`, slice
+ * 6) offered anywhere a pause could not be resumed inside the run: in any
+ * allowlist whose path from the root is not resumable all the way down, or in
+ * one that is not where the gate is dispatched (a loop that does not record its
+ * history declares no `resumable`, so it is refused here too). A walk of
+ * `children` cannot see an `askHuman` inside a tool executor, so the check
+ * matches allowlist NAMES (`capabilities.tools`). `inherited` is what the
+ * caller already declares gated above `patterns`.
+ */
+export function refuseUnresumableGates<T>(
+  patterns: readonly ConfiguredPattern<T>[] | undefined,
+  inherited: readonly string[] = [],
+): void {
+  const walk = (
+    pattern: ConfiguredPattern<T>,
+    gated: ReadonlySet<string>,
+    blocker: string | undefined,
+  ): void => {
+    const capability = ownResumable(pattern)
+    const here = new Set([...gated, ...(pattern.capabilities?.gatedTools ?? [])])
+    const stop = blocker ?? (capability ? undefined : pattern.name)
+    // Only the allowlist this pattern dispatches from: a wrapper that spread
+    // its inner pattern carries the inner list by reference, and is not where
+    // the call is made.
+    const tools = pattern.capabilities?.tools
+    const own = tools && !pattern.children?.some((c) => c.capabilities?.tools === tools)
+    const offered = own ? tools.filter((name) => here.has(name)) : []
+    if (offered.length > 0 && (stop !== undefined || capability?.next !== undefined)) {
+      throw new Error(
+        `'${offered[0]}' may pause for a person (it is a gated tool), but '${pattern.name}' offers it ` +
+          `on a path that cannot be resumed inside a run${stop ? ` ('${stop}' is not resumable)` : ''}. ` +
+          'Offer a gated tool only from a simpleLoop that records its history, under resumable patterns all the way from the root.',
+      )
+    }
+    for (const child of pattern.children ?? []) walk(child, here, stop)
+  }
+  for (const pattern of patterns ?? []) walk(pattern, new Set(inherited), undefined)
 }

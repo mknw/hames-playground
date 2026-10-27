@@ -138,8 +138,16 @@ describe('simpleLoop: recoverable failures are fed back', () => {
     expect(seen.tool_result?.error).toContain(`as you wrote it:\n${RAW}\n`)
     expect(callToolMock).toHaveBeenCalledTimes(1)
 
+    // `feedback` is exactly what the next round was told, so a resume rebuilds
+    // that round's entry from the event (slice 6).
     expect(recoveries(events)).toEqual([
-      { failure: 'unparseable_output', error: failure.message, turn: 0, maxTurns: 4 },
+      {
+        failure: 'unparseable_output',
+        error: failure.message,
+        turn: 0,
+        maxTurns: 4,
+        feedback: seen.tool_result?.error,
+      },
     ])
     // The raw answer rides the recovery — the only record of what was said.
     expect(ofType(events, 'loop_recovery')[0].llmCall?.rawOutput).toBe(RAW)

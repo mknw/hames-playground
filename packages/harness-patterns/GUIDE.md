@@ -475,6 +475,43 @@ See the runner's `agent.resume` / `agent.continue` for the bound forms of the
 two calls above, and `answerOf(view, kind, key)` to read a decision in a later
 turn (give the request an explicit `key` when you will look it up).
 
+**Resuming inside a route.** When the gate sits inside nested patterns (a
+`decisionLoop` route, the `simpleLoop` in it), the run continues INSIDE them
+after the answer: the loop rebuilds its records and its turn log from its own
+events, makes no model call for the work already done, dispatches no earlier
+tool again, and the held call's outcome is in the next controller turn. That
+holds only along a path of patterns that declare `capabilities.resumable` —
+`decisionLoop`, `simpleLoop` (with an explicit `patternId` and its rounds
+recorded), `withReferences`, `withInjectionGuard`, `withEgressGate` and
+`withPseudonymisedInputs`; a pause below a top-level pattern that is not
+resumable re-runs that pattern from its start, as before. Declare the tools that
+may pause as `gatedTools` on the `decisionLoop`: construction then refuses one
+offered under `actorCritic`, `withSandbox` or any other pattern that cannot be
+resumed, and a loop refuses a batch that contains one. A wrapper of your own
+joins the path with `wrapperResumable` and `resumableStep`:
+
+```typescript
+import { amendRunFrame, resumableStep, wrapperResumable } from '@hames-ai/harness-patterns'
+import type { ConfiguredPattern, ToolTransport } from '@hames-ai/harness-patterns'
+
+declare const transport: ToolTransport
+
+function withMyTransport<T>(inner: ConfiguredPattern<T>): ConfiguredPattern<T> {
+  const resumable = wrapperResumable('withMyTransport', inner)
+  return {
+    ...inner,
+    name: `withMyTransport(${inner.name})`,
+    children: [inner],
+    // Its OWN capability: one copied from `inner` by the spread counts as absent.
+    capabilities: { ...inner.capabilities, resumable },
+    fn: (scope, view) =>
+      resumableStep('withMyTransport', resumable, () =>
+        amendRunFrame({ transports: [transport] }, () => inner.fn(scope, view)),
+      ),
+  }
+}
+```
+
 ---
 
 ## 2. Writing a pattern

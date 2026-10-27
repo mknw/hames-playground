@@ -5,11 +5,13 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { activeRunFrame } from '../run-frame.server'
+import { activeRunFrame, amendRunFrame, type ResumeSlot } from '../run-frame.server'
+import { bracketContents, currentRunEvents } from '../resume.server'
 import type {
   UnifiedContext,
   ContextEvent,
   ConfiguredPattern,
+  ContinuationSegment,
   PatternConfig,
   ErrorEventData,
 } from '../types'
@@ -101,7 +103,11 @@ export async function runChain<T extends Record<string, unknown>>(
   ctx: UnifiedContext<T>,
   patterns: ConfiguredPattern<T>[],
   onEvent?: (event: ContextEvent) => void,
-  opts?: { readonly startAt?: number },
+  opts?: {
+    readonly startAt?: number
+    /** The recorded path to re-enter the pattern at `startAt` through (slice 6). */
+    readonly continuation?: readonly ContinuationSegment[]
+  },
 ): Promise<UnifiedContext<T>> {
   activeRunFrame()
 
@@ -115,7 +121,9 @@ export async function runChain<T extends Record<string, unknown>>(
   }
 
   // `hitl` is undefined unless THIS chain owns a HITL run (#433, F7; #477).
-  return withHitlRun(ctx, (hitl) => runPatterns(ctx, patterns, onEvent, hitl, startAt))
+  return withHitlRun(ctx, (hitl) =>
+    runPatterns(ctx, patterns, onEvent, hitl, startAt, opts?.continuation),
+  )
 }
 
 /** The body of {@link runChain}, inside the HITL run it owns (if any). */
@@ -125,8 +133,19 @@ async function runPatterns<T extends Record<string, unknown>>(
   onEvent: ((event: ContextEvent) => void) | undefined,
   hitl: HitlRun | undefined,
   startAt: number,
+  continuation: readonly ContinuationSegment[] | undefined,
 ): Promise<UnifiedContext<T>> {
   const names = patterns.map((p) => p.name)
+  // Slice 6: the paused top-level pattern is handed the path and the events its
+  // paused invocation recorded — every bracket it ran under in this run, so a
+  // pause after a resume carries both halves.
+  const resumeFor = (pattern: ConfiguredPattern<T>, patternId: string): ResumeSlot => ({
+    continuation: continuation!,
+    events: bracketContents(
+      currentRunEvents(ctx.events),
+      (enter) => enter.patternId === patternId && enter.data.pattern === pattern.name,
+    ),
+  })
 
   try {
     let currentData = ctx.data
@@ -155,6 +174,8 @@ async function runPatterns<T extends Record<string, unknown>>(
       // 2. Create view based on pattern's viewConfig (exclude self from fromLastPattern)
       const view = createEventView(ctx, pattern.config.viewConfig, patternId)
 
+      const resumed = continuation && i === startAt ? resumeFor(pattern, patternId) : undefined
+
       // 3. Add pattern_enter event (fires live if enabled).
       //    Surface known config fields (maxTurns) for UI progress tracking.
       const cfg = pattern.config as PatternConfig & { maxTurns?: number }
@@ -166,8 +187,12 @@ async function runPatterns<T extends Record<string, unknown>>(
       )
 
       try {
-        // 4. Execute pattern
-        const result = await pattern.fn(scope, view)
+        // 4. Execute pattern — on a resume, inside it (slice 6). The slot is
+        //    computed before this pattern's new enter event is in the bracket.
+        const result =
+          continuation && i === startAt
+            ? await amendRunFrame({ resume: resumed }, () => pattern.fn(scope, view))
+            : await pattern.fn(scope, view)
 
         // 5. Commit events based on strategy
         const beforeLen = ctx.events.length

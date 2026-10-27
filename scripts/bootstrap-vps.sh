@@ -62,6 +62,10 @@ readonly F2B_JAIL="/etc/fail2ban/jail.local"
 readonly MANAGED_BY="Managed by scripts/bootstrap-vps.sh"
 readonly COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yaml"
 readonly CLONE_COMPOSE_FILES="$COMPOSE_FILES:docker-compose.clones.yaml"
+# The environment VM shapes (#648, docs/PREVIEW.md §12): dev on its own VM, then
+# release on its own as well. Release never moves before dev, and never alone.
+readonly DEV_VM_COMPOSE_FILES="$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml"
+readonly BOTH_VM_COMPOSE_FILES="$DEV_VM_COMPOSE_FILES:docker-compose.release-sandbox-vm.yaml"
 readonly CLONE_INPUTS=(DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL)
 readonly COMPOSE_PROFILE="app"
 readonly MIN_ENGINE="28.0.0" # Neo4j's isolated bridge gateway mode needs it
@@ -452,7 +456,8 @@ env_problems() {
 # -----------------------------------------------------------------------------
 # Only the persisted root .env selects the shape; a shell export cannot silently
 # drop a clone. Accept exactly §12's file order, with at most one of its dev
-# sandbox overlays: the owner socket opt-in or dev's own environment VM.
+# sandbox overlays: the owner socket opt-in or dev's own environment VM; then,
+# after dev's VM overlay only, release's own environment VM overlay.
 compose_files() {
   local files key
   # Compose accepts alternate assignment spellings that env_get cannot read.
@@ -464,7 +469,7 @@ compose_files() {
   fi
   files=$(env_get COMPOSE_FILE)
   case $files in
-    "$CLONE_COMPOSE_FILES"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox.yaml"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;
+    "$CLONE_COMPOSE_FILES"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox.yaml"|"$DEV_VM_COMPOSE_FILES"|"$BOTH_VM_COMPOSE_FILES") ;;
     "$COMPOSE_FILES"|'')
       for key in "${CLONE_INPUTS[@]}"; do
         if [[ -n "$(env_get "$key")" ]]; then
@@ -514,12 +519,31 @@ clone_preflight() {
   for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev; do
     [[ -r $APP_DIR/$path && -f $APP_DIR/$path ]] || { printf '%s\n' "Clone configuration is missing a required overlay, validator or Caddy file" >&2; return 1; }
   done
-  # Only the operator can prove the VM's Docker port is reachable from the dev
-  # link network alone (envapp-dev, app-dev at its pinned address; §12 and
-  # docs/plan/env-vm-network.md); the overlay waits for that record. Its content is not read.
-  if [[ $files == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+  # Only the operator can prove each VM's Docker port is reachable from that
+  # clone's link network alone (envapp-<clone>, the app at its pinned address;
+  # §12 and docs/plan/env-vm-network.md); each overlay waits for its record.
+  # Matched by exact shape, never by suffix: a release overlay after dev's must
+  # not drop dev's own evidence check. Dev's record is not read.
+  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
     path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)
     [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The dev environment VM overlay requires DEV_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+  fi
+  if [[ $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
+    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)
+    [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The release environment VM overlay requires RELEASE_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+    # Release's record is the guard smoke's own machine-written JSON, read for
+    # its structure only: it must hold probes for the release environment. Dev's
+    # record, or one written before release joined the guard config, does not.
+    # The guard smoke writes it as root, mode 0600, so it is read through sudo.
+    sudo python3 -I -c 'import json, sys
+try:
+    record = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(1)
+environments = record.get("environments") if isinstance(record, dict) else None
+probes = environments.get("release") if isinstance(environments, dict) else None
+sys.exit(0 if isinstance(probes, list) and probes else 1)' "$path" 2>/dev/null ||
+      { printf '%s\n' "RELEASE_SANDBOX_FIREWALL_EVIDENCE is not a guard smoke record that probed the release environment (§12)" >&2; return 1; }
   fi
   # The render leaves out services of any other profile, so the validator could
   # never see them: the pinned files may declare only the app profile.
@@ -1847,7 +1871,7 @@ stage_smoke() {
     note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
     note "10 forwarded metadata rules and persistence; cap-dropped throwaway bridge probe blocked; app healthy before/after"
     [[ $files == "$COMPOSE_FILES" ]] || note "11 both clones: running env matches the validated shape; read-only TCP login checks each limited Postgres role"
-    [[ $files != "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]] || note "12 environment VM guard --check (the installed config)"
+    [[ $files != "$DEV_VM_COMPOSE_FILES" && $files != "$BOTH_VM_COMPOSE_FILES" ]] || note "12 environment VM guard --check (the installed config)"
     if ((PROBE_PRIVATE_HEALTH)); then
       note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
     else
@@ -1981,15 +2005,15 @@ stage_smoke() {
       fails=$((fails + 1))
     fi
   fi
-  # Item 3 of docs/plan/env-vm-network.md §11: with the dev environment VM
-  # overlay selected, the smoke also runs the guard's own read-only --check
+  # Item 3 of docs/plan/env-vm-network.md §11: with an environment VM overlay
+  # selected (dev's, or dev's and release's), the smoke also runs the guard's own read-only --check
   # (its default --config is the installed /etc/env-vm-guard/config.json). The
   # guard's refusal — a missing config, a drifted table, anything it reports —
   # fails the smoke with the guard's own message, and a checkout without the
   # installer is refused here rather than silently skipped. The other shapes
   # (single app, socket overlay, plain clones) never run it.
   guard_out=""
-  if [[ $files == "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]]; then
+  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
     if [[ -f $APP_DIR/scripts/env-vm-guard.py ]]; then
       guard_out=$(sudo python3 "$APP_DIR/scripts/env-vm-guard.py" --check 2>&1) && guard_rc=0 || guard_rc=$?
     else

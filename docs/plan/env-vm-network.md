@@ -116,6 +116,21 @@ table inet env_vm_guard {
 }
 ```
 
+A second environment, `release` with service `app` ([#648](https://github.com/mknw/hames-playground/issues/648)),
+adds exactly these five lines, each beside its `dev` counterpart. The drops are unchanged: they
+already match every `envvm-*` bridge.
+
+```text
+    counter app_to_vm_release {}
+        # input:
+        iifname "envvm-release" ip saddr <release-vm-address> ct original ip daddr <release-vm-address> ct state established accept
+        # forward, leaving the bridge:
+        iifname "envvm-release" ip saddr <release-vm-address> oifname "envapp-release" ip daddr <release-app-address> ct original ip daddr <release-vm-address> ct state established,related accept
+        # forward, entering the bridge:
+        iifname "envapp-release" ip saddr <release-app-address> oifname "envvm-release" ip daddr <release-vm-address> tcp dport 2376 ct state new counter name "app_to_vm_release" accept
+        iifname "envapp-release" oifname "envvm-release" ct original ip saddr <release-app-address> ct original ip daddr <release-vm-address> ct original proto-dst 2376 ct state established,related accept
+```
+
 What each choice is for:
 
 - **Default deny by name, not by list.** Every environment bridge is named `envvm-<environment>`
@@ -622,7 +637,8 @@ succeeds where a refusal is expected stops the window ([§8](#8-failure-modes-an
   they ran. It names the counter basis: a delta against a quiet baseline, where
   the expected amount is the packets the probe sent.
   `DEV_SANDBOX_FIREWALL_EVIDENCE` names it. Bootstrap only requires that file to exist and be
-  non-empty (`scripts/bootstrap-vps.sh:517-523`), so the smoke removes any earlier record when it
+  non-empty, and for release's record (`RELEASE_SANDBOX_FIREWALL_EVIDENCE`) also that its
+  `environments` hold probes for `release` (`scripts/bootstrap-vps.sh:522-546`), so the smoke removes any earlier record when it
   starts and writes a new one only when every probe passes: a failed run can never satisfy that
   gate.
 
@@ -720,9 +736,11 @@ each one.
   (`docs/PREVIEW.md:1330`). The operator's `health` probe uses this path. No Compose service
   shares the host's network namespace: the only non-default network mode is `none`
   (`docker-compose.yaml:99`). The exception is a holder of the host's Docker socket, which is
-  root-equivalent (`docs/deployment/egress-design.md:27-30`): the release app and the MCP gateway
-  hold it (`docker-compose.yaml:366`, `:132`), and either can start a container in the host's
-  network namespace and read the delivered key. Owner question 4 on
+  root-equivalent (`docs/deployment/egress-design.md:27-30`): the MCP gateway holds it
+  (`docker-compose.yaml:132`), and so does the release app until release's own VM overlay drops
+  it (`docker-compose.yaml:366`, `docker-compose.release-sandbox-vm.yaml`). Either holder can start a
+  container in the host's network namespace and read the delivered key; once the overlay is
+  applied, only the MCP gateway can. Owner question 4 on
   [#740](https://github.com/mknw/hames-playground/pull/740) asks whether to narrow this path
   anyway.
 - **Traffic that is not IP.** The table filters IP only. Three paths stay outside every `inet`
@@ -734,7 +752,8 @@ each one.
 - **The MCP gateway's host socket**, and its sharing `app-network` with app-dev (#731 question 10).
 - **The release environment.** Release keeps the host socket until its own VM lands
   ([#648](https://github.com/mknw/hames-playground/issues/648) Q2). The table takes more
-  environments, but adding one is its own reviewed change.
+  environments, but adding one is its own reviewed change: release's overlay and its
+  rules are in [§2.1](#21-the-guard-table) and `docs/PREVIEW.md` §12.
 - **Any egress for the guest**: no allowlist, proxy, DNS or NTP. The images are preloaded. The
   guest's clock depends on the hypervisor, which is one reason backdating certificate validity is
   being considered (#731 question 4).
@@ -779,7 +798,7 @@ each one.
    [§2.3](#23-the-dev-apps-link-network-docker), with the validator refusing a render without
    `gw_priority: 1`. In the same PR as the installer: update `docs/PREVIEW.md` §12 to the link
    network as the one allowed source (step 1's proof, the evidence wording in step 2, and "What
-   this does not establish"), the matching comment in `scripts/bootstrap-vps.sh:517-519`, and
+   this does not establish"), the matching comment in `scripts/bootstrap-vps.sh:522-526`, and
    the Scripts line in `docs/INDEX.md` for `scripts/env-vm-guard.py`.
 3. **The bootstrap smoke**: with the VM overlay selected, `--only smoke` runs the guard's
    `--check`.

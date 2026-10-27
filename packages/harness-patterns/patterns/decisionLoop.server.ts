@@ -25,8 +25,10 @@
  * it — and with this loop's own route records removed (they carry copies of
  * those results). The user's message is not a route event and always stays. Its
  * `data` is built fresh: the latest plan, the separately headed
- * handoff and, for a planner route, the agent map. Never `memories`,
- * `memoryContext` or `intent`. Nothing a child writes to `data` flows back.
+ * handoff, the conversation before the latest message (the decisions model's
+ * own lines, under a heading of its own) and, for a planner route, the agent
+ * map. Never `memories`, `memoryContext` or `intent`. Nothing a child writes to
+ * `data` flows back.
  *
  * ## What comes back
  *
@@ -103,6 +105,7 @@ import {
   computeStats,
   extract,
   leafPattern,
+  renderConversation,
   renderHandoff,
   resultBlock,
   routeKind,
@@ -549,6 +552,16 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     // Roster-only source payloads from EVERY iteration, even after its summary
     // falls outside lastN. Never content_sanitized, never shown to a child.
     const rosterPayloads: unknown[][] = []
+    // And from every result committed before this run (earlier turns'), every
+    // route included: an earlier final answer in the conversation block can name
+    // a person a route this child may not see read (a mail sender), so the
+    // roster must hold that person too. Re-entering a pause, this loop's own
+    // first half is in the context too: its finished iterations reach the
+    // roster through `rosterPayloads` and its paused child's never did, as live.
+    const resumedIds = new Set(taken?.events.map((e) => e.id))
+    const earlierPayloads = outerCtx.events
+      .filter((e) => e.type === 'tool_result' && e.patternId !== loopId && !resumedIds.has(e.id))
+      .map((e) => e.data)
     // Events an earlier version withheld on a screen outage (S-d, now removed):
     // conversations persisted before that ride the ids on the marker record, which
     // is in the context. Nothing writes new ones; they are read back here as a
@@ -587,9 +600,25 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     for (let iteration = paused?.iteration ?? 1; iteration <= maxIterations; iteration++) {
       const resuming = paused !== undefined && iteration === paused.iteration
       let label: string
+      // The decisions model's conversation lines; the child below gets the same
+      // ones, minus the latest message. Read inside a try: a message the
+      // builder cannot read is a non-decision like any other.
+      let conversation: string[] = []
       if (resuming) {
-        // Decided before the pause: the same route, with no model call.
+        // Decided before the pause: the same route, with no model call. Its
+        // child still reads the earlier conversation, as it did live.
         label = paused.route
+        try {
+          conversation = conversationTurns(view)
+        } catch (e) {
+          recordError(
+            scope,
+            `decisionLoop state builder failed: ${e instanceof Error ? e.message : String(e)}`,
+            iteration,
+          )
+          ended = 'stopped'
+          break
+        }
       } else {
         // The options THIS decision offers: a guarded planner is absent straight
         // after itself and once a plan exists. Only `answer` left means nothing to ask.
@@ -613,9 +642,10 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         let state = ''
         let stateError: string | undefined
         try {
+          conversation = conversationTurns(view)
           state = renderState(
             {
-              conversation: conversationTurns(view),
+              conversation,
               records,
               lastN,
               iteration,
@@ -721,6 +751,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       const childView = createEventView(syntheticCtx, pattern.config.viewConfig, childId)
 
       const handoffText = renderHandoff(records, lastN)
+      // The turns before the latest message: a follow-up ("the same count") is
+      // unreadable without them, and a loop child reads only that message.
+      const earlierConversation = renderConversation(conversation, maxChars)
       const childData = {
         ...(latestPlan
           ? {
@@ -732,11 +765,12 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             }
           : {}),
         ...(handoffText ? { handoff: handoffText } : {}),
+        ...(earlierConversation ? { conversation: earlierConversation } : {}),
         ...(kinds.get(label) === 'planner' ? { agentMap } : {}),
         ...(harnessPseudonymisesInputs([pattern])
           ? {
               [WEB_ROSTER_INPUT]: {
-                payloads: rosterPayloads.flat(),
+                payloads: [...earlierPayloads, ...rosterPayloads.flat()],
                 steps: renderHandoff(records, 0),
               } satisfies WebRosterInput,
             }

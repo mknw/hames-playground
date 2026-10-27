@@ -158,7 +158,10 @@ always be there) rather than around the loop. A conversation saved by an older
 version may carry `withheldEventIds` on a record; they are still honoured,
 and nothing writes new ones. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
-data, never `memories`. And a decision that is not a decision — an error, an
+data, never `memories`. That data does carry the conversation before the
+user's latest message (the decisions model's own lines, minus that message,
+each capped and quoted), under its own data heading in `plan_context`, so a
+follow-up such as "the same count" reaches the route with its referent. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
 not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
@@ -189,11 +192,13 @@ body) and provenance fences stay intact. A roster identity the screen already ne
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
 module or table is imported into core. `decisionLoop` gives the wrapper roster
-input from every earlier iteration, even beyond the handoff window, without
+input from every earlier iteration, even beyond the handoff window, and from
+every earlier turn's results, every route included (an earlier answer in the
+child's conversation block can name a person only a hidden route read), without
 widening its sibling visibility. That temporary input is removed before the
 inner pattern runs.
 
-Missing or failed host wiring withholds earlier results, recording a warning
+Missing or failed host wiring withholds earlier results and the earlier conversation, recording a warning
 while allowing the child to continue on the user's message; it refuses no call
 itself. The app host requires a readable, non-empty directory;
 declare `{ directory: 'none' }` in code only for deployments without one. Its

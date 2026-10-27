@@ -44,9 +44,9 @@ A live pass proves: the model requests a Project count with a valid Cypher query
 
 **RUNNABLE NOW · must** · recorded `general` baseline
 
-User: “Find the Lantern release notes and read the page. What changed in version 2?”
+User: “Find the Next.js release notes and read the page. What changed in version 15.5?”
 
-Expected assistant: Version 2 adds CSV export; cite https://example.invalid/lantern.
+Expected assistant: Version 15.5 makes Turbopack the default bundler; cite https://example.invalid/nextjs. The seeded `lantern-notes.md` stays as a present-but-wrong local decoy (#775): it does not answer this ask.
 
 Expected routes: `info-retrieval`. Expected tools: `search`, `fetch`.
 
@@ -104,15 +104,15 @@ User: “How many Project nodes are in the knowledge graph?”
 
 Expected assistant: There are 42 Project nodes.
 
-User: “Double that number. Just give me the result.”
+User: “Who is involved in the three most popular?”
 
-Expected assistant: 84
+Expected assistant: The participants of the three most popular projects: Dune, Ember, Fern, Gulf, Haven, Iris and Juniper.
 
 Expected routes: `info-retrieval`. Expected tools: `read_neo4j_cypher`.
 
-Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries 84; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries each of Dune, Ember, Fern, Gulf, Haven, Iris and Juniper; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
-A live pass proves: the model uses the earlier count and reports its double in the same conversation.
+A live pass proves: the model answers the follow-up from the canned graph fixture's per-entity relationship data — the three most popular projects by relationship degree and the union of their participants — in the same conversation.
 
 ### 08-follow-up-failure — Retry after an explicitly failed turn
 

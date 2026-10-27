@@ -13,6 +13,9 @@
  *   request's kind.
  */
 import {
+  EGRESS_RELEASE_KIND,
+  INGRESS_FLAG_KIND,
+  ingressFlagResolution,
   readHitl,
   type ContextEvent,
   type HitlPayloadStore,
@@ -20,7 +23,12 @@ import {
   type UnifiedContext,
 } from '@hames-ai/harness-patterns'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import { deleteHitlPayloads, deleteQuarantine, holdHitlPayload } from '../db/hitl.server'
+import {
+  deleteHitlPayloads,
+  deleteQuarantine,
+  getHitlPayload,
+  holdHitlPayload,
+} from '../db/hitl.server'
 
 assertServerOnImport()
 
@@ -78,9 +86,31 @@ type Resolver = (
 const dropQuarantine: Resolver = (request, _answer, userId) =>
   deleteQuarantine(request.requestId, userId)
 
+/** What a flagged result becomes on the person's answer (boundary guards slice
+ *  10): read from the request's own payload row, owner-scoped. A row that is
+ *  gone (expired, swept) leaves the result out, never something else. Reading
+ *  is idempotent per requestId. */
+const releaseFlaggedResult: Resolver = async (request, answer, userId) => {
+  const row = request.payloadRef ? await getHitlPayload(request.payloadRef, userId) : null
+  // A row of another kind is never released as a result: it is ignored whole.
+  const own = row?.kind === INGRESS_FLAG_KIND ? row : null
+  return ingressFlagResolution(
+    own ? answer.choice : 'leave-out',
+    own ? own.payload : { tool: request.summary.tool },
+  )
+}
+
+/** An egress release has no side effect here: the resumed route sends the call
+ *  itself, inside its own frame, so its result meets the ingress guard (O15). */
+const noSideEffect: Resolver = async () => undefined
+
 /** Each kind's resolver. A kind with none keeps the original behaviour. A
  *  Map, so a kind named like an `Object.prototype` member is just a kind. */
-const RESOLVERS: ReadonlyMap<string, Resolver> = new Map([['provenance', dropQuarantine]])
+const RESOLVERS: ReadonlyMap<string, Resolver> = new Map([
+  ['provenance', dropQuarantine],
+  [INGRESS_FLAG_KIND, releaseFlaggedResult],
+  [EGRESS_RELEASE_KIND, noSideEffect],
+])
 
 /** The host's `resolve` for one owner's resume: the request's kind picks it. */
 export function resolveHitlAnswer(userId: string) {

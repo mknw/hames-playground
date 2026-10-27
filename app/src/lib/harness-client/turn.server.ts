@@ -117,12 +117,12 @@ import {
   TURN_CLAIM_TTL_SECONDS,
   deriveTitle,
 } from '../db/conversations.server'
+import { closeHitlRows, loadHitlAnswerRows, type HitlAnswerValue } from '../db/hitl.server'
 import {
-  closeHitlRows,
-  deleteQuarantine,
-  loadHitlAnswerRows,
-  type HitlAnswerValue,
-} from '../db/hitl.server'
+  createHitlPayloadStore,
+  purgeClosedPayloads,
+  resolveHitlAnswer,
+} from '../hitl/payloads.server'
 
 assertServerOnImport()
 
@@ -651,7 +651,13 @@ async function runAndSave(
     const patterns = await getOrBuildPatterns(sessionId, agentId)
     const memory = await startTurnMemory(patterns, agentDeps().memory)
     const result = await amendRunFrame(
-      { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
+      {
+        live: req.onEvent,
+        hitl: { attended: isAttendedRequest() },
+        // Where a blocking request's payload is held (slice 8): bound to this
+        // turn's owner and conversation, so core never names either.
+        hitlPayloads: createHitlPayloadStore(userId, sessionId),
+      },
       () => run(patterns),
     )
     // Written at the version the claim holds, releasing it in the same
@@ -665,6 +671,11 @@ async function runAndSave(
       memoryRunOrigin: req.mode === 'interactive' ? 'interactive' : 'triggered',
     })
     held.released = true
+    // A new message superseded whatever waited: its held payloads go now, not
+    // at their expiry. Hygiene, not the turn — logged on failure.
+    await purgeClosedPayloads(result.context, userId).catch((err: unknown) =>
+      console.error('[hitl] could not purge the closed payloads of %s:', sessionId, err),
+    )
     return { result, memory, saved: { version, eventCount: result.context.events.length } }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
@@ -1010,15 +1021,19 @@ async function runResumeAndSave(
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
     const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
-      { live: req.onEvent, hitl: { attended: isAttendedRequest() } },
+      {
+        live: req.onEvent,
+        hitl: { attended: isAttendedRequest() },
+        hitlPayloads: createHitlPayloadStore(userId, sessionId),
+      },
       () =>
         resumeHarness(loaded.serializedContext, patterns, plan.answers, {
           principal: userId,
-          // The host's one side effect (F4): drop the held content — DELETE is
-          // idempotent per requestId, the Δ4 rule. The row's PAYLOAD purge is
-          // deliberately NOT here: it happens after the save, when the
-          // answer is durable, in `syncAnswerRows`.
-          resolve: (request) => deleteQuarantine(request.requestId, userId),
+          // The host's side effect (F4), chosen by the request's kind; each is
+          // idempotent per requestId, the Δ4 rule. The PAYLOAD purge is
+          // deliberately NOT here: it happens after the save, when the answer
+          // is durable, in `syncAnswerRows` and `purgeClosedPayloads`.
+          resolve: resolveHitlAnswer(userId),
         }),
     )
     // Written at the version the claim holds, releasing it in the same
@@ -1034,6 +1049,9 @@ async function runResumeAndSave(
     // the rows close on the next sync or the expiry sweep.
     await syncAnswerRows(result.context, sessionId, userId).catch((err: unknown) =>
       console.error('[hitl] could not close the spent answer rows of %s:', sessionId, err),
+    )
+    await purgeClosedPayloads(result.context, userId).catch((err: unknown) =>
+      console.error('[hitl] could not purge the closed payloads of %s:', sessionId, err),
     )
     return {
       agentId: loaded.agentId,

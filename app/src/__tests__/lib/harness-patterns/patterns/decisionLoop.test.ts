@@ -2360,6 +2360,51 @@ describe('decisionLoop — a route is not offered again after two records in a r
     expect(errors.map((e) => (e.data as ErrorEventData).kind)).toEqual(['budget_exhausted'])
   })
 
+  // MUTATION: add `&& kind !== 'retriever'` to `succeededCalls` in computeStats (no
+  // retriever record reads as progress): read is withheld at decision 3.
+  it('a real retriever that found matches twice in a row is NOT withheld: its result counts as its call', async () => {
+    const hit = { backend: 'redis', id: 'h1', content: 'Figures rose.', source: 'q3.md' }
+    const read = retriever<Data>({
+      backends: [{ name: 'redis', type: 'vector', search: async () => [hit] }],
+      rewrite: (async () => ({ value: '' })) as never,
+      patternId: 'read-p',
+    })
+    const { decide, offeredAt } = stubborn('read')
+    const ctx = await run([
+      build({ read: route(read), other: route(returning('o', 'x')) }, decide, {
+        maxIterations: 3,
+      }),
+    ])
+    expect(decided(ctx)).toEqual(['read', 'read', 'read'])
+    expect(offeredAt[2]).toEqual(['read', 'other', 'answer'])
+  })
+
+  // MUTATION: add `&& kind !== 'actorCritic'` to `succeededCalls` in computeStats (no
+  // actorCritic record reads as progress): doc is withheld at decision 3.
+  it('a real actorCritic whose accepted attempt made a successful call, twice in a row, is NOT withheld', async () => {
+    const actor = vi.fn(async () => ({
+      action: {
+        reasoning: 'look',
+        tool_name: 'search',
+        tool_args: '{}',
+        is_final: true,
+      } as ControllerAction,
+    }))
+    const critic = vi.fn(async () => ({ result: { is_sufficient: true, explanation: 'ok' } }))
+    const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
+      patternId: 'doc-p',
+      maxRetries: 2,
+    })
+    const { decide, offeredAt } = stubborn('doc')
+    const ctx = await run([
+      build({ doc: route(doc), other: route(returning('o', 'x')) }, decide, {
+        maxIterations: 3,
+      }),
+    ])
+    expect(decided(ctx)).toEqual(['doc', 'doc', 'doc'])
+    expect(offeredAt[2]).toEqual(['doc', 'other', 'answer'])
+  })
+
   // MUTATION: drop `&& r.tool !== EXPAND_TOOL_NAME` from `succeededCalls` in computeStats:
   // re-reading an earlier result counts as a lookup, and info is offered again.
   it('an expandPreviousResult is not a successful call: it re-reads, it looks nothing up', async () => {

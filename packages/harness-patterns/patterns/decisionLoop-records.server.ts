@@ -66,7 +66,9 @@ export interface RouteStats {
   readonly toolCalls: number
   /** Tool results that came back `success: true`, `expandPreviousResult`
    *  excluded (it re-reads the context and looks nothing up). The retriever's
-   *  one result counts as its call. */
+   *  one result counts as its call. A held call's placeholder that a re-sent
+   *  call superseded (`redispatch`, slice 10) is not counted: the re-sent
+   *  call's own result is. */
   readonly succeededCalls: number
   readonly errors: number
   readonly wallMs: number
@@ -432,7 +434,9 @@ export function computeStats(
   const base = {
     kind,
     toolCalls,
-    succeededCalls: results.filter((r) => r.success === true && r.tool !== EXPAND_TOOL_NAME).length,
+    succeededCalls: results.filter(
+      (r) => r.success === true && r.redispatch !== true && r.tool !== EXPAND_TOOL_NAME,
+    ).length,
     errors: errorEvents.length + (kind === 'retriever' ? 0 : failedResults),
     wallMs,
     hitBound: budget !== undefined,

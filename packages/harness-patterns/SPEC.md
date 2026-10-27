@@ -1993,6 +1993,9 @@ it is offered.
     no plan), even when one of its calls succeeded;
   - it made no tool call;
   - every one of its calls failed, including a call the egress gate refused.
+    On an attended turn a held call is sent again once the person answers
+    (slice 10). Its placeholder stays on the record with `success: true`, but it
+    is not counted; only the re-sent call's result is.
 
   The status alone does not decide it: a `simpleLoop` that Returns "I could not
   count them" after three failed reads is `succeeded` and made no progress. The

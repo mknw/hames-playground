@@ -530,6 +530,79 @@ export async function askHumanHolding<C extends string>(
   return outcome
 }
 
+/**
+ * The decision this run already holds for a holding request of `kind` over
+ * `payload` at THIS call, or undefined: {@link askHumanHolding}'s replay, read
+ * without raising, holding or writing anything. A gate re-entered on a call a
+ * person decided (boundary guards slice 10) reads its answer here instead of
+ * asking its model again. `summary` is the request's own, as recorded.
+ */
+export function recordedHolding(
+  kind: string,
+  options: readonly HitlOption[],
+  payload: unknown,
+):
+  | {
+      readonly choice: string
+      readonly requestId: string
+      readonly summary: Readonly<Record<string, string | number | boolean | null>>
+    }
+  | undefined {
+  const frame = currentRunFrame()
+  const run = hitlRunStore.getStore()
+  if (!run || frame?.callKey === undefined) return undefined
+  const digest = createHash('sha256').update(canonicalJson(payload)).digest('hex')
+  const key = `${kind}:${digest}:${frame.callKey}`
+  const events = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)]
+  const answer = readHitl({ events }).answers.get(hitlReplayKey({ kind, key, options }))
+  if (!answer || !isAvailable(options, answer.choice)) return undefined
+  const request = events.find(
+    (e): e is ContextEvent & { data: HitlRequestEventData } =>
+      e.type === 'hitl_request' && isRequest(e) && e.data.requestId === answer.requestId,
+  )
+  return {
+    choice: answer.choice as string,
+    requestId: answer.requestId,
+    summary: request?.data.summary ?? {},
+  }
+}
+
+/** Is there an attended HITL run here, someone a request can reach? False
+ *  outside one and in an unattended one. */
+export function hitlRunAttended(): boolean {
+  const run = hitlRunStore.getStore()
+  return !!run && !run.closed && run.attended
+}
+
+/**
+ * May the code running here pause for a person and be resumed where it
+ * stopped (boundary guards slice 10)? True only when all of these hold:
+ *
+ * - a HITL run is open and ATTENDED: an unattended one has nobody to ask;
+ * - the call has a logical identity (`callKey`, set by `simpleLoop` around a
+ *   dispatch) and the host holds payloads (`hitlPayloads`);
+ * - the recorded path is whole, from the top-level pattern to the loop that
+ *   dispatched this call: its first step is the root `runChain` set, each
+ *   step names the next one's fingerprint as its child, and the last is a
+ *   loop that dispatches the call itself. A pattern that cannot resume
+ *   records no step, so a path through one is broken here.
+ *
+ * Read at RUN time, so it holds for a composition construction never saw.
+ * False outside a frame.
+ */
+export function canPauseHere(): boolean {
+  const frame = currentRunFrame()
+  if (!hitlRunAttended() || !frame?.hitl) return false
+  if (frame.callKey === undefined || !frame.hitlPayloads) return false
+  const path = frame.continuation
+  if (path.length === 0 || typeof frame.continuationRoot !== 'string') return false
+  if (path[0].fingerprint !== frame.continuationRoot) return false
+  for (let i = 0; i < path.length - 1; i++) {
+    if (path[i].child !== path[i + 1].fingerprint) return false
+  }
+  return path[path.length - 1].child === undefined
+}
+
 /** The note a held result carries when the consumer gives none. */
 export const HELD_NOTE = "This call is waiting for a person's decision. Do not retry it; stop."
 
@@ -1221,6 +1294,9 @@ function substituteHeld(
       ...rest,
       result,
       heldBy: requestId,
+      // The held CALL runs again on re-entry (slice 10): kept on the event,
+      // which outlives the placeholder it replaces.
+      ...(data.result.redispatch === true ? { redispatch: true } : {}),
       ...(report.findings.length > 0 ? { sanitized: redactReport(report) } : {}),
     } satisfies ToolResultEventData
   }

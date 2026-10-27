@@ -18,6 +18,7 @@ import {
   harnessPseudonymisesInputs,
   harnessUsesMemory,
   harnessUsesSyncWorkspace,
+  INGRESS_TEXTS,
   inferServer,
   ownResumable,
   serializeContext,
@@ -318,9 +319,18 @@ function walk(patterns: ConfiguredPattern<AgentData>[]): ConfiguredPattern<Agent
 function routesOf(patterns: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] {
   return walk(patterns).find((p) => p.name === 'decisionLoop')!.children!
 }
-async function run(tier = 'anthropic', supplied = deps, message = 'synthetic task') {
+/** One turn as the app runs a chat: attended, with nowhere to hold a payload,
+ *  so a person cell takes its "nobody can be asked here" default (slice 10). */
+async function run(
+  tier = 'anthropic',
+  supplied = deps,
+  message = 'synthetic task',
+  attended = true,
+) {
   const patterns = await agent.createPatterns('synthetic-session', supplied)
-  return withRunFrame({ inference: { tier } }, () => harness(...patterns)(message))
+  return withRunFrame({ inference: { tier }, hitl: { attended } }, () =>
+    harness(...patterns)(message),
+  )
 }
 
 describe('general-next composition', () => {
@@ -615,6 +625,8 @@ describe('general-next composition', () => {
     // hide behind an unknown field or a renamed option.
     expect([...new Set(all.flatMap((p) => Object.keys(p.capabilities ?? {})))].sort()).toEqual([
       'decisionKeys',
+      // The egress gate's outgoing names, while it asks the person (slice 10).
+      'gatedTools',
       'pseudonymisedInputs',
       'resumable',
       'retrievalBackends',
@@ -1457,7 +1469,11 @@ describe('general-next composition', () => {
           : value && typeof value === 'object'
             ? Object.values(value).flatMap(leaves)
             : []
-      const strings = leaves((mail.data as { result: unknown }).result)
+      // Attended on the office route, which cannot pause: the flagged mail
+      // keeps its shape and says so in the guard's own line (slice 10, O14).
+      const { notice, ...content } = (mail.data as { result: Record<string, unknown> }).result
+      expect(notice).toBe(detected ? INGRESS_TEXTS.neutralised('graph_mail_recent') : undefined)
+      const strings = leaves(content)
       expect(strings.length).toBeGreaterThan(0)
       for (const leaf of strings) {
         expect(leaf.match(/⟦UNTRUSTED CONTENT · source:/g)).toHaveLength(1)

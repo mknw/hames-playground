@@ -2417,9 +2417,9 @@ export interface EgressAuditEventData {
   readonly hosts: readonly string[]
   /** The roster's matched spans, as they occur in the request, each capped at 80. */
   readonly spans: readonly string[]
-  /** The egress question's answer. */
-  readonly probs: EgressProbabilities
-  /** Who let the call go: the egress question, or (once the person is asked) the person. */
+  /** The egress question's answer; absent when a person released the call. */
+  readonly probs?: EgressProbabilities
+  /** Who let the call go: the egress question, or the person (slice 10). */
   readonly allowedBy: 'decide' | 'person'
 }
 

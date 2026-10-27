@@ -851,6 +851,7 @@ class Host:
         self.test.assertFalse(kwargs.get("shell", False))
         self.test.assertIsNotNone(kwargs.get("timeout"))
         self.clock.now += self.cost.get(args[0] + " " + (args[1] if len(args) > 1 else ""), 0)
+        self.expire()
         rc, out = 0, ""
         try:
             out = getattr(self, "cmd_" + args[0].replace("-", "_"))(args, kwargs.get("input"))
@@ -1039,6 +1040,17 @@ class Host:
         self.test.assertEqual(args, ["ss", "-Hltn"])
         return self.ss
 
+    def expire(self):
+        # The stand-in is `--rm` with `sleep <n>` as its entrypoint: once n has
+        # passed, Docker has removed it and the pinned address it held is free
+        # again. It alone must outlive the probes that need it (1, 5, 6 and
+        # probe 11's shadow); the netns sleepers serve probes 3-4b only.
+        for ident, container in list(self.containers.items()):
+            if container.get("until") is not None and self.clock.now >= container["until"]:
+                del self.containers[ident]
+                for network in container["networks"]:
+                    self.networks[network]["Containers"].pop(ident, None)
+
     def bridge_of(self, network):
         doc = self.networks[network]
         return doc["Options"].get("com.docker.network.bridge.name", "br-" + doc["Id"][:12])
@@ -1079,7 +1091,8 @@ class Host:
             return (1, "")
         if args[1:3] == ["rm", "-f"]:
             self.test.assertTrue(args[3].startswith("x"), "removed a container the smoke did not start")
-            for network in self.containers.pop(args[3])["networks"]:
+            # --force ignores a container that is already gone, as Docker's does.
+            for network in self.containers.pop(args[3], {"networks": {}})["networks"]:
                 self.networks[network]["Containers"].pop(args[3], None)
             return ""
         if args[1] == "--host":
@@ -1122,7 +1135,8 @@ class Host:
         env = dict(e.split("=", 1) for e in values.get("-e", []))
         self.containers[ident] = {"service": None, "image": image, "pid": str(4000 + self.next_container),
                                   "networks": {network: address}, "env": env, "user": values["--user"][0],
-                                  "mounts": values.get("--mount", [])}
+                                  "mounts": values.get("--mount", []),
+                                  "until": self.clock.now + float(argv[i + 1]) if "--ip" in values else None}
         self.networks[network]["Containers"][ident] = {"IPv4Address": address + "/29"}
         return ident + "\n"
 
@@ -2256,6 +2270,20 @@ class Smoke(Smoking, Harness):
         with patch.object(self.host, "cmd_incus", side_effect=late):
             self.assert_fails("bound")
 
+    def test_one_environment_keeps_its_300_s_bound(self):
+        # Measured on the host: one environment's smoke took 161 s and 171 s, the
+        # fake's 96 s plus about 6 s per guest command.
+        self.ready()
+        self.host.cost = {"incus exec": 6}
+        self.host.calls.clear()
+        start = self.host.clock.now
+        self.assertEqual(self.smoke(), 0, self.err)
+        self.assertLess(self.host.clock.now - start, 300)
+        stand_in = next(c for c in self.host.calls if c[:3] == ["docker", "run", "-d"] and "--ip" in c)
+        self.assertEqual(stand_in[-1], "300", "the stand-in sleeps the bound")
+        self.host.cost = {"incus exec": 18}  # 96 s + 12 x 18 s = 312 s
+        self.assert_fails("bound of 300 s per environment")
+
     def test_probe_2_needs_the_daemon_to_answer_the_host(self):
         self.ready()
         self.host.host_answer = ""
@@ -2343,6 +2371,38 @@ class SmokeTwoEnvironments(Smoking, Harness):
                 self.assertEqual((results["6"]["rule"], results["6"]["counter_change"]), ("to_vm_refused", 3))
                 self.assertEqual((results["7"]["rule"], results["7"]["counter_change"]), ("vm_to_vm", 3))
                 self.assertIs(results["7"]["single_environment"], False)
+
+
+    def test_the_bound_is_300_s_per_environment(self):
+        # Two environments at the host's pace (one took 161 s and 171 s) run past
+        # a 300 s total, so the bound, and the stand-ins' sleep with it, scale
+        # with the count.
+        self.ready()
+        self.host.cost = {"incus exec": 6}
+        self.host.calls.clear()
+        start = self.host.clock.now
+        self.assertEqual(self.smoke(), 0, self.err)
+        self.assertGreater(self.host.clock.now - start, 300)
+        stand_ins = [c for c in self.host.calls if c[:3] == ["docker", "run", "-d"] and "--ip" in c]
+        self.assertEqual([c[-1] for c in stand_ins], ["600", "600"], "each stand-in sleeps the whole bound")
+        self.host.cost = {"incus exec": 18}  # 198 s + 23 x 18 s = 612 s
+        self.assert_fails("bound of 300 s per environment")
+
+    def test_a_stand_in_outlives_a_slow_environment(self):
+        # Dev alone past 300 s, the two together inside 600 s: dev's stand-in must
+        # still hold its pinned address at probe 11's shadow read, whichever
+        # environment runs first.
+        self.ready()
+        real_incus = self.host.cmd_incus
+
+        def slow_dev(args, payload):
+            if len(args) > 13 and args[3] == "sandbox-dev" and args[13] == str(guard.SPORT["9"]):
+                self.host.clock.now += 250
+            return real_incus(args, payload)
+        start = self.host.clock.now
+        with patch.object(self.host, "cmd_incus", side_effect=slow_dev):
+            self.assertEqual(self.smoke(), 0, self.err)
+        self.assertTrue(300 < self.host.clock.now - start < 600)
 
 
 class SmokeTwoEnvironmentsSecondFirst(SmokeTwoEnvironments):
@@ -2487,7 +2547,7 @@ MUTATIONS = {
     "smoke-connect-not-stopped": ('    if outcome == "CONNECTED":\n', "    if False:\n"),
     "smoke-noisy-baseline": ('    require(packet_counts()[counter] == start, label + ": counter moved during the quiet baseline (inconclusive)")', "    pass"),
     "smoke-past-bound": ("SMOKE_BOUND = 300", "SMOKE_BOUND = 3000"),
-    "smoke-bound-unchecked": ('    require(left > 0, "smoke exceeded its %d s bound" % SMOKE_BOUND)', "    pass"),
+    "smoke-bound-unchecked": ('    require(left > 0, "smoke exceeded its bound of %d s per environment" % SMOKE_BOUND)', "    pass"),
     "smoke-final-bound-unchecked": ("        remaining(deadline)\n    # Only a passing run writes", "        pass\n    # Only a passing run writes"),
     "stand-in-copies-key": ('"type=bind,source=%s,target=/run/sandbox-tls/%s.pem,readonly" % (path, part)]', '"type=bind,source=%s,target=/run/sandbox-tls/%s.pem,readonly" % (__import__("shutil").copy(path, STATE), part)]'),
     "stand-in-widens-key": ('    key = files["key"].lstat()\n    mounts = []', '    files["key"].chmod(0o644)\n    key = files["key"].lstat()\n    mounts = []'),
@@ -2664,6 +2724,13 @@ MUTATIONS = {
                                         '            pairs = [e for e in config["environments"][1:]\n                     if e["name"] != name'),
     "per-pair-last-environment-only": ('            pairs = [e for e in config["environments"]\n                     if e["name"] != name',
                                        '            pairs = [e for e in config["environments"][:-1]\n                     if e["name"] != name'),
+    # The smoke's bound is 300 s per environment: a 300 s total fails dev + release
+    # on the host; the stand-in's sleep must cover the scaled bound; one environment keeps 300 s.
+    "smoke-bound-not-multiplied": ('    return SMOKE_BOUND * len(config["environments"])', "    return SMOKE_BOUND"),
+    "smoke-bound-one-widened": ('    return SMOKE_BOUND * len(config["environments"])', '    return SMOKE_BOUND * (len(config["environments"]) + 1)'),
+    "smoke-deadline-not-scaled": ("    deadline = time.monotonic() + smoke_bound(config)", "    deadline = time.monotonic() + SMOKE_BOUND"),
+    "stand-in-sleep-not-scaled": ('"--entrypoint", "sleep", image, str(bound)]', '"--entrypoint", "sleep", image, str(SMOKE_BOUND)]'),
+    "stand-in-given-unscaled-bound": ("stand_in(env, image, files, smoke_bound(config), deadline)", "stand_in(env, image, files, SMOKE_BOUND, deadline)"),
     "S2-probe-8d-embeds-nothing-live": ('lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT)', 'lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT - 1)'),
 }
 

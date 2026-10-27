@@ -965,9 +965,15 @@ HARDENED = ["--pull", "never", "--cap-drop", "ALL", "--security-opt", "no-new-pr
             "--pids-limit", "32", "--memory", "256m"]
 
 
+def smoke_bound(config):
+    # Per environment: each is a whole probe set, so one more environment is
+    # one more bound (#777 added release; a 300 s total failed dev + release).
+    return SMOKE_BOUND * len(config["environments"])
+
+
 def remaining(deadline):
     left = deadline - time.monotonic()
-    require(left > 0, "smoke exceeded its %d s bound" % SMOKE_BOUND)
+    require(left > 0, "smoke exceeded its bound of %d s per environment" % SMOKE_BOUND)
     return min(left, 20)
 
 
@@ -1047,7 +1053,7 @@ def client_files(entry_point):
     return files
 
 
-def stand_in(env, image, files, deadline):
+def stand_in(env, image, files, bound, deadline):
     key = files["key"].lstat()
     mounts = []
     for part, path in sorted(files.items()):
@@ -1058,7 +1064,7 @@ def stand_in(env, image, files, deadline):
     return run(["docker", "run", "-d", "--rm", *HARDENED, "--user", "%d:%d" % (key.st_uid, key.st_gid),
                 "--network", "envapp-" + env["name"], "--ip", env["clientAddress"],
                 "--tmpfs", "/tmp:rw,size=4m", "-e", "HOME=/tmp", *tls, *mounts,
-                "--entrypoint", "sleep", image, str(SMOKE_BOUND)], timeout=remaining(deadline)).strip()
+                "--entrypoint", "sleep", image, str(bound)], timeout=remaining(deadline)).strip()
 
 
 def probe_environment(config, env, facts, shared, deadline):
@@ -1097,7 +1103,7 @@ def probe_environment(config, env, facts, shared, deadline):
         identity = fact["member"]
         if identity is None:
             # W9: a stand-in holding the pinned address proves the rule before app-dev moves.
-            identity = extra = stand_in(env, image, files, deadline)
+            identity = extra = stand_in(env, image, files, smoke_bound(config), deadline)
         before = packet_counts()[allow]
         answer = run(["docker", "exec", identity, "sh", "-c", DOCKER_VERSION], timeout=remaining(deadline))
         require(bool(answer.strip()), "probe 1: the VM's Docker daemon did not answer")
@@ -1346,7 +1352,7 @@ def listens(port, six):
 
 
 def smoke(config, config_path, record_path):
-    deadline = time.monotonic() + SMOKE_BOUND
+    deadline = time.monotonic() + smoke_bound(config)
     # An earlier run's record must not outlive a failing one: bootstrap admits
     # the overlay on any non-empty file. A symlink is removed, never followed.
     record_path.unlink(missing_ok=True)

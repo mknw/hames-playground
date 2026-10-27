@@ -113,8 +113,12 @@ it.each([
       egressGateScenario: { id: 'egress-gate', role: 'decide' },
     }
     modules['./scenarios/fence-wording'] = {
-      createFenceWordingScenario: () => ({ id: 'fence-wording-live', role: 'controller' }),
-      currentFenceHeader: () => ({ label: 'legacy', header: '', footer: '' }),
+      createFenceWordingScenario: ({ label }: { label: string }) => ({
+        id: `fence-wording-${label}`,
+        role: 'controller',
+      }),
+      currentFenceHeader: () => ({ label: 'provenance', header: '', footer: '' }),
+      LEGACY_FENCE_HEADER: { label: 'legacy', header: '', footer: '' },
     }
     execute('run', modules, processStub)
     await vi.waitFor(() =>

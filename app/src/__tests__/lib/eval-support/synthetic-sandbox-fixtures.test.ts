@@ -37,16 +37,16 @@ const read = (file: string) => readFileSync(resolve(`evals/general-next/scenario
 // The scenario objects as written, pinned to their sources (src/ may not import evals/).
 const pin = (source: string, snippet: string) =>
   expect(source.replace(/\s+/g, ' ')).toContain(snippet.replace(/\s+/g, ' '))
-pin(read('10-csv-analysis.ts'), "sandboxArgs(['lantern-sales.csv', 'lantern-totals.csv'])")
-pin(read('09-upload-summary.ts'), "sandboxArgs(['lantern-summary.docx'])")
-pin(read('11-mail-to-file.ts'), "sandboxArgs(['lantern-launch.md'])")
+pin(read('10-csv-analysis.ts'), "sandboxArgs('lantern-totals.csv', 'lantern-sales.csv')")
+pin(read('09-upload-summary.ts'), "sandboxArgs('lantern-summary.docx')")
+pin(read('11-mail-to-file.ts'), "sandboxArgs('lantern-launch.md')")
 pin(
   read('14-analysis-index-follow-up.ts'),
-  "'lantern-notes.md', 'lantern-sales.csv', 'lantern-analysis.md'",
+  "'lantern-analysis.md', 'lantern-notes.md', 'lantern-sales.csv'",
 )
 pin(
   read('17-mail-analysis-follow-up.ts'),
-  "'lantern-notes.md', 'lantern-sales.csv', 'lantern-launch-analysis.md'",
+  "'lantern-launch-analysis.md', 'lantern-notes.md', 'lantern-sales.csv'",
 )
 
 const SALES = '/work/in/lantern-sales.csv'
@@ -63,7 +63,7 @@ const csv = {
     'Use the uploaded lantern-sales.csv to total revenue by region. Save lantern-totals.csv and tell me the grand total.',
   ],
   expectedTools: ['sandbox_bash'],
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-sales.csv', 'lantern-totals.csv']) },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-totals.csv', 'lantern-sales.csv') },
   expectedRoutes: ['office-data'],
   answerIncludes: ['North', '47', 'South', '19', '66'],
   artifacts: ['lantern-totals.csv'],
@@ -81,7 +81,7 @@ const summary = {
     'I uploaded lantern-notes.md. Write a short Word summary called lantern-summary.docx and give me the download link.',
   ],
   expectedTools: ['sandbox_bash'],
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-summary.docx']) },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-summary.docx') },
   expectedRoutes: ['office-data'],
   answerIncludes: ['lantern-summary.docx', '2030-04-12'],
   artifacts: ['lantern-summary.docx'],
@@ -95,7 +95,7 @@ const mail = {
     'Find the Lantern launch email in my inbox. Turn its checklist into lantern-launch.md and give me the file.',
   ],
   expectedTools: ['graph_mail_recent', 'sandbox_bash'],
-  expectedArgs: { sandbox_bash: sandboxArgs(['lantern-launch.md']), graph_mail_recent: mailArgs },
+  expectedArgs: { sandbox_bash: sandboxArgs('lantern-launch.md'), graph_mail_recent: mailArgs },
   expectedRoutes: ['office-data'],
   answerIncludes: ['lantern-launch.md', 'CSV'],
   artifacts: ['lantern-launch.md'],
@@ -112,7 +112,7 @@ const analysis = {
   ],
   expectedTools: ['sandbox_bash'],
   expectedArgs: {
-    sandbox_bash: sandboxArgs(['lantern-notes.md', 'lantern-sales.csv', 'lantern-analysis.md']),
+    sandbox_bash: sandboxArgs('lantern-analysis.md', 'lantern-notes.md', 'lantern-sales.csv'),
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],
@@ -132,11 +132,11 @@ const seventeen = {
   expectedTools: ['graph_mail_recent', 'sandbox_bash'],
   expectedArgs: {
     graph_mail_recent: mailArgs,
-    sandbox_bash: sandboxArgs([
+    sandbox_bash: sandboxArgs(
+      'lantern-launch-analysis.md',
       'lantern-notes.md',
       'lantern-sales.csv',
-      'lantern-launch-analysis.md',
-    ]),
+    ),
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],

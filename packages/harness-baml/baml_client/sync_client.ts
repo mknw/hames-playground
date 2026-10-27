@@ -898,7 +898,7 @@ export class BamlSyncClient {
   }
   
   ScreenUntrustedContent(
-      source: string,content: string,
+      source: string,content: string,boundary: string,
       __baml_options__?: BamlCallOptions<never>
   ): types.ScreenVerdict {
     try {
@@ -930,7 +930,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "ScreenUntrustedContent",
         {
-          "source": source,"content": content
+          "source": source,"content": content,"boundary": boundary
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

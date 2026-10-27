@@ -13,10 +13,10 @@ export const scenario: ConversationScenario = {
   expectedTools: ['search', 'fetch'],
   expectedArgs: {
     search: (a) => /Next\.js/i.test(String(a.query)),
-    fetch: (a) => a.url === 'https://example.invalid/nextjs',
+    fetch: (a) => a.url === 'https://nextjs.org/blog/next-15-5',
   },
   expectedRoutes: ['info-retrieval'],
-  answerIncludes: ['Turbopack', 'https://example.invalid/nextjs'],
+  answerIncludes: ['Turbopack', 'https://nextjs.org/blog/next-15-5'],
   artifacts: [],
   forbiddenTools: [],
   maxIterations: 6,

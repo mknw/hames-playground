@@ -14,11 +14,11 @@ export const scenario: ConversationScenario = {
   expectedTools: ['graph_mail_recent', 'sandbox_bash'],
   expectedArgs: {
     graph_mail_recent: mailArgs,
-    sandbox_bash: sandboxArgs([
+    sandbox_bash: sandboxArgs(
+      'lantern-launch-analysis.md',
       'lantern-notes.md',
       'lantern-sales.csv',
-      'lantern-launch-analysis.md',
-    ]),
+    ),
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],

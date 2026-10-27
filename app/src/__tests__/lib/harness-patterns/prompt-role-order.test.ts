@@ -261,7 +261,8 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   ['GenerateConversationTitle', (o) => () => b.request.GenerateConversationTitle('q', o)],
   [
     'ScreenUntrustedContent',
-    (o) => () => b.request.ScreenUntrustedContent('web', 'fetched page text', o),
+    (o) => () =>
+      b.request.ScreenUntrustedContent('web', 'fetched page text', '0123456789abcdef', o),
   ],
 ]
 

@@ -2,9 +2,15 @@ export const projectCountArgs = (args: Record<string, unknown>): boolean =>
   typeof args.query === 'string' && /MATCH[\s\S]*Project[\s\S]*count/i.test(args.query)
 
 /** A scenario's argument predicate. `scripts` is the text of the files the shell
- * command runs (the synthetic sandbox resolves it from what the actor wrote); the
- * graders have only the arguments and pass none. */
-export type ArgsPredicate = (args: Record<string, unknown>, scripts?: string) => boolean
+ * command runs (the synthetic sandbox resolves it from what the actor wrote) and
+ * `readFiles` the bare names a sandbox tool returned earlier in the same turn (the
+ * synthetic sandbox resolves both from the trace); the graders have only the arguments
+ * and pass neither. */
+export type ArgsPredicate = (
+  args: Record<string, unknown>,
+  scripts?: string,
+  readFiles?: readonly string[],
+) => boolean
 
 /** What the production `sandbox_bash` input schema itself rejects (rootfs/mcp-shell:
  * `command` string, `cwd` string, `timeout_ms` positive integer); undefined when it fits. */
@@ -46,19 +52,33 @@ const heads = (command: string): string[] =>
  * produce the declared artifact — a converter or interpreter, or `cat`/`printf`/`echo`
  * redirected to a file — and the artifact predicate validates the OUTPUT, which for the
  * graders (who hold only the arguments and the scripts) resolves to the command, or a
- * script it runs, naming every declared file. The synthetic sandbox judges the same way
- * and additionally checks the produced artifact it records. Naming files is not running
- * them: `echo a b | cat` and a bare `printf 'a b'` do not pass. */
+ * script it runs, naming the declared output and every declared input the script does not
+ * get another way. The synthetic sandbox judges the same way and additionally checks the
+ * produced artifact it records. Naming files is not running them: `echo a b | cat` and a
+ * bare `printf 'a b'` do not pass.
+ *
+ * An input may be credited by a READ instead of a name (R6DIAG row 14, run 6): an
+ * executor that read the file with `sandbox_read` earlier in the same turn holds its
+ * content, so a script that transcribes it is a computation, not a silent no-op — while
+ * a script that neither names an input nor had it read would run, exit 0 and leave
+ * nothing behind. The declared OUTPUT must still be NAMED by the command or a script it
+ * runs; a read can never credit a file nothing writes. Reads are bare names, as declared
+ * here; the synthetic sandbox reduces the read paths to theirs. */
 export const sandboxArgs =
-  (files: string[]): ArgsPredicate =>
-  (args, scripts = '') => {
+  (output: string, ...inputs: string[]): ArgsPredicate =>
+  (args, scripts = '', readFiles = []) => {
     if (sandboxShapeError(args) !== undefined) return false
     const command = args.command as string
     if (command.startsWith('fixture-write')) return false
     const runs = heads(command).some(
       (h) => EXECUTORS.has(h) || (WRITERS.has(h) && />\s*\S/.test(command)),
     )
-    return runs && files.every((file) => `${command}\n${scripts}`.includes(file))
+    const named = `${command}\n${scripts}`
+    return (
+      runs &&
+      named.includes(output) &&
+      inputs.every((file) => named.includes(file) || readFiles.includes(file))
+    )
   }
 
 /** A `writtenArtifacts` predicate: the written text names every phrase, ignoring case

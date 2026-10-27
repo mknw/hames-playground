@@ -19,6 +19,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import ts from 'typescript'
 import type { ActiveInjectionGuard } from '@hames-ai/harness-patterns/injection-guard'
+import { FENCE, LEGACY_FENCE } from '@hames-ai/harness-patterns/injection-guard'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -82,9 +83,35 @@ async function load() {
   return { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard }
 }
 
-/** Make the mocked gateway return `text` as a single text block. */
+/** The `callTool` invocation id the gateway was last called inside: the item id
+ *  every fence on that result must name (boundary guards slice 8). */
+let lastCallId: string | undefined
+
+/** Make the mocked gateway return `text` as a single text block, recording the
+ *  invocation it was called inside. */
 function gatewayReturns(text: string): void {
-  mockCallTool.mockResolvedValue({ content: [{ type: 'text', text }] })
+  lastCallId = undefined
+  mockCallTool.mockImplementation(async () => {
+    const { currentToolCallId } = await import('@hames-ai/harness-patterns/run-frame.server')
+    lastCallId = currentToolCallId()
+    return { content: [{ type: 'text', text }] }
+  })
+}
+
+/** `data` is fenced once, by a provenance header naming `<ns>/<tool>` and THIS
+ *  call's id. MUTATION: drop the item id (`callTool` passes none, or
+ *  `spotlight` drops it): the header no longer matches. */
+function expectCallFence(data: unknown, ns: string, tool: string): void {
+  expect(lastCallId).toMatch(/^call-\d+$/)
+  const text = data as string
+  expect(
+    text.startsWith(
+      `${FENCE.open}${ns}/${tool}${FENCE.itemSeparator}${lastCallId}${FENCE.headerEnd}\n`,
+    ),
+  ).toBe(true)
+  expect(text.endsWith(`\n${FENCE.close}`)).toBe(true)
+  expect(text.split(FENCE.open)).toHaveLength(2)
+  expect(text).not.toContain(LEGACY_FENCE.open)
 }
 
 describe('callTool + withInjectionGuard', () => {
@@ -120,7 +147,7 @@ describe('callTool + withInjectionGuard', () => {
     expect(result.data).not.toBe(ATTACK)
     expect(result.data as string).not.toMatch(/ignore all previous instructions/i)
     expect(result.data as string).toContain('neutralized:instruction-override')
-    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    expectCallFence(result.data, 'web', 'search')
 
     // ...and the audit trail rides along.
     expect(result.sanitized?.neutralized).toBe(true)
@@ -214,6 +241,8 @@ describe('callTool + withInjectionGuard', () => {
     expect(result.error).not.toMatch(/ignore all previous instructions/i)
     expect(result.error).toContain('neutralized:instruction-override')
     expect(typeof result.error).toBe('string')
+    // The error channel's fence names the call too (slice 8).
+    expectCallFence(result.error, 'web', 'search')
     expect(result.sanitized?.neutralized).toBe(true)
     expect(events).toHaveLength(1)
     await closeMcpClient()
@@ -430,7 +459,7 @@ describe("spotlight: 'always'", () => {
 
     // The fence IS applied — that is what the setting asked for, and the caller
     // must receive it (keying the rewrite off `summary` would have discarded it).
-    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    expectCallFence(result.data, 'web', 'search')
     expect(result.data as string).toContain(CLEAN)
     // But nothing was DETECTED, so there is nothing to report. The fence states
     // its own provenance in the text; a findings-empty event is pure noise.
@@ -553,8 +582,8 @@ describe("spotlight: 'always'", () => {
 
     expect(events).toHaveLength(1)
     expect(events[0].data.screenReason).toContain('429')
-    // And the fence survives the outage path.
-    expect(result.data as string).toContain('UNTRUSTED CONTENT')
+    // And the fence survives the outage path, naming the call.
+    expectCallFence(result.data, 'web', 'search')
     await closeMcpClient()
   })
 
@@ -668,7 +697,7 @@ describe('nested guards sanitize each tool with the declaring guard’s own opti
       (tool) => callTool(tool, { q: 'x' }),
       'search',
     )) as Awaited<ReturnType<typeof callTool>>
-    expect(outerTool.data as string).toContain('UNTRUSTED CONTENT')
+    expectCallFence(outerTool.data, 'web', 'search')
 
     // The inner guard left `spotlight` at its 'on-detection' default, so clean
     // content on ITS tool stays byte-identical.
@@ -845,13 +874,15 @@ describe('per-call screen override source boundary', () => {
         const override = node.arguments[2]
         if (!override) return
         // Refuse opaque overrides too: a variable or spread could hide screen.
+        // The per-call bag may carry the item id (slice 8) and the spotlight
+        // override, and nothing else.
         expect(ts.isObjectLiteralExpression(override)).toBe(true)
         if (ts.isObjectLiteralExpression(override)) {
           expect(
             override.properties.every(
               (property) =>
                 ts.isPropertyAssignment(property) &&
-                property.name.getText().replace(/['"]/g, '') === 'spotlight',
+                ['spotlight', 'item'].includes(property.name.getText().replace(/['"]/g, '')),
             ),
           ).toBe(true)
         }
@@ -870,8 +901,8 @@ it('per-call spotlight defaults to the enclosing guard and accepts an explicit o
     () => {},
     'synthetic-merge',
   )
-  expect((await guard.sanitize('synthetic', 'clean', { spotlight: undefined })).data).toContain(
-    '⟦UNTRUSTED CONTENT',
+  expect((await guard.sanitize('synthetic', 'clean', { spotlight: undefined })).data).toBe(
+    `${FENCE.open}synthetic/synthetic${FENCE.headerEnd}\nclean\n${FENCE.close}`,
   )
   expect((await guard.sanitize('synthetic', 'clean', { spotlight: 'off' })).data).toBe('clean')
 })

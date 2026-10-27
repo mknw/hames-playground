@@ -22,7 +22,10 @@ export async function listBlockingRequestViews(
   userId: string,
 ): Promise<BlockingRequestView[]> {
   const loaded = await loadSession(sessionId, userId)
-  if (!loaded) return []
+  // The ROW decides whether the pause is still live, as the inbox reads it: a
+  // pause a `chain-changed` refusal ended for good leaves its blob `paused`
+  // and its row `error`, and offering it again would loop on that refusal.
+  if (!loaded || loaded.status !== 'paused') return []
   const ctx = deserializeContext(loaded.serializedContext)
   if (ctx.status !== 'paused') return []
   const pending = readHitl(ctx).pending

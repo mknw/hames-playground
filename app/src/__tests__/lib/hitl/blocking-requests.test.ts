@@ -90,7 +90,7 @@ describe('listBlockingRequests', () => {
   // MUTATION: read the payload under any id but the session's (or with no
   // owner) → another user's held payload could be served → red.
   it("reads the conversation and each held payload as the session's own user", async () => {
-    loadSession.mockResolvedValue({ serializedContext: blob('paused', 'ref-1') })
+    loadSession.mockResolvedValue({ serializedContext: blob('paused', 'ref-1'), status: 'paused' })
     getHitlPayload.mockResolvedValue({ payload: { url: 'https://a.example' } })
     const views = await listBlockingRequests('s1')
     expect(loadSession).toHaveBeenCalledWith('s1', 'alice')
@@ -112,17 +112,29 @@ describe('listBlockingRequests', () => {
   // MUTATION: list pending requests whatever the run's status → a finished
   // run's old request is offered for an answer → red.
   it('offers nothing for a conversation that is not paused', async () => {
-    loadSession.mockResolvedValue({ serializedContext: blob('done', 'ref-1') })
+    // The row says paused; the blob is what says the run is not.
+    loadSession.mockResolvedValue({ serializedContext: blob('done', 'ref-1'), status: 'paused' })
     expect(await listBlockingRequests('s1')).toEqual([])
     expect(getHitlPayload).not.toHaveBeenCalled()
   })
 
   it('a payload that is gone reads as null, and a request with none carries no payload field', async () => {
-    loadSession.mockResolvedValue({ serializedContext: blob('paused', 'ref-gone') })
+    loadSession.mockResolvedValue({
+      serializedContext: blob('paused', 'ref-gone'),
+      status: 'paused',
+    })
     getHitlPayload.mockResolvedValue(null)
     expect((await listBlockingRequests('s1'))[0].payload).toBeNull()
-    loadSession.mockResolvedValue({ serializedContext: blob('paused') })
+    loadSession.mockResolvedValue({ serializedContext: blob('paused'), status: 'paused' })
     expect('payload' in (await listBlockingRequests('s1'))[0]).toBe(false)
+  })
+
+  // #803 review B1. MUTATION: read only the blob's status → a pause a
+  // chain-changed refusal ended for good is offered again, forever → red.
+  it('offers nothing for a pause that ended for good (row error, blob still paused)', async () => {
+    loadSession.mockResolvedValue({ serializedContext: blob('paused', 'ref-1'), status: 'error' })
+    expect(await listBlockingRequests('s1')).toEqual([])
+    expect(getHitlPayload).not.toHaveBeenCalled()
   })
 
   it("someone else's (or an unknown) conversation is an empty list", async () => {

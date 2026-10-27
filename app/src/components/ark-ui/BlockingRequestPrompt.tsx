@@ -37,6 +37,9 @@ export interface BlockingRequestPromptProps {
   onResume: () => void
 }
 
+/** How long after a step a press still belongs to the gesture before it. */
+export const STEP_GUARD_MS = 400
+
 export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
   const [views, setViews] = createSignal<readonly BlockingRequestView[]>([])
   const [read, setRead] = createSignal<'idle' | 'loading' | 'failed'>('idle')
@@ -48,6 +51,13 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
   const [announced, setAnnounced] = createSignal('')
   /** The person's choices so far, by request id; sent together after the last. */
   let answers: Record<string, string> = {}
+  /** When the dialog last stepped to the next request: a press inside
+   *  {@link STEP_GUARD_MS} of it (a double-click, a held key) is the same
+   *  gesture as the one before, never an answer to a request nobody read. */
+  let steppedAt = 0
+  /** The clock the expiry reads: moved by a timer at the earliest deadline, so
+   *  a dead request stops offering a live option without a re-render elsewhere. */
+  const [now, setNow] = createSignal(Date.now())
   /** Bumped on a conversation switch: a read begun before it must not paint. */
   let generation = 0
 
@@ -59,6 +69,9 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
       if (gen !== generation || sessionId !== props.sessionId) return
       setViews(found)
       setRead('idle')
+      // A re-read can shrink what waits (one answer recorded, another refused):
+      // a position past the end would read as superseded.
+      if (index() >= unanswered().length) setIndex(0)
       notifyInboxChanged()
       const key = found.map((v) => v.requestId).join(',')
       if (found.length > 0 && key !== announced()) {
@@ -100,6 +113,23 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
     review()
   })
 
+  // At the earliest deadline still ahead, move the clock and re-read, so an
+  // open dialog shows the request expired rather than a live option.
+  createEffect(() => {
+    const ahead = views()
+      .map((v) => v.expiresAt)
+      .filter((t): t is number => t !== null && t > now())
+    if (ahead.length === 0) return
+    const timer = setTimeout(
+      () => {
+        setNow(Date.now())
+        void refresh(props.sessionId)
+      },
+      Math.min(...ahead) - Date.now() + 50,
+    )
+    onCleanup(() => clearTimeout(timer))
+  })
+
   /** Requests still to be answered by this person: not recorded already. */
   const unanswered = () => views().filter((v) => v.recorded === null)
   const current = () => unanswered()[index()]
@@ -117,15 +147,16 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
     if (read() === 'failed') return 'failed'
     const r = current()
     if (!r) return read() === 'loading' ? 'loading' : 'superseded'
-    if (r.expiresAt !== null && Date.now() >= r.expiresAt) return 'expired'
+    if (r.expiresAt !== null && now() >= r.expiresAt) return 'expired'
     return 'ready'
   }
 
   const choose = async (optionId: string) => {
     const r = current()
-    if (!r || submitting()) return
+    if (!r || submitting() || Date.now() - steppedAt < STEP_GUARD_MS) return
     answers[r.requestId] = optionId
     if (index() + 1 < unanswered().length) {
+      steppedAt = Date.now()
       setIndex(index() + 1)
       return
     }
@@ -158,14 +189,18 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
     return deadlines.length > 0 ? Math.min(...deadlines) : null
   }
   const count = () => views().length
-  const allRecorded = () => count() > 0 && unanswered().length === 0
+  /** What the card and the announcement count: the decisions still to make. */
+  const pending = () => unanswered().length
+  const allRecorded = () => count() > 0 && pending() === 0
 
   return (
     <>
       {/* One polite announcement per new set of requests; focus stays put. */}
       <div sr-only aria-live="polite" data-testid="hitl-blocking-live">
-        {announced() && count() > 0
-          ? `Approval needed: ${count() === 1 ? 'one decision' : `${count()} decisions`}`
+        {announced() && pending() > 0
+          ? pending() === 1
+            ? 'One decision needed'
+            : `${pending()} decisions needed`
           : ''}
       </div>
       <Show when={!props.busy && (count() > 0 || read() === 'failed')}>
@@ -193,17 +228,21 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
               style={{ 'flex-shrink': 0 }}
             />
             <span text="sm ui-text-primary">
-              <Show when={read() !== 'failed'} fallback="The waiting decisions could not be read.">
+              <Show when={read() !== 'failed'} fallback="The decisions could not be loaded.">
                 <Show
                   when={!allRecorded()}
                   fallback="Your answer is recorded. Continue when you are ready."
                 >
-                  {count() === 1 ? 'One decision needed' : `${count()} decisions needed`}
+                  {pending() === 1 ? 'One decision needed' : `${pending()} decisions needed`}
                 </Show>
               </Show>
             </span>
-            <Show when={expiryText(earliest())}>
-              {(text) => <span text="xs ui-text-secondary">{text()}</span>}
+            <Show when={expiryText(earliest(), now())}>
+              {(text) => (
+                <span text="xs ui-text-secondary">
+                  {text() === 'expired' ? 'expired — nothing was decided' : text()}
+                </span>
+              )}
             </Show>
           </div>
           <Show

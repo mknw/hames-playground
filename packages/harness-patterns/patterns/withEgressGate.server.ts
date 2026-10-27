@@ -27,9 +27,22 @@
  *  4. Decide unavailable (`'roster'` mode, a failure after one retry, a
  *     timeout, a state it cannot be asked over): the directory matrix (D5).
  *
- * Where the design asks the person (an `egress-release` prompt), this slice
- * refuses: the prompts and their resume are a later slice, and until it lands
- * every person cell takes its "nobody to ask" default, which is Refuse.
+ * ## Asking the person (slice 10)
+ *
+ * With `askPerson`, a Decide refusal and the D5 cells the design gives a person
+ * (Decide down on an `empty` or `none` directory, and on a `loaded` one where
+ * `loadedDecideDown` says so) raise an `egress-release` request instead of
+ * refusing, when the call can pause here (`canPauseHere()`: an attended run, on
+ * a whole resumable path) and is not one of a batch (O16). The call is HELD:
+ * nothing is sent, its arguments go in the request's payload row, and the loop
+ * pauses on the placeholder. On re-entry the loop dispatches the same call
+ * again under the same call key (O15), and this check answers from the
+ * recorded decision without asking Decide again: Accept sends exactly that
+ * call, once, audited `allowedBy: 'person'`; Refuse is the tripwire it would
+ * have been; Refuse all similar actions closes every route's outgoing calls
+ * for the turn; Interrupt is a `stopsRun` option, so the resume stops before
+ * anything is re-entered. Unattended, on a path that cannot pause, or inside a
+ * batch, the person cell takes its "nobody to ask" default, Refuse.
  *
  * ## The tripwire (ruling M)
  *
@@ -81,7 +94,13 @@ import {
 } from '../egress-gate.server'
 import { isDegradedToolSurface } from '../gateway-health.server'
 import { emitLive } from '../live-event-context.server'
-import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
+import { askHumanHolding, canPauseHere, held as held_, recordedHolding } from '../hitl.server'
+import {
+  amendRunFrame,
+  currentRunFrame,
+  resolveByTier,
+  type EgressVerdict,
+} from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
 import { inferServer } from '../tools.server'
 import type {
@@ -93,6 +112,7 @@ import type {
   EgressProbabilities,
   EgressRefusedEventData,
   EventType,
+  HitlOption,
   PatternScope,
   ToolCallResult,
   ToolResultEventData,
@@ -175,10 +195,33 @@ export interface EgressGateConfig {
   /** Ruling U: with Decide down on a loaded directory, `'by-shape'` (default)
    *  refuses a call with a URL query or a decoded block over
    *  {@link EGRESS_SMALL_BLOCK_CHARS} and leaves any other to the roster;
-   *  `'ask'` refuses every such call. (Each refusal is a person cell, asked
-   *  once the prompts land.) */
+   *  `'ask'` refuses every such call. (Each refusal is a person cell: with
+   *  `askPerson`, asked where the call can pause.) */
   readonly loadedDecideDown?: 'by-shape' | 'ask'
+  /** Ask the person (an `egress-release` request) in the cells that name one,
+   *  where the call can pause; elsewhere those cells refuse. Default false.
+   *  While on, every outgoing name of `catalog` is a gated name, so a
+   *  composition that offers one on a path that cannot resume refuses
+   *  construction (slice 10). */
+  readonly askPerson?: boolean
 }
+
+/** The request kind of the egress prompt. */
+export const EGRESS_RELEASE_KIND = 'egress-release'
+
+/** The egress prompt's four buttons, in the owner's order (ruling M). Only
+ *  Refuse may be picked unattended (ruling T), and it is the default (ruling X);
+ *  Interrupt ends the turn. */
+export const EGRESS_RELEASE_OPTIONS = [
+  { id: 'refuse', label: 'Refuse', unattended: true },
+  { id: 'accept', label: 'Accept', tone: 'danger' },
+  { id: 'refuse-all', label: 'Refuse all similar actions' },
+  { id: 'interrupt', label: 'Interrupt', stopsRun: true },
+] as const satisfies readonly HitlOption[]
+
+/** What the controller reads while the call waits for the person. */
+export const EGRESS_HELD_NOTE =
+  "This request is waiting for the user's decision before it is sent. Do not retry it; stop."
 
 /** The state's nonce source under the test runner; never a config field, so a
  *  library caller cannot ship a fence whose code it chose. */
@@ -373,6 +416,28 @@ function damageCause(error: unknown): string {
 // side only, so the request's own address is still compared whole.
 const TRAILING_PUNCTUATION = /[.,;:!?)\]]+$/
 
+/** What a person would be asked to release: exactly this call, readably, and
+ *  the roster's matches in it. The decision AUTHORIZES the tool and its
+ *  arguments alone, so a re-entry finds it whatever else is shown. */
+interface EgressPayload {
+  readonly tool: string
+  readonly args: Readonly<Record<string, unknown>>
+  readonly lines: readonly string[]
+  readonly hosts: readonly string[]
+  readonly spans: readonly string[]
+}
+
+/** What an egress release authorizes: exactly this tool with these arguments. */
+const authorizedBy = (p: EgressPayload) => ({ tool: p.tool, args: p.args })
+
+/** A call a person cell is about: why it was stopped, and what they see. */
+interface Held {
+  readonly cause: 'decide' | 'unchecked'
+  readonly category?: 'personal' | 'company'
+  readonly payload: EgressPayload
+  readonly spans: readonly string[]
+}
+
 /** What one ask of the egress question came to. */
 type EgressAnswer =
   | { readonly kind: 'answered'; readonly probs: EgressProbabilities }
@@ -385,7 +450,7 @@ interface Degraded {
   failures: number
   /** Calls that went out on the roster alone (a loaded directory, Decide down). */
   rosterOnly: number
-  /** Calls refused for want of Decide (a person cell, refused until the prompts land). */
+  /** Calls stopped for want of Decide: a person cell, asked or refused. */
   refusedUnchecked: number
 }
 
@@ -576,12 +641,70 @@ export function withEgressGate(config: EgressGateConfig) {
           return closes ? EGRESS_TEXTS.personalClosing : EGRESS_TEXTS.personalOpen
         }
 
+        /** The person's decision on this call: the button they pressed, or the
+         *  unattended rule's pick, which is Refuse. */
+        const decided = (choice: string, held: Held): string | undefined => {
+          if (choice === 'accept') {
+            record('egress_audit', {
+              tool,
+              hosts: held.payload.hosts,
+              spans: held.spans.map((s) => s.slice(0, EGRESS_SPAN_CAP)),
+              allowedBy: 'person',
+            } satisfies EgressAuditEventData)
+            return undefined
+          }
+          if (choice === 'refuse-all') {
+            closures.counts.set(route, (closures.counts.get(route) ?? 0) + 1)
+            closures.turnClosed = true
+            record('egress_refused', {
+              tool,
+              route,
+              cause: held.cause,
+              ...(held.category && { category: held.category }),
+              closes: 'turn',
+            } satisfies EgressRefusedEventData)
+            return EGRESS_TEXTS.turnClosed
+          }
+          // Refuse, and anything else: the tripwire this refusal would have been.
+          return tripwire(held.cause, held.category)
+        }
+
+        /** A cell that names the person: ask, where the call can pause and is
+         *  not one of a batch (O16); anywhere else, refuse. */
+        const person = async (held: Held): Promise<EgressVerdict> => {
+          if (!config.askPerson || currentRunFrame()?.batch || !canPauseHere()) {
+            return tripwire(held.cause, held.category)
+          }
+          const outcome = await askHumanHolding(
+            {
+              kind: EGRESS_RELEASE_KIND,
+              question: 'Send this request to an outside service?',
+              options: EGRESS_RELEASE_OPTIONS,
+              defaultOption: 'refuse',
+              summary: {
+                category: held.category ?? 'unchecked',
+                // Whether Refuse closes the route: the helper line says so.
+                closes: (closures.counts.get(route) ?? 0) + 1 > maxRetries,
+              },
+            },
+            held.payload,
+            authorizedBy(held.payload),
+          )
+          if (outcome.status === 'rebound') return tripwire(held.cause, held.category)
+          if (outcome.status === 'pending') {
+            return { held: { ...held_(outcome, EGRESS_HELD_NOTE), redispatch: true } }
+          }
+          // No choice (an unattended rule that decided nothing) refuses.
+          return decided(outcome.choice ?? 'refuse', held)
+        }
+
         /** Decide could not answer for this call: the directory matrix (D5). */
-        const unavailable = (
+        const unavailable = async (
           why: 'roster-mode' | 'down',
           request: OutgoingRequest,
-          spans: readonly string[],
-        ): string | undefined => {
+          unchecked: Held,
+        ): Promise<EgressVerdict> => {
+          const { spans } = unchecked
           if (directory === 'loaded') {
             if (why === 'roster-mode') return spans.length ? EGRESS_TEXTS.roster : undefined
             const asked =
@@ -590,7 +713,7 @@ export function withEgressGate(config: EgressGateConfig) {
               request.block.length > EGRESS_SMALL_BLOCK_CHARS
             if (asked) {
               degraded.refusedUnchecked++
-              return tripwire('unchecked')
+              return person(unchecked)
             }
             if (spans.length) return EGRESS_TEXTS.roster
             degraded.rosterOnly++
@@ -601,13 +724,13 @@ export function withEgressGate(config: EgressGateConfig) {
             return tripwire('unchecked')
           }
           // `empty` or `none`: the payload roster vetoes first, then the person
-          // is asked, which refuses until the prompts land.
+          // is asked (ruling C).
           if (spans.length) return EGRESS_TEXTS.roster
           if (why === 'down') degraded.refusedUnchecked++
-          return tripwire('unchecked')
+          return person(unchecked)
         }
 
-        const decideOne = async (): Promise<string | undefined> => {
+        const decideOne = async (): Promise<EgressVerdict> => {
           if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
           if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
           if (damaged) return EGRESS_TEXTS.damagedRoster
@@ -632,10 +755,37 @@ export function withEgressGate(config: EgressGateConfig) {
           }
 
           const spans = roster ? roster.match(request.texts) : []
-          const mode = resolveByTier(config.mode ?? (config.decide ? 'filter' : 'roster'))
-          if (mode !== 'filter' || !config.decide) return unavailable('roster-mode', request, spans)
-
           const hosts = destinationHosts(request.texts)
+          // What a person would be shown and asked about: exactly this call.
+          const payload: EgressPayload = {
+            tool: call.name,
+            args: call.args,
+            lines: request.lines,
+            hosts,
+            spans: spans.map((s) => s.slice(0, EGRESS_SPAN_CAP)),
+          }
+          const unchecked: Held = { cause: 'unchecked', payload, spans }
+          if (config.askPerson) {
+            // Re-entered on a call a person decided: their answer, not Decide's.
+            const prior = recordedHolding(
+              EGRESS_RELEASE_KIND,
+              EGRESS_RELEASE_OPTIONS,
+              authorizedBy(payload),
+            )
+            if (prior) {
+              const c = prior.summary.category
+              return decided(
+                prior.choice,
+                c === 'personal' || c === 'company'
+                  ? { cause: 'decide', category: c, payload, spans }
+                  : unchecked,
+              )
+            }
+          }
+          const mode = resolveByTier(config.mode ?? (config.decide ? 'filter' : 'roster'))
+          if (mode !== 'filter' || !config.decide)
+            return unavailable('roster-mode', request, unchecked)
+
           let state: string
           try {
             state = renderEgressState(
@@ -652,18 +802,23 @@ export function withEgressGate(config: EgressGateConfig) {
             // A state the question cannot be asked over (over the box's budget,
             // or no nonce to draw): Decide is unavailable for this call.
             degraded.failures++
-            return unavailable('down', request, spans)
+            return unavailable('down', request, unchecked)
           }
           const answer = await askEgress(state)
           if (answer.kind !== 'answered') {
             if (answer.kind === 'timeout') degraded.timeouts++
             else degraded.failures++
-            return unavailable('down', request, spans)
+            return unavailable('down', request, unchecked)
           }
           const { probs } = answer
           if (1 - probs.nothing_private >= threshold) {
             // The feedback names the larger private label; a tie names personal.
-            return tripwire('decide', probs.company > probs.personal ? 'company' : 'personal')
+            return person({
+              cause: 'decide',
+              category: probs.company > probs.personal ? 'company' : 'personal',
+              payload,
+              spans,
+            })
           }
           if (spans.length) {
             record('egress_audit', {
@@ -724,7 +879,20 @@ export function withEgressGate(config: EgressGateConfig) {
       ...pattern,
       name: `withEgressGate(${pattern.name})`,
       fn,
-      capabilities: { ...pattern.capabilities, resumable },
+      capabilities: {
+        ...pattern.capabilities,
+        resumable,
+        // A call that may pause for a person is offered only where a pause
+        // resumes: construction refuses an outgoing name anywhere else.
+        ...(config.askPerson
+          ? {
+              gatedTools: [
+                ...(pattern.capabilities?.gatedTools ?? []),
+                ...config.catalog.filter((name) => !isLocal(name)),
+              ],
+            }
+          : {}),
+      },
       // Static introspection still sees the patterns nested inside the gate.
       children: [pattern],
     }

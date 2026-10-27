@@ -299,7 +299,9 @@ async function createPatterns(
     localTools: officeLocalTools(officeAttach, sandboxTools),
     catalog: tools.all,
     fetchTools: (tools.web ?? []).filter((name) => name.includes('fetch')),
-    addressSources: ['web', 'context7', 'graph'],
+    // Like the info guard, context7 only when the gateway offers it: the gate
+    // refuses, on every turn, a source namespace no catalog tool resolves to.
+    addressSources: ['web', ...(docTools.length ? ['context7'] : []), 'graph'],
     roster: deps.egressRoster,
     decide: createDecideAdapter(),
     // The composition root's GUARD_EGRESS switch (slice 6), validated at boot;

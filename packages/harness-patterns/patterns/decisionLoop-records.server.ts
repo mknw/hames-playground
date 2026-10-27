@@ -12,7 +12,8 @@
  *      (SD-3), so an extractor that touched it would convert a neutralised
  *      problem into a decision-stage one.
  *   2. the stats, counted from those same events.
- *   3. the rendering of the decision state and the child handoff from records.
+ *   3. the rendering of the decision state and the child handoff from records,
+ *      and of the child's earlier-conversation block.
  *
  * Nothing in this file sanitizes or screens: a record is not an ingress (the
  * loop's own text is the model's, or built by code). Two extractors quote
@@ -521,6 +522,24 @@ export function resultBlock(r: RouteOutput): string {
  *  ONE JSON string, so a newline in it cannot start a line that reads as the
  *  state's own structure: a `User:` turn, a step line, a heading. */
 const asLine = (text: string): string => JSON.stringify(text)
+
+/** The conversation before the user's latest message, for a child: the
+ *  decisions model's own conversation lines (`conversationTurns`) minus that
+ *  message, which every child already reads as its task. Each line keeps its
+ *  code-written `User:` / `Assistant:` role; the text after it is capped at
+ *  `max` and rendered as ONE JSON string, because a final answer can echo what
+ *  a tool returned and a newline in it must not start a line of the prompt's
+ *  own structure. `''` when there is no earlier turn. */
+export function renderConversation(turns: readonly string[], max: number): string {
+  const latest = turns.findLastIndex((t) => t.startsWith('User: '))
+  return turns
+    .filter((_, i) => i !== latest)
+    .map((t) => {
+      const at = t.indexOf(': ')
+      return `${t.slice(0, at)}: ${asLine(capText(t.slice(at + 2), max))}`
+    })
+    .join('\n')
+}
 
 /** The step list and the last `lastN` outputs — the block both the decisions
  *  model ("This turn so far" + "Latest results") and the next child (its handoff)

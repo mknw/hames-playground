@@ -73,6 +73,9 @@ describe('conversation delete → memory erase (#531)', () => {
         // it (#579 review 3). MUTATION: drop the call → red; run it after the
         // erase → red.
         'tx:DELETE FROM hitl_requests',
+        // A held blocking-request payload goes in the same transaction too
+        // (decision-loop-agent slice 8). MUTATION: drop it → red.
+        'tx:DELETE FROM hitl_payloads',
         'erase(inTx=true,sameTx=true)',
         'tx:DELETE FROM conversations',
         'COMMIT',
@@ -84,6 +87,7 @@ describe('conversation delete → memory erase (#531)', () => {
 
   it('a failing row delete rolls the transaction back after the erase ran in it', async () => {
     tx.query.mockResolvedValueOnce({ rows: [] }) // the proposal rows
+    tx.query.mockResolvedValueOnce({ rows: [] }) // the held payloads
     tx.query.mockRejectedValueOnce(new Error('delete failed'))
     await expect(deleteConversations(['conv-a'], 'user-a')).rejects.toThrow('delete failed')
     expect(calls).toEqual(['BEGIN', 'erase(inTx=true,sameTx=true)', 'ROLLBACK'])

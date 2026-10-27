@@ -35,11 +35,12 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall, SubCallOutcome } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.server'
-import { hitlPending } from '../hitl.server'
+import { createHash } from 'node:crypto'
+import { currentRunId, hitlPending } from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
-import { currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import { onPath, resumableFingerprint, takeResume } from '../resume.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import {
@@ -599,6 +600,24 @@ export function simpleLoop<T extends SimpleLoopData>(
       maxResultChars: settings.maxResultChars,
       resultOmit: config?.resultOmit,
     }
+    // Each call's LOGICAL identity (slice 8): the run, the resumable path to
+    // this loop, the turn and the call's position in its action. Every input
+    // is durable state of the run, so a retry of the call recomputes it in any
+    // process, and a deliberate repeat is at another turn or position. Not
+    // `currentToolCallId()`: a process-local counter a restart reissues.
+    const runId = currentRunId()
+    const callKeyOf = (turn: number, position: number): string | undefined =>
+      runId === undefined
+        ? undefined
+        : createHash('sha256')
+            .update(JSON.stringify([runId, currentRunFrame()?.continuation ?? [], turn, position]))
+            .digest('hex')
+    /** Dispatch under the call's key, so an executor that holds a payload for
+     *  a person (`askHumanHolding`) binds it to this call. */
+    const dispatch = (name: string, args: Record<string, unknown>, callKey: string | undefined) =>
+      callKey !== undefined
+        ? amendRunFrame({ callKey }, () => callTool(name, args))
+        : callTool(name, args)
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -941,7 +960,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           const gated = new Set(currentRunFrame()?.gatedTools ?? [])
           const gatedCall = allCalls.find((c) => gated.has(c.tool_name))?.tool_name
 
-          for (const c of allCalls) {
+          const callKeys = allCalls.map((_, position) => callKeyOf(turn, position))
+          for (const [position, c] of allCalls.entries()) {
             const callId = generateId('tc')
             callIds.push(callId)
             if (gatedCall !== undefined) {
@@ -1002,7 +1022,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             subCalls.push({
               tool: c.tool_name,
               run: async () => {
-                const result = await callTool(c.tool_name, resolvedArgs)
+                const result = await dispatch(c.tool_name, resolvedArgs, callKeys[position])
                 // onToolResult hook per sub-call — same non-fatal contract as
                 // the singular path.
                 if (config?.onToolResult) {
@@ -1046,6 +1066,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             tool: sc.tool,
             args: trackedArgs[i],
             ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
+            ...(sc.run && callKeys[i] !== undefined ? { callKey: callKeys[i] } : {}),
           }))
           for (const data of callData) trackEvent(scope, 'tool_call', data, resolved.trackHistory)
 
@@ -1229,18 +1250,20 @@ export function simpleLoop<T extends SimpleLoopData>(
         )
 
         // Track tool call event (with original args for readability)
+        const callKey = callKeyOf(turn, 0)
         const call: ToolCallEventData = {
           callId,
           tool: action.tool_name,
           args,
           ...(argsRepair ? { repaired: argsRepair } : {}),
+          ...(callKey !== undefined ? { callKey } : {}),
         }
         trackEvent(scope, 'tool_call', call, resolved.trackHistory)
 
         // Execute tool with resolved args. A dispatch ends any run of unusable
         // answers, whatever the tool then returns.
         streak.dispatched()
-        const result = await callTool(action.tool_name, resolvedArgs)
+        const result = await dispatch(action.tool_name, resolvedArgs, callKey)
 
         // onToolResult hook: enrich/transform result before the event is committed.
         // Failures here are non-fatal — log an error event, keep the original result.

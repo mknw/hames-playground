@@ -24,6 +24,13 @@ vi.mock('../../../lib/memory/actions.server', () => ({
   setMemoryEnabled: mem.set,
   exportMyMemories: vi.fn(),
 }))
+// The inbox also lists conversations whose run waits on a decision
+// (decision-loop-agent slice 9); none here.
+vi.mock('~/lib/hitl/actions.server', () => ({
+  listBlockingInbox: async () => [],
+  listBlockingRequests: async () => [],
+  answerHitl: async () => [],
+}))
 vi.mock('~/lib/memory/confirm-actions.server', () => ({
   listMemoryProposals: (s: string) => mem.proposals(s) as unknown,
   answerMemoryProposal: vi.fn(),

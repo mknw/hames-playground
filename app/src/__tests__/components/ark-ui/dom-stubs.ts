@@ -2,9 +2,10 @@
  * jsdom gaps the Ark/zag components trip over.
  *
  * `ResizeObserver` is used by the popper positioners, the autoresize textarea
- * and the graph container; `matchMedia` by the theme switcher. Neither exists
- * in jsdom, and both are pure environment scaffolding — no component behaviour
- * is being faked here.
+ * and the graph container; `IntersectionObserver` by the ScrollArea every HITL
+ * dialog body sits in; `matchMedia` by the theme switcher. None exists in
+ * jsdom, and all are pure environment scaffolding — no component behaviour is
+ * being faked here.
  */
 import { vi } from 'vitest'
 
@@ -13,6 +14,14 @@ export function installDomStubs({ prefersDark = true } = {}) {
     observe() {}
     unobserve() {}
     disconnect() {}
+  }
+  ;(globalThis as Record<string, unknown>).IntersectionObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+    takeRecords() {
+      return []
+    }
   }
   // jsdom implements no layout, so scrolling a node into view is a no-op.
   Element.prototype.scrollIntoView ??= function () {}

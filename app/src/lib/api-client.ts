@@ -77,9 +77,13 @@ const jsonRequest = (body: unknown): RequestInit => ({
 
 export interface ChatTurnRequest {
   sessionId: string
-  message: string
-  agentId: string
+  /** Absent on a resume: the run to continue is the stored row's. */
+  message?: string
+  agentId?: string
   settings: HarnessSettings
+  /** `resume` continues a paused run with the answers already recorded
+   *  (`answerHitl`); the server reads them, never the body. */
+  mode?: 'interactive' | 'resume'
 }
 
 /**

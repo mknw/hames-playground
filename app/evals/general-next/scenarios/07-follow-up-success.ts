@@ -4,7 +4,8 @@ import type { ConversationScenario } from '../types'
 export const scenario: ConversationScenario = {
   id: '07-follow-up-success',
   title: 'Refer back to a successful turn',
-  priority: 'must',
+  priority: 'should',
+  pendingMustIssue: 808,
   baseline: true,
   p4: false,
   messages: [

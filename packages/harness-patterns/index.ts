@@ -87,6 +87,8 @@ export type {
   HitlRequest,
   HitlOutcome,
   HeldResult,
+  HitlPayloadStore,
+  HoldingOutcome,
   HitlAnswer,
   HitlAnswers,
 
@@ -293,6 +295,9 @@ export {
 
 export {
   askHuman,
+  askHumanHolding,
+  canonicalJson,
+  HOLDING_EXPIRES_IN_MS,
   held,
   hitlPending,
   resolveUnattended,

@@ -1506,7 +1506,8 @@ evidence. Each step mirrors dev's [above](#dev-sandbox-on-its-own-environment-vm
    must be a guard smoke record whose `environments` hold probes for `release`,
    so dev's record, or one written before release joined the guard config, is
    refused. Dev's own inputs and evidence stay required, and dev's record is
-   still not read.
+   still not read. The guard smoke writes the record as root, mode 0600; leave
+   it so, because bootstrap reads it through `sudo`.
 
 4. **Append the overlay after dev's**:
    `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml`.

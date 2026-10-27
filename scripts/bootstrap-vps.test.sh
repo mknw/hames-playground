@@ -74,6 +74,8 @@ if [[ -n ${FAKEROOT:-} ]]; then
   [[ ${args[0]} == chown ]] && exit 0
   exec "${args[@]}"
 fi
+# Opt-in, one line per call: which reads a case needed root for.
+[[ -z ${SHIM_SUDO_LOG:-} ]] || printf 'sudo%s\n' "$(printf ' %q' "$@")" >>"$SHIM_SUDO_LOG"
 exec "$@"
 SHIM
 cat >"$tmproot/bin/docker" <<'SHIM'
@@ -456,10 +458,16 @@ PY
   both="$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml"
   clone_reset
   clone_select "$both"
-  out=$(clone_boot 2>&1); rc=$?
+  : >"$dir/sudo.log"
+  out=$(SHIM_SUDO_LOG="$dir/sudo.log" clone_boot 2>&1); rc=$?
   if ((rc == 0)) && grep -Fxq "$both|app|compose up -d" "$dir/calls"; then
     pass "clones retains both environment VM overlays, release after dev"
   else flunk "clones both VM overlays (rc=$rc)" "$out"; fi
+  # The guard smoke writes release's record as root, mode 0600: the structural
+  # read must go through sudo, or every genuine record is refused on a host.
+  if grep -F 'sudo python3 -I -c ' "$dir/sudo.log" | grep -Fq " $dir/release-evidence.json"; then
+    pass "clones reads release's evidence record through sudo"
+  else flunk "clones read release's evidence record without sudo" "$(cat "$dir/sudo.log")"; fi
   for shape in "$clones:docker-compose.release-sandbox-vm.yaml" \
     "$clones:docker-compose.release-sandbox-vm.yaml:docker-compose.dev-sandbox-vm.yaml" \
     "$clones:docker-compose.dev-sandbox.yaml:docker-compose.release-sandbox-vm.yaml" \
@@ -804,6 +812,7 @@ mutants = [
      '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path ]]'),
     ('release-vm-evidence-reads-dev-input', 'path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)', 'path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)'),
     # #777 security review: release's record must have probed release.
+    ('release-evidence-read-unprivileged', "    sudo python3 -I -c 'import json, sys", "    python3 -I -c 'import json, sys"),
     ('release-evidence-structure-unread', "sys.exit(0 if isinstance(probes, list) and probes else 1)' \"$path\" 2>/dev/null ||",
      "sys.exit(0)' \"$path\" 2>/dev/null ||"),
     ('release-evidence-any-environment', 'probes = environments.get("release") if', 'probes = environments.get("dev") if'),

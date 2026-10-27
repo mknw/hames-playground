@@ -534,7 +534,8 @@ clone_preflight() {
     # Release's record is the guard smoke's own machine-written JSON, read for
     # its structure only: it must hold probes for the release environment. Dev's
     # record, or one written before release joined the guard config, does not.
-    python3 -I -c 'import json, sys
+    # The guard smoke writes it as root, mode 0600, so it is read through sudo.
+    sudo python3 -I -c 'import json, sys
 try:
     record = json.load(open(sys.argv[1]))
 except (OSError, ValueError):

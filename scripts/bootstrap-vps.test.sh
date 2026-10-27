@@ -265,20 +265,24 @@ clone_tests() {
   mkdir -p "$dir/release/app" "$dir/release/configs" "$dir/release/scripts" "$dir/dev/app" "$dir/dev/configs"
   cp "${CLONE_VALIDATOR_SCRIPT:-$ROOT/scripts/validate-clones.mjs}" "$dir/release/scripts/validate-clones.mjs"
   touch "$dir/release/scripts/check-vps.py" "$dir/release/scripts/metadata-egress.py" "$dir/release/scripts/env-vm-guard.py"
-  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml docker-compose.dev-sandbox-vm.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
+  for file in docker-compose.yaml docker-compose.prod.yaml docker-compose.clones.yaml docker-compose.dev-sandbox.yaml docker-compose.dev-sandbox-vm.yaml docker-compose.release-sandbox-vm.yaml configs/Caddyfile configs/Caddyfile.dev configs/mcp-config.yaml; do
     touch "$dir/release/$file"
   done
-  # Synthetic dev environment VM client material, outside both checkouts.
-  mkdir -p "$dir/tls"
-  (
-    cd "$dir/tls" || exit 1
-    openssl req -new -x509 -nodes -days 1 -subj /CN=dev-ca -newkey rsa:2048 -keyout ca-key.pem \
-      -addext basicConstraints=critical,CA:TRUE -out ca.pem &&
-      openssl req -new -newkey rsa:2048 -nodes -subj /CN=dev-client -keyout key.pem -out client.csr &&
-      printf 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n' >client.ext &&
-      openssl x509 -req -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile client.ext -out cert.pem &&
-      chmod 600 key.pem ca-key.pem
-  ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
+  # Synthetic environment VM client material, outside both checkouts: dev's in
+  # tls/, release's in tls-release/ under its own CA (the validator refuses one
+  # clone's identity on the other's VM).
+  for tls in tls:dev tls-release:release; do
+    mkdir -p "$dir/${tls%%:*}"
+    (
+      cd "$dir/${tls%%:*}" || exit 1
+      openssl req -new -x509 -nodes -days 1 -subj "/CN=${tls#*:}-ca" -newkey rsa:2048 -keyout ca-key.pem \
+        -addext basicConstraints=critical,CA:TRUE -out ca.pem &&
+        openssl req -new -newkey rsa:2048 -nodes -subj "/CN=${tls#*:}-client" -keyout key.pem -out client.csr &&
+        printf 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n' >client.ext &&
+        openssl x509 -req -days 1 -in client.csr -CA ca.pem -CAkey ca-key.pem -CAcreateserial -extfile client.ext -out cert.pem &&
+        chmod 600 key.pem ca-key.pem
+    ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
+  done
   echo 'synthetic firewall evidence record' >"$dir/firewall-evidence.txt"
   : >"$dir/firewall-empty.txt"
 
@@ -373,7 +377,7 @@ c['services']['app-dev']['volumes'].append(dict(type='bind',source='/var/run/doc
 p.write_text(json.dumps(c))
 PY
     fi
-    if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml ]]; then
+    if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml || $1 == *:docker-compose.dev-sandbox-vm.yaml:* ]]; then
       printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${2-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
       python3 - "$dir/render.json" "$dir/tls" <<'PY'
 import json, pathlib, sys
@@ -383,6 +387,19 @@ dev['environment'].update(SANDBOX_DOCKER_HOST='tcp://198.51.100.2:2376', **{'SAN
 dev['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
 dev['networks']['envapp-dev'] = dict(ipv4_address='192.0.2.66', gw_priority=1)
 c['networks'] = {'envapp-dev': dict(name='envapp-dev', external=True)}
+p.write_text(json.dumps(c))
+PY
+    fi
+    if [[ $1 == *:docker-compose.release-sandbox-vm.yaml ]]; then
+      printf 'RELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${3-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
+      python3 - "$dir/render.json" "$dir/tls-release" <<'PY'
+import json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); app=c['services']['app']
+c['x-clone-release-sandbox']='per-env'
+app['environment'].update(SANDBOX_DOCKER_HOST='tcp://198.51.100.18:2376', **{'SANDBOX_DOCKER_TLS_'+k: '/run/sandbox-tls/'+v for k, v in (('CA', 'ca.pem'), ('CERT', 'cert.pem'), ('KEY', 'key.pem'))})
+app['volumes'] += [dict(type='bind', source=sys.argv[2]+'/'+f, target='/run/sandbox-tls/'+f, read_only=True, bind=dict(create_host_path=False)) for f in ('ca.pem', 'cert.pem', 'key.pem')]
+app['networks']['envapp-release'] = dict(ipv4_address='192.0.2.10', gw_priority=1)
+c.setdefault('networks', {})['envapp-release'] = dict(name='envapp-release', external=True)
 p.write_text(json.dumps(c))
 PY
     fi
@@ -424,6 +441,34 @@ PY
     clone_reset
     clone_select "$clones:docker-compose.dev-sandbox-vm.yaml" "$evidence"
     clone_refused "the dev VM overlay without its firewall evidence file (${evidence:-unset})"
+  done
+  # Release on its own VM (#648): one shape only, after dev's overlay.
+  both="$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml"
+  clone_reset
+  clone_select "$both"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$both|app|compose up -d" "$dir/calls"; then
+    pass "clones retains both environment VM overlays, release after dev"
+  else flunk "clones both VM overlays (rc=$rc)" "$out"; fi
+  for shape in "$clones:docker-compose.release-sandbox-vm.yaml" \
+    "$clones:docker-compose.release-sandbox-vm.yaml:docker-compose.dev-sandbox-vm.yaml" \
+    "$clones:docker-compose.dev-sandbox.yaml:docker-compose.release-sandbox-vm.yaml" \
+    "$both:docker-compose.release-sandbox-vm.yaml" "$base:docker-compose.release-sandbox-vm.yaml"; do
+    clone_reset
+    printf 'COMPOSE_FILE=%s\n' "$shape" >>"$dir/release/.env"
+    printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\nRELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "$dir/firewall-evidence.txt" "$dir/firewall-evidence.txt" >>"$dir/release/.env"
+    clone_refused "release's VM overlay alone, first, beside the dev socket, twice or without clones ($shape)"
+  done
+  for evidence in '' "$dir/firewall-empty.txt" firewall-evidence.txt "$dir/absent.txt"; do
+    clone_reset
+    clone_select "$both" "$dir/firewall-evidence.txt" "$evidence"
+    clone_refused "the release VM overlay without its firewall evidence file (${evidence:-unset})"
+  done
+  # Dev's record is still required when release's overlay follows dev's.
+  for evidence in '' "$dir/firewall-empty.txt"; do
+    clone_reset
+    clone_select "$both" "$evidence"
+    clone_refused "both VM overlays without dev's firewall evidence file (${evidence:-unset})"
   done
   # A service of another profile is absent from the render the validator reads.
   for profile in '    profiles: ["debug"]' '    profiles:' '    profiles: [app, debug]'; do
@@ -522,7 +567,8 @@ PY
 
   # The real shared wrappers: only Docker/Python/HTTP effects are inert.
   for operation in dc probe smoke images; do
-    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml" "$clones:docker-compose.dev-sandbox-vm.yaml"; do
+    for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml" "$clones:docker-compose.dev-sandbox-vm.yaml" \
+      "$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml"; do
       clone_reset
       clone_select "$shape"
       [[ $operation != images ]] || continue # failure path below; image catalogue is out of scope
@@ -578,6 +624,12 @@ PY
   if ((rc == 0)) && grep -Fq "$guard_call" "$dir/calls"; then
     pass 'clones VM overlay smoke runs the guard check'
   else flunk "clones VM overlay smoke did not run the guard check (rc=$rc)" "$out"; fi
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml"
+  out=$(clone_boot smoke 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fq "$guard_call" "$dir/calls"; then
+    pass 'clones both VM overlays smoke runs the guard check'
+  else flunk "clones both VM overlays smoke did not run the guard check (rc=$rc)" "$out"; fi
   for shape in "$clones" "$clones:docker-compose.dev-sandbox.yaml"; do
     clone_reset
     clone_select "$shape"
@@ -721,13 +773,28 @@ mutants = [
     ('runtime-owner-file-parser', 'v=$(env_get "$key" "$file")', 'v=$(env_get "$key")'),
     ('dev-ref-head', '[[ $head == "$ref" && -z $dirty ]]', '[[ -z $dirty ]]'),
     ('dev-checkout-clean', '[[ $head == "$ref" && -z $dirty ]]', '[[ $head == "$ref" ]]'),
-    ('dev-sandbox-overlay-allowlist', '|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
-    ('dev-vm-firewall-evidence', '[[ $path == /* && -f $path && -s $path ]] ||', 'true ||'),
-    ('dev-vm-firewall-evidence-empty', ' && -f $path && -s $path ]]', ' && -f $path ]]'),
+    ('dev-sandbox-overlay-allowlist', '|"$DEV_VM_COMPOSE_FILES"|"$BOTH_VM_COMPOSE_FILES") ;;', '|"$CLONE_COMPOSE_FILES:"*) ;;'),
+    # #648 release VM: one shape, release after dev, each with its own evidence.
+    ('release-vm-overlay-not-accepted', '|"$DEV_VM_COMPOSE_FILES"|"$BOTH_VM_COMPOSE_FILES") ;;', '|"$DEV_VM_COMPOSE_FILES") ;;'),
+    ('release-vm-overlay-without-dev', 'readonly BOTH_VM_COMPOSE_FILES="$DEV_VM_COMPOSE_FILES:docker-compose.release-sandbox-vm.yaml"',
+     'readonly BOTH_VM_COMPOSE_FILES="$CLONE_COMPOSE_FILES:docker-compose.release-sandbox-vm.yaml"'),
+    ('release-vm-firewall-evidence', '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path && -s $path ]] ||',
+     '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    true ||'),
+    ('release-vm-firewall-evidence-empty', '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path && -s $path ]]',
+     '    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path ]]'),
+    ('release-vm-evidence-reads-dev-input', 'path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)', 'path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)'),
+    ('dev-vm-evidence-by-suffix', '  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then\n    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)',
+     '  if [[ $files == *:docker-compose.dev-sandbox-vm.yaml ]]; then\n    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)'),
+    ('vm-guard-check-dev-shape-only', '  guard_out=""\n  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then',
+     '  guard_out=""\n  if [[ $files == "$DEV_VM_COMPOSE_FILES" ]]; then'),
+    ('dev-vm-firewall-evidence', '    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path && -s $path ]] ||',
+     '    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)\n    true ||'),
+    ('dev-vm-firewall-evidence-empty', '    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path && -s $path ]]',
+     '    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)\n    [[ $path == /* && -f $path ]]'),
     # Item 3 (plan env-vm-network §11): with the VM overlay selected, the smoke
     # runs the guard's read-only --check; its refusal fails the smoke.
     ('vm-guard-check-skipped', '      guard_out=$(sudo python3 "$APP_DIR/scripts/env-vm-guard.py" --check 2>&1) && guard_rc=0 || guard_rc=$?', '      guard_rc=1'),
-    ('vm-guard-check-unconditional', '  guard_out=""\n  if [[ $files == "$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml" ]]; then', '  guard_out=""\n  if [[ $files != "$COMPOSE_FILES" ]]; then'),
+    ('vm-guard-check-unconditional', '  guard_out=""\n  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then', '  guard_out=""\n  if [[ $files != "$COMPOSE_FILES" ]]; then'),
     ('vm-guard-exit-swallowed', '--check 2>&1) && guard_rc=0 || guard_rc=$?', '--check 2>&1 || true) && guard_rc=0 || guard_rc=$?'),
     ('vm-guard-refusal-uncounted', 'fails=$((fails + 1)) # the guard refused', ': # the guard refused'),
     ('vm-guard-message-withheld', 'failed or is unavailable: ${guard_out:-the pinned checkout lacks scripts/env-vm-guard.py}"', 'failed (its message withheld)"'),

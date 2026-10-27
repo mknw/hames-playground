@@ -2321,6 +2321,25 @@ class SmokeTwoEnvironments(Smoking, Harness):
         record = json.loads(self.record().read_text())
         self.assertEqual(set(record["environments"]), {"dev", "rel"})
 
+    def test_the_second_environment_is_probed_whole_and_per_pair_toward_the_first(self):
+        # #648: release joins dev as the second environment. Its own record is the
+        # evidence its overlay waits for, so it must hold every probe, and probes 6
+        # and 7 must attribute release -> dev per pair as they do dev -> release.
+        self.ready()
+        self.assertEqual(self.smoke(), 0, self.err)
+        record = json.loads(self.record().read_text())["environments"]
+        for name in ("dev", "rel"):
+            results = {p["probe"]: p for p in record[name]}
+            with self.subTest(name):
+                # 8-link-local runs only where the fake host gives the bridge an IPv6 address (dev's).
+                self.assertEqual(set(results) - {"8-link-local"},
+                                 {"1", "2", "3", "4", "4b", "5", "6", "7", "8-gateway", "8-primary", "8b", "8c", "8d",
+                                  "8d-host", "9", "10", "11-shadow", "11-link", "11-app"})
+                self.assertEqual(results["1"]["outcome"], "answered")
+                self.assertEqual((results["6"]["rule"], results["6"]["counter_change"]), ("to_vm_refused", 3))
+                self.assertEqual((results["7"]["rule"], results["7"]["counter_change"]), ("vm_to_vm", 3))
+                self.assertIs(results["7"]["single_environment"], False)
+
 
 class Docs(unittest.TestCase):
     def test_the_plan_names_only_modes_the_installer_has(self):
@@ -2330,6 +2349,28 @@ class Docs(unittest.TestCase):
             for mode in modes & {"--check", "--install", "--apply", "--persist", "--confirm", "--remove",
                                  "--deadman-restore", "--smoke", "--deadman"}:
                 self.assertIn(mode, SOURCE.read_text())
+
+    def test_the_plan_states_exactly_what_a_release_environment_adds(self):
+        # The security review reads the plan's five lines, not the code: they must
+        # be exactly what the render adds for release, with nothing else changed.
+        plan = (ROOT / "docs/plan/env-vm-network.md").read_text()
+        block = re.search(r"adds exactly these five lines.*?```text\n(.*?)```", plan, re.S).group(1)
+        values = {"<release-vm-address>": "198.51.100.18", "<release-app-address>": "192.0.2.10"}
+        documented = []
+        for line in block.splitlines():
+            if not line.strip().startswith("#"):
+                for placeholder, value in values.items():
+                    line = line.replace(placeholder, value)
+                documented.append(line.strip())
+        release = {"name": "release", "service": "app", "guestAddress": values["<release-vm-address>"],
+                   "clientAddress": values["<release-app-address>"], "entryPointConfig": "/synthetic/release.json"}
+        one = config()
+        two = config()
+        two["environments"].append(release)
+        before, after = guard.render(one).splitlines(), guard.render(two).splitlines()
+        added = [line.strip() for line in after if line not in before]
+        self.assertEqual(sorted(documented), sorted(added))
+        self.assertEqual([line for line in before if line not in after], [], "a second environment removes nothing")
 
 
 # Every pin with the mutation that turns it red. Names starting with a plan
@@ -2608,6 +2649,9 @@ MUTATIONS = {
     "S2-probe-8d-skipped": ('                for label, target, counter in (("8d", probes["publicAddress"], "vm_egress"),\n                                               ("8d-host", shared["primary"], "vm_to_host")):',
                             '                for label, target, counter in ():'),
     "S2-probe-8d-host-skipped": ('                                               ("8d-host", shared["primary"], "vm_to_host")):', '                                               ):'),
+    # #648 release as the second environment: per-pair attribution in both directions.
+    "per-pair-first-environment-only": ('            pairs = [e for e in config["environments"]\n                     if e["name"] != name',
+                                        '            pairs = [e for e in config["environments"][1:]\n                     if e["name"] != name'),
     "S2-probe-8d-embeds-nothing-live": ('lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT)', 'lambda t=target: guest_run("icmp", t, gateway, guest, "tcp", hport, DOCKER_PORT - 1)'),
 }
 

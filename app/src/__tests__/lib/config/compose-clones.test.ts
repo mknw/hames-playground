@@ -654,6 +654,55 @@ describe('a clone sandbox on its own environment VM (#648)', () => {
     expect(vmOverlay.networks).toEqual({ 'envapp-dev': { external: true } })
   })
 
+  it('the release overlay moves only release onto its own VM, and drops its host socket', () => {
+    const doc = parseDocument(
+      readFileSync(repoFile('docker-compose.release-sandbox-vm.yaml'), 'utf8'),
+    )
+    const vmOverlay = doc.toJS()
+    expect(vmOverlay['x-clone-release-sandbox']).toBe('per-env')
+    expect(vmOverlay['x-clone-dev-sandbox']).toBeUndefined()
+    expect(vmOverlay['x-clone-dev-docker-socket']).toBeUndefined()
+    expect(Object.keys(vmOverlay.services)).toEqual(['app'])
+    // !override drops the base's socket mount instead of merging beside it.
+    expect((doc.getIn(['services', 'app', 'volumes'], true) as { tag?: string }).tag).toBe(
+      '!override',
+    )
+    const release = vmOverlay.services.app
+    expect(release.volumes).toEqual([
+      './configs:/configs:ro',
+      ...['ca', 'cert', 'key'].map((part) => ({
+        type: 'bind',
+        source: expect.stringMatching(
+          new RegExp(`^\\$\\{RELEASE_SANDBOX_DOCKER_TLS_${part.toUpperCase()}:\\?`),
+        ),
+        target: `/run/sandbox-tls/${part}.pem`,
+        read_only: true,
+        bind: { create_host_path: false },
+      })),
+    ])
+    expect(release.environment).toEqual({
+      SANDBOX_DOCKER_HOST: expect.stringMatching(/^\$\{RELEASE_SANDBOX_DOCKER_HOST:\?/),
+      SANDBOX_DOCKER_TLS_CA: '/run/sandbox-tls/ca.pem',
+      SANDBOX_DOCKER_TLS_CERT: '/run/sandbox-tls/cert.pem',
+      SANDBOX_DOCKER_TLS_KEY: '/run/sandbox-tls/key.pem',
+    })
+    // No dev input, and no socket under any spelling.
+    expect(JSON.stringify(vmOverlay)).not.toMatch(/docker\.sock|DEV_|envapp-dev/)
+    expect(release.networks).toEqual({
+      'envapp-release': {
+        ipv4_address: expect.stringMatching(/^\$\{RELEASE_SANDBOX_LINK_ADDRESS:\?/),
+        gw_priority: 1,
+      },
+    })
+    expect((doc.getIn(['services', 'app', 'networks'], true) as { tag?: string }).tag).toBe(
+      undefined,
+    )
+    expect(vmOverlay.networks).toEqual({ 'envapp-release': { external: true } })
+    // The base mounts the socket on app: the override above is what removes it.
+    const base = parseDocument(readFileSync(repoFile('docker-compose.yaml'), 'utf8')).toJS()
+    expect(base.services.app.volumes).toContain('/var/run/docker.sock:/var/run/docker.sock')
+  })
+
   it('accepts dev on its own VM beside a socket release, and both clones on separate VMs', () => {
     const config = fresh()
     vm(config, 'app-dev')

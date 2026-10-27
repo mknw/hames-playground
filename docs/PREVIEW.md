@@ -1135,7 +1135,10 @@ The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
 flag is needed. Bootstrap accepts exactly the file order above, optionally followed
 by **one** dev sandbox overlay: `:docker-compose.dev-sandbox.yaml` for the existing
 owner socket opt-in, or `:docker-compose.dev-sandbox-vm.yaml` for dev's own
-environment VM ([below](#dev-sandbox-on-its-own-environment-vm)). Keep
+environment VM ([below](#dev-sandbox-on-its-own-environment-vm)). Only after the
+second may `:docker-compose.release-sandbox-vm.yaml` follow, for release's own
+VM ([below](#release-sandbox-on-its-own-environment-vm)); no other order or
+combination is accepted. Keep
 `COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
 shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
 under the single-app file list, unsupported file orders, missing inputs, relative
@@ -1306,7 +1309,8 @@ sandbox off the host socket onto that clone's **own** VM, which runs its own
 Docker daemon. The app reaches that daemon over mutual TLS. Nothing is shared
 between clones: one VM, one CA and one client certificate per clone. Dev moves
 first. Release keeps the host socket until its own VM lands, per the owner's
-answer on #648.
+answer on #648; [its move](#release-sandbox-on-its-own-environment-vm) follows
+the same steps once dev is on its VM.
 
 1. **Provision dev's VM and deliver its client files** with the operator entry
    point. Run it from the repo root of a checkout of the reviewed commit, after
@@ -1467,6 +1471,62 @@ is then back to no Docker access and no sandbox agents. Tear down the VM, the
 link network and the guard separately, in the plan's
 [rollback order](plan/env-vm-network.md#7-operator-runbook).
 
+### Release sandbox on its own environment VM
+
+Release moves the same way, **after** dev is on its own VM, and never on dev's VM
+or dev's credentials: release's own VM, CA, client certificate, link network and
+evidence. Each step mirrors dev's [above](#dev-sandbox-on-its-own-environment-vm).
+
+1. **Provision release's VM** with the entry point and its own operator-private
+   config: environment `release`, bridge `envvm-release`, its own guest address,
+   state directory and delivery directory. Create its link network,
+   `envapp-release`, on a subnet of its own that overlaps no host route, no
+   Docker address pool and not `envapp-dev`.
+2. **Add `release` to the guard config** as a second environment, with service
+   `app`. That is a firewall rule change: it adds release's own allow and reply
+   rules, and nothing else ([plan §2.1](plan/env-vm-network.md#21-the-guard-table)),
+   so review it before it is persisted. `--apply` refuses while any environment
+   VM runs, so dev's VM is stopped for the apply, under the dead-man. Then run
+   the guard smoke: its one record covers both environments, and the
+   VM-to-VM probes now attribute each pair.
+3. **Set the release-only inputs** in the root `.env`, as literal values:
+
+   | Input                               | Meaning                                                               |
+   | ----------------------------------- | --------------------------------------------------------------------- |
+   | `RELEASE_SANDBOX_DOCKER_HOST`       | `tcp://<release VM guest IPv4>:<port>`                                |
+   | `RELEASE_SANDBOX_DOCKER_TLS_CA`     | Absolute path to release's delivered CA certificate                   |
+   | `RELEASE_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to release's client certificate                         |
+   | `RELEASE_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to release's client key                                 |
+   | `RELEASE_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the guard smoke's record covering `release`          |
+   | `RELEASE_SANDBOX_LINK_ADDRESS`      | The release app's pinned IPv4 address on the `envapp-release` network |
+
+   As for dev, the preflight refuses the overlay until the evidence file exists
+   and is not empty, and never reads it. Dev's own inputs and evidence stay
+   required.
+
+4. **Append the overlay after dev's**:
+   `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml`.
+   It declares `x-clone-release-sandbox: per-env`, replaces the release app's
+   mounts with its configs plus the three files, so the **host Docker socket is
+   no longer mounted**, sets the four `SANDBOX_DOCKER_*` settings and attaches
+   the app to `envapp-release` at `RELEASE_SANDBOX_LINK_ADDRESS` with
+   `gw_priority: 1`. Bootstrap refuses the release overlay alone, before dev's,
+   beside the dev socket opt-in, or twice.
+5. **Tag the running release image for rollback**, then run the same preflight.
+   Recreate the app with `--only boot --no-seed`, which takes release down while
+   its container is recreated.
+   Then run `--only smoke --no-seed`, which runs the guard's `--check` for this
+   shape too.
+
+The validator's `per-env` rules above apply to release unchanged, and with both
+clones on their VMs it also refuses a shared guest address and either clone's
+certificate verifying under the other's CA. The MCP gateway still holds the
+host socket ([plan §10](plan/env-vm-network.md#10-deliberately-left-out)).
+
+**Rollback.** Drop `:docker-compose.release-sandbox-vm.yaml` from `COMPOSE_FILE`
+and recreate the app: release is back on the host socket and dev is unchanged.
+Remove `release` from the guard config, its link network and its VM separately.
+
 ### Shared state and the limits of the claim
 
 This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
@@ -1474,7 +1534,8 @@ it **does not isolate all clone data**. Both clones can read/write the shared
 Neo4j graph; Redis stash keys are also shared (and, on a host not yet moved to this code, the retired gateway memory volume).
 Use synthetic/demo data only until that shared-data posture is acceptable to the
 operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
-The release app retains the root-equivalent Docker socket (SD-19). Dev has no
+The release app retains the root-equivalent Docker socket (SD-19) until its own
+VM overlay is applied ([above](#release-sandbox-on-its-own-environment-vm)). Dev has no
 socket by default and mounts only its own checkout's read-only `configs/`;
 sandbox agents on dev therefore remain unavailable. Dev's own environment VM
 ([above](#dev-sandbox-on-its-own-environment-vm)) enables them without host

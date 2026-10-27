@@ -1,0 +1,48 @@
+# Opt-in, LAST in COMPOSE_FILE, after docker-compose.dev-sandbox-vm.yaml (docs/PREVIEW.md §12).
+# Points the release app's sandbox at release's own environment VM, over Docker
+# mutual TLS, and drops the host Docker socket. Release moves only once dev is on its VM.
+# The inputs are release-only, so dev cannot pick them up by accident.
+# The operator creates envapp-release before this overlay (docs/plan/env-vm-network.md
+# §2.3); it is the one source the environment VM network guard allows to release's VM.
+x-clone-release-sandbox: per-env
+
+services:
+  app:
+    environment:
+      SANDBOX_DOCKER_HOST: ${RELEASE_SANDBOX_DOCKER_HOST:?set the release environment VM tcp://address:port}
+      SANDBOX_DOCKER_TLS_CA: /run/sandbox-tls/ca.pem
+      SANDBOX_DOCKER_TLS_CERT: /run/sandbox-tls/cert.pem
+      SANDBOX_DOCKER_TLS_KEY: /run/sandbox-tls/key.pem
+    # Merged with the base's app-network. gw_priority makes the link network
+    # the release app's default route, so its traffic to the VM leaves through it.
+    networks:
+      envapp-release:
+        ipv4_address: ${RELEASE_SANDBOX_LINK_ADDRESS:?set the release app's pinned address on the envapp-release link network}
+        gw_priority: 1
+    # Only the three Docker client files, never the provisioner's state directory
+    # and never the host socket the base mounts. create_host_path: false makes a
+    # missing file fail `up` instead of mounting an empty directory in its place.
+    volumes: !override
+      - ./configs:/configs:ro
+      - type: bind
+        source: ${RELEASE_SANDBOX_DOCKER_TLS_CA:?set the release environment VM CA file}
+        target: /run/sandbox-tls/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${RELEASE_SANDBOX_DOCKER_TLS_CERT:?set the release Docker client certificate}
+        target: /run/sandbox-tls/cert.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${RELEASE_SANDBOX_DOCKER_TLS_KEY:?set the release Docker client key}
+        target: /run/sandbox-tls/key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  envapp-release:
+    external: true

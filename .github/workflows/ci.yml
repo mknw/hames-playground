@@ -633,8 +633,9 @@ jobs:
           # app/src/__tests__/lib/config/compose-clones.test.ts. A job-level
           # `if` cannot diff, so this job computes the answer and clone-mutations
           # reads the output.
-          if git diff --name-only "$BASE_SHA" HEAD \
-              | grep -qE '^(scripts/|deploy/|\.github/workflows/ci\.yml$|app/src/__tests__/lib/config/compose-clones\.test\.ts$)'; then
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+          if printf '%s\n' "$changed" | grep -qE '^(scripts/|deploy/|\.github/workflows/ci\.yml$|app/src/__tests__/lib/config/compose-clones\.test\.ts$)'; then
             echo "relevant=true" >>"$GITHUB_OUTPUT"
           else
             echo "relevant=false" >>"$GITHUB_OUTPUT"

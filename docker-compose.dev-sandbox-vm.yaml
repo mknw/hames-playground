@@ -1,0 +1,49 @@
+# Opt-in, AFTER docker-compose.clones.yaml in COMPOSE_FILE (docs/PREVIEW.md §12).
+# Points app-dev's sandbox at dev's own environment VM, over Docker mutual TLS,
+# and drops every host socket mount. Never combine with docker-compose.dev-sandbox.yaml.
+# The inputs are dev-only, so release cannot pick them up by accident.
+# The operator creates envapp-dev before this overlay (docs/plan/env-vm-network.md
+# §2.3, step W7); it is the one source the environment VM network guard allows.
+x-clone-dev-sandbox: per-env
+x-clone-dev-docker-socket: false
+
+services:
+  app-dev:
+    environment:
+      SANDBOX_DOCKER_HOST: ${DEV_SANDBOX_DOCKER_HOST:?set the dev environment VM tcp://address:port}
+      SANDBOX_DOCKER_TLS_CA: /run/sandbox-tls/ca.pem
+      SANDBOX_DOCKER_TLS_CERT: /run/sandbox-tls/cert.pem
+      SANDBOX_DOCKER_TLS_KEY: /run/sandbox-tls/key.pem
+    # Merged with the base's app-network. gw_priority makes the link network
+    # app-dev's default route, so its traffic to the VM leaves through it.
+    networks:
+      envapp-dev:
+        ipv4_address: ${DEV_SANDBOX_LINK_ADDRESS:?set app-dev's pinned address on the envapp-dev link network}
+        gw_priority: 1
+    # Only the three Docker client files, never the provisioner's state directory.
+    # create_host_path: false makes a missing file fail `up` instead of mounting
+    # an empty directory in its place.
+    volumes: !override
+      - ${DEV_CLONE_PATH:?}/configs:/configs:ro
+      - type: bind
+        source: ${DEV_SANDBOX_DOCKER_TLS_CA:?set the dev environment VM CA file}
+        target: /run/sandbox-tls/ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DEV_SANDBOX_DOCKER_TLS_CERT:?set the dev Docker client certificate}
+        target: /run/sandbox-tls/cert.pem
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DEV_SANDBOX_DOCKER_TLS_KEY:?set the dev Docker client key}
+        target: /run/sandbox-tls/key.pem
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  envapp-dev:
+    external: true

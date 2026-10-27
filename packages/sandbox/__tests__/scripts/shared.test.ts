@@ -29,10 +29,13 @@ beforeEach(() => {
     printed.push(args.map(String).join(' '))
   })
   spawn.mockReset()
+  for (const name of ['HOST', 'TLS_CA', 'TLS_CERT', 'TLS_KEY'])
+    vi.stubEnv(`SANDBOX_DOCKER_${name}`, undefined)
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
 })
 
 const out = () => printed.join('\n')
@@ -203,6 +206,44 @@ describe('checkRootfsImage', () => {
       stdio: ['ignore', 'ignore', 'ignore'],
     })
   })
+
+  it.each(['tcp://sandbox.example.test:2376', 'unix:///synthetic/sandbox.sock'])(
+    'inspects the rootfs at %s despite conflicting inherited routing',
+    async (endpoint) => {
+      vi.stubEnv('SANDBOX_DOCKER_HOST', endpoint)
+      const flags = [`--host=${endpoint}`]
+      if (endpoint.startsWith('tcp:')) {
+        flags.push('--tlsverify')
+        for (const [setting, flag] of [
+          ['CA', 'tlscacert'],
+          ['CERT', 'tlscert'],
+          ['KEY', 'tlskey'],
+        ]) {
+          vi.stubEnv(`SANDBOX_DOCKER_TLS_${setting}`, `/synthetic/${setting}.pem`)
+          flags.push(`--${flag}=/synthetic/${setting}.pem`)
+        }
+      }
+      const inherited = [
+        'DOCKER_HOST',
+        'DOCKER_CONTEXT',
+        'DOCKER_TLS',
+        'DOCKER_TLS_VERIFY',
+        'DOCKER_CERT_PATH',
+      ]
+      for (const name of inherited) vi.stubEnv(name, 'conflicting-setting')
+      spawn.mockImplementation(() => fakeChild((h) => h.close?.(0)))
+      await expect(checkRootfsImage()).resolves.toBeUndefined()
+      const [bin, args, opts] = spawn.mock.calls[0]
+      expect(bin).toBe('docker')
+      expect(args).toEqual([...flags, 'image', 'inspect', 'kg-sandbox:base'])
+      expect(opts.stdio).toEqual(['ignore', 'ignore', 'ignore'])
+      expect(opts.env.PATH).toBe(process.env.PATH)
+      for (const name of inherited) {
+        expect(opts.env).not.toHaveProperty(name)
+        expect(process.env[name]).toBe('conflicting-setting')
+      }
+    },
+  )
 
   it('rejects with build instructions when the image is missing', async () => {
     spawn.mockImplementation(() => fakeChild((h) => h.close?.(1)))

@@ -2,15 +2,11 @@
  * The shared graph-schema fetch (sf-M6).
  *
  * Three agents primed their Cypher controllers with `get_neo4j_schema` and only
- * ONE of them — `general` — handled a failure. `search` and `retriever-agent`
- * returned `''` and let `getOrBuildPatterns` cache that build, so a Neo4j or
- * gateway blip during the first message froze a schema-blind controller into the
- * conversation for its whole life. This file pins the behaviour for all three,
- * so the next agent that needs a schema cannot quietly reintroduce the third
- * copy.
- *
- * `general-agent.test.ts` keeps its own coverage of the same property (it is
- * about that agent's degraded build); this is about the helper's contract.
+ * ONE of them handled a failure. The other two returned `''` and let
+ * `getOrBuildPatterns` cache that build, so a Neo4j or gateway blip during the
+ * first message froze a schema-blind controller into the conversation for its
+ * whole life. This file pins the helper's contract, so the next agent that needs
+ * a schema cannot quietly reintroduce a private copy.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'

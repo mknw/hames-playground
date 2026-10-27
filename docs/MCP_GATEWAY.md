@@ -51,15 +51,14 @@ its repositories, never through the gateway.
 
 ### Registered Servers
 
-| Server                | Title           | Tools                                                                        | Auth                 | Backend                      |
-| --------------------- | --------------- | ---------------------------------------------------------------------------- | -------------------- | ---------------------------- |
-| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)              | Password (hardcoded) | neo4j-relay → isolated neo4j |
-| `fetch`               | Fetch           | `fetch`                                                                      | None                 | -                            |
-| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                    | None                 | -                            |
-| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                     | None                 | -                            |
-| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more        | None (volume mounts) | -                            |
-| `memory`              | Memory          | `create_entities`, `create_relations`, `search_nodes`, `read_graph`, +5 more | None (volume)        | -                            |
-| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more    | Password (hardcoded) | redis container              |
+| Server                | Title           | Tools                                                                     | Auth                 | Backend                      |
+| --------------------- | --------------- | ------------------------------------------------------------------------- | -------------------- | ---------------------------- |
+| `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)           | Password (hardcoded) | neo4j-relay → isolated neo4j |
+| `fetch`               | Fetch           | `fetch`                                                                   | None                 | -                            |
+| `web_search`          | DuckDuckGo      | `search`, `fetch_content`                                                 | None                 | -                            |
+| `context7`            | Context7        | `resolve-library-id`, `get-library-docs`                                  | None                 | -                            |
+| `rust-mcp-filesystem` | Rust Filesystem | `read_text_file`, `write_file`, `edit_file`, `search_files`, +10 more     | None (volume mounts) | -                            |
+| `redis`               | Redis           | `get`, `set`, `delete`, `hget`, `hset`, `lpush`, `sadd`, `zadd`, +24 more | Password (hardcoded) | redis container              |
 
 ### Configuration Strategy
 
@@ -162,10 +161,10 @@ What happens now, items 1–3 in `packages/harness-patterns/` and item 4 in `pac
    **"Lost the gateway's tools" is not the same as "has no tools", and reading
    it as the latter left the default agent uncovered** (#278 F1). `listTools`
    degrades to the app-side tools, so a pattern handed `tools.all` gets the nine
-   `graph_*` tools rather than `[]`: `general`'s surface is amputated, not
+   `graph_*` tools rather than `[]`: the removed `general` agent's surface was amputated, not
    empty, and a length check let it answer a dead gateway with a confident
    `done`. It cannot be settled by inspecting the NAMES either — every app-side
-   tool is in the `graph` namespace, so a robbed `general` holds exactly the list
+   tool is in the `graph` namespace, so a robbed agent of that kind held exactly the list
    `microsoft-365` composes on purpose from `tools.graph`, and that agent needs
    no gateway at all. The distinction is provenance: `tools.server.ts` marks the
    `all` array when the catalog read behind it did not reach the gateway, and
@@ -320,7 +319,7 @@ A changed config reaches a running gateway only when it is rendered again and th
 
 ### Postgres
 
-No agent reaches Postgres (#412). Running agents were never meant to query the app's own database, and `general` hands every tool the gateway lists to its loop, so the two-place shape holds it here too:
+No agent reaches Postgres (#412). Running agents were never meant to query the app's own database, and the `general` agent, since removed, handed every tool the gateway lists to its loop, so the two-place shape was built to hold it and still holds it here:
 
 - **At the gateway:** the `database-server` MCP server is gone from `configs/custom-catalog.yaml` and from the gateway config, and the `mcp-config` render service is no longer given `POSTGRES_PASSWORD`. A host config that still carries the `${POSTGRES_PASSWORD}` placeholder is refused at render, by name, rather than filled into a database URL; delete its `database-server` block.
 - **In the app:** `listTools()` leaves the server's tools (`query_database`, `execute_sql`, `list_tables`, `describe_table`, `connect_to_database`, `get_connection_examples`, `get_current_database_info`) out of the catalog every agent's tool list is built from, through the same list as `write_neo4j_cypher`, and logs once if the gateway lists them. Every loop's allowlist check refuses them too.

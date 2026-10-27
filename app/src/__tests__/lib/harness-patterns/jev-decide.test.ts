@@ -19,7 +19,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 import {
   evaluateDecision,
   typedDecision,
@@ -34,6 +34,8 @@ import {
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import type { DecisionSetSpec, DecisionSpec } from '@hames-ai/harness-patterns/types'
 import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -91,8 +93,8 @@ const JEV_BODY = {
 
 // The private tier is refused without its endpoints; nothing listens there —
 // the lock must refuse before any connection is attempted.
-process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-process.env.VERDA_INFERENCE_API_KEY = 'unused'
+process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+process.env.LARGE_LLM_API_KEY = 'unused'
 
 // The BAML channel: a counting listener standing in for the private tier's 4B
 // (`SMALL_LLM_BASE_URL`). A Jev failure must send NOTHING there either — the
@@ -147,8 +149,8 @@ afterEach(async () => {
 
 async function onPrivateTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('@hames-ai/harness-baml/clients.server')
-  clients.assertInferenceTier('verda')
-  return withRunFrame({ inference: { tier: 'verda' } }, fn)
+  clients.assertInferenceTier('self_deployed')
+  return withRunFrame({ inference: { tier: 'self_deployed' } }, fn)
 }
 
 async function transport() {
@@ -425,7 +427,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     expect(requests).toHaveLength(0)
   })
 
-  it.each(['verda', 'unknown', 'future'])(
+  it.each(['self_deployed', 'unknown', 'future'])(
     'refuses tier %s before reading the key',
     async (tier) => {
       const { decideAll } = await transport()
@@ -477,8 +479,8 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
     expect(requests).toHaveLength(0)
   })
 
-  it('the deployment-default private tier (USE_VERDA_INFERENCE=1, no run frame) is refused at both layers', async () => {
-    process.env.USE_VERDA_INFERENCE = '1'
+  it('the deployment-default private tier (USE_SELF_DEPLOYED_INFERENCE=1, no run frame) is refused at both layers', async () => {
+    process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
     try {
       const { decideAll } = await transport()
       await expect(decideAll({ spec: SET, state: 's' })).rejects.toThrow(/inference tier/)
@@ -489,7 +491,7 @@ describe('jev-tier-lock — Jev is a public provider and may never take a privat
       await expect((await adapter())({ spec: SPEC, state: 's' })).rejects.toThrow(/inference tier/)
       expect(requests).toHaveLength(0)
     } finally {
-      delete process.env.USE_VERDA_INFERENCE
+      delete process.env.USE_SELF_DEPLOYED_INFERENCE
     }
   })
 })
@@ -608,6 +610,27 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     expect(requests[0].init.signal).toBeInstanceOf(AbortSignal)
   })
 
+  // Boundary guards slice 3: the guard gate's deadline aborts the REQUEST, not
+  // only the wait for it. MUTATION: drop `input.signal` from `decide`'s call to
+  // the request (or `signal` from the fetch's `AbortSignal.any`): the fetch's
+  // signal no longer follows the caller's and this goes red.
+  it("DecideInput.signal reaches the fetch: the caller's abort aborts the request", async () => {
+    const caller = new AbortController()
+    let fetchSignal: AbortSignal | undefined
+    respond = () =>
+      new Promise<Response>((_, reject) => {
+        fetchSignal = requests[0].init.signal ?? undefined
+        fetchSignal?.addEventListener('abort', () => reject(fetchSignal?.reason))
+      })
+    const { decide } = await transport()
+    const pending = decide({ spec: SPEC, state: 's', signal: caller.signal })
+    await vi.waitFor(() => expect(fetchSignal).toBeDefined())
+    expect(fetchSignal?.aborted).toBe(false)
+    caller.abort(new Error('the gate stopped waiting'))
+    await expect(pending).rejects.toThrow(/request failed/)
+    expect(fetchSignal?.aborted).toBe(true)
+  })
+
   it('a missing key is a refusal before any request', async () => {
     delete process.env.JEV_DECISIONS_API_KEY
     const decide = await adapter()
@@ -629,6 +652,10 @@ describe('jev-fallback — fail closed, never a downgrade to another provider', 
     await evaluateDecision({ decide, spec: SPEC, state: 's' })
     expect(seen).toHaveLength(1)
     expect(seen[0].clientName).toBe('JevDecide')
+    // Slice 3: the sample names its question, so a ledger can tell the guard
+    // gate's Decide spend from the loop's. MUTATION: drop `decisionKey` from the
+    // transport's `notifyLlmUsage`.
+    expect(seen[0].decisionKey).toBe('memory.recall')
   })
 })
 
@@ -917,8 +944,9 @@ describe('jev-tier-lock score/noul', () => {
           return base.question
         },
       }
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       try {
-        for (const tier of ['verda', 'unknown', 'future']) {
+        for (const tier of ['self_deployed', 'unknown', 'future']) {
           const err = await withRunFrame({ inference: { tier } }, () =>
             t.decide({ spec, state: 'synthetic' }),
           ).catch((e) => e)
@@ -933,6 +961,7 @@ describe('jev-tier-lock score/noul', () => {
         expect(requests).toHaveLength(0)
       } finally {
         process.env = real
+        vi.unstubAllEnvs()
       }
     },
   )
@@ -1017,7 +1046,7 @@ describe('G11 private systemone routing', () => {
   it.each([undefined, 'future', ''])(
     'routes to the private URL under the private deployment default when the frame tier is %j',
     async (tier) => {
-      vi.stubEnv('USE_VERDA_INFERENCE', '1')
+      vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '1')
       try {
         const { decideAll } = await transport()
         const run = () => decideAll({ spec: SET, state: 'Synthetic.' })
@@ -1052,7 +1081,7 @@ describe('G11 private systemone routing', () => {
     try {
       const fn = await adapter()
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
@@ -1067,7 +1096,7 @@ describe('G11 private systemone routing', () => {
     const fn = await adapter()
     await expect(
       withRunFrame(
-        { inference: { tier: 'verda', clientOverride: () => ({ client: 'JevDecide' }) } },
+        { inference: { tier: 'self_deployed', clientOverride: () => ({ client: 'JevDecide' }) } },
         () => fn({ spec: SPEC, state: 'Synthetic.' }),
       ),
     ).rejects.toThrow('Refusing')
@@ -1089,7 +1118,7 @@ describe('G11 private systemone routing', () => {
       expect(entered).toBe(false)
       // The transport must refuse independently of the host's configuration gate.
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow(/public systemone provider/)
@@ -1101,7 +1130,12 @@ describe('G11 private systemone routing', () => {
     const fn = await adapter()
     await expect(
       withRunFrame(
-        { inference: { tier: 'verda', clientOverride: () => ({ client: 'SomeConsumerDecide' }) } },
+        {
+          inference: {
+            tier: 'self_deployed',
+            clientOverride: () => ({ client: 'SomeConsumerDecide' }),
+          },
+        },
         () => fn({ spec: SPEC, state: 'Synthetic.' }),
       ),
     ).rejects.toThrow('Refusing')
@@ -1126,7 +1160,7 @@ describe('G11 private systemone routing', () => {
       )
       // Host refusal cannot hide a transport-level fallback to the public key.
       await expect(
-        withRunFrame({ inference: { tier: 'verda' } }, () =>
+        withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
           fn({ spec: SPEC, state: 'Synthetic.' }),
         ),
       ).rejects.toThrow('SMALL_LLM_API_KEY')
@@ -1161,7 +1195,9 @@ describe('G11 private systemone routing', () => {
     expect(() => assertPrivateTierConfigured()).toThrow('SMALL_LLM_DECISIONS_URL')
     const fn = await adapter()
     await expect(
-      withRunFrame({ inference: { tier: 'verda' } }, () => fn({ spec: SPEC, state: 'Synthetic.' })),
+      withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
+        fn({ spec: SPEC, state: 'Synthetic.' }),
+      ),
     ).rejects.toThrow('SMALL_LLM_DECISIONS_URL')
     expect(requests).toHaveLength(0)
   })

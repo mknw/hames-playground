@@ -319,7 +319,17 @@ repository runs for its own deployment. It is off by default and you do not need
 it; to use your own model, see
 [Bring your own provider or model](#bring-your-own-provider-or-model). How it is
 switched on is documented beside its clients, in
-[baml_src/verda-client.baml](https://github.com/mknw/hames-playground/blob/main/packages/harness-baml/baml_src/verda-client.baml).
+[baml_src/large-client.baml](https://github.com/mknw/hames-playground/blob/main/packages/harness-baml/baml_src/large-client.baml).
+
+A host can restrict the built-in inference tier with
+`configureInferencePolicy({ defaultTier: () => 'self_deployed', privateOnly: () => true,
+assertTierReachable })`. Public run frames and public or unverified client
+overrides then throw before a request. Package adapters use
+`guarded-client.server` for BAML calls; hosts making direct calls should use that
+same boundary and supply `clientOverrideFor(role)` in the positional options bag.
+Missing or shifted options are refused under the restriction. With `privateOnly`
+absent, existing routing and argument bytes are preserved. The reference app's
+operator setting is `INFERENCE_TIERS=self_deployed` (see `docs/PREVIEW.md` §6).
 
 ## Reference
 

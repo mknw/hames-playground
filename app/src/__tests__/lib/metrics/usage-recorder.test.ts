@@ -31,7 +31,7 @@ import {
   notifyLlmUsage,
   resetLlmUsageObservers,
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
-import { resetVerdaActivity, verdaWarmth } from '../../../lib/inference/verda-activity.server'
+import { resetLargeActivity, largeWarmth } from '../../../lib/inference/large-activity.server'
 import {
   noteSmallCallCompleted,
   resetSmallActivity,
@@ -55,7 +55,7 @@ const metrics = (over: Partial<EventMetrics> = {}): EventMetrics => ({
 beforeEach(async () => {
   addUsage.mockReset()
   addUsage.mockResolvedValue(undefined)
-  resetVerdaActivity()
+  resetLargeActivity()
   resetSmallActivity()
   resetCallLatency()
   await flushUsage() // drain anything a previous case left pending
@@ -70,21 +70,44 @@ function written(tier: string): Record<string, unknown> | undefined {
 }
 
 describe('tierOfSample — the selected client is the evidence', () => {
-  it('attributes a VerdaQwen call to the self-hosted tier', () => {
-    expect(tierOfSample({ functionName: 'LoopController', clientName: 'VerdaQwen' })).toBe('verda')
+  it('attributes a LargeQwen call to the self-hosted tier', () => {
+    expect(tierOfSample({ functionName: 'LoopController', clientName: 'LargeQwen' })).toBe(
+      'self_deployed',
+    )
   })
 
-  it('attributes a LocalQwenSmall call to the private tier too', () => {
+  it('accounts the dormant thinking planner on the same private box and latency window', async () => {
+    const now = 1_700_000_000_000
+    recordSample(
+      {
+        functionName: 'PlannerThinking',
+        clientName: 'LargeQwenThink',
+        metrics: metrics(),
+        durationMs: 5000,
+      },
+      now,
+    )
+    expect(tierOfSample({ functionName: 'PlannerThinking', clientName: 'LargeQwenThink' })).toBe(
+      'self_deployed',
+    )
+    expect(largeWarmth(now).state).toBe('warm')
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: 5000, samples: 1 })
+    await flushUsage()
+    expect(written('self_deployed')).toMatchObject({ llmCalls: 1, outputTokens: 20 })
+    expect(written('anthropic')).toBeUndefined()
+  })
+
+  it('attributes a SmallQwen call to the private tier too', () => {
     // THE DESCRIBE FLIP'S ACCOUNTING HALF (2026-08-26). The private tier became
     // TWO models — the heavy roles on the 27B, summarization on the 4B — and a
-    // hardcoded `=== 'VerdaQwen'` would have counted every private-tier describe
+    // hardcoded `=== 'LargeQwen'` would have counted every private-tier describe
     // call as an ANTHROPIC call. That is six of the twelve routed functions, and
     // the highest-frequency ones, so the header's "private share" would have
     // understated itself on exactly the tier the number exists to report, while
     // the routing was perfectly correct. Nothing would have looked wrong.
-    expect(
-      tierOfSample({ functionName: 'ResultDescribeBatch', clientName: 'LocalQwenSmall' }),
-    ).toBe('verda')
+    expect(tierOfSample({ functionName: 'ResultDescribeBatch', clientName: 'SmallQwen' })).toBe(
+      'self_deployed',
+    )
   })
 
   it('derives the set from the tier map rather than listing names', () => {
@@ -92,11 +115,11 @@ describe('tierOfSample — the selected client is the evidence', () => {
     // is counted as private. A third model added to the tier is counted with no
     // edit in the recorder — which is the failure this replaced, arriving a second
     // time.
-    const { VERDA_CLIENT_BY_ROLE } = clients
-    const routed = Object.values(VERDA_CLIENT_BY_ROLE).filter(Boolean) as string[]
+    const { SELF_DEPLOYED_CLIENT_BY_ROLE } = clients
+    const routed = Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE).filter(Boolean) as string[]
     expect(routed.length).toBeGreaterThan(1)
     for (const clientName of routed) {
-      expect(tierOfSample({ functionName: 'X', clientName }), clientName).toBe('verda')
+      expect(tierOfSample({ functionName: 'X', clientName }), clientName).toBe('self_deployed')
     }
     // Not vacuous: the map holds three clients — the 27B, the 4B summarizer, and
     // (#418) the 4B's one-token decide readout — and the decide client is counted
@@ -111,8 +134,8 @@ describe('tierOfSample — the selected client is the evidence', () => {
     )
     expect(tierOfSample({ functionName: 'Router' })).toBe('anthropic')
     // Near-misses are not the self-hosted box. A prefix match would let a
-    // future `VerdaQwenSomethingElse` silently join the confidential tier.
-    expect(tierOfSample({ functionName: 'X', clientName: 'VerdaQwenPreview' })).toBe('anthropic')
+    // future `LargeQwenSomethingElse` silently join the confidential tier.
+    expect(tierOfSample({ functionName: 'X', clientName: 'LargeQwenPreview' })).toBe('anthropic')
     // `LocalGLM` is the OTHER local client and is in no chain and no tier map.
     // "Local" is not the criterion; being in the tier map is.
     expect(tierOfSample({ functionName: 'X', clientName: 'LocalGLM' })).toBe('anthropic')
@@ -128,26 +151,26 @@ describe('the warm clock does NOT follow the tier attribution', () => {
     // asleep, which is exactly the wrong direction: the whole module errs
     // pessimistic so a user is never told the box is up when it is not.
     const NOW = 1_700_000_000_000
-    recordSample({ functionName: 'ResultDescribe', clientName: 'LocalQwenSmall' }, NOW)
-    expect(verdaWarmth(NOW).state).toBe('unknown')
+    recordSample({ functionName: 'ResultDescribe', clientName: 'SmallQwen' }, NOW)
+    expect(largeWarmth(NOW).state).toBe('unknown')
     // The decide readout is the same 4B on the same server: also not evidence.
     recordSample({ functionName: 'Decide', clientName: 'PrivateSystemOne' }, NOW)
-    expect(verdaWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
 
-    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' }, NOW)
-    expect(verdaWarmth(NOW).state).toBe('warm')
+    recordSample({ functionName: 'LoopController', clientName: 'LargeQwen' }, NOW)
+    expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
 
 describe('the small warm clock requires metrics', () => {
   it('refreshes an expired clock when a describe sample spent tokens', () => {
     const now = Date.now()
-    noteSmallCallCompleted(now - 200_000)
+    noteSmallCallCompleted(now - 400_000)
     expect(smallProvenWarm(now)).toBe(false)
     recordSample(
       {
         functionName: 'DescribeToolResult',
-        clientName: 'LocalQwenSmall',
+        clientName: 'SmallQwen',
         metrics: metrics(),
       },
       now,
@@ -157,8 +180,8 @@ describe('the small warm clock requires metrics', () => {
 
   it('leaves an expired clock cold when the sample has no metrics', () => {
     const now = Date.now()
-    noteSmallCallCompleted(now - 200_000)
-    recordSample({ functionName: 'DescribeToolResult', clientName: 'LocalQwenSmall' }, now)
+    noteSmallCallCompleted(now - 400_000)
+    recordSample({ functionName: 'DescribeToolResult', clientName: 'SmallQwen' }, now)
     expect(smallProvenWarm(now)).toBe(false)
   })
 })
@@ -184,39 +207,47 @@ describe('recordSample', () => {
 
   it('accumulates several calls into one write', async () => {
     for (let i = 0; i < 3; i++) {
-      recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', metrics: metrics() })
+      recordSample({
+        functionName: 'LoopController',
+        clientName: 'LargeQwen',
+        metrics: metrics(),
+      })
     }
     await flushUsage()
 
     expect(addUsage).toHaveBeenCalledTimes(1)
-    expect(written('verda')).toMatchObject({ llmCalls: 3, inputTokens: 345, outputTokens: 60 })
+    expect(written('self_deployed')).toMatchObject({
+      llmCalls: 3,
+      inputTokens: 345,
+      outputTokens: 60,
+    })
   })
 
   it('keeps the two tiers in separate rows', async () => {
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
     recordSample({ functionName: 'B', clientName: 'DescribeAnthropic', metrics: metrics() })
     await flushUsage()
 
     expect(addUsage).toHaveBeenCalledTimes(2)
-    expect(written('verda')).toMatchObject({ llmCalls: 1 })
+    expect(written('self_deployed')).toMatchObject({ llmCalls: 1 })
     expect(written('anthropic')).toMatchObject({ llmCalls: 1 })
   })
 
   it('counts a call that spent nothing as no call at all', async () => {
     // A pre-flight throw never reached a model; counting it would inflate both
     // the call count and the denominator of the self-hosted share.
-    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen' })
+    recordSample({ functionName: 'LoopController', clientName: 'LargeQwen' })
     await flushUsage()
     expect(addUsage).not.toHaveBeenCalled()
   })
 
-  it('stamps the warm clock for a Verda call, and only for a Verda call', () => {
+  it('stamps the warm clock for a self-deployed call, and only for a self-deployed call', () => {
     const NOW = 1_700_000_000_000
     recordSample({ functionName: 'A', clientName: 'AnthropicSonnet5', metrics: metrics() }, NOW)
-    expect(verdaWarmth(NOW).state).toBe('unknown')
+    expect(largeWarmth(NOW).state).toBe('unknown')
 
-    recordSample({ functionName: 'B', clientName: 'VerdaQwen', metrics: metrics() }, NOW)
-    expect(verdaWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
+    recordSample({ functionName: 'B', clientName: 'LargeQwen', metrics: metrics() }, NOW)
+    expect(largeWarmth(NOW)).toMatchObject({ state: 'warm', secondsUntilScaledown: 300 })
   })
 
   it('stamps the clock even for a call that failed', () => {
@@ -224,17 +255,21 @@ describe('recordSample', () => {
     // failure path (`extractFailureLLMCallData`) notifies too. Reporting cold
     // here would send the next user into a cold start that will not happen.
     const NOW = 1_700_000_000_000
-    recordSample({ functionName: 'B', clientName: 'VerdaQwen' }, NOW)
-    expect(verdaWarmth(NOW).state).toBe('warm')
+    recordSample({ functionName: 'B', clientName: 'LargeQwen' }, NOW)
+    expect(largeWarmth(NOW).state).toBe('warm')
   })
 })
 
 describe('recordSample — the latency window', () => {
   it('records the call duration against the tier the client proves', () => {
-    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', durationMs: 4100 })
+    recordSample({
+      functionName: 'LoopController',
+      clientName: 'LargeQwen',
+      durationMs: 4100,
+    })
     recordSample({ functionName: 'Critic', clientName: 'AnthropicSonnet5', durationMs: 900 })
 
-    expect(tierLatency('verda')).toEqual({ p50Ms: 4100, samples: 1 })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: 4100, samples: 1 })
     expect(tierLatency('anthropic')).toEqual({ p50Ms: 900, samples: 1 })
   })
 
@@ -288,23 +323,31 @@ describe('recordSample — the latency window', () => {
     // The metrics gate below it drops this sample from the token counters — it
     // reached a model and failed. But the user waited for it, and keeping only
     // the calls that went well would bias the median towards the good ones.
-    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', durationMs: 30_000 })
-    expect(tierLatency('verda')).toEqual({ p50Ms: 30_000, samples: 1 })
+    recordSample({
+      functionName: 'LoopController',
+      clientName: 'LargeQwen',
+      durationMs: 30_000,
+    })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: 30_000, samples: 1 })
   })
 
   it('records nothing when BAML measured nothing', () => {
     // Absent, not zero: a pre-flight failure has no duration, and a 0 would
     // read as an instant call.
-    recordSample({ functionName: 'LoopController', clientName: 'VerdaQwen', metrics: metrics() })
-    expect(tierLatency('verda')).toEqual({ p50Ms: null, samples: 0 })
+    recordSample({
+      functionName: 'LoopController',
+      clientName: 'LargeQwen',
+      metrics: metrics(),
+    })
+    expect(tierLatency('self_deployed')).toEqual({ p50Ms: null, samples: 0 })
   })
 })
 
 describe('recordTurn', () => {
   it('counts a turn against its tier without needing an LLM call', async () => {
-    recordTurn('verda')
+    recordTurn('self_deployed')
     await flushUsage()
-    expect(written('verda')).toMatchObject({ turns: 1, llmCalls: 0 })
+    expect(written('self_deployed')).toMatchObject({ turns: 1, llmCalls: 0 })
   })
 })
 
@@ -315,7 +358,7 @@ describe('flushUsage', () => {
   })
 
   it('clears the pending deltas, so a second flush does not double-count', async () => {
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
     await flushUsage()
     addUsage.mockClear()
 
@@ -328,7 +371,7 @@ describe('flushUsage', () => {
     // are documented as "at most what was spent" for exactly this.
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     addUsage.mockRejectedValueOnce(new Error('postgres is down'))
-    recordSample({ functionName: 'A', clientName: 'VerdaQwen', metrics: metrics() })
+    recordSample({ functionName: 'A', clientName: 'LargeQwen', metrics: metrics() })
 
     await expect(flushUsage()).resolves.toBeUndefined()
     expect(error).toHaveBeenCalled()
@@ -357,7 +400,7 @@ describe('installUsageRecorder', () => {
 
     notifyLlmUsage({
       functionName: 'LoopController',
-      clientName: 'VerdaQwen',
+      clientName: 'LargeQwen',
       metrics: metrics({
         inputUncachedTokens: 100,
         inputCacheReadTokens: 0,
@@ -369,7 +412,7 @@ describe('installUsageRecorder', () => {
 
     expect(addUsage).toHaveBeenCalledOnce()
     expect(addUsage.mock.calls[0][0]).toMatchObject({
-      tier: 'verda',
+      tier: 'self_deployed',
       llmCalls: 1,
       inputTokens: 100,
       outputTokens: 20,
@@ -380,7 +423,7 @@ describe('installUsageRecorder', () => {
     // The registration itself is production's only wiring; every other test in
     // this file calls `recordSample` directly and would pass without it.
     installUsageRecorder(60_000)
-    notifyLlmUsage({ functionName: 'X', clientName: 'VerdaQwen', metrics: metrics() })
-    expect(verdaWarmth().state).not.toBe('unknown')
+    notifyLlmUsage({ functionName: 'X', clientName: 'LargeQwen', metrics: metrics() })
+    expect(largeWarmth().state).not.toBe('unknown')
   })
 })

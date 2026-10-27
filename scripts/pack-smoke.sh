@@ -309,21 +309,23 @@ const pkgDir = fileURLToPath(new URL('./node_modules/@hames-ai/agents/', import.
 //    the agent-surface types resolve through it
 const root = await import('@hames-ai/agents')
 for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeElement',
-  'isNodeElement', 'isNeo4jGraphResult', 'isMemoryGraphResult', 'extractReferences',
+  'isNodeElement', 'isNeo4jGraphResult', 'extractReferences',
   'referencesForDoc', 'errorBubble', 'replayMessages']) {
   assert.equal(typeof (root as Record<string, unknown>)[fn], 'function', `${fn} missing from the root barrel`)
 }
 
-// 2. the definitions barrel evaluates — the eight definition modules, through
+// 2. the definitions barrel evaluates — the five definition modules, through
 //    the tarball (which transitively loads the two overridden dependency
 //    tarballs and @boundaryml/baml)
 const agents = await import('@hames-ai/agents/agents')
-for (const name of ['searchAgent', 'generalAgent', 'sandboxAgent',
+for (const name of ['searchAgent', 'generalNextAgent', 'sandboxAgent',
   'retrieverAgent', 'microsoft365Agent']) {
   const def = (agents as Record<string, { id?: string }>)[name]
   assert.equal(typeof def?.id, 'string', `${name} missing from the agents barrel`)
   assert.equal(typeof def.createPatterns, 'function', `${name}.createPatterns missing`)
 }
+// the removed `general` agent must not ship in the tarball
+assert.equal((agents as Record<string, unknown>).generalAgent, undefined, 'generalAgent is back in the agents barrel')
 for (const name of ['getGraphSchema', 'NEO4J_FEW_SHOTS', 'NEO4J_FEW_SHOTS_DEFAULT',
   'NEO4J_READ_ONLY_CONTEXT', 'createTitleAgent', 'sanitizeTitle', 'runFirstTurnTitleGen', 'runRegenerateTitle']) {
   assert.notEqual((agents as Record<string, unknown>)[name], undefined, `${name} missing from the agents barrel`)
@@ -391,7 +393,7 @@ assert.doesNotThrow(() => client.getNeo4jDriver(), 'configured client must build
 // 4. the catalog data and the pure transforms (the client-safe root barrel)
 const catalog = await import('@hames-ai/connectors/mcp-catalog')
 assert.equal(catalog.mcpNamespace('search'), 'web', 'catalog data must resolve after tarball install')
-assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 86, 'catalog must hold 86 names')
+assert.equal(Object.keys(catalog.MCP_TOOL_CATALOG).length, 77, 'catalog must hold 77 names')
 const root = await import('@hames-ai/connectors')
 assert.equal(typeof root.transformNeo4jToCytoscape, 'function', 'root barrel must export the transform')
 

@@ -43,7 +43,8 @@ vi.mock('@azure/msal-node', () => ({
   },
 }))
 
-vi.mock('../../../lib/auth/entra-config.server', () => ({
+vi.mock('../../../lib/auth/entra-config.server', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lib/auth/entra-config.server')>()),
   buildEntraConfig: () => ({
     tenantId: 't',
     clientId: 'c',

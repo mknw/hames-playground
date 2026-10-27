@@ -33,7 +33,7 @@ const RECREATE_GATEWAY =
   '`docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`'
 
 /** Owner decision, 2026-10-03 (#403, #206): agents are READ-ONLY against Neo4j,
- *  the `general` agent included. The one writer is the memory hook (#419), and
+ *  (the removed `general` agent included). The one writer is the memory hook (#419), and
  *  it writes through the app, not through an agent's tool list. The deployment
  *  ships `read_only: true` for `neo4j-cypher` in `configs/mcp-config.yaml`,
  *  under which the pinned `mcp-neo4j-cypher` 0.5.0 does not list the tool. */

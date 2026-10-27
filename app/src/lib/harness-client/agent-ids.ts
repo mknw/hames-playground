@@ -23,13 +23,40 @@ const RENAMED_AGENT_IDS: Record<string, string> = {
   // `flavoured-sandbox` is the router it kept, so both land on it.
   'sandbox-session': 'sandbox',
   'flavoured-sandbox': 'sandbox',
+  // 2026-10-21 — `general` (planner → loop over every tool, no injection guard)
+  // was REMOVED, not renamed: this is a retirement folded into its successor.
+  // Stored conversations resume on `general-next` (the history still renders —
+  // it is the event stream, not the agent — and the row rewrites itself to the
+  // new id on its next save), and so does anything that still NAMES the id: a
+  // stale tab, a routine, a trigger-endpoint URL. One rule for every entry
+  // point, so none of them can throw `Unknown agent: general`.
+  general: 'general-next',
 }
 
 /** The agent a new chat opens with, and the id every caller that names none falls back to.
- * One constant, so the next change of default is one line. (HELD flip, #507: was 'search'.) */
+ * One constant, so the next change of default is one line. (#507 flip: was 'search'.) */
 export const DEFAULT_AGENT_ID = 'general-next'
 
 /** Current id for a possibly-legacy agent id. Unknown ids pass through. */
 export function canonicalAgentId(id: string): string {
   return RENAMED_AGENT_IDS[id] ?? id
+}
+
+/**
+ * Whether a legacy id folds forward at an UNATTENDED entry point: a routine
+ * firing, or a POST to `/api/agents/:id`, where nobody is watching the run.
+ *
+ * Open owner decision (the `general` removal): today a legacy id runs on its
+ * successor there, as it does everywhere. Those runs have no one to notice the
+ * surface changed (`general-next` adds an office sandbox and drops the raw
+ * tools), so the alternative is to refuse the legacy id outright. That switch
+ * is this one constant: set it to `false` and both entry points answer as they
+ * do for an unknown agent (404 / "unknown agent — skipping").
+ */
+const FOLD_LEGACY_IDS_UNATTENDED = true
+
+/** True when an unattended entry point may run under `id`. Both callers ask this
+ *  before `getAgent`, so the decision lives here and nowhere else. */
+export function unattendedIdAccepted(id: string): boolean {
+  return FOLD_LEGACY_IDS_UNATTENDED || canonicalAgentId(id) === id
 }

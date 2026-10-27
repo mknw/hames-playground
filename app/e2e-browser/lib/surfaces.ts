@@ -66,7 +66,7 @@ export const VOLATILE_SELECTORS = [
   '[data-testid="preview-header-metrics"]',
   // The warm indicator: a state word whose WIDTH varies, plus a countdown that
   // ticks once a second.
-  '[data-testid="verda-warmth"]',
+  '[data-testid="large-warmth"]',
   // Wall-clock times on every bubble ("11:03 PM"): a run either side of a minute
   // boundary differs, and it is the only thing that differs.
   '[data-testid="message-time"]',
@@ -85,7 +85,7 @@ export const VOLATILE_SELECTORS = [
  * `toBeHidden` rather than `toHaveCount(0)`: `display: none` leaves the element in
  * the DOM. It also passes for a selector that matches nothing at all, which is
  * what several of these are on any given surface — there is no `thread-time` on
- * the header strip, and no `verda-warmth` on a deployment with no endpoint.
+ * the header strip, and no `large-warmth` on a deployment with no endpoint.
  */
 export async function hideVolatile(page: Page): Promise<void> {
   await page.addStyleTag({

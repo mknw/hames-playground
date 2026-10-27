@@ -21,14 +21,17 @@
  * denominator and the share reads high. That is why the chokepoint is one
  * function rather than a line copied beside each call, and why sites that
  * produce no `LLMCallData` event of their own (the describe tier, the
- * injection screen) still open a collector purely to be counted. A new BAML
+ * injection screen) still open a collector purely to be counted. Those two now
+ * also report the call's record through `onCall`, which their callers record as
+ * a `model_call` event: this observer is the process-wide counter, that event
+ * is the run's own copy. A new BAML
  * call site that holds a collector and does not reach `accountBamlCall` is a
  * silent bias, not a missing detail.
  *
  * Deliberately weak by design:
  *
  * - **`clientName` is the ground truth, not the flag.** It is the client BAML
- *   selected, after chains and fallbacks. A sample saying `VerdaQwen` means
+ *   selected, after chains and fallbacks. A sample saying `LargeQwen` means
  *   that call reached the self-hosted box; a routing intention that silently
  *   did not take effect cannot fake one.
  * - **A throwing listener never breaks a turn.** Bookkeeping is not worth an
@@ -47,7 +50,11 @@ assertServerOnImport()
 export interface LlmUsageSample {
   /** BAML function name, e.g. `LoopController`. */
   functionName: string
-  /** The client BAML SELECTED — `VerdaQwen`, `AnthropicSonnet5`, … Absent when
+  /** The question's key, for a call of the decision transport (`Decide`):
+   *  `guard.screen` is the guard gate, `next_step` the decision loop. Lets a
+   *  ledger tell one Decide question's spend from another's. */
+  decisionKey?: string
+  /** The client BAML SELECTED — `LargeQwen`, `AnthropicSonnet5`, … Absent when
    *  the collector never got far enough to name one. */
   clientName?: string
   /** Step accounting across every attempt of this call; absent when the call

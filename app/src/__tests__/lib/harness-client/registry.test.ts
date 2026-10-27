@@ -8,7 +8,9 @@
  * module registers on import are exercised through the public listing.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { unattendedIdAccepted } from '../../../lib/harness-client/agent-ids'
 import type { AgentConfig } from '../../../lib/harness-client/registry.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -47,9 +49,6 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
 }
 vi.mock('@hames-ai/agents/agents/search.server', () => ({
   searchAgent: stubAgent('search'),
-}))
-vi.mock('@hames-ai/agents/agents/general.server', () => ({
-  generalAgent: stubAgent('general'),
 }))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
@@ -116,19 +115,6 @@ describe('registration + lookup', () => {
     expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
   })
 
-  // HELD flip (#507, ruling C=B+A): general-next replaces general in the PICKER; stored
-  // 'general' rows keep opening on `general` (no legacy-id mapping forward).
-  it('lists general-next and not general, yet general still resolves to itself', () => {
-    const meta = getAgentMetadata()
-    const listed = meta.filter((m) => m.listed).map((m) => m.id)
-    expect(listed).toContain('general-next')
-    expect(listed).not.toContain('general')
-    // ...but the metadata still carries it, so the picker can name an old row's own agent.
-    expect(meta.find((m) => m.id === 'general')?.listed).toBe(false)
-    expect(getAgent('general')?.id).toBe('general')
-    expect(canonicalAgentId('general')).toBe('general')
-  })
-
   it('returns undefined for an unknown id rather than throwing', () => {
     expect(getAgent('no-such-agent')).toBeUndefined()
   })
@@ -150,6 +136,33 @@ describe('registration + lookup', () => {
       },
     )
 
+    // 2026-10-21: `general` was REMOVED (not renamed), so unlike the ids above
+    // its successor is a different agent. Every stored reference still opens:
+    // `conversations.agent_id` and `routines.agent_id` rows, a stale tab's request,
+    // a device's `/api/agents/general` URL — all resolve here, none throws
+    // `Unknown agent`.
+    //
+    // MUTATION: delete the `general: 'general-next'` entry in agent-ids.ts and
+    // both assertions redden.
+    it("folds the removed 'general' id into general-next", () => {
+      expect(canonicalAgentId('general')).toBe('general-next')
+      expect(getAgent('general')?.id).toBe('general-next')
+    })
+
+    // Unattended entry points (a routine firing, `POST /api/agents/:id`) decide
+    // through ONE function, so refusing legacy ids there later is one line.
+    // Today the owner's answer is pending and the id folds, as above.
+    //
+    // MUTATION: flip FOLD_LEGACY_IDS_UNATTENDED to `false` in agent-ids.ts and the
+    // first assertion reddens (that is the switch to fail-closed, and this pin then
+    // changes with it); drop the call from either entry point and the source pin does.
+    it('lets unattended entry points fold a legacy id, deciding through one function', () => {
+      expect(unattendedIdAccepted('general')).toBe(true)
+      expect(unattendedIdAccepted('search')).toBe(true)
+      for (const file of ['src/lib/routines/dispatch.server.ts', 'src/routes/api/agents/[id].ts'])
+        expect(readFileSync(file, 'utf8'), file).toContain('!unattendedIdAccepted(')
+    })
+
     it('passes an id it does not know through unchanged', () => {
       expect(canonicalAgentId('retriever')).toBe('retriever')
       expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
@@ -160,6 +173,8 @@ describe('registration + lookup', () => {
       expect(ids).not.toContain('default')
       expect(ids).not.toContain('sandbox-session')
       expect(ids).not.toContain('flavoured-sandbox')
+      // No agent is registered under the removed id: it resolves, it is not listed.
+      expect(ids).not.toContain('general')
     })
   })
 
@@ -186,7 +201,6 @@ describe('registration + lookup', () => {
       // A definition that does not declare a sandbox has none — sent as an
       // explicit `false`, so the client never interprets an absent flag.
       usesSandbox: false,
-      listed: true,
     })
     expect('createPatterns' in meta).toBe(false)
   })

@@ -17,18 +17,6 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 const mockToolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema', 'Return'],
   web: ['search', 'fetch', 'fetch_content', 'Return'],
-  memory: [
-    'create_entities',
-    'create_relations',
-    'add_observations',
-    'delete_entities',
-    'delete_relations',
-    'delete_observations',
-    'open_nodes',
-    'search_nodes',
-    'read_graph',
-    'Return',
-  ],
   context7: ['resolve-library-id', 'get-library-docs', 'Return'],
   filesystem: [
     'read_text_file',
@@ -58,7 +46,6 @@ mockToolSets.all = [
   ...new Set([
     ...mockToolSets.neo4j,
     ...mockToolSets.web,
-    ...mockToolSets.memory,
     ...mockToolSets.context7,
     ...mockToolSets.filesystem,
     ...mockToolSets.redis,
@@ -74,7 +61,6 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 const callToolMock = mockCallTool({
   responses: {
     get_neo4j_schema: { nodes: ['Person'], relationships: ['KNOWS'] },
-    read_graph: { entities: [], relations: [] },
     json_get: { data: 'cached value' },
     hset: 'OK',
     expire: true,
@@ -230,22 +216,6 @@ describe('Agent Harnesses', () => {
       const ids = patterns.map((p) => p.config.patternId)
       const uniqueIds = new Set(ids)
       expect(uniqueIds.size).toBe(ids.length)
-    })
-  })
-
-  describe('generalAgent', () => {
-    it('should have valid config', async () => {
-      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-      validateAgentConfig(generalAgent)
-      expect(generalAgent.id).toBe('general')
-      expect(generalAgent.servers).toContain('neo4j-cypher')
-    })
-
-    it('should create a planner → simpleLoop → compactExecution chain', async () => {
-      const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-      const patterns = await validatePatterns(generalAgent)
-
-      expect(patterns.map((p) => p.name)).toEqual(['planner', 'simpleLoop', 'compactExecution'])
     })
   })
 
@@ -407,9 +377,9 @@ describe('Agent Consistency', () => {
 
   it('all agents should contain compactExecution pattern', async () => {
     const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
+    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
 
-    const agents = [searchAgent, generalAgent]
+    const agents = [searchAgent, generalNextAgent]
 
     for (const config of agents) {
       const patterns = (await config.createPatterns('test-session', testAgentDeps)) as Pattern[]
@@ -428,7 +398,6 @@ describe('Agent Consistency', () => {
  * only. The user's message is tracked at the harness level (patternId
  * 'harness'), so it was filtered out and `Synthesize` ran with an empty
  * USER MESSAGE: the answer-writer had the tool results but not the question.
- * `general.server.ts` is the shape the others now follow.
  */
 describe('compactExecution view scope — the user message must survive', () => {
   interface Node {

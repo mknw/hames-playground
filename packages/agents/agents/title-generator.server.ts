@@ -35,7 +35,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { harness, compactExecution } from '@hames-ai/harness-patterns'
 import { withUsageAccounting } from '@hames-ai/harness-baml'
 import type { HarnessData, UnifiedContext, UserMessageEventData } from '@hames-ai/harness-patterns'
-import { b } from '@hames-ai/harness-baml/baml_client'
+import { b } from '@hames-ai/harness-baml/guarded-client.server'
 import type { AgentDeps } from '../types'
 
 // The directive is gone, so nothing else keeps this module off the client. The
@@ -143,15 +143,15 @@ export function createTitleAgent(deps: AgentDeps) {
         // describe-tier call, and a role that is not counted drops out of the
         // preview header's on-prem denominator rather than merely losing detail.
         // The override is the other half: a title is generated FROM the user's
-        // first message, so on a verda-tier turn it belongs on the box with the
+        // first message, so on a self_deployed-tier turn it belongs on the box with the
         // rest of the describe role. The override is injected app policy
         // (`AgentDeps.clientOverride`) — the package never imports the host's
         // client map; without it the call runs on the client the BAML function
         // declares.
         const raw = await withUsageAccounting('GenerateConversationTitle', (opts) =>
           b.GenerateConversationTitle(userMessage, {
-            ...opts,
             ...(deps.clientOverride?.('describe') ?? {}),
+            ...opts,
           }),
         )
         // Lane A3: `SynthesisFn` returns the LLMResult envelope — the override

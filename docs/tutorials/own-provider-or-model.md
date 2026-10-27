@@ -18,6 +18,7 @@ this page's code assembled into one file you can copy out and run.
 
 The whole plug lives in one module, `@hames-ai/harness-baml/consumer-clients.server`:
 
+<!-- prettier-ignore -->
 ```typescript
 import {
   defineInferenceClients,
@@ -57,6 +58,7 @@ nothing until it is wired in (steps 2–3).
 
 `AgentDeps.clientOverride` takes exactly this function type — the plug drops in with no cast:
 
+<!-- prettier-ignore -->
 ```typescript
 import type { AgentDeps } from "@hames-ai/agents/types";
 import type { ClientOverride } from "@hames-ai/harness-baml/consumer-clients.server";
@@ -77,6 +79,7 @@ generator). The adapter call sites — controller, actor, critic, planner, descr
 injection screen — all route through one seam, `clientOverrideFor(role)`, and the consumer
 layer is composed **inside that seam**, on top of the built-in tier:
 
+<!-- prettier-ignore -->
 ```typescript
 import {
   activateConsumerClients,
@@ -94,7 +97,7 @@ The composition rule (pinned by the package's own test):
 
 - **A role you map takes your client**, over the built-in tier — whatever tier scope is active.
 - **A role you do not map changes nothing.** It runs on the client its BAML function declares
-  (the Anthropic chain), or — under a Verda-tier scope — on the built-in private tier.
+  (the Anthropic chain), or — under a self-deployed tier scope — on the built-in private tier.
 - With no layer registered, `clientOverrideFor` behaves exactly as it did before the layer
   existed.
 
@@ -121,6 +124,7 @@ names into its `configureModelTables` tables.
 A consumer running the ready-made agents against a non-Anthropic OpenAI-compatible endpoint,
 keeping the critic on the built-in chain:
 
+<!-- prettier-ignore -->
 ```typescript
 import {
   defineInferenceClients,
@@ -166,6 +170,7 @@ const deps: AgentDeps = {
 
 To verify a render offline (no socket), the package ships `b.request.<Fn>(...)`:
 
+<!-- prettier-ignore -->
 ```typescript
 import type {
   RouteOption,

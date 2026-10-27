@@ -12,13 +12,18 @@
 'use server'
 
 import type { HarnessResultScoped } from '@hames-ai/harness-patterns'
-import { loadSession, deleteSession, evictPatterns, type SessionData } from './session.server'
+import {
+  loadSession,
+  deleteSession,
+  deleteSessions,
+  evictPatterns,
+  type SessionData,
+} from './session.server'
 import { runTurnAndPersist } from './turn.server'
 import { getAgent, getAgentMetadata } from './registry.server'
 import {
   listConversations as dbListConversations,
   promoteConversation as dbPromoteConversation,
-  deleteConversations as dbDeleteConversations,
   getConversationInferenceTier as dbGetConversationInferenceTier,
   setConversationPinned as dbSetConversationPinned,
   CONVERSATION_PIN_LIMIT,
@@ -31,7 +36,12 @@ import {
 } from '../db/conversations.server'
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { chooseConversationTier, resolveTier, verdaConfigured } from '../inference/tier.server'
+import {
+  chooseConversationTier,
+  privateInferenceOnly,
+  resolveTier,
+  selfDeployedConfigured,
+} from '../inference/tier.server'
 import { getStoredInferenceTier } from '../db/user-prefs.server'
 import type { InferenceTier } from '../inference/config.server'
 import { DEFAULT_AGENT_ID } from './agent-ids'
@@ -116,7 +126,7 @@ export async function deleteConversationsBulk(ids: string[]): Promise<{ deleted:
   // Dedupe and cap at the sidebar's list size — nothing legitimate selects
   // more rows than the list can show.
   const unique = [...new Set(ids)].slice(0, 200)
-  const deleted = await dbDeleteConversations(unique, user.id)
+  const deleted = await deleteSessions(unique, user.id)
   for (const id of deleted) evictPatterns(id)
   return { deleted }
 }
@@ -207,8 +217,6 @@ export async function getAgentList(): Promise<
     servers: string[]
     /** Whether the agent runs in a sandbox — gates the support panel's Sandbox tab. */
     usesSandbox: boolean
-    /** False for an unlisted agent: not offered in the picker, still resolvable by id. */
-    listed: boolean
   }>
 > {
   return getAgentMetadata()
@@ -296,7 +304,9 @@ export interface ConversationTierState {
   /** False when the self-hosted endpoints are unconfigured — the switch renders
    *  its private position disabled rather than offering a choice the server
    *  refuses (and that `assertInferenceTier` would throw on). */
-  verdaAvailable: boolean
+  selfDeployedAvailable: boolean
+  /** Omitted on ordinary deployments to preserve the existing RPC response. */
+  anthropicAvailable?: boolean
 }
 
 /**
@@ -313,7 +323,11 @@ export async function getConversationTier(sessionId: string): Promise<Conversati
     dbGetConversationInferenceTier(sessionId, user.id),
     getStoredInferenceTier(user.id),
   ])
-  return { tier: resolveTier(stored, seed), verdaAvailable: verdaConfigured() }
+  return {
+    tier: resolveTier(stored, seed),
+    selfDeployedAvailable: selfDeployedConfigured(),
+    ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
+  }
 }
 
 /**
@@ -333,7 +347,11 @@ export async function setConversationTier(
 ): Promise<ConversationTierState> {
   const user = await requireUser()
   const chosen = await chooseConversationTier(sessionId, user.id, tier)
-  return { tier: chosen, verdaAvailable: verdaConfigured() }
+  return {
+    tier: chosen,
+    selfDeployedAvailable: selfDeployedConfigured(),
+    ...(privateInferenceOnly() ? { anthropicAvailable: false } : {}),
+  }
 }
 
 // Replay helper extracted to a dependency-free module so it can be unit-tested

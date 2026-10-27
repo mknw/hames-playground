@@ -6,12 +6,12 @@ merely "more of the same, slower" is not worth its wall clock, and a layer whose
 gaps are unstated is worse than one that is missing, because its green reads as
 a claim it does not make.
 
-| #   | Layer                                                                               | Invoked by                                                   | Needs                                                     | Runs in CI                                |
-| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------- |
-| 1   | Unit + integration — modules and components in jsdom, coverage floors enforced      | `pnpm test:run --coverage`                                   | a Postgres, or `CI=1` to skip its DB-backed tests (below) | **yes**; its DB tests on PRs only (below) |
-| 2   | App-path e2e — whole conversations through the real server action and the SSE route | `pnpm test:e2e`                                              | Postgres                                                  | no                                        |
-| 3   | Browser e2e — Chromium against a real `vinxi dev`, both themes, screenshots, axe    | `pnpm test:e2e:browser`                                      | Postgres, a browser, a dev-server boot                    | no                                        |
-| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-verda.ts`, `smoke-verda-load.ts` | a provider key or a GPU endpoint                          | never                                     |
+| #   | Layer                                                                               | Invoked by                                                           | Needs                                                     | Runs in CI                                |
+| --- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------- |
+| 1   | Unit + integration — modules and components in jsdom, coverage floors enforced      | `pnpm test:run --coverage`                                           | a Postgres, or `CI=1` to skip its DB-backed tests (below) | **yes**; its DB tests on PRs only (below) |
+| 2   | App-path e2e — whole conversations through the real server action and the SSE route | `pnpm test:e2e`                                                      | Postgres                                                  | no                                        |
+| 3   | Browser e2e — Chromium against a real `vinxi dev`, both themes, screenshots, axe    | `pnpm test:e2e:browser`                                              | Postgres, a browser, a dev-server boot                    | no                                        |
+| 4   | Live — real inference, real endpoint, real bill                                     | `pnpm eval:harness`, `smoke-self-deployed.ts`, `smoke-large-load.ts` | a provider key or a GPU endpoint                          | never                                     |
 
 Layers 1–3 are **hermetic**: no provider key, no GPU, no bill. Layer 4 is not,
 and is coordinated by hand.
@@ -156,13 +156,25 @@ Two lanes that each start one need different ports and container names.
 share that one database. Their dev-bypass user ids still keep their rows apart
 (above).
 
-**No database at all**, as CI's `check` job runs it: `CI=1 pnpm test:run`. The
+**No database at all**, as CI's `test · unit` job runs it: `CI=1 pnpm test:run`. The
 unit suite's DB-backed tests skip. Their URL then names a Unix socket in a
 directory that does not exist, so `pg` fails at once with no TCP connection. It
 is never left unset, because `lib/db/client.server.ts` reads an unset
 `DATABASE_URL` as the dev database. `pnpm release:check` sets `CI=1` for every
 layer. So in a checkout with neither of the first two rows, its unit layer skips
 the DB-backed tests and the two e2e layers refuse.
+
+Explicit URLs must use a test-named database (`test`, `hames_test`, or a
+`*_test_*` name), with a nonempty, unencoded explicit host. Without the
+checkout-bound owner opt-in, **all port-5432 URLs are refused**, regardless of
+host spelling; an omitted port counts as 5432. This structural barrier includes
+numeric IPv4, IPv6 and DNS aliases. The owner opt-in can authorize that port for
+test names only; it cannot authorize missing/encoded hosts, query overrides or
+non-test names, and a copied opt-in never authorizes another checkout. The guard
+cannot establish whether an arbitrary remote server on another port is
+production: the operator must still supply a throwaway server. The exact
+`postgresql://x:x@127.0.0.1:59999/x` URL is accepted only as a dead-port no-DB
+sentinel for dispatched runs; nothing may listen there.
 
 `test-database-guard.test.ts` pins the four rows. `suite-isolation.test.ts` pins
 that every suite's default goes through the guard, because a suite that falls
@@ -171,19 +183,19 @@ back on its own would go round it.
 ## The database in CI: pull requests only
 
 The owner's decision (2026-10-03): "postgres to CI yes, but only pre-merge and
-not every push." So layer 1 runs in two CI jobs, and the event decides which:
+not every push." So layer 1 runs in two CI jobs, and the event decides which. (The required check named `typecheck · lint · test · build` is an aggregate over the parallel jobs `typecheck · lint · format`, `shell · tests`, `test · unit`, `test · packages` and `build`; it fails unless every one succeeded.)
 
-| Job (its check name)              | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
-| --------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
-| `typecheck · lint · test · build` | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
-| `test · postgres`                 | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
+| Job (its check name)                                               | Runs on                               | Database                                                                              | Layer 1's DB-backed tests | Uploads coverage |
+| ------------------------------------------------------------------ | ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------- | ---------------- |
+| `test · unit` (part of the `typecheck · lint · test · build` gate) | every pull request and push to `main` | none: `CI` is set and `TEST_DATABASE_URL` is not (the third row above)                | skip                      | yes, to Codecov  |
+| `test · postgres`                                                  | pull requests only                    | a `pgvector/pgvector` (postgres:16 bookworm) service, pinned by digest, on port 55439 | run                       | no               |
 
 The second job runs the same `pnpm test:run --coverage` with `TEST_DATABASE_URL`
 set to the service, so the guard takes its first row. It is a job of its own
 because a service container cannot depend on the event; only a job's `if` can.
 It runs the whole suite rather than a list of DB test files, so the next DB
 test file is included without anyone having to add it. It runs in parallel with
-`check`, so it adds no wall clock to a pull request. Whether a red one blocks
+the gate's other jobs, so it adds no wall clock to a pull request. Whether a red one blocks
 the merge is the `CI-before-merge` ruleset's decision, not the workflow's.
 
 **It fails closed.** A DB-backed test that cannot reach its database reports as
@@ -199,7 +211,7 @@ database was never created, or a skip condition is simply wrong.
 base commit on `main`, and a push to `main` never has a database. An upload from
 this job would credit every pull request with a rise it did not make, and with
 `require_changes` in `codecov.yml`, Codecov would comment on every one of them.
-So `check` stays the only `app` upload, and pull requests and `main` are
+So `test · unit` stays the only `app` upload, and pull requests and `main` are
 measured the same way. The higher figure is in this job's log. The floors in
 `app/vitest.config.ts` are unchanged and apply to both jobs. They were set
 against the run without a database, which is the lower of the two.

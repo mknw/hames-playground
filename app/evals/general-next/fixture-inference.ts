@@ -16,18 +16,48 @@ export async function fixtureInference() {
       for await (const chunk of req) raw += chunk
       const body = JSON.parse(raw)
       let value: unknown
-      if (req.url === '/v1/systemone') {
+      const questions = req.url === '/v1/systemone' ? Object.values(body.questions) : []
+      if (
+        questions.length > 0 &&
+        questions.every((q) => (q as { type?: string }).type === 'noul')
+      ) {
+        // The guard gate's question (`guard.screen`) is not a route decision: it consumes no
+        // scripted route. A fixed answer below the gate's threshold ("skip"), which 'shadow'
+        // records and ignores, so the screen still runs and the report counts the gate call.
+        value = {
+          answers: Object.fromEntries(
+            Object.keys(body.questions).map((name) => [name, { type: 'noul', noul: 0.05 }]),
+          ),
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
+      } else if (req.url === '/v1/systemone' && body.questions['guard.egress']) {
+        // The egress question (`guard.egress`, boundary guards slice 4) is not a route
+        // decision either: it consumes no scripted route. No fixture carries private data, so
+        // every outgoing request is `nothing_private` and goes out; the report counts the call.
+        const labels = Object.keys(
+          (body.questions['guard.egress'] as { criteria: Record<string, unknown> }).criteria,
+        )
+        value = {
+          answers: {
+            'guard.egress': {
+              type: 'choice',
+              choice: 'nothing_private',
+              probabilities: Object.fromEntries(
+                labels.map((l) => [l, l === 'nothing_private' ? 1 : 0]),
+              ),
+            },
+          },
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
+      } else if (req.url === '/v1/systemone') {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
         const answers = Object.fromEntries(
           Object.entries(body.questions).map(([name, question]) => {
-            const criteria = Object.keys((question as { criteria: object }).criteria)
-            const chosen = criteria.find(
-              (c) =>
-                c === route ||
-                String((question as { criteria: Record<string, unknown> }).criteria[c]).includes(
-                  route,
-                ),
-            )
+            const described = (question as { criteria: Record<string, unknown> }).criteria
+            const criteria = Object.keys(described)
+            // The choice is a criteria key, as the real decider's contract is: a description
+            // that merely mentions the route ("the answer needs...") must never select it.
+            const chosen = criteria.find((c) => c === route)
             if (!chosen) throw new Error(`Fixture cannot select route ${route}`)
             return [
               name,
@@ -77,8 +107,8 @@ export async function fixtureInference() {
                         query:
                           name === 'read_neo4j_cypher'
                             ? 'MATCH (p:Project) RETURN count(p) AS count'
-                            : 'Lantern',
-                        url: 'https://example.invalid/lantern',
+                            : 'Next.js release notes',
+                        url: 'https://nextjs.org/blog/next-15-5',
                         libraryName: 'solid-js',
                         context7CompatibleLibraryID: '/solidjs/solid',
                       },

@@ -1,0 +1,86 @@
+name: VM rehearsal
+
+# The VM track's off-host rehearsal (#648): the image pipeline end to end, then
+# Incus from the pinned upstream source and the spike, on a disposable runner
+# with KVM. Never part of the default CI: it takes about 50 minutes and installs
+# a VM manager. Run it by hand, or open a pull request that touches the files it
+# exercises (the path filter below). It is a maintainer tool: pull requests from
+# forks are skipped (the job's `if`), and no run has a secret or a write token.
+# The properties that keep it safe on a public repository are pinned by
+# app/src/__tests__/lib/config/vm-rehearsal-workflow-pin.test.ts.
+on:
+  workflow_dispatch:
+    inputs:
+      stop_after:
+        description: 'Stop early after "grow" or "build" ("all" runs everything)'
+        type: choice
+        options: [all, grow, build]
+        default: all
+  pull_request:
+    paths:
+      - '.github/workflows/vm-rehearsal.yml'
+      - 'scripts/vm-rehearsal.sh'
+      - 'scripts/sandbox-vm*'
+      - 'scripts/lib/sandbox_vm*.py'
+      - 'packages/sandbox/scripts/vm-image/**'
+      - 'rootfs/**'
+      # Text and tests do not run here; the hermetic suites cover them.
+      - '!**/*.md'
+      - '!**/*.test.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vm-rehearsal-${{ github.ref }}
+  # A new push makes the previous answer irrelevant; a manual run is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rehearse:
+    name: pipeline · upstream Incus · spike
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # GitHub-hosted Linux runners expose KVM; give the kvm group access, as
+      # the spike's preflight requires a non-root kvm member (not world access).
+      - name: Enable KVM for the kvm group
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-sbxs-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h / /mnt
+
+      - name: Rehearse
+        timeout-minutes: 75
+        env:
+          REHEARSAL_STOP_AFTER: ${{ inputs.stop_after }}
+        run: bash scripts/vm-rehearsal.sh
+
+      # Diagnosis only, on failure. Synthetic runner values; no key material:
+      # the command log records argv and output, never stdin.
+      - name: Keep the spike's command log
+        if: failure()
+        run: |
+          mkdir -p evidence
+          sudo sh -c 'cd .sandbox-vm-spike/run 2>/dev/null && cp commands.private.jsonl results.json failure.private.txt rollback.private.json transaction.private.json "$OLDPWD/evidence/" 2>/dev/null; chmod a+r "$OLDPWD"/evidence/*' || true
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: spike-evidence
+          path: evidence/
+          retention-days: 1
+          if-no-files-found: ignore

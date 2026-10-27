@@ -67,7 +67,8 @@ declared once in the pattern's `viewConfig`, not re-argued at every call site:
   (`compactExecution`'s `thread` mode reads every execution of the `fromPatterns`
   you name within the turn window, and otherwise the last pattern to enter — name
   the wrapper when its children run in nested views; a name absent from the run
-  gives no history and synthesis drops to `response` mode)
+  gives no history and synthesis drops to `response` mode; `threadTurns` widens
+  only that read, e.g. to keep the previous turn's records on a follow-up)
 - `eventTypes` / `limit` — narrow by type and size
 - `fromLastNTurns` — a rolling window bounded by `user_message` events
 - `contentTransforms` — read-time reshaping (`truncateToolResults`,
@@ -118,7 +119,6 @@ import {
   simpleLoop,
   planner,
   withInjectionGuard,
-  DECISION_LOOP_OUTPUT_KEY,
   type DecideFn,
   type PlanCallResult,
 } from '@hames-ai/harness-patterns'
@@ -129,35 +129,57 @@ declare const decide: DecideFn
 declare const controller: ControllerFn
 declare const planFn: (user: string, intent: string, context?: string) => Promise<PlanCallResult>
 
-const orchestrator = withInjectionGuard({
-  tools: [DECISION_LOOP_OUTPUT_KEY],
-  spotlight: 'always',
-})(
-  decisionLoop<Data>(
-    {
-      lookup: {
-        pattern: simpleLoop(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
-        description: 'Look things up',
-      },
-      think: {
-        pattern: planner(planFn, ['search'], { patternId: 'think' }),
-        description: 'Decide the steps before acting',
-      },
+// The guard sits on the route that reads outside content, not around the loop.
+const lookup = withInjectionGuard({ tools: ['search'], spotlight: 'always' })(
+  simpleLoop<Data>(controller, ['search'], { patternId: 'info', returnStyle: 'answer' }),
+)
+
+const orchestrator = decisionLoop<Data>(
+  {
+    lookup: { pattern: lookup, description: 'Look things up' },
+    think: {
+      pattern: planner(planFn, ['search'], { patternId: 'think' }),
+      description: 'Decide the steps before acting',
     },
-    { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
-  ),
+  },
+  { decide, answer: 'Answer the user now', patternId: 'orchestrator' },
 )
 ```
 
 Three things to know. A route's result is built by code from its committed
-events and is **untrusted**: it is capped, then passed through the enclosing
-guard under the fixed key `decision_loop_output`, so declare that key in the
-guard's `tools` (undeclared, the guard is a no-op for it) and a screen that
-cannot run withholds the output instead of waving it through. A child sees only
+events and capped; the loop does not sanitise or screen it. Guards run where
+content crosses the environment's edge, and a record is neither crossing: its
+text is the model's own (a plan, a `simpleLoop` Return), built by code (the
+stats), or a tool-result body that already passed its route's guard. The
+`actorCritic` and `retriever` routes quote such bodies, and put each one back
+under the provenance fence it arrived in, so declare the guard on the routes
+that read outside content (with `spotlight: 'always'` if the fence should
+always be there) rather than around the loop. A conversation saved by an older
+version may carry `withheldEventIds` on a record; they are still honoured,
+and nothing writes new ones. A child sees only
 what it is allowed to (`siblingResults`, default none) and starts with fresh
-data, never `memories`. And a decision that is not a decision — an error, an
-abstention, a state that would not build — never dispatches a route. See SPEC's
+data, never `memories`. That data does carry the conversation before the
+user's latest message (the decisions model's own lines, minus that message,
+each capped and quoted), under its own data heading in `plan_context`, so a
+follow-up such as "the same count" reaches the route with its referent. And a decision that is not a decision — an error, an
+abstention, a state that would not build — never dispatches a route. A `planner`
+route is offered at most once per run of the loop: not straight after itself, and
+not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
+A host can also tell the decisions model which documents the conversation holds,
+through `documents` on the loop's config: a per-run source that returns the
+visible total and, only when the host decides that run may reveal them, a list
+of names. Core renders it into the state (capped, each name sanitised
+deterministically, an unreadable list shown as unknown, never as none) but never
+reads a tier itself. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
+A planner caps the reasoning handed to downstream executors with
+`maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
+plan text. Its `plan_created` event and LLM call record retain the full trace.
+A `PlannerFn` may call its optional fourth `onRetry(failedCall)` argument before
+a same-endpoint retry; the pattern records a warning even if that retry fails.
+See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
 
 ### Protecting the web route's earlier inputs
 
@@ -168,38 +190,49 @@ copies are limited to the child's visible events and post-checked per string;
 residual bodies become `[withheld: private identity]` (per leaf inside a JSON
 body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
 explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
-that builds a per-invocation rewrite, selective redaction, literal post-check, local-result observer
-and outgoing-argument check; no host privacy
+that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
 module or table is imported into core. `decisionLoop` gives the wrapper roster
-input from every earlier iteration, even beyond the handoff window, without
+input from every earlier iteration, even beyond the handoff window, and from
+every earlier turn's results, every route included (an earlier answer in the
+child's conversation block can name a person only a hidden route read), without
 widening its sibling visibility. That temporary input is removed before the
 inner pattern runs.
 
-Missing or failed host wiring withholds earlier results and refuses web calls,
-recording a warning while allowing the child to continue on the user's message
-and internal reads. The app host requires a readable, non-empty directory;
+Missing or failed host wiring withholds earlier results and the earlier conversation, recording a warning
+while allowing the child to continue on the user's message; it refuses no call
+itself. The app host requires a readable, non-empty directory;
 declare `{ directory: 'none' }` in code only for deployments without one. Its
 table is never stored or reversed. See SPEC's
 [G14 boundary](SPEC.md#withpseudonymisedinputsconfigpattern-507-g14) for the
 failure policy and remaining literal-matching limits.
 
-Outgoing checks use the `egressChecks` run-frame slot. It concatenates on nested
-`amendRunFrame`, innermost first: every check runs and any denial stops dispatch
-as a failed tool call, so an inner scope cannot switch off an outer check.
-Only the declared local `neo4j` and `memory` namespaces are exempt (`context7` is outbound and checked). A scoped `afterToolCall`
-hook extends outgoing literals from identities discovered by local reads;
-an update failure withholds the result and refuses further outgoing calls.
+What leaves is judged by `withEgressGate` (boundary guards, slice 4), wrapped
+around the whole decision loop rather than one route, so a route that gains an
+outgoing tool later is covered without a declaration. Outgoing checks use the
+`egressChecks` run-frame slot. It concatenates on nested `amendRunFrame`,
+innermost first: every check runs and any denial stops dispatch as a failed tool
+call, so an inner scope cannot switch off an outer check. A call is egress unless
+its namespace is declared `local` or its exact name `localTools`. A fetch tool
+(`fetchTools`) may only fetch an address the user wrote or one found in the data
+of an `addressSources` result: name the namespaces that return content they did
+not compute (web pages, docs, mail), never a query engine or a code box. The gate's
+`afterToolCall` hook extends its roster from local results across routes, and an
+update failure refuses further outgoing calls while delivering the result. The
+gate counts its refusals per route by the run frame's `route` slot, which
+`decisionLoop` writes around each child. See SPEC's
+[egress gate](SPEC.md#withegressgateconfigpattern-boundary-guards-slice-4).
 
-The reference application registers `general-next` as a selectable candidate
-beside `general` (#507 S3), built in `packages/agents/agents/general-next.server.ts`.
+The reference application registers `general-next` as a selectable agent
+(#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
-lookups (plus `context7` library docs and the memory graph's read tools), the conversation's Redis retriever, and planning. The web route uses
+lookups (plus `context7` library docs), the conversation's Redis retriever, and planning. The web route uses
 the host-supplied G14 pseudonymiser around `withReferences`; missing private
-configuration withholds earlier content and refuses web calls. The outer
-injection guard always fences route outputs and enables the screen. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` and turn-results
-materialisation remain disabled until P4. The rollout still requires live
-acceptance evidence; registration does not change the default agent.
+configuration withholds earlier content and refuses web calls. The loop itself
+sanitises and screens nothing: the office and info route guards declare the
+screen, the documents route's guard none, and a route record carries the
+fence its tool results arrived in. Memory
+is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
+reference app's default agent, set by the host rather than by registration.
 
 ### Deciding with probabilities
 
@@ -307,10 +340,10 @@ fallback is allowed. For the later app wiring slice, wrap the reachability check
 
 ```typescript
 // Supplied by the app from @hames-ai/harness-baml/clients.server:
-declare const assertInferenceTier: (tier: 'anthropic' | 'verda') => void
+declare const assertInferenceTier: (tier: 'anthropic' | 'self_deployed') => void
 
 const assertTier = (tier: string) => {
-  if (tier !== 'anthropic' && tier !== 'verda') throw new TypeError('unknown memory tier')
+  if (tier !== 'anthropic' && tier !== 'self_deployed') throw new TypeError('unknown memory tier')
   assertInferenceTier(tier)
 }
 ```
@@ -579,13 +612,21 @@ Two properties are the design, not accidents:
   transport is dispatched there before any process-registered transport and
   before the gateway — there is deliberately **no `priority` field**, so
   containment cannot be inverted by a value or an import order.
-- **Nested transports shadow; the injection guard unions.** Two nested
+- **Nested transports shadow; the injection guard widens coverage.** Two nested
   transport scopes resolve a name they both own to the inner one — two
   sandboxes are two machines, and only an order answers "which machine". Two
-  nested `withInjectionGuard`s union instead, because a nested guard is a second
-  reviewer of the same content and the strictest reading must win. The
-  inconsistency is deliberate; do not "fix" it, and both rules are stated in one
+  nested `withInjectionGuard`s union what they cover instead, because a nested
+  guard may only add to the content that is guarded, never remove it. Their
+  options do not union: a tool is sanitized with the `spotlight`, `screen`,
+  `rules` and `disableRules` of the guard that declares it, so an inner guard
+  can neither weaken an outer guard's tools that it does not itself declare nor inherit
+  its screen. A tool declared by two guards takes the inner guard's options. A guard that
+  wants a fence or a screen on a tool declares it itself. The inconsistency with
+  transports is deliberate; do not "fix" it, and both rules are stated in one
   place — `amendRunFrame` in `run-frame.server.ts`.
+
+**`route` replaces** like the rest: `decisionLoop` writes its route key there
+around each child, and the egress gate counts refusals per route by it.
 
 **Two more slots concatenate** (#507 N4): `stashWriteObservers` (told when core's
 `storeDocument` has durably stored a document) and `afterToolCall` (run by

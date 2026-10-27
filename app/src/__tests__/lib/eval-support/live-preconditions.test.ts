@@ -6,10 +6,10 @@ import {
 
 const env = {
   EVAL_GENERAL_GO: 'S3 merged: go',
-  VERDA_INFERENCE_ENDPOINT: 'https://verda.example.invalid/v1',
+  LARGE_LLM_BASE_URL: 'https://self_deployed.example.invalid/v1',
   SMALL_LLM_BASE_URL: 'https://small.example.invalid/v1',
   SMALL_LLM_DECISIONS_URL: 'https://small.example.invalid/v1/systemone',
-  VERDA_INFERENCE_API_KEY: 'synthetic',
+  LARGE_LLM_API_KEY: 'synthetic',
   SMALL_LLM_API_KEY: 'synthetic',
 }
 
@@ -25,7 +25,7 @@ describe('private eval live preconditions', () => {
       'disabled',
     )
   })
-  it.each(['VERDA_INFERENCE_ENDPOINT', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL'])(
+  it.each(['LARGE_LLM_BASE_URL', 'SMALL_LLM_BASE_URL', 'SMALL_LLM_DECISIONS_URL'])(
     'requires %s from the env file',
     (name) => {
       expect(() => assertLivePreconditions({ ...env, [name]: undefined })).toThrow(name)
@@ -54,12 +54,35 @@ describe('private eval live preconditions', () => {
       }),
     ).toThrow('wrong path')
   })
-  it.each(['VERDA_INFERENCE_API_KEY', 'SMALL_LLM_API_KEY'])(
-    'requires %s without echoing it',
-    (name) => {
-      expect(() => assertLivePreconditions({ ...env, [name]: '' })).toThrow(name)
-    },
-  )
+  it.each(['LARGE_LLM_API_KEY', 'SMALL_LLM_API_KEY'])('requires %s without echoing it', (name) => {
+    expect(() => assertLivePreconditions({ ...env, [name]: '' })).toThrow(name)
+  })
+  // Pins the fail-closed OpenRouter precondition (live-preconditions.ts, the
+  // LARGE_LLM_MODEL check): a live run with the large endpoint on OpenRouter and
+  // no explicit model id is refused here, before any call — the default model id
+  // names the vLLM deployment's HF path, which OpenRouter 400s mid-burst. The
+  // negative half is what makes the test discriminating: the same snapshot with
+  // a non-OpenRouter large host passes WITHOUT the model id, so breaking the
+  // guard (dropping the host check, or requiring the var unconditionally) goes red.
+  it.each([undefined, '', '   '])('refuses the OpenRouter route with model id %j', (modelId) => {
+    expect(() =>
+      assertLivePreconditions({
+        ...env,
+        LARGE_LLM_ROUTE: 'openrouter',
+        LARGE_LLM_MODEL: modelId,
+      }),
+    ).toThrow('Live precondition: LARGE_LLM_MODEL is required when LARGE_LLM_ROUTE is openrouter')
+  })
+  it('does not require LARGE_LLM_MODEL when the route is not openrouter', () => {
+    expect(() => assertLivePreconditions({ ...env, LARGE_LLM_MODEL: undefined })).not.toThrow()
+    expect(() =>
+      assertLivePreconditions({
+        ...env,
+        LARGE_LLM_ROUTE: 'modal',
+        LARGE_LLM_MODEL: undefined,
+      }),
+    ).not.toThrow()
+  })
   it('refuses another embedding endpoint', () => {
     expect(() =>
       assertLivePreconditions({ ...env, EMBEDDINGS_LOCAL_URL: 'https://embed.example.invalid' }),
@@ -90,4 +113,28 @@ describe('public paths cannot use loaded or inherited credentials', () => {
   it('accepts the explicit local provider', () => {
     expect(() => assertLivePreconditions({ ...env, EMBEDDINGS_PROVIDER: 'local' })).not.toThrow()
   })
+})
+
+it('accepts old endpoint/key names in a live env-file snapshot without mutating it', () => {
+  const legacy = {
+    ...env,
+    LARGE_LLM_BASE_URL: undefined,
+    LARGE_LLM_API_KEY: undefined,
+    VERDA_INFERENCE_ENDPOINT: env.LARGE_LLM_BASE_URL,
+    VERDA_INFERENCE_API_KEY: env.LARGE_LLM_API_KEY,
+  }
+  expect(() => assertLivePreconditions(legacy)).not.toThrow()
+  expect(legacy.LARGE_LLM_BASE_URL).toBeUndefined()
+  expect(() => assertLivePreconditions({ ...legacy, LARGE_LLM_BASE_URL: '' })).toThrow(
+    'LARGE_LLM_BASE_URL',
+  )
+})
+
+it('does not pair a new endpoint with an old key in a live env-file snapshot', () => {
+  const mixed = {
+    ...env,
+    LARGE_LLM_API_KEY: undefined,
+    VERDA_INFERENCE_API_KEY: env.LARGE_LLM_API_KEY,
+  }
+  expect(() => assertLivePreconditions(mixed)).toThrow('LARGE_LLM_API_KEY')
 })

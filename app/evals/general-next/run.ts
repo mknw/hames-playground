@@ -12,17 +12,25 @@ import {
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
 import { flipGate } from '../../src/lib/eval-support/flip-gate'
+import { GENERAL_BASELINE } from '../../src/lib/eval-support/general-baseline'
+import { describeWakeFailure, wakeFailureReason } from '../../src/lib/eval-support/wake-failure'
 import {
   assertProxyNode,
   proxyEnvironment,
   assertEgressSelfTest,
 } from '../../src/lib/eval-support/hermetic-egress'
-import { DEFAULT_VERDA_EUR_PER_HOUR, DEFAULT_SMALL_LLM_EUR_PER_HOUR } from '../../src/lib/settings'
+import {
+  DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+  DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+} from '../../src/lib/settings'
 import {
   assertLivePreconditions,
   poisonPublicProviders,
 } from '../../src/lib/eval-support/live-preconditions'
+import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
+import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
+import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
 
@@ -39,10 +47,14 @@ async function main() {
   if (process.argv.includes('--list')) {
     for (const s of picked)
       console.log(
-        `${s.id}\t${s.priority}\t${s.p4 ? 'GATED ON P4' : 'RUNNABLE NOW'}\t${s.baseline ? 'general baseline + candidate' : 'candidate'}`,
+        `${s.id}\t${s.priority}\t${s.p4 ? 'GATED ON P4' : 'RUNNABLE NOW'}\t${s.baseline ? 'recorded general baseline + candidate' : 'candidate'}`,
       )
     return
   }
+  // Before the proxy child, the fixture server or any wake: nothing below may start on a
+  // checkout that cannot load its agents.
+  const agents = [candidate]
+  assertPackageLayout(agents)
   let fake: Awaited<ReturnType<typeof import('./fixture-inference').fixtureInference>> | undefined
   if (!live && process.env.GENERAL_EVAL_CHILD !== '1') {
     assertProxyNode()
@@ -80,8 +92,8 @@ async function main() {
     const { fixtureInference } = await import('./fixture-inference')
     fake = await fixtureInference()
     Object.assign(process.env, {
-      VERDA_INFERENCE_ENDPOINT: fake.base,
-      VERDA_INFERENCE_API_KEY: 'fixture',
+      LARGE_LLM_BASE_URL: fake.base,
+      LARGE_LLM_API_KEY: 'fixture',
       SMALL_LLM_BASE_URL: fake.base,
       SMALL_LLM_DECISIONS_URL: `${fake.base}/systemone`,
       SMALL_LLM_API_KEY: 'fixture',
@@ -89,7 +101,7 @@ async function main() {
   }
   poisonPublicProviders(process.env)
   // All model calls use the production private-role map. No EVAL_CLIENT overrides.
-  process.env.USE_VERDA_INFERENCE = '1'
+  process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
   const liveCatalog = live
     ? await (
         await import('./tool-catalog')
@@ -99,26 +111,40 @@ async function main() {
   const gateway = await startFakeGateway()
   process.env.MCP_GATEWAY_URL = gateway.url
   const rates = await import('../../src/lib/cost-rates.server')
-  const verdaRate = floorHourlyRate(rates.verdaEurPerHour(), DEFAULT_VERDA_EUR_PER_HOUR)
+  const largeRate = floorHourlyRate(rates.largeEurPerHour(), DEFAULT_LARGE_LLM_EUR_PER_HOUR)
   const smallRate = floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)
-  const { verdaScaledownSeconds } = await import('../../src/lib/inference/verda-activity.server')
+  const { largeScaledownSeconds } = await import('../../src/lib/inference/large-activity.server')
   const { smallScaledownSeconds } = await import('../../src/lib/inference/cold-start.server')
   await import('../../src/lib/inference/config.server')
   const clients = await import('@hames-ai/harness-baml/clients.server')
-  clients.assertInferenceTier('verda')
+  clients.assertInferenceTier('self_deployed')
+  // The OpenRouter route for the 27B roles: when LARGE_LLM_ROUTE=openrouter,
+  // the tier's client resolution maps every 27B role onto its declared OR twin
+  // (`LargeQwenOR`, or `LargeQwenThinkOR` when the role's pattern is
+  // reasoning-configured via PRIVATE_REASONING_ROLES); `describe`/`decide`
+  // stay on the small box. There is no separate activation step: the route is
+  // resolved per call from the env at the same seam every private-tier call
+  // reads. With the vars unset (hermetic mode, and every other run) this
+  // reads false and every rendered body is byte-identical to the declared
+  // client's. See `inference-env.server.ts` (`largeLlmRoute`).
+  const { largeOnOpenRouter } = await import('@hames-ai/harness-baml/inference-env.server')
+  const openRouterLarge = largeOnOpenRouter()
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
-  const jobs = picked.flatMap((s) =>
-    (s.baseline && candidate !== 'general' ? ['general', candidate] : [candidate]).map((agent) => ({
-      scenario: s,
-      key: { agent, scenario: s.id, tier: 'verda' as const },
-    })),
-  )
+  let wakeDetail: string | undefined
+  const jobs = picked.map((s) => ({
+    scenario: s,
+    key: { agent: candidate, scenario: s.id, tier: 'self_deployed' as const },
+  }))
   const file = resolve(
     'evals/reports',
     `${new Date().toISOString().replace(/[:.]/g, '-')}-general-next.json`,
   )
   mkdirSync(resolve('evals/reports'), { recursive: true })
+  // Off unless EVAL_GENERAL_CAPTURE=1: decision requests/choices and raw controller outputs,
+  // beside the report and gitignored with it.
+  const capture = captureEnabled(process.env) ? new CaptureLog() : undefined
+  const captureFile = file.replace(/\.json$/, '-capture.json')
   let active: SpendKey | undefined
   let started = 0
   let driver: ConversationDriver | undefined
@@ -137,7 +163,8 @@ async function main() {
       JSON.stringify(
         {
           mode: live ? 'live' : 'hermetic',
-          tier: 'verda',
+          tier: 'self_deployed',
+          largeOnOpenRouter: openRouterLarge,
           candidate,
           selectionComplete: picked.length === scenarios.length,
           flipGate: flipGate(
@@ -147,6 +174,8 @@ async function main() {
             scenarios,
             rows as ConversationResult[],
           ),
+          // RECORDED, not run: `general` was removed, so these are its last live results.
+          generalBaselineRecorded: GENERAL_BASELINE,
           hermeticCaveat: live
             ? undefined
             : 'Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. No G14 substitution is exercised (no fixture identity, directory off).',
@@ -155,9 +184,11 @@ async function main() {
           stopUsd: budget.stopUsd,
           totalUsd: budget.totalUsd,
           stopReason: budget.reason,
+          stopDetail: wakeDetail,
           eurPerUsd: budget.eurPerUsd,
-          verdaEurPerHour: verdaRate,
+          largeEurPerHour: largeRate,
           smallEurPerHour: smallRate,
+          captureFile: capture ? captureFile : undefined,
           limitation:
             'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
           results: rows.map((r) => {
@@ -169,9 +200,20 @@ async function main() {
         2,
       ) + '\n',
     )
+    if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
-    if (active && live) budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)
+    if (active && live)
+      // The large box's wall-clock is charged only while the large endpoint is
+      // the box: under the OpenRouter switch there is no GPU to bill and the
+      // provider-reported call costs carry the 27B spend (observed above), so
+      // charging its hourly rate here would manufacture a floor for a box that
+      // is not running and eat the cap with it.
+      budget.infrastructure(
+        active,
+        Date.now() - started,
+        openRouterLarge ? smallRate : largeRate + smallRate,
+      )
   }
   const stop = () => {
     write()
@@ -199,7 +241,7 @@ async function main() {
         )
     }
     const { createDriver } = await import('./driver')
-    driver = await createDriver(fake, live, liveCatalog)
+    driver = await createDriver(fake, live, liveCatalog, agents)
     for (const job of jobs) {
       active = job.key
       started = Date.now()
@@ -216,34 +258,43 @@ async function main() {
         try {
           if (live) {
             budget.beginInfrastructure(active, started, [
-              { box: 'verda', seconds: verdaScaledownSeconds(), eurPerHour: verdaRate },
+              ...(openRouterLarge
+                ? []
+                : [
+                    {
+                      box: 'self_deployed',
+                      seconds: largeScaledownSeconds(),
+                      eurPerHour: largeRate,
+                    },
+                  ]),
               { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
             ])
             if (budget.stopped) stop()
             const { ensurePrivateTierAwake } = await import('../../src/lib/inference/wake.server')
             try {
               await ensurePrivateTierAwake()
-            } catch {
-              budget.reason = 'VERDA_WAKE_FAILED'
-              results.push({ ...active, status: 'fail', checks: [], error: 'VERDA_WAKE_FAILED' })
+            } catch (err) {
+              const reason = wakeFailureReason(err)
+              budget.reason = reason
+              wakeDetail = describeWakeFailure(err)
+              results.push({ ...active, status: 'fail', checks: [], error: reason })
               tick()
               stop()
             }
           }
           const trace = await driver.run(job.scenario, active)
-          const checks = grade(job.scenario, trace, active.agent === 'general')
+          const checks = grade(job.scenario, trace, false)
           if ((await takeEgressAttempts?.())?.length)
             checks.push({
               name: 'no unexpected egress',
               pass: false,
               detail: 'Hermetic egress backstop refused requests',
             })
-          results.push({
-            ...active,
-            status: checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail',
-            checks,
-          })
+          const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
+          capture?.add(active, trace, status === 'fail')
+          results.push({ ...active, status, checks, guards: guardTurnCounts(trace.turns) })
         } catch (err) {
+          capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
           results.push({
             ...active,
             status: 'fail',

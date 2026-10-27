@@ -73,7 +73,8 @@ vi.mock('@hames-ai/harness-baml', () => ({
   createLoopControllerAdapter: () => composed.controller,
   createActorControllerAdapter: () => vi.fn(),
   createCriticAdapter: () => vi.fn(),
-  createDecideAdapter: () => vi.fn(),
+  // The guard gate refuses a seam that cannot serve its `noul` question.
+  createDecideAdapter: () => Object.assign(vi.fn(), { supportedTypes: ['choice', 'noul'] }),
   createInjectionScreen: () => vi.fn(),
 }))
 import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
@@ -320,9 +321,9 @@ describe('R1 flow 4', () => {
       toolNamespaces: mcpNamespace,
       withSandbox: () => (pattern) => pattern,
       createRedisBackend: () => backend,
-      pseudonymiseForWeb,
+      guards: { pseudonymiseForWeb },
     } satisfies AgentDeps)
-    const result = await withRunFrame({ inference: { tier: 'verda' } }, () =>
+    const result = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
       composed.routes['info-retrieval'].pattern.fn(
         createScope('info', {}),
         createEventView(ctx, { fromLast: false }),

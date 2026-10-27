@@ -25,7 +25,7 @@ where a new test goes, and which rules hold across all four.
 | 1   | `pnpm test:run` — `app/src/**/__tests__/`                                          | vitest + jsdom, [`app/vitest.config.ts`](../../../app/vitest.config.ts)                           | a function, a module, a component                      | **every push, in CI, with `--coverage`** — the only merge gate |
 | 2   | `pnpm test:e2e` — [`app/e2e/`](../../../app/e2e/README.md)                         | its own vitest config, node env, real Postgres (`hames_test_apppath`), fakes on both edges        | **a conversation**, through the real server actions    | pre-merge, by hand, when the chat path changes                 |
 | 3   | `pnpm test:e2e:browser` — [`app/e2e-browser/`](../../../app/e2e-browser/README.md) | Playwright → headless chromium → a real `vinxi dev`                                               | **a person at a keyboard** — what is painted           | pre-release, and after any change a user can see               |
-| 4   | `pnpm eval:harness`, `E2E_LIVE=verda pnpm test:e2e`, the `smoke-*` scripts         | real, billed calls against live endpoints ([`app/evals/README.md`](../../../app/evals/README.md)) | one BAML call, or a whole turn, on real infrastructure | a coordinated burst — **never per-PR**                         |
+| 4   | `pnpm eval:harness`, `E2E_LIVE=self_deployed pnpm test:e2e`, the `smoke-*` scripts | real, billed calls against live endpoints ([`app/evals/README.md`](../../../app/evals/README.md)) | one BAML call, or a whole turn, on real infrastructure | a coordinated burst — **never per-PR**                         |
 
 Layer 2 fakes exactly two things — the inference endpoint and the MCP gateway.
 Everything else in it is the shipped code. Layer 3 fakes the same two and adds a
@@ -193,7 +193,7 @@ that structurally cannot see the failure is the wrong one.
 
 The self-hosted deployment scales to zero and pays a multi-minute cold start on
 the first call after idle, and it is a **single replica** — concurrency there is
-queueing, not scaling (measured with `smoke-verda-load.ts`). Layer 4 therefore
+queueing, not scaling (measured with `smoke-large-load.ts`). Layer 4 therefore
 runs as one coordinated session: the evals in both positions (the baseline and
 `EVAL_CLIENT=tier`), the live e2e leg, the smokes — back to back, paying **one**
 cold start for the lot.

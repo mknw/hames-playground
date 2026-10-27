@@ -18,10 +18,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 // The composition root registers the seam (model tables incl. the output
 // caps `llmCallHitOutputCap` reads through `maxOutputTokensFor`).
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 import { mockFinalAction } from '../../mocks/baml'
 import { mockListTools } from '../../mocks/mcp'
 import type { Collector } from '@boundaryml/baml'
+
+useFlagDrivenDefaultTier()
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),

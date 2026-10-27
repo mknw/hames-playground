@@ -7,7 +7,7 @@
  * document into Markdown by posting it to a kreuzberg sidecar: `POST /extract`,
  * a multipart body with one `files` part and a JSON `config` part. It reads the
  * sidecar's base URL from `DOC_CONVERT_URL` on every call, so pointing that
- * variable here is the shipped seam, unmodified, the same way `VerdaQwen` reaches
+ * variable here is the shipped seam, unmodified, the same way `LargeQwen` reaches
  * the fake inference endpoint. `app.ts#bootApp` does it in BOTH modes: the live
  * mode measures the inference route, and a real converter in layer 2 would make
  * a red result depend on whatever build a developer happens to run (the real

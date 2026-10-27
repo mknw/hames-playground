@@ -35,6 +35,8 @@ import {
 import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
 import { getRequestUserId, getRequestSessionId } from '../harness-client/request-user.server'
 import { graphFetch } from '../auth/graph-token.server'
+import { currentRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { privateInferenceOnly } from '../inference/tier-config.server'
 import {
   conversionEnabled,
   isConvertible,
@@ -47,6 +49,7 @@ import {
   type GraphStashStore,
 } from '@hames-ai/connectors/graph/graph-tools.server'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { checkHomeDomains, homeDomains } from '../harness-client/ingress-classifier.server'
 
 // The registry, with the app's identity resolution injected (design S3): the
 // app passes its own getRequestUserId/getRequestSessionId pair, so the
@@ -71,6 +74,20 @@ const appToolRegistry = createAppToolRegistry({
 registerGraphConnectorTools({
   registerAppTool: appToolRegistry.registerAppTool,
   graphFetch,
+  // P4 slice 1: no default-tier coercion. The deployment restriction stays
+  // until the tier-flip tag, sandbox isolation and release screen land.
+  // RAW slot, as in decision-documents: a legacy `verda` frame is routed as self_deployed
+  // but does not ingest files here (closed direction, on purpose).
+  fileIngestAllowed: () => {
+    try {
+      return currentRunFrame()?.inference?.tier === 'self_deployed' && privateInferenceOnly()
+    } catch {
+      return false
+    }
+  },
+  // Ruling O: each mail, calendar and sharing result is stamped home or external
+  // from the raw addresses, against this deployment's own domains (read per call).
+  homeDomains,
   content: { conversionEnabled, isConvertible, guessMimeType, isTextMime },
   stash: {
     loadStore: async (): Promise<GraphStashStore> => {
@@ -79,10 +96,10 @@ registerGraphConnectorTools({
       return { storeDocument, maxContentBytes: MAX_CONTENT_BYTES }
     },
     // Reports how the run ended (#420). `ingestStashDocument` answers null for
-    // every failure and writes the reason onto the document, so the reason is
-    // read back from there: the tool then quotes the same `ingestError` the
-    // Data Stash panel's chip shows, rather than a second wording of it. The
-    // read-back costs one fetch, on failure only.
+    // every failure and writes the reason onto the document, so the recorded reason is
+    // available to the bridge. Connectors classify it into fixed feedback
+    // before returning it to the model; raw engine text stays out of context.
+    // The read-back costs one fetch, on failure only.
     ingest: async (sessionId, documentId): Promise<GraphStashIngestOutcome> => {
       const [{ ingestStashDocument }, { getDocument }] = await Promise.all([
         import('@hames-ai/harness-patterns/stash/document-ingest.server'),
@@ -124,6 +141,10 @@ const appToolTransport: ToolTransport = {
 }
 
 registerTransport(appToolTransport)
+
+// Once, at boot: a single-label home domain is refused, and a list with no
+// usable domain (every sender external) is warned about.
+checkHomeDomains()
 
 // The deployment's MCP-gateway catalog (#225 L5), registered ONCE here — the
 // same boot point as the transport, so `inferServer` sees it without any call

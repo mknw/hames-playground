@@ -17,11 +17,22 @@ defaults:
   run:
     working-directory: app
 
+# The gate is split into parallel jobs (#739: one job took 20 to 22 minutes
+# against a 25-minute cap, and a cancelled job is red without a failure). The
+# ruleset requires the check NAME `typecheck · lint · test · build`, so the job
+# carrying that exact name is now the aggregate, `check`, at the end of this
+# group; the parts only report to it. Every part is a job with no `if`, so a
+# part that did not succeed (failed, cancelled or skipped) fails the aggregate.
+# Adding a job to the group means adding it to `check`'s `needs` too, or it
+# gates nothing.
 jobs:
-  check:
-    name: typecheck · lint · test · build
+  # Types, lint and the changed-files format check. No tests, no build.
+  static:
+    name: typecheck · lint · format
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -61,44 +72,6 @@ jobs:
       - name: Seed local-only config
         working-directory: .
         run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
-
-      # Pins the destructive-import guard in scripts/import-neo4j.sh (PR #318
-      # review round): refuse-on-populated, --wipe-proceeds, fail-closed on an
-      # unreadable node count, and a failed DETACH DELETE failing the script —
-      # all via a `docker` shim, no daemon needed.
-      - name: Shell tests (import guard)
-        working-directory: .
-        run: scripts/import-neo4j.test.sh
-
-      # Pins what decides whether a box is safe to boot
-      # (scripts/bootstrap-vps.sh): the public-listener check, the gateway
-      # digest-pin gate, secrets generated but never printed or regenerated,
-      # the boot gate's .env checks, the escrow marker, and the anti-lockout
-      # stages run against a fake box. Shims for sudo/docker/uname/sshd/ufw/
-      # ss/systemctl; no daemon, no root. ShellCheck is preinstalled on
-      # ubuntu-latest.
-      - name: Shell tests (VPS bootstrap)
-        working-directory: .
-        run: |
-          shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
-          scripts/bootstrap-vps.test.sh
-          scripts/check-docker.test.sh
-
-      # Pins the Postgres → pgvector migration script (#419 M8) against a docker
-      # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,
-      # the copy runs forward and is verified, a running container under any
-      # compose project blocks it, an extra database blocks the dump, the dump
-      # lives outside the rotated backups/ tree, and no rm/stop/--clean ever
-      # reaches docker.
-      - name: Shell tests (pgvector migration)
-        working-directory: .
-        run: |
-          shellcheck -x scripts/migrate-postgres-pgvector.sh scripts/migrate-postgres-pgvector.test.sh
-          scripts/migrate-postgres-pgvector.test.sh
-
-      - name: Shell tests (release-tag publish guard)
-        working-directory: .
-        run: scripts/check-release-tag.test.sh
 
       - run: pnpm typecheck
 
@@ -140,6 +113,131 @@ jobs:
           # shellcheck disable=SC2086
           ./app/node_modules/.bin/prettier --check $files
 
+  # The shell-script tests (no docker daemon, no root: every external command
+  # is a shim). Their own job because they were the longest single stretch of
+  # the old one job and share nothing with the TypeScript steps.
+  shell:
+    name: shell · tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose: the root package.json's packageManager
+      # field (pnpm@10.28.1, matching the Dockerfile's PNPM_VERSION) is the
+      # single pin, and action-setup reads it from the checkout above. Passing
+      # both makes action-setup@v4 fail with "multiple versions specified".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The lockfile is the workspace root's (#225 Step 0), so the install runs
+      # from the repo root, not from the `app` default below. There is no
+      # generate step: the ONE BAML corpus's `baml_client/` is COMMITTED, and a
+      # client that drifts from its corpus is caught by
+      # `baml-version-check.test.ts` in the `unit` job.
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      # configs/mcp-config.yaml is COMMITTED with the compose-default
+      # credentials (same laptop-only defaults docker-compose.yaml ships). The
+      # committed copy is enough for the server-catalog tests that read it.
+      - name: Seed local-only config
+        working-directory: .
+        run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
+
+      # Pins the destructive-import guard in scripts/import-neo4j.sh (PR #318
+      # review round): refuse-on-populated, --wipe-proceeds, fail-closed on an
+      # unreadable node count, and a failed DETACH DELETE failing the script —
+      # all via a `docker` shim, no daemon needed.
+      - name: Shell tests (import guard)
+        working-directory: .
+        run: scripts/import-neo4j.test.sh
+
+      # Pins what decides whether a box is safe to boot
+      # (scripts/bootstrap-vps.sh): the public-listener check, the gateway
+      # digest-pin gate, secrets generated but never printed or regenerated,
+      # the boot gate's .env checks, the escrow marker, and the anti-lockout
+      # stages run against a fake box. Shims for sudo/docker/uname/sshd/ufw/
+      # ss/systemctl; no daemon, no root. ShellCheck is preinstalled on
+      # ubuntu-latest.
+      - name: Shell tests (VPS bootstrap)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/bootstrap-vps.sh scripts/bootstrap-vps.test.sh scripts/check-docker.sh scripts/check-docker.test.sh
+          scripts/bootstrap-vps.test.sh
+          scripts/check-docker.test.sh
+          python3 scripts/check-vps.test.py
+          python3 scripts/check-vps.test.py --mutations
+          python3 scripts/prepare-embedder.test.py
+          python3 scripts/prepare-embedder.test.py --mutations
+          python3 scripts/metadata-egress.test.py
+          python3 scripts/metadata-egress.test.py --mutations
+          # The environment VM guard: rules, dead-man and smoke against an
+          # in-memory host; no nft, systemctl, loginctl, incus or docker runs.
+          python3 scripts/env-vm-guard.test.py
+          python3 scripts/env-vm-guard.test.py --mutations
+
+      # Pins the Postgres → pgvector migration script (#419 M8) against a docker
+      # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,
+      # the copy runs forward and is verified, a running container under any
+      # compose project blocks it, an extra database blocks the dump, the dump
+      # lives outside the rotated backups/ tree, and no rm/stop/--clean ever
+      # reaches docker.
+      - name: Shell tests (pgvector migration)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/migrate-postgres-pgvector.sh scripts/migrate-postgres-pgvector.test.sh
+          scripts/migrate-postgres-pgvector.test.sh
+
+      - name: Shell tests (release-tag publish guard)
+        working-directory: .
+        run: scripts/check-release-tag.test.sh
+
+  # The app's unit suite with the coverage floor, and the @hames-ai/harness-patterns
+  # suite that rides along. Layer 1 with no database (see `postgres` below for the
+  # one with).
+  unit:
+    name: test · unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose: the root package.json's packageManager
+      # field (pnpm@10.28.1, matching the Dockerfile's PNPM_VERSION) is the
+      # single pin, and action-setup reads it from the checkout above. Passing
+      # both makes action-setup@v4 fail with "multiple versions specified".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The lockfile is the workspace root's (#225 Step 0), so the install runs
+      # from the repo root, not from the `app` default below. There is no
+      # generate step: the ONE BAML corpus's `baml_client/` is COMMITTED, and a
+      # client that drifts from its corpus is caught by
+      # `baml-version-check.test.ts` in the `unit` job.
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Seed local-only config
+        working-directory: .
+        run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
+
       # Coverage is measured on the same vitest invocation (v8 instrumentation
       # is near-free here — under a second of extra wall clock locally). The
       # thresholds live in app/vitest.config.ts and are backstop floors: the job
@@ -178,9 +276,55 @@ jobs:
             ' coverage/coverage-summary.json
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Upload semantics (when a failed or hung upload fails the job, and why)
+      # are written out on the sandbox upload in `unit-packages` below; both
+      # uploads share them. It runs last so a failed upload can never skip a test.
+      - name: Upload coverage to Codecov (app)
+        timeout-minutes: 3
+        continue-on-error: ${{ github.event_name != 'push' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: app/coverage/lcov.info
+          disable_search: true
+          flags: app
+          fail_ci_if_error: ${{ github.event_name == 'push' }}
+
+  # The connectors and sandbox packages' own co-located suites, each from its
+  # workspace member.
+  unit-packages:
+    name: test · packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose: the root package.json's packageManager
+      # field (pnpm@10.28.1, matching the Dockerfile's PNPM_VERSION) is the
+      # single pin, and action-setup reads it from the checkout above. Passing
+      # both makes action-setup@v4 fail with "multiple versions specified".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The lockfile is the workspace root's (#225 Step 0), so the install runs
+      # from the repo root, not from the `app` default below. There is no
+      # generate step: the ONE BAML corpus's `baml_client/` is COMMITTED, and a
+      # client that drifts from its corpus is caught by
+      # `baml-version-check.test.ts` in the `unit` job.
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
       # The connectors package's OWN co-located suite (#225 PR-C2): the tests
       # that moved with the modules out of the app's tree run from their
-      # workspace member. The app suite above covers everything that stayed
+      # workspace member. The app suite (`unit`) covers everything that stayed
       # app-side; this covers what moved (and its own guards — the use-server
       # strip pin, the supplier-throw tests, the package-side read-only scan).
       - name: Package tests (@hames-ai/connectors)
@@ -203,27 +347,24 @@ jobs:
         working-directory: packages/sandbox
         run: pnpm test --coverage
 
-      # Catches SSR/vinxi breakage the unit tests cannot see.
-      - run: pnpm build
-
-      # Sends the lcov reports the two coverage steps wrote to Codecov, which
+      # Sends the lcov reports the coverage steps wrote to Codecov, which
       # is what the README's coverage badge reads. The floors in the two
-      # vitest configs stay the gate. Codecov only reports. These run last so
-      # a failed upload can never skip a test or the build.
+      # vitest configs stay the gate. Codecov only reports. These run last in
+      # their jobs so a failed upload can never skip a test.
       #
       # When a failed upload fails the job, and why:
       # - On a push to main, it FAILS. The badge is computed from main's
       #   uploads, and a silent failure there leaves a stale badge that nobody
       #   notices. A push to main is not a merge gate, so a red run there
       #   blocks no one but is still visible on the commit and in Actions.
-      # - On a pull request, it only logs. This job is `check`, the one the
+      # - On a pull request, it only logs. These jobs feed `check`, the one the
       #   CI-before-merge ruleset requires, so a loud failure would let a
       #   Codecov outage, a missing CODECOV_TOKEN, or a Dependabot PR (which
       #   cannot read repository secrets) block every merge. Coverage on a PR
       #   is already enforced by the floors.
       # A HANG is bounded the same way. `fail_ci_if_error` only covers errors,
       # and the uploader's curls have no overall time limit, so a stalled
-      # Codecov would hold `check` pending until the job's 15-minute limit
+      # Codecov would hold the job pending until its timeout
       # and then fail it. `timeout-minutes: 3` ends a stalled upload (a
       # normal one takes seconds). `continue-on-error` off main makes that
       # timeout, and any failure in the action's own setup steps, non-fatal
@@ -236,17 +377,6 @@ jobs:
       # it, each upload would also pick up the other suite's file under the
       # wrong flag. The paths inside each file are repo-relative (the
       # `projectRoot` on each config's lcovonly reporter).
-      - name: Upload coverage to Codecov (app)
-        timeout-minutes: 3
-        continue-on-error: ${{ github.event_name != 'push' }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: app/coverage/lcov.info
-          disable_search: true
-          flags: app
-          fail_ci_if_error: ${{ github.event_name == 'push' }}
-
       - name: Upload coverage to Codecov (sandbox)
         timeout-minutes: 3
         continue-on-error: ${{ github.event_name != 'push' }}
@@ -258,18 +388,82 @@ jobs:
           flags: sandbox
           fail_ci_if_error: ${{ github.event_name == 'push' }}
 
+  # Catches SSR/vinxi breakage the unit tests cannot see.
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose: the root package.json's packageManager
+      # field (pnpm@10.28.1, matching the Dockerfile's PNPM_VERSION) is the
+      # single pin, and action-setup reads it from the checkout above. Passing
+      # both makes action-setup@v4 fail with "multiple versions specified".
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # The lockfile is the workspace root's (#225 Step 0), so the install runs
+      # from the repo root, not from the `app` default below. There is no
+      # generate step: the ONE BAML corpus's `baml_client/` is COMMITTED, and a
+      # client that drifts from its corpus is caught by
+      # `baml-version-check.test.ts` in the `unit` job.
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Seed local-only config
+        working-directory: .
+        run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
+
+      - run: pnpm build
+
+  # THE REQUIRED CHECK. Its name is what the CI-before-merge ruleset requires,
+  # so it must stay exactly `typecheck · lint · test · build`; it does no work
+  # of its own and reports whether every part succeeded. `if: always()` makes
+  # it run (and so report red) when a part failed or was cancelled, instead of
+  # being skipped, which a required check can read as passing or as pending
+  # forever. Success is compared strictly: `skipped` is as bad as `failure`.
+  # No checkout and no token permissions: it only reads `needs`.
+  check:
+    name: typecheck · lint · test · build
+    needs: [static, shell, unit, unit-packages, build]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - name: Every part succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'length == 5 and all(.[]; .result == "success")' >/dev/null \
+            || { echo "::error::a part of the gate did not succeed (failure, cancelled or skipped)"; exit 1; }
+
   # Layer 1's DB-backed tests, against a throwaway Postgres, on pull requests
   # ONLY. The owner's decision (2026-10-03): "postgres to CI yes, but only
-  # pre-merge and not every push." `check` above runs the same suite with no
+  # pre-merge and not every push." `unit` runs the same suite with no
   # database, so on a push to main those tests skip exactly as before.
   #
   # A separate job, because `services` cannot depend on the event: the job's
   # own `if` is the only way to have a service container on one event and not
-  # on the other. The alternative, a `docker run` step inside `check` gated on
+  # on the other. The alternative, a `docker run` step inside `unit` gated on
   # the event, has no service health check (it needs a polling loop) and would
-  # make `check` measure coverage differently on a PR than on main (see the
+  # make `unit` measure coverage differently on a PR than on main (see the
   # Codecov note below). The cost is a second install and a second run of the
-  # whole suite, in parallel with `check`, so it adds no wall clock to a PR.
+  # whole suite, in parallel with the gate, so it adds no wall clock to a PR.
   # It runs the WHOLE suite rather than a list of DB test files: a list would
   # silently leave out the next DB test file somebody adds.
   #
@@ -277,10 +471,10 @@ jobs:
   # base commit on main, and main is a push, which has no database. An upload
   # from here would credit every PR with a coverage rise it did not make and,
   # under codecov.yml's `require_changes`, make Codecov comment on every PR.
-  # So `check` stays the one `app` upload on both events, measured the same
+  # So `unit` stays the one `app` upload on both events, measured the same
   # way on both. What this run reaches is in its log (the text summary). The
   # floors in app/vitest.config.ts apply here unchanged: same config, and this
-  # run covers a superset of what `check` covers.
+  # run covers a superset of what `unit` covers.
   postgres:
     name: test · postgres
     if: github.event_name == 'pull_request'
@@ -325,7 +519,7 @@ jobs:
     # test-database-guard.test.ts pins that this job sets it.
     env:
       TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:55439/hames_test
-      TEST_DATABASE_REQUIRED: '1'
+      TEST_DATABASE_REQUIRED: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -341,7 +535,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: .
 
-      # The same command as `check`'s test step.
+      # The same command as `unit`'s test step.
       - name: Test against Postgres (with coverage floor)
         run: pnpm test:run --coverage
 
@@ -358,7 +552,7 @@ jobs:
     # now reports its true conclusion: a red fails the workflow run and is a
     # visible regression. What BLOCKS a merge is decided by the
     # CI-before-merge ruleset (the enforcement mechanism, not this file) —
-    # `check` is on it today; whether the pack job joins the ruleset's
+    # the `check` aggregate is on it today; whether the pack job joins the ruleset's
     # required_status_checks is a pending owner decision, not a scheduled
     # change — which is why this comment does not claim the job gates merges
     # like `check` does.
@@ -368,7 +562,7 @@ jobs:
     # published tarball actually work": the image job boots from the workspace
     # symlink, so only this catches a file missing from the `files`/`exports`
     # allowlist or a dependency the package imports but does not declare.
-    # Independent of `check` and `image` on purpose, like those two are of
+    # Independent of the gate and `image` on purpose, like those two are of
     # each other.
     #
     # Deliberately NO `pnpm install` of the workspace: packing needs only the
@@ -406,6 +600,37 @@ jobs:
       - name: Run the pack smoke
         id: pack_smoke
         run: scripts/pack-smoke.sh
+
+  # The clone mutation corpus (bootstrap preflight and clone validator) on its
+  # own runner, beside the gate: with the dev environment VM corpus, the old single
+  # job's shell step went from 552s (main) to 1110s and the job past its cap. Each
+  # bootstrap mutant re-runs `bootstrap-vps.test.sh --clones-only` (bash,
+  # python3, openssl, git, node, all on ubuntu-latest); each validator mutant
+  # runs one vitest file from app/, hence the workspace install.
+  clone-mutations:
+    name: shell · clone mutations
+    runs-on: ubuntu-latest
+    # #777 (release VM, 38 -> 45 bootstrap mutants) took 23m28s against the old 25.
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Clone mutations (bootstrap preflight + clone validator)
+        run: scripts/bootstrap-vps.test.sh --clone-mutations
 
   changeset:
     name: changeset · version intent
@@ -464,7 +689,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
-    # Independent of `check` on purpose: it builds the same code a different
+    # Independent of the gate on purpose: it builds the same code a different
     # way (inside the image, from the lockfile, with the BAML client generated
     # there), so running them in parallel costs nothing and a red one localises
     # the breakage by itself.
@@ -483,11 +708,17 @@ jobs:
         working-directory: .
         run: docker build --build-context root=. -f app/Dockerfile --tag hames-app:ci app
 
-      # Booting proves less than it looks: /api/health touches neither native
-      # package, so an image whose node_modules lost node-pty's .node addon or
-      # the `@boundaryml` overlay (since #469 the image's only copy of BAML)
-      # still passes the smoke test below and only fails on the first Shell tab
-      # or the first BAML call. Require them here.
+      # Booting proves less for node-pty than it looks: /api/health never
+      # requires it, so an image that lost its .node addon still passes the
+      # smoke test below and only fails on the first Shell tab. BAML is
+      # different since #480 decision (b): `src/middleware.ts` now imports
+      # `@hames-ai/harness-baml/baml_client` at module scope on purpose, so a
+      # missing `@boundaryml` overlay (since #469 the image's only copy of
+      # BAML) crashes the WHOLE PROCESS before it ever listens — "Boot it and
+      # hit /api/health" below would already catch that case. This step still
+      # earns its place: it isolates each native binding by itself, with no
+      # boot/healthcheck window and no dependence on which route a scanner
+      # happens to hit first, and the `ls` fallback names the missing file.
       # `-w /app/.output/server` is where the server bundle itself resolves from
       # (its node_modules sits beside index.mjs), not the /app the CMD runs in.
       # The listing is in the failure branch on purpose: `ls` exits 0 on an empty
@@ -514,6 +745,13 @@ jobs:
       # so a 200 there proves the server bundle's inlined package source loads
       # and runs — the runtime half of the workspace-link story the deps stage
       # canary proves at build time.
+      #
+      # Since #480 decision (b) the boot ALSO exercises BAML's native binding:
+      # `src/middleware.ts` loads `@hames-ai/harness-baml/baml_client` at module
+      # scope deliberately, so a broken binding throws before the process ever
+      # listens and this step's own loop times out and fails loudly here — a
+      # container reporting `(healthy)` while every BAML route answers 500 is
+      # exactly the failure #469 was, and the shape this decision closes.
       #
       # AUTH_REDIRECT_URI is the one variable the run is given: its origin is the
       # app's public origin, which the write check below compares against
@@ -581,7 +819,7 @@ jobs:
       # guard these answer 302 or 500 (the function ran) or 404 (an unknown id).
       - name: Assert no server function runs from a GET
         run: |
-          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          fn='src_lib_harness-client_preview-header_server_ts--igniteSelfDeployedBox_1'
           for p in /_server /_server/ /_serverx /_server.js /%5Fserver /_server%2F /_server%2Fx; do
             code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Referer: http://localhost:3444/' \
               "localhost:3444${p}?id=${fn}&name=x")
@@ -600,7 +838,7 @@ jobs:
       - name: Assert a cross-origin write is refused
         run: |
           own=http://localhost:3444
-          fn='src_lib_harness-client_preview-header_server_ts--igniteVerdaBox_1'
+          fn='src_lib_harness-client_preview-header_server_ts--igniteSelfDeployedBox_1'
           form=(-H 'Content-Type: application/x-www-form-urlencoded' --data 'a=b')
           answer() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
           refuse() {

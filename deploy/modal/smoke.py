@@ -6,7 +6,7 @@ Every check prints PASS or FAIL; the exit status is 0 only when all pass. A cold
 box is started the way the app's wake starts it (GET /health until a 200) and is
 left to scale down on its own. Synthetic inputs only.
 
-What a PASS means for the app: the summarizer answers `LocalQwenSmall`'s exact
+What a PASS means for the app: the summarizer answers `SmallQwen`'s exact
 body under its model alias with thinking off, and the decision answers parse the
 way the app's systemone transport parses them (every asked label present, each
 in [0, 1], mass within 0.01 of 1, a score consistent with its distribution).
@@ -19,12 +19,15 @@ import os
 import sys
 
 from measure import call, cold_start
+from smoke_probes import PROBE_URL
 
 SUMMARIZER_MODEL = "qwen3.5-4b-instruct"
 DECIDER_MODEL = "h2oai/h2o-lightning-4b"
 MASS_TOLERANCE = 0.01  # the app's decide transport refuses an answer further from 1
+# vLLM's modality-limit refusal precedes media fetching; a generic 400 does not.
+IMAGE_REFUSAL = "At most 0 image(s) may be provided in one prompt"
 
-# The body `LocalQwenSmall` sends (packages/harness-baml/baml_src/local-client.baml).
+# The body `SmallQwen` sends (packages/harness-baml/baml_src/local-client.baml).
 SUMMARIZE = {
     "model": SUMMARIZER_MODEL,
     "messages": [
@@ -93,7 +96,7 @@ def main() -> int:
     check(
         "box ready, adapter check passed after boot",
         box.get("adapter_check") == "ok",
-        f"ready after {boot['cold_start_s']}s, restored from snapshot: {box.get('restored')},"
+        f"ready after {boot['cold_start_s']}s on {box.get('gpu')}, restored from snapshot: {box.get('restored')},"
         f" reference drift {box.get('reference_drift')}",
     )
 
@@ -137,17 +140,57 @@ def main() -> int:
     check("decide: score parses and matches its distribution", consistent, f"score {score.get('score')}")
 
     # The surface that must stay closed, now that the box is up.
+    # Dot segments are resolved before the route list is matched (observed
+    # 2026-10-17), so a traversal is only a bypass if it LANDS on an unlisted route.
     for path in ("/sleep?level=1", "/collective_rpc", "/v1/completions",
-                 "/metrics", "/metrics/../v1/models",
-                 "/api/alpha/decisions/../../../v1/systemone"):
+                 "/metrics", "/v1/models/../../metrics",
+                 "/v1/systemone/../../sleep?level=1", "/health/../collective_rpc"):
         status, _, _ = call(base, token, "POST", path, {})
         check(f"{path.split('?')[0]} is not reachable", status == 404, f"status {status}")
-    status, body, _ = call(base, token, "POST", "/v1/systemone", {**DECIDE, "image_url": "https://example.com/x.png"})
+    image = {
+        **SUMMARIZE,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this."},
+            {"type": "image_url", "image_url": {"url": PROBE_URL}},
+        ]}],
+    }
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", image, timeout=60)
+    message = str((body.get("error") or {}).get("message", ""))
     check(
-        "an image URL is refused without a fetch",
-        status == 422 and str(body.get("detail", "")).startswith("image URLs are not accepted here"),
-        f"status {status}",
+        "an image part is refused before any fetch",
+        status == 400 and IMAGE_REFUSAL in message
+        and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
+        f"status {status}, {seconds:.2f}s, {message[:80]!r}",
     )
+    video = {
+        **SUMMARIZE,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "Describe this."},
+            {"type": "video_url", "video_url": {"url": PROBE_URL}},
+        ]}],
+    }
+    status, body, seconds = call(base, token, "POST", "/v1/chat/completions", video, timeout=60)
+    message = str((body.get("error") or {}).get("message", ""))
+    check(
+        "a video part is refused before any fetch",
+        status == 400 and "At most 0 video(s) may be provided in one prompt" in message
+        and not any(word in message.lower() for word in ("fetch", "resolve", "connect", "dns", "timeout")),
+        f"status {status}, {seconds:.2f}s, {message[:80]!r}",
+    )
+    # The pinned shim accepts image parts recursively inside structured state
+    # (h2o_lightning_shim.py:506–528,547–597), as well as top-level image_url.
+    for label, request in (
+        ("top-level", {**DECIDE, "image_url": PROBE_URL}),
+        ("structured-state", {**DECIDE, "state": {"content": [
+            {"type": "image_url", "image_url": {"url": PROBE_URL}},
+        ]}}),
+    ):
+        status, body, _ = call(base, token, "POST", "/v1/systemone", request)
+        check(
+            f"a {label} image URL is refused without a fetch",
+            status == 422 and str(body.get("detail", "")).startswith("image URLs are not accepted here"),
+            f"status {status}",
+        )
 
     passed = sum(results)
     print(f"\n{passed}/{len(results)} passed", flush=True)

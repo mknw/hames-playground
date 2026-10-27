@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * compactBulkData Tests
  *
@@ -19,6 +19,8 @@ import type {
   DescribeBatchItem,
 } from '@hames-ai/harness-patterns/types'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../../lib/settings'
+
+useFlagDrivenDefaultTier()
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -138,6 +140,8 @@ describe('compactBulkData', () => {
       JSON.stringify({ q: 'test' }),
       'Need to search',
       'Found 5 results',
+      // The call-record sink the summary's `model_call` event is built from.
+      expect.any(Function),
     )
 
     // Should have enriched the event
@@ -628,16 +632,16 @@ describe('compactBulkData', () => {
     expect(maxBatchItems(mockDescribeBatch)).toBe(MAX_BATCH_ITEMS)
   })
 
-  it('shrinks the batch geometry on a verda-tier run, both halves', async () => {
+  it('shrinks the batch geometry on a self_deployed-tier run, both halves', async () => {
     // BOTH halves of this batcher read `resolveClientForRole('describe')` — the
     // OUTPUT cap for the item count and the INPUT window for the per-batch token
     // budget — so a tier decision moves the batch geometry, and this is what
     // makes the mirror reporting the override load-bearing rather than tidy.
     //
     // THE NUMBERS CHANGED ON 2026-08-26, TWICE. The widening put `describe` on
-    // `VerdaQwen`, where the cap happened to be identical to Haiku's (16 384, so
+    // `LargeQwen`, where the cap happened to be identical to Haiku's (16 384, so
     // the 8-item ceiling held) and only the window shrank. The describe flip
-    // later the same day moved it to the 4B `LocalQwenSmall`, and now BOTH
+    // later the same day moved it to the 4B `SmallQwen`, and now BOTH
     // shrink: the cap to 2 048 and the window to 32 768.
     //
     // The cap is the one with a behavioural consequence, and it is a cost the
@@ -663,15 +667,15 @@ describe('compactBulkData', () => {
     })
 
     const KEYS = [
-      'VERDA_INFERENCE_ENDPOINT',
-      'VERDA_INFERENCE_API_KEY',
+      'LARGE_LLM_BASE_URL',
+      'LARGE_LLM_API_KEY',
       'SMALL_LLM_BASE_URL',
       'SMALL_LLM_DECISIONS_URL',
       'SMALL_LLM_API_KEY',
     ]
     const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
-    process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-    process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+    process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+    process.env.LARGE_LLM_API_KEY = 'test-key'
     process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
     process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
     process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -679,10 +683,10 @@ describe('compactBulkData', () => {
       // #374: the tier is a slot of the run frame; the reachability check the
       // old opener made is now the host-called `assertInferenceTier`.
       const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
-      clients.assertInferenceTier('verda')
-      await withRunFrame({ inference: { tier: 'verda' } }, async () => {
-        expect(clients.resolveClientForRole('describe')).toBe('LocalQwenSmall')
-        expect(CLIENT_MAX_OUTPUT_TOKENS.LocalQwenSmall).toBeLessThan(
+      clients.assertInferenceTier('self_deployed')
+      await withRunFrame({ inference: { tier: 'self_deployed' } }, async () => {
+        expect(clients.resolveClientForRole('describe')).toBe('SmallQwen')
+        expect(CLIENT_MAX_OUTPUT_TOKENS.SmallQwen).toBeLessThan(
           CLIENT_MAX_OUTPUT_TOKENS.DescribeAnthropic,
         )
         // The batch floor, not the ceiling — stated as both, because the exact

@@ -40,7 +40,7 @@
 // Values rendered with `tojson` so the encoding of `tool_args` matches the
 // attempt log below (which also uses `tojson`): it is a string whose content is
 // JSON, so its inner quotes are escaped.
-template_string ActorFewShots(few_shots: FewShot[]?) #"
+template_string ActorFewShots(few_shots: FewShot[]?, with_reasoning: bool) #"
   {% if few_shots and few_shots|length > 0 %}
 
   ---
@@ -48,7 +48,7 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
   {% for ex in few_shots %}
 
   - User: {{ ex.user }}
-    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
+    {{ "{" }}{% if with_reasoning %}"reasoning": {{ ex.reasoning | tojson }}, {% endif %}"tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
   {% endfor %}
 
   ---
@@ -81,7 +81,7 @@ template_string ActorFewShots(few_shots: FewShot[]?) #"
 // content is JSON with inner quotes escaped, `additional_calls` entries of
 // tool_name/tool_args only — because a demonstration that disagrees with the
 // contract is this repo's most-paid-for defect class (#144 twice, #159, #248).
-template_string ActorMultiCalls(multi_call_mode: string?) #"
+template_string ActorMultiCalls(multi_call_mode: string?, with_reasoning: bool) #"
   {% if multi_call_mode == "parallel" %}
 
   MULTIPLE CALLS PER TURN:
@@ -93,7 +93,7 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
   tool_args small. A failed call reports its error alongside the other results.
   Two independent lookups batched into one attempt — copy this SHAPE, not its
   content (tool_args stays a JSON string with its inner quotes escaped):
-  {"reasoning": "The schema and the concept list do not depend on each other, so one attempt covers both.", "tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
+  {{ "{" }}{% if with_reasoning %}"reasoning": "The schema and the concept list do not depend on each other, so one attempt covers both.", {% endif %}"tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
   {% elif multi_call_mode == "sequential" %}
 
   MULTIPLE CALLS PER TURN:
@@ -106,7 +106,7 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
   At most 4 calls per attempt; keep each tool_args small.
   A script written and then run in one attempt — copy this SHAPE, not its
   content (tool_args stays a JSON string with its inner quotes escaped):
-  {"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same attempt.", "tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
+  {{ "{" }}{% if with_reasoning %}"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same attempt.", {% endif %}"tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
   {% endif %}
 "#
 
@@ -121,7 +121,7 @@ template_string ActorMultiCalls(multi_call_mode: string?) #"
 // and rewrites the rest to `user`), false of an OpenAI-compatible server. vLLM
 // rejects the whole request with `System message must be at the beginning.`, so
 // a `system` marker here 400s every actor call that carries a context — and
-// under `USE_VERDA_INFERENCE=1` that is every sandbox actor call. Rendering it
+// under `USE_SELF_DEPLOYED_INFERENCE=1` that is every sandbox actor call. Rendering it
 // `user` is byte-identical on the Anthropic wire (pinned by
 // `prompt-role-order.test.ts`) and legal on both.
 // An upstream planner's plan (#27) rides `context` here and stays cache-safe:
@@ -174,10 +174,10 @@ template_string ActorTaskFrame(intent: string, context: string?, user_message: s
 // the second line of defence — a bare `tojson` of an absent value would render
 // `"is_final": null` into one of the model's OWN prior messages, demonstrating a
 // third value for a boolean field.
-template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?) #"
+template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?, with_reasoning: bool) #"
   {% for attempt in attempts %}
   {{ _.role("assistant") }}
-  {"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, "tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | default(false) | tojson }}}
+  {{ "{" }}{% if with_reasoning %}"reasoning": {{ attempt.action.reasoning | default("") | tojson }}, {% endif %}"tool_name": {{ attempt.action.tool_name | tojson }}, "tool_args": {{ attempt.action.tool_args | tojson }}{% if attempt.action.additional_calls %}, "additional_calls": [{% for c in attempt.action.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ attempt.action.status | default("") | tojson }}, "is_final": {{ attempt.action.is_final | default(false) | tojson }}}
       {% if loop.index0 >= (attempt_n - 2) %}
       {{ _.role("user", cache_control={"type": "ephemeral"}) }}
       {% else %}
@@ -219,7 +219,10 @@ template_string ActorClosing(attempts: Attempt[], attempt_n: int?, max_attempts:
   You are on attempt {{ attempts|length + 1 }}. Respond with the next action.
 "#
 
-function ActorController(
+// Shared body for #625; with_reasoning controls content-side reasoning,
+// not model-side thinking. Originals keep their contract by passing true.
+// Output format belongs to the calling function, never to this template.
+template_string ActorControllerBody(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
@@ -228,13 +231,9 @@ function ActorController(
   few_shots: FewShot[]?,
   attempt_n: int?,
   max_attempts: int?,
-  multi_call_mode: string?
-) -> ControllerAction {
-  // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
-  // here. #139 disabled it for the simpleLoop controller on measured evidence
-  // that did not cover this pattern at all.
-  client ActorAnthropic
-  prompt #"
+  multi_call_mode: string?,
+  with_reasoning: bool
+) #"
     {# ────────── SYSTEM · static requirements: role · tools · examples ────────── #}
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
@@ -251,17 +250,36 @@ function ActorController(
     While you still have work to do, keep is_final=false and call the next tool.
     In particular, a script you have only WRITTEN is not done: keep is_final=false
     and run it (and confirm its output) before you set is_final=true.
-    {{ ActorMultiCalls(multi_call_mode) }}
-    {{ ActorFewShots(few_shots) }}
+    {{ ActorMultiCalls(multi_call_mode, with_reasoning) }}
+    {{ ActorFewShots(few_shots, with_reasoning) }}
 
     {# ────────── TASK FRAME · intent · context · request (call-1 cache marker) ────────── #}
     {{ ActorTaskFrame(intent, context, user_message, attempt_n) }}
 
     {# ────────── ATTEMPT LOG · append-only, rolling marker on newest result ────────── #}
-    {{ ActorAttemptLog(attempts, attempt_n) }}
+    {{ ActorAttemptLog(attempts, attempt_n, with_reasoning) }}
 
     {# ────────── VOLATILE TAIL · feedback nudge · budget · counter — never cached ────────── #}
     {{ ActorClosing(attempts, attempt_n, max_attempts) }}
+"#
+
+function ActorController(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  attempts: Attempt[],
+  context: string?,
+  few_shots: FewShot[]?,
+  attempt_n: int?,
+  max_attempts: int?,
+  multi_call_mode: string?
+) -> ControllerAction {
+  // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
+  // here. #139 disabled it for the simpleLoop controller on measured evidence
+  // that did not cover this pattern at all.
+  client ActorAnthropic
+  prompt #"
+    {{ ActorControllerBody(user_message, intent, tools, attempts, context, few_shots, attempt_n, max_attempts, multi_call_mode, true) }}
 
     {{ ctx.output_format }}
   "#
@@ -271,12 +289,10 @@ function ActorController(
 // Critic - Evaluates whether the actor's output satisfies the intent
 // ============================================================================
 
-function Critic(
-  intent: string,
-  attempts: Attempt[]
-) -> CriticResult {
-  client CriticAnthropic
-  prompt #"
+// Shared body for the reasoning twins (#625 pattern): the critic's prompt,
+// extracted verbatim from the original function so the twin and the original
+// cannot drift. Output format belongs to the calling function.
+template_string CriticBody(intent: string, attempts: Attempt[]) #"
     {{ _.role("system") }}
     You evaluate whether task execution results satisfy the user's intent.
     Be precise about what is missing. Be lenient with partial results after multiple attempts.
@@ -331,6 +347,36 @@ function Critic(
     {% if attempts|length >= 3 %}
     NOTE: {{ attempts|length }} attempts have been made. Accept partial results if they provide meaningful information.
     {% endif %}
+"#
+
+function Critic(
+  intent: string,
+  attempts: Attempt[]
+) -> CriticResult {
+  client CriticAnthropic
+  prompt #"
+    {{ CriticBody(intent, attempts) }}
+
+    {{ ctx.output_format }}
+  "#
+}
+
+// The critic's reasoning twin (#625 pattern, reasoning-config slice): the SAME
+// body, the trace taken from the response's separate reasoning field — never
+// from `content` — and an inline think-close in `content` REFUSED loudly (Q7).
+// `CriticResult` needs no content-only variant: it has no reasoning field of
+// its own, so there is nothing to duplicate and nothing for the adapter to
+// restore. Selected only when reasoning is configured for the `critic` pattern
+// (`PRIVATE_REASONING_ROLES`) and the active tier is self_deployed; on either
+// thinking leaf (`LargeQwenThink` on the vLLM route, `LargeQwenThinkOR` on the
+// OpenRouter route). `Critic` keeps its contract everywhere else.
+function CriticThinking(
+  intent: string,
+  attempts: Attempt[]
+) -> CriticResult {
+  client LargeQwenThink
+  prompt #"
+    {{ CriticBody(intent, attempts) }}
 
     {{ ctx.output_format }}
   "#

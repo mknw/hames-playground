@@ -173,7 +173,10 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
 
 /** What a simpleLoop asks its controller to put in the terminal `Return`
  *  action's `tool_args` (#149).
- *  - 'summary' (default) — a one-or-two-sentence completion summary. The loop's
+ *  - 'summary' (default) — a one-or-two-sentence completion summary, except
+ *    that when no tool call in the task has returned a result (none called, or
+ *    every call failed) the prompt asks for the complete answer instead (#615),
+ *    since the core hands that `Return` text to the synthesizer as the answer. The loop's
  *    prose reaches no user: `Synthesize` renders `tool_result.tool` / `.result`
  *    only and never `tool_call.args`, which is where the terminal action's
  *    prose lands, so a downstream `compactExecution` composes the user-facing
@@ -269,6 +272,23 @@ export type EventType =
    *  ids, kind, tier and action, never the content nor a hash of it (#541). See
    *  `MemoryWrittenEventData`. */
   | 'memory_written'
+  /** One model call that is its own observable step but no pattern's output: the
+   *  injection screen on one tool result, a describe-tier summary of tool
+   *  results. METADATA ONLY — the record rides on `llmCall` with `variables`,
+   *  the rendered prompt and the output stripped (`redactCall`), because those
+   *  hold the untrusted content the call read. What survives is the client BAML
+   *  selected, the duration and the step's `metrics`, so the call is priced on
+   *  the client it actually ran on. See `ModelCallEventData`. */
+  | 'model_call'
+  /** An outgoing call the egress gate allowed although the roster matched part
+   *  of it (boundary guards). Human-facing: rendered into LLM-facing views as one
+   *  fixed line with no payload, and never written to a server log. See
+   *  `EgressAuditEventData`. */
+  | 'egress_audit'
+  /** An outgoing call the egress gate refused on Decide's answer or for want of
+   *  one: the record its tripwire count is derived from, so the count survives a
+   *  pause. Metadata only. See `EgressRefusedEventData`. */
+  | 'egress_refused'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -480,9 +500,8 @@ export interface ControllerInput {
 export interface ActorInput {
   userMessage: string
   intent: string
-  /** Part of the seam shape per the design note; the implementation resolves
-   *  its own allowlist from the factory options and does not read this — it
-   *  was accepted-and-ignored positionally before A4 too. */
+  /** Rendered by `createActorControllerAdapter` as the actor's catalogue,
+   *  unioned with the factory's own `toolNames`/`toolNamesProvider` (#613). */
   availableTools: readonly string[]
   previousAttempts: readonly ScriptExecutionEvent[]
   attemptNumber?: number
@@ -524,7 +543,7 @@ export type CriticFnWithLLMData = (
  *
  *  Per CALL, not per construction: a tier decision is an AsyncLocalStorage
  *  scope, so a value captured at pattern-construction time would budget a
- *  verda-tier turn against the wrong model. `limitsFor(role)` in
+ *  self_deployed-tier turn against the wrong model. `limitsFor(role)` in
  *  `clients.server.ts` resolves per call; the adapter-backed seam functions
  *  expose it as `limits()`. */
 export interface ModelLimits {
@@ -603,6 +622,8 @@ export type RetrieveQueryFn = {
  *  (the resolved one — an active sandbox scope's in-VM tools plus the gateway
  *  tools that resolved — not the raw name list). */
 export interface PlanCallResult {
+  /** Diagnostic degradation on an otherwise usable plan, recorded by the pattern. */
+  warning?: string
   plan: PlanResult
   llmCall?: LLMCallRecord
   toolCount: number
@@ -616,7 +637,20 @@ export type PlannerFn = (
   userMessage: string,
   intent: string,
   context?: string,
+  /** Called before a same-endpoint retry; the pattern records the failed attempt. */
+  onRetry?: (failedCall: LLMCallRecord | undefined) => void,
 ) => Promise<PlanCallResult>
+
+/** Where an implementation reports the record of a model call whose VALUE is
+ *  all its caller gets back (a summary string, a screen verdict). The caller
+ *  turns it into a `model_call` event, so the call is visible and priced in the
+ *  run's observability instead of only in the process-wide usage counters.
+ *
+ *  Called once per finished call, failed ones included, and never for a call
+ *  that spent nothing (a pre-flight failure). The record may carry the prompt
+ *  and the model's output; the receiver redacts it (`redactCall`) before it
+ *  becomes an event. A sink must not throw into the call that fed it. */
+export type CallRecordSink = (call: LLMCallRecord) => void
 
 /** One tool result queued for a batched describe call. `id` is a
  *  caller-assigned label, unique within the batch, that the model echoes back
@@ -641,6 +675,11 @@ export type DescribeFn = (
   toolArgs: string,
   reasoning: string,
   result: string,
+  /** Receives the record of every model call this describe made, success or
+   *  failure (a call that threw still spent what it spent). Optional and
+   *  TRAILING: an implementation that never calls it stays correct and simply
+   *  leaves its calls unrecorded. */
+  onCall?: CallRecordSink,
 ) => Promise<string>
 
 /** The batched describe seam: REQUIRED config on `compactBulkData`. Returns a
@@ -650,7 +689,7 @@ export type DescribeFn = (
  *  `limits` is what `maxBatchItems` sizes batches against (the CHAIN FLOOR,
  *  SA-M6). */
 export type DescribeBatchFn = {
-  (items: DescribeBatchItem[]): Promise<Map<string, string>>
+  (items: DescribeBatchItem[], onCall?: CallRecordSink): Promise<Map<string, string>>
   limits?: () => ModelLimits
 }
 
@@ -1066,6 +1105,12 @@ export interface CompactExecutionInput {
   response?: string
   data?: unknown
   loopHistory?: LoopHistory
+  /** The controller's own `Return` text, set ONLY alongside a `loopHistory`
+   *  whose every tool call failed (#614) — the one case where the `Return` is
+   *  the turn's answer and `response` (which a history-reading synthesizer
+   *  ignores) would cost it the failure. A synthesizer appends it as a final
+   *  turn after the history. */
+  returnText?: string
   /** Whether an error occurred in upstream patterns */
   hasError?: boolean
   /** Error message from upstream patterns */
@@ -1088,6 +1133,14 @@ export interface CompactExecutionConfig extends PatternConfig {
   synthesize: SynthesisFn
   /** Skip synthesis if response already exists */
   skipIfHasResponse?: boolean
+  /** Turn window of the `thread` read when `viewConfig.fromPatterns` names the
+   *  patterns whose records are the thread. Defaults to `viewConfig.fromLastNTurns`
+   *  (else 1). Widen it so a follow-up turn keeps earlier turns' committed
+   *  records; the error read ignores it and keeps its own window
+   *  (`viewConfig.fromLastNTurns`, else 1), and an earlier turn's FAILED record
+   *  is not carried forward. An integer >= 1; refused at construction unless
+   *  `mode` is `'thread'` and `viewConfig.fromPatterns` is set. */
+  threadTurns?: number
 }
 
 /** Data interface for compactExecution */
@@ -1098,6 +1151,11 @@ export interface CompactExecutionData {
   loopHistory?: LoopHistory
   /** Written by `memoryRecall`, cleared by it every turn; read here (#419 M5a). */
   memoryContext?: string
+  /** The text of a `simpleLoop` turn's terminal `Return`, written by that loop
+   *  on exit and cleared by `continueSession` (and at the loop's own start).
+   *  Read only when no tool iteration reached the synthesizer (#610), or when
+   *  every tool call of the turn failed (#614). */
+  returnText?: string
 }
 
 // ============================================================================
@@ -1281,6 +1339,13 @@ export type WarningTask =
   | 'web_privacy'
   /** `@hames-ai/sandbox`'s mount of the run's skills into `/skills` (#415). */
   | 'skills_mount'
+  /** The planner retried without thinking or accepted a plan with no trace (#625). */
+  | 'planner'
+  /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
+  | 'decision_documents'
+  /** The egress gate checked outgoing calls with less than it should have: a
+   *  damaged roster, a missing or unreadable directory, or Decide down. */
+  | 'egress_check'
 
 /**
  * Data payload for a `warning` event: a side task failed and the turn carried
@@ -1307,6 +1372,9 @@ export interface WarningEventData {
   fallback: string
   /** The underlying failure, verbatim, for the observability drill-down. */
   error?: string
+  /** Counts and cells for the observability drill-down. Never rendered into an
+   *  LLM-facing serialization (`formatEventData` reads `task` and `message`). */
+  detail?: Readonly<Record<string, number | string>>
 }
 
 /**
@@ -1396,14 +1464,17 @@ export interface IntentCompactedEventData {
  *  render as a tool call that never happened. `llmCall` (on the ContextEvent)
  *  holds the BAML call detail. */
 export interface PlanCreatedEventData {
-  /** The plan written to `scope.data.plan` (post-truncation). Absent when
-   *  `skipped` is set — there is no plan in that case. */
+  /** Plan text post-truncation, with the FULL reasoning for observability.
+   *  `scope.data.plan` carries the capped reasoning handed to executors.
+   *  Absent when `skipped` is set — there is no plan in that case. */
   plan?: PlanResult
   /** Number of tools the planner was shown — the catalog the adapter actually
    *  resolved (sandbox + gateway), not the raw name list the factory took. */
   toolCount: number
   /** Set when the plan text was capped by `PlannerConfig.maxPlanChars`. */
   truncated?: boolean
+  /** Reasoning was capped for executors; this event still holds the full trace. */
+  reasoningTruncated?: boolean
   /** Set when no LLM call was made: the context held no user message to plan
    *  for, so the chain runs unplanned. Mirrors
    *  `IntentCompactedEventData.skipped`. */
@@ -1610,8 +1681,9 @@ export const MAX_SCORE_LEVELS = 10
 
 export type DecisionType = 'choice' | 'score' | 'noul'
 
-/** One label of a typed decision. `description` is the ONLY text the model
- *  sees for this label — the id is an identifier, not prose. */
+/** One label of a typed decision. The decision box prints each id before its
+ *  description (`A) personal: …`), so the model reads both: keep ids readable
+ *  words that agree with their description. */
 export interface DecisionLabel<L extends string = string> {
   readonly id: L
   readonly description: string
@@ -1722,9 +1794,26 @@ export type DecisionFor<S> =
         ? ChoiceDecision<L>
         : never
 
+/**
+ * A setting that may differ per inference tier: a bare value applies on every
+ * tier; a map names tiers by their opaque string and falls back to `default`.
+ * Resolved PER CALL by `resolveByTier` (`run-frame.server.ts`) against the
+ * registered `effectiveTier()`, the one tier routing also takes, so a setting
+ * and the client a call lands on cannot name different tiers. Core compares
+ * strings and interprets none. For scalar settings: a map is recognised by its
+ * own `default` key.
+ */
+export type ByTier<T> = T | { readonly default: T; readonly [tier: string]: T }
+
 export interface DecideInput<L extends string = string> {
   readonly spec: DecisionSpec<L> | ScoreSpec<L> | NoulSpec
   readonly state: string
+  /** Aborts the request itself, not only the wait for it: a caller with its own
+   *  deadline (the guard gate) must not leave a request running, and billed by
+   *  time on a self-deployed box, after it has stopped listening. A transport
+   *  passes it to its fetch; one that ignores it is still bounded by the
+   *  caller's own race. */
+  readonly signal?: AbortSignal
 }
 
 export interface DecideResult<L extends string = string> {
@@ -2173,6 +2262,73 @@ export interface MemoryWrittenEventData {
   readonly eventId: string
   readonly ordinal: number
   readonly action: MemoryWriteAction
+}
+
+/** Which role's call a `model_call` event records. */
+export type ModelCallRole = 'screen' | 'describe'
+
+/** Data payload for `model_call`. METADATA ONLY (SD-3): the role and a label
+ *  for what the call was about. The client, duration, tokens and cost are on
+ *  the event's own `llmCall` / `metrics`, so every fold that already reads
+ *  those (`stepCostEur`, the observability panel's totals) includes the call
+ *  without knowing this type exists. */
+export interface ModelCallEventData {
+  readonly role: ModelCallRole
+  /** What the call read, as a label: `namespace/tool` for a screen, the tool
+   *  name for one summarized result. Absent for a batch. */
+  readonly source?: string
+  /** Results one batched call summarized. */
+  readonly items?: number
+}
+
+/** The egress question's three probabilities, as Decide returned them. */
+export interface EgressProbabilities {
+  readonly personal: number
+  readonly company: number
+  readonly nothing_private: number
+}
+
+/**
+ * Data payload for `egress_audit` (boundary guards, coordinator proposal 1): an
+ * outgoing call that went out although the roster matched part of it, so the
+ * judgement that let it go can be audited afterwards. HUMAN-FACING ONLY, like
+ * `content_sanitized` (SD-3): `spans` are text the request carries that names
+ * a person, so the event is rendered into LLM-facing views as one fixed line with
+ * no payload (`formatEventData` has its own case) and never written to a server
+ * log. It lives in the conversation blob, which is encrypted at rest.
+ */
+export interface EgressAuditEventData {
+  /** The tool name, reduced to `[A-Za-z0-9._:-]` and capped at 64. */
+  readonly tool: string
+  /** Every host the request names, nested URLs included, in order of appearance. */
+  readonly hosts: readonly string[]
+  /** The roster's matched spans, as they occur in the request, each capped at 80. */
+  readonly spans: readonly string[]
+  /** The egress question's answer. */
+  readonly probs: EgressProbabilities
+  /** Who let the call go: the egress question, or (once the person is asked) the person. */
+  readonly allowedBy: 'decide' | 'person'
+}
+
+/**
+ * Data payload for `egress_refused`: one tripwire, i.e. an outgoing call the
+ * egress gate refused on Decide's answer (`cause: 'decide'`) or for want of one
+ * (`'unchecked'`). The gate derives each route's count, the closed routes and the
+ * turn-wide closure from these events (and only from these and the turn's
+ * answers), so a pause and resume continue the same count. METADATA ONLY: no
+ * argument text, ever.
+ */
+export interface EgressRefusedEventData {
+  /** The tool name, reduced like `EgressAuditEventData.tool`. */
+  readonly tool: string
+  /** The `decisionLoop` route the call came from (the run frame's `route`
+   *  slot), or `null` for a call outside any route. */
+  readonly route: string | null
+  readonly cause: 'decide' | 'unchecked'
+  /** The category Decide named; absent for `'unchecked'`. */
+  readonly category?: 'personal' | 'company'
+  /** What the refusal closed: nothing, this route, or every route for the turn. */
+  readonly closes: 'none' | 'route' | 'turn'
 }
 
 // ============================================================================

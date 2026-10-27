@@ -178,16 +178,16 @@ published port to loopback, and change the default passwords:
 # /opt/hames/docker-compose.override.yml  (production)
 services:
   postgres:
-    ports: ["127.0.0.1:5432:5432"]
-    environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
+    ports: ['127.0.0.1:5432:5432']
+    environment: ['POSTGRES_PASSWORD=<STRONG_PW>']
   neo4j:
-    environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
+    environment: ['NEO4J_AUTH=neo4j/<STRONG_PW>']
   neo4j-relay:
-    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
+    ports: ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
   redis:
-    ports: ["127.0.0.1:6379:6379"]
+    ports: ['127.0.0.1:6379:6379']
   mcp-gateway:
-    ports: ["127.0.0.1:8811:8811"]
+    ports: ['127.0.0.1:8811:8811']
   # (drop the arm64 `platform: linux/amd64` override — you're on x86 now)
 ```
 
@@ -281,8 +281,11 @@ The Data Stash pipeline needs an embedder. Two options:
   file or the production overlay. Memory text is embedded there (#419), so
   keep it unreachable from outside; if a host-run process truly needs it, add a
   git-ignored override binding `127.0.0.1` and nothing wider.
-- **Hosted provider** — set `EMBEDDINGS_PROVIDER` to a remote provider instead.
-  (`openrouter` sends text off the box; the memory pipeline pins `local`.)
+- **Hosted provider** — not selectable by env alone: the app boots only with
+  `local` or a provider declared trusted in code (`TRUSTED_EMBEDDING_PROVIDERS`),
+  because the retriever's query reaches the embedder without the egress gate.
+  `openrouter` is not declared trusted, so boot refuses it. (`local` names the
+  wire format: point `EMBEDDINGS_LOCAL_URL` only at a box the deployment runs.)
 
 If you don't use DataStash search, you can skip this.
 
@@ -307,7 +310,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | Var                                                                       | Purpose                                                                | Default / note                                                                                                                          |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `ANTHROPIC_API_KEY`                                                       | **Required** — every BAML chain, and the only LLM key                  | —                                                                                                                                       |
-| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | needed iff `EMBEDDINGS_PROVIDER=openrouter`                                                                                             |
+| `OPENROUTER_API_KEY`                                                      | the `openrouter` embedding provider only                               | unused: boot refuses `EMBEDDINGS_PROVIDER=openrouter`                                                                                   |
 | `DATABASE_URL`                                                            | Postgres (conversations)                                               | `postgresql://postgres:password@localhost:5432/hames` — **override the password**                                                       |
 | `MCP_GATEWAY_URL`                                                         | MCP gateway endpoint                                                   | `http://localhost:8811/mcp`                                                                                                             |
 | `MCP_GATEWAY_POOL_SIZE`                                                   | warm gateway connections kept in the client pool (#120)                | `4` — leases isolate reconnects; extra concurrent calls open a short-lived overflow connection rather than queueing                     |
@@ -321,7 +324,7 @@ Every var the server reads (`grep process.env src/`), with its localhost default
 | `TOKEN_ENCRYPTION_KEY`                                                    | encrypts the per-user MSAL token cache at rest (#110)                  | HKDF-derived from `AUTH_SESSION_SECRET` when unset; **set it explicitly in prod** so the two can rotate independently                   |
 | `DATA_ENCRYPTION_KEY`                                                     | **Required** — encrypts stored conversations and personal data at rest | `openssl rand -base64 32`. No fallback, by design. See the escrow warning below                                                         |
 | `AUTH_REDIRECT_URI` / `AUTH_POST_LOGOUT_REDIRECT_URI`                     | OIDC redirect / post-logout URIs                                       | default to port **3444**; the redirect MUST match one registered on the app. Its origin gates every write (#455): **required in prod**  |
-| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                                 | defaults to the full connector set; every scope must be consented under API permissions **first**, or sign-in fails                     |
+| `AZURE_GRAPH_SCOPES`                                                      | override the delegated Graph scope set                                 | subsets of seven consented scopes only; others refuse boot/token mint; consent required — see [`entra-setup.md`](entra-setup.md)        |
 | `VITE_ALLOWED_EMAILS`                                                     | email allow-list for real auth                                         | comma-separated; supports `*@domain.com`                                                                                                |
 | `VITE_DEV_BYPASS_AUTH`                                                    | skips sign-in entirely                                                 | `'true'` in `.env.example`. **Must be `'false'` in prod** — and note the name: `DEV_BYPASS_AUTH` (no `VITE_` prefix) is read by nothing |
 

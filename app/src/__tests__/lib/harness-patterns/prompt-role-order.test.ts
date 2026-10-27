@@ -12,7 +12,7 @@
  * two places after the conversation had started — the CONTEXT block in
  * `ActorTaskFrame` and every result block in `ActorAttemptLog` — and it went
  * unnoticed until the harness evals ran the actor against the self-hosted
- * deployment (`USE_VERDA_INFERENCE=1`, `baml_src/verda-client.baml`). There the
+ * deployment (`USE_SELF_DEPLOYED_INFERENCE=1`, `baml_src/large-client.baml`). There the
  * first attempt passed and every RETRY 400d, which kills actorCritic's whole
  * reason for existing on that route, silently: nothing fails until a critic
  * first rejects something.
@@ -20,7 +20,7 @@
  * So this file pins two things.
  *
  * 1. **The invariant, over EVERY function** — not just the two that were wrong
- *    and not just the roles the Verda map routes today. The blast radius of the
+ *    and not just the roles the self-deployed map routes today. The blast radius of the
  *    original defect was set by which client a role happened to resolve to, and
  *    that map is one edit away from moving; a template that is legal on both
  *    providers costs nothing and cannot regress this way.
@@ -46,7 +46,7 @@
  *    `--- CONTEXT:`) — `LoopController`'s two cached user tiers have always
  *    merged that way. A block carrying a #122 `cache_control` marker is NOT
  *    merged like that: it stays its own entry in a content-part ARRAY, even
- *    on `VerdaQwen`, which declares no `allowed_role_metadata` and so drops
+ *    on `LargeQwen`, which declares no `allowed_role_metadata` and so drops
  *    the marker itself from the body. That array boundary is the one at the
  *    end of every controller prompt — the newest tool result carries the
  *    rolling marker and the volatile tail follows it — so nothing in this
@@ -72,7 +72,7 @@
  *
  * Rendered offline via `b.request.*` — no socket is opened, so this runs in CI
  * where the endpoint is unreachable. Live counterpart:
- * `scripts/smoke-verda.ts`.
+ * `scripts/smoke-self-deployed.ts`.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
@@ -99,14 +99,14 @@ import type {
 
 /** Fakes: rendering a request needs the options to resolve, not to connect. */
 const ENV = {
-  VERDA_INFERENCE_ENDPOINT: 'https://example.invalid/deployment/v1',
-  VERDA_INFERENCE_API_KEY: 'offline-render-test',
+  LARGE_LLM_BASE_URL: 'https://example.invalid/deployment/v1',
+  LARGE_LLM_API_KEY: 'offline-render-test',
   SMALL_LLM_BASE_URL: 'https://example.invalid/v1',
   SMALL_LLM_API_KEY: 'offline-render-test',
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || 'offline-render-test',
 }
 /** An OpenAI-generic client: the wire format that enforces the ordering. */
-const OPENAI = { client: 'VerdaQwen', env: ENV }
+const OPENAI = { client: 'LargeQwen', env: ENV }
 const ANTHROPIC = { client: 'AnthropicSonnet5', env: ENV }
 
 type BamlRequest = (typeof import('@hames-ai/harness-baml/baml_client').b)['request']
@@ -122,7 +122,7 @@ beforeAll(async () => {
 })
 // ---------------------------------------------------------------------------
 // Worst-case arguments: every optional populated and every history non-empty,
-// because the defect was invisible on the empty ones. `verda-body-shape.test.ts`
+// because the defect was invisible on the empty ones. `self-deployed-body-shape.test.ts`
 // renders ActorController with `[]` attempts and passed throughout.
 // ---------------------------------------------------------------------------
 const TOOLS: ToolDescription[] = [
@@ -217,10 +217,39 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   ],
   ['Critic', (o) => () => b.request.Critic('i', ATTEMPTS, o)],
   [
+    'CriticThinking',
+    (o) => () => b.request.CriticThinking('i', ATTEMPTS, { ...o, client: 'LargeQwenThink' }),
+  ],
+  [
     'Synthesize',
-    (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', o),
+    (o) => () => b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, o),
   ],
   ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', o)],
+  [
+    'PlannerThinking',
+    (o) => () =>
+      b.request.PlannerThinking('q', 'i', TOOLS, 'CONTEXT BLOCK', {
+        ...o,
+        client: 'LargeQwenThink',
+      }),
+  ],
+  [
+    'ControllerThinking',
+    (o) => () =>
+      b.request.ControllerThinking(
+        'q',
+        'i',
+        TOOLS,
+        TURNS,
+        'CONTEXT BLOCK',
+        PRIOR,
+        FEW_SHOTS,
+        'parallel',
+        'PLAN',
+        'answer',
+        { ...o, client: 'LargeQwenThink' },
+      ),
+  ],
   ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],
   ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],
   ['RetrieveQuery', (o) => () => b.request.RetrieveQuery(HISTORY, 'latest', o)],
@@ -232,7 +261,8 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   ['GenerateConversationTitle', (o) => () => b.request.GenerateConversationTitle('q', o)],
   [
     'ScreenUntrustedContent',
-    (o) => () => b.request.ScreenUntrustedContent('web', 'fetched page text', o),
+    (o) => () =>
+      b.request.ScreenUntrustedContent('web', 'fetched page text', '0123456789abcdef', o),
   ],
 ]
 

@@ -21,7 +21,7 @@
  * USAGE (always from `app/`):
  *
  *   pnpm eval:harness                          # baseline: the declared Anthropic chains
- *   EVAL_CLIENT=VerdaQwen pnpm eval:harness    # the self-hosted deployment
+ *   EVAL_CLIENT=LargeQwen pnpm eval:harness    # the self-hosted deployment
  *   EVAL_RELIABILITY_N=5 pnpm eval:harness     # shorter reliability sample
  *   EVAL_ROLES=screen pnpm eval:harness        # narrow to one role while bisecting
  *
@@ -29,6 +29,10 @@
  */
 
 import { Collector } from '@boundaryml/baml'
+import {
+  privateInferenceOnly,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
+} from '@hames-ai/harness-baml/clients.server'
 import { resolveEvalRouting } from './client'
 import { runScenario, scenarioPassed, type Scenario, type ScenarioResult } from './harness'
 import { renderReport, writeReport } from './report'
@@ -50,14 +54,27 @@ import { synthesizerGroundedScenario } from './scenarios/synthesizer'
 import { describeBatchScenario } from './scenarios/describe'
 import { referenceSelectorScenario } from './scenarios/reference-selector'
 import { screenScenario } from './scenarios/screen'
-import { plannerScenario } from './scenarios/planner'
+import { isThinkingPlannerRun, plannerScenario } from './scenarios/planner'
 import { reliabilityScenario } from './scenarios/reliability'
+import { egressGateScenario } from './scenarios/egress-gate'
+import {
+  createFenceWordingScenario,
+  currentFenceHeader,
+  LEGACY_FENCE_HEADER,
+} from './scenarios/fence-wording'
 
 /** Declaration order is report order. Cheap structural checks first so a
- *  misconfigured run fails in a second rather than after twenty calls. */
+ *  misconfigured run fails in a second rather than after twenty calls. The
+ *  fence-wording scenario takes the fence HEADER as a parameter (boundary
+ *  guards slice 7), and slice 8 registers it twice: the provenance header the
+ *  guard writes, and the legacy one it wrote before ruling F, with the same
+ *  fixtures and samples, read side by side (N7). */
 export const SCENARIOS: Scenario[] = [
   truncationDetectionScenario,
   screenScenario,
+  egressGateScenario,
+  createFenceWordingScenario(LEGACY_FENCE_HEADER),
+  createFenceWordingScenario(currentFenceHeader()),
   routerScenario,
   plannerScenario,
   controllerToolCallScenario,
@@ -103,7 +120,7 @@ function selected(): Scenario[] {
  * would prove the box is up without proving this key can complete on it.
  */
 async function preflight(client: string | undefined): Promise<void> {
-  const { b } = await import('@hames-ai/harness-baml/baml_client')
+  const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
   const collector = new Collector('eval-preflight')
   const opts = { collector, ...(client ? { client } : {}) }
   const t0 = Date.now()
@@ -125,25 +142,32 @@ async function preflight(client: string | undefined): Promise<void> {
 async function main(): Promise<void> {
   const routing = resolveEvalRouting()
   const scenarios = selected()
+  const thinkingPlanner = isThinkingPlannerRun(routing, scenarios)
   const startedAt = new Date().toISOString()
 
   console.log('🧪 harness/client compatibility eval')
   console.log(`   client under test : ${routing.client ?? 'default (declared Anthropic chains)'}`)
   console.log(`   routing           : ${routing.note}`)
   console.log(`   scenarios         : ${scenarios.length}`)
-  if (routing.client === 'VerdaQwen') {
-    console.log('   NOTE: the Verda box scales to zero — a cold start can take minutes.')
+  if (routing.client === 'LargeQwen') {
+    console.log('   NOTE: the large-model box scales to zero — a cold start can take minutes.')
   }
   console.log('')
 
   // Decide-only runs must not wake a different model or call another provider.
-  if (scenarios.some((s) => s.role !== 'decide')) await preflight(routing.client)
+  if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide'))
+    await preflight(
+      routing.client ??
+        (privateInferenceOnly() && routing.byRole
+          ? SELF_DEPLOYED_CLIENT_BY_ROLE.critic
+          : undefined),
+    )
 
   const t0 = Date.now()
   const results: ScenarioResult[] = []
   // Sequential on purpose. The self-hosted endpoint is ONE box: running the
   // scenarios concurrently would measure queueing rather than the client, and
-  // `smoke-verda-load.ts` is where throughput under concurrency belongs.
+  // `smoke-large-load.ts` is where throughput under concurrency belongs.
   for (const scenario of scenarios) {
     process.stdout.write(`   ▶ ${scenario.id} … `)
     const result = await runScenario(scenario, routing)

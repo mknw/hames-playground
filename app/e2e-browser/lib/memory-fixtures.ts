@@ -92,7 +92,7 @@ export async function seedProposal(
     const vector = Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0))
     const payload = {
       v: 1,
-      tier: 'verda',
+      tier: 'self_deployed',
       embedSpace: 'synthetic',
       eventId,
       conversationId: id,
@@ -151,7 +151,7 @@ export async function seedMemory(id: string, content: string): Promise<void> {
     const vector = JSON.stringify(Array.from({ length: 1024 }, (_, i) => (i === 0 ? 1 : 0)))
     await client.query(
       `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space)
-       VALUES ($1, $2, 'preference', 'verda', $3, $3, $4::vector, 'synthetic')`,
+       VALUES ($1, $2, 'preference', 'self_deployed', $3, $3, $4::vector, 'synthetic')`,
       [id, BYPASS_USER_ID, content, vector],
     )
   } finally {

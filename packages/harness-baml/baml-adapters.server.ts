@@ -39,31 +39,38 @@ import type {
   PlanResult,
   CostBasis,
 } from '@hames-ai/harness-patterns/types'
-import type { InjectionScreen } from '@hames-ai/harness-patterns/injection-guard'
+import {
+  neutralizeFenceMarkers,
+  type InjectionScreen,
+} from '@hames-ai/harness-patterns/injection-guard'
+import { drawFenceNonce } from '@hames-ai/harness-patterns/guard-gate.server'
 import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
 import {
   activeTransportContext,
   activeTransports,
 } from '@hames-ai/harness-patterns/tool-transport.server'
-import { Collector, BamlValidationError } from '@boundaryml/baml'
+import { Collector, BamlValidationError, type HTTPRequest } from '@boundaryml/baml'
 import { getBamlFiles } from './baml_client/inlinedbaml'
 import {
   activeCostPricing,
-  activeInferenceTier,
   activeCostRates,
   clientOverrideFor,
   limitsFor,
   maxOutputTokensFor,
-  resolveClientForRole,
+  privateInferenceOnly,
+  selfDeployedNonThinkingClientFor,
+  THINKING_CLIENTS,
+  THINKING_FUNCTIONS_BY_CLIENT,
 } from './clients.server'
 import { notifyLlmUsage } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import { createJevTransport } from './jev-decide.server'
-import { escapeDataFence } from './data-fence'
+import { thinkingFrom, splitAtLastThinkClose } from './thinking-trace'
 import { runBamlClientCheckOnce } from './baml-version-check.server'
 import type { DecideFn, DecideAllFn } from '@hames-ai/harness-patterns/types'
 import type {
   LLMCallRecord,
+  CallRecordSink,
   ControllerFn,
   ActorFn,
   ControllerCallResult,
@@ -205,7 +212,7 @@ export function extractLLMCallData(
   }
   const llmCall = buildLLMCallDataFromLog(last, functionName, variables, startTime, parsedOutput)
   llmCall.metrics = computeEventMetrics(collector)
-  accountBamlCall(collector, functionName, llmCall.metrics)
+  accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
   // Lane A3: the implementation stamps the cap-hit on the record; the pattern
   // layer reads the boolean and never sees the cap table.
   return { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
@@ -217,7 +224,9 @@ export function extractLLMCallData(
  *
  * It is separate from `extractLLMCallData` because accounting coverage and
  * *observability* coverage are not the same set. A call that produces no
- * `LLMCallData` event — every describe-tier call, the injection screen — still
+ * `LLMCallData` event of its own — every describe-tier summary, the injection
+ * screen (which `withUsageAccounting`'s `onCall` hands to the caller to record
+ * as a `model_call` event) — still
  * spent tokens on a client, and leaving those out does not merely lose detail:
  * it biases the header's "on-prem %" in whichever direction the missing calls
  * would have counted. When those two roles were both Anthropic-only that bias
@@ -231,23 +240,57 @@ export function extractLLMCallData(
  * everyone else lets this recompute from the collector.
  *
  * Silent when the collector never saw a call (a pre-flight failure spent
- * nothing), and never throws — `notifyLlmUsage` owns that guarantee.
+ * nothing). After accounting, refuses a thinking leaf selected for a function
+ * without its designated twin (#637). This covers registry chains hidden from
+ * the pre-send name guard, including calls with no observability event. The
+ * refusal is fatal and retains the exchange, never an executable draft.
  */
 export function accountBamlCall(
   collector: Collector | undefined,
   functionName: string,
   metrics?: EventMetrics,
+  llmCall?: LLMCallData,
 ): void {
   const last = collector?.last
   if (!last) return
   const calls = (last.calls ?? []) as CollectorCall[]
   const selectedCall = calls.find((c) => c.selected) ?? calls[calls.length - 1]
+  const callMetrics = metrics ?? computeEventMetrics(collector)
   notifyLlmUsage({
     functionName,
     clientName: selectedCall?.clientName,
-    metrics: metrics ?? computeEventMetrics(collector),
+    metrics: callMetrics,
     durationMs: measuredDurationMs(last),
   })
+  const violation = thinkingFunctionViolation(functionName, selectedCall)
+  if (violation) {
+    const record = llmCall ?? buildLLMCallDataFromLog(last, functionName, {}, Date.now())
+    throw new LLMCallError(violation, {
+      ...record,
+      // A rejected action must not look like an accepted parsed result.
+      parsedOutput: undefined,
+      metrics: callMetrics,
+      hitOutputCap: llmCallHitOutputCap(record),
+    })
+  }
+}
+
+function thinkingFunctionViolation(functionName: string, call?: CollectorCall): string | undefined {
+  const clientName = call?.clientName
+  let requestThinking = false
+  try {
+    const body = call?.httpRequest?.body?.json() as
+      { chat_template_kwargs?: { enable_thinking?: unknown } } | undefined
+    requestThinking = body?.chat_template_kwargs?.enable_thinking === true
+  } catch {
+    // Some failed attempts have no rendered JSON body; the leaf-name policy still applies.
+  }
+  if (
+    ((clientName && THINKING_CLIENTS.has(clientName)) || requestThinking) &&
+    !THINKING_FUNCTIONS_BY_CLIENT[clientName ?? '']?.includes(functionName)
+  ) {
+    return `${functionName} selected a thinking leaf '${clientName ?? 'unknown'}' without a designated counterpart`
+  }
 }
 
 /** How long BAML measured something to take — a whole function call across
@@ -283,6 +326,14 @@ function measuredDurationMs(source: {
  *     b.ResultDescribe(tool, toolArgs, reasoning, result, opts),
  *   )
  *
+ * `onCall`, when the caller passes one, also receives the call's record — built
+ * from the same collector, with the metrics priced on the client BAML actually
+ * SELECTED — so a call whose value is all its caller gets back (a summary, a
+ * screen verdict) can still become an event in the run's observability. It is
+ * handed the record before accounting runs, so a call that is then refused by
+ * the thinking-leaf policy is still recorded. A sink that throws is logged and
+ * does not replace the call's own outcome: recording is not worth a verdict.
+ *
  * The options bag is passed positionally to a generated function, so a stale
  * `baml_client` drops it (#154) — the consequence here is an uncounted call,
  * not a wrong answer, which is why this site does not also warn.
@@ -290,12 +341,42 @@ function measuredDurationMs(source: {
 export async function withUsageAccounting<T>(
   functionName: string,
   run: (opts: { collector: Collector }) => Promise<T>,
+  onCall?: CallRecordSink,
 ): Promise<T> {
   const collector = new Collector(functionName)
+  const startTime = Date.now()
   try {
     return await run({ collector })
   } finally {
-    accountBamlCall(collector, functionName)
+    const record = onCall ? reportCallRecord(collector, functionName, startTime, onCall) : undefined
+    accountBamlCall(collector, functionName, record?.metrics)
+  }
+}
+
+/** Hand one finished call's record to a sink; the record, when there was one.
+ *  Nothing is reported for a collector that never saw a call (a pre-flight
+ *  failure spent nothing), and nothing thrown here may escape: this runs in a
+ *  `finally`, where a throw would replace the call's own result or error. */
+function reportCallRecord(
+  collector: Collector,
+  functionName: string,
+  startTime: number,
+  onCall: CallRecordSink,
+): LLMCallRecord | undefined {
+  const last = collector.last
+  if (!last) return undefined
+  try {
+    const llmCall = buildLLMCallDataFromLog(last, functionName, {}, startTime)
+    llmCall.metrics = computeEventMetrics(collector)
+    const record: LLMCallRecord = { ...llmCall, hitOutputCap: llmCallHitOutputCap(llmCall) }
+    onCall(record)
+    return record
+  } catch (err) {
+    console.error(
+      `[baml] ${functionName}: recording the call failed; it is accounted but not recorded:`,
+      err,
+    )
+    return undefined
   }
 }
 
@@ -313,7 +394,7 @@ type CollectorCall = {
    *  Read off the same `timing` getter as the function-level reading, which is
    *  why {@link measuredDurationMs} takes both. */
   timing?: { durationMs?: number | null }
-  httpRequest?: { body?: unknown }
+  httpRequest?: HTTPRequest | null
   httpResponse?: { body?: { json?: () => unknown } } | null
   usage?: {
     inputTokens?: number | null
@@ -324,13 +405,19 @@ type CollectorCall = {
 
 /** Provider-side usage from a call's raw HTTP response. Needed because the
  *  Collector's Usage has no cache-WRITE bucket (only read); Anthropic reports
- *  `cache_creation_input_tokens` only in the response body. Best-effort. */
+ *  `cache_creation_input_tokens` only in the response body. Best-effort.
+ *
+ *  `cost` is the PROVIDER-REPORTED call cost in USD (the fourth basis's input;
+ *  OpenRouter reports it as `usage.cost` per call, alongside `cost_details`).
+ *  Read for every attempt but consumed only by clients in PROVIDER_COST_CLIENTS —
+ *  passing it to the estimator for any other client changes nothing. */
 function usageFromResponse(call: CollectorCall | undefined):
   | {
       input_tokens?: number
       output_tokens?: number
       cache_read_input_tokens?: number
       cache_creation_input_tokens?: number
+      cost?: number
     }
   | undefined {
   try {
@@ -341,6 +428,7 @@ function usageFromResponse(call: CollectorCall | undefined):
             output_tokens?: number
             cache_read_input_tokens?: number
             cache_creation_input_tokens?: number
+            cost?: number
           }
         }
       | undefined
@@ -370,15 +458,14 @@ const NO_TOKEN_USAGE: TokenBuckets = {
 /** One call's token buckets: raw response usage first (has the cache-write
  *  bucket), Collector usage as fallback (write reads as 0). Undefined when
  *  the call never produced usage (pre-flight failures). */
-function callTokenBuckets(call: CollectorCall | undefined):
-  | {
-      inputUncachedTokens: number
-      inputCacheReadTokens: number
-      inputCacheWriteTokens: number
-      outputTokens: number
-    }
-  | undefined {
-  const raw = usageFromResponse(call)
+function callTokenBuckets(call: CollectorCall | undefined) {
+  return callTokenBucketsFromRaw(usageFromResponse(call), call)
+}
+
+function callTokenBucketsFromRaw(
+  raw: ReturnType<typeof usageFromResponse>,
+  call: CollectorCall | undefined,
+): TokenBuckets | undefined {
   if (raw && (raw.input_tokens != null || raw.output_tokens != null)) {
     return {
       inputUncachedTokens: raw.input_tokens ?? 0,
@@ -430,7 +517,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   // rates come through the host seam (PR-1a) — `configureCostRates` at the
   // composition root — rather than a direct import of the host's
   // `lib/cost-rates.server.ts`, which an installed package cannot resolve.
-  const { eurPerUsd: eurPerUsdRate, verdaEurPerHour: verdaEurPerHour } = activeCostRates()
+  const { eurPerUsd: eurPerUsdRate, largeEurPerHour: largeEurPerHour } = activeCostRates()
   const { estimate: estimateLlmCostEur, timePricedClient, timePricedClients } = activeCostPricing()
   const eurPerUsd = eurPerUsdRate()
   const timeRates = Object.fromEntries(
@@ -438,7 +525,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
   )
   // Keep the published single-client form working for existing consumers.
   if (timePricedClient && !Object.hasOwn(timeRates, timePricedClient)) {
-    timeRates[timePricedClient] = verdaEurPerHour()
+    timeRates[timePricedClient] = largeEurPerHour()
   }
   let attempts = 0
   let costEur = 0
@@ -460,8 +547,10 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         call.clientName !== undefined && Object.hasOwn(timeRates, call.clientName)
           ? timeRates[call.clientName]
           : undefined
+      const raw = usageFromResponse(call)
       const buckets =
-        callTokenBuckets(call) ?? (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
+        callTokenBucketsFromRaw(raw, call) ??
+        (eurPerHour !== undefined ? NO_TOKEN_USAGE : undefined)
       if (!buckets) continue
       attempts++
       totals.inputUncachedTokens += buckets.inputUncachedTokens
@@ -472,6 +561,11 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         durationMs: measuredDurationMs(call),
         eurPerUsd,
         eurPerHour,
+        // The provider's own bill for the call, USD — consumed only by a
+        // client in PROVIDER_COST_CLIENTS (the estimator ignores it
+        // otherwise). A provider-basis call without one prices as unknown,
+        // never as free.
+        providerCostUsd: raw?.cost,
       })
       if (est) {
         costEur += est.costEur
@@ -483,7 +577,7 @@ export function computeEventMetrics(collector: Collector | undefined): EventMetr
         if (est.basis === 'time') {
           timePricedAttempts++
           timeRate = {
-            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? verdaEurPerHour(),
+            eurPerHour: est.timeRate?.eurPerHour ?? eurPerHour ?? largeEurPerHour(),
             durationMs: (timeRate?.durationMs ?? 0) + (est.timeRate?.durationMs ?? 0),
           }
         }
@@ -600,7 +694,7 @@ export function extractFailureLLMCallData(
     // Failed steps still spent tokens (e.g. a truncated 32k-output response
     // before the retry also failed) — account for them.
     llmCall.metrics = computeEventMetrics(collector)
-    accountBamlCall(collector, functionName, llmCall.metrics)
+    accountBamlCall(collector, functionName, llmCall.metrics, llmCall)
     // The FAILURE path stamps hitOutputCap too — this is the twin of the
     // success path above and of the old llmCallHitOutputCap/collectorHitOutputCap
     // pair. Missing it would silently revert the loop patterns'
@@ -714,8 +808,14 @@ function collectorReturnedNoText(collector: Collector | undefined): boolean {
 function planParseRetry(
   error: unknown,
   collector: Collector | undefined,
+  functionName: string,
 ): { guidance: string | null } | null {
   if (!(error instanceof BamlValidationError)) return null
+  const calls = (collector?.last?.calls ?? []) as CollectorCall[]
+  const selected = calls.find((call) => call.selected) ?? calls[calls.length - 1]
+  // A hidden thinking leaf is a policy violation, even if its trace consumed
+  // the whole output cap. Never send a corrective retry to that same leaf.
+  if (thinkingFunctionViolation(functionName, selected)) return null
   if (collectorHitOutputCap(collector)) return { guidance: TRUNCATION_RETRY_GUIDANCE }
   if (collectorReturnedNoText(collector)) return { guidance: null }
   return null
@@ -742,6 +842,9 @@ export function wrapAsLLMCallError(
   startTime: number,
   collector: Collector | undefined,
 ): LLMCallError {
+  // Shared extraction may already have refused and accounted the exchange.
+  // Keep its fatal classification and avoid recording the bill twice.
+  if (err instanceof LLMCallError) return err
   const message = err instanceof Error ? err.message : String(err)
   const llmCall = extractFailureLLMCallData(collector, functionName, variables, startTime)
   return new LLMCallError(message, llmCall, err, {
@@ -773,9 +876,7 @@ function getPromptTemplate(functionName: string): string | undefined {
 function loadTemplatesFromInlinedBaml(cache: Record<string, string>): void {
   try {
     const files = getBamlFiles() as Record<string, string>
-    for (const source of Object.values(files)) {
-      extractPromptTemplates(source, cache)
-    }
+    extractPromptTemplates(Object.values(files).join('\n'), cache)
   } catch {
     // baml_client not generated — caller falls back to disk
   }
@@ -789,19 +890,101 @@ function loadTemplatesFromDisk(cache: Record<string, string>): void {
     const path = require('node:path') as typeof import('node:path')
     const bamlSrc = path.resolve(process.cwd(), 'baml_src')
     if (!fs.existsSync(bamlSrc)) return
-    for (const entry of fs.readdirSync(bamlSrc)) {
-      if (!entry.endsWith('.baml')) continue
-      const source = fs.readFileSync(path.join(bamlSrc, entry), 'utf8')
-      extractPromptTemplates(source, cache)
-    }
+    const sources = fs
+      .readdirSync(bamlSrc)
+      .filter((entry) => entry.endsWith('.baml'))
+      .map((entry) => fs.readFileSync(path.join(bamlSrc, entry), 'utf8'))
+    extractPromptTemplates(sources.join('\n'), cache)
   } catch {
     // filesystem unavailable — templates remain unset
   }
 }
 
-/** Parse BAML source to extract function prompt blocks. Exported for the
- *  parenthesised-signature-comment pinning test. */
+/** Find a signature/call's closing delimiter without interpreting its arguments.
+ * Only BAML declarations have comments; in Jinja arguments `//` is floor division.
+ * Quoted arguments may contain braces or escaped quotes. The cursor only moves
+ * forwards, including on malformed input. */
+function closingParenthesis(text: string, start: number, declarationComments = false): number {
+  let depth = 1
+  let quote = ''
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (quote) {
+      if (char === '\\') i++
+      else if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (declarationComments && text.startsWith('//', i)) {
+      const end = text.indexOf('\n', i + 2)
+      if (end === -1) return -1
+      i = end
+    } else if (declarationComments && text.startsWith('/*', i)) {
+      const end = text.indexOf('*/', i + 2)
+      if (end === -1) return -1
+      i = end + 1
+    } else if (char === '(') {
+      depth++
+    } else if (char === ')' && --depth === 0) {
+      return i
+    }
+  }
+  return -1
+}
+
+/** Extract function prompts with labelled textual includes of shared bodies.
+ * Pass the whole corpus so template_strings in other files are available.
+ * This is source inspection: no argument substitution or Jinja evaluation. */
 export function extractPromptTemplates(source: string, cache: Record<string, string>): void {
+  const bodies = new Map<string, string>()
+  const declaration = /\btemplate_string\s+(\w+)\s*\(/g
+  let shared: RegExpExecArray | null
+  while ((shared = declaration.exec(source)) !== null) {
+    const close = closingParenthesis(source, declaration.lastIndex, true)
+    if (close === -1) break
+    declaration.lastIndex = close + 1
+    while (/\s/.test(source[declaration.lastIndex] ?? '')) declaration.lastIndex++
+    if (!source.startsWith('#"', declaration.lastIndex)) continue
+    const bodyStart = declaration.lastIndex + 2
+    const bodyEnd = source.indexOf('"#', bodyStart)
+    if (bodyEnd === -1) break
+    bodies.set(shared[1], source.slice(bodyStart, bodyEnd))
+    // Never retry inside a scanned signature/body: repeated incomplete
+    // declarations and repeated raw-string openers must remain linear.
+    declaration.lastIndex = bodyEnd + 2
+  }
+
+  const include = (text: string, ancestors: string[] = []): string => {
+    const bareCall = /\{\{\s*(\w+)\s*\(/g
+    const parts: string[] = []
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = bareCall.exec(text)) !== null) {
+      const close = closingParenthesis(text, bareCall.lastIndex)
+      if (close === -1) break
+      bareCall.lastIndex = close + 1
+      while (/\s/.test(text[bareCall.lastIndex] ?? '')) bareCall.lastIndex++
+      if (!text.startsWith('}}', bareCall.lastIndex)) continue
+      bareCall.lastIndex += 2
+      const name = match[1]
+      const call = text.slice(match.index, bareCall.lastIndex)
+      const body = bodies.get(name)
+      parts.push(text.slice(cursor, match.index))
+      // Missing bodies degrade visibly; recursive references stay as source.
+      if (body === undefined) {
+        parts.push(`{# unresolved template_string ${name}: body not found #}\n${call}`)
+      } else if (ancestors.includes(name)) {
+        parts.push(call)
+      } else {
+        parts.push(
+          `{# expanded from ${name} #}\n${include(body, [...ancestors, name])}\n{# end expansion ${name} #}`,
+        )
+      }
+      cursor = bareCall.lastIndex
+    }
+    parts.push(text.slice(cursor))
+    return parts.join('')
+  }
+
   // Match: function FunctionName(...) -> ReturnType { ... prompt #"..."# }
   //
   // The parameter list is `[^{}]*?`, not `[^)]*`: signatures carry `//`
@@ -812,7 +995,7 @@ export function extractPromptTemplates(source: string, cache: Record<string, str
   const funcRegex = /function\s+(\w+)\s*\([^{}]*?\)\s*->\s*\S+\s*\{[^}]*?prompt\s+#"([\s\S]*?)"#/g
   let match: RegExpExecArray | null
   while ((match = funcRegex.exec(source)) !== null) {
-    cache[match[1]] = match[2]
+    cache[match[1]] = include(match[2])
   }
 }
 
@@ -920,7 +1103,7 @@ export function createLoopControllerAdapter(
     input: ControllerInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -984,33 +1167,210 @@ export function createLoopControllerAdapter(
     // in the bag even when no tier override is, so the bag is never empty and
     // the old with/without-opts dual call is gone. BAML routes the call to
     // `ControllerAnthropic` — its declared client in `simpleLoop.baml` —
-    // unless `USE_VERDA_INFERENCE=1` overrides the `controller` role onto the
+    // unless `USE_SELF_DEPLOYED_INFERENCE=1` overrides the `controller` role onto the
     // self-hosted deployment (`clients.server.ts`). A structured-output
     // failure that is not a truncation or an empty completion propagates:
     // there is no second provider to escalate to on either route.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    //
+    // REASONING TWIN: when the resolved override names a thinking leaf (the
+    // `controller` pattern reasoning-configured on the private tier —
+    // `PRIVATE_REASONING_ROLES`), the call goes to `ControllerThinking`, the
+    // planner twin's Q7 shape: the trace comes from the response's separate
+    // reasoning field, an inline think-close in `content` is REFUSED loudly,
+    // and the one corrective retry falls back to the non-thinking function on
+    // the SAME route (the transport-equality check proves it). Mirrors
+    // `createPlannerAdapter` below — read its branch for the full rationale.
+    const override = clientOverrideFor('controller')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'ControllerThinking' : 'LoopController'
+    const baseOpts = { ...override, collector }
+    const selectedCall = (source = collector) => {
+      const calls = (source.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
     let action: ControllerAction
     try {
-      action = await b.LoopController(
-        input.userMessage,
-        input.intent,
-        tools,
-        turns,
-        context,
-        priorResults,
-        fewShots,
-        input.multiCallMode,
-        input.planContext,
-        input.returnStyle,
-        baseOpts,
-      )
+      if (requestedThinking) {
+        const answer = await b.ControllerThinking(
+          input.userMessage,
+          input.intent,
+          tools,
+          turns,
+          context,
+          priorResults,
+          fewShots,
+          input.multiCallMode,
+          input.planContext,
+          input.returnStyle,
+          baseOpts,
+        )
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
+          throw new Error('ControllerThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by Q7.
+          throw new Error(
+            'ControllerThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          )
+        }
+        const trace = thinkingFrom(selectedCall())
+        // The trace IS the action's reasoning (the twin's envelope omits the
+        // field so the model never duplicates its thinking in content). Same
+        // restore rule as the planner twin.
+        action = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
+      } else {
+        action = await b.LoopController(
+          input.userMessage,
+          input.intent,
+          tools,
+          turns,
+          context,
+          priorResults,
+          fewShots,
+          input.multiCallMode,
+          input.planContext,
+          input.returnStyle,
+          baseOpts,
+        )
+      }
+      const llmCall = extractLLMCallData(collector, functionName, variables, startTime, action)
+      return { action, llmCall }
     } catch (e) {
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinkingFrom(selected)
+        if (trace.kind === 'trace' && error.llmCall) {
+          error.llmCall.parsedOutput = {
+            ...(error.llmCall.parsedOutput as object),
+            reasoning: trace.text,
+          }
+        }
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as an executable action.
+        try {
+          const tail = b.parse.ControllerThinking(split.tail) as unknown as Record<string, unknown>
+          if (error.llmCall) {
+            error.llmCall.parsedOutput = { ...(error.llmCall.parsedOutput as object), ...tail }
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'ControllerThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          error.llmCall,
+          e,
+        )
+      }
+      const noAnswer = e instanceof BamlValidationError && collectorReturnedNoText(collector)
+      // The retry is gated on REQUESTED thinking, not on the leaf the collector
+      // happened to select: a thinking leaf reached through a hidden registry
+      // chain is a policy violation (planParseRetry refuses it too), never a
+      // legitimate twin attempt owed a corrective retry.
+      if (
+        requestedThinking &&
+        (noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))
+      ) {
+        // ONE corrective retry, on the NON-thinking twin of the SAME route —
+        // same box and credentials on the modal route, same OpenRouter
+        // endpoint and model on the OR one. Never the original's Anthropic
+        // default; no public fallback; no further corrective retry here.
+        const retryClient = selfDeployedNonThinkingClientFor('controller')
+        if (!retryClient) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const retryCollector = new Collector('LoopController')
+        try {
+          const retryOpts = { ...override, collector: retryCollector, client: retryClient }
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          // SKIPPED under a private-only deployment: the pre-check renders
+          // through `b.request`, which the private-only guard refuses outright —
+          // and it is redundant there, because the seam has already refused any
+          // bag carrying a registry or env, so no third party could have
+          // redefined the transport between the two attempts.
+          if (!privateInferenceOnly()) {
+            const retryRequest = await b.request.LoopController(
+              input.userMessage,
+              input.intent,
+              tools,
+              turns,
+              context,
+              priorResults,
+              fewShots,
+              input.multiCallMode,
+              input.planContext,
+              input.returnStyle,
+              retryOpts,
+            )
+            const transport = (request: HTTPRequest | null | undefined) => {
+              if (!request) throw new Error('Controller retry cannot establish the same transport')
+              return JSON.stringify({
+                url: request.url,
+                method: request.method,
+                headers: Object.entries(request.headers)
+                  .map(([key, value]) => [key.toLowerCase(), value])
+                  .sort(([a], [b]) => a.localeCompare(b)),
+                model: (request.body.json() as { model?: string }).model,
+              })
+            }
+            if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+              throw new Error(
+                'Controller retry requires the same transport (endpoint, credentials and model)',
+              )
+            }
+          }
+          action = await b.LoopController(
+            input.userMessage,
+            input.intent,
+            tools,
+            turns,
+            context,
+            priorResults,
+            fewShots,
+            input.multiCallMode,
+            input.planContext,
+            input.returnStyle,
+            retryOpts,
+          )
+          if (selectedCall(retryCollector)?.clientName !== retryClient) {
+            throw new Error('Controller retry did not select the original private-tier client')
+          }
+          const llmCall = extractLLMCallData(
+            retryCollector,
+            'LoopController',
+            variables,
+            startTime,
+            action,
+          )
+          return { action, llmCall }
+        } catch (retryError) {
+          throw wrapAsLLMCallError(
+            retryError,
+            'LoopController',
+            variables,
+            startTime,
+            retryCollector,
+          )
+        }
+      }
       // Recoverable parse failures (any chain, incl. Anthropic-only): the parse
       // failed because the response was cut off, or because there was no
       // response at all — not because the model can't do structured output.
       // ONE retry, guidance appended to `context` only when there is something
-      // to correct (per-call, transient); a second failure throws.
-      const plan = planParseRetry(e, collector)
+      // to correct (per-call, transient); a second failure throws. In thinking
+      // mode this path is terminal (mirrors the planner: no guidance retry on
+      // a thinking attempt that parsed but mis-shaped).
+      const plan = requestedThinking ? null : planParseRetry(e, collector, 'LoopController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1041,11 +1401,14 @@ export function createLoopControllerAdapter(
           throw wrapAsLLMCallError(eRetry, 'LoopController', variables, startTime, collector)
         }
       }
-      throw wrapAsLLMCallError(e, 'LoopController', variables, startTime, collector)
+      throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
     }
 
-    // Extract LLM call data if collector present
-    const llmCall = extractLLMCallData(collector, 'LoopController', variables, startTime, action)
+    // Extract LLM call data if collector present — OUTSIDE the catch, exactly
+    // where it always was: the leaf policy (`selected a thinking leaf`) is a
+    // TERMINAL refusal, and keeping it out of the catch is what keeps it out
+    // of every retry branch inside the try.
+    const llmCall = extractLLMCallData(collector, functionName, variables, startTime, action)
 
     return { action, llmCall }
   }
@@ -1152,8 +1515,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     user_message: string,
     intent: string,
     context?: string,
+    onRetry?: (failedCall: LLMCallRecord | undefined) => void,
   ): Promise<PlanCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // The implementation owns its collector (Lane A3) — the seam type carries
@@ -1166,42 +1530,154 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
 
     const variables = { user_message, intent, tools, context }
 
-    // `PlannerAnthropic` — what planner.baml declares — unless a verda-tier
-    // run overrides it per call. The retry below is the whole failure policy:
-    // this call runs ONCE per chain, over the largest tool catalog in the repo,
-    // and a throw here means the chain runs unplanned. That failure policy is
-    // why the planner was held off the self-hosted box until 2026-08-26; it is
-    // unchanged, and it now applies on whichever client the tier picked.
-    //
-    // Read the `planner:` entry in `VERDA_CLIENT_BY_ROLE` before changing
-    // anything here: it is the one place the composite consequence of routing
-    // this role is stated whole (no thinking, halved output ceiling, one
-    // retry, then a silently unplanned chain).
-    const baseOpts = { collector, ...clientOverrideFor('planner') }
+    // Read the `planner:` entry in `SELF_DEPLOYED_CLIENT_BY_ROLE` for the tier's composite consequence.
+    const override = clientOverrideFor('planner')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'PlannerThinking' : 'Planner'
+    const baseOpts = { ...override, collector }
+    const selectedCall = (source = collector) => {
+      const calls = (source.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
+    let warning: string | undefined
     let plan: PlanResult
+    let llmCall: LLMCallRecord | undefined
     try {
-      plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+      if (requestedThinking) {
+        const answer = await b.PlannerThinking(user_message, intent, tools, context, baseOpts)
+        const selected = selectedCall()
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selected?.clientName ?? '')) {
+          throw new Error('PlannerThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by G19 Q7.
+          throw new Error(
+            'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          )
+        }
+        if (!answer.plan.trim()) throw new Error('PlannerThinking returned no answer')
+        const trace = thinkingFrom(selected)
+        if (trace.kind !== 'trace') warning = 'no thinking trace'
+        plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
+      } else {
+        plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+      }
+      llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
-      // ONE retry on a cut-off or empty completion, with corrective guidance
-      // only when there is something to correct; a genuine structured-output
-      // failure propagates as an LLMCallError the pattern turns into an error
-      // event.
-      const retry = planParseRetry(e, collector)
-      if (!retry) throw wrapAsLLMCallError(e, 'Planner', variables, startTime, collector)
-      const retryContext = retry.guidance
-        ? [context, retry.guidance].filter(Boolean).join('\n\n')
-        : context
-      try {
-        plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
-      } catch (eRetry) {
-        throw wrapAsLLMCallError(eRetry, 'Planner', variables, startTime, collector)
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // One failure-record path retains the selected parser trace for both
+      // terminal errors and retry warnings, without replacing malformed content.
+      const failure = () => {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinking ? thinkingFrom(selected) : undefined
+        if (trace?.kind === 'trace') error.llmCall.parsedOutput = { reasoning: trace.text }
+        return error
+      }
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const failedCall = failure().llmCall
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as an executable plan.
+        try {
+          failedCall.parsedOutput = {
+            ...(failedCall.parsedOutput as object),
+            ...b.parse.PlannerThinking(split.tail),
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'PlannerThinking requires a reasoning parser: </think> in content; answer tail rejected',
+          failedCall,
+          e,
+        )
+      }
+      const noAnswer =
+        thinking &&
+        ((e instanceof BamlValidationError && collectorReturnedNoText(collector)) ||
+          (e instanceof Error && e.message === 'PlannerThinking returned no answer'))
+      if (
+        thinking &&
+        (noAnswer || (e instanceof BamlValidationError && collectorHitOutputCap(collector)))
+      ) {
+        // Keep the failed thinking attempt and the retry in separate collectors:
+        // each is accounted once and the warning survives a failed retry.
+        const failedCall = failure().llmCall
+        onRetry?.(failedCall)
+        const retryCollector = new Collector('Planner')
+        try {
+          // SAME box and route. Never the original's Anthropic default; no
+          // public fallback, and no further corrective retry in this branch.
+          // Route-resolved: `LargeQwenOR` on the OpenRouter route, `LargeQwen`
+          // on the box — the transport check below proves the two attempts
+          // name the same endpoint and model either way.
+          const retryClient = selfDeployedNonThinkingClientFor('planner')
+          if (!retryClient) throw new Error('Planner retry cannot resolve the private-tier client')
+          const retryOpts = { ...override, collector: retryCollector, client: retryClient }
+          // Compare actual rendered transport to the thinking attempt BEFORE
+          // sending. A registry may redefine either name, including credentials.
+          // SKIPPED under a private-only deployment: the pre-check renders
+          // through `b.request`, which the private-only guard refuses outright —
+          // and it is redundant there, because the seam has already refused any
+          // bag carrying a registry or env, so no third party could have
+          // redefined the transport between the two attempts.
+          if (!privateInferenceOnly()) {
+            const retryRequest = await b.request.Planner(
+              user_message,
+              intent,
+              tools,
+              context,
+              retryOpts,
+            )
+            const transport = (request: HTTPRequest | null | undefined) => {
+              if (!request) throw new Error('Planner retry cannot establish the same transport')
+              return JSON.stringify({
+                url: request.url,
+                method: request.method,
+                headers: Object.entries(request.headers)
+                  .map(([key, value]) => [key.toLowerCase(), value])
+                  .sort(([a], [b]) => a.localeCompare(b)),
+                model: (request.body.json() as { model?: string }).model,
+              })
+            }
+            if (transport(selected?.httpRequest) !== transport(retryRequest)) {
+              throw new Error(
+                'Planner retry requires the same transport (endpoint, credentials and model)',
+              )
+            }
+          }
+          plan = await b.Planner(user_message, intent, tools, context, retryOpts)
+          if (selectedCall(retryCollector)?.clientName !== retryClient) {
+            throw new Error('Planner retry did not select the original private-tier client')
+          }
+          llmCall = extractLLMCallData(retryCollector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, retryCollector)
+        }
+      } else {
+        const retry = requestedThinking ? null : planParseRetry(e, collector, 'Planner')
+        if (!retry) throw failure()
+        const retryContext = retry.guidance
+          ? [context, retry.guidance].filter(Boolean).join('\n\n')
+          : context
+        try {
+          plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
+        } catch (retryError) {
+          throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, collector)
+        }
       }
     }
 
-    // extractLLMCallData fires warnIfCollectorEmpty itself on an empty collector.
-    const llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
-
-    return { plan, llmCall, toolCount: tools.length }
+    return { plan, llmCall, toolCount: tools.length, ...(warning ? { warning } : {}) }
   }
 }
 
@@ -1214,10 +1690,9 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
  *  `maxAttempts` are passed by `actorCritic.server.ts` so the actor's prompt
  *  can show "Attempt N of M" and prefer Return as budget runs low.
  *
- *  Note `availableTools` is part of the seam shape (design note §3) but the
- *  implementation resolves its own allowlist from the factory options — it
- *  was accepted-and-ignored positionally before A4 and is accepted-and-ignored
- *  here; the allowlist the adapters and loop enforce is the factory's.
+ *  Note `availableTools` is rendered: the actor's catalogue is that list
+ *  UNIONED with the factory's own `toolNames` (#613), so the pattern's
+ *  allowlist need not be declared twice.
  *
  *  The legacy positional form — same acceptance-test constraint and same A6
  *  deletion as `LegacyControllerFn`'s — rides the factory return as
@@ -1239,7 +1714,9 @@ export type LegacyActorFn = (
  *  that should be visible to subsequent actor calls in the same session). */
 export interface ActorAdapterOptions {
   /** Static tool names always available to the actor. Mutually exclusive
-   *  with `toolNamesProvider`; if both are set, the provider wins. */
+   *  with `toolNamesProvider`; if both are set, the provider wins. Both are
+   *  unioned with the pattern's `input.availableTools`; neither can remove a
+   *  name the pattern allows. */
   toolNames?: string[]
   /** Async closure resolved per actor invocation. Use this when the
    *  allowlist is user-curated and may change between turns of the same
@@ -1290,7 +1767,7 @@ export function createActorControllerAdapter(
     input: ActorInput,
     passedCollector?: Collector,
   ): Promise<ControllerCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1301,9 +1778,15 @@ export function createActorControllerAdapter(
     // Resolve the actor's allowlist. `toolNamesProvider` (if set) is called
     // fresh per invocation so user-curated selections persisted to the
     // session context surface live; otherwise fall back to the static array.
-    const names = options.toolNamesProvider
-      ? await options.toolNamesProvider()
-      : (options.toolNames ?? [])
+    // The pattern's allowlist rides the call as `input.availableTools`; it is
+    // unioned in so an agent declares it once (#613). `filterToolDescriptions`
+    // dedupes by name.
+    const names = [
+      ...(options.toolNamesProvider
+        ? await options.toolNamesProvider()
+        : (options.toolNames ?? [])),
+      ...input.availableTools,
+    ]
 
     // Get tool descriptions — optionally refresh + include pattern matches.
     // When a transport is scoped to this run (`withTransport` — today the in-VM
@@ -1370,13 +1853,13 @@ export function createActorControllerAdapter(
     // Call with options always — the implementation-owned collector is in the
     // bag, so the old with/without-opts dual call is gone. BAML routes to
     // `ActorAnthropic` (declared in `actorCritic.baml`) — or to the self-hosted
-    // deployment when `USE_VERDA_INFERENCE=1` re-points the `controller` role,
+    // deployment when `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `controller` role,
     // which covers the actor too. Mirrors `createLoopControllerAdapter` above:
     // a truncated or empty completion takes one corrective retry, anything
     // else — including a genuine structured-output failure, a network error or
     // a pre-call throw — is wrapped as `LLMCallError` so the observability
     // panel keeps the captured prompt/variables drill-down.
-    const baseOpts = { collector, ...clientOverrideFor('controller') }
+    const baseOpts = { ...clientOverrideFor('controller'), collector }
     let action: ControllerAction
     try {
       action = await b.ActorController(
@@ -1394,7 +1877,7 @@ export function createActorControllerAdapter(
     } catch (e) {
       // Truncated or empty response: one retry, guidance only when there is
       // something to correct — see createLoopControllerAdapter for rationale.
-      const plan = planParseRetry(e, collector)
+      const plan = planParseRetry(e, collector, 'ActorController')
       if (plan) {
         const retryContext = plan.guidance
           ? [context, plan.guidance].filter(Boolean).join('\n\n')
@@ -1482,7 +1965,7 @@ export function createCriticAdapter(): CriticAdapterFn {
     previous_attempts: ScriptExecutionEvent[],
     passedCollector?: Collector,
   ): Promise<CriticCallResult> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
 
     // Lane A3: the implementation owns the collector when the caller does not
@@ -1514,18 +1997,90 @@ export function createCriticAdapter(): CriticAdapterFn {
     // Call with options always — the implementation-owned collector is in the
     // bag, so the old with/without-opts dual call is gone. `actorCritic.baml`
     // declares `CriticAnthropic`, overridden onto the self-hosted deployment
-    // when `USE_VERDA_INFERENCE=1` re-points the `critic` role.
-    const criticOpts = { collector, ...clientOverrideFor('critic') }
+    // when `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `critic` role.
+    //
+    // REASONING TWIN: when the resolved override names a thinking leaf (the
+    // `critic` pattern reasoning-configured on the private tier), the call
+    // goes to `CriticThinking` — the Q7 shape, mirroring the planner and
+    // controller twins: the trace comes from the response's separate reasoning
+    // field, an inline think-close in `content` is REFUSED loudly, and the
+    // trace (which `CriticResult` has no field for) rides the call record's
+    // `parsedOutput` for observability — the same place the planner's failure
+    // path records a retained trace. The critic has NO corrective retry on
+    // either branch today; that semantics is preserved here, not invented.
+    const override = clientOverrideFor('critic')
+    const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
+    const functionName = requestedThinking ? 'CriticThinking' : 'Critic'
+    const criticOpts = { ...override, collector }
+    const selectedCall = () => {
+      const calls = (collector.last?.calls ?? []) as CollectorCall[]
+      return calls.find((call) => call.selected) ?? calls[calls.length - 1]
+    }
     let result: CriticResult
     try {
-      result = await b.Critic(intent, attempts, criticOpts)
+      if (requestedThinking) {
+        result = await b.CriticThinking(intent, attempts, criticOpts)
+        // The collector, not the routing intention, proves that this response
+        // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
+        if (!THINKING_CLIENTS.has(selectedCall()?.clientName ?? '')) {
+          throw new Error('CriticThinking did not select a known thinking client')
+        }
+        const split = splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        if (split.closed) {
+          // Never inspect BAML's first JSON candidate (it may be a draft).
+          // Even a valid tail is refused: a parser is required by Q7.
+          throw new Error(
+            'CriticThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          )
+        }
+      } else {
+        result = await b.Critic(intent, attempts, criticOpts)
+      }
     } catch (e) {
-      throw wrapAsLLMCallError(e, 'Critic', variables, startTime, collector)
+      const selected = selectedCall()
+      const thinking = THINKING_CLIENTS.has(selected?.clientName ?? '')
+      // Q7 is a loud failure even if BAML failed before returning a value.
+      const split = thinking
+        ? splitAtLastThinkClose(collector.last?.rawLlmResponse ?? '')
+        : undefined
+      if (split?.closed) {
+        const error = wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        const trace = thinkingFrom(selected)
+        if (trace.kind === 'trace' && error.llmCall) {
+          error.llmCall.parsedOutput = {
+            ...(error.llmCall.parsedOutput as object),
+            reasoning: trace.text,
+          }
+        }
+        // Defence in depth: reparse ONLY the tail after the LAST delimiter.
+        // Retain it as rejected diagnostic data, never as a verdict.
+        try {
+          const tail = b.parse.CriticThinking(split.tail) as unknown as Record<string, unknown>
+          if (error.llmCall) {
+            error.llmCall.parsedOutput = { ...(error.llmCall.parsedOutput as object), ...tail }
+          }
+        } catch {
+          // An invalid tail is still the same parser-policy failure.
+        }
+        throw new LLMCallError(
+          'CriticThinking requires a reasoning parser: think-close in content; answer tail rejected',
+          error.llmCall,
+          e,
+        )
+      }
+      throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
     }
 
-    // Extract LLM call data if collector present
-    const llmCall = extractLLMCallData(collector, 'Critic', variables, startTime, result)
-
+    // Extract LLM call data if collector present — outside the catch, so the
+    // leaf policy stays a terminal refusal unreachable from any retry logic
+    // (the critic has none, but the invariant is the seam's, not the caller's).
+    const llmCall = extractLLMCallData(collector, functionName, variables, startTime, result)
+    if (requestedThinking) {
+      const trace = thinkingFrom(selectedCall())
+      if (trace.kind === 'trace' && llmCall) {
+        llmCall.parsedOutput = { ...(llmCall.parsedOutput as object), reasoning: trace.text }
+      }
+    }
     return { result, llmCall }
   }
 }
@@ -1541,24 +2096,30 @@ export function createCriticAdapter(): CriticAdapterFn {
  * made a summarizer outage indistinguishable from a blank answer, so nothing
  * anywhere said the summarizer was down.
  *
- * The collector exists only for accounting — nothing here reads it, and this
- * call emits no `LLMCallData` event. See {@link withUsageAccounting}: describe
- * is the repo's highest-frequency role, so an uncounted describe call biases
- * the header's on-prem share by more than any other single role. Since
- * 2026-08-26 it is also a role a tier decision MOVES, hence the override.
+ * The collector exists for accounting, and for the call's record when the
+ * caller passes `onCall`: this call returns a bare string, so `compactBulkData`
+ * is what turns the record into a `model_call` event. See
+ * {@link withUsageAccounting}: describe is the repo's highest-frequency role,
+ * so an uncounted describe call biases the header's on-prem share by more than
+ * any other single role. Since 2026-08-26 it is also a role a tier decision
+ * MOVES, hence the override.
  */
 export async function describeToolResultOp(
   tool: string,
   toolArgs: string,
   reasoning: string,
   result: string,
+  onCall?: CallRecordSink,
 ): Promise<string> {
-  const { b } = await import('./baml_client')
-  return withUsageAccounting('ResultDescribe', (opts) =>
-    b.ResultDescribe(tool, toolArgs, reasoning, result, {
-      ...opts,
-      ...clientOverrideFor('describe'),
-    }),
+  const { b } = await import('./guarded-client.server')
+  return withUsageAccounting(
+    'ResultDescribe',
+    (opts) =>
+      b.ResultDescribe(tool, toolArgs, reasoning, result, {
+        ...clientOverrideFor('describe'),
+        ...opts,
+      }),
+    onCall,
   )
 }
 
@@ -1582,11 +2143,12 @@ export type { DescribeBatchItem } from '@hames-ai/harness-patterns/types'
  */
 export async function describeToolResultsBatchOp(
   items: DescribeBatchItem[],
+  onCall?: CallRecordSink,
 ): Promise<Map<string, string>> {
   const byId = new Map<string, string>()
   if (items.length === 0) return byId
   const wanted = new Set(items.map((i) => i.id))
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   const targets = items.map((i) => ({
     id: i.id,
     tool: i.tool,
@@ -1594,13 +2156,17 @@ export async function describeToolResultsBatchOp(
     reasoning: i.reasoning,
     result: i.result,
   }))
-  // Collector for accounting only — see `describeToolResultOp`. A failed call
-  // throws to the caller, which logs the N+1 fallback it then pays for.
-  const batch = await withUsageAccounting('ResultDescribeBatch', (opts) =>
-    b.ResultDescribeBatch(targets, {
-      ...opts,
-      ...clientOverrideFor('describe'),
-    }),
+  // Collector for accounting and, through `onCall`, for the call's record — see
+  // `describeToolResultOp`. A failed call throws to the caller, which logs the
+  // N+1 fallback it then pays for.
+  const batch = await withUsageAccounting(
+    'ResultDescribeBatch',
+    (opts) =>
+      b.ResultDescribeBatch(targets, {
+        ...clientOverrideFor('describe'),
+        ...opts,
+      }),
+    onCall,
   )
   for (const entry of batch?.summaries ?? []) {
     const summary = entry?.summary?.trim()
@@ -1625,13 +2191,13 @@ describeToolResultsBatchOp.limits = () => limitsFor('describe')
  *   withInjectionGuard({
  *     namespaces: ['web'],
  *     catalog: tools.all,
- *     screen: createInjectionScreen(),
+ *     screen: { run: createInjectionScreen() },
  *   })
  *
- * The guard invokes it only for content its deterministic corpus passed clean,
- * so this costs one cheap call per otherwise-clean untrusted result — never one
- * per tool call, and never on the default path (no agent gets a screen it did
- * not ask for). It goes through its OWN `screen` role rather than riding
+ * The guard invokes it as the screen's `mode` says: on every external payload
+ * (`'always'`), behind the guard gate (`'gated'`), and always on a result the
+ * deterministic corpus found something in — never on the default path (no
+ * agent gets a screen it did not ask for). It goes through its OWN `screen` role rather than riding
  * `describe`, so it can never inherit whatever cheap model summarization is
  * pointed at IMPLICITLY; since 2026-08-26 the private tier moves it
  * EXPLICITLY, by owner decision, which is the difference that separation
@@ -1643,11 +2209,22 @@ describeToolResultsBatchOp.limits = () => limitsFor('describe')
  * injections are placed to be read first, so the head is what gets screened —
  * and the deterministic corpus, which has no such bound, still covers the whole
  * thing. The truncation is reported in the verdict reason rather than hidden.
+ *
+ * The prompt's two markers carry a per-call `boundary`: 16 hex characters from
+ * the platform's cryptographic source, drawn AFTER the quoted text is final and
+ * drawn again if that text holds it (`drawFenceNonce`, the guard gate's and the
+ * egress state's own). Text written before the call cannot know it, so it
+ * cannot close the fence in any spelling, which the marker neutraliser cannot
+ * promise (it catches plain spellings only). A text no draw avoids throws, and
+ * the guard records the screen as unavailable. `drawNonce` is a test seam.
  */
-export function createInjectionScreen(options?: { maxChars?: number }): InjectionScreen {
+export function createInjectionScreen(options?: {
+  maxChars?: number
+  drawNonce?: () => string
+}): InjectionScreen {
   const maxChars = options?.maxChars ?? 20_000
 
-  return async ({ tool, namespace, content }) => {
+  return async ({ tool, namespace, content, onCall }) => {
     const truncated = content.length > maxChars
     // TRUNCATE FIRST, then de-fence. The de-fencing regex must never run over
     // the full payload: only `maxChars` of it are ever interpolated into the
@@ -1655,29 +2232,17 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // attacker a free CPU multiplier on a value that is otherwise discarded.
     const head = truncated ? content.slice(0, maxChars) : content
 
-    // Neutralize the PROMPT's own fence before interpolating. The guard escapes
-    // its `⟦⟧` sentinels out of content so data cannot forge a marker or close
-    // the spotlight fence; the screen prompt has an ASCII fence
-    // (`---BEGIN/END UNTRUSTED CONTENT UNDER REVIEW---`) with no such
-    // protection, and by construction the screen only ever sees content the
-    // regex corpus passed clean. Without this, a page could close the fence and
-    // address the screening model directly — the exact hole `sentinel-escape`
-    // exists to close, one layer up.
-    //
-    // Anchored on the KEYWORD, not on a leading `-{2,}` run. The original
-    // `-{2,}\s*(?:BEGIN|END)…` put two variable-length runs back to back, which
-    // is quadratic: 100k hyphens measured 10s of synchronous CPU (and, run
-    // pre-truncation, on content that was about to be thrown away). Dropping the
-    // hyphen run is also strictly STRONGER — the old pattern required at least
-    // two hyphens, so `BEGIN UNTRUSTED CONTENT` with no decoration at all
-    // evaded it while still reading as a fence to the screening model.
-    const body = head.replace(/(?:BEGIN|END)\s{1,4}UNTRUSTED\s{1,4}CONTENT[^\n]{0,40}/gi, '[fence]')
+    // Neutralize the PROMPT's own fence before interpolating, with the one
+    // shared neutraliser the guard gate's state uses too (its comment has the
+    // reasons and the backtracking history).
+    const body = neutralizeFenceMarkers(head)
+    const boundary = drawFenceNonce(body, options?.drawNonce)
 
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const source = `${namespace}/${tool}`
     // THE ONE SPREAD THAT ROUTES A SECURITY CONTROL, and the only call site of
     // `clientOverrideFor('screen')` in the repo. Until 2026-08-26 this call
-    // deliberately had no override and `clients-verda.test.ts` scanned for the
+    // deliberately had no override and `clients-self-deployed.test.ts` scanned for the
     // absence; the owner then ruled that no call made under the private tier
     // may be sent to any public AI provider, so the screen follows the tier
     // like every other role. The scan is inverted accordingly: the map entry
@@ -1685,22 +2250,26 @@ export function createInjectionScreen(options?: { maxChars?: number }): Injectio
     // than quietly leaving the screen on Anthropic through a turn the user
     // asked to keep on the box.
     //
-    // WHAT MOVING IT COSTS is on `VERDA_CLIENT_BY_ROLE` and is not restated
-    // here: `VerdaQwen` is unmeasured on the two properties a screener needs,
+    // WHAT MOVING IT COSTS is on `SELF_DEPLOYED_CLIENT_BY_ROLE` and is not restated
+    // here: `LargeQwen` is unmeasured on the two properties a screener needs,
     // and the eval suite's `screen-on-the-tier` scenario is what measures them.
     //
     // POSITIONALLY SAFE (#154) without a `hasOpts` branch, unlike the Router
     // and Planner sites: `withUsageAccounting` always supplies `{ collector }`,
     // so the merged bag is never empty and the trailing slot is never an
     // `{}` standing in for "passed nothing". The generated
-    // `ScreenUntrustedContent(source, content, __baml_options__?)` reads
-    // `__options__.client` into a `ClientRegistry` primary, which is the same
-    // seam every other routed call uses.
-    const verdict = await withUsageAccounting('ScreenUntrustedContent', (opts) =>
-      b.ScreenUntrustedContent(source, body, {
-        ...opts,
-        ...clientOverrideFor('screen'),
-      }),
+    // `ScreenUntrustedContent(source, content, boundary, __baml_options__?)`
+    // reads `__options__.client` into a `ClientRegistry` primary, which is the
+    // same seam every other routed call uses. `boundary` sits BEFORE the bag:
+    // dropping it here would hand the bag to the nonce slot.
+    const verdict = await withUsageAccounting(
+      'ScreenUntrustedContent',
+      (opts) =>
+        b.ScreenUntrustedContent(source, body, boundary, {
+          ...clientOverrideFor('screen'),
+          ...opts,
+        }),
+      onCall,
     )
 
     return {

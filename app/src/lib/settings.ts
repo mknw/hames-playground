@@ -158,19 +158,26 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Local (local-client.baml, not used in chains)
   LocalGLM: 16_384,
   // = the `--ctx-size` `make llm-small` serves it with; keep the two in step.
-  LocalQwenSmall: 32_768,
+  SmallQwen: 32_768,
   // Conservative state budget below the private shim's 40,960-token serving length (#567).
   PrivateSystemOne: 32_768,
   // #418 T4. Jev's documented state cap ("up to 32k tokens", state + questions):
   // a REST adapter has no `--ctx-size` to read, so the number is the docs'.
   // `limitsFor('decide')` reads it and the decision state trimmer trims to it.
   JevDecide: 32_000,
-  // Self-hosted (verda-client.baml) — vLLM was started with
+  // Self-hosted (large-client.baml) — vLLM was started with
   // `--max-model-len 131072`, so this is the server's hard ceiling on
   // prompt + completion, not a model-family marketing number. An earlier plan
   // for this client said 250k; the deployment says 131072 and the deployment
-  // wins. Reached through resolveClientForRole() while USE_VERDA_INFERENCE=1.
-  VerdaQwen: 131_072,
+  // wins. Reached through resolveClientForRole() while USE_SELF_DEPLOYED_INFERENCE=1.
+  LargeQwen: 131_072,
+  LargeQwenThink: 131_072, // Same parser-equipped private 27B box (#625).
+  // The OpenRouter-route twins (large-client.baml): the same model served by a
+  // public per-token API whose server-side ceiling is not this repo's to read.
+  // PROVISIONAL 131 072, mirroring the box — 'G19 Q5 sets the final pair' —
+  // the same separately authorised eval that settles the cap below.
+  LargeQwenOR: 131_072,
+  LargeQwenThinkOR: 131_072,
   // Strategy-level chain clients — the names patterns actually pass to
   // getContextWindow() (via resolveClientForRole). Without these the lookup
   // fell through to the 16_384 default and over-trimmed prompts, dropping real
@@ -217,17 +224,23 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
   AnthropicOpus4: 4_096,
   // Local (local-client.baml — manual wiring only, not in any chain).
   LocalGLM: 2_048,
-  LocalQwenSmall: 2_048,
-  // Self-hosted (verda-client.baml). Mirrors the `max_tokens` declared there;
-  // without this entry the truncation retry is blind on every Verda-routed
+  SmallQwen: 2_048,
+  // Self-hosted (large-client.baml). Mirrors the `max_tokens` declared there;
+  // without this entry the truncation retry is blind on every self-deployed
   // controller turn, which is the failure this map exists for. 4 096 rather
   // than the 16 384 the Anthropic mid-tier carries, and the reason is a
   // COUPLING rather than a property of the model: this cap and that client's
   // `request_timeout_ms` are one decision — a full-cap generation has to finish
   // inside the timeout, or the retry this map enables can never fire on the
-  // outputs that need it. The arithmetic is in verda-client.baml; the
-  // inequality is pinned by clients-verda.test.ts.
-  VerdaQwen: 4_096,
+  // outputs that need it. The arithmetic is in large-client.baml; the
+  // inequality is pinned by clients-self-deployed.test.ts.
+  LargeQwen: 4_096,
+  LargeQwenThink: 4_096, // Provisional / unmeasured; G19 Q5 eval sets the final pair.
+  // The OpenRouter-route twins mirror their box counterparts' provisional cap
+  // AND the timeout it is coupled to (180s in large-client.baml) — the pair
+  // moves together or not at all, on either route.
+  LargeQwenOR: 4_096,
+  LargeQwenThinkOR: 4_096,
   // Strategy-chain FLOORS — the smallest cap of any leaf in the chain, the
   // same conservative-floor pattern as the chain entries in
   // MODEL_CONTEXT_WINDOWS above. Truncation detection never consults these
@@ -253,7 +266,7 @@ export const CLIENT_MAX_OUTPUT_TOKENS: Record<string, number> = {
 // Which model a call takes is decided by the client BAML actually SELECTED
 // (`call.clientName`), never by the tier the run intended — the same attribution
 // rule the preview counters use (`metrics/usage-recorder.server.ts`). A call
-// that fell back to Anthropic is priced as Anthropic even on a verda-tier turn.
+// that fell back to Anthropic is priced as Anthropic even on a self_deployed-tier turn.
 
 /**
  * $ per MTok per BAML client. A client with no entry — and not in
@@ -284,14 +297,37 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalGLM'])
 
 /**
  * The fourth basis: clients whose price is what the PROVIDER reported on the
- * response — Jev's `usage.cost`, which is USD (#418 T4). Output tokens are free
- * and the docs state no per-input list price, so an invented per-MTok rate would
- * render as a confident figure; the reported figure converts once at
- * `EUR_PER_USD`, like every token-priced client. Neither time-priced (no
- * duration basis, so no `≥` floor) nor unknown (the provider measured it).
- * Disjoint from the other three sets (`pricing-eur.test.ts`).
+ * response — Jev's `usage.cost`, which is USD (#418 T4) — and, since the
+ * OpenRouter eval, the two 27B leaves.
+ *
+ * `LargeQwen` / `LargeQwenThink` moved here when the 27B eval pointed
+ * `LARGE_LLM_BASE_URL` at OpenRouter (`qwen/qwen3.8-27b`): a per-token public
+ * API has no GPU-hour bill, so the time basis (measured wall-clock × the box
+ * rate) was pricing calls the box never served. The provider's own `usage.cost`
+ * — present on every OpenRouter response, probe-verified — is the auditable
+ * figure, converted once at `EUR_PER_USD` like every USD number. THE
+ * CONSEQUENCE, on the record: on the GPU box, where vLLM reports no
+ * `usage.cost`, a 27B step now prices as UNKNOWN rather than carrying the
+ * time-floor `≥` — unknown beats a confident figure from the wrong model.
+ * SmallQwen / PrivateSystemOne keep the time basis: their endpoint is the
+ * metered small GPU, and that bill is wall-clock.
+ *
+ * Output tokens are free on the provider basis and the docs state no per-input
+ * list price, so an invented per-MTok rate would render as a confident figure;
+ * neither time-priced (no duration basis, so no `≥` floor) nor unknown when
+ * the provider reported a cost (the provider measured it). Disjoint from the
+ * other three sets (`pricing-eur.test.ts`).
  */
-export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set(['JevDecide'])
+export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set([
+  'JevDecide',
+  'LargeQwen',
+  'LargeQwenThink',
+  // The OpenRouter-route twins: same basis as their box counterparts — a
+  // per-token public API reports usage.cost and has no GPU-hour bill. The
+  // route changes the WIRE shape, never the pricing basis.
+  'LargeQwenOR',
+  'LargeQwenThinkOR',
+])
 
 /** Anthropic cache pricing multipliers on the base input rate. */
 export const CACHE_WRITE_MULT = 1.25
@@ -324,23 +360,53 @@ export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
 
 /**
  * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda
- * (DataCrunch) instance, 2026-08-26. Overridable at `VERDA_EUR_PER_HOUR`.
+ * (DataCrunch) instance, 2026-08-26. Overridable at `LARGE_LLM_EUR_PER_HOUR`.
  *
  * The deployment scales to zero, so an idle box costs nothing and this rate is
  * only ever multiplied by time something was actually running.
  */
-export const DEFAULT_VERDA_EUR_PER_HOUR = 1.819
+export const DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
 
 /** Metered small summarizer GPU rate; overridable at SMALL_LLM_EUR_PER_HOUR. */
 export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 
 /** Default EUR/hour by selected client. Keys are pinned against the routing
  * vocabulary; server-side overrides are read per call in cost-rates.server.ts.
- * Keys are written as literals because this file is client-safe. */
+ * Keys are written as literals because this file is client-safe.
+ *
+ * The 27B leaves are NOT here any more — see {@link PROVIDER_COST_CLIENTS}:
+ * with the large endpoint on OpenRouter during the eval, a wall-clock bill is
+ * the wrong model for their calls, and the provider's own `usage.cost` is the
+ * auditable figure. `DEFAULT_LARGE_LLM_EUR_PER_HOUR` stays: it is the box's
+ * rate, and the eval's INFRASTRUCTURE accounting (scenario wall-clock on the
+ * boxes) still uses it — for the large box only while that box is actually
+ * being served (the runner drops its lines when the large endpoint is
+ * OpenRouter). */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
-  VerdaQwen: DEFAULT_VERDA_EUR_PER_HOUR,
-  LocalQwenSmall: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+  SmallQwen: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+}
+
+/**
+ * Client names stored before the box-named rename (`llmCall.clientName` on saved
+ * conversations, counters), read as the current name. The ONE alias table: every
+ * reader that keys a stored name into a table here goes through
+ * {@link canonicalClientName}, so a stored `VerdaQwen` step keeps its time-priced
+ * basis instead of reading as cost-unknown. Writes always use the new names.
+ * Removed with the other one-release readers (`docs/deployment/self-deployed-migration.md`).
+ */
+export const LEGACY_CLIENT_NAMES: Readonly<Record<string, string>> = {
+  VerdaQwen: 'LargeQwen',
+  VerdaQwenThink: 'LargeQwenThink',
+  LocalQwenSmall: 'SmallQwen',
+}
+
+export function canonicalClientName(clientName: string): string
+export function canonicalClientName(clientName: string | undefined): string | undefined
+export function canonicalClientName(clientName: string | undefined): string | undefined {
+  return clientName !== undefined && Object.hasOwn(LEGACY_CLIENT_NAMES, clientName)
+    ? LEGACY_CLIENT_NAMES[clientName]
+    : clientName
 }
 
 /** Token buckets one call was billed on. */
@@ -396,7 +462,7 @@ export interface CostEstimateEur {
  */
 export function estimateLlmCostEur(
   tokens: TokenBuckets,
-  clientName?: string,
+  storedClientName?: string,
   opts?: {
     durationMs?: number
     eurPerUsd?: number
@@ -405,6 +471,7 @@ export function estimateLlmCostEur(
     providerCostUsd?: number
   },
 ): CostEstimateEur | undefined {
+  const clientName = canonicalClientName(storedClientName)
   // Checked before the two priced paths: a locally-served call has no bill on
   // either basis, and €0.00 with a basis that says so is a different statement
   // from an absent figure. `noCacheEur` matches, so the step contributes no

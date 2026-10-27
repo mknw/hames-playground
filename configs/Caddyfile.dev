@@ -1,0 +1,5 @@
+# Mounted only by docker-compose.clones.yaml; shares release's guards and SSE
+# settings, but always targets the independently built dev app.
+{$DEV_APP_DOMAIN} {
+	import preview app-dev:3444
+}

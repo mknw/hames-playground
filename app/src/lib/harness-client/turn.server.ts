@@ -12,6 +12,7 @@
  *
  * | step                         | interactive | triggered | resume |
  * | ---------------------------- | ----------- | --------- | ------ |
+ * | verifies session ownership   | yes         | yes       | yes    |
  * | claims the conversation      | yes         | its seed  | yes    |
  * | loads the stored context     | yes         | no        | required |
  * | continues it (vs. fresh run) | same agent  | never     | resumes |
@@ -68,6 +69,7 @@ import {
   type MemoryConfig,
   type MemoryWrittenEventData,
   type ContextEvent,
+  type ErrorEventData,
   type HarnessResultScoped,
   type HitlDecidedBy,
   type HitlRequestEventData,
@@ -98,7 +100,8 @@ import { DEFAULT_SETTINGS } from '../settings'
 import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
-import { beginVerdaTurn, endVerdaTurn } from '../inference/verda-activity.server'
+import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
+import { beginSelfDeployedTurn, endSelfDeployedTurn } from '../inference/large-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
 import { ensurePrivateTierAwake } from '../inference/wake.server'
 import { recordTurn } from '../metrics/usage-recorder.server'
@@ -140,7 +143,7 @@ export interface TurnHooks {
   /**
    * This turn has started waiting on a self-hosted box that is not up, and the
    * next thing the user sees will be minutes away. Fires at most once per turn,
-   * only on the verda tier, and only when nothing says the box is warm — see
+   * only on the self_deployed tier, and only when nothing says the box is warm — see
    * `inference/cold-start.server.ts`. Absent means "do not compute it": no
    * hook, no watch.
    */
@@ -226,7 +229,7 @@ export async function runTurnAndPersist(
   // class of edit moves whole ROLES at once and would move the injection screen
   // along with summarization, because the two declare the same chain in BAML and
   // are separate only in `CLIENT_BY_ROLE`. The switch moves exactly the roles
-  // `VERDA_CLIENT_BY_ROLE` lists, which since 2026-08-26 is every one of them —
+  // `SELF_DEPLOYED_CLIENT_BY_ROLE` lists, which since 2026-08-26 is every one of them —
   // the screen included, on the owner's rule that no call made under the private
   // tier may be sent to any public AI provider. Two decisions, two lines, and
   // that is the whole point of the seam: on the same day `describe` was moved to
@@ -241,7 +244,8 @@ export async function runTurnAndPersist(
   //
   // Resolved here rather than at each entry point so both modes
   // (interactive, triggered) get it from one place, and a failure to
-  // read it falls back to the deployment default rather than failing the turn.
+  // read it falls back to the host's default tier — the self-deployed tier, which
+  // refuses the turn when it is not configured.
   //
   // Per conversation since the switch moved off the header: a turn's tier is
   // now a fact about the thread it belongs to, which is what lets an Anthropic
@@ -256,7 +260,7 @@ export async function runTurnAndPersist(
   // Refuse a tier this deployment cannot take, BEFORE anything runs and before
   // the row below records it. This is the check `runWithInferenceTier` used to
   // make on the way into its scope; the scope is now core's generic run frame,
-  // which cannot know what 'verda' means, so the fail-closed gate stayed in
+  // which cannot know what 'self_deployed' means, so the fail-closed gate stayed in
   // `@hames-ai/harness-baml` and the host calls it (issue #374, D1).
   assertInferenceTier(tier)
 
@@ -330,12 +334,12 @@ export async function runTurnAndPersist(
         // this turn here — one place, so no entry point can forget. `finally`
         // is load-bearing: a turn that throws must not leave the in-flight
         // gauge pinned, which would show "running" forever.
-        if (tier === 'verda') beginVerdaTurn()
+        if (tier === 'self_deployed') beginSelfDeployedTurn()
         recordTurn(tier)
         try {
           // The cold-start watch is armed HERE rather than at the first
-          // verda-bound call, because the thing that detects one is several
-          // layers down and takes no parameters. Only for a verda-tier turn whose
+          // self_deployed-bound call, because the thing that detects one is several
+          // layers down and takes no parameters. Only for a self_deployed-tier turn whose
           // caller wants the notice — the SSE route is the only one that does,
           // since it is the only entry point with a live wire to a person
           // waiting. A turn with no watch still wakes; the ping is not a UI
@@ -346,10 +350,10 @@ export async function runTurnAndPersist(
           // conversation row — see {@link runAndSave}, which is where it moved
           // and why.
           const run = (): Promise<HarnessResultScoped<SessionData>> => runOneTurn(req, tier)
-          const watched = tier === 'verda' && req.onWarming
+          const watched = tier === 'self_deployed' && req.onWarming
           return watched ? await runWithColdStartWatch(watched, run) : await run()
         } finally {
-          if (tier === 'verda') endVerdaTurn()
+          if (tier === 'self_deployed') endSelfDeployedTurn()
         }
       },
     ),
@@ -452,12 +456,47 @@ interface SavedTurn {
   eventCount: number
 }
 
+/** The one refusal for a session that is absent or not the caller's. */
+const SESSION_NOT_FOUND = 'Session not found'
+
+/**
+ * The turn's first gate, ahead of every mode and everything a turn builds from
+ * the session id (patterns, retriever, document list, sandbox). Interactive and
+ * triggered turns are record-or-verify through the same resolver the stash
+ * routes use, so a turn and the stash agree on who a session belongs to. A
+ * resume is VERIFY-ONLY: it continues a conversation that already exists, so it
+ * has no business establishing an owner for an id nothing has claimed. A
+ * session that is not the caller's is refused with the stash routes' own
+ * not-found wording — no difference between "not yours" and "absent", on every
+ * mode — and nothing is persisted. An ownership store that cannot answer
+ * refuses the turn too: no fallthrough.
+ */
+async function assertSessionOwned(
+  sessionId: string,
+  userId: string,
+  mode: TurnRequest['mode'],
+): Promise<void> {
+  let owned: boolean
+  try {
+    owned =
+      mode === 'resume'
+        ? await userOwnsSession(sessionId, userId)
+        : await claimSessionOwnership(sessionId, userId)
+  } catch (err) {
+    console.error('[turn] could not verify the owner of %s:', sessionId, err)
+    throw new Error('Could not verify session ownership; the turn was not run.')
+  }
+  if (!owned) throw new Error(SESSION_NOT_FOUND)
+}
+
 /**
  * Take the conversation for this turn, or refuse. Throws
  * `ConversationBusyError` (from the repository) while another turn holds it.
  */
 async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTurn> {
   const { sessionId, userId } = req
+  // Every mode, the triggered one included, before anything else.
+  await assertSessionOwned(sessionId, userId, req.mode)
   // A triggered run never loads (see the module docstring), and its claim was
   // taken by the seed it is about to replace.
   if (req.mode === 'triggered') return { loaded: null, version: req.claimVersion, released: false }
@@ -468,8 +507,9 @@ async function claimTurn(req: TurnRequest, tier: InferenceTier): Promise<HeldTur
   // existing row by construction, so an unknown id here is not this user's
   // session (re-pin of the deleted approval tests: refuse a session the user
   // does not own, flipping nothing). The claim was not taken — `claimSession`
-  // returns null only when the row does not exist under this user.
-  if (req.mode === 'resume') throw new Error('No active session')
+  // returns null only when the row does not exist under this user. Worded as
+  // the ownership refusal is, so an absent id and another user's id read alike.
+  if (req.mode === 'resume') throw new Error(SESSION_NOT_FOUND)
 
   // Brand-new conversation: persist the row BEFORE the run so it exists in the
   // sidebar for its whole first turn (#105) — previously the row only appeared
@@ -596,7 +636,7 @@ async function runAndSave(
     // THROWS, which is what ends the turn as a visible error rather than handing
     // the harness a box that is not there — see the SSE route's `catch`, and the
     // `catch` below for the row.
-    if (tier === 'verda') await ensurePrivateTierAwake()
+    if (tier === 'self_deployed') await ensurePrivateTierAwake()
     // THE LISTENER'S SCOPE IS THIS RUN, not the turn — see the frame opened in
     // `runTurnAndPersist`. Amending it here rather than filling the turn frame's
     // slot is what keeps the title agent and the detached compaction, both
@@ -629,6 +669,12 @@ async function runAndSave(
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
+    // The failure is RECORDED in the transcript before the row is let go — the
+    // live stream's `error` frame is the only other place it exists, and a
+    // reload (or opening a triggered run) rebuilds the transcript from the blob
+    // alone. A claim that was lost, or a row that cannot be read, falls through
+    // to the plain release below, which is the old behaviour.
+    if (await recordRunFailure(req, agentId, tier, held, err)) throw err
     await dbReleaseConversationClaim(sessionId, userId, held.version, { failed: true }).catch(
       (statusErr: unknown) => {
         console.error(
@@ -640,6 +686,69 @@ async function runAndSave(
       },
     )
     throw err
+  }
+}
+
+/**
+ * Write a failed turn into the conversation's own blob and release the claim in
+ * the same statement: the turn's user message (when the stored blob does not
+ * hold it yet), an irrecoverable `error` event, and `status: 'error'`.
+ *
+ * `replayMessages` turns that event into the same bubble the live stream
+ * painted, so a failure that ends the turn before the harness produced a single
+ * event — a wake that never answered — survives a reload instead of leaving an
+ * empty transcript under an `error` badge.
+ *
+ * Resolves `false` when nothing was written (row unreadable, claim lost, save
+ * refused); the caller then releases the claim without a blob, as before. An
+ * interactive first message and a triggered run already have a seeded blob
+ * holding their input; only a CONTINUED conversation needs the new message
+ * added, and one whose agent changed starts over exactly as `planTurn` does
+ * (the stored history is replaced, as a successful turn's save would).
+ *
+ * The persisted text is the SAME string the live `error` frame carries
+ * (`routes/api/events.ts`), capped at {@link PERSISTED_ERROR_MAX}: it is stored
+ * for every failure in `runAndSave`, not only the wake, and a stored blob has no
+ * expiry. The column is encrypted, and the shared-conversation projection drops
+ * error bubbles.
+ */
+const PERSISTED_ERROR_MAX = 2000
+
+async function recordRunFailure(
+  req: TurnRequest,
+  agentId: string,
+  tier: InferenceTier,
+  held: HeldTurn,
+  err: unknown,
+): Promise<boolean> {
+  const { sessionId, userId } = req
+  try {
+    const row = await dbLoadConversation(sessionId, userId)
+    if (!row) return false
+    let ctx = deserializeContext<SessionData>(row.serializedContext)
+    if (req.mode === 'interactive' && held.loaded) {
+      ctx =
+        held.loaded.agentId === agentId
+          ? ctx
+          : createContext<SessionData>(req.message, undefined, sessionId)
+      if (held.loaded.agentId === agentId) {
+        ctx.events.push(createEvent('user_message', 'harness', { content: req.message }))
+      }
+    }
+    const data: ErrorEventData = {
+      error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
+      severity: 'irrecoverable',
+    }
+    ctx.events.push(createEvent('error', 'harness', data))
+    ctx.status = 'error'
+    await saveSession(sessionId, userId, agentId, serializeContext(ctx), {
+      version: held.version,
+      inferenceTier: tier,
+    })
+    return true
+  } catch (writeErr) {
+    console.error('[turn] could not record the failure in %s:', sessionId, writeErr)
+    return false
   }
 }
 
@@ -824,8 +933,13 @@ async function planResume(
  * leaves the person able to try again: a refusal records nothing (core's
  * steps 1–6 checked before any `resolve`), a `resolve` that threw records
  * nothing (nothing durable was written), and a wake or pattern-build
- * failure never reached the run. So the release RESTORES `paused` when the
- * row it claimed said `paused`, and `chain-changed` alone — the one refusal
+ * failure never reached the run. A wake failure of a row still `paused`
+ * appends a recoverable error to the claimed blob and saves it still `paused`,
+ * releasing in that same write (#624). Its text is the live error frame's, capped at
+ * `PERSISTED_ERROR_MAX`; replay paints a warning and the answer stays in
+ * transit for a retry. Otherwise (including a failed recording write), the
+ * original release RESTORES `paused` when the row it claimed said `paused`,
+ * and `chain-changed` alone — the one refusal
  * that says this paused run can never continue — flips to `error` and
  * stamps `hitl_ended_at`, so the m3 load-restore exempts it (owner item 1 on
  * review 6004200697) rather than resurrecting `paused` from a blob that
@@ -845,7 +959,8 @@ async function runResumeAndSave(
   // `claimTurn` refuses a resume that loads no session, so this is never null
   // here; the assertion keeps the type honest without a cast.
   const loaded = held.loaded
-  if (!loaded) throw new Error('No active session')
+  if (!loaded) throw new Error(SESSION_NOT_FOUND)
+  let wakeFailed = false
   try {
     const plan = await planResume(loaded, tier, sessionId, userId)
 
@@ -886,7 +1001,12 @@ async function runResumeAndSave(
     // WAKE THEN RUN — the same rule as `runAndSave`, minus the stop-only
     // case (A5): a resume whose answers all stop the run makes no model
     // call, so it must not pay a cold start either.
-    if (tier === 'verda' && !plan.stopOnly) await ensurePrivateTierAwake()
+    if (tier === 'self_deployed' && !plan.stopOnly) {
+      await ensurePrivateTierAwake().catch((err: unknown) => {
+        wakeFailed = true
+        throw err
+      })
+    }
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
     const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
     const result = await amendRunFrame(
@@ -924,26 +1044,48 @@ async function runResumeAndSave(
   } catch (err) {
     console.error(`[turn] resume failed for %s:`, sessionId, err)
     held.released = true
-    const failed = err instanceof HitlAnswerError && err.code === 'chain-changed'
-    await dbReleaseConversationClaim(sessionId, userId, held.version, {
-      failed,
-      // The A4 restore applies only to a row that was paused — a row this
-      // resume claimed at anything else ('done', say) is released without a
-      // flip, which is the re-pin of the old approval refusal.
-      paused: !failed && loaded.status === 'paused',
-      // And `chain-changed` is TERMINAL for the pause (owner item 1 on review
-      // 6004200697): the release stamps `hitl_ended_at` beside the `error`,
-      // so the m3 load-restore exempts this row instead of resurrecting
-      // `paused` from a blob that still says `paused`. Every other failure
-      // leaves the pause alive, and the marker unset.
-      hitlTerminal: failed,
-    }).catch((releaseErr: unknown) => {
-      console.error(
-        `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
-        sessionId,
-        releaseErr,
-      )
-    })
+    let recorded = false
+    if (wakeFailed && loaded.status === 'paused') {
+      try {
+        // The claim already loaded this blob; nothing in the run or its
+        // answer journal was consumed. Preserve it and append only the failure.
+        const ctx = deserializeContext<SessionData>(loaded.serializedContext)
+        const data: ErrorEventData = {
+          error: (err instanceof Error ? err.message : String(err)).slice(0, PERSISTED_ERROR_MAX),
+          severity: 'recoverable',
+        }
+        ctx.events.push(createEvent('error', 'harness', data))
+        await saveSession(sessionId, userId, loaded.agentId, serializeContext(ctx), {
+          version: held.version,
+          inferenceTier: tier,
+        })
+        recorded = true
+      } catch (writeErr) {
+        console.error('[turn] could not record the resume wake failure in %s:', sessionId, writeErr)
+      }
+    }
+    if (!recorded) {
+      const failed = err instanceof HitlAnswerError && err.code === 'chain-changed'
+      await dbReleaseConversationClaim(sessionId, userId, held.version, {
+        failed,
+        // The A4 restore applies only to a row that was paused — a row this
+        // resume claimed at anything else ('done', say) is released without a
+        // flip, which is the re-pin of the old approval refusal.
+        paused: !failed && loaded.status === 'paused',
+        // And `chain-changed` is TERMINAL for the pause (owner item 1 on review
+        // 6004200697): the release stamps `hitl_ended_at` beside the `error`,
+        // so the m3 load-restore exempts this row instead of resurrecting
+        // `paused` from a blob that still says `paused`. Every other failure
+        // leaves the pause alive, and the marker unset.
+        hitlTerminal: failed,
+      }).catch((releaseErr: unknown) => {
+        console.error(
+          `[turn] could not release %s; it refuses new turns for up to ${TURN_CLAIM_TTL_SECONDS}s:`,
+          sessionId,
+          releaseErr,
+        )
+      })
+    }
     throw err
   }
 }

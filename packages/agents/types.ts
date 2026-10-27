@@ -34,12 +34,17 @@ export interface ElementDefinition {
 import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.server'
 import type {
   ConfiguredPattern,
+  DecisionDocumentsSource,
+  EgressMode,
+  EgressRosterSource,
+  IngressClassifier,
   MemoryConfig,
+  PseudonymiseForWeb,
   RetrieverBackend,
   RetrieverData,
-  PseudonymiseForWeb,
+  ScreenMode,
 } from '@hames-ai/harness-patterns'
-import type { OnToolResult } from '@hames-ai/harness-patterns/types'
+import type { OnToolResult, ByTier } from '@hames-ai/harness-patterns/types'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
 import type { RouterData } from '@hames-ai/harness-patterns/patterns/router.server'
 import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
@@ -49,12 +54,45 @@ import type { SimpleLoopData } from '@hames-ai/harness-patterns/patterns'
  */
 export interface GraphElement extends ElementDefinition {
   /** Source of this graph element (for filtering by tab) */
-  source?: 'neo4j' | 'memory' | 'unknown'
+  source?: 'neo4j' | 'unknown'
 }
 
 // ============================================================================
 // Agent definition surface (#225 — the @hames-ai/agents extraction)
 // ============================================================================
+
+/**
+ * The guards' host settings, per tier where the design's switches are
+ * (`boundary-guards.md`, the Settings table and "How the operator switch
+ * works"). Every member optional; absent, the agent keeps the design's
+ * per-tier defaults for it.
+ *
+ * - `screenMode` sets the injection screen's `mode` on every guard that
+ *   declares one. The composition root validates it against each tier's
+ *   declared default: on the self-deployed tier (and an absent or unknown
+ *   one) every of the four values is accepted, on the Anthropic tier only
+ *   `'off'` and `'always'` — `'gated'` or `'shadow'` there would send every
+ *   body the screen would have read to that tier's decisions host by an env
+ *   var, a processor change that belongs in a reviewed line of code.
+ * - `egressMode` sets the egress gate's `mode` (`'filter'` decides with the
+ *   roster's matches as evidence; `'roster'` vetoes on a match and asks no
+ *   model). Accepted on both tiers.
+ * - `classifyIngress` is the host's classifier (ruling O), passed as a
+ *   screen's `classify`. Absent: every payload is external, the safe default.
+ *   It rides `guards` rather than its own `AgentDeps` field — one path to the
+ *   screen's gating, not two — and no env variable sets it.
+ * - `pseudonymiseForWeb` is the input pseudonymiser (K5), until the retirement
+ *   slice removes it from the registered agents along with its switch. A
+ *   switch that turns the filter off omits it: the agent then composes no
+ *   `withPseudonymisedInputs` at all, never a null filter into a wrapper that
+ *   would withhold every word of inherited content on the tier it runs on.
+ */
+export interface AgentGuards {
+  readonly screenMode?: ByTier<ScreenMode>
+  readonly egressMode?: ByTier<EgressMode>
+  readonly classifyIngress?: IngressClassifier
+  readonly pseudonymiseForWeb?: PseudonymiseForWeb
+}
 
 /**
  * The composite the app calls `SessionData` (app `session.server.ts`) — all
@@ -69,7 +107,7 @@ export interface AgentData extends HarnessData, RouterData, SimpleLoopData, Retr
 /**
  * The structural shape of the app-side sandbox wrapper, as the factories pass
  * it. The package carries no sandbox module (the containment posture stays
- * app-side, SD-19) — the composition root's adapter narrows these five plain
+ * app-side, SD-19) — the composition root's adapter narrows these six plain
  * fields onto its own `WithSandboxConfig`.
  */
 export interface SandboxAttach {
@@ -78,6 +116,8 @@ export interface SandboxAttach {
   rootfs?: string
   egress?: string
   syncWorkspace?: boolean
+  /** Start the sandbox on the first `sandbox_*` call rather than at the turn's entry. */
+  lazy?: boolean
 }
 
 /**
@@ -90,11 +130,33 @@ export interface SandboxAttach {
  * members are omitted when a deployment does not compose that capability.
  */
 export interface AgentDeps {
-  /** G14 web-route input/egress filter. Optional for Anthropic-only hosts;
-   *  absence fails closed in withPseudonymisedInputs on every other tier. */
-  pseudonymiseForWeb?: PseudonymiseForWeb
+  /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
+  graphFileIngest?: boolean
   /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
   memory?: MemoryConfig
+  /**
+   * The guards' host settings (boundary guards, slice 6: the operator
+   * switches). One object rather than one field per guard, so a guard added
+   * later is a new key and not a second `AgentDeps` path. The composition root
+   * builds it from the `GUARD_*` env variables once at boot
+   * (`guard-config.server.ts`); a host that composes no guard settings leaves
+   * it absent, which keeps every guard at the design's per-tier defaults.
+   *
+   * These are the ONLY fields an env variable can set: the deterministic
+   * layers and the thresholds have no switch, and a value the design leaves in
+   * code (an `exempt` list, the egress tripwire's N, `loadedDecideDown`) stays
+   * there. An invalid value REFUSES boot; one below a tier's default warns.
+   */
+  guards?: AgentGuards
+  /**
+   * The egress gate's roster (boundary guards, slice 4): the directory status,
+   * the spans an outgoing request names, and its extension from local results.
+   * Absent: the gate runs with no directory (`'none'`), so its question still
+   * judges every call, and a call it cannot judge is refused. Separated from
+   * `guards` because it is WIRING, not a switch: the gate reads it at run
+   * time, and `GUARD_*` never turns the roster on or off.
+   */
+  egressRoster?: EgressRosterSource
   /**
    * This deployment's MCP tool→namespace resolver (the app's
    * `app-tools/mcp-catalog.ts`). Passed explicitly — owner ruling B-iii makes
@@ -106,6 +168,14 @@ export interface AgentDeps {
   enrichNeo4jResult?: OnToolResult
   /** Data Stash backend factory (the app's retriever wiring). */
   createRedisBackend?: (sessionId: string) => RetrieverBackend
+  /**
+   * What the Decide step may be told about the conversation's documents (#507).
+   * The host's source, bound to one conversation and called by `decisionLoop`
+   * once per run. The host owns the tier rule: only it decides whether a run may
+   * reveal names or the count alone, because core never reads a tier. Without it
+   * the state says nothing about documents.
+   */
+  createDecisionDocuments?: (sessionId: string) => DecisionDocumentsSource
   /**
    * The app's sandbox wrapper (the app's `with-sandbox.server.ts`), curried
    * onto the attach config the factories pass. The pattern type is

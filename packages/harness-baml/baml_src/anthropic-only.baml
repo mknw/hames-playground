@@ -34,12 +34,12 @@ client<llm> ControllerAnthropic {
 client<llm> ActorAnthropic {
   provider fallback
   options {
-    // The actor keeps thinking ON. Same models as ControllerAnthropic, and it
-    // used to share that client — split so the measured simpleLoop change does
-    // not silently apply here. The #139 corpus contained ZERO ActorController
-    // prompts and nothing deeper than 2 turns; the sandbox actor is the deepest,
-    // most multi-step loop we run and the place thinking is most likely to earn
-    // its cost. Do not flip this without its own measurement.
+    // Preserve provider defaults: Sonnet 5 thinks; the Sonnet 4.6 backstop
+    // does not (#627; clients.baml). Same models as ControllerAnthropic, but
+    // split so its measured NoThink change does not silently apply here.
+    // The #139 corpus contained ZERO ActorController prompts and nothing
+    // deeper than 2 turns; the sandbox actor is our deepest loop. Changing
+    // either leaf's thinking options needs its own measurement.
     strategy [AnthropicSonnet5, AnthropicSonnet46]
   }
 }
@@ -47,13 +47,12 @@ client<llm> ActorAnthropic {
 client<llm> PlannerAnthropic {
   provider fallback
   options {
-    // Thinking left ON, like the actor and unlike ControllerAnthropic. The
-    // #139 measurement that disabled thinking covers the simpleLoop CONTROLLER
-    // — a per-turn "pick the next tool" decision where the model already holds
-    // the answer half the time. The planner is the opposite call: ONE
-    // strategic decomposition per chain, made before any tool has run, where
-    // the reasoning budget is the whole point. Do not flip this without its
-    // own measurement (that corpus contained no Planner prompts).
+    // Preserve provider defaults, like the actor: Sonnet 5 thinks; the
+    // Sonnet 4.6 backstop does not (#627; clients.baml). The #139 NoThink
+    // measurement covers the simpleLoop CONTROLLER, not this upfront
+    // strategic decomposition (that corpus contained no Planner prompts).
+    // The planner's output `reasoning` is separate from model-side thinking.
+    // Changing either leaf's thinking options needs its own measurement.
     strategy [AnthropicSonnet5, AnthropicSonnet46]
   }
 }
@@ -100,12 +99,12 @@ client<llm> SynthesizerAnthropic {
 // chain HERE — the separation lives in the TypeScript mirror, not in BAML. So
 // re-pointing THIS BLOCK moves the injection screen onto whatever summarization
 // lands on: the one edit to avoid. Still true after 2026-08-26, when the private
-// tier moved the screen deliberately (its own line in VERDA_CLIENT_BY_ROLE, its
+// tier moved the screen deliberately (its own line in SELF_DEPLOYED_CLIENT_BY_ROLE, its
 // own eval scenario): a deliberate move is not the accident this warns about,
 // and this block is what the Anthropic tier still runs. To move the describe
 // tier, rewrite its EIGHT `client DescribeAnthropic` lines individually, or
 // declare a separate chain (e.g. `DescribeLocal`) and point those eight at it.
-// The owned-inference flip is documented on LocalQwenSmall in local-client.baml.
+// The owned-inference flip is documented on SmallQwen in local-client.baml.
 client<llm> DescribeAnthropic {
   provider fallback
   options {

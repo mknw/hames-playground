@@ -36,7 +36,9 @@
  * server**: the model passes structured arguments and this module composes the
  * KQL, so no model-authored operator can reshape the query it didn't write.
  */
+import { domainToASCII, domainToUnicode } from 'node:url'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { embeddingProviderPassesEgress } from '@hames-ai/harness-patterns/stash/embeddings.server'
 import { GraphAuthRequiredError } from './graph-auth'
 import type { AppToolDefinition } from '../app-tools/registry'
 
@@ -164,6 +166,14 @@ export interface GraphConnectorDeps {
   /** The Data Stash bridge for the file-ingest path. REQUIRED — throws if
    *  missing, including any missing member. */
   stash: GraphStashBridge
+  /** Host policy, evaluated PER CALL before Graph or stash I/O. Must positively
+   * identify a private run. Until tier-flip release ships, the host must also
+   * require a private-only deployment. No deployment-default tier fallback. */
+  fileIngestAllowed: () => boolean
+  /** The deployment's home email domains, read PER CALL, from which each result's
+   *  {@link GRAPH_PROVENANCE} is computed. Optional: without it every item's
+   *  provenance is `'unknown'`, which an ingress classifier reads as external. */
+  homeDomains?: () => readonly string[]
 }
 
 /** Fields we surface from `/me`. Explicit so we never dump the whole payload
@@ -375,7 +385,7 @@ const NOT_INDEXED: IndexReport = { status: 'not_indexed' }
 
 /**
  * Start the index run and wait up to {@link INGEST_OUTCOME_WAIT_MS} for how it
- * ends. Never throws: a run that rejects is a `failed` outcome with its message
+ * ends. Never throws: a run that rejects is a `failed` outcome with fixed feedback
  * (the store it failed against is not the tool's problem — the copy is already
  * stored), and a run still going at the bound is `pending` and keeps going.
  */
@@ -392,10 +402,15 @@ async function awaitIngestOutcome(
       (outcome) =>
         outcome?.status === 'indexed'
           ? { status: 'indexed' }
-          : { status: 'failed', error: outcome?.error ?? 'the index run reported no reason' },
-      (err: unknown) => ({
+          : {
+              status: 'failed',
+              error:
+                'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
+            },
+      () => ({
         status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error:
+          'Document indexing failed; the copy is stored but not searchable. Tell the user; do not retry this turn.',
       }),
     )
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -418,7 +433,7 @@ async function awaitIngestOutcome(
  * pages; measured live: 22 of this tenant's 25 .loop items). Re-signing-in
  * cannot help; app-only guest access is the tracked fix (#137).
  *
- * 401 and token-acquisition failures (status undefined) pass through — for
+ * 401 and token-acquisition failures (status undefined) get fixed sign-in advice — for
  * those, "sign in again" is the correct advice.
  */
 function translateIngestDenial(err: unknown, itemId: string): unknown {
@@ -432,7 +447,14 @@ function translateIngestDenial(err: unknown, itemId: string): unknown {
         'If this is an ordinary file, the account may genuinely lack access to it.',
     )
   }
-  return err
+  if (err instanceof GraphAuthRequiredError && (err.status === 401 || err.status === undefined)) {
+    return new Error(
+      'Microsoft 365 sign-in is required. Ask the user to sign in again; do not retry this turn.',
+    )
+  }
+  return new Error(
+    'Microsoft 365 file retrieval failed. Tell the user the file could not be copied; do not retry this turn.',
+  )
 }
 
 // ============================================================================
@@ -863,10 +885,13 @@ export function shapeFileEntries(raw: unknown): GraphFileEntry[] {
   })
 }
 
+/**
+ * No `query`: the composed KQL would echo the controller's own `site` / `author`
+ * text, URLs kept whole, into a result from a namespace the egress gate reads
+ * addresses from, so a URL the controller wrote would come back as one it was
+ * given. No Graph result may carry a string the controller wrote.
+ */
 export interface GraphFileSearchResult {
-  /** The KQL the app composed, so the model can see how its arguments were
-   *  read — and correct them — instead of guessing why a filter didn't bite. */
-  query: string
   /** Graph's reported match count; null when Search didn't report one. */
   total: number | null
   results: GraphFileHit[]
@@ -1254,6 +1279,126 @@ export function shapeAttachmentMessage(
 }
 
 // ============================================================================
+// Provenance — where a result came from, computed BEFORE shaping
+// ============================================================================
+//
+// The injection guard gates its model screen in only for content from outside
+// (boundary guards, ruling O), and a mail result's shaped `from` cannot say so:
+// `shapeMessages` keeps the display NAME whenever one exists, and a display name
+// is free text any sender sets. So each tool that carries identities reads the
+// ADDRESSES off the raw Graph response, before shaping, and stamps a code-written
+// verdict on every shaped item and on the result. The identities follow #433
+// §6.1: a message's `from`, a calendar entry's organiser, a shared-with-me row's
+// `sharedBy`. File listings select no identity field, so they carry no stamp, and
+// a result with no stamp is external.
+
+/** A Graph item's or result's provenance. `'unknown'` is read as external. */
+export type GraphProvenance = 'home' | 'external' | 'unknown'
+
+/**
+ * The key the verdict rides under: a symbol, set NON-ENUMERABLE. `JSON.stringify`,
+ * `Object.keys`/`entries`, `for…in`, spread and `structuredClone` never see it, so
+ * it reaches no serialization a model reads (the guard's own fence rebuilds every
+ * object it touches from `Object.entries`), and content cannot forge it: tool
+ * content is parsed JSON, which has no symbols. `Symbol.for`, so two loaded
+ * copies of this package agree on it.
+ */
+export const GRAPH_PROVENANCE: unique symbol = Symbol.for(
+  'hames.connectors.graph-provenance',
+) as never
+
+/** The verdict stamped on `value`, or `undefined` when it carries none. */
+export function graphProvenance(value: unknown): GraphProvenance | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const p = (value as Record<symbol, unknown>)[GRAPH_PROVENANCE]
+  return p === 'home' || p === 'external' || p === 'unknown' ? p : undefined
+}
+
+/** A configured domain lower-cased and IDNA-normalised, or `''` when it is not one. */
+function normaliseDomain(domain: string): string {
+  return domainToASCII(domain.trim())
+}
+
+/**
+ * An address's domain in its ASCII form, but only when it is already canonical:
+ * its lower-cased spelling is that form or that form's Unicode spelling. IDNA
+ * mapping folds fullwidth letters, ideographic full stops and ignorable
+ * characters (a zero-width space, a soft hyphen) into ASCII, so normalising the
+ * SENDER's spelling would make `ｃｏｎｔｏｓｏ.com` home; nothing says the tenant's
+ * DMARC alignment counts that spelling as the home domain. Only the configured
+ * domains are normalised. `''` when the domain is not canonical.
+ */
+function canonicalDomain(raw: string): string {
+  // NFC first: `toLowerCase` folds the Kelvin sign (U+212A) onto ASCII `k`, and NFC changes it.
+  if (raw.normalize('NFC') !== raw) return ''
+  const lower = raw.toLowerCase()
+  const ascii = domainToASCII(raw)
+  if (!ascii || (ascii !== lower && domainToUnicode(ascii) !== lower)) return ''
+  // Only letters, digits, hyphens and dots can be home: `*` is legal in a From, but never a domain.
+  if (!/^(?:[a-z0-9-]+\.)+[a-z0-9-]+$/.test(ascii)) return ''
+  return ascii
+}
+
+/**
+ * True when `address`'s domain is one of `homeDomains` or a subdomain of one,
+ * both lower-cased and IDNA-normalised, so a lookalike (`contoso.com.example`,
+ * `evilcontoso.com`, a homoglyph) is not home. The address's domain must already
+ * be canonical (`canonicalDomain`): a spelling IDNA folds onto a home domain is
+ * not home. Anything that is not an address is not home.
+ */
+export function isHomeAddress(address: unknown, homeDomains: readonly string[]): boolean {
+  if (typeof address !== 'string') return false
+  const at = address.lastIndexOf('@')
+  if (at <= 0 || address.indexOf('@') !== at) return false
+  const domain = canonicalDomain(address.slice(at + 1))
+  if (!domain) return false
+  return homeDomains.some((configured) => {
+    const home = normaliseDomain(configured)
+    return home !== '' && (domain === home || domain.endsWith(`.${home}`))
+  })
+}
+
+/** One item's verdict from the addresses it carries: external when any address
+ *  is not home, unknown when one is missing, home only when all are home. */
+export function provenanceOf(
+  addresses: readonly unknown[],
+  homeDomains: readonly string[],
+): GraphProvenance {
+  if (addresses.length === 0) return 'unknown'
+  let missing = false
+  for (const address of addresses) {
+    if (typeof address !== 'string' || !address.includes('@')) missing = true
+    else if (!isHomeAddress(address, homeDomains)) return 'external'
+  }
+  return missing ? 'unknown' : 'home'
+}
+
+/** A result's verdict from its items': home only when it has items and every
+ *  one is home; external when any is; unknown otherwise. */
+function resultProvenance(items: readonly unknown[]): GraphProvenance {
+  const verdicts = items.map((item) => graphProvenance(item) ?? 'unknown')
+  if (verdicts.includes('external')) return 'external'
+  return verdicts.length > 0 && verdicts.every((v) => v === 'home') ? 'home' : 'unknown'
+}
+
+/** Stamp `value` with a verdict, non-enumerable. Returns `value`. */
+function stamp<T extends object>(value: T, verdict: GraphProvenance): T {
+  Object.defineProperty(value, GRAPH_PROVENANCE, { value: verdict, enumerable: false })
+  return value
+}
+
+/** The raw items of a Graph collection response. */
+function rawItems(raw: unknown): Record<string, unknown>[] {
+  const items = (raw as { value?: unknown[] })?.value
+  return Array.isArray(items) ? items.map((it) => (it ?? {}) as Record<string, unknown>) : []
+}
+
+/** `emailAddress.address` of a Graph recipient (`from`, `organizer`). */
+function recipientAddress(recipient: unknown): unknown {
+  return (recipient as { emailAddress?: { address?: unknown } } | undefined)?.emailAddress?.address
+}
+
+// ============================================================================
 // Registration — an explicit factory call, not an import side effect
 // ============================================================================
 
@@ -1304,6 +1449,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     'registerAppTool',
   )
   const graphFetch = requireGraphSupplier<GraphFetchFn>(deps, 'graphFetch')
+  const fileIngestAllowed = requireGraphSupplier<() => boolean>(deps, 'fileIngestAllowed')
   const content = requireGraphBag<GraphContentClassifier>(deps, 'content')
   requireGraphSupplier(content, 'conversionEnabled')
   requireGraphSupplier(content, 'isConvertible')
@@ -1313,6 +1459,24 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
   requireGraphSupplier(stash, 'loadStore')
   requireGraphSupplier(stash, 'ingest')
   const { conversionEnabled, isConvertible, guessMimeType, isTextMime } = content
+  // Optional, but a present supplier that is not a function is refused here like
+  // any other: it would read as configuration and classify nothing.
+  if (deps.homeDomains !== undefined) requireGraphSupplier(deps, 'homeDomains')
+  /** One item's verdict, read per call. No supplier, or one that throws: unknown. */
+  const provenance = (addresses: readonly unknown[]): GraphProvenance => {
+    if (!deps.homeDomains) return 'unknown'
+    try {
+      return provenanceOf(addresses, deps.homeDomains())
+    } catch {
+      return 'unknown'
+    }
+  }
+  /** Stamp each shaped item from its raw twin (shaping maps index to index). */
+  const stampAll = <T extends object>(
+    shaped: T[],
+    raw: Record<string, unknown>[],
+    addresses: (item: Record<string, unknown>) => unknown[],
+  ): T[] => shaped.map((item, i) => stamp(item, provenance(addresses(raw[i] ?? {}))))
 
   registerAppTool({
     name: 'graph_calendar_today',
@@ -1348,7 +1512,10 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           headers: { Prefer: `outlook.timezone="${tz}"` },
         },
       )
-      return { timeZone: tz, day: start.slice(0, 10), events: shapeEvents(raw) }
+      const events = stampAll(shapeEvents(raw), rawItems(raw), (e) => [
+        recipientAddress(e.organizer),
+      ])
+      return stamp({ timeZone: tz, day: start.slice(0, 10), events }, resultProvenance(events))
     },
   })
 
@@ -1387,7 +1554,10 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           (unreadOnly ? `&$filter=isRead eq false` : ''),
         { scopes: ['Mail.Read'] },
       )
-      return { unreadOnly, messages: shapeMessages(raw) }
+      const messages = stampAll(shapeMessages(raw), rawItems(raw), (m) => [
+        recipientAddress(m.from),
+      ])
+      return stamp({ unreadOnly, messages }, resultProvenance(messages))
     },
   })
 
@@ -1412,15 +1582,14 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     name: 'graph_file_ingest',
     namespace: 'graph',
     description:
-      "Copy one of the signed-in person's own Microsoft 365 files (OneDrive or " +
-      "SharePoint) into this conversation's Data Stash, so later turns can read it, " +
-      'hand it to the sandbox and — when it can be indexed — search it. Identify the file by item_id, ' +
+      "Copy one Microsoft 365 file the signed-in person can open (OneDrive or SharePoint) into this conversation's Data Stash, so the sandbox can open it in /work/in and, when it can be indexed, it can be searched. Identify the file by item_id, " +
       'optionally with drive_id for a shared/SharePoint drive. Returns the stash ' +
       'document id and metadata — never the file contents — and indexStatus, ' +
       'which says whether the copy can be searched: indexed (yes), pending (still ' +
       'indexing), failed (stored but NOT searchable; indexError says why) or ' +
       'not_indexed (a format with no text to index: stored as-is, NOT searchable). ' +
       'For failed and not_indexed, tell the person the copy cannot be searched. ' +
+      'A configuration refusal is final for this turn: do not retry or fetch the file another way; tell the user it could not be copied here and relay search metadata only. ' +
       'Acts as the current signed-in person.',
     inputSchema: {
       type: 'object',
@@ -1442,6 +1611,18 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       additionalProperties: false,
     },
     execute: async (args, { userId, sessionId }): Promise<GraphFileIngestResult> => {
+      // P4: fail closed for EVERY caller, before metadata, bytes or stash I/O.
+      // Policy belongs to the host; connectors do not interpret inference tiers.
+      if (fileIngestAllowed() !== true) {
+        throw new Error(
+          'Copying Microsoft 365 files into this conversation is not enabled on this deployment (it needs private inference on a private-only deployment). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
+        )
+      }
+      if (!embeddingProviderPassesEgress(process.env.EMBEDDINGS_PROVIDER)) {
+        throw new Error(
+          'Copying Microsoft 365 files into this conversation is not enabled on this deployment (its document index uses an external embedding service). This is a configuration refusal, not a sign-in or file problem: do not retry it or fetch the file another way. Tell the user the file could not be copied here; you may still relay its search metadata (name, link, snippet). This refusal is final for this turn.',
+        )
+      }
       // Fail closed: the Data Stash is keyed by conversation, so without one in
       // scope there is no correct place to put the file — and guessing would mean
       // writing one person's file into another conversation's stash.
@@ -1660,7 +1841,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           ? `Showing ${results.length} of ${total} matches. Prefer narrowing ` +
             `(modified_after, file_type, site, author, sort="newest") over raising limit.`
           : undefined
-      return { query, total, results, ...(hint ? { hint } : {}) }
+      return { total, results, ...(hint ? { hint } : {}) }
     },
   })
 
@@ -1840,8 +2021,12 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       }
       const needle = sharedBy.toLowerCase()
       const seen = new Set<string>()
-      const rows = ((raw as { value?: unknown[] })?.value ?? [])
-        .map(shapeSharedInsight)
+      const rows = rawItems(raw)
+        .map((it) => {
+          const row = shapeSharedInsight(it)
+          const by = ((it.lastShared ?? {}) as { sharedBy?: { address?: unknown } }).sharedBy
+          return row && stamp(row, provenance([by?.address]))
+        })
         .filter((r): r is GraphSharedFile => r !== null)
         .filter((r) => !needle || (r.shared_by ?? '').toLowerCase().includes(needle))
         .filter((r) => !via || r.via === via)
@@ -1884,7 +2069,8 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
 
       if (rows.length === 0 && (sharedBy || via)) {
         const filters = [
-          ...(sharedBy ? [`by "${sharedBy}"`] : []),
+          // Not the `shared_by` text itself: see GraphFileSearchResult.
+          ...(sharedBy ? ['by the person named'] : []),
           ...(via ? [`via ${via}`] : []),
         ].join(' and ')
         return {
@@ -1895,7 +2081,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
             'author for older files.',
         }
       }
-      return { items: rows }
+      return stamp({ items: rows }, resultProvenance(rows))
     },
   })
 
@@ -1969,7 +2155,13 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       )
 
       const messages = ((raw as { value?: unknown[] })?.value ?? [])
-        .map((m) => ({ raw: m, shaped: shapeAttachmentMessage(m, direction) }))
+        .map((m) => ({
+          raw: m,
+          shaped: stamp(
+            shapeAttachmentMessage(m, direction),
+            provenance([recipientAddress((m as { from?: unknown } | null)?.from)]),
+          ),
+        }))
         .filter(({ raw: m }) => {
           if (!person) return true
           const msg = (m ?? {}) as Record<string, unknown>
@@ -1993,7 +2185,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         .filter((m) => m.attachments.length > 0)
         .slice(0, limit)
 
-      return { direction, messages }
+      return stamp({ direction, messages }, resultProvenance(messages))
     },
   })
 }

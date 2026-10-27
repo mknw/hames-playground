@@ -1,6 +1,7 @@
 /** Live mode reads production gateway metadata only; no gateway tool is executed. */
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import { registerGraphConnectorTools } from '@hames-ai/connectors/graph/graph-tools.server'
+import { sandboxFileToolsFromGateway } from '../../src/lib/eval-support/synthetic-sandbox'
 
 export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDescription[]> {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
@@ -23,6 +24,7 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
     throw new Error('Metadata-only Graph supplier cannot execute')
   }
   registerGraphConnectorTools({
+    fileIngestAllowed: refuse,
     registerAppTool: (def) =>
       tools.push({ name: def.name, description: def.description, inputSchema: def.inputSchema }),
     graphFetch: refuse,
@@ -60,5 +62,6 @@ export async function productionCatalog(gatewayUrl: string): Promise<MCPToolDesc
       additionalProperties: false,
     },
   })
+  tools.push(...sandboxFileToolsFromGateway(tools))
   return tools
 }

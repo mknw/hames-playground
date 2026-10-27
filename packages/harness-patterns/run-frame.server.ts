@@ -58,7 +58,7 @@ import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
 import type { ToolTransport } from './tool-transport.server'
-import type { ContextEvent, ToolCallResult } from './types'
+import type { ByTier, ContextEvent, ToolCallResult } from './types'
 
 assertServerOnImport()
 
@@ -133,7 +133,9 @@ export type AfterToolCallHook = (
  *  optional; an absent slot means "this run has none", not "use a default". */
 export interface RunFrame {
   /** The active injection guard. Built by the caller — `createInjectionGuard`
-   *  already unions with any enclosing guard, see {@link amendRunFrame}. */
+   *  already ORs the enclosing guard's coverage into its own, and answers each
+   *  tool's sanitizer options from the guard that declares it, see
+   *  {@link amendRunFrame}. */
   guard?: ActiveInjectionGuard
   /** Transports scoped to this run, innermost first. */
   transports?: readonly ToolTransport[]
@@ -155,6 +157,11 @@ export interface RunFrame {
   afterToolCall?: readonly AfterToolCallHook[]
   /** Checks run before any tool dispatch in this scope. */
   egressChecks?: readonly EgressCheck[]
+  /** Which route of a `decisionLoop` this scope runs, as the loop names it (its
+   *  route key). Code-written by the loop around each child, never by content:
+   *  the egress gate counts its refusals per route by this label, and records
+   *  it on each refusal event so the count survives a pause. */
+  route?: string
 }
 
 /** The live slot as the emitters see it: the listener plus the per-run
@@ -187,6 +194,8 @@ export interface ActiveRunFrame {
   readonly afterToolCall: readonly AfterToolCallHook[]
   /** Never undefined; innermost first, without dropping outer checks. */
   readonly egressChecks: readonly EgressCheck[]
+  /** The innermost `decisionLoop` route this code runs inside, if any. */
+  readonly route?: string
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -197,7 +206,7 @@ const NO_TRANSPORTS: readonly ToolTransport[] = Object.freeze([])
  *
  * `Symbol.for` is the repo's existing idiom for process-wide singletons that
  * must survive both HMR and a duplicated module instance
- * (`Symbol.for('hames-app.verda-wake')`). The failure it prevents is not
+ * (`Symbol.for('hames-app.large-wake')`). The failure it prevents is not
  * hypothetical for a published package: `peerDependencies` ASK the installer for
  * one copy, and an installer that gives two produces a silently guardless run
  * rather than an error. Here two copies find the same store, so the frame one
@@ -213,6 +222,64 @@ const holder: StoreHolder = (globalStore[STORE_KEY] ??= {
   store: new AsyncLocalStorage<ActiveRunFrame>(),
 })
 const store = holder.store
+
+/**
+ * The ONE TIER RULE's seam (boundary guards, slice 9).
+ *
+ * "Which tier is this run on" has two readers that used to disagree: routing
+ * (an absent or empty frame tier takes the host's default; a present but
+ * unrecognised one is the self-deployed tier, refused when unreachable) and the
+ * guards (the raw string). Core cannot settle it, because core interprets no
+ * tier string — so the companion that does, `@hames-ai/harness-baml`'s tier
+ * module, REGISTERS its answer here and every core reader asks
+ * {@link effectiveTier} instead of the raw slot.
+ *
+ * On a `globalThis` symbol for the same reason as the frame: two loaded copies
+ * of this package must see one registration.
+ */
+const EFFECTIVE_TIER_KEY: unique symbol = Symbol.for(
+  'hames.harness-patterns.effective-tier',
+) as never
+type EffectiveTierHolder = { read?: () => string }
+const tierGlobal = globalThis as unknown as Record<symbol, EffectiveTierHolder | undefined>
+const effectiveTierHolder: EffectiveTierHolder = (tierGlobal[EFFECTIVE_TIER_KEY] ??= {})
+
+/** Register the function that answers {@link effectiveTier}; `undefined`
+ *  unregisters. Called by the tier module that interprets tier strings, at its
+ *  load. The last registration wins. */
+export function registerEffectiveTier(read: (() => string) | undefined): void {
+  effectiveTierHolder.read = read
+}
+
+/**
+ * The tier this run is on, as the registered tier module answers it, or
+ * `undefined` when none is registered (core used without a tier interpreter —
+ * nothing routes, so there is no tier to name and the caller keeps its own
+ * default). Core never inspects the string. A registered reader that refuses
+ * (a restricted deployment) throws, and the throw propagates: a guard that
+ * cannot learn the tier must not guess it.
+ */
+export function effectiveTier(): string | undefined {
+  return effectiveTierHolder.read?.()
+}
+
+/**
+ * A {@link ByTier} setting's value on the tier this call is on. A map's key for
+ * {@link effectiveTier}'s answer when it has one, else its `default`; a bare
+ * value as it is. With a tier module registered, an absent tier is whatever that
+ * module answers (its host's default, or its own fallback with no host policy),
+ * never `default` by omission. Only with nothing registered, where nothing
+ * routes, is there no tier and `default` applies. A reader that refuses throws,
+ * and so does this: a setting that cannot learn its tier must not guess it.
+ */
+export function resolveByTier<T>(value: ByTier<T>): T {
+  if (typeof value !== 'object' || value === null || !Object.hasOwn(value, 'default')) {
+    return value as T
+  }
+  const map = value as { readonly default: T; readonly [tier: string]: T }
+  const tier = effectiveTier()
+  return tier !== undefined && Object.hasOwn(map, tier) ? map[tier] : map.default
+}
 
 /** Which slots a caller actually supplied — an explicit `undefined` is not a
  *  slot, so `{ guard: maybeGuard }` with nothing to put there still joins. */
@@ -267,6 +334,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       : NO_HOOKS,
     afterToolCall: frame.afterToolCall ? Object.freeze([...frame.afterToolCall]) : NO_HOOKS,
     egressChecks: frame.egressChecks ? Object.freeze([...frame.egressChecks]) : NO_HOOKS,
+    route: frame.route,
   }
 }
 
@@ -316,16 +384,20 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     nested sandboxes both own `sandbox_bash`; a union has no answer to "which
  *     machine" and an order has a deterministic one. See
  *     `tool-transport.server.ts` for the containment invariant this carries.
- *   - `guard` REPLACES — and that is the UNION rule, not its opposite. The
+ *   - `guard` REPLACES — and that is the coverage rule, not its opposite. The
  *     widening happens one level up, at construction: `createInjectionGuard`
- *     reads the enclosing guard and ORs its `isUntrusted` and its sanitizer
- *     options, so the value arriving here is ALREADY the union of inner and
- *     outer (SD-5: an inner wrapper can only widen coverage, never remove it).
- *     Unioning again here would be a second, redundant merge on a value that is
- *     already merged. Do not "simplify" this by making the guard slot prepend
- *     like transports: the two rules are deliberately opposite, a nested guard
- *     being a second reviewer of the same content where a nested sandbox is a
- *     different machine.
+ *     reads the enclosing guard and ORs its `isUntrusted` into its own, so the
+ *     value arriving here ALREADY covers everything inner and outer declare
+ *     (SD-5: an inner wrapper can only widen coverage, never remove it). The
+ *     OPTIONS do not merge: each guard sanitizes the tools it declares with its
+ *     own options and hands any other tool to the enclosing guard
+ *     (`ActiveInjectionGuard.optionsFor`), so a nested guard can neither weaken
+ *     nor inherit another guard's `disableRules`, `spotlight`, `rules` or
+ *     `screen`. Merging again here would be a second, redundant merge on a value
+ *     that already answers both questions. Do not "simplify" this by making the
+ *     guard slot prepend like transports: the two rules are deliberately
+ *     different, a nested guard being a second reviewer of the same content
+ *     where a nested sandbox is a different machine.
  *   - `hitl` passes BY REFERENCE (#433, F7). The slot is the run's, not the
  *     subtree's: `withInjectionGuard` and `withSandbox` amend the frame around
  *     the very patterns whose tool executors call `askHuman`, so a slot
@@ -340,6 +412,8 @@ export function withRunFrame<T>(frame: RunFrame, fn: () => Promise<T>): Promise<
  *     never switch an outer one off.
  *   - `egressChecks` CONCATENATE, innermost first, like transports. Every
  *     check runs; any denial denies, so an inner scope cannot remove one.
+ *   - `route` REPLACES, like everything else: a nested `decisionLoop`'s child
+ *     runs under its own route's label, and leaving it restores the outer one.
  *   - everything else REPLACES for the duration.
  *
  * Refuses outside a frame, by way of {@link activeRunFrame}: something that
@@ -380,6 +454,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
     egressChecks: partial.egressChecks
       ? Object.freeze([...partial.egressChecks, ...open.egressChecks])
       : open.egressChecks,
+    route: partial.route ?? open.route,
   }
   return store.run(amended, fn)
 }

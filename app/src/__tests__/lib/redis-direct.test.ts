@@ -28,8 +28,11 @@ import type { Redis } from 'ioredis'
 // ----------------------------------------------------------------------------
 // Fake ioredis — records ops; canned replies for module commands.
 // ----------------------------------------------------------------------------
-function makeFakeIoredis(opts: { jsonGet?: unknown; smembers?: string[] } = {}) {
+function makeFakeIoredis(
+  opts: { jsonGet?: unknown; smembers?: string[]; scanPages?: Array<[string, string[]]> } = {},
+) {
   const ops: Array<[string, unknown[]]> = []
+  const scanPages = [...(opts.scanPages ?? [])]
   let ftSearch: unknown = [0]
   let ftCreateErr: Error | null = null
   const fake = {
@@ -79,6 +82,10 @@ function makeFakeIoredis(opts: { jsonGet?: unknown; smembers?: string[] } = {}) 
     expire: async (...args: unknown[]) => {
       ops.push(['expire', args])
       return 1
+    },
+    scan: async (...args: unknown[]) => {
+      ops.push(['scan', args])
+      return scanPages.shift() ?? ['0', []]
     },
   }
   return fake
@@ -218,6 +225,25 @@ describe('redis-direct adapter', () => {
       data: 1,
     })
     expect(fake.ops.find(([m]) => m === 'srem')![1]).toEqual(['stash:docs:s', 'd1'])
+  })
+
+  it('scan_all_keys walks the cursor to the end and returns each key once', async () => {
+    const fake = makeFakeIoredis({
+      scanPages: [
+        ['17', ['stashvec:s:a', 'stashvec:s:b']],
+        ['0', ['stashvec:s:b', 'stashvec:s:c']],
+      ],
+    })
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    expect(await ct('scan_all_keys', { pattern: 'stashvec:s:*', batch_size: 500 })).toEqual({
+      success: true,
+      data: ['stashvec:s:a', 'stashvec:s:b', 'stashvec:s:c'],
+    })
+    expect(fake.ops.filter(([m]) => m === 'scan').map(([, a]) => a)).toEqual([
+      ['0', 'MATCH', 'stashvec:s:*', 'COUNT', 500],
+      ['17', 'MATCH', 'stashvec:s:*', 'COUNT', 500],
+    ])
   })
 
   it('expire uses args.name + numeric expire_seconds', async () => {

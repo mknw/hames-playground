@@ -33,6 +33,8 @@ export default class TypeBuilder {
     
     ControllerAction: ClassViewer<'ControllerAction', "reasoning" | "tool_name" | "tool_args" | "additional_calls" | "status" | "is_final">;
     
+    ControllerActionThinking: ClassViewer<'ControllerActionThinking', "tool_name" | "tool_args" | "additional_calls" | "status" | "is_final">;
+    
     CriticResult: ClassViewer<'CriticResult', "is_sufficient" | "explanation" | "suggested_approach">;
     
     DescribeBatchResult: ClassViewer<'DescribeBatchResult', "summaries">;
@@ -55,6 +57,8 @@ export default class TypeBuilder {
     
     PlanResult: ClassViewer<'PlanResult', "reasoning" | "plan" | "n_steps">;
     
+    PlanResultThinking: ClassViewer<'PlanResultThinking', "plan" | "n_steps">;
+    
     PriorResult: ClassViewer<'PriorResult', "ref_id" | "tool" | "summary" | "expanded_in_turn">;
     
     ReferenceCandidate: ClassViewer<'ReferenceCandidate', "ref_id" | "tool" | "summary" | "tool_args" | "ts_offset_s">;
@@ -69,6 +73,8 @@ export default class TypeBuilder {
     
     ScreenVerdict: ClassViewer<'ScreenVerdict', "injection_detected" | "reason" | "spans">;
     
+    SynthesisReference: ClassViewer<'SynthesisReference', "source" | "docId" | "startOffset" | "endOffset">;
+    
     ToolCall: ClassViewer<'ToolCall', "tool" | "args">;
     
     ToolCallRequest: ClassViewer<'ToolCallRequest', "tool_name" | "tool_args">;
@@ -82,7 +88,7 @@ export default class TypeBuilder {
     constructor() {
         this.tb = new _TypeBuilder({
           classes: new Set([
-            "Attempt","CompactedMemory","ControllerAction","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
+            "Attempt","CompactedMemory","ControllerAction","ControllerActionThinking","CriticResult","DescribeBatchResult","DescribeItemSummary","DescribeTarget","ExpandedRef","ExtractedMemory","FewShot","LoopTurn","MemoryMember","Message","PlanResult","PlanResultThinking","PriorResult","ReferenceCandidate","ReferenceSelection","ReferenceSelectorResult","RouteOption","RoutingResult","ScreenVerdict","SynthesisReference","ToolCall","ToolCallRequest","ToolDescription","ToolResult",
           ]),
           enums: new Set([
             
@@ -100,6 +106,10 @@ export default class TypeBuilder {
         
         this.ControllerAction = this.tb.classViewer("ControllerAction", [
           "reasoning","tool_name","tool_args","additional_calls","status","is_final",
+        ]);
+        
+        this.ControllerActionThinking = this.tb.classViewer("ControllerActionThinking", [
+          "tool_name","tool_args","additional_calls","status","is_final",
         ]);
         
         this.CriticResult = this.tb.classViewer("CriticResult", [
@@ -146,6 +156,10 @@ export default class TypeBuilder {
           "reasoning","plan","n_steps",
         ]);
         
+        this.PlanResultThinking = this.tb.classViewer("PlanResultThinking", [
+          "plan","n_steps",
+        ]);
+        
         this.PriorResult = this.tb.classViewer("PriorResult", [
           "ref_id","tool","summary","expanded_in_turn",
         ]);
@@ -172,6 +186,10 @@ export default class TypeBuilder {
         
         this.ScreenVerdict = this.tb.classViewer("ScreenVerdict", [
           "injection_detected","reason","spans",
+        ]);
+        
+        this.SynthesisReference = this.tb.classViewer("SynthesisReference", [
+          "source","docId","startOffset","endOffset",
         ]);
         
         this.ToolCall = this.tb.classViewer("ToolCall", [

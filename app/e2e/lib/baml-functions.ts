@@ -47,7 +47,13 @@ const MARKERS = [
   ['ResultDescribeBatch', 'You will receive several INDEPENDENT tool'],
   ['ResultDescribe', 'Summarize what the following tool call'],
   ['CompactIntent', "You rewrite a user's latest message into a single self-contained instruction"],
+  ['PlannerThinking', 'You are a strategic planner for a tool-using agent.'],
   ['Planner', 'You are a strategic planner for a tool-using agent.'],
+  [
+    'ControllerThinking',
+    'Select one tool per turn. Use "Return" when you have enough information.',
+  ],
+  ['CriticThinking', "You evaluate whether task execution results satisfy the user's intent."],
   ['ScreenUntrustedContent', 'You are a prompt-injection detector.'],
   ['RetrieveQuery', "You turn a user's latest message into a concise SEARCH QUERY"],
   [
@@ -100,13 +106,47 @@ export function promptText(messages: readonly ChatMessage[]): string {
  */
 export function classifyPrompt(text: string): BamlFunctionName | null {
   for (const [name, marker] of MARKERS) {
-    if (text.includes(marker)) return name
+    if (!text.includes(marker)) continue
+    // The planner pair shares its body. Only its final output schema differs;
+    // ignore user/context mentions of reasoning before that schema.
+    if (name === 'PlannerThinking') {
+      const schema = text.slice(text.lastIndexOf('Answer in JSON using this schema:'))
+      if (schema.includes('reasoning: string')) continue
+    }
+    return name
   }
   return null
 }
 
 /** Every function name the classifier can produce — used by the fidelity pin. */
 export const ALL_BAML_FUNCTIONS: readonly BamlFunctionName[] = MARKERS.map(([name]) => name)
+
+/**
+ * Recover a REASONING TWIN from the request body, not the prompt.
+ *
+ * The twins share their original's prompt bytes by design — the controller
+ * twin renders the same body template and the critic twin is byte-identical —
+ * so {@link classifyPrompt} alone can never name them. The request body can:
+ * a thinking leaf carries the thinking-on shape, and the twin is the only
+ * function that may send it. Both wire forms are recognised — the vLLM route's
+ * `chat_template_kwargs { enable_thinking: true }` and the OpenRouter route's
+ * native `reasoning { enabled: true }` — so the fake answers the twin's own
+ * reasoning-less envelope (with the trace in the separate field) whichever
+ * route a scenario drives.
+ */
+export function resolveThinkingTwin(
+  fn: BamlFunctionName | null,
+  body: { chat_template_kwargs?: { enable_thinking?: unknown }; reasoning?: { enabled?: unknown } },
+): BamlFunctionName | null {
+  if (!fn) return fn
+  const thinkingOn =
+    body.chat_template_kwargs?.enable_thinking === true || body.reasoning?.enabled === true
+  if (!thinkingOn) return fn
+  if (fn === 'Planner') return 'PlannerThinking'
+  if (fn === 'LoopController') return 'ControllerThinking'
+  if (fn === 'Critic') return 'CriticThinking'
+  return fn
+}
 
 /**
  * The function names the GENERATED client declares, read off `b.request`.

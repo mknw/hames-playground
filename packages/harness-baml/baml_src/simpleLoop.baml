@@ -79,14 +79,14 @@
 // cap. The escaping is unavoidable while tool_args is typed `string` (BAML has no
 // JSON type, and the tool set is only known at runtime); what IS avoidable is
 // disagreeing about it.
-template_string LoopFewShots(few_shots: FewShot[]?) #"
+template_string LoopFewShots(few_shots: FewShot[]?, with_reasoning: bool) #"
   {% if few_shots and few_shots|length > 0 %}
 
   ---
   EXAMPLES (illustrative — adapt to the actual request, do not copy verbatim):
   {% for ex in few_shots %}
   - User: {{ ex.user }}
-    {"reasoning": {{ ex.reasoning | tojson }}, "tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
+    {{ "{" }}{% if with_reasoning %}"reasoning": {{ ex.reasoning | tojson }}, {% endif %}"tool_name": {{ ex.tool | tojson }}, "tool_args": {{ ex.args | tojson }}, "is_final": false}
   {% endfor %}
   {% endif %}
 "#
@@ -119,7 +119,7 @@ template_string LoopFewShots(few_shots: FewShot[]?) #"
 // inner quotes escaped, `additional_calls` entries of tool_name/tool_args only —
 // because disagreeing demonstrations are this repo's most-paid-for defect class
 // (#144 twice, #159, #248); see the comment on LoopFewShots.
-template_string LoopMultiCalls(multi_call_mode: string?) #"
+template_string LoopMultiCalls(multi_call_mode: string?, with_reasoning: bool) #"
   {% if multi_call_mode == "parallel" %}
 
   MULTIPLE CALLS PER TURN:
@@ -132,7 +132,7 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
   Never use additional_calls on a "Return" or "expandPreviousResult" turn.
   Two independent lookups batched into one turn — copy this SHAPE, not its
   content (tool_args stays a JSON string with its inner quotes escaped):
-  {"reasoning": "The schema and the concept list do not depend on each other, so one turn covers both.", "tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
+  {{ "{" }}{% if with_reasoning %}"reasoning": "The schema and the concept list do not depend on each other, so one turn covers both.", {% endif %}"tool_name": "get_neo4j_schema", "tool_args": "{}", "additional_calls": [{"tool_name": "read_neo4j_cypher", "tool_args": "{\"query\": \"MATCH (c:Concept) RETURN c.name LIMIT 20\"}"}], "status": "Reading the schema and listing concepts", "is_final": false}
   {% elif multi_call_mode == "sequential" %}
 
   MULTIPLE CALLS PER TURN:
@@ -146,7 +146,7 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
   Never use additional_calls on a "Return" or "expandPreviousResult" turn.
   A script written and then run in one turn — copy this SHAPE, not its content
   (tool_args stays a JSON string with its inner quotes escaped):
-  {"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same turn.", "tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
+  {{ "{" }}{% if with_reasoning %}"reasoning": "Escaping a long script through the shell is fragile, so write it to a file and run that file in the same turn.", {% endif %}"tool_name": "sandbox_write", "tool_args": "{\"path\": \"/work/inspect.py\", \"content\": \"import openpyxl\\nprint('ok')\"}", "additional_calls": [{"tool_name": "sandbox_bash", "tool_args": "{\"command\": \"python3 /work/inspect.py\"}"}], "status": "Writing the script, then running it", "is_final": false}
   {% endif %}
 "#
 
@@ -170,6 +170,15 @@ template_string LoopMultiCalls(multi_call_mode: string?) #"
 // precisely because the compactExecution renders the links), across patterns,
 // with `view.hasErrors()` for honest error reporting.
 //
+// A turn in which no tool returned a result (none called, or every call failed)
+// is the exception, #615: nothing is left for the compactExecution to compose
+// from, and simpleLoop hands the Return text to it as the answer
+// (`data.returnText`: #612 for no call, #620/#614 for all calls failed). The
+// summary branch therefore asks for the complete answer there, in the system
+// block AND on the tier-1 catalog line, so those paths do not depend on the
+// model volunteering it against "NOT the user-facing answer". An
+// `expandPreviousResult` records a real tool_result, so it stays a summary.
+//
 // "answer" restores the pre-#149 wording verbatim, for a loop whose Return
 // prose IS the deliverable. It is prompt-only: the loop still writes no
 // `data.response`, so a downstream compactExecution remains the author — the
@@ -190,8 +199,11 @@ template_string LoopReturnStyle(return_style: string?) #"
   BRIEF completion summary in tool_args as plain prose (not JSON) — one or two
   sentences on what you found or did, NOT the user-facing answer: a later step
   composes that from the full tool results, so re-stating them here is wasted
-  work. That turn makes no tool call, so there is no progress to report and
-  `status` may be omitted.
+  work. EXCEPTION: if no tool call in this task has returned a result (you
+  called none, or every call failed), no tool result exists for that later step
+  to compose from, so put the COMPLETE answer in tool_args instead, and if a
+  call failed, say briefly what failed. The Return turn makes no tool call, so there is no
+  progress to report and `status` may be omitted.
   {% endif %}
 "#
 
@@ -241,10 +253,10 @@ template_string LoopPriorResults(turns_previous_runs: PriorResult[]?) #"
 // 'Return') break`), so every turn that reaches this log is non-final by
 // construction. `tojson` does the quoting, so tool_args (itself JSON, full of
 // quotes) can't break out of its string.
-template_string LoopTurnLog(turns: LoopTurn[]) #"
+template_string LoopTurnLog(turns: LoopTurn[], with_reasoning: bool) #"
   {% for turn in turns %}
   {{ _.role("assistant") }}
-  {"reasoning": {{ turn.reasoning | default("") | tojson }}, "tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}{% if turn.additional_calls %}, "additional_calls": [{% for c in turn.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
+  {{ "{" }}{% if with_reasoning %}"reasoning": {{ turn.reasoning | default("") | tojson }}, {% endif %}"tool_name": {{ (turn.tool_call.tool if turn.tool_call else "") | tojson }}, "tool_args": {{ (turn.tool_call.args if turn.tool_call else "") | tojson }}{% if turn.additional_calls %}, "additional_calls": [{% for c in turn.additional_calls %}{"tool_name": {{ c.tool_name | tojson }}, "tool_args": {{ c.tool_args | tojson }}}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif %}, "status": {{ turn.status | default("") | tojson }}, "is_final": false}
   {% if loop.index0 >= turns|length - 2 %}
   {{ _.role("user", cache_control={"type": "ephemeral"}) }}
   {% else %}
@@ -269,6 +281,73 @@ template_string LoopTurnLog(turns: LoopTurn[]) #"
   {% endfor %}
   {% endif %}
   {% endfor %}
+"#
+
+// Shared body for #625; with_reasoning controls content-side reasoning,
+// not model-side thinking. Originals keep their contract by passing true.
+// Output format belongs to the calling function, never to this template.
+template_string LoopControllerBody(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  turns: LoopTurn[],
+  context: string?,
+  turns_previous_runs: PriorResult[]?,
+  few_shots: FewShot[]?,
+  multi_call_mode: string?,
+  plan_context: string?,
+  return_style: string?,
+  with_reasoning: bool
+) #"
+    {# The terminal action is described HERE because the turn log can never show
+       one: the loop breaks before pushing a final action, so `is_final` renders
+       as a literal false and every demonstration the model gets is a non-final
+       turn paired with a tool call. That left the one shape that ENDS the loop
+       undemonstrated. Static text (per style), so it costs nothing per turn and
+       stays inside the cached prefix. #}
+    {{ _.role("system") }}
+    You are an AI agent that accomplishes tasks by calling tools.
+    Select one tool per turn. Use "Return" when you have enough information.
+    {{ LoopReturnStyle(return_style) }}
+
+    {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if context %}
+    CONTEXT:
+    {{ context }}
+
+    ---
+    {% endif %}
+    AVAILABLE TOOLS:
+    {{ ToolCatalog(tools) }}
+    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary, or the complete answer if no tool returned a result{% endif %})
+    {{ LoopMultiCalls(multi_call_mode, with_reasoning) }}
+    {{ LoopFewShots(few_shots, with_reasoning) }}
+
+    {# ────────── CACHED TIER 2 · run-static: plan · intent · instructions · prior results ────────── #}
+    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
+    {% if plan_context %}
+    {{ plan_context }}
+
+    ---
+    {% endif %}
+    INTENT: {{ intent }}
+
+    ---
+    INSTRUCTIONS: {{ user_message }}
+    {{ LoopPriorResults(turns_previous_runs) }}
+
+    {# ────────── TURN HISTORY · append-only, rolling markers on last two results ────────── #}
+    {{ LoopTurnLog(turns, with_reasoning) }}
+
+    {# ────────── VOLATILE TAIL · changes every turn, never cached ────────── #}
+    {{ _.role("user") }}
+    {# 0-indexed to match the turn log and the `n` the next turn is recorded
+       under: with one completed turn the log ends at "Turn 0 result" and this
+       asks for turn 1. The previous `+ 1` skipped a number, inviting the model
+       to infer a turn it had never seen. #}
+    Turn {{ turns|length }}. Decide the next action.
+    For Return, use plain prose (not JSON), as your instructions describe.
 "#
 
 function LoopController(
@@ -296,54 +375,37 @@ function LoopController(
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
-    {# The terminal action is described HERE because the turn log can never show
-       one: the loop breaks before pushing a final action, so `is_final` renders
-       as a literal false and every demonstration the model gets is a non-final
-       turn paired with a tool call. That left the one shape that ENDS the loop
-       undemonstrated. Static text (per style), so it costs nothing per turn and
-       stays inside the cached prefix. #}
-    {{ _.role("system") }}
-    You are an AI agent that accomplishes tasks by calling tools.
-    Select one tool per turn. Use "Return" when you have enough information.
-    {{ LoopReturnStyle(return_style) }}
+    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}
 
-    {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% if context %}
-    CONTEXT:
-    {{ context }}
+    {{ ctx.output_format }}
+  "#
+}
 
-    ---
-    {% endif %}
-    AVAILABLE TOOLS:
-    {{ ToolCatalog(tools) }}
-    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary{% endif %})
-    {{ LoopMultiCalls(multi_call_mode) }}
-    {{ LoopFewShots(few_shots) }}
-
-    {# ────────── CACHED TIER 2 · run-static: plan · intent · instructions · prior results ────────── #}
-    {{ _.role("user", cache_control={"type": "ephemeral"}) }}
-    {% if plan_context %}
-    {{ plan_context }}
-
-    ---
-    {% endif %}
-    INTENT: {{ intent }}
-
-    ---
-    INSTRUCTIONS: {{ user_message }}
-    {{ LoopPriorResults(turns_previous_runs) }}
-
-    {# ────────── TURN HISTORY · append-only, rolling markers on last two results ────────── #}
-    {{ LoopTurnLog(turns) }}
-
-    {# ────────── VOLATILE TAIL · changes every turn, never cached ────────── #}
-    {{ _.role("user") }}
-    {# 0-indexed to match the turn log and the `n` the next turn is recorded
-       under: with one completed turn the log ends at "Turn 0 result" and this
-       asks for turn 1. The previous `+ 1` skipped a number, inviting the model
-       to infer a turn it had never seen. #}
-    Turn {{ turns|length }}. Decide the next action.
+// The controller's reasoning twin (#625 pattern, reasoning-config slice): the
+// SAME body, content-side reasoning guidance off, the trace taken from the
+// response's separate reasoning field — never from `content`. The adapter
+// restores `ControllerAction.reasoning` from that trace and REFUSES an inline
+// think-close in `content` loudly (Q7): a parser-equipped endpoint is
+// required, on either route (`LargeQwenThink` on the vLLM route,
+// `LargeQwenThinkOR` — native `reasoning` object — on the OpenRouter route).
+// Selected only when reasoning is configured for the `controller` pattern
+// (`PRIVATE_REASONING_ROLES`) and the active tier is self_deployed;
+// `LoopController` keeps its contract everywhere else.
+function ControllerThinking(
+  user_message: string,
+  intent: string,
+  tools: ToolDescription[],
+  turns: LoopTurn[],
+  context: string?,
+  turns_previous_runs: PriorResult[]?,
+  few_shots: FewShot[]?,
+  multi_call_mode: string?,
+  plan_context: string?,
+  return_style: string?
+) -> ControllerActionThinking {
+  client LargeQwenThink
+  prompt #"
+    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, false) }}
 
     {{ ctx.output_format }}
   "#

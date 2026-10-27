@@ -1,7 +1,7 @@
 // The composition root registers the harness client seam (tier policy, model
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
-import '../../../lib/inference/config.server'
+import { useFlagDrivenDefaultTier } from '../../mocks/flag-default-tier'
 /**
  * BAML Adapters Tests
  *
@@ -10,6 +10,8 @@ import '../../../lib/inference/config.server'
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mockFinalAction, mockCriticResult } from '../../mocks/baml'
+
+useFlagDrivenDefaultTier()
 
 // Mock server-only imports
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -36,6 +38,7 @@ const mockCritic = vi.fn()
 const mockResultDescribe = vi.fn()
 const mockResultDescribeBatch = vi.fn()
 const mockPlanner = vi.fn()
+const mockPlannerThinking = vi.fn()
 
 vi.mock('@hames-ai/harness-baml/baml_client', () => ({
   b: {
@@ -45,6 +48,7 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
     ResultDescribe: (...args: unknown[]) => mockResultDescribe(...args),
     ResultDescribeBatch: (...args: unknown[]) => mockResultDescribeBatch(...args),
     Planner: (...args: unknown[]) => mockPlanner(...args),
+    PlannerThinking: (...args: unknown[]) => mockPlannerThinking(...args),
   },
 }))
 
@@ -57,20 +61,20 @@ vi.mock('@hames-ai/harness-baml/baml_client', () => ({
  * stub was called. The endpoint values are fakes — nothing opens a socket, they
  * exist to satisfy the fail-closed check the scope runs before `fn`.
  */
-async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
+async function withSelfDeployedTier<T>(fn: () => Promise<T>): Promise<T> {
   const clients = await import('@hames-ai/harness-baml/clients.server')
   // BOTH endpoints: the private tier is the 27B plus the 4B summarizer, and a
   // scope naming it without the second is refused outright (2026-08-26).
   const KEYS = [
-    'VERDA_INFERENCE_ENDPOINT',
-    'VERDA_INFERENCE_API_KEY',
+    'LARGE_LLM_BASE_URL',
+    'LARGE_LLM_API_KEY',
     'SMALL_LLM_BASE_URL',
     'SMALL_LLM_DECISIONS_URL',
     'SMALL_LLM_API_KEY',
   ]
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
   process.env.SMALL_LLM_BASE_URL = 'https://example.invalid/small/v1'
@@ -79,8 +83,8 @@ async function withVerdaTier<T>(fn: () => Promise<T>): Promise<T> {
     // reachability check the old opener made on the way in is now the
     // host-called `assertInferenceTier`. Both, in that order, is what a turn does.
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
-    clients.assertInferenceTier('verda')
-    return await withRunFrame({ inference: { tier: 'verda' } }, fn)
+    clients.assertInferenceTier('self_deployed')
+    return await withRunFrame({ inference: { tier: 'self_deployed' } }, fn)
   } finally {
     for (const k of KEYS) {
       if (saved[k] === undefined) delete process.env[k]
@@ -277,6 +281,51 @@ describe('createPlannerAdapter', () => {
     expect(intent).toBe('intent')
     expect((tools as Array<{ name: string }>).map((t) => t.name)).toEqual(['read_neo4j_cypher'])
     expect(context).toBe('Node: Person')
+  })
+
+  it('rejects a non-thinking selected leaf even when the requested client and an unselected attempt think', async () => {
+    const { createPlannerAdapter, LLMCallError } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    mockPlannerThinking.mockImplementation(async (...args: unknown[]) => {
+      const { collector } = args[4] as { collector: object }
+      Object.defineProperty(collector, 'last', {
+        value: {
+          rawLlmResponse: JSON.stringify({ plan: '1. Search', n_steps: 1 }),
+          calls: [
+            {
+              selected: false,
+              clientName: 'LargeQwenThink',
+              httpResponse: {
+                body: { json: () => ({ choices: [{ message: { reasoning: 'STALE TRACE' } }] }) },
+              },
+            },
+            { selected: true, clientName: 'LargeQwen' },
+          ],
+        },
+      })
+      return { plan: '1. Search', n_steps: 1 }
+    })
+    // The reasoning setting is config-derived and read per call; this test's
+    // per-run thinking override is legitimate only with the planner configured.
+    process.env.PRIVATE_REASONING_ROLES = 'planner'
+    const failure = await withRunFrame(
+      {
+        inference: {
+          tier: 'self_deployed',
+          clientOverride: () => ({ client: 'LargeQwenThink' }),
+        },
+      },
+      () => createPlannerAdapter([])('msg', 'intent'),
+    ).catch((error: unknown) => error)
+    delete process.env.PRIVATE_REASONING_ROLES
+    expect(failure).toBeInstanceOf(LLMCallError)
+    expect(failure).toMatchObject({
+      message: 'PlannerThinking did not select a known thinking client',
+      llmCall: { clientName: 'LargeQwen' },
+    })
+    expect(mockPlannerThinking).toHaveBeenCalledTimes(1)
+    expect(mockPlanner).not.toHaveBeenCalled()
   })
 
   it('does not let a degraded catalog outlive the outage', async () => {
@@ -717,9 +766,14 @@ describe('extractLLMCallData', () => {
     )
 
     expect(result).toBeDefined()
-    // Raw prompt = the BAML template with placeholders intact
+    // Shared bodies are included as raw source, including nested sections (#628).
     expect(result!.promptTemplate).toBeDefined()
-    expect(result!.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    expect(result!.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
+    expect(result!.promptTemplate).toContain(
+      'You are an AI agent that accomplishes tasks by calling tools.',
+    )
+    expect(result!.promptTemplate).toContain('{# expanded from ToolCatalog #}')
+    expect(result!.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // Parsed prompt = the rendered HTTP body containing substituted content
     expect(result!.rawInput).toContain('INTENT: hello')
     // The two must not be the same string
@@ -744,7 +798,7 @@ describe('describeToolResultOp', () => {
     )
 
     expect(result).toBe('Found 3 nodes in the graph.')
-    // OUTSIDE a verda scope the trailing options bag carries a collector and
+    // OUTSIDE a self_deployed scope the trailing options bag carries a collector and
     // NOTHING else — no `client` key, so the function runs the chain
     // `describe.baml` declares. The collector is not optional either: describe
     // is the repo's highest-frequency role, so an unaccounted describe call
@@ -759,23 +813,23 @@ describe('describeToolResultOp', () => {
     expect(Object.keys(mockResultDescribe.mock.calls[0][4] as object)).toEqual(['collector'])
   })
 
-  it('adds the client override inside a verda scope', async () => {
-    // The 2026-08-26 half of the pair above. `clients-verda.test.ts` greps for
+  it('adds the client override inside a self_deployed scope', async () => {
+    // The 2026-08-26 half of the pair above. `clients-self-deployed.test.ts` greps for
     // the literal ONCE PER ROLE, and describe has six call sites, so five could
     // lose their spread and stay green there; the e2e tier scenario only ever
     // exercises whichever describe path that turn happened to take. This is the
     // per-call-site check for the two that carry tool results.
     //
-    // `LocalQwenSmall`, not `VerdaQwen` — the describe flip later the same day.
+    // `SmallQwen`, not `LargeQwen` — the describe flip later the same day.
     // Asserting the specific client rather than "some override" is what makes
     // this the test that would catch summarization being sent to the 27B (or to
     // Anthropic) on a private-tier turn.
     const { describeToolResultOp } = await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribe.mockResolvedValue('ok')
 
-    await withVerdaTier(() => describeToolResultOp('search', '{}', '', 'data'))
+    await withSelfDeployedTier(() => describeToolResultOp('search', '{}', '', 'data'))
 
-    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribe.mock.calls[0][4]).toMatchObject({ client: 'SmallQwen' })
   })
 
   // #420: a failed call THROWS. It used to resolve `''`, the same value as a
@@ -817,7 +871,7 @@ describe('describeToolResultsBatchOp', () => {
     expect(byId.get('1')).toBe('Found A.')
     expect(byId.get('2')).toBe('Fetched B.')
     // `toolArgs` is renamed to the BAML class's snake_case `tool_args`; outside
-    // a verda scope the trailing bag is the accounting collector only (see
+    // a self_deployed scope the trailing bag is the accounting collector only (see
     // `describeToolResultOp`).
     expect(mockResultDescribeBatch).toHaveBeenCalledWith(
       [
@@ -829,7 +883,7 @@ describe('describeToolResultsBatchOp', () => {
     expect(Object.keys(mockResultDescribeBatch.mock.calls[0][1] as object)).toEqual(['collector'])
   })
 
-  it('adds the client override inside a verda scope', async () => {
+  it('adds the client override inside a self_deployed scope', async () => {
     // The BATCH path specifically. The e2e tier scenario cannot reach it — its
     // turns produce a single tool result, which routes to the single-item call
     // — so without this the busiest describe path would be pinned by nothing
@@ -839,9 +893,9 @@ describe('describeToolResultsBatchOp', () => {
       await import('@hames-ai/harness-baml/baml-adapters.server')
     mockResultDescribeBatch.mockResolvedValue({ summaries: [{ id: '1', summary: 'A.' }] })
 
-    await withVerdaTier(() => describeToolResultsBatchOp(items))
+    await withSelfDeployedTier(() => describeToolResultsBatchOp(items))
 
-    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'LocalQwenSmall' })
+    expect(mockResultDescribeBatch.mock.calls[0][1]).toMatchObject({ client: 'SmallQwen' })
   })
 
   it('omits ids the model dropped or answered blank', async () => {
@@ -1155,9 +1209,10 @@ describe('LLMCallError — failed LLM call capture', () => {
         intent: 'do thing',
       }),
     )
-    // promptTemplate must be populated from inlined BAML
+    // Failed calls capture the same included source and output-format placeholder.
     expect(err.llmCall.promptTemplate).toBeDefined()
-    expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*intent\s*\}\}/)
+    expect(err.llmCall.promptTemplate).toContain('{# expanded from LoopControllerBody #}')
+    expect(err.llmCall.promptTemplate).toMatch(/\{\{\s*ctx\.output_format\s*\}\}/)
     // HTTP body captured before the failure
     expect(err.llmCall.rawInput).toBe('{"messages":[{"role":"user","content":"INTENT: do thing"}]}')
     // rawOutput captured (the malformed response) — equivalent to httpResponse
@@ -1546,6 +1601,116 @@ describe('warnIfCollectorEmpty', () => {
 })
 
 describe('extractPromptTemplates', () => {
+  it('includes every call as raw text, preserving placeholders, branches and unknown expressions', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `function Example() -> string {
+      prompt #"{{ Shared("first") }}|{{ Shared("second") }}|{{ ctx.output_format }}"#
+    }
+    template_string Shared(value: string) #"{% if value %}{{ value }}{% else %}empty{% endif %}{{ Other(value) }}{{ _.role("user") }}"#`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+
+    const included =
+      '{# expanded from Shared #}\n{% if value %}{{ value }}{% else %}empty{% endif %}{# unresolved template_string Other: body not found #}\n{{ Other(value) }}{{ _.role("user") }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`${included}|${included}|{{ ctx.output_format }}`)
+  })
+
+  it.each([
+    ['quoted braces', '{{ Shared("{x}") }}'],
+    ['escaped quote', String.raw`{{ Shared("a\"}) still quoted") }}`],
+    ['nested parentheses', '{{ Shared(("x")) }}'],
+  ])('finds the bare call boundary with %s without evaluating arguments', async (_, call) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(value: string) #"RAW {{ value }}"#
+      function Example() -> string { prompt #"before ${call} after"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      'before {# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #} after',
+    )
+  })
+
+  it('includes a floor-division argument and the following call without evaluating either', async () => {
+    const { BamlRuntime } = await import('@boundaryml/baml')
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const source = `client<llm> Offline {
+      provider anthropic
+      options {
+        model "claude-sonnet-4-5"
+        api_key "offline"
+      }
+    }
+    template_string Shared(value: int) #"RAW {{ value }}"#
+    function Example() -> string {
+      client Offline
+      prompt #"before {{ Shared(4 // 2) }} between {{ Shared(1) }} after"#
+    }`
+    // Compile only: this validates the fixture without contacting a provider.
+    BamlRuntime.fromFiles('baml_src', { 'floor-division.baml': source }, {})
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const body = '{# expanded from Shared #}\nRAW {{ value }}\n{# end expansion Shared #}'
+    expect(cache.Example).toBe(`before ${body} between ${body} after`)
+  })
+
+  it('labels a formerly available body after it is renamed or removed, retaining the exact call', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const call = '{{ Shared( "{x}" ) }}'
+    const prompt = `function Example() -> string { prompt #"${call}"# }`
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(`template_string Shared(value: string) #"body"#\n${prompt}`, cache)
+    expect(cache.Example).toContain('expanded from Shared')
+    for (const declaration of ['', 'template_string Renamed(value: string) #"body"#']) {
+      extractPromptTemplates(`${declaration}\n${prompt}`, cache)
+      expect(cache.Example).toBe(`{# unresolved template_string Shared: body not found #}\n${call}`)
+    }
+  })
+
+  it('keeps comments in shared-body signatures and does not truncate long raw bodies', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const body = 'raw {{ value }}\n'.repeat(10_000)
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string Shared(
+        value: string, // unmatched ) ( { in a signature comment
+        // another unmatched (
+      ) #"${body}"#
+      function Example() -> string { prompt #"{{ Shared("x") }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(`{# expanded from Shared #}\n${body}\n{# end expansion Shared #}`)
+  })
+
+  it.each([
+    ['unclosed signatures', 'template_string 0('.repeat(32_000)],
+    ['unclosed raw bodies', 'template_string 0()#"' + ')#"z'.repeat(32_000)],
+  ])('scans the CodeQL %s family within a linear CPU budget', async (_, source) => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const start = process.cpuUsage()
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(source, cache)
+    const cpu = process.cpuUsage(start)
+    // CPU time excludes scheduler delays; the linear scanner has >10x headroom.
+    expect((cpu.user + cpu.system) / 1_000).toBeLessThan(500)
+    expect(cache).toEqual({})
+  })
+
+  it('leaves a recursive reference visible instead of recursing forever', async () => {
+    const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const cache: Record<string, string> = {}
+    extractPromptTemplates(
+      `template_string A() #"{{ B() }}"#
+      template_string B() #"{{ A() }}"#
+      function Example() -> string { prompt #"{{ A() }}"# }`,
+      cache,
+    )
+    expect(cache.Example).toBe(
+      '{# expanded from A #}\n{# expanded from B #}\n{{ A() }}\n{# end expansion B #}\n{# end expansion A #}',
+    )
+  })
+
   it('matches a signature whose comment contains a parenthesis', async () => {
     const { extractPromptTemplates } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const source = `function Planner(

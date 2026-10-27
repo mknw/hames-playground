@@ -33,7 +33,11 @@ import {
 } from '@azure/msal-node'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { GraphAuthRequiredError } from '@hames-ai/connectors/graph/graph-auth'
-import { buildEntraConfig, msalConfiguration } from './entra-config.server'
+import {
+  assertConsentedGraphScopes,
+  buildEntraConfig,
+  msalConfiguration,
+} from './entra-config.server'
 import { loadUserTokenCache, saveUserTokenCache } from './user-tokens.server'
 
 assertServerOnImport()
@@ -68,6 +72,7 @@ export async function getUserGraphToken(
   userId: string,
   scopes: readonly string[] = DEFAULT_GRAPH_SCOPES,
 ): Promise<string> {
+  assertConsentedGraphScopes(scopes)
   const stored = await loadUserTokenCache(userId)
   if (!stored) {
     throw new GraphAuthRequiredError(
@@ -178,6 +183,12 @@ export async function graphFetch(
     responseType?: 'json' | 'base64'
   } = {},
 ): Promise<unknown> {
+  // Delegated tools read Graph. Microsoft Search is the sole read-shaped POST.
+  // Refuse writes before touching the user's token cache, MSAL or HTTP.
+  const method = init.method ?? 'GET'
+  if (method !== 'GET' && !(method === 'POST' && path === '/search/query')) {
+    throw new Error('Delegated Microsoft Graph requests are read-only (GET or POST /search/query).')
+  }
   const token = await getUserGraphToken(userId, init.scopes ?? DEFAULT_GRAPH_SCOPES)
   const res = await sendGraphRequest(token, path, init)
 

@@ -63,15 +63,15 @@ assertServerOnImport()
  *  keeps reporting the length it actually sent. */
 export function createCompactIntentAdapter(): CompactIntentFn {
   const fn = async ({ history, latest }: HistoryQueryInput): Promise<LLMResult<string>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('compactIntent')
     const variables = { history, latest }
 
     // Routes to `DescribeAnthropic` (Haiku 4.5), or to the self-hosted box
-    // on a verda-tier run — the intent is compacted FROM the conversation's
+    // on a self_deployed-tier run — the intent is compacted FROM the conversation's
     // own history, so it moves with the rest of the describe role.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.CompactIntent(history, latest, opts)
@@ -100,13 +100,13 @@ export function createCompactIntentAdapter(): CompactIntentFn {
  *  `LLMCallError` so the fallback path can carry the record. */
 export function createRetrieveQueryAdapter(): RetrieveQueryFn {
   const fn = async ({ history, latest }: HistoryQueryInput): Promise<LLMResult<string>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('retriever')
     const variables = { history, latest }
-    // describe-tier, and it moves with a verda tier decision: the rewrite is
+    // describe-tier, and it moves with a self_deployed tier decision: the rewrite is
     // built from the user's own question and the conversation history.
-    const opts = { collector, ...clientOverrideFor('describe') }
+    const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
       raw = await b.RetrieveQuery(history, latest, opts)
@@ -160,7 +160,7 @@ export function createMemoryExtractAdapter(): (
     window,
     latestUser,
   }: MemoryExtractInput): Promise<LLMResult<ExtractedMemory[]>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('memory-extract')
     const variables = { kindHint, window, latestUser }
@@ -174,15 +174,15 @@ export function createMemoryExtractAdapter(): (
     let items: ExtractedMemory[]
     try {
       // The spread is INLINE in the argument list, not hoisted into a local:
-      // `clients-verda.test.ts` pins it on this very call by balanced parens,
+      // `clients-self-deployed.test.ts` pins it on this very call by balanced parens,
       // and a variable would read as unwired to a pin built to fail loudly.
       items = await b.ExtractMemory(
         kindHint,
         escapeDataFence(window),
         escapeDataFence(latestUser),
         {
-          collector,
           ...clientOverrideFor('describe'),
+          collector,
         },
       )
     } catch (e) {
@@ -202,7 +202,7 @@ export function createMemoryCompactAdapter(): (
   input: MemoryCompactInput,
 ) => Promise<LLMResult<CompactedMemory>> {
   return async ({ kind, members }: MemoryCompactInput): Promise<LLMResult<CompactedMemory>> => {
-    const { b } = await import('./baml_client')
+    const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
     const collector = new Collector('memory-compact')
     const variables = { kind, members }
@@ -217,8 +217,8 @@ export function createMemoryCompactAdapter(): (
           evidence: escapeDataFence(m.evidence),
         })),
         {
-          collector,
           ...clientOverrideFor('describe'),
+          collector,
         },
       )
     } catch (e) {

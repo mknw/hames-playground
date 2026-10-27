@@ -5,10 +5,10 @@
  * supplies runtime BAML clients through a `ClientRegistry`, maps the roles it
  * wants off the built-in chains, and the composition inside
  * `clientOverrideFor` layers the consumer's client OVER the built-in tier for
- * exactly the mapped roles. `clients-verda.test.ts` pins the built-in tier;
+ * exactly the mapped roles. `clients-self-deployed.test.ts` pins the built-in tier;
  * this file pins the layer on top of it. Nothing here renders a prompt — every
  * render is offline (`b.request.*`), no socket opened, same hermetic pattern
- * as `verda-body-shape.test.ts`.
+ * as `self-deployed-body-shape.test.ts`.
  *
  * The five pins, each with the mutation that reddens it (verified, recorded
  * verbatim in the PR body):
@@ -59,7 +59,7 @@ import {
 } from '@hames-ai/harness-baml/clients.server'
 import type { AgentDeps } from '@hames-ai/agents/types'
 /** The offline render's shape — what `b.request.<Fn>` resolves to (the same
- *  loose typing `verda-body-shape.test.ts` uses; the generated request types
+ *  loose typing `self-deployed-body-shape.test.ts` uses; the generated request types
  *  are not exported, so naming them would invent members). */
 type RenderedRequest = { body: { json(): unknown } }
 
@@ -113,17 +113,29 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
 
 async function renderScreen(bag: Record<string, unknown>): Promise<{ model?: string }> {
   const { b } = await import('@hames-ai/harness-baml/baml_client')
+  // `boundary` (the markers' per-call code) comes before the bag (slice 8). The
+  // cast hides a missing one from typecheck, which then lands the bag in the
+  // nonce slot and the render on the declared chain.
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
-  )['ScreenUntrustedContent']('web/fetch', 'fetched page text', bag as never)
+  )['ScreenUntrustedContent']('web/fetch', 'fetched page text', '0123456789abcdef', bag as never)
   return render.body.json() as { model?: string }
 }
 
 // The tier policy is module state (the package-side default is 'anthropic');
-// these tests register a verda default directly, the same way the host's
+// these tests register a self_deployed default directly, the same way the host's
 // composition root would, and restore the safe default after each.
-function policy(tier: 'anthropic' | 'verda', onPrivateCallStart?: (client: string) => void): void {
-  configureInferencePolicy({ defaultTier: () => tier, onPrivateCallStart })
+function policy(
+  tier: 'anthropic' | 'self_deployed',
+  onPrivateCallStart?: (client: string) => void,
+): void {
+  // A self_deployed DEFAULT is reachability-checked on every read (the one tier
+  // rule), so the stand-in host says its tier is reachable.
+  configureInferencePolicy({
+    defaultTier: () => tier,
+    assertTierReachable: () => {},
+    onPrivateCallStart,
+  })
 }
 
 let restored: typeof process.env
@@ -189,31 +201,31 @@ describe('the plug — unmapped roles (P2)', () => {
     expect(plug('describe')?.client).toBe(BYO_DESCRIBE)
   })
 
-  it('unmapped roles keep the built-in behaviour exactly — no bag on the anthropic tier, the built-in tier under a verda default', () => {
+  it('unmapped roles keep the built-in behaviour exactly — no bag on the anthropic tier, the built-in tier under a self_deployed default', () => {
     configureConsumerClients(plugDescribeOnly())
     // Anthropic default: no bag at all, for the mapped role OR the unmapped ones.
     expect(clientOverrideFor('controller')).toBeUndefined()
     expect(clientOverrideFor('screen')).toBeUndefined()
 
-    // Verda default: only the MAPPED role moves; the built-in tier applies to
+    // self-deployed default: only the MAPPED role moves; the built-in tier applies to
     // every other role unchanged.
-    policy('verda')
-    expect(clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
-    expect(clientOverrideFor('screen')).toEqual({ client: 'VerdaQwen' })
+    policy('self_deployed')
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(clientOverrideFor('screen')).toEqual({ client: 'LargeQwen' })
     expect(clientOverrideFor('describe')).toEqual({
       client: BYO_DESCRIBE,
       clientRegistry: expect.any(ClientRegistry),
     })
     // ...and budgeting follows the client the call actually takes.
-    expect(resolveClientForRole('controller')).toBe('VerdaQwen')
+    expect(resolveClientForRole('controller')).toBe('LargeQwen')
     expect(resolveClientForRole('describe')).toBe(BYO_DESCRIBE)
   })
 })
 
 describe('the composition seam — consumer over the built-in tier', () => {
-  it('a mapped role takes the consumer client OVER the verda tier, and the private-call hook does not fire for it', () => {
+  it('a mapped role takes the consumer client OVER the self_deployed tier, and the private-call hook does not fire for it', () => {
     const privateCalls: string[] = []
-    policy('verda', (client) => privateCalls.push(client))
+    policy('self_deployed', (client) => privateCalls.push(client))
     configureConsumerClients(plugRouter())
 
     // The consumer's client wins over the built-in tier for the mapped role.
@@ -224,26 +236,26 @@ describe('the composition seam — consumer over the built-in tier', () => {
     // The built-in tier applies unchanged to every unmapped role — and the
     // private-call hook fires only for those (the consumer's client is not
     // the private tier and owes nobody a wake).
-    expect(clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
-    expect(privateCalls).toEqual(['VerdaQwen'])
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(privateCalls).toEqual(['LargeQwen'])
     expect(privateCalls).not.toContain(BYO_ROUTER)
   })
 
   it('with no consumer layer the seam is what it was before — hook included', () => {
     const privateCalls: string[] = []
-    policy('verda', (client) => privateCalls.push(client))
+    policy('self_deployed', (client) => privateCalls.push(client))
     expect(activeConsumerClients()).toBeUndefined()
-    expect(clientOverrideFor('controller')).toEqual({ client: 'VerdaQwen' })
-    expect(privateCalls).toEqual(['VerdaQwen'])
+    expect(clientOverrideFor('controller')).toEqual({ client: 'LargeQwen' })
+    expect(privateCalls).toEqual(['LargeQwen'])
   })
 
   it('clearing the layer returns the seam to the built-in tier', () => {
-    policy('verda')
+    policy('self_deployed')
     configureConsumerClients(plugRouter())
     expect(resolveClientForRole('router')).toBe(BYO_ROUTER)
     configureConsumerClients(undefined)
-    expect(resolveClientForRole('router')).toBe('VerdaQwen')
-    expect(clientOverrideFor('router')).toEqual({ client: 'VerdaQwen' })
+    expect(resolveClientForRole('router')).toBe('LargeQwen')
+    expect(clientOverrideFor('router')).toEqual({ client: 'LargeQwen' })
   })
 
   it('activateConsumerClients registers the layer (the one-subpath convenience)', () => {

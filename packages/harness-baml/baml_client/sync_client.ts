@@ -22,7 +22,7 @@ import type { BamlRuntime, FunctionResult, BamlCtxManager, Image, Audio, Pdf, Vi
 import { toBamlError, BamlAbortError, ClientRegistry, type HTTPRequest } from "@boundaryml/baml"
 import type { Checked, Check, RecursivePartialNull as MovedRecursivePartialNull } from "./types"
 import type * as types from "./types"
-import type {Attempt, CompactedMemory, ControllerAction, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
+import type {Attempt, CompactedMemory, ControllerAction, ControllerActionThinking, CriticResult, DescribeBatchResult, DescribeItemSummary, DescribeTarget, ExpandedRef, ExtractedMemory, FewShot, LoopTurn, MemoryMember, Message, PlanResult, PlanResultThinking, PriorResult, ReferenceCandidate, ReferenceSelection, ReferenceSelectorResult, RouteOption, RoutingResult, ScreenVerdict, SynthesisReference, ToolCall, ToolCallRequest, ToolDescription, ToolResult} from "./types"
 import type TypeBuilder from "./type_builder"
 import { HttpRequest, HttpStreamRequest } from "./sync_request"
 import { LlmResponseParser, LlmStreamParser } from "./parser"
@@ -247,6 +247,56 @@ export class BamlSyncClient {
     }
   }
   
+  ControllerThinking(
+      user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+      __baml_options__?: BamlCallOptions<never>
+  ): types.ControllerActionThinking {
+    try {
+      const __options__ = { ...this.bamlOptions, ...(__baml_options__ || {}) }
+      const __signal__ = __options__.signal;
+
+      if (__signal__?.aborted) {
+        throw new BamlAbortError('Operation was aborted', __signal__.reason);
+      }
+
+      // Check if onTick is provided and reject for sync operations
+      if (__options__.onTick) {
+        throw new Error("onTick is not supported for synchronous functions. Please use the async client instead.");
+      }
+
+      const __collector__ = __options__.collector ? (Array.isArray(__options__.collector) ? __options__.collector : [__options__.collector]) : [];
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+
+      // Resolve client option to clientRegistry (client takes precedence)
+      let __clientRegistry__ = __options__.clientRegistry;
+      if (__options__.client) {
+        __clientRegistry__ = __clientRegistry__ || new ClientRegistry();
+        __clientRegistry__.setPrimary(__options__.client);
+      }
+
+      const __raw__ = this.runtime.callFunctionSync(
+        "ControllerThinking",
+        {
+          "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null
+        },
+        this.ctxManager.cloneContext(),
+        __options__.tb?.__tb(),
+        __clientRegistry__,
+        __collector__,
+        __options__.tags || {},
+        __env__,
+        __signal__,
+        __options__.watchers,
+      )
+      return __raw__.parsed(false) as types.ControllerActionThinking
+    } catch (error: any) {
+      throw toBamlError(error);
+    }
+  }
+  
   Critic(
       intent: string,attempts: types.Attempt[],
       __baml_options__?: BamlCallOptions<never>
@@ -279,6 +329,56 @@ export class BamlSyncClient {
 
       const __raw__ = this.runtime.callFunctionSync(
         "Critic",
+        {
+          "intent": intent,"attempts": attempts
+        },
+        this.ctxManager.cloneContext(),
+        __options__.tb?.__tb(),
+        __clientRegistry__,
+        __collector__,
+        __options__.tags || {},
+        __env__,
+        __signal__,
+        __options__.watchers,
+      )
+      return __raw__.parsed(false) as types.CriticResult
+    } catch (error: any) {
+      throw toBamlError(error);
+    }
+  }
+  
+  CriticThinking(
+      intent: string,attempts: types.Attempt[],
+      __baml_options__?: BamlCallOptions<never>
+  ): types.CriticResult {
+    try {
+      const __options__ = { ...this.bamlOptions, ...(__baml_options__ || {}) }
+      const __signal__ = __options__.signal;
+
+      if (__signal__?.aborted) {
+        throw new BamlAbortError('Operation was aborted', __signal__.reason);
+      }
+
+      // Check if onTick is provided and reject for sync operations
+      if (__options__.onTick) {
+        throw new Error("onTick is not supported for synchronous functions. Please use the async client instead.");
+      }
+
+      const __collector__ = __options__.collector ? (Array.isArray(__options__.collector) ? __options__.collector : [__options__.collector]) : [];
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+
+      // Resolve client option to clientRegistry (client takes precedence)
+      let __clientRegistry__ = __options__.clientRegistry;
+      if (__options__.client) {
+        __clientRegistry__ = __clientRegistry__ || new ClientRegistry();
+        __clientRegistry__.setPrimary(__options__.client);
+      }
+
+      const __raw__ = this.runtime.callFunctionSync(
+        "CriticThinking",
         {
           "intent": intent,"attempts": attempts
         },
@@ -492,6 +592,56 @@ export class BamlSyncClient {
         __options__.watchers,
       )
       return __raw__.parsed(false) as types.PlanResult
+    } catch (error: any) {
+      throw toBamlError(error);
+    }
+  }
+  
+  PlannerThinking(
+      user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+      __baml_options__?: BamlCallOptions<never>
+  ): types.PlanResultThinking {
+    try {
+      const __options__ = { ...this.bamlOptions, ...(__baml_options__ || {}) }
+      const __signal__ = __options__.signal;
+
+      if (__signal__?.aborted) {
+        throw new BamlAbortError('Operation was aborted', __signal__.reason);
+      }
+
+      // Check if onTick is provided and reject for sync operations
+      if (__options__.onTick) {
+        throw new Error("onTick is not supported for synchronous functions. Please use the async client instead.");
+      }
+
+      const __collector__ = __options__.collector ? (Array.isArray(__options__.collector) ? __options__.collector : [__options__.collector]) : [];
+      const __rawEnv__ = __baml_options__?.env ? { ...process.env, ...__baml_options__.env } : { ...process.env };
+      const __env__: Record<string, string> = Object.fromEntries(
+        Object.entries(__rawEnv__).filter(([_, value]) => value !== undefined) as [string, string][]
+      );
+
+      // Resolve client option to clientRegistry (client takes precedence)
+      let __clientRegistry__ = __options__.clientRegistry;
+      if (__options__.client) {
+        __clientRegistry__ = __clientRegistry__ || new ClientRegistry();
+        __clientRegistry__.setPrimary(__options__.client);
+      }
+
+      const __raw__ = this.runtime.callFunctionSync(
+        "PlannerThinking",
+        {
+          "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null
+        },
+        this.ctxManager.cloneContext(),
+        __options__.tb?.__tb(),
+        __clientRegistry__,
+        __collector__,
+        __options__.tags || {},
+        __env__,
+        __signal__,
+        __options__.watchers,
+      )
+      return __raw__.parsed(false) as types.PlanResultThinking
     } catch (error: any) {
       throw toBamlError(error);
     }
@@ -748,7 +898,7 @@ export class BamlSyncClient {
   }
   
   ScreenUntrustedContent(
-      source: string,content: string,
+      source: string,content: string,boundary: string,
       __baml_options__?: BamlCallOptions<never>
   ): types.ScreenVerdict {
     try {
@@ -780,7 +930,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "ScreenUntrustedContent",
         {
-          "source": source,"content": content
+          "source": source,"content": content,"boundary": boundary
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -798,7 +948,7 @@ export class BamlSyncClient {
   }
   
   Synthesize(
-      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,
+      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
       __baml_options__?: BamlCallOptions<never>
   ): string {
     try {
@@ -830,7 +980,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Synthesize",
         {
-          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null
+          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

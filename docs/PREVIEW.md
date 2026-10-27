@@ -57,8 +57,12 @@ x86/amd64.**
   native image is correct — and the production overlay never loads that file
   (§3), so nothing carries the workaround onto the VM.
 - **16 GiB is not generous.** Neo4j (+apoc+n10s), redis-stack, Postgres, the
-  Node server, Caddy and _N concurrent sandbox containers_ share it. The
-  container build alone peaks near 2.3 GB RSS.
+  Node server, Caddy, the CPU embedder and _N concurrent sandbox containers_
+  share it. Budget separately for a second app container if deployed on the
+  same host (§12). The embedder's 2 GiB
+  compose limit is a placeholder, not measured RSS or a capacity guarantee.
+  Measure peak RSS and ingestion latency alongside serving and builds before
+  choosing a host size. The container build alone peaks near 2.3 GB RSS.
 - **64 GiB disk.** Docker images dominate: redis-stack is ~2.7 GB and neo4j
   ~840 MB before any data.
 - One instance, no HA. The app holds per-session run state, the sandbox
@@ -154,12 +158,14 @@ chmod 600 .env
 $EDITOR .env       # every placeholder; the file explains each variable
 ```
 
-`.env` at the **repo root** is the single source of runtime configuration. It is
+For the single-app shape, `.env` at the **repo root** is the single source of runtime configuration. It is
 read twice, deliberately: Compose reads it for `${VAR}` substitution (that is how
 `COMPOSE_FILE`, the two database passwords and `APP_DOMAIN` reach the overlay),
 and the `app` service loads the same file as its `env_file`. There is no
 `app/.env` on this host — the overlay pins the app's `env_file` to the root file
-so a stray one cannot contribute anything.
+so a stray one cannot contribute anything. The opt-in two-clone shape (§12) replaces
+that app env file with separate app-only files while keeping Compose inputs in
+the release checkout’s root `.env`.
 
 The two lines at the top of `.env` are what make the bring-up a single command:
 
@@ -174,14 +180,14 @@ apply here.
 
 ### 3a. The agent-reachable tool surface
 
-Everything the MCP gateway lists reaches an agent controller: the `general`
-agent passes `tools.all` — literally every listed tool
-(`packages/harness-patterns/tools.server.ts:111,130`) — into one loop
-(`packages/agents/agents/general.server.ts:47,57,63`). An agent's
-declared `servers: [...]` array is display metadata for the agent picker
-(`AgentSelector.tsx:182,195`); **it filters nothing**. So the gateway's enabled
-set _is_ the preview's tool surface, and it has to be chosen rather than
-inherited.
+Every agent takes a namespace slice of what the MCP gateway lists, so the
+gateway's enabled set bounds the preview's tool surface, and it has to be chosen
+rather than inherited. (Until 2026-10-21 the `general` agent passed `tools.all` —
+literally every listed tool — into one loop, so the enabled set WAS the surface;
+the agent was removed, and `agent-postgres-tools.test.ts` pins that no agent is
+handed the whole listing again.) An agent's declared `servers: [...]` array is
+display metadata for the agent picker (`AgentSelector.tsx:182,195`); **it filters
+nothing**.
 
 **Two things decide it, and only one of them is the control.**
 
@@ -189,17 +195,19 @@ inherited.
 an explicit allow-list:
 
 ```
---servers=neo4j-cypher,fetch,web_search,context7,memory
+--servers=neo4j-cypher,fetch,web_search,context7
 ```
 
 That is the control. `--enable-all-servers` means _every server in the
 catalog_, so `configs/mcp-config.yaml` is a **connection-parameter file, not an
 enablement list** — deleting an entry from it changes nothing while the flag is
 set. Verified on this stack, same config file both times: with the flag, nine
-servers and 134 tools; with the allow-list, five servers and 17 tools. A trimmed
+servers and 134 tools; with the allow-list, five servers and 17 tools (measured
+before the `memory` server was retired; the allow-list is four servers now and the
+count has not been re-measured). A trimmed
 config file on its own would read like protection and match nothing.
 
-Write `configs/mcp-config.yaml` with exactly the five, so the file and the
+Write `configs/mcp-config.yaml` with exactly the four, so the file and the
 allow-list say the same thing and nobody has to reconcile them later:
 
 ```yaml
@@ -220,9 +228,6 @@ web_search:
   enabled: true
 
 context7:
-  enabled: true
-
-memory:
   enabled: true
 ```
 
@@ -270,19 +275,17 @@ can tighten here:
   `grep -n 'user_id\|ownerId' app/src/lib/neo4j/*.ts` returns nothing — so
   every signed-in colleague's turn reads the same graph. The future writer is
   the memory hook (#419), which writes through the app and asks the user to
-  confirm first (#206). §11 records the shared property for `memory`, which
-  agents can still write. `PREVIEW-WELCOME.md` carries both.
-- **The agent holding that surface declares no content boundary.**
-  `withInjectionGuard` is declared by exactly three agents — `microsoft-365`,
-  `search` and `retriever-agent` — and `general`, the one that passes
-  `tools.all` into its loop, is not among them (a known, filed gap: #206). Two
-  of the preview's five servers are `fetch` and `web_search`, so text from a
-  page whose author is not your colleague lands in the same controller turn
-  that holds the shared `memory` writes, unsanitised. (It no longer holds
-  `write_neo4j_cypher`: no agent does, since #403.)
-  No setting on this VM switches that boundary on for `general` — it is the code
-  change filed as #206. It bears on how far to trust an answer that cites a fetched
-  page, and on who you invite — the same register §11 uses for the sandbox.
+  confirm first (#206). The shared `memory` MCP server is retired (§11).
+  `PREVIEW-WELCOME.md` carries the Neo4j property.
+- **The agent holding that surface used to declare no content boundary; the
+  one left without one is the sandbox agent.** `withInjectionGuard` is declared
+  by four agents — `microsoft-365`, `search`, `retriever-agent` and
+  `general-next`. The unguarded `general` agent, which passed `tools.all` into
+  one loop (web fetch and the shared `memory` writes in the same controller turn),
+  was removed on 2026-10-21, and the shared memory graph itself was retired on
+  2026-10-22: no agent is handed any memory-graph tool. (No agent holds
+  `write_neo4j_cypher` either, since #403.) The gap that remains in this register
+  is the sandbox agent's, the same one §11 records for the sandbox.
 
 **Pre-launch check — the GitHub MCP server and its token (#261 P0-2).** The
 tracked template carries no `github:` block, so a from-scratch provision is
@@ -313,6 +316,103 @@ dig +short preview.example.com     # must return the VM's public IP
 Caddy requests the certificate the moment it starts. If the name does not yet
 resolve, the ACME challenge fails, Caddy backs off and retries, and repeated
 failures count against Let's Encrypt's rate limits. DNS first, then boot.
+
+### 4a. Request admission, uploads and SSE
+
+Both sites use `configs/Caddyfile`'s `preview` snippet. Caddy limits **request
+bodies** to **32 MiB** on `/api/stash/upload` and `/api/agents/*`, and **1 MiB**
+on every other path; this does not limit response bytes or stream duration.
+The app's Data Stash accepts **5 MiB decoded content**
+(`packages/harness-patterns/stash/document-store.server.ts`, `MAX_CONTENT_BYTES`).
+The multipart intake sends raw file bytes; the JSON intake can send base64
+(under 7 MiB for a maximal binary) or escaped text. A maximal text body can
+expand sixfold under JSON escaping: **30 MiB**, plus up to **2 MiB** for the
+envelope/metadata. The 1 MiB cap accommodates the **64 KiB** skill-file limit
+even after sixfold JSON escaping (`packages/sandbox/skills.ts`). Arbitrarily
+padded JSON, metadata or multipart fields are not exempt. The app still enforces
+its smaller content limits.
+`request_body max_size` rejects reads beyond the cap with 413
+([Caddy reference](https://caddyserver.com/docs/caddyfile/directives/request_body)).
+The app can receive up to the applicable cap before Caddy aborts an oversized
+request, including a chunked body; the cap does not pre-buffer it at the proxy.
+
+Rate limiting lives in `app/src/lib/request-rate-limit.server.ts`, wired before
+route work in both middleware routers. Stock Caddy has no built-in rate limiter;
+its [rate-limit module](https://caddyserver.com/docs/modules/http.handlers.rate_limit)
+is non-standard. A small app admission gate avoids a custom plugin build and
+another dependency to audit/pin. It uses token buckets:
+
+- Each **verified user ID** gets **600 requests/minute**, with a burst of
+  **120** shared across that owner's browser sessions and action tokens, routes
+  and HTTP methods. Session routes resolve the cookie through the session store;
+  `POST /api/agents/:id` uses `resolveActionUser(bearerSecret(authorization))`,
+  including when a cookie is also present. Only the identity the endpoint honors
+  is charged, once. Route auth and allow-list checks still decide access
+  (SD-13/SD-15/SD-16).
+- Verified principals consume **only their own allowance**. Requests with no
+  verified principal (including unknown/expired cookies and unknown action
+  tokens) normally consume a **per-address 600/minute, burst 120** allowance, then
+  the process-wide **anonymous 6000/minute, burst 1000** backstop. Refusals at
+  an earlier bucket do not drain the later one. Cookie lookup precedes address
+  admission, so verified office users do not share a NAT allowance.
+- The unresolved path trusts only the single address Caddy explicitly writes
+  with `header_up X-Forwarded-For {remote_host}`. This requires Caddy as the sole
+  public ingress and the app's loopback-only binding; do not expose the app port
+  or place another proxy in front without revisiting that trust contract.
+  Missing, malformed or multiple forwarded addresses share one fallback bucket.
+  The sole exception is a direct socket from `127.0.0.1`, `::1` or
+  `::ffff:127.0.0.1` with **no** forwarding header: local dev/browser-suite RPCs
+  consume only the anonymous global backstop (100/second, burst 1000). The
+  socket peer, never the URL or another header, establishes this exception;
+  absent peer metadata keeps the fallback. An empty or malformed forwarding
+  header does not qualify. This is admission, not authentication or a dev-auth
+  bypass. Caddy supplies the overwritten address even over a loopback socket,
+  so public unresolved requests retain their per-address bound. The config pin
+  also forbids removing that header after overwriting it (Opus Y1).
+- Exhaustion returns **429** with whole-second `Retry-After` and
+  `Cache-Control: no-store`. A failed session lookup returns **503**, not an
+  anonymous fallback. Both user and address tables hold at most **256** entries;
+  a new key is refused if full, and only fully refilled entries may be reclaimed.
+
+The per-user refill allows ten requests/second because terminal input sends a
+request per keystroke (`InteractiveTerminal.tsx`). These are preview defaults,
+not measured capacity guarantees. Session-route requests with cookies incur a
+session lookup before admission; route authorization still performs its own check. State is
+**in memory per process**, shared by the two router bundles, reset on restart,
+and separate for release/dev containers and any replicas. This is admission
+control, not a concurrent-request cap or edge DDoS protection: distributed or
+anonymous floods can still exhaust the anonymous backstop and affect other
+anonymous users, and authentication or other shared resources can still be
+overwhelmed. These buckets do not promise availability under distributed floods.
+There is no timer on an admitted SSE response, and exhaustion never cancels one.
+`flush_interval -1` stays on both upstreams, with no response buffering or stream
+timeout ([Caddy streaming reference](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)).
+
+Validate syntax offline using a local **stock Caddy 2.10** binary, never a running
+deployment. From the repo root, this uses synthetic inputs and temporary storage;
+it does not start a server or perform ACME/DNS/live-provider checks:
+
+```bash
+check_dir=$(mktemp -d)
+cp configs/Caddyfile "$check_dir/Caddyfile"
+mkdir "$check_dir/dev-sites"
+# Single-app config, with no dev site mounted:
+APP_DOMAIN=release.example.invalid ACME_EMAIL=operator@example.invalid \
+  XDG_DATA_HOME="$check_dir/data" XDG_CONFIG_HOME="$check_dir/config" \
+  caddy validate --adapter caddyfile --config "$check_dir/Caddyfile" &&
+  cp configs/Caddyfile.dev "$check_dir/dev-sites/dev.caddy" &&
+  APP_DOMAIN=release.example.invalid DEV_APP_DOMAIN=dev.example.invalid \
+  ACME_EMAIL=operator@example.invalid XDG_DATA_HOME="$check_dir/data" \
+  XDG_CONFIG_HOME="$check_dir/config" \
+  caddy validate --adapter caddyfile --config "$check_dir/Caddyfile"
+rm -rf "$check_dir"
+```
+
+Unit text pins: `app/src/__tests__/lib/config/caddy.test.ts`; admission and failure
+policy: `app/src/__tests__/lib/request-rate-limit.test.ts`. These checks do not
+prove live ACME, uploads or SSE timing; operator smoke on **both** hostnames
+remains required after deployment. No host access or private-tier probe is part
+of this step.
 
 ## 5. Entra app registration — the exact changes
 
@@ -365,14 +465,25 @@ https://<APP_DOMAIN>/auth/signin
 `entra-config.server.ts:40`). Front-channel logout with the v2 endpoint needs no
 separate registration.
 
-**c. Consent every delegated Graph scope, before anyone signs in.** _API
-permissions → Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`,
-`Mail.Send`, `Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`, then
-**Grant admin consent**. The full set is requested at sign-in
-(`DEFAULT_GRAPH_SCOPES`, `entra-config.server.ts`), and **a scope that is
-requested but not consented fails the entire sign-in**, not just the connector
-that wanted it. If a scope turns out to be blocked, trim it via
-`AZURE_GRAPH_SCOPES` in `.env` and restart — no code change.
+**c. Keep the already-consented delegated Graph scopes.** _API permissions →
+Microsoft Graph → Delegated_: `User.Read`, `email`, `Mail.Read`, `Mail.Send`,
+`Calendars.ReadWrite`, `Files.Read.All`, `Sites.Read.All`. MSAL also supplies
+`openid`, `profile`, `offline_access`; keep their consent for background refresh.
+The full set is requested at sign-in (`DEFAULT_GRAPH_SCOPES`), and **a requested
+scope without consent fails the entire sign-in**. With user consent disabled,
+adding `Calendars.Read` causes “Approval required” even though the existing
+`Calendars.ReadWrite` permission already covers the calendar reader.
+
+`AZURE_GRAPH_SCOPES` may trim only this seven-scope set (case-insensitive);
+all other scopes, including `Calendars.Read` and delegated `.default`, refuse
+boot and delegated token minting. Keep the same registration/client id and add
+only the redirect URI. The owner is no longer asked to remove `Mail.Send` or
+`Calendars.ReadWrite` or revoke their existing grants. Leave application
+permissions (the roster read) unchanged.
+
+The app requests `Mail.Send` and `Calendars.ReadWrite` but ships no Graph write
+tool; requesting these scopes adds no write tool. HITL write gating stays
+Neo4j-only. See the [consent runbook](deployment/entra-setup.md#keep-the-consented-permissions-in-entra).
 
 Also confirm the client secret in `.env` is the secret **value**, not its id, and
 note its expiry somewhere you will see it.
@@ -396,8 +507,9 @@ from pages on https://preview.example.com`.
 grep -n 'example\.com' .env       # must return nothing
 ```
 
-The other half of the preflight is the four values that have no default and no
-fallback. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
+The other half of the preflight is the required values with no default or
+fallback. `ANTHROPIC_API_KEY` may be empty only on a private-only server
+(`INFERENCE_TIERS=self_deployed`); the three encryption/session keys remain required. `DATA_ENCRYPTION_KEY` is the one that hides: it does **not** fail at
 boot on a fresh database. The schema init finds no encrypted rows, logs a
 warning and continues
 (`app/src/lib/db/migrate-encryption.server.ts:363-379`), so the stack comes up
@@ -408,38 +520,75 @@ healthy and the first sign-in is what dies — `encryptField` throws with no key
 opaque error and takes steps 5–9 with it. Catch it here instead:
 
 ```bash
-K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY|ANTHROPIC_API_KEY"
+K="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
+# Ordinary deployments also require ANTHROPIC_API_KEY (4 keys total).
+# A private-only deployment requires only these 3; env_problems below checks policy.
+if ! grep -qE "^INFERENCE_TIERS=[\"']?(self_deployed|private)[\"']?$" .env; then
+  K="$K|ANTHROPIC_API_KEY"
+fi
 grep -nE "^($K)=(''|\"\")?$" .env    # must return nothing — a hit is still empty
-grep -cE "^($K)=" .env               # must print 4 — fewer means a line is gone
+grep -cE "^($K)=" .env               # must print 3 (private-only) or 4 — fewer means a line is gone
 ```
 
 Two checks because the two failures look nothing alike: a value left at the
 template's `''` and a line removed from `.env` altogether.
 
-**Pre-launch check — the private tier is TWO endpoints, and it refuses on one.**
-Only if this host will reach the self-hosted tier at all: either
-`USE_VERDA_INFERENCE='1'`, or nothing set but a user picking **Private** on a
-conversation's switch (beside the Agent selector), which is available whenever
-the endpoints are configured. The
-`describe` role runs on a 4B summarizer at `SMALL_LLM_BASE_URL`, and a private
-tier without it is **refused, not descaled** — deliberately, because falling back
-onto the 27B would be a routing change nobody asked for, invisible in every log,
-on the role that is handed tool results verbatim. So a host with the 27B
-configured and this line missing has a switch whose private position either
-fails every turn or renders disabled, depending on which of the two is
-missing:
+**Pre-launch check — the private tier requires all five values.**
+The 27B chat endpoint, the 4B summarizer and the systemone decisions URL are
+one tier. A partial configuration is refused; there is no public-provider
+fallback and no summarizer fallback onto the 27B. The decisions URL is a
+**full URL ending in `/v1/systemone`**, rather than a base to which the app
+appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
+with the summarizer, even if a local llama-server accepts unauthenticated
+summarization. `CLAUDE.md`'s private-tier section is the routing contract.
+
+P4 file ingestion (#717) is enabled only when INFERENCE_TIERS=self_deployed. Do not unset it on a deployment whose conversations hold ingested files: history is not screened on a tier flip until the release slice in #693 lands.
+
+**Private-only server (#653):** set `INFERENCE_TIERS=self_deployed` in the runtime `.env`.
+The bootstrap and server boot then require all five private-tier values and accept
+an empty `ANTHROPIC_API_KEY`. Existing Anthropic conversation rows and last-used
+seeds resolve to private for their next turn, without rewriting the history.
+Server actions refuse new Anthropic selections. The switch keeps Anthropic visible
+but greyed out, disabled, with an explanation. Explicit public run frames and
+public/unverified client overrides fail before a provider request; summaries,
+screening, memory and titles use their private role clients. Unset preserves
+all existing behavior. `USE_SELF_DEPLOYED_INFERENCE=1` by itself does **not** disable
+Anthropic or waive its key. This is a configuration check, never a health probe.
+
+For staging, **configure all five values** with the operator's private-tier
+endpoints and keys. A user who never chose starts on Private whenever the
+whole tier is configured, even with `USE_SELF_DEPLOYED_INFERENCE` unset; the first turn
+may pay a metered cold start. The conversation's own tier and the user's
+last-used tier take precedence. A run that names no tier at all (a script, a
+job, an eval) is on the self-deployed tier by one rule that routing and the
+guards both read, and is refused where the tier is not configured; it is never
+routed to Anthropic. `USE_SELF_DEPLOYED_INFERENCE=1` is the boot-time switch
+only: it requires the tier to be configured when the server starts, and it no
+longer decides the tier of any run. A host that intentionally offers only
+Anthropic leaves all five values and the flag unset, and its runs name the
+Anthropic tier explicitly (every turn does).
 
 ```bash
-# All three, or none of them — two out of three is the refusal. Must print 3 or 0.
-grep -cE "^(VERDA_INFERENCE_ENDPOINT|VERDA_INFERENCE_API_KEY|SMALL_LLM_BASE_URL)='.+'$" .env
+# Must print 5 for staging (0 only for an Anthropic-only host); any partial set
+# must be completed before boot. Counts only; never print keys or endpoint values.
+K_PRIVATE="LARGE_LLM_BASE_URL|LARGE_LLM_API_KEY|SMALL_LLM_BASE_URL|SMALL_LLM_DECISIONS_URL|SMALL_LLM_API_KEY"
+grep -cE "^($K_PRIVATE)='.+'$" .env
 
-# And read the two URLs back: both MUST end in `/v1`. Without it every call 404s
-# on `<root>/chat/completions`, which the app refuses at module load for the 27B.
-grep -E "^(VERDA_INFERENCE_ENDPOINT|SMALL_LLM_BASE_URL)=" .env
+# Run from the checkout root. Use boot's shared validation (requires python3);
+# it prints only key/problem labels, never configured values, and makes no calls.
+HAMES_APP_DIR="$PWD" HAMES_BOOTSTRAP_SOURCED=1 source scripts/bootstrap-vps.sh
+env_problems
 ```
 
-`SMALL_LLM_API_KEY` is **not** required: llama-server authenticates nothing, and
-an endpoint that does check a key 401s loudly on its own.
+The bootstrap asks for missing values on an interactive re-run, including a
+partially configured tier; both bearer-key prompts are hidden. Its preflight
+refuses a partial set, malformed URLs, or a flag enabled without the
+complete set, before starting containers. This checks configuration only and
+makes no provider request. The decisions URL must parse as an absolute HTTPS
+URL or HTTP loopback URL, without userinfo or a trailing-dot host, with pathname
+exactly `/v1/systemone`, and must not name a public systemone provider. Both
+checks use this same validation. Endpoint values belong with the operator
+(ADR-0008); the env names remain unchanged when the hosting provider changes.
 
 ```bash
 cd /opt/hames
@@ -485,6 +634,9 @@ docker compose exec app printenv VITE_DEV_BYPASS_AUTH   # false
 
 ## 7. Escrow the three keys — do this now, not later
 
+For subsequent changes, use the [per-key rotation runbook](deployment/secret-rotation.md).
+Gateway authentication (#392/#417) and the data re-encrypt tool remain deferred.
+
 ```bash
 grep -E '^(AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY)=' .env
 ```
@@ -514,6 +666,81 @@ this VM ever holds rows written before the key was set.
 
 ## 8. Smoke checklist
 
+Configure the [external uptime probe and alerting checklist](deployment/observability.md)
+from an independent runner. Its liveness check makes no inference calls; alert
+thresholds remain named placeholders until the operator measures the deployment.
+
+Bootstrap's on-box smoke also checks the deployed Neo4j bridge and daemon
+isolation settings, paired egress probes and a Cypher round trip through the
+relay, even with `--no-seed`. Private `/health` is **skipped** by default;
+`--probe-private-health` explicitly permits a single GET that may wake the small
+model. No completion or retry is made. See the
+[probe scope](testing/neo4j-egress.md#existing-deployment-smoke-432-g20-rows-3-4-and-10)
+and [dump-first Engine-upgrade runbook](deployment/docker-engine-upgrade.md).
+
+Before admitting containers, install the [forwarded-only metadata policy and
+its opt-in persistence unit](deployment/egress-design.md#forwarded-only-deployment-mode-676)
+from a reviewed pinned artifact:
+
+```sh
+python3 scripts/metadata-egress.py --docker-user-only --persist # offline preview
+sudo python3 scripts/metadata-egress.py --docker-user-only --apply --persist
+sudo systemctl start vps-metadata-egress.service
+sudo python3 scripts/metadata-egress.py --docker-user-only --check # read-only
+```
+
+**Operator notes** (from the #676 throwaway-host boot/restart trial):
+
+- **On a host that still has the interim manual denies, do not use the block
+  above.** Run the [replacement sequence](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
+  verbatim, from `$APP_DIR` at the merged commit. Keep the manual denies until
+  the second `--check`, and run the full bootstrap smoke before reopening
+  ingress.
+- **Never restart or stop the seed directly**: that restarts or stops Docker
+  and every container. Reapply with
+  `sudo systemctl restart vps-metadata-egress.service` or
+  `sudo python3 -I scripts/metadata-egress.py --docker-user-only --apply`
+  (from `$APP_DIR`), then `--check`.
+- **From `--persist` on, a seed failure takes Docker and every container
+  down** (fail-closed), at boot or on a Docker restart. Fix the cause named by
+  the seed's `FAIL …` line (`journalctl -u vps-metadata-egress-seed.service`),
+  then `sudo systemctl start docker`. If systemd reports "start request
+  repeated too quickly", first run
+  `sudo systemctl reset-failed vps-metadata-egress-seed.service docker.socket`.
+- **Keep provider-console access available before persisting** and through
+  the apply.
+
+This mode denies the reviewed IPv4/IPv6 metadata inventory and conntrack
+original destinations in `DOCKER-USER` only; host `INPUT`/`OUTPUT` and host
+metadata access retain their existing policy (`scripts/metadata-egress.py:198`,
+`:427`). `--only smoke` checks the installed rules and persistence, attempts a
+three-second TCP connection to `169.254.169.254:80` from a throwaway default-
+bridge container with all capabilities dropped, and requires app liveness both
+before and after (`scripts/bootstrap-vps.sh:1945`; `scripts/metadata-egress.py:276`).
+It uses the local app image without pulling, makes no metadata HTTP request,
+and needs no public internet or private-tier box. A runtime error fails smoke;
+an endpoint timeout alone is not packet proof. Dual-stack synthetic packet,
+counter and reboot/restart evidence remains operator work. #676's trial
+supplied it on a throwaway host; the live host relies on readback and smoke.
+
+Docker **will** auto-start restart-policy containers before an After=docker.service
+unit runs. Persistence now enables a required Before=docker.service seed that
+creates DOCKER-USER in both families if missing and inserts the same tagged denies;
+the After unit remains the strict parent/rule readback. #676's throwaway-host
+boot/restart trial confirmed that this closes the firewall window across Docker
+restarts and reboots ([report](https://github.com/mknw/hames-playground/issues/676#issuecomment-6253496890)).
+Quiesce workloads during firewall maintenance,
+reapply and verify both units and families before admission. Smoke requires an
+increase in the tagged IPv4 DROP packet counter, plus health before and after.
+Forwarded WireServer TCP 80/32526 is denied; host metadata and DNS 53 stay unchanged.
+See the [gap-free replacement and console recovery procedure](deployment/egress-design.md#operator-adoption-and-temporary-rule-replacement)
+and [policy upgrade procedure](deployment/app-upgrade.md#metadata-policy-upgrade).
+Undo is `--docker-user-only --apply --remove`: it removes only journaled exact
+rules/files/enablement, never a saved full table. On systemd 255 the trial saw
+`--remove` keep Docker up; on another systemd, check `systemctl is-active docker`
+afterwards. Restore interim/manual denies
+first; an upgrade must not remove the active denies without that coverage.
+
 Run all of it yourself before inviting anyone, from a browser that has never
 seen the host.
 
@@ -533,8 +760,8 @@ docker compose logs mcp-gateway | grep -E 'Those servers are enabled|tools liste
 Step 1b must print exactly:
 
 ```
-- Those servers are enabled: neo4j-cypher, fetch, web_search, context7, memory
-> 16 tools listed in …
+- Those servers are enabled: neo4j-cypher, fetch, web_search, context7
+> 7 tools listed in …
 ```
 
 Order varies; the **set** and the **count** do not. `redis`,
@@ -738,6 +965,12 @@ says escrow it before the first sign-in rather than after the first backup.
 
 ## 10. Rollback
 
+Before moving a deployed pin, follow the [application upgrade gate](deployment/app-upgrade.md):
+stop writers, take local dumps, retain the actual last-good images, then require
+post-upgrade smoke including the embedder and explicitly authorized private-tier
+checks. Same-disk dumps are required for this change window even while scheduled
+off-box backups are deferred. That runbook also covers additive schema rollback.
+
 **A bad app release** — the data tier is untouched, so this is a rebuild:
 
 ```bash
@@ -799,10 +1032,13 @@ diagnosis, and nothing is reachable from outside.
   VM.** The stack carries the embedder as the compose `embedder` service
   (profile `app`, so the `COMPOSE_PROFILES=app` of the bring-up includes it;
   internal network only; the app is pointed at `http://embedder:8090/v1`). The
-  weights are not in git: put `Qwen3-Embedding-0.6B-Q8_0.gguf` in `models/`
-  ([`models/README.md`](../models/README.md)), or the service exits at start and
-  vector search over uploads stays dead while everything else — upload, storage,
-  download, conversion — works. The service publishes **no port**, not even on
+  weights are not in git: the bootstrap's `boot` stage fetches them from Hugging
+  Face, pinned by repository, revision commit and file SHA-256 in
+  `models/embedder.lock`. Manual bring-up runs
+  `python3 scripts/prepare-embedder.py models` first
+  ([`models/README.md`](../models/README.md)). Each container start verifies the
+  checksum; bootstrap waits for health and its smoke requires a 1024-dimension
+  forward pass. The service publishes **no port**, not even on
   loopback. Alternatively point `EMBEDDINGS_LOCAL_URL` at a remote
   OpenAI-compatible embedder (the `/v1` suffix is required; "local" names the
   wire format, not the machine) or `EMBEDDINGS_PROVIDER` at a hosted one — which
@@ -816,26 +1052,25 @@ diagnosis, and nothing is reachable from outside.
   runbook's order (dump before any `up`).
 - **Neo4j's password is set once.** `NEO4J_AUTH` is applied only when the data
   volume is empty, so changing `NEO4J_PASSWORD` in `.env` after first boot
-  changes what the app sends and not what the database expects — the symptom is
-  an authentication failure on the graph panel with no other clue. Change it in
-  both places:
-  `docker compose exec neo4j cypher-shell -u neo4j -p <old> "ALTER CURRENT USER SET PASSWORD FROM '<old>' TO '<new>'"`,
-  then update `.env` and `docker compose up -d --force-recreate app`.
+  changes what clients send and not what the database expects. Follow the
+  [Neo4j password rotation procedure](deployment/secret-rotation.md#neo4j_password),
+  including the gateway renderer and every app consumer.
 - **Postgres has the same one-shot trap.** `POSTGRES_PASSWORD` is applied only
   when the data volume is initialised. It only bites on a reused volume, which
-  a from-scratch preview does not have — but it is the same footgun, and worth
-  knowing before you reuse a volume from an earlier attempt.
+  a from-scratch preview does not have. Use the
+  [Postgres password rotation procedure](deployment/secret-rotation.md#postgres_password-and-clone-database-credentials)
+  for the interactive role-password change and matching client configuration.
 - **No off-box backups.** `backups/` sits on the VM's own disk and nothing
   copies it away (§9). Losing the VM loses the data with it. Accepted for this
   alpha by owner decision; not a posture to carry past it.
-- **The `memory` MCP server is one graph for everybody.** It is backed by a
-  single named volume (`claude-memory:/app/dist`,
-  `configs/custom-catalog.yaml:88-104`) with no per-user or per-session
-  scoping, so anything an agent writes there is readable by every other
-  signed-in user's agent. It is in the preview's allow-list (§3a) because
-  `general` advertises it in the picker — a choice made when that list was
-  written, not something the agent's `servers: [...]` array enforces; nothing
-  in the preview writes to it on its own.
+- **The shared `memory` MCP server is retired (2026-10-22).** It was one graph
+  for every signed-in user, kept in a single named volume with no per-user
+  scoping. It is gone from the catalog, the gateway config and the §3a
+  allow-list, and no agent is handed a memory-graph tool
+  (`agent-postgres-tools.test.ts`). Personal memory is per-user, encrypted, in
+  Postgres (#419). A host provisioned earlier may still hold the old
+  `claude-memory` volume: it is no longer read, and exporting then removing it
+  is a separate, announced operator step, backup first.
 - **The sandbox containers are not hardened.** They run as root with no
   capability drops, no read-only root and no seccomp profile, and only the
   strict egress profile is actually enforced — the other profile names fall
@@ -854,115 +1089,489 @@ diagnosis, and nothing is reachable from outside.
   survivable — and changing it needs a re-encryption pass nobody has written.
   Treat `DATA_ENCRYPTION_KEY` as set once for the life of this preview.
 
-## 12. More than one environment
+## 12. Two branch clones, one infrastructure stack
 
-[ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md) records why
-this is guidance rather than a plan: how many environments a deployment runs,
-and on how many hosts, is its operator's decision. What follows is what a
-second environment (a dev or a prod beside staging, say) adds to §§0–11. None
-of it is built here.
+The [G20 row 8 ruling](https://github.com/mknw/hames-playground/pull/432#issuecomment-6238143691)
+supports **one clone pinned to the release branch and another pinned to the dev
+branch**. Each builds and runs its own app container. Both use the **same compose
+project**, Postgres server, Neo4j, Redis, gateway, embedder and document converter.
+Do not repeat §§3–7 in a second compose project. This remains provider-neutral
+operator guidance ([ADR-0008](adr/0008-deployment-guidance-is-provider-neutral.md)).
 
-**Each environment is a complete copy of §§3–7**: its own compose project,
-`.env`, Postgres, Neo4j and Redis volumes, and three keys. That means **one
-escrow per environment in §7**, with no key reused across environments.
-Environments may load the same graph into their own Neo4j, but conversation
-databases are never shared.
+`docker-compose.clones.yaml` is an **opt-in third overlay**, after the base and
+production overlay. It adds only `app-dev` and extends the existing Caddy service;
+`app` remains the release app and Caddy's existing upstream.
+The dev app inherits `app/Dockerfile`'s built runtime,
+healthcheck and shared dependencies, while its build contexts point at the dev
+checkout. It has a distinct image tag and container name, and publishes no port.
+It is never `pnpm dev`, Vite, a source bind mount, or a second full environment.
+Both containers explicitly keep `VITE_DEV_BYPASS_AUTH=false` (SD-15).
+Both checkouts must include the request-admission middleware (§4a), and both
+app images must be rebuilt for the rate limit to apply. Updating Caddy alone
+cannot add rate admission to an older app image.
 
-**Changes to compose and code have to land before two environments can share
-one host.** The committed files assume one stack per Docker daemon, in five
-places:
+### Checkouts, hostnames and app-only configuration
 
-1. **Container names.** Every service except `mcp-config` and `mcp-gateway`
-   pins a `container_name` (`docker-compose.yaml:23,121,149,175,201`;
-   `docker-compose.prod.yaml:157`). Those names are global to the daemon. The
-   top-level `name: hames` (`docker-compose.yaml:4`) also has to differ per
-   project.
-2. **Ports.** Each project publishes the same loopback ports
-   (`docker-compose.yaml:26-204`), and the overlay gives Caddy `80`/`443` in each
-   project (`docker-compose.prod.yaml:162-165`). Only one process can bind each
-   port.
-3. **The sandbox reaper.** It force-removes every `kg-sandbox=1` container on
-   the host when a process starts
-   (`packages/sandbox/docker-backend.server.ts:415-451`, called from
-   `packages/sandbox/with-sandbox.server.ts:198`; the #97 caveat). One
-   environment's restart kills the other's in-flight sandboxes.
-4. **Volumes the gateway creates.** The `memory` server's `claude-memory` volume
-   (`configs/custom-catalog.yaml:103-104`) is created by the gateway, not by
-   compose, so it is not scoped to a project and both environments would share
-   one memory graph. The sandbox cache volume has the same shape
-   (`docker-backend.server.ts:151-152`), but `SANDBOX_CACHE_VOLUME` overrides it
-   per environment.
-5. **Memory.** §1 sizes one stack at 16 GiB and calls that "not generous". Two
-   stacks have not been measured.
+Keep two separate checkouts on the operator's chosen release/dev branches. Record
+and verify **each branch name and full commit SHA before every build**; the
+release checkout is the directory from which compose is run. Do not switch that
+checkout to dev to build the second image. `DEV_CLONE_PATH` is the absolute path
+to the other checkout; its `app/` and workspace root are the dev image's two build
+contexts. Both checkouts must include these guards before enabling two apps.
 
-Until those are fixed, a second project on the same VM collides at
-`docker compose up`. Worse, it may come up and share state. The overlay stays
-load-bearing as it is today (§2), so read any of those changes against this
-runbook, not against the compose file alone.
+Set these operator inputs in the release checkout's root `.env`:
 
-**One Caddy, two hostnames.** On a shared host, a single Caddy outside both
-projects terminates TLS for each environment's hostname and proxies each one
-to its own app. `configs/Caddyfile` has one site block (`{$APP_DOMAIN}`, line
-18), so it needs a second. It also needs distinct upstreams. Line 21 proxies
-to `app:3444` by compose service name, both projects call their app service
-`app`, and the loopback alternative collides on `127.0.0.1:3444` (item 2). A
-host with one environment keeps today's one-site shape.
+| Input                                               | Meaning                                                                      |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `COMPOSE_FILE`                                      | `docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml`    |
+| `COMPOSE_PROFILES`                                  | `app`                                                                        |
+| `DEV_CLONE_PATH`                                    | Absolute path to the separate dev-branch checkout                            |
+| `DEV_REF`                                           | Reviewed full commit SHA; dev HEAD must match and its checkout must be clean |
+| `APP_DOMAIN` / `DEV_APP_DOMAIN`                     | Distinct release/dev HTTPS hostnames                                         |
+| `RELEASE_RUNTIME_ENV_FILE` / `DEV_RUNTIME_ENV_FILE` | Separate absolute paths to app-only runtime env files                        |
+| `RELEASE_DATABASE_URL` / `DEV_DATABASE_URL`         | The separate-database policy below                                           |
 
-**Hostnames.** One per environment, under a domain you control (§4), and Entra
-needs one redirect URI per environment hostname (§5a); an app registration
-accepts several. Where DNS is not ready, a provider-assigned name can stand in
-for §4's A record (on Azure, a public IP's `<label>.<region>.cloudapp.azure.com`,
-so two names on one VM means two public IPs). Read §14's note on shared
-provider names and Let's Encrypt's limits before relying on one.
+The persisted `COMPOSE_FILE` is also bootstrap's explicit clone opt-in; no new
+flag is needed. Bootstrap accepts exactly the file order above, optionally followed
+by **one** dev sandbox overlay: `:docker-compose.dev-sandbox.yaml` for the existing
+owner socket opt-in, or `:docker-compose.dev-sandbox-vm.yaml` for dev's own
+environment VM ([below](#dev-sandbox-on-its-own-environment-vm)). Only after the
+second may `:docker-compose.release-sandbox-vm.yaml` follow, for release's own
+VM ([below](#release-sandbox-on-its-own-environment-vm)); no other order or
+combination is accepted. Keep
+`COMPOSE_PROFILES=app`. Set these as literal values (quote paths if needed), not
+shell exports or interpolated expressions. Bootstrap refuses clone-specific inputs
+under the single-app file list, unsupported file orders, missing inputs, relative
+or missing runtime files, and missing overlay/validator/Caddy files. Alternate
+`export KEY=value` or `KEY = value` spellings of the Compose/clone inputs are
+refused in both shapes. Bootstrap requires `DEV_REF` to match the clean dev
+checkout's HEAD; it does not update that checkout for you. It never
+silently falls back to the root app env or the administrator database URL.
 
-**A registry replaces `--build`.** CI builds each image once and pushes it to
-a private registry, and each host pulls by digest. Images stay private because
-they can carry org data. Prefer a registry the hosts and CI reach with a
-workload identity over one that needs a stored credential: on Azure, that is a
-container registry that GitHub Actions pushes to through OIDC
-workload-identity federation and each VM pulls from with its own managed
-identity, so no long-lived registry secret exists anywhere. A host that has to
-store a pull credential is the thing to avoid, which is why §14's single box
-builds its own image instead. The app service then runs
-`image: <registry>/<repo>@sha256:<digest>` instead of building
-`hames-app:local` (`docker-compose.yaml:188-200`). That compose change comes
-with the workflows, not before them.
+Create both app-only files with mode 0600, outside **both** checkouts (canonical
+paths are checked). Bootstrap refuses group/other permission bits. Use the app
+settings in `.env.production.example` as the inventory, but **do not copy the root
+file wholesale**: omit `POSTGRES_PASSWORD`, compose controls, and the other
+clone's settings/secrets. The validator also refuses root-only `RELEASE_DATABASE_URL`,
+`DEV_DATABASE_URL`, `*_RUNTIME_ENV_FILE`, `DEV_CLONE_PATH` and `COMPOSE_FILE` in app envs,
+sibling passwords/URLs/keys under any variable name, and the rendered Postgres
+administrator password anywhere in either app env. Database role passwords must
+differ, and `postgres`, `template0` and `template1` cannot be app databases.
+The overlay supplies each app's `DATABASE_URL`, Entra
+callback/logout URLs, sandbox namespace/cache, shared-service endpoints and
+Neo4j credentials. Keep `VITE_ALLOWED_EMAILS` separate for each app and leave it
+unset at image-build time. Runtime allow-lists win (`app/src/lib/auth/allowList.ts`).
 
-**Each environment has its own allow-list.** A release-candidate environment
-typically lists a subset of users. One image can serve different lists only
-because the runtime value wins over the build-time one
-(`app/src/lib/auth/allowList.ts:24-29`), so **the CI build must not set
-`VITE_ALLOWED_EMAILS`**: if it did, that value would become the fallback
-allow-list in every environment, prod included. §8 step 5 is still the test of
-each gate, so run it once per environment. An Entra group or app-role check
-would replace the lists and is not designed here.
+Register **both exact HTTPS callbacks** in Entra (§5), one per hostname:
+`https://<release-host>/api/auth/callback` and
+`https://<dev-host>/api/auth/callback`. An app registration can list both; reusing
+that registration is deliberate, but it does not justify reusing application
+keys. Generate **independent `DATA_ENCRYPTION_KEY`, `AUTH_SESSION_SECRET`, and
+`TOKEN_ENCRYPTION_KEY` for each clone**, and escrow each key set separately (§7).
+In clone mode, `--only env --keys-escrowed` fingerprints all six runtime-file
+keys; changing any one invalidates the attestation. Unused root application
+keys do not satisfy this gate. Boot also checks the owner-required settings in
+each runtime file, including its Entra secret and allow-list.
+Never put release ciphertext or a release database dump into dev. A second key
+alone is not database isolation: it can instead turn a schema/backfill mistake
+into an unreadable database. Auth cookies have no `Domain` attribute
+(`app/src/lib/auth/cookies.server.ts`); independent signing keys also prevent one
+clone accepting the other's signed login handshake (SD-17).
 
-**One GPU box for several environments.** If every environment points
-`VERDA_INFERENCE_*` at the same scale-to-zero deployment, a turn in one
-environment can queue behind a turn in another. Each app process keeps its own
-cold-start estimate and its own wake poll
-(`app/src/lib/inference/cold-start.server.ts:71-77`;
-`app/src/lib/inference/wake.server.ts:117,293-303`). So the "starting GPU"
-countdown in one environment does not know about a wake that another
-environment just paid for, and an environment that joins partway through
-another's cold start can record the rest of that wait as a cold start of its
-own, which lowers its estimate. Only the countdown is affected, not routing.
+The clones overlay mounts `configs/Caddyfile.dev` into Caddy's optional
+`dev-sites/*.caddy` import and requires `DEV_APP_DOMAIN`. That second site routes
+only to `app-dev:3444`, shares the release site's request/SSE settings (§4a), and
+keeps dev upstream failure confined to the dev hostname (502); Caddy startup
+does not depend on dev health. Without the overlay there is no mounted dev site
+and no dev-host environment variable in Caddy. Keep the hostnames distinct;
+the §12 preflight already refuses shared callback origins. DNS, callback
+registration and allow-list smoke are needed for **each** hostname; offline
+pins do not establish reachability or authentication correctness (SD-18).
 
-**Where the live layer runs.** The coordinated burst, `pnpm eval:harness` and
-`smoke-verda.ts` belong against a remote environment rather than a laptop. A
-laptop on Apple Silicon is aarch64 and the hosts are linux/amd64, and #412
-shows what that difference hides. The hermetic layers do not move
-([`testing/pyramid.md`](testing/pyramid.md)).
+### Database policy — separate databases and limited roles
+
+**Owner-approved row 8c:** both containers use `postgres:5432`, but each has its own
+database and login role. Neo4j and Redis remain shared. This removes cross-clone
+schema-hash churn and prevents either clone's encrypted-column backfill touching
+the other's rows. The policy inputs are isolated in
+`docker-compose.clones.yaml`'s `x-clone-database-policy`; its matching checks are
+in the database-policy section of `scripts/validate-clones.mjs`. Keep this one
+policy section and its matching guard aligned if the owner changes the decision;
+there is no silent shared-database fallback. No host has been accessed by this step.
+
+The operator provisions two databases/roles on the **existing**
+server, using an administrator session (`psql`, not a committed credential).
+For **new empty databases**, the shape is the following generic SQL; choose the
+actual names privately and supply passwords with psql's interactive `\password`
+command, never as shell arguments or committed SQL:
+
+```sql
+CREATE ROLE release_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE ROLE dev_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+CREATE DATABASE app_release OWNER release_app;
+CREATE DATABASE app_dev OWNER dev_app;
+REVOKE CONNECT, TEMPORARY ON DATABASE app_release FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE app_dev FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE hames, postgres FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE app_release TO release_app;
+GRANT CONNECT, TEMPORARY ON DATABASE app_dev TO dev_app;
+```
+
+Do not grant either role membership in the other, server administration, or
+rights on the other database. The explicit revocation above also closes the
+legacy `hames` and maintenance `postgres` databases to `PUBLIC`. Install the
+`vector` extension as administrator **in each new database** before app startup. Set each URL to its own role/password and database
+on `postgres:5432`. The apps must never receive the Postgres administrator
+credential. An existing release database needs an operator-reviewed ownership /
+grant migration and a dump first; the empty-database example is not an in-place
+migration and must not be run over live data. No automated migration is shipped.
+
+Before either app starts, verify the role attributes and `has_database_privilege`
+for both cross-database directions as administrator, and attempt each cross-login:
+both must be denied. Also check the legacy release database as administrator:
+
+```sql
+SELECT has_database_privilege('dev_app', 'hames', 'CONNECT'); -- must be false
+```
+
+Then each app role must be able to bootstrap its own schema.
+The offline config check validates distinct role/database names, not server ACLs;
+these live grant checks remain owed. `SCHEMA_SQL` stays additive/idempotent even
+with separate databases; its unit pin refuses destructive schema or data edits.
+
+### Preflight and build
+
+From the release checkout, after reviewing both branch/commit pins and configuring
+the inputs above:
+
+```bash
+set -o pipefail
+docker compose config --format json | node scripts/validate-clones.mjs &&
+  docker compose up -d --build app app-dev
+```
+
+The `&&` prevents startup after a failed preflight, including when pasting the
+whole block. Stop on any failure; do not run startup separately after one. **Never
+save or print the rendered config**: it contains secrets. The validator's CLI
+prints no input or secret-bearing parse error. It refuses shared encryption /
+signing keys, callbacks, sandbox caches/namespaces and database roles/databases,
+and refuses a dev command override, a shared canonical build path, shared configs,
+a dev socket without owner opt-in or a published dev port.
+Re-run it before every manual recreate. Bootstrap runs this same validator
+itself before clone Compose operations, including `images`, `boot`, and smoke
+probes. It requires Node.js on the host (use the supported Node 22 or newer);
+missing Node, a failed render, or failed validation prevents the operation.
+Rendered configuration goes directly to the validator; it is never saved or
+printed. This is an operator preflight, not a runtime Docker authorization boundary.
+
+Once configured, re-run bootstrap with the deployment's existing hostname/ACME
+arguments and reviewed full `--ref`, selecting `--only images,boot --no-seed`
+(or `--only boot --no-seed` for already-built images). It uses one Compose project
+from the release checkout for **both** apps, retains the optional dev socket
+overlay, waits for `app-dev` health as well as release health, and does not pass
+`--remove-orphans` in clone mode. The single-app shape retains its existing
+`docker compose up -d --remove-orphans` command unchanged.
+Before that single-app command, a read-only project-scoped container query refuses
+if an `app-dev` container still exists. Restore the clone file list rather than
+letting a single-app boot prune it. An unavailable query also refuses startup.
+
+Run `--only smoke --no-seed` afterwards. When clones are enabled, smoke also
+compares both running apps' database URLs, keys, callbacks, auth bypass and sandbox
+namespaces/cache names with the validated configuration, and requires both apps
+to be healthy in one Compose project. It makes a read-only TCP database login
+with each running app's own credentials and checks the effective role/database
+and non-admin role attributes, no role memberships, and denied `CONNECT` on the
+sibling database and `postgres`. Database names are passed separately and queried
+as parameters; no credentials are printed. Smoke compares each running `/configs`
+and Docker socket mount with the render, and refuses a dev socket without the
+owner opt-in. An old release still using the root administrator URL fails this
+check. Administrator checks on the legacy `hames` database and browser sign-in
+checks on **both** hostnames remain operator work. Offline tests do not establish
+live grants or host isolation (SD-18/SD-19).
+
+Caddy file-content detection remains tracked in #672. After changing a Caddyfile
+or its imported sites, explicitly recreate only Caddy with
+`docker compose up -d --no-deps --force-recreate caddy` using the same full Compose
+file list. Keep the existing `caddy_data` volume so its certificates are retained;
+never delete it as part of an app update.
+
+Sandbox resources carry `kg-sandbox-environment=release` or `dev`; the startup
+reaper filters **containers and networks** by both that label and `kg-sandbox=1`.
+Both overlays set distinct `SANDBOX_CACHE_VOLUME` bases. Production backends
+refuse a missing environment label. Unlabelled legacy sandboxes are deliberately
+left alone: after confirming no old run is active, inspect and remove them by
+explicit resource ID, never by an unscoped family-label sweep.
+
+### Dev sandbox on its own environment VM
+
+[#648](https://github.com/mknw/hames-playground/issues/648) moves one clone's
+sandbox off the host socket onto that clone's **own** VM, which runs its own
+Docker daemon. The app reaches that daemon over mutual TLS. Nothing is shared
+between clones: one VM, one CA and one client certificate per clone. Dev moves
+first. Release keeps the host socket until its own VM lands, per the owner's
+answer on #648; [its move](#release-sandbox-on-its-own-environment-vm) follows
+the same steps once dev is on its VM.
+
+1. **Provision dev's VM and deliver its client files** with the operator entry
+   point. Run it from the repo root of a checkout of the reviewed commit, after
+   a workspace install (`corepack pnpm install --frozen-lockfile`). It holds the
+   Incus manager credential, so it never runs inside an app:
+
+   ```bash
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts reconcile /operator-private/dev.json
+   corepack pnpm dlx tsx@4.21.0 packages/sandbox/scripts/incus-environment.ts health /operator-private/dev.json --wait 600
+   ```
+
+   - **The config file** is operator-private. It holds the
+     [`createIncusEnvironment` options](../packages/sandbox/README.md#incus-environment-vms-operator-opt-in),
+     with the manager's three PEM files given as paths, plus
+     `delivery: { directory, owner? }`. An unknown or misspelt key is refused.
+   - **`reconcile`** creates or verifies the VM. It then copies only the CA
+     certificate, the client certificate and the client key into
+     `delivery.directory`: mode 0700, files 0600, owned by `delivery.owner` when
+     set. Set the owner to the operator user who runs bootstrap, because the
+     preflight reads the files. Keep the directory outside both checkouts.
+     Unchanged files keep their inode, so a running app's binds stay valid. The
+     provisioner's state directory, which holds the CA key, is never delivered.
+     `reconcile` prints the four Docker inputs for step 2.
+   - **`health`** probes Docker over mutual TLS with the delivered files,
+     exactly as the app will. It stops at once if the daemon is not this
+     environment's.
+
+   Before routing app-dev to the VM, prove that only app-dev reaches the VM's
+   Docker port, and record that proof for step 2. The one allowed source is the
+   dev link network, `envapp-dev`, with app-dev at its pinned address. Create
+   that network once, before the overlay, on a subnet that overlaps no host
+   route and none of Docker's address pools:
+
+   ```bash
+   docker network create --driver bridge --subnet <link-subnet> --gateway <link-gateway> \
+     --opt com.docker.network.bridge.name=envapp-dev envapp-dev
+   ```
+
+   The rules belong to the environment VM network guard,
+   `scripts/env-vm-guard.py`. Its `--smoke --record <path>` removes any earlier
+   evidence record when it starts and writes a new one only when every probe
+   passes. [The plan](plan/env-vm-network.md)
+   has the rules, the probes and the operator runbook. Neither the provisioner
+   nor the entry point sets firewall rules.
+
+2. **Set the dev-only inputs** in the release checkout's root `.env`, as literal
+   values:
+
+   | Input                           | Meaning                                                        |
+   | ------------------------------- | -------------------------------------------------------------- |
+   | `DEV_SANDBOX_DOCKER_HOST`       | `tcp://<dev VM guest IPv4>:<port>`                             |
+   | `DEV_SANDBOX_DOCKER_TLS_CA`     | Absolute path to dev's delivered CA certificate                |
+   | `DEV_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to dev's client certificate                      |
+   | `DEV_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to dev's client key                              |
+   | `DEV_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the operator's firewall evidence record       |
+   | `DEV_SANDBOX_LINK_ADDRESS`      | app-dev's pinned IPv4 address on the `envapp-dev` link network |
+
+   The evidence record is the guard smoke's record. It proves that only the
+   link network's pinned address, which app-dev takes, reaches the VM's Docker
+   port. The preflight refuses the overlay until that file exists and is not
+   empty. It never reads what the file says.
+
+3. **Append the overlay**: `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml`.
+   It declares `x-clone-dev-sandbox: per-env`, replaces app-dev's mounts with
+   its configs plus the three files (read-only, never created when missing) and
+   sets the four `SANDBOX_DOCKER_*` settings. It also attaches app-dev to the
+   external `envapp-dev` network at `DEV_SANDBOX_LINK_ADDRESS` with
+   `gw_priority: 1`, which makes that network app-dev's default route. App-dev
+   stays on `app-network` for its data services. `gw_priority` needs a Compose
+   release that supports it. The overlay cannot be combined with the socket
+   opt-in.
+4. **Run the same preflight**, then recreate app-dev with bootstrap's
+   `--only boot --no-seed`, then `--only smoke --no-seed`. With the VM overlay
+   selected, that smoke also runs the guard's read-only `--check` against the
+   installed config and refuses when it does not pass.
+
+For a clone declared `per-env`, the validator refuses:
+
+- any Docker socket, under any target or source name, and any mount besides
+  the configs and the three TLS files;
+- an endpoint that is not `tcp://` to a unicast IPv4 guest address (loopback,
+  link-local, unspecified and multicast addresses are refused), or TLS settings
+  that do not name the mounted files;
+- any `DOCKER_*` variable, which the terminal path would inherit as a second
+  endpoint;
+- a CA or certificate file that holds a private key or more than one
+  certificate, a CA file that is not a CA, a client certificate that is a CA,
+  is not signed by its own CA or does not match its key, a CA or client
+  certificate outside its validity period, a key file with any group or other
+  permission, and TLS files inside either checkout;
+- with both clones `per-env`, a shared guest address, or either clone's client
+  certificate verifying under the other clone's CA;
+- networks other than exactly `app-network` and the clone's own external link
+  network, `envapp-<clone>`; a link attachment without `gw_priority: 1` or
+  without a pinned unicast IPv4 address; `app-network` as the default route;
+  and any other service on that link network, under whatever key it names the
+  network with, `app-network` renamed to it included;
+- another service built from, tagged as, or sharing a namespace or mounts with
+  the VM clone, joining any container by id, or mounting the VM clone's TLS
+  files or a directory that holds them, whether through a bind, the file behind
+  a `secrets` or `configs` entry, or a named volume whose local driver binds a
+  host path.
+
+For both apps, whatever their mode, it refuses `privileged`, `devices`,
+`cap_add`, `volumes_from`, `secrets`, `configs` and shared `pid`, `ipc`,
+`network_mode`, `userns_mode` or `cgroup` namespaces. Each reaches host or
+sibling resources around the mount rules; the MCP gateway, for one, holds the
+host socket, and Compose bind-mounts the file behind a secret or config at any
+target, a socket included. A clone declared `socket` mounts no host path but its
+configs and the socket, including through a named volume whose local driver
+binds one, and must not carry any `SANDBOX_DOCKER_*` setting. The render
+leaves out services of any other profile, so the preflight also refuses a
+`profiles:` value other than `["app"]` in the selected Compose files. Smoke compares
+both running apps' endpoint settings and TLS mounts with the render, and refuses
+any mount on a VM clone that the render does not list. For a VM clone it also
+compares the live link network with the render: its bridge name, one IPv4
+subnet that holds the pinned address, the clone as its sole member, and the
+clone's address on it.
+
+**Reboots, rotation and concurrency.**
+
+- **Reboots.** The state directory and the delivery directory must be on
+  persistent storage. The entry point refuses `/tmp`, `/var/tmp`, `/run`,
+  `/dev` and similar mounts, also behind a link and under their macOS
+  `/private` names. After a host reboot, Incus
+  restores each VM's last power state. Re-run `health --wait 600`, and run
+  `reconcile` if the VM was stopped: it starts the VM and never generates new
+  keys for an existing state.
+- **Rotation.** The client certificate is valid for 365 days. `health` warns
+  30 days before expiry, and once it has expired says so at once, instead of
+  waiting on a daemon that keeps refusing it. To rotate, run `teardown`, then
+  `reconcile`, then recreate app-dev: the paths are unchanged, but the files are
+  new inodes. A failed teardown keeps the state and the delivered files for
+  recovery.
+- **One operation per state directory.** A `<stateDirectory>.lock` beside the
+  directory records the holder's pid and boot, and refuses a second operation
+  while that holder runs. A lock whose holder is gone, after Ctrl-C, a kill or
+  a reboot, is reclaimed, and the entry point says so. A refused lock with no
+  operation running means its pid now belongs to another process: remove it
+  by hand. `teardown` keeps a delivery directory that holds other files, and
+  says so.
+
+**What this does not establish.** The preflight's checks are offline and see
+configuration only, and smoke compares what Docker reports with that
+configuration. Neither proves network isolation between the clones' VMs, or
+between a VM and host services: that is the guard smoke's evidence, which the
+preflight requires but never reads. The guard cannot refuse a holder of the
+host Docker socket, which is root-equivalent: the release app and the MCP
+gateway hold it ([plan §10](plan/env-vm-network.md#10-deliberately-left-out)).
+Dev holds root inside its own VM, by design. The MCP gateway shares
+`app-network` with both apps. Still owed live: `createIncusEnvironment`
+creating and booting a VM on a real Incus host (the spike harness provisioned
+its own VMs), and Docker answering after a guest reboot and after a host
+reboot.
+
+**Rollback.** Remove the overlay from `COMPOSE_FILE` and recreate app-dev. Dev
+is then back to no Docker access and no sandbox agents. Tear down the VM, the
+link network and the guard separately, in the plan's
+[rollback order](plan/env-vm-network.md#7-operator-runbook).
+
+### Release sandbox on its own environment VM
+
+Release moves the same way, **after** dev is on its own VM, and never on dev's VM
+or dev's credentials: release's own VM, CA, client certificate, link network and
+evidence. Each step mirrors dev's [above](#dev-sandbox-on-its-own-environment-vm).
+
+1. **Provision release's VM** with the entry point and its own operator-private
+   config: environment `release`, bridge `envvm-release`, its own guest address,
+   state directory and delivery directory. Create its link network,
+   `envapp-release`, on a subnet of its own that overlaps no host route, no
+   Docker address pool and not `envapp-dev`.
+2. **Add `release` to the guard config** as a second environment, with service
+   `app`. That is a firewall rule change: it adds release's own allow and reply
+   rules, and nothing else ([plan §2.1](plan/env-vm-network.md#21-the-guard-table)),
+   so review it before it is persisted. `--apply` refuses while any environment
+   VM runs, so every environment VM — dev's and the release VM just provisioned
+   in step 1 — is stopped for the apply, under the dead-man. Then run
+   the guard smoke: its one record covers both environments, and the
+   VM-to-VM probes now attribute each pair.
+3. **Set the release-only inputs** in the root `.env`, as literal values:
+
+   | Input                               | Meaning                                                               |
+   | ----------------------------------- | --------------------------------------------------------------------- |
+   | `RELEASE_SANDBOX_DOCKER_HOST`       | `tcp://<release VM guest IPv4>:<port>`                                |
+   | `RELEASE_SANDBOX_DOCKER_TLS_CA`     | Absolute path to release's delivered CA certificate                   |
+   | `RELEASE_SANDBOX_DOCKER_TLS_CERT`   | Absolute path to release's client certificate                         |
+   | `RELEASE_SANDBOX_DOCKER_TLS_KEY`    | Absolute path to release's client key                                 |
+   | `RELEASE_SANDBOX_FIREWALL_EVIDENCE` | Absolute path to the guard smoke's record covering `release`          |
+   | `RELEASE_SANDBOX_LINK_ADDRESS`      | The release app's pinned IPv4 address on the `envapp-release` network |
+
+   As for dev, the preflight refuses the overlay until the evidence file exists
+   and is not empty. Release's file is also read, for its structure only: it
+   must be a guard smoke record whose `environments` hold probes for `release`,
+   so dev's record, or one written before release joined the guard config, is
+   refused. Dev's own inputs and evidence stay required, and dev's record is
+   still not read. The guard smoke writes the record as root, mode 0600; leave
+   it so, because bootstrap reads it through `sudo`.
+
+4. **Append the overlay after dev's**:
+   `COMPOSE_FILE=docker-compose.yaml:docker-compose.prod.yaml:docker-compose.clones.yaml:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml`.
+   It declares `x-clone-release-sandbox: per-env`, replaces the release app's
+   mounts with its configs plus the three files, so the **host Docker socket is
+   no longer mounted**, sets the four `SANDBOX_DOCKER_*` settings and attaches
+   the app to `envapp-release` at `RELEASE_SANDBOX_LINK_ADDRESS` with
+   `gw_priority: 1`. Bootstrap refuses the release overlay alone, before dev's,
+   beside the dev socket opt-in, or twice.
+5. **Tag the running release image for rollback**, then run the same preflight.
+   Recreate the app with `--only boot --no-seed`, which takes release down while
+   its container is recreated.
+   Then run `--only smoke --no-seed`, which runs the guard's `--check` for this
+   shape too.
+
+The validator's `per-env` rules above apply to release unchanged, and with both
+clones on their VMs it also refuses a shared guest address and either clone's
+certificate verifying under the other's CA. The MCP gateway still holds the
+host socket ([plan §10](plan/env-vm-network.md#10-deliberately-left-out)).
+
+**Rollback.** Drop `:docker-compose.release-sandbox-vm.yaml` from `COMPOSE_FILE`
+and recreate the app: release is back on the host socket and dev is unchanged.
+Remove `release` from the guard config, its link network and its VM separately.
+
+### Shared state and the limits of the claim
+
+This shape isolates application Postgres rows, keys and ordinary sandbox cleanup;
+it **does not isolate all clone data**. Both clones can read/write the shared
+Neo4j graph; Redis stash keys are also shared (and, on a host not yet moved to this code, the retired gateway memory volume).
+Use synthetic/demo data only until that shared-data posture is acceptable to the
+operator (SD-10, SD-18). Do not describe dev as an untrusted staging boundary.
+The release app retains the root-equivalent Docker socket (SD-19) until its own
+VM overlay is applied ([above](#release-sandbox-on-its-own-environment-vm)). Dev has no
+socket by default and mounts only its own checkout's read-only `configs/`;
+sandbox agents on dev therefore remain unavailable. Dev's own environment VM
+([above](#dev-sandbox-on-its-own-environment-vm)) enables them without host
+Docker access. The other owner knob is
+adding `docker-compose.dev-sandbox.yaml` **after** the clones overlay in
+`COMPOSE_FILE`. That opt-in supplies both `x-clone-dev-docker-socket: true` and
+the socket mount; the validator refuses a dev socket without that policy.
+Enabling it lets dev code bypass labels, access sibling containers and recover
+their secrets, regardless of DB/key separation. Namespace labels prevent
+accidental cleanup only. Keep the opt-in out unless the owner accepts this
+exposure. This supported option follows ADR-0008; ADR-0007 is superseded and
+needs no additional note.
+
+Tests use the shared `resolveTestDatabase()` gate before connecting. Explicit
+URLs must name test databases with explicit unencoded hosts; all port-5432
+targets (including an omitted port) are refused without owner opt-in;
+the existing checkout-bound **owner-only** local opt-in remains the documented
+exception, for test-named databases only. Agents must use a separate throwaway
+server or the exact dead-port no-DB sentinel; a copied opt-in cannot authorize a
+worktree. See [the pyramid](testing/pyramid.md#which-postgres-a-test-run-may-touch).
+No DB/browser or live-provider checks ran for this repo-only step, and Verda
+remains paused: never wake/probe it for these checks.
 
 ## 13. Deploy and promotion, once the workflows exist
 
 None of these workflows exist in this repository yet. This is the shape that
 keeps the artifact that was approved the artifact that ships: an environment
 that pulls runs the digest the environment before it ran, never a rebuild.
-Environment branches and rebuilding prod from a release tag were rejected for
-exactly that reason, because each ships bytes nobody tested
-([ADR-0007](adr/0007-three-environments-digest-promotion.md), considered
-options). A single box that builds its own image from a pinned commit (§14)
+For the current two-branch clone shape, the owner's G20 ruling in §12 governs;
+this future promotion workflow still requires the tested digest, without a
+rebuild. A single box that builds its own image from a pinned commit (§14)
 needs no registry credential, at a cost: nothing can promote "the bytes staging
 ran" until CI builds the images.
 
@@ -999,6 +1608,14 @@ idempotent: each stage checks before it changes anything, so you resume by
 re-running it. Its header and `--help` hold the details. A deployment that
 keeps its own parameters and runbook elsewhere runs this script at a pinned
 commit of this repository; nothing in it is specific to one host.
+
+For §12's two-clone shape, bootstrap reads the complete ordered `COMPOSE_FILE`
+from the release checkout's root `.env`, validates both apps before Compose
+operations, and keeps `app-dev` in the same project through `images`, `boot` and
+smoke. Prepare both app-only env files, the separate checkout and limited database
+roles first; bootstrap does not provision databases or grants. Node.js on the
+host is required only for the clone validator. Omitting clone inputs keeps the
+single-app command path unchanged.
 
 **Before the first run:**
 
@@ -1049,21 +1666,21 @@ action, and you re-run with the same arguments once it is done:
    generated the keys: on the generating run it is ignored, because nobody can
    have escrowed keys that did not exist yet.
 
-| Stage       | What it changes on the box                                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `preflight` | Nothing. It refuses anything that is not x86_64 (#412), not Ubuntu, under 4 GiB of RAM or under 20 GiB of free disk, a root login, or a user without passwordless sudo                                                                                                                                                                                                                                        |
-| `updates`   | `apt-get upgrade`, plus `/etc/apt/apt.conf.d/20auto-upgrades`, which turns on daily unattended upgrades from the security origin only. Docker's repo is not in that origin, so the engine is never upgraded under the stack. Reboots are never automatic                                                                                                                                                      |
-| `ssh`       | `/etc/ssh/sshd_config.d/00-hames-hardening.conf`: keys only, no passwords, no keyboard-interactive, no root login, and `Port` lines only if `--ssh-port` is given. The `00-` prefix makes it sort first, because sshd keeps the first value it reads and a cloud image's `50-cloud-init.conf` can turn passwords back on. The stage runs `sshd -t` before any reload and reads the result back with `sshd -T` |
-| `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the rules for a firewall in front of the box                                                                                                                                                                            |
-| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the baseline `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). `ignoreip` is loopback plus the operator: `--f2b-ignore <ip>[,…]`, else this SSH session's own client address, printed. It refuses to overwrite a `jail.local` it did not write                                                            |
-| `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks that the key file holds exactly Docker's one signing key and refuses if Docker publishes no suite for the release. It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds the login user to the `docker` group                                    |
-| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's five-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                   |
-| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow, except on the run that generated the keys                                                                            |
-| `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                                            |
-| `images`    | `docker compose build` and `pull`, a host pull of the five allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                                      |
-| `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d` and waits for every service                                                                                                                               |
-| `seed`      | Imports `neo4j_dumps/seed-data.cypher`, or `--seed-file`, through `scripts/import-neo4j.sh`, and only into an empty graph. It never passes `--wipe`                                                                                                                                                                                                                                                           |
-| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the five servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; and the graph is not empty                                                                    |
+| Stage       | What it changes on the box                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `preflight` | Nothing. It refuses anything that is not x86_64 (#412), not Ubuntu, under 4 GiB of RAM or under 20 GiB of free disk, a root login, or a user without passwordless sudo                                                                                                                                                                                                                                                                                                                                       |
+| `updates`   | `apt-get upgrade`, plus `/etc/apt/apt.conf.d/20auto-upgrades`, which turns on daily unattended upgrades from the security origin only. Docker's repo is not in that origin, so the engine is never upgraded under the stack. Reboots are never automatic                                                                                                                                                                                                                                                     |
+| `ssh`       | `/etc/ssh/sshd_config.d/00-hames-hardening.conf`: keys only, no passwords, no keyboard-interactive, no root login, and `Port` lines only if `--ssh-port` is given. The `00-` prefix makes it sort first, because sshd keeps the first value it reads and a cloud image's `50-cloud-init.conf` can turn passwords back on. The stage runs `sshd -t` before any reload and reads the result back with `sshd -T`                                                                                                |
+| `firewall`  | `ufw`: deny incoming, allow outgoing, allow the SSH port(s), 80/tcp, 443/tcp and 443/udp, on IPv4 and IPv6. Each SSH port is allowed and read back before `ufw` is enabled. It prints the rules for a firewall in front of the box                                                                                                                                                                                                                                                                           |
+| `fail2ban`  | Installs `fail2ban` and writes `/etc/fail2ban/jail.local` with the baseline `[sshd]` values: `maxretry = 3`, `findtime = 5m`, `bantime = 30m`, on the SSH port(s). `ignoreip` is loopback plus the operator: `--f2b-ignore <ip>[,…]`, else this SSH session's own client address, printed. It refuses to overwrite a `jail.local` it did not write                                                                                                                                                           |
+| `docker`    | Docker Engine and the compose plugin from Docker's apt repository, never the snap. It checks that the key file holds exactly Docker's one signing key and refuses if Docker publishes no suite for the release. It writes `/etc/docker/daemon.json` with log rotation if the file is absent, requires Compose 2.24 or later, and adds the login user to the `docker` group                                                                                                                                   |
+| `checkout`  | Clones the repo into `/opt/hames`, detached at `--ref`, a required full commit SHA, fetched by id if no branch carries it. It refuses a dirty tree and any commit older than #260. It writes §3a's four-server `configs/mcp-config.yaml` and never touches the tracked `docker-config.json`                                                                                                                                                                                                                  |
+| `env`       | Creates `.env` (mode 600) from the template. It generates the two database passwords and the three keys on the box, and never regenerates an existing value or one a data volume already depends on. It lists, or prompts for, the owner's values. `--keys-escrowed` records the escrow, except on the run that generated the keys                                                                                                                                                                           |
+| `hostname`  | Writes `APP_DOMAIN`, `ACME_EMAIL` and the two auth URIs into `.env`, checks that DNS points at the box, and prints the Entra steps                                                                                                                                                                                                                                                                                                                                                                           |
+| `images`    | Requires Engine >= 28 and safe daemon isolation settings before `docker compose build` and `pull`, a host pull of the four allow-listed MCP server images (in the gateway a failed pull is only a warning), and `docker build -t kg-sandbox:base rootfs/`. `--sandbox-flavours` also builds the three flavour images the `flavoured-sandbox` agent needs                                                                                                                                                     |
+| `boot`      | Runs every gate first: the gateway pin, `dynamic-tools` disabled, §6's preflight, the escrow, DNS, a GitHub-token scan, and the rendered config (every port but Caddy's on loopback, the gateway allow-listed). Then it runs `docker compose up -d`, verifies the deployed Neo4j network is internal/isolated, and waits for service health                                                                                                                                                                  |
+| `seed`      | Imports `neo4j_dumps/seed-data.cypher`, or `--seed-file`, through `scripts/import-neo4j.sh`, and only into an empty graph. It never passes `--wipe`                                                                                                                                                                                                                                                                                                                                                          |
+| `smoke`     | §8's on-box half: `ss` shows nothing public but the SSH port(s), 80 and 443; the gateway serves exactly the four servers; HTTP redirects to HTTPS; `/api/health` answers over a valid certificate; an unauthenticated `POST /api/events` gets 401; there is no GitHub token; `dynamic-tools` is still disabled; the graph is not empty; Neo4j isolation and paired egress probes pass; Cypher traverses the relay. Private `/health` is skipped unless `--probe-private-health` is supplied (may wake a box) |
 
 **The anti-lockout procedure.** The lockout-capable stages, `ssh` and
 `firewall`, run first. Once either one changes something, the script stops
@@ -1222,9 +1839,12 @@ for these:
 - `VITE_ALLOWED_EMAILS`: this deployment's allow-list. The template's
   `*@contoso.com` counts as missing.
 - `ANTHROPIC_API_KEY`.
-- Optionally, the private tier: `VERDA_INFERENCE_ENDPOINT`,
-  `VERDA_INFERENCE_API_KEY` and `SMALL_LLM_BASE_URL` (all three or none, both
-  URLs ending in `/v1`), plus `SMALL_LLM_API_KEY` and `USE_VERDA_INFERENCE`.
+- The private tier (§6): `LARGE_LLM_BASE_URL`,
+  `LARGE_LLM_API_KEY`, `SMALL_LLM_BASE_URL`, `SMALL_LLM_DECISIONS_URL`
+  and `SMALL_LLM_API_KEY` — all five or none; staging configures all five.
+  The two base URLs end in `/v1`; the full decisions URL ends in
+  `/v1/systemone`. `USE_SELF_DEPLOYED_INFERENCE` is a separate boot-time switch (it
+  requires the tier to be configured), not a sixth required tier value.
 - `--hostname`, `--acme-email` and `--ref <reviewed commit SHA>` on the command
   line; `--ssh-port` if you want the port moved; `--f2b-ignore` if the operator's
   address is not the one running the script.
@@ -1267,7 +1887,10 @@ and no root, and it pins the gates: the listener check, the gateway pin,
 values. It also runs the `ssh` and `firewall` stages and the checkpoint against
 a fake box (shims for sudo, sshd, ufw, ss and systemctl), asserting what was
 called and in which order, plus the rendered-exposure and volume gates. Each
-pin was shown to go red by a mutation. Before the script was made
+pin was shown to go red by a mutation. The portable `--clones-only` subset uses
+the real validator and an inert Docker shim to pin the ordered overlay, both-app
+lifecycle, failed preflight, partial configuration refusal and byte-exact default
+boot command transcript; `--clone-mutations` turns each guard red in CI. Before the script was made
 provider-neutral (a change of wording, of the managed-file header and of one
 removed provider-specific warning, not of logic), its real stages were
 exercised in throwaway Ubuntu 24.04 and 26.04 containers, including with
@@ -1294,10 +1917,10 @@ still lists it as pending, that copy predates the merge. That is the shape this
 table rots in: `main` moves, and a row here quietly stops describing the build
 you are about to deploy. Re-read it against `git log` rather than trusting it.
 
-| Claim                                            | Reality today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "Names are pseudonymised before prompts go out." | The substitution modules exist and are tested, but nothing in production imports them — `grep -rn pseudonymise app/src` returns only the modules under `app/src/lib/privacy/` and their own tests, on this branch and on `main`. Every egress path is unhooked, mapped path-by-path in PR #258 (merged).                                                                                                                                                                                                                                                                                                                                                                     | a decision that has not been taken yet — `docs/plan/graph-pseudonymisation.md` holds the open questions. PR #264 (merged 2026-08-26) supplied the roster the substitution would read from, which leaves the hook itself as the only missing piece                                                                                                                                                                                                                                                                                 |
-| "Inference runs on our own hardware."            | With the endpoint configured, every signed-in user gets a per-conversation switch (beside the Agent selector, with the chosen tier shown on every sidebar row) and **every** role follows it, the prompt-injection screen included. So no model call a turn makes goes off the box on that setting. Two edges: the embeddings provider is a separate seam (`EMBEDDINGS_PROVIDER=openrouter` would send query text out; the default is `local`), and the screen's own client is now an **unmeasured** screener — the owner accepted that trade knowingly, and `pnpm eval:harness`'s `screen-on-the-tier` scenario is what settles it. No agent enables that classifier today. | **Shipped and widened twice** — PR #263 merged 2026-08-26 (controller / actor / critic / synthesizer); the router / planner / describe roles were added the same day on the owner's call, because the router sees the raw user message and `describe` sees tool results verbatim; the injection screen followed on the rule that no call made under the private tier may be sent to any public AI provider (owner decision, answer 7). There is no exception left. With the endpoint unset, nothing about this deployment changes |
+| Claim                                            | Reality today                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Names are pseudonymised before prompts go out." | The substitution modules exist and are tested, but nothing in production imports them — `grep -rn pseudonymise app/src` returns only the modules under `app/src/lib/privacy/` and their own tests, on this branch and on `main`. Every egress path is unhooked, mapped path-by-path in PR #258 (merged).                                                                                                                                                                                                                                                                                                                                                                                                                                              | a decision that has not been taken yet — `docs/plan/graph-pseudonymisation.md` holds the open questions. PR #264 (merged 2026-08-26) supplied the roster the substitution would read from, which leaves the hook itself as the only missing piece                                                                                                                                                                                                                                                                                 |
+| "Inference runs on our own hardware."            | With the endpoint configured, every signed-in user gets a per-conversation switch (beside the Agent selector, with the chosen tier shown on every sidebar row) and **every** role follows it, the prompt-injection screen included. So no model call a turn makes goes off the box on that setting. Two edges: the embeddings provider is a separate seam (boot refuses an `EMBEDDINGS_PROVIDER` that is not `local` or declared trusted in code, so `openrouter`, which would send query text out, cannot be selected), and the screen's own client is now an **unmeasured** screener — the owner accepted that trade knowingly, and `pnpm eval:harness`'s `screen-on-the-tier` scenario is what settles it. No agent enables that classifier today. | **Shipped and widened twice** — PR #263 merged 2026-08-26 (controller / actor / critic / synthesizer); the router / planner / describe roles were added the same day on the owner's call, because the router sees the raw user message and `describe` sees tool results verbatim; the injection screen followed on the rule that no call made under the private tier may be sent to any public AI provider (owner decision, answer 7). There is no exception left. With the endpoint unset, nothing about this deployment changes |
 
 [`PREVIEW-WELCOME.md`](PREVIEW-WELCOME.md) says all of this to the preview
 circle in plain language. **Keep the two documents in step**, in both
@@ -1310,7 +1933,7 @@ nothing but this instruction connects the two.
 > `PREVIEW-WELCOME.md`'s "What happens to what you type" still tells preview
 > users _"Your messages are sent to Anthropic … That is the only external model
 > provider involved — nothing is sent anywhere else for inference."_ The row
-> above has now landed twice, and the default path for a new user is **verda
+> above has now landed twice, and the default path for a new user is **self_deployed
 > when the endpoint is configured**, so that sentence is wrong on the default
 > path rather than on an opt-in edge — and it is wrong in the direction of
 > over-stating what leaves, which is the harmless direction for a
@@ -1334,13 +1957,14 @@ means concretely:
   no Arm redis override loaded, and the gateway's merged `command:` carrying
   `--servers=…` with no `--enable-all-servers` left in it.
 - **§3a's tool surface, by running the gateway three ways against the same
-  catalog.** `--enable-all-servers` with a five-server `mcp-config.yaml`:
+  catalog.** `--enable-all-servers` with a mcp-config.yaml naming only the allow-listed servers:
   _nine_ servers enabled, 134 tools — the config file does not narrow anything,
   which is why the allow-list and not the config file is the control.
-  `--servers=neo4j-cypher,fetch,web_search,context7,memory`: five servers, 17
+  `--servers=neo4j-cypher,fetch,web_search,context7,memory` (the allow-list
+  at the time, before the `memory` server was retired): five servers, 17
   tools. The same allow-list against the development `mcp-config.yaml` that
   still carries a `github:` block: still five servers, still 17 tools, no
-  `github`.
+  `github`. These figures predate the retirement and have not been re-measured.
 - Fail-closed substitution: removing `POSTGRES_PASSWORD` aborts with
   `required variable POSTGRES_PASSWORD is missing a value` rather than silently
   falling back to the base file's `password`.
@@ -1384,3 +2008,5 @@ One local result that is **not** a finding about the VM: running redis-stack
 natively on Apple Silicon dies with `Illegal instruction` on the RediSearch
 module. That is the arm64 defect `docker-compose.override.yml` exists for, it
 reproduces with or without these changes, and it is why §1 says x86.
+
+Inference naming and one-release compatibility: [complete migration table](deployment/self-deployed-migration.md).

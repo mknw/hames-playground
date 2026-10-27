@@ -44,20 +44,15 @@ ingest a file, get a document id, and be unable to read a word of it. Search and
 browse are the half of the file story that works without a retriever. An agent
 that _does_ compose a retriever should compose the ingest tool too.
 
-**Consented scopes still exceed implemented tools.** The sign-in request also
-carries `Mail.Send` (see the setup doc for why consent is taken up front). No
-tool exposes it, so the model cannot use it: a granted scope is not a capability
-— capability comes from a registered tool. `Sites.Read.All` was in that unused
-set until `graph_files_search` claimed it.
-
-**Writes.** None yet. Adding one is the same shape as a read tool, but it should
-carry a confirmation gate: creating an event emails real invitations, and
-`Mail.Send` sends real mail. The gate is #433's: the tool's executor calls
-`askHuman(…)` and returns `held(outcome)` while the person decides, and the run
-continues through `resumeHarness(serialized, patterns, answers, opts)` with an
-answer bound to that request. (The boolean `resumeHarness`, the
-`approveAction`/`rejectAction` server actions and `setPaused` were removed in
-#433 S3.)
+**Scopes and writes.** Sign-in requests the seven already-consented scopes:
+`User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
+`Files.Read.All`, `Sites.Read.All`; MSAL adds `openid`/`profile`/`offline_access`.
+`graph_calendar_today` uses `Calendars.ReadWrite` for reads. The app requests
+`Mail.Send` and `Calendars.ReadWrite` but ships no Graph write tool; requesting
+these scopes adds no write tool. HITL write gating stays Neo4j-only. The owner
+is no longer asked to remove those permissions or revoke their grants. The shared
+boot/mint allowlist permits only the consented set, including those two scopes;
+see the [setup runbook](deployment/entra-setup.md#keep-the-consented-permissions-in-entra).
 
 ---
 
@@ -278,9 +273,11 @@ property (`LastModifiedTime>=a LastModifiedTime<=b`) are **silently ignored**
 by Microsoft Search — the query behaves as if neither were there. Both bounds
 therefore compose as the single range clause `LastModifiedTime:a..b`.
 
-The composed KQL is returned to the model as the result's `query`, so a filter
-that didn't bite is visible rather than guessed at. Terms first, restrictions
-after: KQL's default operator is AND.
+The composed KQL is **not** returned to the model: it would carry the
+controller's own `site` / `author` text, URLs kept whole, back as a Graph
+result, and `graph` is an address source for the egress gate. No Graph result
+may echo a string the controller wrote. Terms first, restrictions after: KQL's
+default operator is AND.
 
 There is no `site:` operator in Graph KQL (that one is Purview eDiscovery only);
 `path:` is the documented way to scope to a site. `listItem` and `site` are
@@ -416,10 +413,12 @@ message once.
 
 ## Files → the Data Stash
 
+`graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
+
 `graph_file_ingest` is the one tool that doesn't hand its result to the model. Its
 `item_id` / `drive_id` arguments are exactly what [file discovery](#finding-a-file)
 returns, so the two halves compose without the model inventing an identifier. It
-copies a file the person already owns into **this conversation's** Data Stash, so
+copies a file the person can open into **this conversation's** Data Stash, so
 the machinery that already exists for uploads — retriever search, the sandbox
 `/work` sync, the file viewer, chat citations — works on Microsoft 365 content
 with no second pipeline. See [DATA_STASH.md](DATA_STASH.md) for that side.

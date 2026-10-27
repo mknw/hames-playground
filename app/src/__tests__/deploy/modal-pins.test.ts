@@ -33,6 +33,13 @@
  *      anything read at runtime.
  *   5. The operator's instance files are git-ignored by the pattern the README
  *      promises.
+ *
+ * The 27B (`hames_private_27b.py`, its own Modal app, `Caddyfile.27b`) gets the
+ * same five, plus the one thing that makes it a drop-in for the app's
+ * `LargeQwen` client: the name it serves and the window it allows equal what that
+ * client sends and assumes. What both apps share (the vLLM pin, Caddy, the
+ * image env, the restore check) lives in `vllm_box.py`, and neither app file
+ * imports the other, so a change to one never discards the other's snapshots.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -44,8 +51,24 @@ const read = (relative: string) => readFileSync(path(relative), 'utf-8')
 
 const behaviourScript = path('../../../../deploy/modal/test_behaviour.py')
 const caddyfile = read('../../../../deploy/modal/Caddyfile')
+const caddyfile27b = read('../../../../deploy/modal/Caddyfile.27b')
+const selfDeployedClient = read('../../../../packages/harness-baml/baml_src/large-client.baml')
+const settings = read('../../lib/settings.ts')
+const largeActivity = read('../../lib/inference/large-activity.server.ts')
+const coldStart = read('../../lib/inference/cold-start.server.ts')
+const smoke27b = read('../../../../deploy/modal/smoke_27b.py')
 const app = read('../../../../deploy/modal/hames_small_models.py')
+const shared = read('../../../../deploy/modal/vllm_box.py')
+const bigApp = read('../../../../deploy/modal/hames_private_27b.py')
 const gitignore = read('../../../../.gitignore')
+const modalLock = read('../../../../deploy/modal/uv.lock')
+
+it('requires reassessing the outbound restriction when the Modal SDK changes', () => {
+  const modal = modalLock.split('[[package]]').find((block) => /^name = "modal"$/m.test(block))
+  expect(modal, 'Reassess deploy/modal/README.md §Outbound restriction on an SDK upgrade').toMatch(
+    /^version = "1\.6\.1"$/m,
+  )
+})
 
 /** The raw-path expression lists, flattened to one set of public paths. */
 const caddyPaths = (text: string): string[] =>
@@ -53,11 +76,14 @@ const caddyPaths = (text: string): string[] =>
     ...text.matchAll(/^\s*@\w+\s+expression `\{http\.request\.uri\.path\} in \[([^\]]+)\]`$/gm),
   ].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((path) => path[1]))
 
-/** Every non-comment line of the Caddyfile. */
-const caddyCode = caddyfile
-  .split('\n')
-  .filter((line) => !line.trim().startsWith('#'))
-  .join('\n')
+/** Every non-comment line of a Caddyfile. */
+const code = (text: string) =>
+  text
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+const caddyCode = code(caddyfile)
+const caddyCode27b = code(caddyfile27b)
 
 const PUBLIC_PATHS = ['/v1/chat/completions', '/v1/models', '/v1/systemone', '/health']
 
@@ -116,9 +142,18 @@ describe('deploy/modal: the public surface is the Caddy route list', () => {
 const boot = app.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
 const serve = app.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
 const download = app.match(/def download_public_weights\(\)[\s\S]*?(?=\nimage =)/)?.[0] ?? ''
+const installCaddy = shared.match(/def _install_caddy\(\)[\s\S]*?(?=\n\n\n)/)?.[0] ?? ''
 const vllmArgv = app.match(/def _vllm_argv\(\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
 
 describe('deploy/modal: the server shape and the vLLM argv', () => {
+  it('keeps the small-box idle default equal to the app warm-window default', () => {
+    const appDefault = coldStart.match(
+      /^export const DEFAULT_SMALL_LLM_SCALEDOWN_SECONDS = (\d+)$/m,
+    )?.[1]
+    expect(appDefault).toBe('300')
+    expect(app).toContain(`SCALEDOWN_S = int(_env("HAMES_MODAL_SCALEDOWN_S", "${appDefault}"))`)
+  })
+
   it('is deployed behind Modal proxy auth', () => {
     expect(app).toMatch(/unauthenticated=False/)
     expect(app).not.toMatch(/unauthenticated=True/)
@@ -166,7 +201,7 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
   })
 
   it('re-checks the adapter after a restore on the readings taken after it', () => {
-    expect(app).toMatch(/^REFERENCE_TOLERANCE = 0\.1$/m)
+    expect(shared).toMatch(/^REFERENCE_TOLERANCE = 0\.1$/m)
     expect(serve).toContain('_reference_drift(before, after[model], model)')
     expect(boot).not.toContain('["caddy", "run"')
     expect(serve).toContain('["caddy", "run"')
@@ -178,23 +213,31 @@ describe('deploy/modal: the server shape and the vLLM argv', () => {
   })
 
   it('enables dev mode (sleep needs it) — which is why the route list above exists', () => {
-    expect(app).toMatch(/"VLLM_SERVER_DEV_MODE": "1"/)
-    expect(app).not.toContain('VLLM_LOGGING_LEVEL')
+    for (const file of [app, bigApp]) {
+      expect(file).toMatch(/\.add_local_python_source\("log_filter", "vllm_box", copy=True\)/)
+      expect(file.match(/^\s*\.env\(VLLM_IMAGE_ENV\)$/gm)).toHaveLength(1)
+      expect(file).not.toContain('VLLM_LOGGING_LEVEL')
+      // Neither app file imports the other: a change to one keeps the other's snapshots.
+      expect(file).not.toMatch(/^(from|import) hames_/m)
+    }
+    expect(shared).toMatch(/"VLLM_SERVER_DEV_MODE": "1"/)
+    expect(shared).not.toContain('VLLM_LOGGING_LEVEL')
     for (const [key, value] of Object.entries({
       VLLM_NO_USAGE_STATS: '1',
       DO_NOT_TRACK: '1',
       VLLM_MEDIA_URL_ALLOW_REDIRECTS: '0',
       HF_HUB_OFFLINE: '1',
     })) {
-      expect(app).toContain(`"${key}": "${value}"`)
+      expect(shared).toContain(`"${key}": "${value}"`)
     }
   })
 })
 
 describe('deploy/modal: what the image and a snapshot can contain is pinned public state', () => {
   it('pins both Hub repos to a commit and every card file to a sha256', () => {
-    expect(app).toMatch(/^VLLM_IMAGE = "vllm\/vllm-openai:v0\.30\.0@sha256:[0-9a-f]{64}"$/m)
-    expect(download).toMatch(/if digest != CADDY_SHA512:\s*raise SystemExit/)
+    expect(shared).toMatch(/^VLLM_IMAGE = "vllm\/vllm-openai:v0\.30\.0@sha256:[0-9a-f]{64}"$/m)
+    expect(installCaddy).toMatch(/if digest != CADDY_SHA512:\s*raise SystemExit/)
+    expect(download).toMatch(/\n {4}_install_caddy\(\)\n/)
     for (const [files, dir] of [
       ['CARD_FILES_SHA256', 'CARD_DIR'],
       ['BASE_FILES_SHA256', 'BASE_DIR'],
@@ -237,7 +280,7 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
     )
     for (const [, , sha] of entries) expect(sha).toHaveLength(64)
     expect(
-      app
+      shared
         .match(/CADDY_SHA512 = \(\s*"([0-9a-f]+)"\s*"([0-9a-f]+)"\s*\)/)
         ?.slice(1)
         .join(''),
@@ -256,8 +299,171 @@ describe('deploy/modal: what the image and a snapshot can contain is pinned publ
     // Values are quoted strings, dicts or ints; no name reference, call or f-string.
     for (const block of [chat, decision]) {
       expect(block).toMatch(/"content": "[^"]+"|"state": "[^"]+"/)
-      expect(block).not.toMatch(/os\.environ|open\(|read|f"|\.get\(|input\(/)
+      expect(block).not.toMatch(/os\.environ|_env\(|open\(|read|f"|\.get\(|input\(/)
     }
+  })
+})
+
+/** The `Qwen27B` class, its boot and serve methods, its argv and its download. */
+const big = bigApp.slice(bigApp.indexOf('@app.server('))
+const bigBoot = big.match(/def _boot\(self\)[\s\S]*?(?= {4}def _serve)/)?.[0] ?? ''
+const bigServe = big.match(/def _serve\(self\)[\s\S]*?hames: ready/)?.[0] ?? ''
+const bigArgv =
+  bigApp.match(/def _qwen27b_argv\(mtp_tokens: int\)[^[]*\[([\s\S]*?)\n\s*\]\n/)?.[1] ?? ''
+const bigDownload =
+  bigApp.match(/def download_qwen27b_weights\(\)[\s\S]*?(?=\nqwen27b_image =)/)?.[0] ?? ''
+
+describe('deploy/modal: the 27B box (Qwen27B)', () => {
+  it('serves the exact model name and window the LargeQwen client sends and assumes', async () => {
+    expect(big).toMatch(/^@app\.server\([^@]*?\n\)\nclass Qwen27B:/)
+    // The client's model id is env-overridable: the declaration is the env
+    // REFERENCE, and the DEFAULT it resolves to when the var is unset is the
+    // id this box must serve (one constant in inference-env.server.ts, pinned
+    // against the rendered wire body in self-deployed-body-shape.test.ts).
+    const clientModelRef = selfDeployedClient.match(/^\s*model env\.(\w+)$/m)?.[1]
+    expect(clientModelRef).toBe('LARGE_LLM_MODEL')
+    // Source-scan, not import: this file runs in jsdom and the constant's
+    // module is server-only. The DEFAULT the unset path sends is the id this
+    // box must serve; the literal is pinned here AND in
+    // self-deployed-body-shape.test.ts, so a changed default is red in both.
+    const envSource = read('../../../../packages/harness-baml/inference-env.server.ts')
+    const defaultModel = envSource.match(/DEFAULT_LARGE_LLM_MODEL = '([^']+)'/)?.[1]
+    expect(defaultModel).toBe('Qwen/Qwen3.8-27B-FP8')
+    expect(bigApp).toContain(`QWEN27B_MODEL = "${defaultModel}"`)
+    const window = settings.match(/^\s*LargeQwen: ([\d_]+),$/m)?.[1]?.replaceAll('_', '')
+    expect(bigApp).toContain(`QWEN27B_MAX_MODEL_LEN = ${window}`)
+    expect(bigArgv).toContain('"--served-model-name", QWEN27B_MODEL')
+    expect(bigArgv).toContain('"--max-model-len", str(QWEN27B_MAX_MODEL_LEN)')
+    expect(bigBoot).toMatch(/served != \{QWEN27B_MODEL\}/)
+  })
+
+  it("idles as long as the app assumes, and the smoke sends the client's own body", () => {
+    // The app's cold-start countdown reads LARGE_LLM_SCALEDOWN_SECONDS; its default
+    // and this box's must agree, or the countdown is wrong on a default deploy.
+    const appDefault = largeActivity.match(/DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = (\d+)/)?.[1]
+    expect(appDefault).toBeTruthy()
+    expect(bigApp).toContain(`_env("HAMES_MODAL_27B_SCALEDOWN_S", "${appDefault}")`)
+    const clientMax = selfDeployedClient.match(/^\s*max_tokens (\d+)$/m)?.[1]
+    const clientTemperature = selfDeployedClient.match(/^\s*temperature ([\d.]+)$/m)?.[1]
+    expect(clientMax && clientTemperature).toBeTruthy()
+    const body = smoke27b.match(/^LARGE_LLM_BODY = \{([\s\S]*?)\n\}/m)?.[1] ?? ''
+    expect(body).toContain(`"max_tokens": ${clientMax},`)
+    expect(body).toContain(`"temperature": ${clientTemperature},`)
+    expect(body).toContain('"chat_template_kwargs": {"enable_thinking": False}')
+  })
+
+  it('forwards exactly three public paths to the one loopback upstream, the rest is a 404', () => {
+    expect(caddyCode27b).not.toMatch(/^\s*@\w+\s+path\s/m)
+    expect(caddyPaths(caddyCode27b).sort()).toEqual(
+      ['/v1/chat/completions', '/v1/models', '/health'].sort(),
+    )
+    const proxies = caddyCode27b.match(/reverse_proxy[^{]*\{[^}]*\}/g) ?? []
+    expect(proxies).toHaveLength(1)
+    expect(proxies[0]).toMatch(/^reverse_proxy 127\.0\.0\.1:8000 \{/)
+    expect(proxies[0]).toContain('header_up -Authorization')
+    expect(caddyCode27b).toMatch(/handle \/status \{[^}]*file_server[^}]*\}/)
+    expect(caddyCode27b).toMatch(/handle \{\s*respond 404\s*\}/)
+    for (const forbidden of [
+      '/sleep',
+      '/wake_up',
+      '/is_sleeping',
+      '/collective_rpc',
+      '/v1/completions',
+      '/tokenize',
+      '/metrics',
+    ])
+      expect(caddyCode27b).not.toContain(forbidden)
+    // The same global block, log filter included, as the small box's.
+    expect(caddyCode27b.slice(0, caddyCode27b.indexOf(':8080'))).toBe(
+      caddyCode.slice(0, caddyCode.indexOf(':8080')),
+    )
+    expect(bigApp).toContain(
+      '.add_local_file(Path(__file__).parent / "Caddyfile.27b", "/etc/hames/Caddyfile", copy=True)',
+    )
+  })
+
+  it('starts vLLM on loopback, text only, with the logging posture and the reasoning parser', () => {
+    expect(bigArgv).not.toBe('')
+    expect(bigArgv.match(/"--host"/g)).toHaveLength(1)
+    for (const flag of [
+      '"--host", "127.0.0.1"',
+      '"--no-log-error-stack"',
+      '"--disable-uvicorn-access-log"',
+      '"--enable-sleep-mode"',
+      '"--language-model-only"',
+      '"--reasoning-parser", "qwen3"',
+    ])
+      expect(bigArgv).toContain(flag)
+    for (const forbidden of [
+      '--enable-log-requests',
+      '--enable-log-outputs',
+      '"0.0.0.0"',
+      '--limit-mm-per-prompt',
+    ])
+      expect(bigArgv).not.toContain(forbidden)
+    expect(bigBoot).toMatch(
+      /target=forward_stderr,\s*args=\(self\.vllm\.stdout, self\.vllm_dropped, self\.public_ready, "vllm"\)/,
+    )
+    expect(bigServe).toMatch(/self\.public_ready\.set\(\)\s*self\.caddy = subprocess\.Popen/)
+    expect(bigApp.match(/unauthenticated=False/g)).toHaveLength(1)
+    expect(bigApp).not.toMatch(/unauthenticated=True/)
+    expect(big).toMatch(/^\s*image=qwen27b_image,$/m)
+    expect(bigApp).toMatch(/\.run_function\(download_qwen27b_weights\)\s*\.env\(VLLM_IMAGE_ENV\)/)
+  })
+
+  it('injects the argv inputs into the container, so it runs what was deployed', () => {
+    expect(big).toContain('"HAMES_MODAL_27B_MTP_TOKENS": str(QWEN27B_MTP_TOKENS)')
+    expect(big).toContain('"HAMES_MODAL_27B_TARGET_CONCURRENCY": str(QWEN27B_TARGET_CONCURRENCY)')
+    expect(bigBoot).toContain('_qwen27b_argv(QWEN27B_MTP_TOKENS)')
+  })
+
+  it('checks after a restore on readings taken after it, before Caddy listens', () => {
+    expect(bigServe).toContain(
+      'after = _reference_logprobs(QWEN27B_MODEL, QWEN27B_REFERENCE_PROMPT)',
+    )
+    expect(bigServe).toContain('_reference_drift(self.reference, after, QWEN27B_MODEL)')
+    expect(bigServe).toMatch(/if _qwen27b_answer\(\) != QWEN27B_ANSWER:\s*raise RuntimeError/)
+    expect(bigServe).toMatch(
+      /now = _draft_acceptance\(\)[\s\S]*if now < before - QWEN27B_DRAFT_TOLERANCE:\s*raise/,
+    )
+    expect(bigServe.indexOf('_qwen27b_answer()')).toBeLessThan(bigServe.indexOf('["caddy", "run"'))
+    expect(bigBoot).not.toContain('["caddy", "run"')
+  })
+
+  it('pins the 27B repo to a commit and every file to a sha256, verified at build', () => {
+    expect(bigApp).toMatch(/^QWEN27B_REVISION = "[0-9a-f]{40}"$/m)
+    const pins = bigApp.match(/QWEN27B_FILES_SHA256 = \{([\s\S]*?)\n\}/)?.[1] ?? ''
+    const entries = [...pins.matchAll(/"([^"]+)": "([0-9a-f]{64})"/g)]
+    expect(entries).toHaveLength(pins.split('\n').filter((l) => l.trim()).length)
+    const names = entries.map((m) => m[1])
+    for (let i = 0; i < 64; i++) expect(names).toContain(`layers-${i}.safetensors`)
+    for (const name of [
+      'config.json',
+      'chat_template.jinja',
+      'mtp.safetensors',
+      'outside.safetensors',
+      'tokenizer.json',
+    ])
+      expect(names).toContain(name)
+    expect(bigDownload).toContain('allow_patterns=list(QWEN27B_FILES_SHA256)')
+    expect(bigDownload).toContain('revision=QWEN27B_REVISION')
+    expect(bigDownload).toMatch(
+      /digest = _sha256_file\(QWEN27B_DIR \/ relative\)\s*if digest != expected:\s*raise SystemExit/,
+    )
+    expect(bigDownload).toContain('_install_caddy()')
+  })
+
+  it('warms up and checks with string literals only', () => {
+    for (const name of ['QWEN27B_WARMUP_MESSAGES', 'QWEN27B_ANSWER_MESSAGES']) {
+      const block = bigApp.match(new RegExp(`${name} = \\(([\\s\\S]*?)\\n\\)`))?.[1] ?? ''
+      // Every content value is one string literal, closed on its own line.
+      const values = [...block.matchAll(/"content": (.*)$/gm)].map((m) => m[1])
+      expect(values.length).toBeGreaterThan(0)
+      for (const value of values) expect(value).toMatch(/^("[^"]*"|'[^']*'),?\s*\}?,?$/)
+      expect(block).not.toMatch(/os\.environ|_env\(|open\(|read|f"|\.get\(|input\(/)
+    }
+    expect(bigApp.match(/QWEN27B_REFERENCE_PROMPT = (.*)/)?.[1]).toMatch(/^"[^"]+"$/)
+    expect(bigBoot).toContain('list(QWEN27B_WARMUP_MESSAGES)')
   })
 })
 

@@ -36,6 +36,7 @@
  * resolves the owner from the session and passes it in — the same contract
  * `turn.server.ts` and `db/user-prefs.server.ts` carry.
  */
+import { normalizeStoredInferenceTier } from './tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   getConversationInferenceTier,
@@ -44,10 +45,9 @@ import {
 import {
   defaultInferenceTier,
   getStoredInferenceTier,
-  isInferenceTier,
   setStoredInferenceTier,
 } from '../db/user-prefs.server'
-import { verdaConfigured, type InferenceTier } from './config.server'
+import { privateInferenceOnly, selfDeployedConfigured, type InferenceTier } from './config.server'
 
 assertServerOnImport()
 
@@ -64,7 +64,10 @@ export function resolveTier(
   conversationTier: string | null,
   seed: InferenceTier | null,
 ): InferenceTier {
-  if (isInferenceTier(conversationTier)) return conversationTier
+  // Old rows remain historical facts; their next turn is clamped to private.
+  if (privateInferenceOnly()) return 'self_deployed'
+  const stored = normalizeStoredInferenceTier(conversationTier)
+  if (stored) return stored
   return seed ?? defaultInferenceTier()
 }
 
@@ -84,11 +87,12 @@ export function resolveTier(
  * the seed first awaits `ensureSchema()` (`db/user-prefs.server.ts`), which has
  * its own persistent failure mode — and under `Promise.all` either rejection
  * discarded both. A conversation the user had PINNED to the private tier then
- * resolved through the caller's fail-open, which is `activeInferenceTier()`, the
- * env flag: on the deployment shape `docs/PREVIEW.md` explicitly allows
- * (endpoints configured, `USE_VERDA_INFERENCE` unset) that is Anthropic, so a
- * seed lookup failing sent a private thread to the public provider while its
- * sidebar glyph still said otherwise.
+ * resolved through the caller's fail-open, which is `activeInferenceTier()`. That
+ * used to follow the env flag: on the deployment shape `docs/PREVIEW.md` explicitly
+ * allows (endpoints configured, `USE_SELF_DEPLOYED_INFERENCE` unset) it was Anthropic,
+ * so a seed lookup failing sent a private thread to the public provider while its
+ * sidebar glyph still said otherwise. Under the one tier rule that fall-open
+ * lands on the self-deployed tier (refused when unconfigured), never on Anthropic.
  *
  * The failure policy of each half, named rather than inherited:
  *   - **seed read fails** → the column decides alone; a recorded tier is the
@@ -97,9 +101,10 @@ export function resolveTier(
  *     instead of the deployment's env flag. Still a fall-back, and still an
  *     un-pinned one, but a nearer answer than the caller's.
  *   - **both fail** → `defaultInferenceTier()`, which is fail-closed by
- *     construction. The pre-existing fall-open ABOVE this function (a total
- *     read failure reaching `activeInferenceTier()`) is unchanged and tracked
- *     separately (#303) — it is the caller's, not this resolver's.
+ *     construction. A total read failure that reaches `activeInferenceTier()`
+ *     with no tier in the frame lands on the host's default tier (the
+ *     self-deployed tier), which is refused when it is not configured — no
+ *     longer a fall-open (#303); it is the caller's, not this resolver's.
  */
 export async function resolveConversationTier(
   sessionId: string,
@@ -147,7 +152,7 @@ export async function resolveConversationTier(
  * conversation that has not been persisted yet is therefore a seed write and
  * nothing more, and the pre-seed of its first turn copies it onto the row.
  *
- * **`'verda'` is refused when the endpoint is unconfigured**, exactly as the
+ * **`'self_deployed'` is refused when the endpoint is unconfigured**, exactly as the
  * header switch it replaces refused it: storing it would leave a row that
  * `assertInferenceTier` throws on, turning one click into a chat that cannot
  * take another message — and the one thing that must never happen instead, a
@@ -158,15 +163,21 @@ export async function resolveConversationTier(
 export async function chooseConversationTier(
   sessionId: string,
   userId: string,
-  tier: unknown,
+  requested: unknown,
 ): Promise<InferenceTier> {
-  if (!isInferenceTier(tier)) {
-    throw new Error(`Unknown inference tier: ${JSON.stringify(tier)}`)
+  // A tab opened before the rename still posts the old literal; it is read as the
+  // same tier (and only that one) and everything below sees, and stores, the new one.
+  const tier = normalizeStoredInferenceTier(requested)
+  if (!tier) {
+    throw new Error(`Unknown inference tier: ${JSON.stringify(requested)}`)
   }
-  if (tier === 'verda' && !verdaConfigured()) {
+  if (privateInferenceOnly() && tier === 'anthropic') {
+    throw new Error('Anthropic is disabled: this deployment allows private inference only.')
+  }
+  if (tier === 'self_deployed' && !selfDeployedConfigured()) {
     throw new Error(
       'The self-hosted inference endpoint is not configured on this deployment, so it cannot ' +
-        'be selected. Set VERDA_INFERENCE_ENDPOINT, VERDA_INFERENCE_API_KEY and ' +
+        'be selected. Set LARGE_LLM_BASE_URL, LARGE_LLM_API_KEY and ' +
         'SMALL_LLM_BASE_URL (see app/.env.example).',
     )
   }
@@ -189,4 +200,4 @@ export async function chooseConversationTier(
 /** Whether the private tier may be OFFERED on this deployment — the switch's
  *  disabled state. Re-exported here so the one server action behind the switch
  *  has a single import for everything it answers. */
-export { verdaConfigured }
+export { privateInferenceOnly, selfDeployedConfigured }

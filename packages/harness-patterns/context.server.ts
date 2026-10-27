@@ -17,6 +17,8 @@ import type {
   PatternConfig,
   UserMessageEventData,
   LLMCallData,
+  LLMCallRecord,
+  ModelCallEventData,
   HitlRequestEventData,
   HitlResponseEventData,
 } from './types'
@@ -138,6 +140,41 @@ export function createEvent(
     ...(llmCall && { llmCall }),
     ...(llmCall?.metrics && { metrics: llmCall.metrics }),
   }
+}
+
+/** A call record without what it carried: `variables`, `promptTemplate`,
+ *  `rawInput`, `rawOutput` and `parsedOutput` are what the call READ and what
+ *  the model said — a memory's text, a tool result, a page under screening.
+ *  Cost attribution survives: the client BAML selected, usage, duration and the
+ *  step's `metrics`. */
+export function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
+  if (!call) return undefined
+  return {
+    functionName: call.functionName,
+    variables: {},
+    ...(call.usage ? { usage: call.usage } : {}),
+    ...(call.metrics ? { metrics: call.metrics } : {}),
+    ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+    ...(call.provider ? { provider: call.provider } : {}),
+    ...(call.clientName ? { clientName: call.clientName } : {}),
+  }
+}
+
+/**
+ * The `model_call` event for one call whose value is all its caller gets back
+ * (the injection screen, a describe-tier summary). The call is REDACTED here,
+ * at the one place the event is built, whoever supplied the record: the
+ * implementation behind an injected seam is not trusted to have stripped the
+ * content it read (SD-3). `metrics` is lifted onto the event by `createEvent`,
+ * which is what puts the call into every cost fold — priced on the client the
+ * record names, not on the tier the run intended.
+ */
+export function createModelCallEvent(
+  patternId: string,
+  data: ModelCallEventData,
+  call: LLMCallRecord,
+): ContextEvent {
+  return createEvent('model_call', patternId, data, redactCall(call))
 }
 
 /** Check if an event type should be tracked based on trackHistory config */
@@ -304,6 +341,11 @@ export function dropHitl(events: ContextEvent[]): ContextEvent[] {
  *  a verdict in `data.decisions` whose evidence is gone. It is metadata-only
  *  (see `DecisionMadeEventData`), so committing it always is safe under every
  *  strategy.
+ *  Includes 'model_call' for the same family of reason: it is the only record
+ *  that a screen or a summary call was made and what it cost, and under
+ *  'on-success' a turn that then failed would drop the spend along with the
+ *  content events. It is metadata only (see `ModelCallEventData`; the call is
+ *  redacted when the event is built), so committing it always is safe.
  *  The two `hitl_*` types are NOT here, although they are always committed
  *  (#433): they never reach a strategy at all. The owning `runChain` commits
  *  them from the run frame's slot straight into the context, after every
@@ -317,6 +359,11 @@ const ALWAYS_COMMIT_TYPES: Set<EventType> = new Set([
   'warning',
   'loop_recovery',
   'decision_made',
+  'model_call',
+  // The egress gate's audit and refusal records: a security record is not
+  // optional history, and the tripwire's count is derived from the refusals.
+  'egress_audit',
+  'egress_refused',
 ])
 
 /** Commit scope events to context based on strategy.

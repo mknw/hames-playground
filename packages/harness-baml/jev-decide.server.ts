@@ -23,7 +23,6 @@ import {
   activeInferenceTier,
   limitsFor,
   resolveClientForRole,
-  onExplicitAnthropicTier,
 } from './clients.server'
 
 assertServerOnImport()
@@ -153,16 +152,21 @@ export function createJevTransport(options: JevTransportOptions = {}): {
   decideAll: DecideAllFn
   decide: DecideFn
 } {
-  const decideAll: DecideAllFn = async <S extends Record<string, AnyDecisionSpec>>(input: {
-    readonly spec: MixedDecisionSet<S>
-    readonly state: string
-  }) => {
+  // `signal` is `DecideInput.signal`, reaching the fetch below: a caller's own
+  // deadline aborts the request rather than only the wait for it.
+  const request = async <S extends Record<string, AnyDecisionSpec>>(
+    input: {
+      readonly spec: MixedDecisionSet<S>
+      readonly state: string
+    },
+    signal?: AbortSignal,
+  ) => {
     const startTime = Date.now()
     const { spec, state } = input
     const names = Object.keys(spec.fields) as Array<keyof S & string>
     const variables: Record<string, unknown> = { state, key: spec.key }
     const clientName = resolveClientForRole('decide')
-    const privateTier = activeInferenceTier() === 'verda'
+    const privateTier = activeInferenceTier() === 'self_deployed'
     const privateClient = clientName === PRIVATE_SYSTEMONE_CLIENT_NAME
     let requested = false
     function jevFailure(
@@ -175,7 +179,14 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       const durationMs = Date.now() - startTime
       const metrics =
         privateClient && requested ? metricsFor(undefined, clientName, durationMs) : undefined
-      if (metrics) notifyLlmUsage({ functionName: 'Decide', clientName, durationMs, metrics })
+      if (metrics)
+        notifyLlmUsage({
+          functionName: 'Decide',
+          decisionKey: spec.key,
+          clientName,
+          durationMs,
+          metrics,
+        })
       return new LLMCallError(
         message,
         {
@@ -192,11 +203,12 @@ export function createJevTransport(options: JevTransportOptions = {}): {
       )
     }
 
-    // A private run must resolve to its own client before any URL/key is read.
-    if (
-      (privateTier && !privateClient) ||
-      (!privateTier && (!onExplicitAnthropicTier() || clientName !== JEV_CLIENT_NAME))
-    ) {
+    // The tier lock is `privateTier` checked against the client's name: a private
+    // run must resolve to its own client, any other to Jev, before any URL/key is
+    // read. An unrecognised frame tier is the private tier, refused
+    // upstream by `activeInferenceTier()` above when that tier is unreachable, so
+    // no separate Anthropic check is needed.
+    if ((privateTier && !privateClient) || (!privateTier && clientName !== JEV_CLIENT_NAME)) {
       throw jevFailure(
         'Refusing systemone client for this inference tier; no request was made.',
         variables,
@@ -342,7 +354,9 @@ export function createJevTransport(options: JevTransportOptions = {}): {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
         body: rawInput,
-        signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(JEV_TIMEOUT_MS)])
+          : AbortSignal.timeout(JEV_TIMEOUT_MS),
         redirect: 'error',
       })
       status = res.status
@@ -398,7 +412,13 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     const metrics = metricsFor(usage, clientName, durationMs)
     // The request WAS answered and billed: account it even when the answer then
     // fails to parse, the same rule the BAML failure path follows.
-    notifyLlmUsage({ functionName: 'Decide', clientName, metrics, durationMs })
+    notifyLlmUsage({
+      functionName: 'Decide',
+      decisionKey: spec.key,
+      clientName,
+      metrics,
+      durationMs,
+    })
 
     const record: LLMCallRecord = {
       functionName: 'Decide',
@@ -509,14 +529,22 @@ export function createJevTransport(options: JevTransportOptions = {}): {
     return { fields }
   }
 
+  const decideAll: DecideAllFn = async <S extends Record<string, AnyDecisionSpec>>(input: {
+    readonly spec: MixedDecisionSet<S>
+    readonly state: string
+  }) => request(input)
+
   const decide: DecideFn = async <L extends string>(input: DecideInput<L>) => {
     if (!JEV_DECISION_TYPES.includes(input.spec.type ?? 'choice')) {
       throw new Error(`Unsupported decision type: ${String(input.spec.type)}`)
     }
-    const r = await decideAll({
-      spec: { key: input.spec.key, fields: { [input.spec.key]: input.spec } },
-      state: input.state,
-    })
+    const r = await request(
+      {
+        spec: { key: input.spec.key, fields: { [input.spec.key]: input.spec } },
+        state: input.state,
+      },
+      input.signal,
+    )
     return r.fields[input.spec.key] as unknown as DecideResult<L>
   }
 

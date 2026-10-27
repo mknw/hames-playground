@@ -111,6 +111,7 @@ export type {
   DecideFn,
   DecideAllFn,
   DecisionMadeEventData,
+  ByTier,
 
   // Memory recall (#419)
   MemoryKind,
@@ -133,6 +134,12 @@ export type {
   MemoryWriteStore,
   MemoryWriteAction,
   MemoryWrittenEventData,
+  ModelCallEventData,
+  ModelCallRole,
+  EgressAuditEventData,
+  EgressRefusedEventData,
+  EgressProbabilities,
+  CallRecordSink,
   MemoryConfirmSeam,
   MemoryProposalItem,
   MemoryProposalPayload,
@@ -202,6 +209,7 @@ export {
   amendRunFrame,
   activeRunFrame,
   currentRunFrame,
+  resolveByTier,
   type RunFrame,
   type ActiveRunFrame,
   type EgressCheck,
@@ -304,6 +312,14 @@ export {
   withPseudonymisedInputs,
   type PseudonymiseForWeb,
   type WebPseudonymisation,
+  withEgressGate,
+  egressClosures,
+  type EgressClosures,
+  type EgressDirectoryStatus,
+  type EgressGateConfig,
+  type EgressMode,
+  type EgressRoster,
+  type EgressRosterSource,
   chain,
   runChain,
   compactExecution,
@@ -311,15 +327,17 @@ export {
   planner,
   formatPlanContext,
   HANDOFF_HEADING,
+  CONVERSATION_HEADING,
   AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
+  DEFAULT_MAX_REASONING_CHARS,
   decisionLoop,
   DECISION_LOOP_MAX_ITERATIONS,
   DECISION_LOOP_KEY,
   DECISION_LOOP_ANSWER,
-  DECISION_LOOP_OUTPUT_KEY,
   DECISION_LOOP_RESULT_CHARS,
-  WITHHELD_SCREEN_UNAVAILABLE,
+  DECISION_DOCUMENTS_TIMEOUT_MS,
+  renderDocumentsBlock,
   collectToolNames,
   retriever,
   configurePattern,
@@ -338,6 +356,10 @@ export {
   type DecisionLoopData,
   type DecisionLoopRoute,
   type DecisionLoopStateInput,
+  type DecisionDocument,
+  type DecisionDocuments,
+  type DecisionDocumentsSource,
+  type ResolvedDecisionDocuments,
   type RouteOutput,
   type RouteStats,
   type RouteKind,
@@ -469,6 +491,8 @@ export {
   deserializeContext,
   createScope,
   createEvent,
+  createModelCallEvent,
+  redactCall,
   shouldTrack,
   trackEvent,
   commitEvents,
@@ -487,7 +511,7 @@ export {
 // Infrastructure (Server-only)
 // ============================================================================
 
-export { callTool, listTools, closeMcpClient } from './mcp-client.server'
+export { callTool, listTools, closeMcpClient, EGRESS_CHECK_FAILED } from './mcp-client.server'
 
 // Lane A6: `limitsFor` moved to `harness-baml` with the role→client map it
 // reads — core pattern files no longer read the model tables, directly or via
@@ -509,14 +533,24 @@ export {
   sanitizeUntrusted,
   sanitizeText,
   spotlight,
+  FENCE,
+  LEGACY_FENCE,
+  fenceItemId,
   applyScreenVerdict,
   redactReport,
   resolveRules,
-  strictestSpotlight,
+  neutralizeFenceMarkers,
   INJECTION_RULES,
+  SCREEN_WITHHELD,
   type InjectionRule,
   type InjectionGuardOptions,
   type InjectionScreen,
+  type InjectionScreenConfig,
+  type ScreenMode,
+  type GuardGate,
+  type GuardGateVerdict,
+  type IngressClass,
+  type IngressClassifier,
   type SanitizeFinding,
   type SanitizeLayer,
   type SanitizeReport,
@@ -526,6 +560,38 @@ export {
   type SpotlightMode,
   type ActiveInjectionGuard,
 } from './injection-guard'
+// The guard gate (boundary guards slice 3): the cheap Decide question in front of
+// the screen, passed as `screen.gate`.
+export {
+  createGuardGate,
+  GUARD_SCREEN,
+  GUARD_GATE_THRESHOLD,
+  GUARD_GATE_TIMEOUT_MS,
+  GUARD_GATE_MAX_CHARS,
+  GUARD_GATE_MAX_STATE_BYTES,
+  guardGateSkipRate,
+  type GuardGateSettings,
+} from './guard-gate.server'
+// The egress gate's question, its fixed texts and its deterministic reads
+// (boundary guards slice 4); the wrapper is `withEgressGate` above.
+export {
+  GUARD_EGRESS,
+  EGRESS_TEXTS,
+  EGRESS_WARNINGS,
+  EGRESS_WARNING_TASK,
+  GUARD_EGRESS_THRESHOLD,
+  GUARD_EGRESS_TIMEOUT_MS,
+  EGRESS_MAX_BLOCK_CHARS,
+  EGRESS_SMALL_BLOCK_CHARS,
+  EGRESS_USER_CAP,
+  EGRESS_SPAN_CAP,
+  readOutgoing,
+  destinationHosts,
+  renderEgressState,
+  type OutgoingRequest,
+  type ReadOutgoing,
+  type EgressStateInput,
+} from './egress-gate.server'
 export { normalizeControllerAction } from './controller-action'
 
 // Lane A6: the BAML adapter factories and their helpers moved to

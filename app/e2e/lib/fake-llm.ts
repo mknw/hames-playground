@@ -4,7 +4,7 @@
  * This is what makes the hermetic mode hermetic. It speaks the same wire
  * protocol as the self-hosted vLLM deployment (`POST /v1/chat/completions`,
  * `GET /v1/models`), so the app reaches it through the SHIPPED seam — the
- * `VerdaQwen` client's `base_url env.VERDA_INFERENCE_ENDPOINT` for the verda
+ * `LargeQwen` client's `base_url env.LARGE_LLM_BASE_URL` for the self_deployed
  * tier, and a test-only `ClientRegistry` primary for the anthropic tier
  * (`baml-route.ts` explains why the two halves differ).
  *
@@ -99,18 +99,19 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
+  resolveThinkingTwin,
   classifyPrompt,
   promptText,
   type BamlFunctionName,
   type ChatMessage,
 } from './baml-functions'
 import { MEMORY_WAKE_PROMPT } from '../../src/lib/inference/memory-wake.server'
-import { VERDA_MODEL } from './mode'
+import { LARGE_LLM_MODEL } from './mode'
 // The wake ping's message text, imported rather than copied: this fake
 // hard-fails on a prompt it cannot classify, so a drift between the constant and
 // the literal here would turn every private-tier turn into a 400 from the fake
 // and read like an app bug.
-import { VERDA_WAKE_PROMPT } from '../../src/lib/inference/wake.server'
+import { LARGE_LLM_WAKE_PROMPT } from '../../src/lib/inference/wake.server'
 
 // ============================================================================
 // Recorded traffic
@@ -158,7 +159,7 @@ export type DecisionEndpoint = 'jev' | 'private'
  * private-tier request on the wire is the wake ping, so an unfiltered fault
  * armed `times: 1` lands on it and never reaches a BAML call — which is how
  * scenario 4 stopped exercising the BAML client's own timeout without going red
- * (it exercised `VERDA_WAKE_TIMEOUT_MS` instead, and passed). The two are
+ * (it exercised `LARGE_LLM_WAKE_TIMEOUT_MS` instead, and passed). The two are
  * separate budgets and each wants a scenario, so which of them a fault targets
  * has to be sayable:
  *
@@ -281,7 +282,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       return
     }
     if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
-      // The Verda smoke script re-reads the served model id from here rather
+      // The self-deployed smoke script re-reads the served model id from here rather
       // than trusting the client declaration; the preflight does the same, so
       // the fake has to answer it.
       json(res, 200, {
@@ -470,20 +471,24 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
   }
 
   async function serve(raw: string, res: http.ServerResponse): Promise<void> {
-    let body: { model?: string; messages?: ChatMessage[]; max_tokens?: number }
+    let body: {
+      model?: string
+      messages?: ChatMessage[]
+      max_tokens?: number
+      chat_template_kwargs?: { enable_thinking?: unknown }
+      reasoning?: { enabled?: unknown }
+    }
     try {
-      body = JSON.parse(raw || '{}') as {
-        model?: string
-        messages?: ChatMessage[]
-        max_tokens?: number
-      }
+      body = JSON.parse(raw || '{}') as typeof body
     } catch {
       json(res, 400, { error: { message: 'fake-llm: request body was not JSON' } })
       return
     }
     const model = body.model ?? '(no model)'
     const prompt = promptText(body.messages ?? [])
-    const fn = classifyPrompt(prompt)
+    // The reasoning twins share their original's prompt bytes; the request
+    // body's thinking-on shape is what recovers them (see resolveThinkingTwin).
+    const fn = resolveThinkingTwin(classifyPrompt(prompt), body)
 
     const record = (outcome: FakeCall['outcome'], delayedMs: number): void => {
       calls.push({ at: Date.now() - startedAt, model, fn, prompt, outcome, delayedMs })
@@ -523,7 +528,7 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
     // vLLM's ordering rule, enforced only for the self-hosted model — see the
     // header. Checked BEFORE any injected fault, so a scenario that also armed
     // a cold start still gets the 400 production would give it.
-    if (!wake && model === VERDA_MODEL && hasLateSystemMessage(body.messages ?? [])) {
+    if (!wake && model === LARGE_LLM_MODEL && hasLateSystemMessage(body.messages ?? [])) {
       record('bad-role-order', 0)
       json(res, 400, {
         object: 'error',
@@ -563,7 +568,18 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
 
     // `fn` is non-null for everything but the wake ping, which the `!wake` guard
     // above let through — it wants a token, not a parseable envelope.
-    const payload = JSON.stringify(completion(model, wake ? 'ok' : replyFor(fn!, prompt)))
+    const payload = JSON.stringify(
+      completion(
+        model,
+        wake ? 'ok' : replyFor(fn!, prompt),
+        // The reasoning twins read their trace from the response's separate
+        // `reasoning` field, so the fake supplies one there (the twin envelopes
+        // themselves carry no reasoning — see replyFor).
+        fn === 'PlannerThinking' || fn === 'ControllerThinking' || fn === 'CriticThinking'
+          ? 'One synthetic lookup is enough.'
+          : undefined,
+      ),
+    )
 
     if (fault?.kind === 'mid-stream') {
       record('mid-stream', delayedMs)
@@ -715,6 +731,23 @@ export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
  * function of the request. That is what makes concurrent conversations safe.
  */
 function replyFor(fn: BamlFunctionName, prompt: string): string {
+  // The reasoning twins reuse their base function's reply; their envelopes
+  // omit the reasoning field (the adapter restores it from the response's
+  // separate trace field), so the fake must not demonstrate it — a twin reply
+  // carrying `reasoning` would be exactly the disagreeing-demonstration
+  // defect the envelope rule exists to prevent.
+  const base =
+    fn === 'ControllerThinking' ? 'LoopController' : fn === 'CriticThinking' ? 'Critic' : fn
+  const raw = replyForBase(base, prompt)
+  if (base !== fn) {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    delete parsed.reasoning
+    return JSON.stringify(parsed)
+  }
+  return raw
+}
+
+function replyForBase(fn: BamlFunctionName, prompt: string): string {
   switch (fn) {
     case 'ExtractMemory': {
       const evidence =
@@ -774,6 +807,12 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
         explanation: 'The attempt answers the intent.',
       })
 
+    case 'PlannerThinking':
+      return JSON.stringify({
+        plan: '1. Query the graph for a node count.',
+        n_steps: 1,
+      })
+
     case 'Planner':
       return JSON.stringify({
         reasoning: 'One lookup is enough.',
@@ -812,6 +851,12 @@ function replyFor(fn: BamlFunctionName, prompt: string): string {
 
     case 'GenerateConversationTitle':
       return 'E2E Fake Conversation'
+
+    // The reasoning twins are answered through their base function's reply
+    // (see replyFor); reaching the switch with a twin name is a wiring bug.
+    case 'ControllerThinking':
+    case 'CriticThinking':
+      throw new Error(`${fn} is answered through its base function's reply`)
   }
 }
 
@@ -852,7 +897,7 @@ function readBatchIds(prompt: string): string[] {
  *  scenario by `memoryConfirm()`, restored by `reset()`. */
 let confirmIndex = 1
 
-function completion(model: string, content: string): unknown {
+function completion(model: string, content: string, reasoning?: string): unknown {
   return {
     id: 'e2e-fake-completion',
     object: 'chat.completion',
@@ -861,7 +906,7 @@ function completion(model: string, content: string): unknown {
     choices: [
       {
         index: 0,
-        message: { role: 'assistant', content },
+        message: { role: 'assistant', content, ...(reasoning ? { reasoning } : {}) },
         finish_reason: 'stop',
       },
     ],
@@ -891,7 +936,7 @@ function isWakePing(
   return (
     (body.max_tokens === 1 || body.max_tokens === 2) &&
     (body.messages ?? []).length === 1 &&
-    prompt.trim() === VERDA_WAKE_PROMPT
+    prompt.trim() === LARGE_LLM_WAKE_PROMPT
   )
 }
 

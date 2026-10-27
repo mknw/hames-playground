@@ -45,6 +45,39 @@ assertServerOnImport()
 
 export type EmbeddingProvider = 'local' | 'openrouter'
 
+/**
+ * Embedding providers declared TRUSTED with a deployment's query text (boundary
+ * guards, ruling W). The retriever sends its query to the embedder directly,
+ * not through `callTool`, so the egress gate never sees it: a host that runs
+ * an agent with the egress gate refuses at boot any provider that is neither
+ * `local` nor in this set ({@link embeddingProviderPassesEgress}). A provider
+ * joins on `local`'s test: it already holds the deployment's data, or holds it
+ * under a processor agreement the owner approved. Trusting a provider with the
+ * query text is a processor decision, so the set is a reviewed line of code and
+ * never an environment variable. `openrouter` is not in it.
+ *
+ * `local` names the wire format, not the machine: its host is
+ * `EMBEDDINGS_LOCAL_URL`, which a deployment may point anywhere, so this check
+ * holds only while that host is the deployment's own box (a named residual).
+ */
+export const TRUSTED_EMBEDDING_PROVIDERS: ReadonlySet<string> = new Set<string>()
+
+/**
+ * Whether `provider` (an `EMBEDDINGS_PROVIDER` value; unset is `local`) may
+ * serve a deployment whose agents have the egress gate: `local`, or a provider
+ * declared trusted. Any other value is refused, a known outside provider and an
+ * unregistered value alike. The ONE predicate the app's boot check, its
+ * file-ingest capability and the ingest tool all read, so a provider added
+ * later fails closed in all three.
+ */
+export function embeddingProviderPassesEgress(
+  provider: string | undefined,
+  trusted: ReadonlySet<string> = TRUSTED_EMBEDDING_PROVIDERS,
+): boolean {
+  if (provider === undefined || provider === 'local') return true
+  return trusted.has(provider)
+}
+
 export interface EmbeddingConfig {
   /** Provider; defaults to `EMBEDDINGS_PROVIDER` env or `'local'`. */
   provider?: EmbeddingProvider

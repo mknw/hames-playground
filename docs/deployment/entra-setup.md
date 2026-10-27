@@ -15,6 +15,8 @@ what the **Entra tenant owner** must provision, plus the env the app needs.
 
 Use an existing registration (its client id goes in `AZURE_CLIENT_ID`) or
 create one: Entra admin center → **App registrations** → **New registration**.
+A deployment that already has a registration keeps it and its client id, and only
+adds its redirect URI.
 
 - **Supported account types:** _Accounts in this organizational directory only_
   (single tenant). Gives a fixed `AZURE_TENANT_ID` and matches the MS-only
@@ -133,14 +135,14 @@ API"** and there is no `api://…/access_as_user` scope. Leave that blade empty.
 `DEFAULT_GRAPH_SCOPES` in `lib/auth/entra-config.server.ts` requests the whole
 connector set at sign-in:
 
-| Scope                 | For                                             | Kind      |
-| --------------------- | ----------------------------------------------- | --------- |
-| `User.Read`, `email`  | own profile                                     | read      |
-| `Mail.Read`           | mailbox search / summarise                      | read      |
-| `Mail.Send`           | send as the user                                | **write** |
-| `Calendars.ReadWrite` | availability + scheduling                       | **write** |
-| `Files.Read.All`      | OneDrive + SharePoint files the user can access | read      |
-| `Sites.Read.All`      | SharePoint sites the user can access            | read      |
+| Scope                 | For                                             | Kind  |
+| --------------------- | ----------------------------------------------- | ----- |
+| `User.Read`, `email`  | own profile                                     | read  |
+| `Mail.Read`           | mailbox search / summarise                      | read  |
+| `Mail.Send`           | already consented; no send tool                 | write |
+| `Calendars.ReadWrite` | calendar reads; no calendar-write tool          | write |
+| `Files.Read.All`      | OneDrive + SharePoint files the user can access | read  |
+| `Sites.Read.All`      | SharePoint sites the user can access            | read  |
 
 Why up front rather than incrementally: **adding a scope later forces every user
 to sign in again** (their stored refresh token must cover it), and background runs
@@ -149,8 +151,8 @@ have no user present to consent mid-run. One consent, done.
 A granted scope is not a capability. The model can only do what a _registered
 tool_ exposes — see
 [MICROSOFT_GRAPH.md](../MICROSOFT_GRAPH.md#what-it-can-do-today) for the current
-set, none of which writes to Microsoft 365. Any future write tool should carry
-its own confirmation gate.
+set, none of which writes to Microsoft 365. Write approval is currently limited to Neo4j (owner ruling, #669);
+Graph write tools are not shipped.
 
 > ⚠️ **Order matters.** Every scope in the request must exist under **API
 > permissions** with consent granted _before_ anyone signs in. A scope that is
@@ -159,10 +161,32 @@ its own confirmation gate.
 > `AZURE_GRAPH_SCOPES` env var (space- or comma-separated) and restart — no code
 > change or redeploy needed. Reserved scopes (`openid`/`profile`/
 > `offline_access`) are stripped automatically; MSAL supplies them.
+> Overrides may only trim the seven-scope consented set above (case-insensitive); any
+> other scope, including every delegated `.default` form, is rejected at boot.
+> The same allowlist refuses unapproved scopes at the delegated token mint before
+> reading the stored cache. Graph-qualified names are not accepted.
 
-### Adding a scope later
+### Keep the consented permissions in Entra
 
-Adding a scope to the sign-in request **forces every user to sign in again**
+Keep the existing registration/client id and its already-consented delegated
+set: **`User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
+`Files.Read.All`, `Sites.Read.All`**. Keep **`openid`, `profile`, `offline_access`**
+as well; MSAL supplies those three and `offline_access` enables background refresh.
+The owner is no longer asked to remove `Mail.Send` or `Calendars.ReadWrite`,
+or revoke their grants. Leave application permissions (the roster read) unchanged.
+
+The app requests `Mail.Send` and `Calendars.ReadWrite` but ships no Graph write
+tool; requesting these scopes adds no write tool. HITL write gating stays
+Neo4j-only. The calendar reader uses the consented `Calendars.ReadWrite` scope
+for reads. Requesting `Calendars.Read` would require new consent and block
+sign-in where user consent is disabled, so the shared boot/mint allowlist refuses it.
+The allowlist permits minting `Mail.Send` and `Calendars.ReadWrite`; it is a
+consented-scope boundary, not a read-only permission boundary. This change
+performs no tenant action or token-cache migration.
+
+### Adding a read scope later
+
+Adding a read scope to the sign-in request **forces every user to sign in again**
 (their stored refresh token must cover it), which is the reason the full set is
 taken up front. Grant it in the portal first, then extend
 `DEFAULT_GRAPH_SCOPES`. Writing the tool that uses it is

@@ -34,6 +34,7 @@ import {
 } from '../../../lib/harness-client/request-user.server'
 import { runtimeConfig } from '@hames-ai/harness-patterns/runtime-config.server'
 import { DEFAULT_SETTINGS } from '../../../lib/settings'
+import { replayMessages } from '@hames-ai/agents/replay'
 
 /** Every run records the ambient scope it saw. */
 const seenScopes: Array<{ userId: string | null; sessionId: string | null }> = []
@@ -185,33 +186,33 @@ const tierScopes = {
 }
 
 const resolveConversationTier = vi.fn<
-  (sessionId: string, userId: string) => Promise<'verda' | 'anthropic'>
+  (sessionId: string, userId: string) => Promise<'self_deployed' | 'anthropic'>
 >(async () => 'anthropic')
 vi.mock('../../../lib/inference/tier.server', () => ({
   resolveConversationTier: (sessionId: string, userId: string) =>
     resolveConversationTier(sessionId, userId),
 }))
 
-const beginVerdaTurn = vi.fn()
-const endVerdaTurn = vi.fn()
-vi.mock('../../../lib/inference/verda-activity.server', () => ({
-  beginVerdaTurn: () => beginVerdaTurn(),
-  endVerdaTurn: () => endVerdaTurn(),
+const beginSelfDeployedTurn = vi.fn()
+const endSelfDeployedTurn = vi.fn()
+vi.mock('../../../lib/inference/large-activity.server', () => ({
+  beginSelfDeployedTurn: () => beginSelfDeployedTurn(),
+  endSelfDeployedTurn: () => endSelfDeployedTurn(),
   // The cold-start watch reads these three to decide whether a wait is worth
   // announcing. Stubbed as a box nobody has called ("starting", never seen), so
   // a turn that arms a watch actually fires its notice — otherwise the
   // concurrent-wake test below would pass by announcing nothing at all.
-  verdaWarmth: () => ({ state: 'starting', secondsUntilScaledown: null }),
-  verdaLastCallCompletedAt: () => null,
-  verdaScaledownSeconds: () => 300,
+  largeWarmth: () => ({ state: 'starting', secondsUntilScaledown: null }),
+  largeLastCallCompletedAt: () => null,
+  largeScaledownSeconds: () => 300,
   // The name `clientOverrideFor` compares against to decide whether a bag is
   // about to wait on the scale-to-zero box.
-  VERDA_CLIENT_NAME: 'VerdaQwen',
+  LARGE_LLM_CLIENT_NAME: 'LargeQwen',
 }))
 
 // The wake ping is MOCKED here, and the split is deliberate: what this file owns
 // is the turn's scope plumbing — is the box woken before the harness runs, on the
-// right tier, and does a failure end the turn — while `verda-wake.test.ts` owns
+// right tier, and does a failure end the turn — while `large-wake.test.ts` owns
 // what the ping puts on the wire and how it dedupes. Running the real one here
 // would open a socket from a scope test.
 const ensurePrivateTierAwake = vi.fn(async () => {})
@@ -274,7 +275,26 @@ const dbLoadConversation = vi.fn<
   (id: string, userId: string) => Promise<{ serializedContext: string; version: string } | null>
 >(async () => null)
 const TURN_CLAIM_RENEW_MS = 30_000
+/** Ownership records, mocked at the repository level so the REAL resolver
+ *  (`stash/ownership.server.ts`) is what the turn consults — the same
+ *  arrangement as `stash-ownership.test.ts`. */
+const conversationOwners = new Map<string, string>()
+const sessionClaims = new Map<string, string>()
+/** First toucher wins, matching the upsert in `session-claims.server.ts`. */
+const dbClaimOwnership = vi.fn(async (sessionId: string, userId: string, _ttl: number) => {
+  const held = sessionClaims.get(sessionId)
+  if (held) return held
+  sessionClaims.set(sessionId, userId)
+  return userId
+})
+const dbReadClaimOwner = vi.fn(async (sessionId: string) => sessionClaims.get(sessionId) ?? null)
+vi.mock('../../../lib/db/session-claims.server', () => ({
+  getSessionClaimOwner: (sessionId: string) => dbReadClaimOwner(sessionId),
+  claimSession: (sessionId: string, userId: string, ttl: number) =>
+    dbClaimOwnership(sessionId, userId, ttl),
+}))
 vi.mock('../../../lib/db/conversations.server', () => ({
+  getConversationOwner: async (id: string) => conversationOwners.get(id) ?? null,
   createConversation: dbCreateConversation,
   releaseConversationClaim: dbReleaseConversationClaim,
   renewConversationClaim: dbRenewConversationClaim,
@@ -312,11 +332,13 @@ const loadHitlAnswerRows = vi.fn<
     }>
   >
 >(async () => [])
-const closeHitlRows = vi.fn(async () => 0)
+const closeHitlRows = vi.fn<typeof import('../../../lib/db/hitl.server').closeHitlRows>(
+  async () => 0,
+)
 const deleteQuarantine = vi.fn(async () => {})
 vi.mock('../../../lib/db/hitl.server', () => ({
   loadHitlAnswerRows: (s: string, u: string) => loadHitlAnswerRows(s, u),
-  closeHitlRows: (...a: unknown[]) => closeHitlRows(...(a as [])),
+  closeHitlRows: (...a: Parameters<typeof closeHitlRows>) => closeHitlRows(...a),
   deleteQuarantine: (...a: unknown[]) => deleteQuarantine(...(a as [])),
 }))
 
@@ -342,7 +364,7 @@ const { runTurnAndPersist, TITLE_GEN_TIMEOUT_MS, mergeTrailingPass } =
   await import('../../../lib/harness-client/turn.server')
 // The REAL refusal class, through the mock that passes it verbatim: the tests
 // throw exactly what core's resume would.
-const { HitlAnswerError } = await import('@hames-ai/harness-patterns')
+const { HitlAnswerError, readHitl, deserializeContext } = await import('@hames-ai/harness-patterns')
 
 const TRIGGER = { transcribedCommand: 'do it', shortDescription: 'Do it' }
 
@@ -368,14 +390,16 @@ beforeEach(() => {
   awaitMemoryWake.mockResolvedValue('awake')
   seenScopes.length = 0
   seenAttended.length = 0
+  conversationOwners.clear()
+  sessionClaims.clear()
   openedFrames.length = 0
   amendedFrames.length = 0
   // The real `runWithInferenceTier` is used (only the recording is a wrapper),
-  // and it refuses the `verda` position unless the endpoint is configured —
+  // and it refuses the `self_deployed` position unless the endpoint is configured —
   // fail-closed, by design. Fakes: nothing here opens a socket, and the
   // endpoint only has to satisfy the shape check.
-  process.env.VERDA_INFERENCE_ENDPOINT = 'https://example.invalid/deployment/v1'
-  process.env.VERDA_INFERENCE_API_KEY = 'test-key'
+  process.env.LARGE_LLM_BASE_URL = 'https://example.invalid/deployment/v1'
+  process.env.LARGE_LLM_API_KEY = 'test-key'
   // The private tier is two models, and the scope refuses to open without both.
   process.env.SMALL_LLM_DECISIONS_URL = 'https://private.example/v1/systemone'
   process.env.SMALL_LLM_API_KEY = 'synthetic-private-key'
@@ -398,8 +422,8 @@ afterEach(async () => {
   // middle of the next test.
   await flush()
   logged.mockRestore()
-  delete process.env.VERDA_INFERENCE_ENDPOINT
-  delete process.env.VERDA_INFERENCE_API_KEY
+  delete process.env.LARGE_LLM_BASE_URL
+  delete process.env.LARGE_LLM_API_KEY
   delete process.env.SMALL_LLM_DECISIONS_URL
   delete process.env.SMALL_LLM_API_KEY
   delete process.env.SMALL_LLM_BASE_URL
@@ -472,13 +496,13 @@ describe('interactive turns', () => {
     claimSession.mockResolvedValue(STORED)
 
     const result = await runTurnAndPersist(
-      interactive({ sessionId: 'sess-3', agentId: 'general', message: 'hi' }),
+      interactive({ sessionId: 'sess-3', agentId: 'retriever', message: 'hi' }),
     )
 
     expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'general')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'retriever')
     expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'general', 'serialized:sess-3', {
+    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'retriever', 'serialized:sess-3', {
       version: 'v-claim',
       inferenceTier: 'anthropic',
       memoryRunOrigin: 'interactive',
@@ -508,6 +532,33 @@ describe('interactive turns', () => {
       inferenceTier: 'anthropic',
       memoryRunOrigin: 'interactive',
     })
+  })
+
+  // 2026-10-21: `general` was removed and its id folds into `general-next`. A
+  // stored conversation resumes there (the claim's load maps the row's id), and a
+  // tab loaded before the deploy still SENDS `general`: compared raw, 'general' !==
+  // 'general-next' would read as an agent switch and replace the thread.
+  //
+  // MUTATION: delete `general: 'general-next'` from RENAMED_AGENT_IDS
+  // (agent-ids.ts) → the request's id stays 'general', `harness` runs fresh,
+  // `getOrBuildPatterns` is asked for the removed agent, and every assertion reddens.
+  it('continues a stored conversation when the request names the removed general agent', async () => {
+    claimSession.mockResolvedValue({ ...STORED, agentId: 'general-next' })
+
+    const result = await runTurnAndPersist(
+      interactive({ sessionId: 'sess-gen', agentId: 'general', message: 'and now?' }),
+    )
+
+    expect(harness).not.toHaveBeenCalled()
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-gen', 'general-next')
+    expect(result.response).toBe('continued:and now?')
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-gen',
+      'user-1',
+      'general-next',
+      'ctx-a+and now?',
+      { version: 'v-claim', inferenceTier: 'anthropic', memoryRunOrigin: 'interactive' },
+    )
   })
 
   it('exposes the user + conversation to the run as ambient request scope', async () => {
@@ -954,6 +1005,22 @@ describe('triggered turns', () => {
     )
   })
 
+  // The removed `general` agent: a routine row or a device URL written before
+  // 2026-10-21 still names it, and runs under its successor rather than failing.
+  it('runs and persists a routine that names the removed general agent under general-next', async () => {
+    await runTurnAndPersist(triggered({ agentId: 'general' }))
+
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'general-next')
+    expect(saveSession).toHaveBeenNthCalledWith(
+      1,
+      'run-1',
+      'user-1',
+      'general-next',
+      'serialized:run-1',
+      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
+    )
+  })
+
   // #226 C5. The background path skipped `compactBulkData` entirely, so a
   // promoted action's next turn re-fed every raw tool payload into the prompt —
   // the exact thing #83 added compaction to prevent.
@@ -1019,20 +1086,20 @@ describe('triggered turns', () => {
 
 describe("the run frame's inference slot — the per-conversation switch, plumbed", () => {
   it('opens the frame with the tier the CONVERSATION is on', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
 
     await runTurnAndPersist(interactive())
 
     // Resolved per conversation, not per user: that is what lets an Anthropic
     // chat start while a private one is still waking.
     expect(resolveConversationTier).toHaveBeenCalledWith('sess-1', 'user-1')
-    expect(tierScopes.value).toEqual(['verda'])
+    expect(tierScopes.value).toEqual(['self_deployed'])
   })
 
   it('fills the anthropic position too, rather than leaving the slot empty', async () => {
     // The slot must be filled in BOTH positions: a run whose frame names no
     // tier falls back to the deployment default, so "leave it out when the user
-    // picked Anthropic" would silently ignore an opt-out on a Verda-default host.
+    // picked Anthropic" would silently ignore an opt-out on a self_deployed-default host.
     resolveConversationTier.mockResolvedValue('anthropic')
 
     await runTurnAndPersist(interactive())
@@ -1070,7 +1137,9 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
     const result = await runTurnAndPersist(interactive())
 
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(tierScopes.value).toEqual(['anthropic']) // the deployment default
+    // the host default of a run that names no tier — the self-deployed tier (the one
+    // tier rule); `assertInferenceTier` is mocked here, so reachability is not at issue
+    expect(tierScopes.value).toEqual(['self_deployed'])
     expect(logged).toHaveBeenCalled()
   })
 })
@@ -1103,42 +1172,42 @@ describe('the request scope says whether anyone is waiting on the run', () => {
 
 describe('what the header learns from a turn', () => {
   it('counts the turn against its tier', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
 
     await runTurnAndPersist(interactive())
 
-    expect(recordTurn).toHaveBeenCalledWith('verda')
+    expect(recordTurn).toHaveBeenCalledWith('self_deployed')
   })
 
-  it('brackets a Verda turn with the in-flight gauge', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
+  it('brackets a self_deployed turn with the in-flight gauge', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
 
     await runTurnAndPersist(interactive())
 
-    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
-    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(beginSelfDeployedTurn).toHaveBeenCalledTimes(1)
+    expect(endSelfDeployedTurn).toHaveBeenCalledTimes(1)
   })
 
   it('releases the gauge even when the turn throws', async () => {
     // Without the `finally`, one failed turn pins the header to "answering"
     // for the life of the process.
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     getOrBuildPatterns.mockRejectedValueOnce(new Error('gateway down'))
 
     await expect(runTurnAndPersist(interactive())).rejects.toThrow('gateway down')
 
-    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
-    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(beginSelfDeployedTurn).toHaveBeenCalledTimes(1)
+    expect(endSelfDeployedTurn).toHaveBeenCalledTimes(1)
   })
 
-  it('wakes the box BEFORE the harness runs, on a verda turn', async () => {
+  it('wakes the box BEFORE the harness runs, on a self_deployed turn', async () => {
     // WAKE THEN RUN, and the ORDER is the whole claim. The box scales to zero, so
     // starting the harness first just moves a 146s wait into a call whose timeout
     // is now sized for a warm box (180s) — i.e. the first turn of every session
     // would fail. Asserted by call order against the first thing the run does
     // rather than by "was it called", because a wake that happens after the
     // controller is not a wake.
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     const order: string[] = []
     dbCreateConversation.mockImplementation(async () => {
       order.push('seed')
@@ -1190,7 +1259,7 @@ describe('what the header learns from a turn', () => {
       return ['patterns:search']
     })
 
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     const privateTurn = runTurnAndPersist(
       interactive({ sessionId: 'sess-private', onWarming: privateWarming }),
     )
@@ -1213,7 +1282,7 @@ describe('what the header learns from a turn', () => {
 
     // Not vacuous: the private turn really was on the self-hosted route and
     // really did announce its wait, from the same seam.
-    expect(overrides['sess-private']).toEqual({ client: 'VerdaQwen' })
+    expect(overrides['sess-private']).toEqual({ client: 'LargeQwen' })
     expect(privateWarming).toHaveBeenCalled()
   })
 
@@ -1233,7 +1302,7 @@ describe('what the header learns from a turn', () => {
     // as an `error` frame, and the in-flight gauge is still released — otherwise
     // one dead deployment pins the header to "answering" for the life of the
     // process.
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     ensurePrivateTierAwake.mockRejectedValueOnce(
       new Error('the private tier did not wake; nothing was sent to any other provider.'),
     )
@@ -1245,8 +1314,8 @@ describe('what the header learns from a turn', () => {
     // And the harness never started — a partially-run turn on a box that is not
     // there is the outcome this ordering exists to prevent.
     expect(getOrBuildPatterns).not.toHaveBeenCalled()
-    expect(beginVerdaTurn).toHaveBeenCalledTimes(1)
-    expect(endVerdaTurn).toHaveBeenCalledTimes(1)
+    expect(beginSelfDeployedTurn).toHaveBeenCalledTimes(1)
+    expect(endSelfDeployedTurn).toHaveBeenCalledTimes(1)
     // AND THE ROW IS NOT LEFT SPINNING. The wake moved inside `runAndSave`'s try
     // for this: a first message that cannot wake the box leaves an errored
     // conversation in the sidebar, the same as a first BAML call that fails
@@ -1267,7 +1336,7 @@ describe('what the header learns from a turn', () => {
     // wake outside the `catch` did neither, so an unattended routine that met a
     // sleeping box left a row spinning forever with no trace anywhere: no chat,
     // no error frame, no log.
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     ensurePrivateTierAwake.mockRejectedValueOnce(
       new Error('the private inference box did not wake: no answer within 300s.'),
     )
@@ -1298,11 +1367,161 @@ describe('what the header learns from a turn', () => {
     )
   })
 
+  describe('a wake failure is recorded in the transcript', () => {
+    // The live stream's `error` frame is the only copy of the failure unless the
+    // blob holds it too: a reload rebuilds the transcript from the blob alone,
+    // and a turn that died before the harness produced one event left an empty
+    // transcript under an `error` badge — the bubble "showed and disappeared".
+    const WAKE_MSG =
+      'the private inference box did not wake (the 27B): 18 attempts over 600s. ' +
+      'The turn was not started; nothing was sent to any other provider.'
+    const seeded = (events: unknown[]) =>
+      JSON.stringify({ sessionId: 'sess-1', status: 'running', events })
+    const userEvent = (content: string) => ({
+      id: `u-${content}`,
+      type: 'user_message',
+      ts: 1,
+      patternId: 'harness',
+      data: { content },
+    })
+    const savedBlob = () => saveSession.mock.calls[0][3] as string
+
+    beforeEach(() => {
+      resolveConversationTier.mockResolvedValue('self_deployed')
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error(WAKE_MSG))
+    })
+
+    // MUTATION: delete the `recordRunFailure` call in `runAndSave`'s catch →
+    // the blob is never saved, nothing replays, and every assertion reddens.
+    it('replays the first message and the failure after a reload, status error', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('first question')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', expect.any(String), {
+        version: 'v-seed',
+        inferenceTier: 'self_deployed',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'first question' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      // The save released the claim; a second release would be a no-op at best.
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: drop the `user_message` push for a continued conversation → the
+    // new message is missing from the replay (the second entry reddens).
+    it('keeps the history and the new message of a continued conversation', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({ ...STORED, serializedContext: stored })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'earlier' },
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+    })
+
+    // MUTATION: add `if (req.mode === 'triggered') return false` at the top of
+    // `recordRunFailure` → no save, the replay assertion reddens.
+    it('records a TRIGGERED run at its seeded claim, without a second input event', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('do it')]),
+        version: 'v-trig',
+      })
+
+      await expect(
+        runTurnAndPersist({
+          mode: 'triggered' as const,
+          sessionId: 'run-wake',
+          userId: 'user-1',
+          agentId: 'search',
+          message: 'do it',
+          data: { trigger: TRIGGER },
+          claimVersion: 'v-claim',
+        }),
+      ).rejects.toThrow(WAKE_MSG)
+
+      expect(saveSession).toHaveBeenCalledWith('run-wake', 'user-1', 'search', expect.any(String), {
+        version: 'v-claim',
+        inferenceTier: 'self_deployed',
+      })
+      expect(JSON.parse(savedBlob()).status).toBe('error')
+      expect(replayMessages(savedBlob())).toMatchObject([
+        { role: 'user', content: 'do it' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replayMessages(savedBlob())).toHaveLength(2)
+      expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    })
+
+    // MUTATION: replace `createContext(req.message, undefined, sessionId)` with
+    // `ctx` in `recordRunFailure` → the old agent's history survives and the
+    // length assertion reddens. Pins that a changed agent starts over, as
+    // `planTurn`'s success path does.
+    it('starts over when the agent changed, as the success path would', async () => {
+      const stored = seeded([userEvent('earlier')])
+      claimSession.mockResolvedValue({
+        ...STORED,
+        agentId: 'other-agent',
+        serializedContext: stored,
+      })
+      dbLoadConversation.mockResolvedValue({ serializedContext: stored, version: 'v-claim' })
+
+      await expect(runTurnAndPersist(interactive({ message: 'again' }))).rejects.toThrow(WAKE_MSG)
+
+      const replay = replayMessages(savedBlob())
+      expect(replay).toMatchObject([
+        { role: 'user', content: 'again' },
+        { role: 'error', content: WAKE_MSG },
+      ])
+      expect(replay).toHaveLength(2)
+    })
+
+    // MUTATION: remove `.slice(0, PERSISTED_ERROR_MAX)` → the stored text is
+    // the whole message and the length assertion reddens.
+    it('caps the persisted error text', async () => {
+      ensurePrivateTierAwake.mockReset()
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error('x'.repeat(5000)))
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow()
+
+      const error = replayMessages(savedBlob()).find((m) => m.role === 'error')
+      expect(error?.content).toHaveLength(2000)
+    })
+
+    it('falls back to the plain failed release when the blob cannot be saved', async () => {
+      dbLoadConversation.mockResolvedValue({
+        serializedContext: seeded([userEvent('q')]),
+        version: 'v-seed',
+      })
+      saveSession.mockRejectedValueOnce(new Error('row moved on'))
+
+      await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
+
+      expect(dbReleaseConversationClaim).toHaveBeenCalledWith('sess-1', 'user-1', 'v-seed', {
+        failed: true,
+      })
+    })
+  })
+
   it('does not touch the gauge for an Anthropic turn', async () => {
     await runTurnAndPersist(interactive())
 
-    expect(beginVerdaTurn).not.toHaveBeenCalled()
-    expect(endVerdaTurn).not.toHaveBeenCalled()
+    expect(beginSelfDeployedTurn).not.toHaveBeenCalled()
+    expect(endSelfDeployedTurn).not.toHaveBeenCalled()
     expect(recordTurn).toHaveBeenCalledWith('anthropic')
   })
 })
@@ -1700,12 +1919,18 @@ function pausedBlob(over: Record<string, unknown> = {}, request = pendingRequest
   })
 }
 
+/** A resume names a conversation that already exists and is its caller's —
+ *  the turn's gate only verifies, it never records — so the request registers
+ *  the owner the way the row it resumes would have. The ownership pins build
+ *  their own requests when they need an id nobody owns. */
 function resume(over: Record<string, unknown> = {}) {
-  return { mode: 'resume' as const, sessionId: 'sess-r', userId: 'user-1', ...over }
+  const req = { mode: 'resume' as const, sessionId: 'sess-r', userId: 'user-1', ...over }
+  if (!conversationOwners.has(req.sessionId)) conversationOwners.set(req.sessionId, req.userId)
+  return req
 }
 
 /** The claimed row a paused conversation reads as. */
-function claimedPaused(blob: string, status = 'paused'): Loaded {
+function claimedPaused(blob: string, status = 'paused'): NonNullable<Loaded> {
   return {
     serializedContext: blob,
     agentId: 'search',
@@ -1773,7 +1998,7 @@ describe('resume turns (#433 S7)', () => {
   it('refuses a session the user does not own, flipping nothing', async () => {
     claimSession.mockResolvedValue(null)
 
-    await expect(runTurnAndPersist(resume())).rejects.toThrow('No active session')
+    await expect(runTurnAndPersist(resume())).rejects.toThrow('Session not found')
 
     expect(resumeHarness).not.toHaveBeenCalled()
     expect(saveSession).not.toHaveBeenCalled()
@@ -1797,7 +2022,7 @@ describe('resume turns (#433 S7)', () => {
   })
 
   it('a tier-changed refusal happens before the wake and restores paused (A4/C1)', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     claimSession.mockResolvedValue(claimedPaused(pausedBlob())) // tier 'anthropic'
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(tier-changed)')
@@ -1836,24 +2061,166 @@ describe('resume turns (#433 S7)', () => {
     ])
   })
 
-  it('a failure before the run leaves the row paused (A4)', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
-    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+  // MUTATION: remove the wake-failure record in runResumeAndSave's catch.
+  // The pause survives, but the saved warning and its replay disappear.
+  it('a resume wake failure replays as a warning and preserves the answerable pause (#624)', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    const blob = pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))
+    claimSession.mockResolvedValue(claimedPaused(blob))
     const wakeFailed = new Error('the private inference box did not wake')
     ensurePrivateTierAwake.mockRejectedValueOnce(wakeFailed)
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
 
-    expect(resumeHarness).not.toHaveBeenCalled()
-    expect(flippedToError()).toEqual([])
-    expect(restoredPaused()).toEqual([
-      ['sess-r', 'user-1', 'v-claim', { failed: false, paused: true, hitlTerminal: false }],
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    expect(saveSession).toHaveBeenCalledWith('sess-r', 'user-1', 'search', expect.any(String), {
+      version: 'v-claim',
+      inferenceTier: 'self_deployed',
+    })
+    const saved = saveSession.mock.calls[0][3] as string
+    const ctx = deserializeContext(saved)
+    expect(ctx.status).toBe('paused')
+    expect(ctx.events.slice(0, -1)).toEqual(JSON.parse(blob).events)
+    expect(ctx.events.at(-1)).toMatchObject({
+      type: 'error',
+      data: { error: wakeFailed.message, severity: 'recoverable' },
+    })
+    expect(readHitl(ctx).pending).toEqual(readHitl(deserializeContext(blob)).pending)
+    expect(replayMessages(saved)).toMatchObject([
+      { role: 'user', content: 'do it' },
+      { role: 'warning', content: wakeFailed.message },
     ])
+    expect(replayMessages(saved)).toHaveLength(2)
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(deleteQuarantine).not.toHaveBeenCalled()
+    expect(closeHitlRows.mock.calls).toEqual([
+      [[], 'user-1', 'applied'],
+      [[], 'user-1', 'expired'],
+      [[], 'user-1', 'superseded'],
+    ])
+    // saveSession releases in its context write; the catch and finally must
+    // not release a second time. MUTATION: remove held.released = true.
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  })
+
+  it('retains every prior event and records each failed attempt once across repeated resumes', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    const original = pausedBlob(
+      { data: { retained: { value: 'unchanged' } } },
+      pendingRequest({ tier: 'self_deployed' }),
+    )
+    let blob = original
+    for (const [i, message] of ['first failed wake', 'second failed wake'].entries()) {
+      claimSession.mockResolvedValueOnce({ ...claimedPaused(blob), version: 'claim-' + i })
+      ensurePrivateTierAwake.mockRejectedValueOnce(new Error(message))
+      await expect(runTurnAndPersist(resume())).rejects.toThrow(message)
+      expect(saveSession).toHaveBeenCalledTimes(i + 1)
+      const call = saveSession.mock.calls[i]
+      expect(call[4]).toEqual({ version: 'claim-' + i, inferenceTier: 'self_deployed' })
+      const ctx = deserializeContext(call[3] as string)
+      expect(ctx.status).toBe('paused')
+      expect(ctx.data).toEqual({ retained: { value: 'unchanged' } })
+      expect(ctx.events.slice(0, -1)).toEqual(deserializeContext(blob).events)
+      expect(readHitl(ctx).pending).toEqual(readHitl(deserializeContext(original)).pending)
+      expect(replayMessages(call[3] as string).filter((m) => m.role === 'warning')).toHaveLength(
+        i + 1,
+      )
+      blob = call[3] as string
+    }
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(deleteQuarantine).not.toHaveBeenCalled()
+    expect(closeHitlRows.mock.calls.every((call) => (call[0] as string[]).length === 0)).toBe(true)
+  })
+
+  // MUTATION: remove the persisted text cap in the resume failure record.
+  it.each(['Error', 'string'])('caps a resume wake failure thrown as %s', async (shape) => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
+    const text = 'x'.repeat(5000)
+    const failure = shape === 'Error' ? new Error(text) : text
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    const saved = saveSession.mock.calls[0][3] as string
+    expect(replayMessages(saved).at(-1)).toMatchObject({
+      role: 'warning',
+      content: 'x'.repeat(2000),
+    })
+  })
+
+  // MUTATION: skip the paused-restoring release when the recording save fails.
+  it('a refused wake-failure save restores paused once and rethrows the wake failure', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
+    const failure = new Error('the private inference box did not wake')
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+    saveSession.mockRejectedValue(new Error('row moved on'))
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(saveSession).toHaveBeenCalledTimes(1)
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: true, hitlTerminal: false },
+    )
+  })
+
+  // MUTATION: remove loaded.status === 'paused' from the recording guard.
+  // A chain-changed row can still hold a paused blob; a recording save must
+  // not resurrect it or clear its terminal marker just because the wake failed.
+  it('a wake failure preserves the release policy of a row already ended in error', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' })), 'error'),
+    )
+    const failure = new Error('the private inference box did not wake')
+    ensurePrivateTierAwake.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: false, hitlTerminal: false },
+    )
+  })
+
+  // MUTATION: record every resume catch, including a pattern build failure.
+  it('a pattern build failure after the wake restores paused without recording a wake failure', async () => {
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
+    const failure = new Error('could not build patterns')
+    getOrBuildPatterns.mockRejectedValueOnce(failure)
+
+    await expect(runTurnAndPersist(resume())).rejects.toBe(failure)
+
+    expect(ensurePrivateTierAwake).toHaveBeenCalledTimes(1)
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).toHaveBeenCalledExactlyOnceWith(
+      'sess-r',
+      'user-1',
+      'v-claim',
+      { failed: false, paused: true, hitlTerminal: false },
+    )
   })
 
   it('a stop-only resume never wakes the box (A5)', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
-    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
     loadHitlAnswerRows.mockResolvedValue([answerRow('req-uuid-1', 'reject')])
 
     await runTurnAndPersist(resume())
@@ -1863,8 +2230,10 @@ describe('resume turns (#433 S7)', () => {
   })
 
   it('a resume with work to re-enter still wakes the box on the private tier', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
-    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
 
     await runTurnAndPersist(resume())
 
@@ -1872,8 +2241,10 @@ describe('resume turns (#433 S7)', () => {
   })
 
   it('missing answers are refused before the wake', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
-    claimSession.mockResolvedValue(claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda' }))))
+    resolveConversationTier.mockResolvedValue('self_deployed')
+    claimSession.mockResolvedValue(
+      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'self_deployed' }))),
+    )
     loadHitlAnswerRows.mockResolvedValue([])
 
     await expect(runTurnAndPersist(resume())).rejects.toThrow('(missing-answer)')
@@ -1897,9 +2268,11 @@ describe('resume turns (#433 S7)', () => {
   })
 
   it('an expired request ends the run without waking anything or re-entering it', async () => {
-    resolveConversationTier.mockResolvedValue('verda')
+    resolveConversationTier.mockResolvedValue('self_deployed')
     claimSession.mockResolvedValue(
-      claimedPaused(pausedBlob({}, pendingRequest({ tier: 'verda', expiresAt: Date.now() - 1 }))),
+      claimedPaused(
+        pausedBlob({}, pendingRequest({ tier: 'self_deployed', expiresAt: Date.now() - 1 })),
+      ),
     )
 
     const result = await runTurnAndPersist(resume())
@@ -1915,7 +2288,7 @@ describe('resume turns (#433 S7)', () => {
     // expiry's closing response — the answer's rows close against it.
     const [id, user, agent, written, held] = saveSession.mock.calls[0]
     expect([id, user, agent]).toEqual(['sess-r', 'user-1', 'search'])
-    expect(held).toEqual({ version: 'v-claim', inferenceTier: 'verda' })
+    expect(held).toEqual({ version: 'v-claim', inferenceTier: 'self_deployed' })
     const closed = JSON.parse(written as string) as {
       status: string
       events: { type: string; data?: { by?: string } }[]
@@ -2361,5 +2734,194 @@ describe('memory host turns (G9)', () => {
     await flush()
     expect(settleMemory).toHaveBeenCalledTimes(1)
     expect(saveSession.mock.calls[0][4]).toMatchObject({ memoryRunOrigin: 'interactive' })
+  })
+})
+
+describe('session ownership on the turn path', () => {
+  const NOT_FOUND = 'Session not found'
+
+  /** Every entry point, as the request it sends for a session id it names. */
+  const ENTRY_POINTS: Array<
+    [string, (userId: string) => Record<string, unknown>, 'claim' | 'verify']
+  > = [
+    ['new', (userId) => interactive({ sessionId: 'sess-o', userId }), 'claim'],
+    [
+      'continue',
+      (userId) => interactive({ sessionId: 'sess-o', userId, message: 'follow up' }),
+      'claim',
+    ],
+    // Verify-only: a resume never establishes an owner.
+    ['resume', (userId) => ({ mode: 'resume' as const, sessionId: 'sess-o', userId }), 'verify'],
+    [
+      'triggered',
+      (userId) => ({
+        mode: 'triggered' as const,
+        sessionId: 'sess-o',
+        userId,
+        agentId: 'search',
+        message: 'do the thing',
+        data: { trigger: TRIGGER },
+        claimVersion: 'v-trig',
+      }),
+      'claim',
+    ],
+  ]
+
+  /** Nothing a turn builds from the session id, and nothing it persists. */
+  function expectNothingRan() {
+    expect(getOrBuildPatterns).not.toHaveBeenCalled()
+    expect(runFresh).not.toHaveBeenCalled()
+    expect(continueSession).not.toHaveBeenCalled()
+    expect(resumeHarness).not.toHaveBeenCalled()
+    expect(ensurePrivateTierAwake).not.toHaveBeenCalled()
+    expect(dbCreateConversation).not.toHaveBeenCalled()
+    expect(saveSession).not.toHaveBeenCalled()
+    expect(dbReleaseConversationClaim).not.toHaveBeenCalled()
+  }
+
+  it('refuses a session whose claim is held by another user, with no conversation row', async () => {
+    sessionClaims.set('sess-o', 'user-a')
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toThrow(NOT_FOUND)
+
+    expectNothingRan()
+    expect(claimSession).not.toHaveBeenCalled()
+    expect(sessionClaims.get('sess-o')).toBe('user-a')
+  })
+
+  it('refuses another user after the conversation was deleted but its claim is still live', async () => {
+    // The row is gone; the claim outlives it for the TTL window.
+    sessionClaims.set('sess-o', 'user-a')
+    expect(conversationOwners.has('sess-o')).toBe(false)
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toThrow(NOT_FOUND)
+
+    expectNothingRan()
+  })
+
+  it("refuses a session that is another user's conversation, in the stash routes' own wording", async () => {
+    conversationOwners.set('sess-o', 'user-a')
+    sessionClaims.set('sess-o', 'user-a')
+
+    await expect(
+      runTurnAndPersist(interactive({ sessionId: 'sess-o', userId: 'user-b' })),
+    ).rejects.toMatchObject({ message: NOT_FOUND })
+
+    expectNothingRan()
+  })
+
+  it("lets the owner's first turn on a fresh id run, and records the claim", async () => {
+    const result = await runTurnAndPersist(interactive({ sessionId: 'sess-fresh' }))
+
+    expect(result.response).toBe('fresh:hello world, this is long')
+    expect(sessionClaims.get('sess-fresh')).toBe('user-1')
+    expect(dbCreateConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it("lets the owner's later turns run", async () => {
+    await runTurnAndPersist(interactive({ sessionId: 'sess-later' }))
+    conversationOwners.set('sess-later', 'user-1')
+    claimSession.mockResolvedValue(STORED)
+
+    const result = await runTurnAndPersist(
+      interactive({ sessionId: 'sess-later', message: 'follow up' }),
+    )
+
+    expect(result.response).toBe('continued:follow up')
+    expect(sessionClaims.get('sess-later')).toBe('user-1')
+  })
+
+  it('refuses the turn when the ownership store cannot answer', async () => {
+    dbClaimOwnership.mockRejectedValueOnce(new Error('connection refused'))
+
+    const run = runTurnAndPersist(interactive({ sessionId: 'sess-down' }))
+
+    await expect(run).rejects.toThrow('Could not verify session ownership')
+    // The store's own error text is logged, not handed to the user.
+    await expect(run).rejects.not.toThrow('connection refused')
+    expectNothingRan()
+    expect(sessionClaims.has('sess-down')).toBe(false)
+  })
+
+  describe('a resume is verify-only and refuses like every other mode', () => {
+    it("reads the same for an absent id and for another user's id", async () => {
+      const refusal = async (setup: () => void, userId = 'user-b') => {
+        conversationOwners.clear()
+        sessionClaims.clear()
+        claimSession.mockResolvedValue(null)
+        setup()
+        return runTurnAndPersist({ mode: 'resume', sessionId: 'sess-o', userId }).then(
+          () => {
+            throw new Error('resume was not refused')
+          },
+          (err: Error) => err.message,
+        )
+      }
+
+      const absent = await refusal(() => {})
+      const notYours = await refusal(() => {
+        conversationOwners.set('sess-o', 'user-a')
+        sessionClaims.set('sess-o', 'user-a')
+      })
+
+      // The caller's own live claim passes the gate, but no conversation row
+      // loads: the refusal inside `claimTurn`, a different line from the gate's.
+      const claimedNoRow = await refusal(() => sessionClaims.set('sess-o', 'user-b'))
+
+      expect(absent).toBe(NOT_FOUND)
+      expect(notYours).toBe(absent)
+      expect(claimedNoRow).toBe(absent)
+    })
+
+    it('leaves no claim behind when the id is absent', async () => {
+      await expect(
+        runTurnAndPersist({ mode: 'resume', sessionId: 'sess-absent', userId: 'user-1' }),
+      ).rejects.toThrow(NOT_FOUND)
+
+      expect(sessionClaims.has('sess-absent')).toBe(false)
+      expect(dbClaimOwnership).not.toHaveBeenCalled()
+      expectNothingRan()
+    })
+  })
+
+  describe.each(ENTRY_POINTS)('the %s entry point', (_name, request, store) => {
+    it("is refused for a user who is not the session's owner", async () => {
+      sessionClaims.set('sess-o', 'user-a')
+      conversationOwners.set('sess-o', 'user-a')
+      claimSession.mockResolvedValue(STORED)
+
+      await expect(runTurnAndPersist(request('user-b') as never)).rejects.toThrow(NOT_FOUND)
+
+      expectNothingRan()
+    })
+
+    it('consults the ownership store before claiming the conversation', async () => {
+      claimSession.mockResolvedValue(STORED)
+
+      await runTurnAndPersist(request('user-1') as never).catch(() => {})
+
+      if (store === 'claim') {
+        expect(dbClaimOwnership).toHaveBeenCalledWith('sess-o', 'user-1', expect.any(Number))
+      } else {
+        expect(dbReadClaimOwner).toHaveBeenCalledWith('sess-o')
+        expect(dbClaimOwnership).not.toHaveBeenCalled()
+      }
+    })
+
+    it('is refused when the ownership store fails', async () => {
+      const failing = store === 'claim' ? dbClaimOwnership : dbReadClaimOwner
+      failing.mockRejectedValueOnce(new Error('store down'))
+      claimSession.mockResolvedValue(STORED)
+
+      await expect(runTurnAndPersist(request('user-1') as never)).rejects.toThrow(
+        'Could not verify session ownership',
+      )
+
+      expectNothingRan()
+    })
   })
 })

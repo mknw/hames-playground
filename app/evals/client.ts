@@ -6,7 +6,7 @@
  * sensitive-domain brief's SD-12 record the provider posture as a *compliance*
  * property rather than a performance one: there is no configuration that sends
  * a production prompt to a different provider, and the one opt-in that moves
- * traffic (`USE_VERDA_INFERENCE`) is all-or-nothing and documented. An eval
+ * traffic (`USE_SELF_DEPLOYED_INFERENCE`) is all-or-nothing and documented. An eval
  * runner that added a general "point any role at any client" env var into
  * `src/` would re-introduce exactly the switch that was deleted on 2026-08-24.
  *
@@ -26,10 +26,10 @@
  * `EVAL_CLIENT=tier` is the SHIPPED question — "does the private tier, as
  * configured, still work?" — and it resolves each role through production's own
  * map, which since 2026-08-26 is TWO clients: the 27B for the heavy roles and the
- * 4B `LocalQwenSmall` for `describe`. That mode exists because the single-name
+ * 4B `SmallQwen` for `describe`. That mode exists because the single-name
  * mode stopped being able to express the shipped route on the day the describe
  * flip landed, and the honest response to that was a second mode rather than a
- * comment claiming the first one still measured it. A default `EVAL_CLIENT=VerdaQwen`
+ * comment claiming the first one still measured it. A default `EVAL_CLIENT=LargeQwen`
  * run now measures summarization on a model production does not use for it — which
  * is a fair question to ask, just not the same question.
  *
@@ -53,7 +53,7 @@
  * copy `spans` VERBATIM, because the guard neutralizes them by literal match)
  * are UNMEASURED on that client. A suite that refuses to point the screen at a
  * candidate client is a suite that guarantees the gap it was protecting
- * against: the refusal was what left `VerdaQwen` unmeasured as a screener in
+ * against: the refusal was what left `LargeQwen` unmeasured as a screener in
  * the first place. Measuring a control before shipping it is the opposite of
  * turning a knob on it, and `scenarios/screen.ts` is where that measurement
  * lives.
@@ -67,13 +67,14 @@
 
 import {
   resolveClientForRole,
-  VERDA_CLIENT_BY_ROLE,
+  SELF_DEPLOYED_CLIENT_BY_ROLE,
   type BamlRole,
 } from '@hames-ai/harness-baml/clients.server'
 // The composition root registers the harness client seam (tier policy, model
-// tables, cost rates). Without it the default tier is the seam's safe
-// package-side 'anthropic', so a run started with USE_VERDA_INFERENCE=1 would
-// silently grade the Anthropic chains instead of the deployment it names.
+// tables, cost rates). Without it no host policy is registered, so
+// the default tier is the seam's package-side 'anthropic' and a run started with
+// USE_SELF_DEPLOYED_INFERENCE=1 would grade the Anthropic chains instead of the
+// deployment it names.
 import '../src/lib/inference/config.server'
 
 /** The roles this suite has scenarios for — every `BamlRole` since the planner
@@ -98,7 +99,7 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
 
 /**
  * The roles a plain `EVAL_CLIENT=X` moves — deliberately the same set as
- * `VERDA_CLIENT_BY_ROLE`. Keeping these in step is what makes a default run a
+ * `SELF_DEPLOYED_CLIENT_BY_ROLE`. Keeping these in step is what makes a default run a
  * measurement of the shipped route rather than of a configuration nobody runs.
  *
  * `router` and `describe` joined on 2026-08-26 with the production map, and
@@ -116,7 +117,7 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
  *  - `planner` closes what was recorded here as a gap: "the role with the
  *    harshest failure policy in the repo now takes the self-hosted route and
  *    nothing here measures it". `planner-plan-shape` measures it. Read the
- *    composite consequence on the `planner:` entry in `VERDA_CLIENT_BY_ROLE`
+ *    composite consequence on the `planner:` entry in `SELF_DEPLOYED_CLIENT_BY_ROLE`
  *    for what that scenario is standing in front of.
  *  - `screen` is the security control (SD-4). It is measured, not merely
  *    routed — `screen-on-the-tier` asserts the two properties the guard depends
@@ -191,7 +192,7 @@ export function resolveEvalRouting(): EvalRouting {
     const byRole: Partial<Record<EvalRole, string>> = {}
     for (const role of asked) {
       // `actor` shares the `controller` BamlRole; the map is keyed by the latter.
-      const client = VERDA_CLIENT_BY_ROLE[PRODUCTION_ROLE[role]]
+      const client = SELF_DEPLOYED_CLIENT_BY_ROLE[PRODUCTION_ROLE[role]]
       if (client) byRole[role] = client
     }
     const routed = [...asked].filter((role) => byRole[role] !== undefined)
@@ -215,7 +216,7 @@ export function resolveEvalRouting(): EvalRouting {
   if (routed.includes('screen')) {
     notes.push('INCLUDING screen — measuring a security control, not tuning it (SD-4)')
   }
-  if (!process.env.EVAL_ROLES) notes.push('default role set = the production Verda map')
+  if (!process.env.EVAL_ROLES) notes.push('default role set = the production self-deployed map')
   return { client: requested, routed, note: notes.join('; ') }
 }
 

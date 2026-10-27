@@ -59,7 +59,7 @@ async function seed(): Promise<{ a: string; m: string }> {
   // Rows another process wrote: raw SQL, so this process never runs the ensure.
   await query(
     `INSERT INTO memories (id, user_id, kind, tier, content, evidence, embedding, embed_space)
-     VALUES ($1, $2, 'semantic', 'verda', 'x', 'x', $3::vector, 'rv')`,
+     VALUES ($1, $2, 'semantic', 'self_deployed', 'x', 'x', $3::vector, 'rv')`,
     [m, U, vec],
   )
   await query(

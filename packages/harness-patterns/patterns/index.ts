@@ -17,8 +17,10 @@ export {
   planner,
   formatPlanContext,
   HANDOFF_HEADING,
+  CONVERSATION_HEADING,
   AGENT_MAP_HEADING,
   DEFAULT_MAX_PLAN_CHARS,
+  DEFAULT_MAX_REASONING_CHARS,
   type PlannerConfig,
   type PlannerData,
 } from './planner.server'
@@ -71,6 +73,17 @@ export {
   type WebPseudonymisation,
 } from './withPseudonymisedInputs.server'
 
+export {
+  withEgressGate,
+  egressClosures,
+  type EgressClosures,
+  type EgressDirectoryStatus,
+  type EgressGateConfig,
+  type EgressMode,
+  type EgressRoster,
+  type EgressRosterSource,
+} from './withEgressGate.server'
+
 // Typed systemone decisions and recording.
 export {
   evaluateDecision,
@@ -100,14 +113,27 @@ export {
   DECISION_LOOP_MAX_ITERATIONS,
   DECISION_LOOP_KEY,
   DECISION_LOOP_ANSWER,
-  DECISION_LOOP_OUTPUT_KEY,
   DECISION_LOOP_RESULT_CHARS,
-  WITHHELD_SCREEN_UNAVAILABLE,
+  DECISION_DOCUMENTS_TIMEOUT_MS,
   type DecisionLoopConfig,
   type DecisionLoopData,
   type DecisionLoopRoute,
   type DecisionLoopStateInput,
 } from './decisionLoop.server'
+export {
+  renderDocumentsBlock,
+  safeDocumentName,
+  documentTypeLabel,
+  DECISION_DOCUMENTS_HEADING,
+  DECISION_DOCUMENTS_MAX_NAMES,
+  DECISION_DOCUMENT_NAME_CODE_POINTS,
+  DECISION_DOCUMENTS_MAX_CHARS,
+  WITHHELD_DOCUMENT_NAME,
+  type DecisionDocument,
+  type DecisionDocuments,
+  type DecisionDocumentsSource,
+  type ResolvedDecisionDocuments,
+} from './decisionLoop-documents.server'
 export {
   collectToolNames,
   type RouteOutput,

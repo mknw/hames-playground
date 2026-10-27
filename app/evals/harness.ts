@@ -28,6 +28,8 @@ import type { LLMCallRecord } from '@hames-ai/harness-patterns'
 import { Collector } from '@boundaryml/baml'
 import type { EvalRole, EvalRouting } from './client'
 import { evalOverrideFor, expectedClientFor } from './client'
+import { assertInferenceTier } from '@hames-ai/harness-baml/clients.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
 /** One deterministic assertion inside a scenario. */
 export interface Check {
@@ -222,8 +224,28 @@ export function check(name: string, pass: boolean, detail: string): Check {
   return { name, pass, detail }
 }
 
-/** Run one scenario, timing it and turning a throw into a reported failure. */
+/** The tier a run of this routing is on: the self-deployed tier when a client
+ *  is routed per role or the flag is set, else the Anthropic baseline. */
+export function evalTierFor(routing: EvalRouting): 'self_deployed' | 'anthropic' {
+  return routing.byRole || process.env.USE_SELF_DEPLOYED_INFERENCE === '1'
+    ? 'self_deployed'
+    : 'anthropic'
+}
+
+/** Run one scenario, timing it and turning a throw into a reported failure.
+ *  Runs inside a run frame that names {@link evalTierFor}, as a turn does: a
+ *  frameless read takes the host's default tier (refused when unconfigured),
+ *  which would move the Anthropic baseline. */
 export async function runScenario(
+  scenario: Scenario,
+  routing: EvalRouting,
+): Promise<ScenarioResult> {
+  const tier = evalTierFor(routing)
+  assertInferenceTier(tier)
+  return withRunFrame({ inference: { tier } }, () => runScenarioInFrame(scenario, routing))
+}
+
+async function runScenarioInFrame(
   scenario: Scenario,
   routing: EvalRouting,
 ): Promise<ScenarioResult> {

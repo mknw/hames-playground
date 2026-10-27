@@ -20,6 +20,8 @@
 # whatever `main` happens to be at that moment.
 #
 # Add --dry-run first: every probe runs, every change is printed, none is made.
+# Two clones: the release checkout's root .env must persist §12's complete
+# COMPOSE_FILE and clone inputs. Node.js on the host runs the offline validator.
 #
 # IDEMPOTENT. Each stage checks before it changes, so re-running is how you
 # resume. The run STOPS (exit 3) at two points and expects a re-run:
@@ -59,6 +61,12 @@ readonly F2B_JAIL="/etc/fail2ban/jail.local"
 # is somebody else's, and is never overwritten.
 readonly MANAGED_BY="Managed by scripts/bootstrap-vps.sh"
 readonly COMPOSE_FILES="docker-compose.yaml:docker-compose.prod.yaml"
+readonly CLONE_COMPOSE_FILES="$COMPOSE_FILES:docker-compose.clones.yaml"
+# The environment VM shapes (#648, docs/PREVIEW.md §12): dev on its own VM, then
+# release on its own as well. Release never moves before dev, and never alone.
+readonly DEV_VM_COMPOSE_FILES="$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox-vm.yaml"
+readonly BOTH_VM_COMPOSE_FILES="$DEV_VM_COMPOSE_FILES:docker-compose.release-sandbox-vm.yaml"
+readonly CLONE_INPUTS=(DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL)
 readonly COMPOSE_PROFILE="app"
 readonly MIN_ENGINE="28.0.0" # Neo4j's isolated bridge gateway mode needs it
 readonly MIN_COMPOSE="2.24.0" # docker-compose.prod.yaml's `!override` needs it
@@ -84,11 +92,11 @@ docker_key_problem() {
 readonly ENCRYPTION_BOUNDARY="56ac2b44af11d65c85cabc3096102c3cdc76d2ed"
 # The preview tool surface, sorted (docs/PREVIEW.md §3a; pinned for the overlay
 # by app/src/__tests__/lib/preview-tool-surface.test.ts).
-readonly PREVIEW_SERVERS="context7 fetch memory neo4j-cypher web_search"
-# 16 since #403: with `read_only: true` the Neo4j server does not offer
-# write_neo4j_cypher (it was 17). Derived, not yet read off a live box — a 17
+readonly PREVIEW_SERVERS="context7 fetch neo4j-cypher web_search"
+# 7 since the shared memory graph was retired (its nine tools left the
+# surface; 16 before that, 17 before #403 made Neo4j read-only). Derived, not yet read off a live box — a 17
 # here means the gateway still lists the write tool (docs/PREVIEW.md, step 1b).
-readonly PREVIEW_TOOL_COUNT=16
+readonly PREVIEW_TOOL_COUNT=7
 readonly KEYS_RE="AUTH_SESSION_SECRET|TOKEN_ENCRYPTION_KEY|DATA_ENCRYPTION_KEY"
 
 readonly STAGES=(preflight updates ssh firewall fail2ban docker checkout env hostname images boot seed smoke)
@@ -210,10 +218,26 @@ reserved_name() {
 # no value is ever on a command line or on the terminal.
 # -----------------------------------------------------------------------------
 
-# env_get KEY — the last KEY= line's value, one layer of quotes removed.
+# env_get KEY [FILE] — the last KEY= line's value, one layer of quotes removed.
 env_get() {
-  local line
-  line=$(grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -n1) || true
+  local line legacy=''
+  line=$(grep -E "^$1=" "${2:-$ENV_FILE}" 2>/dev/null | tail -n1) || true
+  # One-release aliases; an explicit canonical value (including empty) wins. The URL and its key
+  # are one deployment: they fall back only when NEITHER canonical line exists.
+  if [[ -z $line ]]; then
+    case $1 in
+      LARGE_LLM_BASE_URL | LARGE_LLM_API_KEY)
+        if ! grep -qE '^LARGE_LLM_(BASE_URL|API_KEY)=' "${2:-$ENV_FILE}" 2>/dev/null; then
+          [[ $1 == LARGE_LLM_BASE_URL ]] && legacy=VERDA_INFERENCE_ENDPOINT || legacy=VERDA_INFERENCE_API_KEY
+        fi
+        ;;
+      LARGE_LLM_EUR_PER_HOUR) legacy=VERDA_EUR_PER_HOUR ;;
+      LARGE_LLM_SCALEDOWN_SECONDS) legacy=VERDA_SCALEDOWN_SECONDS ;;
+      LARGE_LLM_WAKE_*) legacy=VERDA_WAKE_${1#LARGE_LLM_WAKE_} ;;
+      USE_SELF_DEPLOYED_INFERENCE) legacy=USE_VERDA_INFERENCE ;;
+    esac
+    [[ -z $legacy ]] || line=$(grep -E "^$legacy=" "${2:-$ENV_FILE}" 2>/dev/null | tail -n1) || true
+  fi
   line=${line#*=}
   if [[ $line == \'*\' || $line == \"*\" ]]; then line=${line:1:${#line}-2}; fi
   printf '%s' "$line"
@@ -282,6 +306,25 @@ KEYS_GENERATED=0
 keys_generated_now() { if [[ $1 =~ ^($KEYS_RE)$ ]]; then KEYS_GENERATED=1; fi; }
 
 keys_fingerprint() {
+  local files file input key value
+  files=$(compose_files) || return 1
+  if [[ $files != "$COMPOSE_FILES" ]]; then
+    (
+      set -o pipefail
+      {
+        for input in RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE; do
+          file=$(env_get "$input")
+          [[ -r $file && -f $file ]] || exit 1
+          for key in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY; do
+            value=$(env_get "$key" "$file")
+            ((${#value} >= 32)) || exit 1
+            printf '%s\n' "$value"
+          done
+        done
+      } | sha256sum | cut -d' ' -f1
+    )
+    return $?
+  fi
   {
     env_get AUTH_SESSION_SECRET
     printf '\n'
@@ -299,15 +342,16 @@ readonly OWNER_REQUIRED=(
   "ANTHROPIC_API_KEY|Anthropic API key|1"
   "VITE_ALLOWED_EMAILS|this deployment's allow-list: comma-separated, *@domain wildcards|0"
 )
-# The private tier: all three or none (CLAUDE.md, docs/PREVIEW.md §6).
-readonly VERDA_TRIO=(VERDA_INFERENCE_ENDPOINT VERDA_INFERENCE_API_KEY SMALL_LLM_BASE_URL)
+# The private tier: all five or none (CLAUDE.md, docs/PREVIEW.md §6).
+readonly PRIVATE_TIER_REQUIRED=(LARGE_LLM_BASE_URL LARGE_LLM_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
 
 # owner_missing — print each owner-required key that is empty or a placeholder.
 owner_missing() {
-  local entry key v
+  local entry key v file=${1:-$ENV_FILE}
   for entry in "${OWNER_REQUIRED[@]}"; do
     key=${entry%%|*}
-    v=$(env_get "$key")
+    [[ $key == ANTHROPIC_API_KEY && "$(env_get INFERENCE_TIERS "$file")" =~ ^(private|self_deployed)$ ]] && continue
+    v=$(env_get "$key" "$file")
     # The template's allow-list is the contoso placeholder, not a real list.
     if [[ -z $v || ($key == VITE_ALLOWED_EMAILS && $v == '*@contoso.com') ]]; then
       printf '%s\n' "$key"
@@ -315,18 +359,69 @@ owner_missing() {
   done
 }
 
-# env_problems — docs/PREVIEW.md §6's preflight greps, plus the rest of what a
+# decisions_url_problem — mirror assertPrivateTierConfigured's parsed-URL
+# policy without Node on the host. python3 is installed by stage_updates.
+# Read via stdin, never argv; only a key/problem label may reach the transcript.
+decisions_url_problem() {
+  python3 -c '
+import ipaddress, re, socket, sys
+from urllib.parse import unquote, urlsplit
+try:
+    url = urlsplit(sys.stdin.read())
+    # WHATWG URL canonicalizes escaped/IDNA hosts before the runtime checks.
+    host = unquote(url.hostname or "").encode("idna").decode("ascii").lower()
+    port = url.port  # Reject malformed/out-of-range ports like the runtime parser.
+    host_valid = True
+    try:
+        loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        try:
+            loopback = socket.inet_aton(host)[0] == 127
+        except OSError:
+            loopback = host == "localhost"
+            # WHATWG treats a numeric final label as IPv4, and refuses it
+            # when the full address cannot be parsed (e.g. an octet > 255).
+            host_valid = not re.fullmatch(r"[0-9]+|0x[0-9a-f]*", host.rsplit(".", 1)[-1])
+    # Brackets belong to the parsed IPv6 authority, never a decoded domain.
+    forbidden = "#/%<>?@\\^|[]" + ("" if url.netloc.startswith("[") else ":")
+    valid = (
+        bool(host)
+        and host_valid
+        and not any(ord(c) <= 32 or ord(c) == 127 or c in forbidden for c in host)
+        and (url.scheme == "https" or (url.scheme == "http" and loopback))
+        and not url.username and not url.password
+        and not host.endswith(".")
+        and url.path == "/v1/systemone"
+        and host not in ("api.typesafe.ai", "openrouter.ai")
+        and not host.endswith(".openrouter.ai")
+    )
+except (ValueError, UnicodeError):
+    valid = False
+if not valid:
+    print("SMALL_LLM_DECISIONS_URL must end in /v1/systemone (the full systemone URL): absolute HTTPS or HTTP loopback, no userinfo or trailing-dot host, exact pathname, no public systemone provider")
+'
+}
+
+# env_problems — docs/PREVIEW.md §6's shared preflight, plus the rest of what a
 # boot needs from .env. One line per problem; nothing printed means clean.
 env_problems() {
-  local k n=0 v
+  local k n=0 v tiers
+  tiers=$(env_get INFERENCE_TIERS)
+  [[ $tiers == private ]] && tiers=self_deployed
   grep -q 'example\.com' "$ENV_FILE" && printf '%s\n' ".env still carries an example.com placeholder (§6: grep -n 'example\\.com' .env)"
   for k in AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATA_ENCRYPTION_KEY ANTHROPIC_API_KEY \
     POSTGRES_PASSWORD NEO4J_PASSWORD; do
+    [[ $k == ANTHROPIC_API_KEY && $tiers == self_deployed ]] && continue
     [[ -n "$(env_get "$k")" ]] || printf '%s\n' "$k is empty"
   done
-  for k in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
-  if ((n != 0 && n != 3)); then
-    printf '%s\n' "private tier: $n of ${VERDA_TRIO[*]} set — all three or none (a partial tier is refused at run time)"
+  case $tiers in
+    self_deployed|'') ;;
+    *) printf '%s\n' "INFERENCE_TIERS must be unset or self_deployed (legacy: private)" ;;
+  esac
+  for k in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$k")" ]] && n=$((n + 1)); done
+  [[ $tiers == self_deployed && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "INFERENCE_TIERS=self_deployed requires all of ${PRIVATE_TIER_REQUIRED[*]}"
+  if ((n != 0 && n != ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '%s\n' "private tier: $n of ${PRIVATE_TIER_REQUIRED[*]} set — all five or none (a partial tier is refused at run time)"
   fi
   # Spliced raw into the app's DATABASE_URL (both compose files), where these
   # break the URL. The gateway renderer used to refuse them; since #412 it
@@ -336,14 +431,19 @@ env_problems() {
       printf '%s\n' "POSTGRES_PASSWORD must be URL-safe (no & \\ / @ : # ? % or space): it is spliced into the app's DATABASE_URL"
       ;;
   esac
-  for k in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
+  for k in LARGE_LLM_BASE_URL SMALL_LLM_BASE_URL; do
     v=$(env_get "$k")
     [[ -z $v || $v == */v1 ]] || printf '%s\n' "$k must end in /v1"
   done
-  [[ "$(env_get USE_VERDA_INFERENCE)" == 1 && $n -ne 3 ]] && printf '%s\n' "USE_VERDA_INFERENCE=1 without all of ${VERDA_TRIO[*]}"
+  v=$(env_get SMALL_LLM_DECISIONS_URL)
+  if [[ -n $v ]]; then
+    printf '%s' "$v" | decisions_url_problem || printf '%s\n' 'SMALL_LLM_DECISIONS_URL validation unavailable'
+  fi
+  [[ "$(env_get USE_SELF_DEPLOYED_INFERENCE)" == 1 && $n -ne ${#PRIVATE_TIER_REQUIRED[@]} ]] && printf '%s\n' "USE_SELF_DEPLOYED_INFERENCE=1 without all of ${PRIVATE_TIER_REQUIRED[*]}"
   [[ "$(env_get STASH_DIRECT_REDIS)" == 1 ]] || printf '%s\n' "STASH_DIRECT_REDIS must be '1' (the preview gateway has no redis server; §3a)"
   grep -qE '^VITE_DEV_BYPASS_AUTH=' "$ENV_FILE" && printf '%s\n' "VITE_DEV_BYPASS_AUTH is set in .env — it must stay unset"
-  [[ "$(env_get COMPOSE_FILE)" == "$COMPOSE_FILES" ]] || printf '%s\n' "COMPOSE_FILE must be $COMPOSE_FILES"
+  compose_files >/dev/null || printf '%s\n' "COMPOSE_FILE or clone inputs are invalid (docs/PREVIEW.md §12)"
+  [[ -n "$(env_get COMPOSE_FILE)" ]] || printf '%s\n' "COMPOSE_FILE must be $COMPOSE_FILES (or the §12 clone overlays)"
   [[ "$(env_get COMPOSE_PROFILES)" == "$COMPOSE_PROFILE" ]] || printf '%s\n' "COMPOSE_PROFILES must be $COMPOSE_PROFILE"
   return 0
 }
@@ -354,7 +454,140 @@ env_problems() {
 # explicitly — the same two values .env carries, so a drifted .env cannot
 # select the laptop file.
 # -----------------------------------------------------------------------------
-dc() { (cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@"); }
+# Only the persisted root .env selects the shape; a shell export cannot silently
+# drop a clone. Accept exactly §12's file order, with at most one of its dev
+# sandbox overlays: the owner socket opt-in or dev's own environment VM; then,
+# after dev's VM overlay only, release's own environment VM overlay.
+compose_files() {
+  local files key
+  # Compose accepts alternate assignment spellings that env_get cannot read.
+  # Refuse ambiguity in either shape before a default can orphan-prune a clone.
+  if grep -E '^[[:space:]]*(export[[:space:]]+)?(COMPOSE_FILE|DEV_CLONE_PATH|DEV_REF|DEV_APP_DOMAIN|RELEASE_RUNTIME_ENV_FILE|DEV_RUNTIME_ENV_FILE|RELEASE_DATABASE_URL|DEV_DATABASE_URL)[[:space:]]*=' "$ENV_FILE" 2>/dev/null |
+    grep -qEv '^(COMPOSE_FILE|DEV_CLONE_PATH|DEV_REF|DEV_APP_DOMAIN|RELEASE_RUNTIME_ENV_FILE|DEV_RUNTIME_ENV_FILE|RELEASE_DATABASE_URL|DEV_DATABASE_URL)='; then
+    printf '%s\n' "Clone Compose inputs require literal KEY= assignments (no export or surrounding whitespace)" >&2
+    return 1
+  fi
+  files=$(env_get COMPOSE_FILE)
+  case $files in
+    "$CLONE_COMPOSE_FILES"|"$CLONE_COMPOSE_FILES:docker-compose.dev-sandbox.yaml"|"$DEV_VM_COMPOSE_FILES"|"$BOTH_VM_COMPOSE_FILES") ;;
+    "$COMPOSE_FILES"|'')
+      for key in "${CLONE_INPUTS[@]}"; do
+        if [[ -n "$(env_get "$key")" ]]; then
+          printf '%s\n' "Clone inputs require the complete §12 COMPOSE_FILE; refusing a single-app fallback" >&2
+          return 1
+        fi
+      done
+      files=$COMPOSE_FILES
+      ;;
+    *) printf '%s\n' "Unsupported COMPOSE_FILE; use the exact file order in docs/PREVIEW.md §12" >&2; return 1 ;;
+  esac
+  printf '%s' "$files"
+}
+
+# Offline and secret-silent: never save a rendered config or echo Compose's
+# errors (which can contain interpolated values). This runs before any clone
+# command other than config, including build/up/exec and read-only smoke probes.
+clone_preflight() {
+  local files=$1 key path mode dev_path ref head dirty profiles
+  [[ $files != "$COMPOSE_FILES" ]] || return 0
+  for key in "${CLONE_INPUTS[@]}"; do
+    [[ -n "$(env_get "$key")" ]] || { printf '%s\n' "Clone configuration requires $key (value not shown)" >&2; return 1; }
+  done
+  for key in RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE; do
+    path=$(env_get "$key")
+    [[ $path == /* && -r $path && -f $path ]] || { printf '%s\n' "Clone configuration requires a readable absolute $key file" >&2; return 1; }
+    mode=$(stat -c %a "$path" 2>/dev/null) || return 1
+    if [[ ! $mode =~ ^[0-7]+$ ]] || (( (8#$mode & 077) != 0 )); then
+      printf '%s\n' "Clone runtime files must have no group/other permissions" >&2
+      return 1
+    fi
+    path=$(realpath "$path") || return 1
+    dev_path=$(realpath "$(env_get DEV_CLONE_PATH)") || return 1
+    case $path in
+      "$(realpath "$APP_DIR")"/*|"$dev_path"/*) printf '%s\n' "Clone runtime files must be outside both checkouts" >&2; return 1 ;;
+    esac
+  done
+  path=$(env_get DEV_CLONE_PATH)
+  [[ $path == /* && -d $path/app && -d $path/configs ]] || { printf '%s\n' "Clone configuration requires a separate absolute DEV_CLONE_PATH checkout" >&2; return 1; }
+  ref=$(env_get DEV_REF)
+  [[ $ref =~ ^[0-9a-f]{40}$ ]] || { printf '%s\n' "DEV_REF must be a reviewed full commit SHA" >&2; return 1; }
+  head=$(git -C "$path" rev-parse HEAD 2>/dev/null) || return 1
+  dirty=$(git -C "$path" status --porcelain 2>/dev/null) || return 1
+  [[ $head == "$ref" && -z $dirty ]] || { printf '%s\n' "Dev checkout must be clean and match DEV_REF" >&2; return 1; }
+  local parts=()
+  IFS=: read -r -a parts <<<"$files"
+  for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev; do
+    [[ -r $APP_DIR/$path && -f $APP_DIR/$path ]] || { printf '%s\n' "Clone configuration is missing a required overlay, validator or Caddy file" >&2; return 1; }
+  done
+  # Only the operator can prove each VM's Docker port is reachable from that
+  # clone's link network alone (envapp-<clone>, the app at its pinned address;
+  # §12 and docs/plan/env-vm-network.md); each overlay waits for its record.
+  # Matched by exact shape, never by suffix: a release overlay after dev's must
+  # not drop dev's own evidence check. Dev's record is not read.
+  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
+    path=$(env_get DEV_SANDBOX_FIREWALL_EVIDENCE)
+    [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The dev environment VM overlay requires DEV_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+  fi
+  if [[ $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
+    path=$(env_get RELEASE_SANDBOX_FIREWALL_EVIDENCE)
+    [[ $path == /* && -f $path && -s $path ]] || { printf '%s\n' "The release environment VM overlay requires RELEASE_SANDBOX_FIREWALL_EVIDENCE: the recorded firewall evidence file (§12)" >&2; return 1; }
+    # Release's record is the guard smoke's own machine-written JSON, read for
+    # its structure only: it must hold probes for the release environment. Dev's
+    # record, or one written before release joined the guard config, does not.
+    # The guard smoke writes it as root, mode 0600, so it is read through sudo.
+    sudo python3 -I -c 'import json, sys
+try:
+    record = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(1)
+environments = record.get("environments") if isinstance(record, dict) else None
+probes = environments.get("release") if isinstance(environments, dict) else None
+sys.exit(0 if isinstance(probes, list) and probes else 1)' "$path" 2>/dev/null ||
+      { printf '%s\n' "RELEASE_SANDBOX_FIREWALL_EVIDENCE is not a guard smoke record that probed the release environment (§12)" >&2; return 1; }
+  fi
+  # The render leaves out services of any other profile, so the validator could
+  # never see them: the pinned files may declare only the app profile.
+  for path in "${parts[@]}"; do
+    profiles=$(grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" || true)
+    if [[ -n $profiles ]] && grep -Evq '^[[:space:]]*profiles:[[:space:]]*\["app"\][[:space:]]*$' <<<"$profiles"; then
+      printf '%s\n' "Clone Compose files may declare only the app profile" >&2
+      return 1
+    fi
+  done
+  command -v node >/dev/null 2>&1 || { printf '%s\n' "Clone preflight requires Node.js on the host" >&2; return 1; }
+  (set -o pipefail; cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose config --format json 2>/dev/null |
+    node scripts/validate-clones.mjs >/dev/null) || { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }
+}
+
+dc() {
+  local files
+  files=$(compose_files) || return 1
+  if [[ $files != "$COMPOSE_FILES" ]]; then
+    if [[ ${1:-} != config ]]; then clone_preflight "$files" || return 1; fi
+    (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null) || {
+      printf '%s\n' "Clone Compose command failed (details suppressed to protect runtime secrets)" >&2
+      return 1
+    }
+    return 0
+  fi
+  (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@")
+}
+
+# Python's standard library only; uses the existing stack, no fixture or start.
+vps_check() {
+  [[ -f $APP_DIR/scripts/check-vps.py ]] || refuse "pinned checkout lacks scripts/check-vps.py; use a ref that includes #639"
+  local files
+  files=$(compose_files) || return 1
+  clone_preflight "$files" || return 1
+  (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py "$@")
+}
+
+assert_daemon_isolation() {
+  if ! vps_check --daemon; then
+    refuse "Docker daemon.json isolation settings are unsafe or unreadable; see docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
+}
 
 have_compose() { command -v docker >/dev/null 2>&1 && sudo docker compose version >/dev/null 2>&1; }
 
@@ -1044,6 +1277,7 @@ EOF
 
   # Unrotated json-file logs grow until the disk is full; the gateway runs
   # --verbose. Written only when absent, so a hand-tuned daemon.json survives.
+  # The images/boot gates validate its isolation options before deployment.
   if sudo test -f /etc/docker/daemon.json; then
     ok "/etc/docker/daemon.json exists; left as is"
   elif put_file /etc/docker/daemon.json 0644 root:root <<'EOF'; then
@@ -1140,7 +1374,7 @@ stage_checkout() {
   fi
   ok "deploying $(git -C "$APP_DIR" log -1 --format='%h %s' "$sha")"
 
-  # docs/PREVIEW.md §3a, verbatim: exactly the overlay's five servers. The
+  # docs/PREVIEW.md §3a, verbatim: exactly the overlay's four servers. The
   # tracked file is the DEVELOPMENT set (redis, filesystem, playwright) —
   # harmless behind the overlay's --servers allow-list, but the file and the
   # allow-list should say the same thing. No literal password: the
@@ -1164,9 +1398,6 @@ web_search:
   enabled: true
 
 context7:
-  enabled: true
-
-memory:
   enabled: true
 EOF
   run git -C "$APP_DIR" update-index --skip-worktree configs/mcp-config.yaml
@@ -1248,24 +1479,30 @@ stage_env() {
       unset v
     fi
   done
-  if ((INTERACTIVE && !DRY_RUN)) && [[ -z "$(env_get VERDA_INFERENCE_ENDPOINT)" ]]; then
-    printf '  Configure the private inference tier (Verda + small model) now? [y/N] ' >/dev/tty
+  local n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  if ((INTERACTIVE && !DRY_RUN && n < ${#PRIVATE_TIER_REQUIRED[@]})); then
+    printf '  Configure the private inference tier now (all five values required)? [y/N] ' >/dev/tty
     IFS= read -r v </dev/tty
     if [[ $v =~ ^[Yy] ]]; then
-      for key in VERDA_INFERENCE_ENDPOINT SMALL_LLM_BASE_URL; do
-        printf '  %s (OpenAI base URL, ends in /v1): ' "$key" >/dev/tty
-        IFS= read -r v </dev/tty
-        [[ -n $v ]] && env_set "$key" "$v" && chg "set $key"
-      done
-      for key in VERDA_INFERENCE_API_KEY SMALL_LLM_API_KEY; do
-        printf '  %s (hidden; Enter to skip): ' "$key" >/dev/tty
-        IFS= read -rs v </dev/tty
-        printf '\n' >/dev/tty
+      for key in "${PRIVATE_TIER_REQUIRED[@]}"; do
+        [[ -n "$(env_get "$key")" ]] && continue
+        case $key in
+          *_API_KEY) label="bearer key, hidden"; secret=1 ;;
+          SMALL_LLM_DECISIONS_URL) label="full systemone URL, ends in /v1/systemone"; secret=0 ;;
+          *) label="OpenAI base URL, ends in /v1"; secret=0 ;;
+        esac
+        printf '  %s (%s): ' "$key" "$label" >/dev/tty
+        if ((secret)); then
+          IFS= read -rs v </dev/tty
+          printf '\n' >/dev/tty
+        else IFS= read -r v </dev/tty; fi
         [[ -n $v ]] && env_set "$key" "$v" && chg "set $key (value not shown)"
       done
-      printf '  Make it the deployment default (USE_VERDA_INFERENCE=1)? [y/N] ' >/dev/tty
+      note "With all five values configured, a user who never chose starts on Private; the first turn may pay a cold start."
+      printf '  Also default non-conversation runs to Private (USE_SELF_DEPLOYED_INFERENCE=1)? [y/N] ' >/dev/tty
       IFS= read -r v </dev/tty
-      [[ $v =~ ^[Yy] ]] && env_set USE_VERDA_INFERENCE 1 && chg "set USE_VERDA_INFERENCE=1"
+      [[ $v =~ ^[Yy] ]] && env_set USE_SELF_DEPLOYED_INFERENCE 1 && chg "set USE_SELF_DEPLOYED_INFERENCE=1"
     fi
     unset v
   fi
@@ -1276,22 +1513,32 @@ stage_env() {
     while read -r key; do note "- $key"; done <<<"$missing"
     note "Fill them in $ENV_FILE (or re-run this script from a terminal: it prompts)."
   fi
-  local n=0
-  for key in "${VERDA_TRIO[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
-  note "private tier: $n of 3 endpoints set (0 = Anthropic only; 3 = the tier is available)"
+  n=0
+  for key in "${PRIVATE_TIER_REQUIRED[@]}"; do [[ -n "$(env_get "$key")" ]] && n=$((n + 1)); done
+  note "private tier: $n of ${#PRIVATE_TIER_REQUIRED[@]} required values set (0 = Anthropic only; 5 = the tier is configured)"
 
   # docs/PREVIEW.md §7. The keys exist ONLY in this file until the owner copies
   # them out; the backup script deliberately never copies .env.
   if ((KEYS_ESCROWED && KEYS_GENERATED)); then
     warn "--keys-escrowed IGNORED: the keys were generated in this run, so nobody can have escrowed them yet."
   elif ((KEYS_ESCROWED)) && ((!DRY_RUN)); then
+    local fingerprint
+    fingerprint=$(keys_fingerprint) || { refuse "cannot attest the configured application keys; check both runtime files in clone mode"; return 1; }
     sudo install -d -m 0700 "$STATE_DIR"
-    printf '%s %s\n' "$(date -u +%FT%TZ)" "$(keys_fingerprint)" | sudo tee "$ESCROW_MARKER" >/dev/null
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$fingerprint" | sudo tee "$ESCROW_MARKER" >/dev/null
     sudo chmod 600 "$ESCROW_MARKER"
-    chg "recorded the owner's escrow attestation (a hash of the three keys, not the keys)"
+    chg "recorded the owner's escrow attestation (a hash of the configured application keys, not the keys)"
   fi
   if escrow_recorded; then ok "key escrow attested for the current keys"; else
-    warn "ESCROW the three keys off this box before boot (docs/PREVIEW.md §7). From the OWNER's own terminal:"
+    warn "ESCROW the configured application keys off this box before boot (docs/PREVIEW.md §7)."
+    local files
+    files=$(compose_files) || return 1
+    if [[ $files != "$COMPOSE_FILES" ]]; then
+      note "Use both RELEASE_RUNTIME_ENV_FILE and DEV_RUNTIME_ENV_FILE; attest all six runtime keys."
+      note "Store the sets separately off this box, then re-run --only env --keys-escrowed."
+      return 0
+    fi
+    note "From the OWNER's own terminal:"
     note "ssh $(id -un)@<host> \"grep -E '^($KEYS_RE)=' $ENV_FILE\""
     note "then put them in the password manager under this environment's name, clear"
     note "the terminal, and re-run this script with --keys-escrowed."
@@ -1301,7 +1548,9 @@ stage_env() {
 escrow_recorded() {
   ((DRY_RUN && KEYS_ESCROWED && !KEYS_GENERATED)) && return 0
   sudo test -f "$ESCROW_MARKER" || return 1
-  [[ "$(sudo cut -d' ' -f2 "$ESCROW_MARKER")" == "$(keys_fingerprint)" ]]
+  local fingerprint
+  fingerprint=$(keys_fingerprint) || return 1
+  [[ "$(sudo cut -d' ' -f2 "$ESCROW_MARKER")" == "$fingerprint" ]]
 }
 
 # The hostname is a parameter, never a committed value. It lands in .env only.
@@ -1343,10 +1592,18 @@ stage_hostname() {
        Keep the existing entries (dev's localhost URI included).
     b. Sign-out needs no registration: AUTH_POST_LOGOUT_REDIRECT_URI is set
        to https://$h/auth/signin in .env by this stage.
-    c. API permissions -> Microsoft Graph -> Delegated: User.Read, email,
-       Mail.Read, Mail.Send, Calendars.ReadWrite, Files.Read.All,
-       Sites.Read.All -> Grant admin consent. A requested scope that is not
-       consented fails the WHOLE sign-in (trim with AZURE_GRAPH_SCOPES).
+    c. Keep the consented Microsoft Graph delegated set: User.Read, email,
+       Mail.Read, Mail.Send, Calendars.ReadWrite, Files.Read.All, Sites.Read.All.
+       MSAL adds openid/profile/offline_access; keep their consent for background refresh.
+       A requested scope without consent fails the WHOLE sign-in.
+       Keep the same registration/client id and existing consent grants.
+       The owner is no longer asked to remove Mail.Send/Calendars.ReadWrite
+       or revoke their grants. Leave application permissions (roster read) unchanged.
+       Overrides may only trim these seven scopes; other scopes, including
+       Calendars.Read and delegated .default, refuse boot/mint.
+       Calendars.ReadWrite covers calendar reads. The app requests Mail.Send
+       and Calendars.ReadWrite but ships no Graph write tool; requesting these
+       scopes adds no write tool. HITL write gating stays Neo4j-only.
     d. AZURE_CLIENT_SECRET must be the secret VALUE, not its id; note its expiry.
 EOF
 }
@@ -1371,6 +1628,8 @@ catalog_image() {
 # shape (docs/PREVIEW.md §13); a single box needs no registry credential.
 stage_images() {
   banner "10/13 images — build on the box, pull the rest"
+  assert_engine_supported
+  assert_daemon_isolation
   if ((!DRY_RUN)) && ! sudo docker info >/dev/null 2>&1; then
     refuse "the Docker daemon is not reachable (sudo systemctl status docker)"
     return 0
@@ -1383,7 +1642,7 @@ stage_images() {
   run dc build
   run dc pull --ignore-buildable --quiet
   # The gateway pulls its catalog servers itself, but a failed pull there is a
-  # warning and the server just contributes 0 tools (#412). Pulling the five
+  # warning and the server just contributes 0 tools (#412). Pulling the four
   # allow-listed images here, on the host, makes a failure stop this run. Any
   # registry login belongs on the host too, never in docker-config.json (#422).
   local srv img
@@ -1414,10 +1673,17 @@ assert_engine_supported() {
   local v
   v=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null) || v=""
   if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]] || ! version_ge "$v" "$MIN_ENGINE"; then
-    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying; no compose services were started"
+    refuse "Docker Engine ${v:-unavailable} is unsupported; need >= $MIN_ENGINE for Neo4j's isolated gateway mode. Upgrade the Engine before deploying (docs/deployment/docker-engine-upgrade.md); no compose services were started"
     return 0
   fi
   ok "Docker Engine $v (>= $MIN_ENGINE for isolated gateway mode)"
+}
+
+prepare_embedder() {
+  if ! run python3 "$APP_DIR/scripts/prepare-embedder.py" "$APP_DIR/models"; then
+    refuse "embedder GGUF preparation failed; no compose services were started"
+    return 1
+  fi
 }
 
 stage_boot() {
@@ -1425,11 +1691,21 @@ stage_boot() {
   # Every gate below runs before anything starts. A real run stops at the
   # first one that fails; a dry run reports all of them.
   assert_engine_supported
+  assert_daemon_isolation
   assert_gateway_pinned
-  local problems missing
+  local problems missing files key file
   if [[ -f $ENV_FILE ]]; then
     problems=$(env_problems)
-    missing=$(owner_missing)
+    files=$(compose_files) || return 1
+    if [[ $files == "$COMPOSE_FILES" ]]; then
+      missing=$(owner_missing)
+    else
+      missing=""
+      for key in RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE; do
+        file=$(env_get "$key")
+        missing+=$(owner_missing "$file" | sed "s/^/$key: /")
+      done
+    fi
   else
     problems="no $ENV_FILE"
     missing=""
@@ -1441,7 +1717,7 @@ stage_boot() {
     refuse "--hostname/--acme-email are reserved placeholders; Let's Encrypt cannot issue for or mail them"
   fi
   [[ -n $missing ]] && owner_stop "fill the owner-supplied values in $ENV_FILE: $(tr '\n' ' ' <<<"$missing")"
-  escrow_recorded || owner_stop "escrow the three keys off the box (docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"
+  escrow_recorded || owner_stop "escrow the configured application keys off the box (both runtime files' six keys in clone mode; docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"
   dns_points_here "$HOSTNAME_ARG" || owner_stop "point DNS for $HOSTNAME_ARG at this box and wait for it to resolve (docs/PREVIEW.md §4)"
 
   assert_dynamic_tools_off
@@ -1465,10 +1741,33 @@ stage_boot() {
     fi
   fi
 
-  run dc up -d --remove-orphans
+  # A clone project owns app-dev too. Never orphan-prune during a clone boot.
+  files=$(compose_files) || return 1
+  clone_preflight "$files" || return 1
+  prepare_embedder || return 1
+  if [[ $files == "$COMPOSE_FILES" ]]; then
+    if ((!DRY_RUN)); then
+      local project existing_dev
+      project=$(set -o pipefail; dc config --format json 2>/dev/null |
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' 2>/dev/null) || { refuse "cannot resolve the Compose project for the single-app guard"; return 1; }
+      [[ $project =~ ^[a-z0-9][a-z0-9_-]*$ ]] || { refuse "invalid Compose project for the single-app guard"; return 1; }
+      existing_dev=$(sudo docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=app-dev 2>/dev/null) || { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }
+      [[ -z $existing_dev ]] || { refuse "app-dev exists in this project; restore the complete clone COMPOSE_FILE before boot"; return 1; }
+    fi
+    run dc up -d --remove-orphans
+  else
+    run dc up -d
+  fi
   ((DRY_RUN)) && return 0
+  if ! vps_check --network; then
+    dc stop || refuse "Neo4j network verification failed and stopping the stack failed; stop it manually and follow docs/deployment/docker-engine-upgrade.md"
+    refuse "Neo4j's running network failed verification; the stack was stopped; follow docs/deployment/docker-engine-upgrade.md"
+    return 0
+  fi
   local svc
-  for svc in postgres neo4j redis app; do
+  local healthy_services=(postgres neo4j redis embedder app)
+  [[ $files == "$COMPOSE_FILES" ]] || healthy_services+=(app-dev)
+  for svc in "${healthy_services[@]}"; do
     if wait_state "$svc" healthy 600; then ok "$svc healthy"; else
       fail "$svc did not become healthy (docker compose logs $svc)"
       return 1
@@ -1556,6 +1855,8 @@ stage_seed() {
 # Smoke: docs/PREVIEW.md §8, the half that can be checked from the box.
 stage_smoke() {
   banner "13/13 smoke — docs/PREVIEW.md §8 (on-box half)"
+  local files
+  files=$(compose_files) || return 1
   if ((DRY_RUN)); then
     note "(dry run: listing the checks)"
     note "1a ss -H -ltn / -lun: nothing on a non-loopback address but SSH ($(desired_ssh_ports | tr ' ' '+')), 80, 443 (+ DHCP client 68/546 udp)"
@@ -1565,9 +1866,21 @@ stage_smoke() {
     note "3  dev bypass off: printenv=false, no [dev-bypass] warning, unauthenticated POST /api/events -> 401"
     note "4  no github block / GitHub token on the box; dynamic-tools disabled; no configs/action-tokens.yaml"
     note "5  the graph is not empty (seed imported)"
+    note "6  Engine >= $MIN_ENGINE, daemon.json safe, deployed Neo4j bridge internal/isolated; bounded egress negatives with positive controls"
+    note "7  Cypher RETURN through neo4j-relay:7687 (also with --no-seed)"
+    note "9  CPU embedder: one internal POST /v1/embeddings returns 1024 finite dimensions"
+    note "10 forwarded metadata rules and persistence; cap-dropped throwaway bridge probe blocked; app healthy before/after"
+    [[ $files == "$COMPOSE_FILES" ]] || note "11 both clones: running env matches the validated shape; read-only TCP login checks each limited Postgres role"
+    [[ $files != "$DEV_VM_COMPOSE_FILES" && $files != "$BOTH_VM_COMPOSE_FILES" ]] || note "12 environment VM guard --check (the installed config)"
+    if ((PROBE_PRIVATE_HEALTH)); then
+      note "8  OPT-IN: one authenticated GET small-model /health; may wake a box; no completion or retry"
+    else
+      note "8  SKIPPED private /health (default: no provider request; --probe-private-health may wake a box)"
+    fi
     return 0
   fi
-  local fails=0 h=$HOSTNAME_ARG out
+  clone_preflight "$files" || return 1
+  local fails=0 h=$HOSTNAME_ARG out guard_out guard_rc
 
   out=$(sudo ss -H -ltnp | public_listeners "$(desired_ssh_ports) 80 443") || out="(ss failed)"
   if [[ -z $out ]]; then ok "1a tcp: only SSH ($(desired_ssh_ports | tr ' ' '+')), 80 and 443 listen publicly"; else
@@ -1657,6 +1970,63 @@ stage_smoke() {
     fi
   fi
 
+  # Keep these checks independent of seeding: --no-seed must not hide a dead
+  # relay or an open network. Inconclusive is a failure, never containment.
+  assert_engine_supported
+  for out in daemon egress relay; do
+    if vps_check "--$out" --ssh-port "$SSH_PORT"; then ok "6/7 $out"; else
+      fail "6/7 $out check failed or inconclusive"
+      fails=$((fails + 1))
+    fi
+  done
+  if ((PROBE_PRIVATE_HEALTH)); then
+    if SMALL_LLM_BASE_URL="$(env_get SMALL_LLM_BASE_URL)" SMALL_LLM_API_KEY="$(env_get SMALL_LLM_API_KEY)" \
+      python3 "$APP_DIR/scripts/check-vps.py" --private-health; then ok "8  private /health returned 200"; else
+      fail "8  private /health failed (no retry or provider fallback)"
+      fails=$((fails + 1))
+    fi
+  else
+    note "8  SKIPPED private /health: no provider request (--probe-private-health may wake a box)"
+  fi
+  if vps_check --embeddings; then ok "9  embedder returned 1024 dimensions"; else
+    fail "9  embedder forward pass failed or returned the wrong dimensions"
+    fails=$((fails + 1))
+  fi
+  if (cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" \
+    python3 scripts/metadata-egress.py --docker-user-only --smoke); then
+    ok "10 forwarded metadata denied; persistence enabled; app stays healthy"
+  else
+    fail "10 forwarded metadata policy/persistence/probe failed or inconclusive"
+    fails=$((fails + 1))
+  fi
+  if [[ $files != "$COMPOSE_FILES" ]]; then
+    if vps_check --clones; then ok "11 both clones use their configured limited database roles and namespaces"; else
+      fail "11 clone runtime or limited-role check failed or inconclusive"
+      fails=$((fails + 1))
+    fi
+  fi
+  # Item 3 of docs/plan/env-vm-network.md §11: with an environment VM overlay
+  # selected (dev's, or dev's and release's), the smoke also runs the guard's own read-only --check
+  # (its default --config is the installed /etc/env-vm-guard/config.json). The
+  # guard's refusal — a missing config, a drifted table, anything it reports —
+  # fails the smoke with the guard's own message, and a checkout without the
+  # installer is refused here rather than silently skipped. The other shapes
+  # (single app, socket overlay, plain clones) never run it.
+  guard_out=""
+  if [[ $files == "$DEV_VM_COMPOSE_FILES" || $files == "$BOTH_VM_COMPOSE_FILES" ]]; then
+    if [[ -f $APP_DIR/scripts/env-vm-guard.py ]]; then
+      guard_out=$(sudo python3 "$APP_DIR/scripts/env-vm-guard.py" --check 2>&1) && guard_rc=0 || guard_rc=$?
+    else
+      guard_rc=1
+    fi
+    if ((guard_rc == 0)); then
+      ok "12 environment VM guard --check passed (installed config)"
+    else
+      fail "12 environment VM guard --check failed or is unavailable: ${guard_out:-the pinned checkout lacks scripts/env-vm-guard.py}"
+      fails=$((fails + 1)) # the guard refused
+    fi
+  fi
+
   say ""
   if ((fails)); then
     fail "$fails smoke check(s) failed. Do not invite anyone."
@@ -1674,6 +2044,9 @@ usage() {
   cat <<'EOF'
 Usage: bootstrap-vps.sh --hostname FQDN --acme-email ADDRESS [options]
 
+Two clones: persist §12's complete COMPOSE_FILE and inputs in the release root
+.env; host Node.js is required for the offline validator. No extra flag.
+
   --hostname FQDN     public name Caddy gets a certificate for (REQUIRED)
   --acme-email ADDR   Let's Encrypt contact mailbox (REQUIRED)
   --ref SHA           the full 40-hex commit to deploy: the reviewed one.
@@ -1686,6 +2059,9 @@ Usage: bootstrap-vps.sh --hostname FQDN --acme-email ADDRESS [options]
                       (ignored on the run that generates them)
   --seed-file PATH    Cypher file for an EMPTY graph (default: neo4j_dumps/seed-data.cypher)
   --no-seed           leave the graph alone
+  --probe-private-health
+                      OPT-IN: one GET small-model /health; may wake a box.
+                      Off by default, even with private endpoints configured
   --sandbox-flavours  also build the three sandbox flavour images
   --no-prompt         never prompt, even with a terminal
   --ssh-port PORT     move SSH to PORT (49152-65535, the dynamic range). Two
@@ -1706,6 +2082,7 @@ main() {
   HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="" ONLY="" KEYS_ESCROWED=0 F2B_IGNORE=""
   SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0
   LOCKOUT_CHANGED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
+  PROBE_PRIVATE_HEALTH=0
   while (($#)); do
     case $1 in
       --hostname) HOSTNAME_ARG=${2:-} && shift ;;
@@ -1716,6 +2093,7 @@ main() {
       --dry-run) DRY_RUN=1 ;;
       --keys-escrowed) KEYS_ESCROWED=1 ;;
       --no-seed) NO_SEED=1 ;;
+      --probe-private-health) PROBE_PRIVATE_HEALTH=1 ;;
       --sandbox-flavours) SANDBOX_FLAVOURS=1 ;;
       --no-prompt) NO_PROMPT=1 ;;
       --ssh-port) SSH_PORT=${2:-} && shift ;;

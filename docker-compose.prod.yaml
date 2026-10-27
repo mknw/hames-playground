@@ -74,9 +74,10 @@ services:
 
     # The agent-reachable tool surface, and the ONLY place it can be narrowed.
     #
-    # The `general` agent hands `tools.all` — every tool the gateway lists — to
-    # one controller loop, so whatever is enabled here is reachable in a turn
-    # that also fetches web pages. Two of the base file's servers do not
+    # Every agent takes a namespace slice of what the gateway lists (the `general`
+    # agent, which handed `tools.all` to one controller loop, was removed), so
+    # whatever is enabled here bounds what a turn that also fetches web pages can
+    # reach. Two of the base file's servers do not
     # belong in that set on a shared host: `redis` (45 tools, including
     # `scan_keys` + `json_get` over the Data Stash, whose keys are scoped by
     # SESSION and not by owner — so it is a cross-user read of every
@@ -107,7 +108,7 @@ services:
     # `docker-config.json` mount, which sets that feature to "disabled". Do not
     # add a `volumes:` override that drops that mount (#412, #420).
     command: !override
-      - --servers=neo4j-cypher,fetch,web_search,context7,memory
+      - --servers=neo4j-cypher,fetch,web_search,context7
       # The rendered config the base file's `mcp-config` service writes — it
       # fills ${NEO4J_PASSWORD} from this host's .env.
       - --config=/mcp/rendered/config.yaml
@@ -162,6 +163,8 @@ services:
       # `dev-bypass.ts` warns at module load if a prod build still carries it.
       # Set explicitly anyway so `docker compose config` shows the intent.
       - VITE_DEV_BYPASS_AUTH=false
+      - SANDBOX_ENVIRONMENT=release
+      - SANDBOX_CACHE_VOLUME=kg-sandbox-cache-release
 
   # ---------------------------------------------------------------------------
   # TLS termination

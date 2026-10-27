@@ -20,10 +20,10 @@ import { installDomStubs } from './dom-stubs'
 beforeAll(() => installDomStubs())
 
 const getPreviewHeaderState = vi.fn()
-const igniteVerdaBox = vi.fn()
+const igniteSelfDeployedBox = vi.fn()
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
   getPreviewHeaderState: () => getPreviewHeaderState(),
-  igniteVerdaBox: () => igniteVerdaBox(),
+  igniteSelfDeployedBox: () => igniteSelfDeployedBox(),
 }))
 
 const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
@@ -52,12 +52,12 @@ const warmth = (over: Partial<State['warmth']> = {}): State['warmth'] =>
 
 const state = (over: Partial<State> = {}): State =>
   ({
-    tier: 'verda',
-    verdaAvailable: true,
+    tier: 'self_deployed',
+    selfDeployedAvailable: true,
     warmth: warmth({ state: 'ready' }),
     activeUsers: 3,
     activeWindowMinutes: 15,
-    usage: { totalTokens: 12_500, llmCalls: 40, turns: 9, verdaCallShare: 0.75 },
+    usage: { totalTokens: 12_500, llmCalls: 40, turns: 9, selfDeployedCallShare: 0.75 },
     latency: { p50Ms: 4123, samples: 12 },
     generatedAt: Date.now(),
     ...over,
@@ -66,7 +66,7 @@ const state = (over: Partial<State> = {}): State =>
 beforeEach(() => {
   vi.clearAllMocks()
   getPreviewHeaderState.mockResolvedValue(state())
-  igniteVerdaBox.mockResolvedValue(
+  igniteSelfDeployedBox.mockResolvedValue(
     state({
       warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
     }),
@@ -77,7 +77,7 @@ const cold = () => state({ warmth: warmth({ state: 'cold', secondsUntilScaledown
 
 /** The warm indicator, whichever element it currently is. */
 const indicator = (container: HTMLElement) =>
-  container.querySelector('[data-testid="verda-warmth"]') as HTMLElement
+  container.querySelector('[data-testid="large-warmth"]') as HTMLElement
 
 /** Render and wait for the first poll to land. */
 async function mounted(container: HTMLElement) {
@@ -263,7 +263,7 @@ describe('the warm indicator', () => {
   })
 
   it('shows the countdown while a turn is ANSWERING on the box, not only between turns', async () => {
-    // THE COUNTDOWN BUG. `verdaWarmth()` computes `secondsUntilScaledown` for
+    // THE COUNTDOWN BUG. `largeWarmth()` computes `secondsUntilScaledown` for
     // `running` — the state's documented promise is that it implies warm — and
     // the render site gated the number on `=== 'warm'`, so it was computed,
     // serialized to the browser and dropped. `running` is also the state a user
@@ -282,7 +282,7 @@ describe('the warm indicator', () => {
   })
 
   it('holds the ANSWERING figure still instead of ticking it down and resetting it', async () => {
-    // `verdaWarmth()` re-sends the FULL window for `running` on every poll —
+    // `largeWarmth()` re-sends the FULL window for `running` on every poll —
     // correctly, since a box cannot scale down while a turn is on it — so the
     // local countdown ran it down for one poll interval and then snapped it back
     // to the top: traced at one-second intervals as 5:00 | 4:59 | 5:00 | 5:00.
@@ -377,11 +377,13 @@ describe('the warm indicator', () => {
   })
 
   it('is absent entirely when there is no self-hosted endpoint to be warm', async () => {
-    getPreviewHeaderState.mockResolvedValue(state({ tier: 'anthropic', verdaAvailable: false }))
+    getPreviewHeaderState.mockResolvedValue(
+      state({ tier: 'anthropic', selfDeployedAvailable: false }),
+    )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
-    expect(container.querySelector('[data-testid="verda-warmth"]')).toBeNull()
+    expect(container.querySelector('[data-testid="large-warmth"]')).toBeNull()
   })
 })
 
@@ -445,7 +447,7 @@ describe('the metrics', () => {
     const hint = p50.getAttribute('title')!
     expect(hint).toContain('last 12 model call')
     // The tier the number belongs to, in the same words as the switch above it.
-    expect(hint).toContain('Private (Verda)')
+    expect(hint).toContain('Private')
     // The two caveats: per call rather than per reply, and this server only.
     expect(hint).toContain('not one reply')
     expect(hint).toContain('another instance')
@@ -453,7 +455,7 @@ describe('the metrics', () => {
 
   it('renders an unmeasurable share as "—", never as 0%', async () => {
     getPreviewHeaderState.mockResolvedValue(
-      state({ usage: { totalTokens: 0, llmCalls: 0, turns: 0, verdaCallShare: null } }),
+      state({ usage: { totalTokens: 0, llmCalls: 0, turns: 0, selfDeployedCallShare: null } }),
     )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
@@ -463,7 +465,9 @@ describe('the metrics', () => {
   })
 
   it('drops the self-hosted share when there is no self-hosted endpoint', async () => {
-    getPreviewHeaderState.mockResolvedValue(state({ tier: 'anthropic', verdaAvailable: false }))
+    getPreviewHeaderState.mockResolvedValue(
+      state({ tier: 'anthropic', selfDeployedAvailable: false }),
+    )
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
 
@@ -601,7 +605,7 @@ describe('starting the box from the header', () => {
   it('KEEPS the start button available in "unknown" — the probe failing is not a reason to strand the user', async () => {
     // The reversed policy (owner decision, 2026-08-29): `unknown` now means the
     // CONTROL PLANE could not be asked, not that the box is unknowable — and
-    // `igniteVerdaBox` is independent of the probe. Withholding the one control
+    // `igniteSelfDeployedBox` is independent of the probe. Withholding the one control
     // that could fix the situation would punish the user for a status API's
     // downtime. This is the case the old file deliberately refused; the
     // decision is new and the button follows it.
@@ -627,18 +631,18 @@ describe('starting the box from the header', () => {
     fireEvent.click(indicator(container))
 
     await waitFor(() => expect(container.textContent).toContain('ready'))
-    expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
+    expect(igniteSelfDeployedBox).toHaveBeenCalledTimes(1)
     // The countdown the server returned is on screen — the whole point.
     expect(container.textContent).toContain('5:00')
   })
 
   it('sends ONE wake however many times it is clicked', async () => {
-    // The dedupe that matters is `ensureVerdaAwake`'s, on the server; this is
+    // The dedupe that matters is `ensureLargeAwake`'s, on the server; this is
     // the client half — a second click while the first is out must not open a
     // second request for the same box.
     getPreviewHeaderState.mockResolvedValue(cold())
     let release: (v: unknown) => void = () => {}
-    igniteVerdaBox.mockReturnValue(new Promise((r) => (release = r)))
+    igniteSelfDeployedBox.mockReturnValue(new Promise((r) => (release = r)))
 
     const { container } = render(() => <PreviewHeaderStrip />)
     await waitFor(() => expect(container.textContent).toContain('cold'))
@@ -647,7 +651,7 @@ describe('starting the box from the header', () => {
     fireEvent.click(indicator(container))
     fireEvent.click(indicator(container))
 
-    expect(igniteVerdaBox).toHaveBeenCalledTimes(1)
+    expect(igniteSelfDeployedBox).toHaveBeenCalledTimes(1)
     release(
       state({
         warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
@@ -662,7 +666,7 @@ describe('starting the box from the header', () => {
     // reading "cold" for the minutes the start actually takes.
     getPreviewHeaderState.mockResolvedValue(cold())
     let release: (v: unknown) => void = () => {}
-    igniteVerdaBox.mockReturnValue(new Promise((r) => (release = r)))
+    igniteSelfDeployedBox.mockReturnValue(new Promise((r) => (release = r)))
 
     const { container } = render(() => <PreviewHeaderStrip />)
     await waitFor(() => expect(container.textContent).toContain('cold'))
@@ -684,14 +688,14 @@ describe('starting the box from the header', () => {
     // slow" and "your next message will not work", and the strip is the only
     // place that click can report from.
     getPreviewHeaderState.mockResolvedValue(cold())
-    igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+    igniteSelfDeployedBox.mockRejectedValue(new Error('the private inference box did not wake'))
 
     const { container } = render(() => <PreviewHeaderStrip />)
     await waitFor(() => expect(container.textContent).toContain('cold'))
     fireEvent.click(indicator(container))
 
     await waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
-    const banner = container.querySelector('[data-testid="verda-ignite-failed"]')!
+    const banner = container.querySelector('[data-testid="self-deployed-ignite-failed"]')!
     // The words say a START failed. "stale" is the vocabulary for numbers that
     // are merely old, and it was what this reported: a user who pressed start,
     // was told to expect minutes and looked away could not tell the two apart.
@@ -711,7 +715,7 @@ describe('starting the box from the header', () => {
     vi.useFakeTimers()
     try {
       getPreviewHeaderState.mockResolvedValue(cold())
-      igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+      igniteSelfDeployedBox.mockRejectedValue(new Error('the private inference box did not wake'))
 
       const { container } = render(() => <PreviewHeaderStrip />)
       await vi.waitFor(() => expect(container.textContent).toContain('cold'))
@@ -737,7 +741,7 @@ describe('starting the box from the header', () => {
     vi.useFakeTimers()
     try {
       getPreviewHeaderState.mockResolvedValue(cold())
-      igniteVerdaBox.mockRejectedValue(new Error('the private inference box did not wake'))
+      igniteSelfDeployedBox.mockRejectedValue(new Error('the private inference box did not wake'))
 
       const { container } = render(() => <PreviewHeaderStrip />)
       await vi.waitFor(() => expect(container.textContent).toContain('cold'))

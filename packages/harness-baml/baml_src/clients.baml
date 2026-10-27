@@ -49,9 +49,14 @@ client<llm> AnthropicSonnet46 {
 }
 
 // --- Thinking-disabled variants (#139) --------------------------------------
-// These models run extended thinking BY DEFAULT — no request asks for it — and
-// they do not expose the trace (empty `thinking` string plus a signature), so a
-// caller pays for tokens it can neither read nor replay into `reasoning`.
+// Sonnet 5 runs adaptive thinking by default when `thinking` is omitted. In
+// #139's captured Sonnet 5 responses the trace was hidden (empty `thinking`
+// string plus a signature), so those tokens could not feed `reasoning`.
+// Sonnet 4.6 and Haiku 4.5 default to thinking OFF: their leaves above/below
+// omit `thinking` and therefore do not think (#627). Sonnet 4.6 would need an
+// explicit `thinking { type "adaptive" }`; adding it is a behaviour change,
+// not a comment correction. Provider defaults:
+// https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
 //
 // Measured over 12 captured controller prompts × 6 samples each (144 calls):
 // disabling thinking took valid actions from 70/72 to 72/72 (with it on, the
@@ -61,9 +66,11 @@ client<llm> AnthropicSonnet46 {
 // answer. Full data and the per-prompt output comparison: #139.
 //
 // Used by ControllerAnthropic (the simpleLoop tool loop). The measurement
-// above is the CONTROLLER's. Everything
-// else keeps thinking, deliberately: the actor, router, critic and compactExecution are
-// unmeasured, and the actor in particular is the deepest loop we run.
+// above is the CONTROLLER's, on Sonnet 5 only. Other chains preserve each
+// leaf's provider default, not a chain-wide thinking guarantee: actor/planner
+// think on Sonnet 5 but not their Sonnet 4.6 backstop; router/critic think only
+// on their Sonnet 5 backstop; DescribeAnthropic's Haiku 4.5 does not think.
+// Those roles are unmeasured by #139; preserve their options until measured.
 //
 // Identical to their twins otherwise — keep the options in sync, including
 // `allowed_role_metadata` (#122 cache markers) and the caps / pricing entries in

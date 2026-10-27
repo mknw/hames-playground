@@ -26,6 +26,7 @@ import type {
   SelectorFn,
 } from '@hames-ai/harness-patterns/types'
 import { trimToFit } from '@hames-ai/harness-patterns/token-budget.server'
+import { unspotlight } from '@hames-ai/harness-patterns/guard'
 import { getContextWindow, resolveClientForRole } from './clients.server'
 import {
   accountBamlCall,
@@ -35,6 +36,7 @@ import {
 } from './baml-adapters.server'
 import { clientOverrideFor } from './clients.server'
 import { escapeDataFence } from './data-fence'
+import type { SynthesisReference } from './baml_client/types'
 
 assertServerOnImport()
 
@@ -45,7 +47,7 @@ assertServerOnImport()
 
 export async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
   // Dynamic import to avoid circular dependencies
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   const startTime = Date.now()
   // Lane A3: the implementation owns the collector — it used to be created by
   // the pattern and handed down, which is the handle the envelope deletes.
@@ -81,6 +83,15 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
         },
       })
     }
+    // #614: every call failed and the controller then Returned an answer from
+    // context — the history above is the failure, this is the answer.
+    if (input.returnText) {
+      turns.push({
+        n: (input.loopHistory.iterations.at(-1)?.turn ?? -1) + 1,
+        reasoning: 'Direct response',
+        tool_result: { tool: 'response', result: input.returnText, success: true },
+      })
+    }
   } else if (input.response) {
     // Create a single turn with the response as a result
     turns.push({
@@ -100,7 +111,16 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   // through to a 16K default, and dropped real tool results before the LLM saw
   // them (see .harness-logs/neo4j-no-results.json).
   const contextWindow = getContextWindow(resolveClientForRole('compactExecution'))
-  const trimmedTurns = trimToFit(turns, (t) => JSON.stringify(t), 500, contextWindow)
+  const trimmedTurns = trimToFit(
+    turns,
+    (retained) => {
+      const refs = synthesisReferences(retained)
+      return JSON.stringify(retained) + (refs.length ? JSON.stringify(refs) + ' '.repeat(800) : '')
+    },
+    500,
+    contextWindow,
+  )
+  const references = synthesisReferences(trimmedTurns)
 
   const variables = {
     userMessage: input.userMessage,
@@ -108,14 +128,15 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
     turns: trimmedTurns,
     hasError: input.hasError ?? false,
     errorMessage: input.errorMessage,
+    references,
   }
 
   // Call with options always: the implementation-owned collector is in the
   // bag even when no tier override is, so the old with/without-opts dual call
   // is gone. `Synthesize` declares `SynthesizerAnthropic` (Sonnet 5 → Haiku
   // 4.5), overridden onto the self-hosted deployment when
-  // `USE_VERDA_INFERENCE=1` re-points the `compactExecution` role.
-  const synthOpts = { collector, ...clientOverrideFor('compactExecution') }
+  // `USE_SELF_DEPLOYED_INFERENCE=1` re-points the `compactExecution` role.
+  const synthOpts = { ...clientOverrideFor('compactExecution'), collector }
   let content: string
   try {
     content = await b.Synthesize(
@@ -125,11 +146,12 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       input.hasError ?? false,
       input.errorMessage,
       // `memory_context` (#419 M9/M5a): `memoryRecall`'s block for this turn, or
-      // null when nothing was recalled. The slot is always passed — the options
-      // bag is the argument AFTER it, and omitting it would hand the bag to the
-      // wrong parameter. Escaped because the template renders it inside a DATA
+      // null when nothing was recalled. Both optional slots are always passed:
+      // the options bag follows references, and omitting either slot moves it
+      // to the wrong parameter. Escaped because it renders inside a DATA
       // fence (data-fence.ts).
       input.memoryContext ? escapeDataFence(input.memoryContext) : null,
+      references.length ? references : null,
       synthOpts,
     )
   } catch (e) {
@@ -152,13 +174,113 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
   return { value: content, call: llmCall }
 }
 
+/** Project retained retriever locators, without widening the event view.
+ * Structured references require the retriever producer. The approved text seam
+ * accepts only read-documents records whose every line has extractRetriever's
+ * grammar; custom route ids receive no text-derived citations. Residual risk:
+ * a read-documents result made entirely of forged record lines still passes.
+ * Typed locator metadata on core records needs a separate owner API decision. */
+function synthesisReferences(turns: LoopTurn[]): SynthesisReference[] {
+  const references = new Map<string, SynthesisReference>()
+  const add = (reference: SynthesisReference) => {
+    // Every projected string is rendered inside the template's DATA fence.
+    const escaped = Object.fromEntries(
+      Object.entries(reference).map(([key, value]) => [
+        key,
+        typeof value === 'string' ? escapeDataFence(value) : value,
+      ]),
+    ) as SynthesisReference
+    references.set(JSON.stringify(escaped), escaped)
+  }
+  const pending: { tool: string; result: unknown }[] = []
+  for (const turn of turns) {
+    // defaultSynthesize constructs only successful result turns above.
+    const toolResult = turn.tool_result!
+    try {
+      const result: unknown = JSON.parse(toolResult.result)
+      if (turn.additional_calls?.length) {
+        // The call roster is transport metadata, not a tool-supplied JSON field.
+        // A fetch result cannot manufacture a nested retriever producer.
+        if (!result || typeof result !== 'object' || Array.isArray(result)) continue
+        const tools = [toolResult.tool, ...turn.additional_calls.map((call) => call.tool_name)]
+        for (const [index, tool] of tools.entries()) {
+          const call = (result as Record<string, unknown>)[String(index + 1)]
+          if (
+            call &&
+            typeof call === 'object' &&
+            'tool' in call &&
+            call.tool === tool &&
+            'result' in call
+          ) {
+            pending.push({ tool, result: call.result })
+          }
+        }
+      } else {
+        pending.push({ tool: toolResult.tool, result })
+      }
+    } catch {
+      // Direct response text is not a structured tool result.
+    }
+  }
+  for (const { tool, result: value } of pending) {
+    if (tool === 'read-documents' && typeof value === 'string') {
+      // general-next fences its sanitized records. Remove only that framework
+      // envelope; neutralized spans remain neutralized and excerpts stay out.
+      const records = unspotlight(value)
+        .split('\n')
+        .filter((line) => line.trim())
+        .map((line) => {
+          if (!line.startsWith('- ')) return undefined
+          // Select the first locator: an excerpt may contain a second one.
+          const at = line.indexOf(' [doc ')
+          if (at < 0) return line.indexOf(': ', 2) > 2 ? null : undefined
+          const source = line.slice(2, at)
+          if (!source.trim()) return undefined
+          const locator = /^\[doc ([^,\]\r\n]+), chars (\d+)-(\d+)\]: /.exec(line.slice(at + 1))
+          if (!locator || !locator[1].trim()) return undefined
+          const startOffset = Number(locator[2])
+          const endOffset = Number(locator[3])
+          if (!Number.isSafeInteger(endOffset) || startOffset > endOffset) return undefined
+          return { source, docId: locator[1], startOffset, endOffset }
+        })
+      if (!records.every((record) => record !== undefined)) continue
+      for (const record of records) if (record) add(record)
+    } else if (
+      tool === 'retriever' &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      const object = value as Record<string, unknown>
+      if (Array.isArray(object.references)) {
+        for (const reference of object.references) {
+          if (!reference || typeof reference !== 'object') continue
+          const { source, docId, startOffset, endOffset } = reference
+          if (typeof source !== 'string' || !source.trim()) continue
+          const document =
+            typeof docId === 'string' &&
+            docId.trim() &&
+            typeof startOffset === 'number' &&
+            Number.isSafeInteger(startOffset) &&
+            startOffset >= 0 &&
+            typeof endOffset === 'number' &&
+            Number.isSafeInteger(endOffset) &&
+            endOffset >= startOffset
+          if (document) add({ source, docId, startOffset, endOffset })
+        }
+      }
+    }
+  }
+  return [...references.values()]
+}
+
 // ============================================================================
 // defaultSelector — the composition-root implementation of withReferences'
 // REQUIRED `selector` config (supplied by bamlPatterns().selector)
 // ============================================================================
 
 export const defaultSelector: SelectorFn = async (input) => {
-  const { b } = await import('./baml_client')
+  const { b } = await import('./guarded-client.server')
   const now = Date.now()
   const collector = new Collector('reference-selector')
   const candidates = input.candidates.map((c) => ({
@@ -174,9 +296,9 @@ export const defaultSelector: SelectorFn = async (input) => {
       input.intent,
       input.recentMessages.map((m) => ({ role: m.role, content: m.content })),
       candidates,
-      // describe-tier, so a verda tier decision moves it: the candidates it
+      // describe-tier, so a self_deployed tier decision moves it: the candidates it
       // ranks are summaries of this conversation's own tool results.
-      { collector, ...clientOverrideFor('describe') },
+      { ...clientOverrideFor('describe'), collector },
     )
   } catch (e) {
     // Non-fatal upstream (the wrapper falls back to attaching nothing), but the

@@ -2,7 +2,7 @@
 // tables, cost rates); these tests exercise scopes/rates/windows, so they run
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
-import { VERDA_CLIENT_NAME } from '../../../lib/inference/verda-activity.server'
+import { LARGE_LLM_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
 /**
  * Event-level token/cost accounting (#122).
  *
@@ -157,14 +157,16 @@ describe('computeEventMetrics', () => {
     expect(m!.basis).toBeUndefined()
   })
 
-  it('prices a self-hosted attempt by its OWN measured duration, not by tokens', async () => {
+  it('prices a metered attempt by its OWN measured duration, not by tokens', async () => {
+    // The small box is the remaining time-priced client: a describe-tier call
+    // on it pays wall-clock, and its tokens are free.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
+    const { DEFAULT_SMALL_LLM_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 900_000, output_tokens: 40_000 }),
+            ...apiCall('SmallQwen', { input_tokens: 900_000, output_tokens: 40_000 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -173,9 +175,9 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     expect(m.basis).toBe('time')
     // Nearly a million tokens and the price is 6.3 GPU-seconds. Tokens are free.
-    expect(m.costEur).toBeCloseTo((6.3 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 12)
+    expect(m.costEur).toBeCloseTo((6.3 / 3600) * DEFAULT_SMALL_LLM_EUR_PER_HOUR, 12)
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
       durationMs: 6_300,
     })
     expect(m.rates).toBeUndefined()
@@ -183,19 +185,69 @@ describe('computeEventMetrics', () => {
     expect(m.inputUncachedTokens).toBe(900_000)
   })
 
-  it('prices each attempt under its own client when a step spans both boxes', async () => {
-    // The attribution rule with teeth: a step that started on the self-hosted
-    // box and retried on Anthropic pays wall-clock for the first attempt and
-    // tokens for the second. Pricing the whole step by the run's intended tier
-    // would bill one of the two wrong.
+  it('prices a 27B attempt on the provider basis, from the reported usage.cost', async () => {
+    // The OpenRouter eval's basis: the provider reports the call's own cost in
+    // USD (usage.cost, probe-verified), and the estimator converts it once at
+    // EUR_PER_USD. Duration and tokens do NOT enter it — a per-token public
+    // API has no GPU-hour bill, and an invented per-MTok rate would render as
+    // a confident figure.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_EUR_PER_USD, DEFAULT_VERDA_EUR_PER_HOUR } =
+    const { DEFAULT_EUR_PER_USD } = await import('../../../lib/settings')
+    const collector = fakeCollector([
+      {
+        calls: [
+          {
+            ...apiCall(LARGE_LLM_CLIENT_NAME, {
+              input_tokens: 900_000,
+              output_tokens: 40_000,
+              cost: 0.02,
+            }),
+            timing: { durationMs: 6_300 },
+          },
+        ],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.basis).toBe('provider')
+    expect(m.costEur).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD, 12)
+    expect(m.noCacheEur).toBeCloseTo(m.costEur!, 12)
+    expect(m.rates).toBeUndefined()
+    expect(m.timePricedAttempts).toBeUndefined()
+    // The tokens are still counted — they are the size of the call, just not its price.
+    expect(m.inputUncachedTokens).toBe(900_000)
+  })
+
+  it('a 27B attempt the provider priced nothing for makes the step unknown, never free', async () => {
+    // OpenRouter reported usage.cost on every probe response; when it does
+    // not, the honest reading is unknown — and NOT the box's €/h floor, since
+    // the call never touched the box. A missing cost must also not zero the
+    // step: unknown beats silently wrong.
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const collector = fakeCollector([
+      {
+        calls: [apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    expect(m.attempts).toBe(1)
+    expect(m.inputUncachedTokens).toBe(5_000)
+    expect(m.costEur).toBeUndefined()
+    expect(m.basis).toBeUndefined()
+  })
+
+  it('prices each attempt under its own client when a step spans clients', async () => {
+    // The attribution rule with teeth: a step that started on the metered
+    // small box and retried on Anthropic pays wall-clock for the first attempt
+    // and tokens for the second. Pricing the whole step by the run's intended
+    // tier would bill one of the two wrong.
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { DEFAULT_EUR_PER_USD, DEFAULT_SMALL_LLM_EUR_PER_HOUR } =
       await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 }),
+            ...apiCall('SmallQwen', { input_tokens: 5_000, output_tokens: 100 }),
             timing: { durationMs: 3_600_000 },
           },
           {
@@ -208,7 +260,7 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_EUR_PER_USD
     expect(m.attempts).toBe(2)
-    expect(m.costEur).toBeCloseTo(DEFAULT_VERDA_EUR_PER_HOUR + anthropicEur, 9)
+    expect(m.costEur).toBeCloseTo(DEFAULT_SMALL_LLM_EUR_PER_HOUR + anthropicEur, 9)
     // `basis` still names the LAST priced attempt — the Anthropic one — which is
     // the convention `rates` already had, and why it is NOT the floor test.
     expect(m.basis).toBe('tokens')
@@ -223,9 +275,45 @@ describe('computeEventMetrics', () => {
     expect(isTimePricedStep(m)).toBe(true)
     // Both audit fields survive the mix rather than only the last basis'.
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
       durationMs: 3_600_000,
     })
+  })
+
+  it('sums a mixed step across bases: provider cost plus a token-priced retry', async () => {
+    // The 27B eval's mixed shape: the OpenRouter attempt priced by the
+    // provider, the Anthropic fallback by tokens. Each attempt under its own
+    // client's basis; the sums still add.
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { DEFAULT_EUR_PER_USD } = await import('../../../lib/settings')
+    const collector = fakeCollector([
+      {
+        calls: [
+          {
+            ...apiCall(LARGE_LLM_CLIENT_NAME, {
+              input_tokens: 5_000,
+              output_tokens: 100,
+              cost: 0.004,
+            }),
+            timing: { durationMs: 3_600_000 },
+          },
+          {
+            ...apiCall('AnthropicSonnet5', { input_tokens: 5_000, output_tokens: 100 }),
+            timing: { durationMs: 1_000 },
+          },
+        ],
+      },
+    ])
+    const m = computeEventMetrics(collector as never)!
+    const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_EUR_PER_USD
+    expect(m.attempts).toBe(2)
+    expect(m.costEur).toBeCloseTo(0.004 * DEFAULT_EUR_PER_USD + anthropicEur, 9)
+    // An hour of attempt duration on a provider-priced client is NOT a floor:
+    // the provider measured the bill, and no GPU was awake behind it.
+    expect(m.timePricedAttempts).toBeUndefined()
+    const { isTimePricedStep } = await import('@hames-ai/harness-patterns/metrics/aggregate')
+    expect(isTimePricedStep(m as never)).toBe(false)
+    expect(m.basis).toBe('tokens')
   })
 
   it('counts a time-priced attempt that reported NO token usage, and bills it', async () => {
@@ -235,19 +323,19 @@ describe('computeEventMetrics', () => {
     // plus a 6.3s call as €0.003 — with a `≥` in front of it, which reads as
     // accounted for.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_VERDA_EUR_PER_HOUR } = await import('../../../lib/settings')
+    const { DEFAULT_SMALL_LLM_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
           // Usage-less: no httpResponse to read, no Collector usage either.
           {
             selected: false,
-            clientName: VERDA_CLIENT_NAME,
+            clientName: 'SmallQwen',
             provider: 'openai-generic',
             timing: { durationMs: 900_000 },
           },
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall('SmallQwen', { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -256,13 +344,13 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(2)
     expect(m.timePricedAttempts).toBe(2)
-    expect(m.costEur).toBeCloseTo((906.3 / 3600) * DEFAULT_VERDA_EUR_PER_HOUR, 9)
+    expect(m.costEur).toBeCloseTo((906.3 / 3600) * DEFAULT_SMALL_LLM_EUR_PER_HOUR, 9)
     // Its tokens are free, so the missing count changes no figure — and the ones
     // that were reported are still summed.
     expect(m.inputUncachedTokens).toBe(2_000)
     // The audit field describes the seconds `costEur` charged for, both attempts.
     expect(m.timeRate).toEqual({
-      eurPerHour: DEFAULT_VERDA_EUR_PER_HOUR,
+      eurPerHour: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
       durationMs: 906_300,
     })
     expect(m.noCacheEur).toBeCloseTo(m.costEur!, 12) // caching cannot save wall-clock
@@ -275,9 +363,9 @@ describe('computeEventMetrics', () => {
     const collector = fakeCollector([
       {
         calls: [
-          { selected: false, clientName: VERDA_CLIENT_NAME, provider: 'openai-generic' },
+          { selected: false, clientName: 'SmallQwen', provider: 'openai-generic' },
           {
-            ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 2_000, output_tokens: 80 }),
+            ...apiCall('SmallQwen', { input_tokens: 2_000, output_tokens: 80 }),
             timing: { durationMs: 6_300 },
           },
         ],
@@ -318,12 +406,14 @@ describe('computeEventMetrics', () => {
     expect(isTimePricedStep(m)).toBe(false)
   })
 
-  it('omits the whole step cost when a self-hosted attempt was not measured', async () => {
-    // A time bill with no time is not a free call, and the step's other attempts
-    // cannot stand in for it: the honest reading is unknown.
+  it('omits the whole step cost when a provider-priced attempt reported no cost', async () => {
+    // A provider bill with no reported cost is unknown, never free — and the
+    // step's other attempts cannot stand in for it: the honest reading is
+    // unknown. (On the GPU box this was the unmeasured-time case; on
+    // OpenRouter it is the missing usage.cost case — same reading.)
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [apiCall(VERDA_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
+      { calls: [apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
     ])
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(1)
@@ -334,14 +424,14 @@ describe('computeEventMetrics', () => {
 
   it('honours the env rates when pricing a step', async () => {
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const saved = process.env.VERDA_EUR_PER_HOUR
-    process.env.VERDA_EUR_PER_HOUR = '3.5'
+    const saved = process.env.SMALL_LLM_EUR_PER_HOUR
+    process.env.SMALL_LLM_EUR_PER_HOUR = '3.5'
     try {
       const collector = fakeCollector([
         {
           calls: [
             {
-              ...apiCall(VERDA_CLIENT_NAME, { input_tokens: 10, output_tokens: 1 }),
+              ...apiCall('SmallQwen', { input_tokens: 10, output_tokens: 1 }),
               timing: { durationMs: 3_600_000 },
             },
           ],
@@ -349,8 +439,8 @@ describe('computeEventMetrics', () => {
       ])
       expect(computeEventMetrics(collector as never)!.costEur).toBeCloseTo(3.5, 9)
     } finally {
-      if (saved === undefined) delete process.env.VERDA_EUR_PER_HOUR
-      else process.env.VERDA_EUR_PER_HOUR = saved
+      if (saved === undefined) delete process.env.SMALL_LLM_EUR_PER_HOUR
+      else process.env.SMALL_LLM_EUR_PER_HOUR = saved
     }
   })
 

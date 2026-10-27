@@ -139,11 +139,11 @@ export async function startBackend(): Promise<Backend> {
  * ## Why it takes TWO turns since 2026-08-26
  *
  * It used to be one, and it asserted "at least one call arrived on a model
- * that is not `VerdaQwen`" — the side roles (`router` / `describe` / `screen` /
+ * that is not `LargeQwen`" — the side roles (`router` / `describe` / `screen` /
  * `planner` / title) were held on Anthropic in both switch positions, so any
  * turn at all witnessed the redirect. The owner's tier widening put EVERY role
  * on the self-hosted deployment for a private-tier run, and the private tier is
- * also the default when `VERDA_INFERENCE_ENDPOINT` is configured — which global
+ * also the default when `LARGE_LLM_BASE_URL` is configured — which global
  * setup configures. So a default-tier turn now makes no Anthropic-chain call
  * whatsoever, and the old assertion would have failed for the right reason
  * about the wrong thing: nothing was leaking, there was simply nothing left to
@@ -153,20 +153,24 @@ export async function startBackend(): Promise<Backend> {
  * the other:
  *
  *  1. **The self-hosted seam.** A default-tier turn reaches the fake at all.
- *     This is the shipped `VERDA_INFERENCE_ENDPOINT` route, and it is also what
+ *     This is the shipped `LARGE_LLM_BASE_URL` route, and it is also what
  *     creates the schema the tier row below is written into.
  *  2. **The Anthropic redirect.** A turn forced onto the anthropic tier has to
  *     produce at least one call carrying `FAKE_ANTHROPIC_TIER_MODEL`. That is
  *     the only tier from which the redirect is reachable now, so it is the only
  *     place the fail-closed check can live.
  */
-export async function assertHermetic(backend: Backend, appUrl: string): Promise<void> {
+export async function assertHermetic(
+  backend: Backend,
+  appUrl: string,
+  privateOnly = false,
+): Promise<void> {
   const onDefaultTier = await probeTurn(backend, appUrl, 'default')
   if (onDefaultTier.length === 0) {
     throw new Error(
       'e2e-browser preflight: a whole turn completed WITHOUT one call reaching the fake ' +
         'endpoint. Neither seam is carrying the run — check that E2E_FAKE_INFERENCE_URL and ' +
-        'VERDA_INFERENCE_ENDPOINT reached the dev server, and that src/middleware.ts still ' +
+        'LARGE_LLM_BASE_URL reached the dev server, and that src/middleware.ts still ' +
         'calls installDevFakeInference(). Refusing to run: every scenario would otherwise ' +
         'issue real provider calls with whatever key the environment holds.',
     )
@@ -177,6 +181,17 @@ export async function assertHermetic(backend: Backend, appUrl: string): Promise<
   // writes it. Only reachable now that the turn above has run `ensureSchema()`.
   await setStoredTier('anthropic')
   const onAnthropicTier = await probeTurn(backend, appUrl, 'anthropic')
+  if (privateOnly) {
+    if (
+      !onAnthropicTier.length ||
+      onAnthropicTier.some((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL)
+    ) {
+      throw new Error(
+        'Private-only browser preflight: legacy public seed did not route exclusively to the private fake.',
+      )
+    }
+    return
+  }
   if (!onAnthropicTier.some((call) => call.model === FAKE_ANTHROPIC_TIER_MODEL)) {
     throw new Error(
       'e2e-browser preflight: a turn forced onto the ANTHROPIC tier produced no call ' +

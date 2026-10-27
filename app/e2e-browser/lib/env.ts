@@ -82,10 +82,10 @@ export const POISONED_ANTHROPIC_KEY = 'e2e-browser-no-real-anthropic-calls'
  *  browser suite reads it off the fake to tell the two tiers apart. */
 export const FAKE_ANTHROPIC_TIER_MODEL = 'e2e-fake-anthropic-tier'
 
-/** The model id `VerdaQwen` declares in `baml_src/verda-client.baml`. Not
+/** The model id `LargeQwen` declares in `baml_src/large-client.baml`. Not
  *  re-derived: a scenario asserting "this call took the self-hosted route"
  *  should fail if the declaration changes under it. */
-export const VERDA_MODEL = 'Qwen/Qwen3.8-27B-FP8'
+export const LARGE_LLM_MODEL = 'Qwen/Qwen3.8-27B-FP8'
 
 /**
  * The dev-bypass user every turn in THIS suite runs as.
@@ -132,7 +132,7 @@ export const COLD_START_HEADLINE = 'starting GPU'
 export const IGNITE_LABEL = 'start RTX PRO 6000'
 
 /**
- * `VERDA_SCALEDOWN_SECONDS` for the dev server under test.
+ * `LARGE_LLM_SCALEDOWN_SECONDS` for the dev server under test.
  *
  * Two seconds instead of the shipped default (300 since 2026-08-26, when the
  * owner set it to match the live box; it was 180 when this suite was written,
@@ -140,7 +140,7 @@ export const IGNITE_LABEL = 'start RTX PRO 6000'
  * shortcut around the feature — it is the only way to REACH it more than once.
  * The cold-start notice fires when nothing says the box is up, and a completed
  * self-hosted call marks it warm for the whole scale-down window
- * (`inference/verda-activity.server.ts`). The suite's own preflight turn makes
+ * (`inference/large-activity.server.ts`). The suite's own preflight turn makes
  * such a call, so with the shipped value every later scenario would run against
  * a box this process believes is warm, and the notice would never fire — the
  * first draft of scenario 2 failed exactly that way.
@@ -150,11 +150,11 @@ export const IGNITE_LABEL = 'start RTX PRO 6000'
  * hook. What it costs: this suite cannot say anything about the shipped window
  * itself, only about what happens on either side of it.
  */
-export const VERDA_SCALEDOWN_SECONDS = 2
+export const LARGE_LLM_SCALEDOWN_SECONDS = 2
 
 /** How long to wait for the app to consider the self-hosted box cold again:
  *  the configured scale-down window, plus a margin for the clock. */
-export const GO_COLD_MS = VERDA_SCALEDOWN_SECONDS * 1000 + 750
+export const GO_COLD_MS = LARGE_LLM_SCALEDOWN_SECONDS * 1000 + 750
 
 /**
  * How long scenario 2's fake box withholds its first self-hosted answer.

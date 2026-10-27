@@ -41,12 +41,8 @@ export const AgentSelector = (props: AgentSelectorProps) => {
     // `agents()` throws while errored — consult `error` first, then `latest`,
     // so the trigger can render the failure instead of crashing the render.
     const list = agents.error ? [] : (agents.latest ?? [])
-    return list.find((a) => a.id === props.selectedAgent) || list.find((a) => a.listed) || list[0]
+    return list.find((a) => a.id === props.selectedAgent) || list[0]
   }
-
-  // Only listed agents are offered; the selected one is looked up in the FULL list above,
-  // so a conversation stored under an unlisted agent (an old `general` row) names its own.
-  const offered = () => agents()?.filter((a) => a.listed) ?? []
 
   const handleSelect = (agentId: string) => {
     props.onAgentChange(agentId)
@@ -146,12 +142,12 @@ export const AgentSelector = (props: AgentSelectorProps) => {
           </Show>
 
           <Show when={!agents.error && agents()}>
-            <Show when={offered().length === 0}>
+            <Show when={agents()?.length === 0}>
               <div p="4" text="center ui-text-secondary">
                 No agents available
               </div>
             </Show>
-            <For each={offered()}>
+            <For each={agents()}>
               {(agent) => (
                 <button
                   type="button"

@@ -78,6 +78,12 @@ export const eventIconClasses: Record<EventType, string> = {
   // the memory UI slice owns the presentation.
   memory_recalled: 'i-material-symbols-memory-outline',
   memory_written: 'i-material-symbols-memory-outline',
+  // A screen or summary model call: its own step, no pattern's output.
+  model_call: 'i-material-symbols-bolt-outline',
+  // The egress gate let a roster-matched call go (an audit row), or refused one.
+  // The refusal uses the egress prompt's own Refuse glyph.
+  egress_audit: 'i-material-symbols-fact-check-outline',
+  egress_refused: 'i-material-symbols-block',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -111,4 +117,9 @@ export const eventColors: Record<EventType, string> = {
   // orange of a control firing on hostile input
   memory_recalled: '#2dd4bf', // teal-400 — placeholder entry; #419's UI slice owns the hue
   memory_written: '#2dd4bf', // same placeholder as memory_recalled
+  model_call: '#fbbf24', // amber-400 — a model call, the family of controller_action and
+  // intent_compacted; what it is NOT is a result, so not tool_result's cyan
+  egress_audit: '#fb923c', // orange-400 — a control's record on outgoing data, the
+  // content_sanitized family: not error red, and not a result
+  egress_refused: '#fb923c', // same family: the egress control firing
 }

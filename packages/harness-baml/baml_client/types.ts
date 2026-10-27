@@ -79,6 +79,19 @@ export interface ControllerAction {
 }
 
 /**
+ * Content-only controller action; the adapter restores `reasoning` from the
+ * parser trace (the reasoning twins' pattern — see `PlanResultThinking`).
+ */
+export interface ControllerActionThinking {
+  tool_name: string
+  tool_args: string
+  additional_calls?: ToolCallRequest[] | null
+  status?: string | null
+  is_final?: boolean | null
+  
+}
+
+/**
  * Critic evaluation result
  */
 export interface CriticResult {
@@ -187,6 +200,15 @@ export interface PlanResult {
 }
 
 /**
+ * Content-only planner answer; the adapter restores reasoning from the parser trace.
+ */
+export interface PlanResultThinking {
+  plan: string
+  n_steps: number
+  
+}
+
+/**
  * A compact reference to a tool result from a previous task/turn.
  * The LLM can pass ref:<ref_id> as a tool argument value to retrieve full data.
  */
@@ -243,6 +265,14 @@ export interface ScreenVerdict {
   injection_detected: boolean
   reason: string
   spans: string[]
+  
+}
+
+export interface SynthesisReference {
+  source: string
+  docId?: string | null
+  startOffset?: number | null
+  endOffset?: number | null
   
 }
 

@@ -2,7 +2,7 @@
  * Graph Element Extractor
  *
  * Extracts graph elements (nodes and edges) from harness context events.
- * Maps pattern IDs to graph sources (neo4j, memory) for UI tab filtering.
+ * Maps pattern IDs to graph sources (neo4j) for UI tab filtering.
  */
 
 import type { GraphElement } from './types'
@@ -18,12 +18,6 @@ const PATTERN_SOURCE_MAP: Record<string, GraphElement['source']> = {
   neo4j: 'neo4j',
   ontology: 'neo4j',
 
-  // Memory patterns
-  memory: 'memory',
-  'memory-loop': 'memory',
-  'session-memory': 'memory',
-  'conversational-memory': 'memory',
-
   // Default to unknown for other patterns
 }
 
@@ -38,9 +32,6 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
   if (patternId.startsWith('neo4j') || patternId.includes('neo4j')) {
     return 'neo4j'
   }
-  if (patternId.startsWith('memory') || patternId.includes('memory')) {
-    return 'memory'
-  }
 
   return 'unknown'
 }
@@ -53,19 +44,6 @@ function getSourceFromPattern(patternId: string): GraphElement['source'] {
 export function isNeo4jGraphResult(toolName: string, _result: unknown): boolean {
   const neo4jTools = ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema']
   return neo4jTools.some((t) => toolName.includes(t))
-}
-
-/** Check if a tool result contains Memory graph data */
-export function isMemoryGraphResult(toolName: string, _result: unknown): boolean {
-  const memoryTools = [
-    'read_graph',
-    'search_nodes',
-    'open_nodes',
-    'create_entities',
-    'create_relations',
-    'add_observations',
-  ]
-  return memoryTools.some((t) => toolName.includes(t))
 }
 
 /** Enrichment payload produced by `enrichNeo4jResult()` — original rows plus
@@ -267,51 +245,6 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
   return deduplicateElements(elements)
 }
 
-/** Parse Memory MCP result into graph elements */
-function parseMemoryResult(result: unknown, source: GraphElement['source']): GraphElement[] {
-  const elements: GraphElement[] = []
-
-  if (!result || typeof result !== 'object') return elements
-
-  // Memory graph structure: { entities: [...], relations: [...] }
-  const data = result as Record<string, unknown>
-
-  // Parse entities as nodes
-  if (Array.isArray(data.entities)) {
-    for (const entity of data.entities) {
-      if (entity && typeof entity === 'object') {
-        const e = entity as Record<string, unknown>
-        const id = String(e.name ?? e.id ?? `entity-${elements.length}`)
-        elements.push(
-          nodeElement(id, String(e.name ?? id), String(e.entityType ?? 'Entity'), e, source),
-        )
-      }
-    }
-  }
-
-  // Parse relations as edges
-  if (Array.isArray(data.relations)) {
-    for (const relation of data.relations) {
-      if (relation && typeof relation === 'object') {
-        const r = relation as Record<string, unknown>
-        const id = `${r.from}-${r.relationType}-${r.to}`
-        elements.push(
-          edgeElement(
-            id,
-            String(r.from),
-            String(r.to),
-            String(r.relationType ?? 'RELATES_TO'),
-            r,
-            source,
-          ),
-        )
-      }
-    }
-  }
-
-  return deduplicateElements(elements)
-}
-
 /** Extract graph entities from a value (recursive) */
 function extractGraphEntities(value: unknown, source: GraphElement['source']): GraphElement[] {
   const elements: GraphElement[] = []
@@ -482,16 +415,12 @@ export function extractGraphElements(events: unknown[]): GraphElement[] {
     if (source === 'unknown') {
       if (isNeo4jGraphResult(toolName, result)) {
         source = 'neo4j'
-      } else if (isMemoryGraphResult(toolName, result)) {
-        source = 'memory'
       }
     }
 
     // Parse based on tool type
     if (isNeo4jGraphResult(toolName, result)) {
       elements.push(...parseNeo4jResult(result, source))
-    } else if (isMemoryGraphResult(toolName, result)) {
-      elements.push(...parseMemoryResult(result, source))
     }
   }
 

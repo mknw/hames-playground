@@ -130,7 +130,7 @@ and pick an agent to watch a first run stream in.
 
 By default every agent call runs on Anthropic. A self-hosted inference tier
 exists as an opt-in for deployments that must keep prompts on their own
-infrastructure — see `USE_VERDA_INFERENCE` in `app/.env.example`.
+infrastructure — see `USE_SELF_DEPLOYED_INFERENCE` in `app/.env.example`.
 
 **The install runs at the repo root; the app's `pnpm` scripts run from `app/`** —
 never npm/npx, and each package's own scripts run from that package's directory.
@@ -240,7 +240,7 @@ as everything else. Prompts as code — not string soup.
 flowchart TB
     subgraph APP["app/ — SolidStart app, port 3444"]
         UI["Chat · Graph · Observability timeline"]
-        REG["Agent registry<br/>search · general · sandbox·session<br/>sandbox·flavoured · retriever · M365"]
+        REG["Agent registry<br/>search · general-next · sandbox<br/>retriever · M365"]
         UI --> REG
     end
 
@@ -277,7 +277,7 @@ streams that log over SSE, and `compactExecution` turns the accumulated events
 into the final answer.
 
 Not drawn: the optional **self-hosted inference tier**. With
-`USE_VERDA_INFERENCE=1`, or a per-conversation switch in the UI, the BAML leaf
+`USE_SELF_DEPLOYED_INFERENCE=1`, or a per-conversation switch in the UI, the BAML leaf
 calls above go to a private endpoint instead of Anthropic; the boxes and arrows
 are otherwise the same.
 
@@ -330,7 +330,6 @@ overlaying an icon and an accent colour, in
 | Agent             | Composition                                                                                           | What it shows                                                                                                                                                                                                                       |
 | ----------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Search**        | `router` → `routes(withReferences(simpleLoop))` → `compactExecution`                                  | Classify into one namespace and dispatch — Neo4j or web search. The `web` route is injection-guarded, `neo4j` is not                                                                                                                |
-| **General**       | `planner` → `simpleLoop` → `compactExecution`                                                         | Pay for strategy once, up front, then hand the whole tool surface to one executor. The A/B counterpart to Search on cross-domain questions                                                                                          |
 | **Sandbox**       | `router` → `routes(withSandbox(actorCritic))` → `compactExecution`                                    | A container per session, persistent across turns: each message goes to the plain box (the one the interactive Shell opens), the data box or the office box, all over one durable workspace                                          |
 | **Retriever**     | `router` → `withInjectionGuard(routes(retriever \| withReferences(simpleLoop)))` → `compactExecution` | Semantic retrieval over uploaded documents (Data Stash) as a peer route beside Neo4j and web. The guard covers both untrusted routes — `web` and `retriever`, whose chunks come from ingested files — while `neo4j` stays unguarded |
 | **Microsoft 365** | `withInjectionGuard(simpleLoop)` → `compactExecution`                                                 | Per-user identity end to end — answers from the signed-in user's own mailbox, calendar and files via delegated Graph scopes                                                                                                         |

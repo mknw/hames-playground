@@ -26,7 +26,7 @@ db/
 
 ### `processMessage(sessionId, message)`
 
-Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, 'search')`.
+Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, message, DEFAULT_AGENT_ID)` (`agent-ids.ts`; `general-next`).
 
 ### `processMessageStreaming(sessionId, message, agentId, onEvent)`
 
@@ -58,9 +58,7 @@ Handles two Neo4j result formats:
 - **MCP format**: Flat records `{ n: { name, description }, r: [startNode, "TYPE", endNode] }`
 - **Neo4j driver format**: Structured objects with `identity`, `labels[]`, `properties{}`
 
-Also handles Memory MCP results (`entities[]`, `relations[]`).
-
-Pattern IDs are mapped to graph sources (`neo4j`, `memory`) for tab filtering in the UI.
+Pattern IDs are mapped to graph sources (`neo4j`) for tab filtering in the UI.
 
 ### Schema suppression and the plain-object guard (#14)
 

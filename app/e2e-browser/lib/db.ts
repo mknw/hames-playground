@@ -117,7 +117,7 @@ export async function storedTier(): Promise<string | null> {
  * `wipeUserRows()` deletes the row afterwards, so scenarios still start from
  * the default a preview user gets.
  */
-export async function setStoredTier(tier: 'anthropic' | 'verda'): Promise<void> {
+export async function setStoredTier(tier: 'anthropic' | 'self_deployed'): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
   await client.connect()
   try {

@@ -198,6 +198,228 @@ containers.
 
 ## Configuration
 
+### Docker endpoint
+
+`SANDBOX_DOCKER_HOST` selects one sandbox-only Docker endpoint for backend
+operations, both MCP exec streams, startup cleanup, proxy/network lifecycle and
+the interactive Shell. Supported values are `unix:///absolute/socket` and
+`tcp://host:port`. TCP requires all three absolute file paths:
+`SANDBOX_DOCKER_TLS_CA`, `SANDBOX_DOCKER_TLS_CERT`, `SANDBOX_DOCKER_TLS_KEY`;
+Docker verifies the server and presents the client certificate. For Unix sockets,
+omit the TLS settings. Invalid configuration throws before backend operations;
+connection failures never retry against another endpoint.
+
+An explicit setting overrides inherited `DOCKER_HOST`, `DOCKER_CONTEXT` and
+Docker TLS variables in every child, without changing the app's environment.
+With all four settings absent, CLI arguments and environment inheritance stay
+unchanged, including existing Docker CLI defaults. Configure these settings
+before constructing backends and restart to change them: each backend captures
+its endpoint, and its Shell uses the connection on the acquired handle.
+
+See [GUIDE.md](GUIDE.md) for configuration and [SPEC.md](SPEC.md) for the
+contract and test boundaries. This selects a daemon; it does not provision VMs,
+remove socket mounts or establish network isolation.
+
+The existing wildcard export makes `./docker-connection.server` available, but
+this subpath is **internal and unstable**, shared by the backend and PTY; it is
+**not a supported entry point**.
+`DockerConnection` is its readonly CLI-flag type, `dockerConnectionFromEnv(env?)`
+validates the generic environment settings, and `dockerInvocation(connection,
+args, baseEnv?)` prepares child argv/env. These server-only helpers are shared by
+the backend and PTY; ordinary consumers configure the environment and keep using
+`DockerBackend` or `withSandbox`. No new root-entry export is added.
+
+### Incus environment VMs (operator opt-in)
+
+`createIncusEnvironment` provisions **one VM per environment**, with Docker still
+providing the individual sandboxes. It is an operator-side, server-only API;
+import it only from `@hames-ai/sandbox/incus-environment.server`. It does not
+depend on the app and is excluded from the app-facing root entry point.
+The subpath exports the named `IncusEnvironment` controller, `IncusCredential`,
+`IncusEnvironmentOptions` and `IncusEnvironmentConnection` types, and
+`probeDockerEndpoint` with its `DockerProbe` result.
+Existing Docker deployments keep their current behavior until explicitly opted in.
+
+```typescript
+import {
+  createIncusEnvironment,
+  probeDockerEndpoint,
+} from '@hames-ai/sandbox/incus-environment.server'
+import { readFile } from 'node:fs/promises'
+
+const ca = await readFile('/operator-private/incus-ca.pem', 'utf8')
+const cert = await readFile('/operator-private/incus-cert.pem', 'utf8')
+const key = await readFile('/operator-private/incus-key.pem', 'utf8')
+const imageFingerprint = 'a'.repeat(64) // replace with your verified image digest
+
+const environment = createIncusEnvironment({
+  environment: 'preview', // owns only the project sandbox-preview
+  manager: { url: 'https://incus.example.test:8443', ca, cert, key }, // PEM strings
+  bridge: 'previewbr', // dedicated, operator-created managed bridge
+  address: '10.77.0.2', // reserve this guest IPv4 on that bridge
+  storagePool: 'sandbox-pool',
+  // Exactly one image source. A simplestreams server:
+  image: {
+    server: 'https://images.example.test', // HTTPS simplestreams origin
+    fingerprint: imageFingerprint, // pinned 64-character SHA-256
+  },
+  // …or the two staged files of the split image, imported into the project
+  // before the VM is created from them (the fingerprint is the same pin):
+  // image: {
+  //   files: {
+  //     metadata: '/operator-private/staged/metadata.tar',
+  //     disk: '/operator-private/staged/disk.qcow2',
+  //   },
+  //   fingerprint: imageFingerprint,
+  // },
+  quota: { cpu: 2, memoryMiB: 2048, diskGiB: 24, rootDiskGiB: 16 },
+  stateDirectory: '/operator-private/sandbox-preview', // parent must exist
+})
+const { project, dockerEnv } = await environment.reconcile()
+// Deliver only dockerEnv and its three files to this environment's app.
+// Remap file paths in dockerEnv if the app runs in a container.
+// Before starting the app, poll until Docker answers over mutual TLS. Stop on
+// `untrusted-server`: that daemon is not this environment's, and never will be.
+const probe = await probeDockerEndpoint(dockerEnv) // { ready: true, ... } once up
+// Later, from the operator process:
+await environment.teardown()
+```
+
+The Incus server must support every configured restriction: **Incus 7.3+** is
+the minimum for `projects_restricted_virtual_machines_nesting`; it must also
+support `projects_restricted_storage_pool_access`. Servers missing these keys
+reject project creation, failing closed. See the
+[Incus 7.3 release notes](https://linuxcontainers.org/incus/news/#incus-7-3-has-been-released)
+and [API extensions](https://linuxcontainers.org/incus/docs/main/api-extensions/).
+Distribution packages of Incus 6.0.x lack both; the operator runbook
+([sandbox VM spike runbook](https://github.com/mknw/hames-playground/blob/main/docs/deployment/sandbox-vm-spike.md), "Upstream Incus packages") installs a
+pinned 7.3+ build from the Incus maintainers' signed apt repository.
+The earlier 7.0.1 system-container experiment predates these restrictions and
+does not verify this configuration. The operator supplies an Incus HTTPS manager certificate permitted to create
+projects and register certificates, a bridge, a storage pool and a pinned VM
+image. The image must already contain **Docker (`/usr/bin/dockerd`), systemd,
+cloud-init and the Incus VM agent**, and support `cloud-init.user-data` and `cloud-init.network-config`; arbitrary
+OCI images cannot boot as Incus VMs. Installing the host, preparing images,
+loading the four `kg-sandbox` images into the guest, bridge routing, firewall
+coexistence with Docker, and nested-KVM measurements belong to the operator's
+scripts and runbook. No installation or firewall change happens on import or
+controller creation. Node 22+ and `openssl` on the operator machine are required.
+
+`reconcile()` creates a restricted `sandbox-<environment>` project, then verifies
+its restrictions on every call. Containers are disabled, one VM is allowed,
+CPU/memory/disk totals are explicit, and host devices, snapshots, backups and
+low-level VM settings are blocked. Root storage and the selected managed NIC are
+the necessary exceptions. The project allows only the selected storage pool;
+VM nesting is blocked and the VM explicitly disables it. Network access is
+explicit. A simplestreams image origin uses the default HTTPS port (443); other
+ports are refused, and the project's image-server domain allowlist names it.
+A local-files image source names no server: the allowlist key stays unset —
+no remote image pull is permitted — and `reconcile` imports the two staged
+files into its own project before the instance exists. The files are checked
+first (absolute paths, no symlink anywhere in the path, regular files, owned
+by root, no group or other write, bounded sizes, and no checkout — a `.git`
+entry in any parent — above them), and the upload rides the project-restricted
+certificate, never the manager credential. Incus computes the fingerprint over
+the bytes it received: unless it equals the pin, the imported image is deleted
+and `reconcile` refuses **before creating any instance**, so a substituted or
+corrupted image cannot become the VM's source. It registers a separate restricted Incus client certificate confined to
+exactly that project, verifies the registered scope, and uses **that certificate**
+for instance operations. The manager credential is never sent to the guest.
+
+Cloud-init writes a per-environment Docker CA/server certificate, configures
+`tlsverify`, and binds the daemon **only** to the reserved guest IPv4 on the
+Incus bridge at port 2376. It pins the classic `overlay2` image store that the
+VM image preloads (Docker 29 would otherwise start on an empty containerd store). It disables socket activation and replaces Docker's
+inherited `-H fd://` command. The managed NIC enables MAC, IPv4 and IPv6 address
+filtering. The operator must enable the bridge netfilter support required by
+Incus for these filters. The app receives the CA certificate and Docker
+client certificate/key as absolute-file settings understood by the existing
+backend, MCP streams and PTY. The app has root-equivalent authority inside its
+own disposable environment VM. It receives **neither** the Incus manager nor
+the project certificate, Docker server key or CA private key. An operator that
+chooses to call the provisioner inside the app explicitly supplies that stronger
+credential through `manager`; doing so broadens the app's authority.
+The Docker server key also persists in the instance's `cloud-init.user-data`
+for the VM's lifetime, readable by holders of the project-restricted or manager
+certificate and by the guest API inside the VM.
+
+State and private keys stay in `stateDirectory` (0700; keys 0600). Keep this
+operator-only directory across restarts, out of source control, logs and app
+mounts. Serialize controllers using the same directory; concurrency across
+processes is the operator's responsibility. Credentials are valid for 365 days;
+rotation is an explicit, successfully completed teardown followed by reconcile.
+After deleting the project and revoking its exact certificate, teardown removes
+`state.json` and all generated PEM, CSR, extension and serial files; reconcile
+then generates a new CA, Docker client key and Incus certificate. Failed teardown
+retains credentials for recovery and does not rotate them. Failed reconciliation
+keeps owned resources and state for retry or teardown. An interrupted initial
+key generation may require operator recovery of the incomplete local directory.
+Transport/API errors omit response bodies, credential values and underlying TLS
+errors, and never retry through plaintext or a different origin.
+
+A slow image pull or local import is recorded as an Incus operation in the
+private state directory;
+retrying reconcile resumes it before submitting another create. Teardown also waits
+for that create and handles completed operations that Incus has expired. A
+locally imported image needs its staged files only on the import itself: once
+the fingerprint matches, later reconciles reuse the image and never re-read
+them. Teardown removes the imported image by its pinned fingerprint from this
+project only.
+
+Before first boot, reconcile reads and validates `volatile.eth0.hwaddr` (the
+Incus device key, independent of the guest name), then writes a per-instance
+`cloud-init.network-config` with a static address matched by MAC, using the
+validated guest address, bridge prefix and default gateway. DHCPv4 and DHCPv6
+are disabled, and no nameservers are set; this works on the reviewed bridges
+with `ipv4.dhcp=false` and `dns.mode=none` without a host INPUT exception.
+The guest can keep `eth0`, `enp5s0` or another predictable name. The shared image seed and the
+operator spike harness's static addressing are unchanged. Reconcile reads the
+seed back before starting; missing/malformed MACs, failed writes and seed/MAC
+drift are refused. An unseeded VM must be stopped with a pending `create`
+template: an already-booted legacy VM requires operator teardown and recreation,
+because changing its cloud-init seed cannot repair its first boot. Interrupted
+creation/seeding can be retried while the VM is still unbooted.
+
+Repeated reconcile verifies ownership/configuration and starts a stopped VM;
+it refuses drift rather than silently rebuilding a running environment. A
+successful return means Incus accepted creation/start, **not** cloud-init or
+Docker readiness. `teardown()` is idempotent, checks ownership, stops/deletes only
+the named instance, removes its pinned cached image and empty default profile,
+deletes the project without force, and revokes only its exact restricted
+certificate. Incus clears a certificate's project references on project deletion;
+an empty scope is accepted only for that final revocation, never for provisioning
+or instance access. Unexpected resources block project deletion. Shared bridges/pools
+are never deleted. This API does
+not establish firewall isolation from host services or other bridges: prove that
+separately before routing an app to the guest.
+
+In the repository compose deployment, opt in with
+`-f docker-compose.yaml -f docker-compose.sandbox-vm.yaml` (put this overlay last;
+Compose 2.24.4+). Supply the four `SANDBOX_DOCKER_*` settings in the compose
+process environment. The overlay **replaces** the app's mount list, drops its
+host socket and mounts only the three Docker client files read-only. Adapt any
+other app mounts explicitly. The MCP gateway's own socket remains out of scope.
+No compose defaults change without this overlay.
+
+Real Incus 7.3+ VM creation with these restrictions and NIC filters, a pull
+from an allowed image-server domain and a local-file import with fingerprint
+verification, remain evidence owed to the spike, along
+with VM boot/agent/cloud-init, firewall/routing, streams/files/PTY and performance.
+The overlay still runs the app container as root and shares `app-network` with
+the gateway, whose host socket remains mounted; it does not establish removal
+of host-root reachability from the app.
+
+### Multiple app clones on one Docker daemon
+
+Set a distinct `SANDBOX_ENVIRONMENT` in each app (for example `release` and
+`dev`). Production requires it; local development defaults to `local`. The
+backend captures that label once and applies it to sandbox/proxy containers and
+egress networks. Both startup cleanup sweeps require the environment label as
+well as `kg-sandbox=1`, so a restart leaves other environments and legacy
+unlabelled resources alone. Remove legacy leftovers manually by inspected ID.
+Set a distinct `SANDBOX_CACHE_VOLUME` base per clone too. Labels prevent
+accidental cleanup; access to the Docker socket remains host-wide authority.
+
 ### What your application passes in
 
 Nothing, for the example above. Two things are yours to supply when you need
@@ -214,6 +436,18 @@ them:
   into the stash) is copied into `/work/in` right after that call returns, so
   the agent can open it in the same run. If that copy fails, the call is
   reported as failed rather than as a success that the agent cannot act on.
+- **Starting the sandbox only when it is used** — `withSandbox({ id, lazy: true })`
+  starts the container on the agent's first `sandbox_*` call instead of at the start
+  of the turn, so a turn that never runs code never needs a container engine. Until
+  then the agent is shown a fixed list of the sandbox tools (kept in step with the
+  real servers by a test), and, when you pass `skills`, a note that skills load when
+  the workspace starts. If the container cannot start, the call fails with a short
+  fixed sentence ("The code workspace is unavailable on this server") instead of the
+  engine's own error, which is written to the server log only; the failure is
+  remembered for the rest of that run. The same holds for a step that fails after
+  the container has started (restoring or saving files, mounting skills): the
+  events say it failed and the engine's words stay in the server log. `lazy` needs
+  an `id` and is off by default.
 - **Whose container it is** — `WithSandboxConfig.tenantId`, the id of the user who
   owns the conversation, as a string or as a function called per run (useful when
   you build your patterns once but the signed-in user changes per request).
@@ -283,13 +517,27 @@ What each image contains: [rootfs/README.md](https://github.com/mknw/hames-playg
 | `./workspace-store`          | `configureWorkspaceStore(...)` — where you plug in storage for `/work` files                      | server                                         |
 | `./with-sandbox.server`      | the wrapper itself, for code that skips the root entry point                                      | server                                         |
 | `./pty-manager.server`       | an interactive terminal into a running container (uses `node-pty`, see Troubleshooting)           | server                                         |
+| `./docker-connection.server` | Endpoint validation and child invocation shared by backend, MCP and PTY                           | server                                         |
 | `./docker-backend.server`    | the Docker compute backend                                                                        | server                                         |
+| `./incus-environment.server` | Operator-only `createIncusEnvironment`, `probeDockerEndpoint` and their types                     | server; excluded from root                     |
 
 **The root entry point is server-only and it pulls Docker with it**, because
 `withSandbox` constructs a `DockerBackend` by default. Browser code imports
 `./types` or `./settings` instead; neither reaches a `node:` module.
 
 ## Troubleshooting
+
+### Building a private VM image
+
+The operator-only [offline VM image pipeline](https://github.com/mknw/hames-playground/tree/main/packages/sandbox/scripts/vm-image)
+assembles pinned local inputs into Incus metadata and qcow2, preloads the
+three sandbox flavours, and records provenance. Its design note distinguishes
+Docker config IDs, save-archive hashes and Incus fingerprints, including the
+additive spike pin support and the Linux boot checks still owed. Save and
+measurement hosts support either classic or containerd stores with archive-derived
+config identity; guest assembly and boot require the classic store. The driver
+is recorded for comparison at boot. This is repo
+tooling outside the published tarball and TypeScript API.
 
 ### Opening an interactive shell
 

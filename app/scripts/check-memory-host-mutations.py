@@ -39,7 +39,7 @@ cases = [
     ('root-config', S, 'memory: createHostMemoryConfig(),', 'memory: undefined,', config, None),
     ('owner-switch', C, 'const owner = getRequestUserId', "const owner = () => 'wrong-owner'", config, None),
     ('memory-enabled', C, 'return id ? getMemoryEnabled(id) : false', 'return true', config, None),
-    ('private-visibility', C, "['anthropic', 'verda']", "['anthropic']", config, None),
+    ('private-visibility', C, "['anthropic', 'self_deployed']", "['anthropic']", config, None),
     ('embed-internal', 'src/lib/memory/embedder.server.ts', "provider: 'local'", "provider: 'openrouter'", config, None),
     ('wake-capability', C, 'if (!memory || !harnessUsesMemory(patterns)) return undefined', 'if (!memory) return undefined', config, None),
     ('same-wake', C, 'const wake = getRequestMemoryWake()', 'const wake = awaitMemoryWake(memoryWakeTimeoutMs())', config, None),
@@ -75,7 +75,7 @@ cases += [
     ('shipped-opt-in', '../packages/agents/agents/search.server.ts', 'import ', "import { withMemory } from '@hames-ai/harness-patterns'\nconst _memoryOptIn = () => withMemory({} as never)\nimport ", config, 'shipped agent'),
 ]
 cases += [
-    ('wake-target-tier', 'src/lib/inference/memory-wake.server.ts', "if (activeInferenceTier() === 'verda') targets.push(SUMMARIZER)", 'targets.push(SUMMARIZER)', 'src/__tests__/lib/inference/memory-wake.test.ts', 'requested target set'),
+    ('wake-target-tier', 'src/lib/inference/memory-wake.server.ts', "if (activeInferenceTier() === 'self_deployed') targets.push(SUMMARIZER)", 'targets.push(SUMMARIZER)', 'src/__tests__/lib/inference/memory-wake.test.ts', 'requested target set'),
     ('tier-consistency', '../packages/harness-patterns/memory-store.server.ts', 'if (cfg.tier && frameTier !== undefined && tier !== frameTier)', 'if (false)', '../packages/harness-patterns/__tests__/memory-store.test.ts', 'tier override'),
 ]
 cases += [
@@ -87,15 +87,15 @@ cases += [
     ('M1', T, "if (event.type === 'memory_written')", 'if (false)', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
     ('M2', T, 'fresh.events[at] = event', '', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
     ('M3', T, "(e.data as MemoryWrittenEventData).eventId === d.eventId &&\n          (e.data as MemoryWrittenEventData).ordinal === d.ordinal", '(e.data as MemoryWrittenEventData).eventId === d.eventId', 'src/__tests__/lib/memory/review-550-merge.test.ts', None),
-    ('Z', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: () => ['anthropic', 'verda']", config, 'composition root wires'),
-    ('Z5', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: (t) => (t ? ['anthropic', 'verda'] : [])", config, 'composition root wires'),
+    ('Z', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: () => ['anthropic', 'self_deployed']", config, 'composition root wires'),
+    ('Z5', C, 'visibleTiers: visibleMemoryTiers', "visibleTiers: (t) => (t ? ['anthropic', 'self_deployed'] : [])", config, 'composition root wires'),
     ('Z4', C, 'settle: { wakeBudgetMs: memoryWakeTimeoutMs() }', 'settle: {}', config, 'composition root wires'),
     ('F3-conjunction', B, '${verdict}', "${schema && embedder === 'answering' ? 'ENABLED' : 'DISABLED'}", boot, None),
     ('F3-off-box-disabled', B, "? 'ENABLED (embedder not probed)'", "? 'DISABLED'", boot, None),
     ('F3-ignore-schema', B, 'const verdict = !schema', 'const verdict = false', boot, None),
     ('E', R, '[d.eventId, d.ordinal]', '[d.eventId, 0]', reconcile, 'keys on'),
     ('E2', R, '[s.eventId, s.ordinal]', '[s.eventId, 0]', reconcile, 'keys on'),
-    ('F', R, 'tier: source.tier', "tier: 'verda'", reconcile, 'keys on'),
+    ('F', R, 'tier: source.tier', "tier: 'self_deployed'", reconcile, 'keys on'),
     ('V', R, 'kind: memory.kind', "kind: 'preference'", reconcile, 'keys on'),
     ('A', T, '!plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined', 'await startTurnMemory(patterns, agentDeps().memory)', turn, 'stop-only resume of an interactive run'),
     ('Q', B, ' || !result.vectors[0].every(Number.isFinite)', '', boot, 'non-finite vector'),

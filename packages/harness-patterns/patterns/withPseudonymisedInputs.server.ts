@@ -1,10 +1,11 @@
-/** G14: a private web route reads rewritten copies, never a stored table or a
- *  reverse mapping. The host supplies the roster policy; core owns the scope
- *  and the pre-dispatch boundary. */
+/** G14's input half (K5): a web route reads rewritten copies, never a stored
+ *  table or a reverse mapping. The host supplies the roster policy; core owns
+ *  the scope. What LEAVES is not this wrapper's: every outgoing call is judged by
+ *  `withEgressGate` (boundary guards, slice 4), which took this wrapper's
+ *  outgoing check and its refusal of web calls. */
 import { assertServerOnImport } from '../assert.server'
 import { trackEvent } from '../context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
-import { inferServer } from '../tools.server'
+import { currentRunFrame, effectiveTier } from '../run-frame.server'
 import type {
   ConfiguredPattern,
   UnifiedContext,
@@ -30,28 +31,15 @@ export interface WebPseudonymisation {
   apply<T>(value: T): T
   /** Withhold only residual string bodies, retaining provenance fences. */
   redact<T>(value: T): T
-  /** The same literal predicate as check, without rejecting our placeholders. */
+  /** The roster's literal predicate over any value: feedback when a residual
+   *  identity remains, without rejecting the host's own placeholders. */
   checkLiterals(value: unknown): string | void
-  /** Extend outgoing literals from a local result; never rewrite that result. */
-  observe(data: unknown): void
-  /** URL-decode arguments and return safe feedback on a literal/placeholder. */
-  check(args: Readonly<Record<string, unknown>>): string | void
 }
 
 export type PseudonymiseForWeb = (
   payloads: readonly unknown[],
   latestUserMessage: string,
 ) => Promise<WebPseudonymisation>
-
-// All other calls are checked, even with no namespace registration. A new
-// local capability must be declared here, never inferred as safe by default.
-// `memory` is the gateway's own knowledge-graph file: no outbound request, and
-// its results are the user's data, so they extend the roster like Neo4j's.
-// `context7` is deliberately absent: library lookup is an outbound public call.
-const LOCAL_SERVERS = new Set(['neo4j', 'memory'])
-// Public services whose RESULTS are not identity sources; every other result
-// still extends the outgoing literals (the over-blocking direction is safe).
-const PUBLIC_RESULT_SERVERS = new Set(['web', 'context7'])
 
 export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseForWeb }) {
   return <T extends PlannerData & Record<string, unknown>>(
@@ -66,7 +54,12 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       const input = scope.data[WEB_ROSTER_INPUT] as WebRosterInput | undefined
       let rewritten: UnifiedContext | undefined
       let filter: WebPseudonymisation | undefined
-      const explicitAnthropic = currentRunFrame()?.inference?.tier === 'anthropic'
+      // The ONE tier rule: the registered tier module's answer (an absent or
+      // empty frame tier is the host's default, a present but unrecognised one is
+      // the self-deployed tier, refused when unreachable; routing reads the same); the
+      // raw slot only when core runs with no tier interpreter registered.
+      const explicitAnthropic =
+        (effectiveTier() ?? currentRunFrame()?.inference?.tier) === 'anthropic'
       try {
         if (!explicitAnthropic && config.pseudonymise) {
           filter = await config.pseudonymise(
@@ -115,6 +108,7 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       if (!filter || !rewritten) {
         scope.data = { handoff: input?.steps || undefined } as T
         // Withhold earlier content, including summaries and expansion payloads.
+        // Calls are NOT refused here: the egress gate judges every outgoing call.
         rewritten = { ...ctx, events: latestUser ? [latestUser] : [] }
         trackEvent(
           scope,
@@ -122,48 +116,13 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
           {
             task: 'web_privacy',
             message: 'earlier results withheld: privacy filter unavailable',
-            fallback: 'This step ran without earlier results; web calls were refused.',
+            fallback: 'This step ran without earlier results.',
           } satisfies WarningEventData,
           true,
         )
       }
       const childView = createEventView(rewritten, pattern.config.viewConfig, scope.id)
-      return amendRunFrame(
-        {
-          egressChecks: [
-            ({ name, args }) => {
-              if (LOCAL_SERVERS.has(inferServer(name))) return
-              return filter ? filter.check(args) : 'Web call refused: privacy filter unavailable.'
-            },
-          ],
-          afterToolCall: [
-            async ({ name }, result) => {
-              if (!filter || PUBLIC_RESULT_SERVERS.has(inferServer(name))) return
-              try {
-                filter.observe(result.data)
-              } catch {
-                filter = undefined
-                trackEvent(
-                  scope,
-                  'warning',
-                  {
-                    task: 'web_privacy',
-                    message: 'privacy roster update failed: web calls refused',
-                    fallback: 'Further web calls were refused.',
-                  } satisfies WarningEventData,
-                  true,
-                )
-                return {
-                  success: false,
-                  data: null,
-                  error: 'Tool result withheld: privacy roster unavailable.',
-                }
-              }
-            },
-          ],
-        },
-        () => pattern.fn(scope, childView),
-      )
+      return pattern.fn(scope, childView)
     },
   })
 }

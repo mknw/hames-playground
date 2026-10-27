@@ -38,6 +38,7 @@
  * vectors were computed when the proposal was prepared, and the tier stamp is
  * the one the proposing turn ran under.
  */
+import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   deserializeContext,
@@ -55,7 +56,7 @@ import {
   applyMemoryProposal,
   MEMORY_CONFIRM_KIND,
   MEMORY_CONFIRM_SAVE,
-  parseMemoryProposalPayload,
+  parseMemoryProposalPayload as parseStoredMemoryProposalPayload,
 } from '@hames-ai/harness-patterns/memory-store.server'
 import { loadConversation, updateConversationContextIfUnchanged } from '../db/conversations.server'
 import {
@@ -76,6 +77,13 @@ import { displayText } from './display-text'
 import { createMemoryEmbedder } from './embedder.server'
 
 assertServerOnImport()
+
+/** Host vocabulary stays outside core's opaque proposal parser. */
+function parseMemoryProposalPayload(value: unknown) {
+  const payload = parseStoredMemoryProposalPayload(value)
+  const tier = normalizeStoredInferenceTier(payload?.tier)
+  return payload && tier ? { ...payload, tier } : null
+}
 
 /** Where the proposing hook parks a prepared payload (`MemoryConfig.confirm`). */
 export function createMemoryConfirmSeam(owner: () => string | null): MemoryConfirmSeam {

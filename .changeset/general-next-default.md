@@ -1,8 +1,6 @@
 ---
-"@hames-ai/agents": minor
+"@hames-ai/agents": patch
 ---
 
-HELD (#507 default flip): `general` no longer opts into memory, which moves to
-`general-next`; in the picker `general-next` replaces `general`, which stays
-registered but unlisted so stored `general` conversations keep opening on it.
-A new chat opens on `general-next` (`DEFAULT_AGENT_ID`) instead of `search`.
+Docs: `general-next` is now the reference app's default agent (a new chat opens on it);
+the README no longer says the default is `search`.

@@ -185,8 +185,8 @@ const READ_ONLY_VERBS = new Set([
 ])
 
 /**
- * Whole tool names that are reads but do not start with a read verb. Redis and
- * the memory graph account for all of them; anything not listed (and not
+ * Whole tool names that are reads but do not start with a read verb. Redis
+ * accounts for all of them; anything not listed (and not
  * verb-prefixed) is treated as potentially mutating.
  *
  * Note what is NOT here: `lpop`/`rpop` (they REMOVE the element they return),
@@ -223,9 +223,6 @@ const READ_ONLY_TOOLS = new Set([
   'scan_keys',
   'scan_all_keys',
   'json_get',
-  // Memory knowledge-graph reads
-  'open_nodes',
-  'read_graph',
 ])
 
 /**
@@ -302,6 +299,12 @@ async function withReconnect<T>(
 // Tool Operations
 // ============================================================================
 
+/** What a THROWING `egressChecks` entry denies with, whichever check it was: a
+ *  fixed text, because the exception may quote the very arguments the check
+ *  was withholding. One of the egress gate's fixed texts (boundary guards). */
+export const EGRESS_CHECK_FAILED =
+  'Refused: the check on outgoing requests failed, so this request was not sent. Answer from what you already have.'
+
 /**
  * Execute a tool and — when a `withInjectionGuard` wrapper is active and the
  * tool's namespace is configured untrusted — sanitize its content before the
@@ -336,12 +339,12 @@ export async function callTool(
     } catch {
       // An unavailable check must not turn into an unchecked dispatch, and its
       // exception may quote the very arguments being withheld.
-      denial ??= 'Tool call refused: outgoing privacy check unavailable.'
+      denial ??= EGRESS_CHECK_FAILED
     }
   }
   if (denial) return { success: false, data: null, error: denial }
   return withToolCallId(async (id) => {
-    const guarded = await applyGuard(name, await dispatchTool(name, args))
+    const guarded = await applyGuard(name, await dispatchTool(name, args), id)
     // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
     // result, and a replacement is new content the guard has not seen, so it is
     // put through the same guard pass as a dispatched result. "Changed" is
@@ -361,7 +364,7 @@ export async function callTool(
       result = out
       changed = true
     }
-    return changed ? applyGuard(name, result) : result
+    return changed ? applyGuard(name, result, id) : result
   })
 }
 
@@ -384,7 +387,13 @@ function sameContent(a: ToolCallResult, b: ToolCallResult): boolean {
   }
 }
 
-async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCallResult> {
+/** `id` is the `callTool` invocation's own ({@link withToolCallId}): every fence
+ *  the guard writes on this result names it as the item id. */
+async function applyGuard(
+  name: string,
+  result: ToolCallResult,
+  id: string,
+): Promise<ToolCallResult> {
   // The run frame's `guard` slot, read SOFTLY: `callTool` is also reached from
   // a gateway health probe and a tool-catalog refresh, neither of which is a
   // run, and an absent guard is this chokepoint's opt-in sentinel.
@@ -397,13 +406,13 @@ async function applyGuard(name: string, result: ToolCallResult): Promise<ToolCal
   // rewrite off `summary` would have thrown that fence away and forwarded the
   // raw payload.
   if (result.success) {
-    const { data, summary } = await guard.sanitize(name, result.data)
+    const { data, summary } = await guard.sanitize(name, result.data, { item: id })
     if (data === result.data && !summary) return result
     return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
   }
 
   if (typeof result.error !== 'string' || result.error.length === 0) return result
-  const { data: cleanedError, summary } = await guard.sanitize(name, result.error)
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, { item: id })
   if (cleanedError === result.error && !summary) return result
   return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
 }

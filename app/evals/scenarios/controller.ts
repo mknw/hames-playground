@@ -35,6 +35,7 @@ import {
   NEO4J_READ_ONLY_CONTEXT,
 } from '@hames-ai/agents/agents/neo4j-fewshots.server'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../src/lib/settings'
+import { packagePath } from '../../src/lib/eval-support/package-layout'
 import { check, rawCompletion, type Check, type Scenario } from '../harness'
 
 /** Small enough to read in a transcript, real enough to choose between, and
@@ -59,7 +60,7 @@ const TOOLS: ToolDescription[] = [
 /** `tool_args` must be a JSON OBJECT string for every tool call — the loop
  *  JSON.parses it before dispatching. `Return` is the documented exception:
  *  its args are plain prose. */
-function argsParseAsObject(toolName: string, args: string): Check {
+export function argsParseAsObject(toolName: string, args: string): Check {
   if (toolName === 'Return') {
     return check(
       'tool_args (Return) is prose',
@@ -87,10 +88,11 @@ function argsParseAsObject(toolName: string, args: string): Check {
 /** A thinking model served with thinking left ON puts its reasoning in
  *  `content` ahead of the envelope, with a stray `</think>` between them — a
  *  degraded PARSE rather than an error, so nothing throws and nothing logs.
- *  Reported as a check because for VerdaQwen it is pinned off deliberately
+ *  Reported as a check because for LargeQwen it is pinned off deliberately
  *  (`chat_template_kwargs { enable_thinking false }`) and a redeploy is what
- *  would turn it back on. */
-function noThinkingLeak(collector: Collector): Check {
+ *  would turn it back on. Exported for the scenarios that drive the controller
+ *  over their own turn logs (`fence-wording`). */
+export function noThinkingLeak(collector: Collector): Check {
   const raw = rawCompletion(collector) ?? ''
   const leaked = /<\/think>/i.test(raw)
   return check(
@@ -107,7 +109,7 @@ function noThinkingLeak(collector: Collector): Check {
  * Comments are stripped so the commented-out example clients do not register.
  */
 function parseBamlClients(): Map<string, string[] | undefined> {
-  const dir = path.resolve(process.cwd(), 'baml_src')
+  const dir = packagePath('harness-baml', 'baml_src')
   const out = new Map<string, string[] | undefined>()
   for (const file of readdirSync(dir).filter((f) => f.endsWith('.baml'))) {
     const source = readFileSync(path.join(dir, file), 'utf8')
@@ -132,7 +134,7 @@ function parseBamlClients(): Map<string, string[] | undefined> {
 }
 
 /** Every leaf client `name` can resolve to, following `strategy` chains. A
- *  direct client (`VerdaQwen`) is its own only leaf. `seen` stops a malformed
+ *  direct client (`LargeQwen`) is its own only leaf. `seen` stops a malformed
  *  self-referencing chain from spinning. */
 function resolveLeaves(
   name: string,
@@ -152,7 +154,7 @@ export const controllerToolCallScenario: Scenario = {
   title: 'simpleLoop controller — tool-call turn (turn 0)',
   what: 'first turn with an empty history: picks an offered tool and emits args the loop can JSON.parse',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-toolcall')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -214,7 +216,7 @@ export const controllerFinalAnswerScenario: Scenario = {
   title: 'simpleLoop controller — final-answer turn',
   what: 'the answer is already in the turn log: terminates with Return + is_final rather than re-querying',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-final')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -280,7 +282,7 @@ export const controllerToolErrorScenario: Scenario = {
   title: 'simpleLoop controller — tool-error feedback turn',
   what: 'the previous call errored: reacts to the error instead of re-issuing the identical failing call',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-toolerror')
     const opts = ctx.opts('controller', collector)
     const action = await b.LoopController(
@@ -348,7 +350,7 @@ export const controllerWriteOnReadOnlyScenario: Scenario = {
   title: 'simpleLoop controller — write-shaped request on a read-only graph',
   what: 'asked to change a graph it can only read: answers or reads, never names a tool it does not hold, never sends a write through the read tool (#401)',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-controller-write-read-only')
     const opts = ctx.opts('controller', collector)
     const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
@@ -448,7 +450,7 @@ export const controllerUnparseableFeedbackScenario: Scenario = {
   title: 'simpleLoop controller — recovers after its own unparseable answer',
   what: 'the previous answer would not parse and was fed back (#437): the next answer is a valid action naming an offered tool, not the empty one replayed in the log',
   run: async (ctx) => {
-    const { b } = await import('@hames-ai/harness-baml/baml_client')
+    const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
     const checks: Check[] = []
     const collectors: Collector[] = []

@@ -52,7 +52,6 @@ const AGENTS = [
     icon: 'i-x',
     servers: ['neo4j'],
     usesSandbox: false,
-    listed: true,
   },
   {
     id: 'kg',
@@ -62,7 +61,6 @@ const AGENTS = [
     icon: 'i-y',
     servers: ['neo4j', 'memory'],
     usesSandbox: false,
-    listed: true,
   },
   {
     id: 'box',
@@ -72,15 +70,14 @@ const AGENTS = [
     icon: 'i-z',
     servers: [],
     usesSandbox: true,
-    listed: true,
   },
 ]
 const getAgentList = vi.fn(async () => AGENTS)
 
-const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', verdaAvailable: true }))
+const getConversationTier = vi.fn(async () => ({ tier: 'anthropic', selfDeployedAvailable: true }))
 const setConversationTier = vi.fn(async (_id: string, tier: string) => ({
   tier,
-  verdaAvailable: true,
+  selfDeployedAvailable: true,
 }))
 // The memory confirmation prompt (M6) asks the server for proposals; here it
 // only has to answer, and count the asks. Its own behaviour is

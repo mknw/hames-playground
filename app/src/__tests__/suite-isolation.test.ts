@@ -55,8 +55,8 @@ function declaredDatabases(source: string): string[] {
 
 /** The shapes a suite default had before the guard, each of which reaches the
  *  Postgres on `localhost:5432` without asking: the compose-URL helper called
- *  with a literal name, a `TEST_DATABASE_URL ??` fallback, and a literal
- *  `?? 'postgresql://…'`. */
+ *  with a literal name, a `TEST_DATABASE_URL ??` fallback, and
+ *  a nullish fallback to a literal Postgres URL. */
 const UNGUARDED_DEFAULT =
   /localDatabaseUrl\(\s*['"`]|TEST_DATABASE_URL\s*\?\?|\?\?\s*['"`]postgresql:/
 
@@ -69,13 +69,31 @@ const TEST_TREES = ['src/__tests__', 'e2e', 'e2e-browser', '../packages/harness-
  *  and connects nowhere. */
 const MAY_BUILD_LIVE_URL = new Set([
   'src/__tests__/test-database.ts',
+  // Pure guard fixtures intentionally construct targets that must be refused;
+  // they never connect to those fixture targets; the CI no-DB probe uses
+  // a nonexistent Unix socket. No pg mock/provisioning exception is implied.
+  'src/__tests__/test-database-guard.test.ts',
   'src/__tests__/lib/config/compose-credentials.test.ts',
+  // Offline rendered-config validator fixtures include compose port 5432;
+  // this suite parses data and runs shell stubs, never a Postgres client.
+  'src/__tests__/lib/config/compose-clones.test.ts',
+  // Offline gateway-config refusal fixture; the renderer reads YAML only.
+  'src/__tests__/lib/config/no-agent-postgres.test.ts',
 ])
 
-/** A call to the compose-URL helper, or a connection string naming Postgres's
- *  default port on this machine. */
-const LIVE_DEFAULT =
-  /\blocalDatabaseUrl\s*\(|postgres(?:ql)?:\/\/[^\s'"`]*(?:localhost|127\.0\.0\.1|\[::1\]):5432\b/
+/** Apply the explicit-target barrier to literal URLs in the test sources too.
+ * Hosts may be absent/encoded or arbitrary aliases; a missing port is 5432. */
+function hasLiveDefault(source: string): boolean {
+  if (/\blocalDatabaseUrl\s*\(/.test(source)) return true
+  return [...source.matchAll(/postgres(?:ql)?:\/\/[^\s'"`]+/g)].some(([literal]) => {
+    try {
+      const url = new URL(literal)
+      return !url.hostname || url.hostname.includes('%') || (url.port || '5432') === '5432'
+    } catch {
+      return true // unparseable literal targets are not safe defaults
+    }
+  })
+}
 
 /** The `.ts`/`.tsx` sources under `tree`, as paths relative to `app/`. */
 function testSources(tree: string): string[] {
@@ -186,15 +204,31 @@ describe('suite isolation: no two test suites share a namespace', () => {
       expect(files.length, `${tree} has no sources: the scan is reading nothing`).toBeGreaterThan(0)
       for (const file of files.filter((f) => !MAY_BUILD_LIVE_URL.has(f))) {
         expect(
-          read(file),
+          hasLiveDefault(read(file)),
           `${file} builds a URL for the Postgres on localhost:5432 outside the guard. Use ` +
             'resolveTestDatabase(), or a dead port for a URL that must never connect',
-        ).not.toMatch(LIVE_DEFAULT)
+        ).toBe(false)
       }
     }
     // The allow-list names real files, so a rename cannot silently widen it.
     const scanned = new Set(TEST_TREES.flatMap(testSources))
     for (const file of MAY_BUILD_LIVE_URL) expect(scanned.has(file), file).toBe(true)
+  })
+
+  // Assemble only text here: these fixtures never become connection strings.
+  it.each([
+    '///hames_test',
+    '//x:x@%6Cocalhost:55439/hames_test',
+    '//x:x@2130706433:5432/hames_test',
+    '//x:x@host.docker.internal/hames_test',
+    '//x:x@[::]:5432/hames_test',
+    '//x:x@throwaway.example.com:5432/hames_test',
+  ])('the source scan rejects default-port or ambiguous-host targets: %s', (target) => {
+    expect(hasLiveDefault(`postgresql:${target}`)).toBe(true)
+  })
+
+  it('the source scan permits a plain explicit host on the throwaway port', () => {
+    expect(hasLiveDefault('postgresql:' + '//x:x@127.0.0.1:55439/hames_test')).toBe(false)
   })
 
   it('each suite declares its own dev-bypass user id', () => {

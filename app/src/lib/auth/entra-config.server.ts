@@ -63,31 +63,51 @@ const RESERVED_SCOPES = new Set(['openid', 'profile', 'offline_access'])
  * `AZURE_GRAPH_SCOPES` exists as an escape hatch: set it to a trimmed,
  * space- or comma-separated list to drop a problem scope without a code change.
  *
- * WRITE scopes are included deliberately (one-and-done consent). Note that a
- * granted scope is not a capability: the model can only do what a *registered
- * tool* exposes, and every `graph` tool registered so far only reads — the
- * consented scope set deliberately runs ahead of the implemented tools. Any
- * future write tool should carry its own confirmation gate.
+ * Keep the already-consented set: an unconsented scope blocks sign-in when
+ * user consent is disabled. Mail.Send and Calendars.ReadWrite are requested,
+ * but no Graph write tool is shipped. Write approval stays Neo4j-only.
  */
 export const DEFAULT_GRAPH_SCOPES: readonly string[] = [
   'User.Read', // own profile
   'email',
   'Mail.Read', // read mailbox
-  'Mail.Send', // WRITE: send as the user
-  'Calendars.ReadWrite', // WRITE: create/modify events
+  'Mail.Send', // already consented; no mail-send tool is shipped
+  'Calendars.ReadWrite', // already consented; used for calendar reads only
   'Files.Read.All', // OneDrive + SharePoint files the user can access
   'Sites.Read.All', // SharePoint sites the user can access
 ]
 
-/** Parse an operator-supplied scope override (comma or whitespace separated). */
+/** Refuse delegated requests outside the seven-scope consented set. */
+export function assertConsentedGraphScopes(scopes: readonly string[]): void {
+  if (
+    scopes.some(
+      (scope) =>
+        !DEFAULT_GRAPH_SCOPES.some((allowed) => allowed.toLowerCase() === scope.toLowerCase()),
+    )
+  ) {
+    throw new Error(
+      '[entra] AZURE_GRAPH_SCOPES or delegated token request includes a scope not in the ' +
+        'consented set; use only User.Read, email, Mail.Read, Mail.Send, Calendars.ReadWrite, ' +
+        'Files.Read.All, Sites.Read.All.',
+    )
+  }
+}
+
+/** Parse a subset of the consented scopes (comma or whitespace separated). */
 function parseScopes(raw: string | undefined): string[] | null {
   if (!raw?.trim()) return null
   const list = raw
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0 && !RESERVED_SCOPES.has(s.toLowerCase()))
+  assertConsentedGraphScopes(list)
   return list.length > 0 ? list : null
 }
+
+// Imported by the boot-time app-tool composition root via graph-token.server.ts.
+// Validate even without Entra credentials: a stale override must fail at boot,
+// rather than wait until the first sign-in or token request.
+parseScopes(process.env.AZURE_GRAPH_SCOPES)
 
 /**
  * True when all three `AZURE_*` secrets are present. `/api/auth/login` checks

@@ -1756,16 +1756,40 @@ describe('Z2: the rules match the namespace URI, whatever the prefix', () => {
 // #482 review: the fix round's pins, one per finding (amendments A9–A13)
 // ============================================================================
 
-/** CPU time of `f`, minimum of 3 passes — interference only ever lengthens it. */
+/** One sample of process CPU; unexpected errors propagate. */
 async function cpuMs(f: () => Promise<unknown>): Promise<number> {
-  let best = Infinity
-  for (let k = 0; k < 3; k++) {
-    const c = process.cpuUsage()
-    await f().catch(() => undefined)
-    const d = process.cpuUsage(c)
-    best = Math.min(best, (d.user + d.system) / 1000)
+  const c = process.cpuUsage()
+  await f()
+  const d = process.cpuUsage(c)
+  return (d.user + d.system) / 1000
+}
+
+/**
+ * Warm BOTH paths, then take the median of five interleaved CPU ratios.
+ * Alternating which path runs first spreads JIT/GC drift across both sides;
+ * separate minima can pair unrelated engine states (#642). These are samples
+ * of one measurement, never retries of a failed assertion (pyramid rule 5).
+ */
+async function cpuRatio(
+  subject: () => Promise<unknown>,
+  control: () => Promise<unknown>,
+): Promise<number> {
+  await subject()
+  await control()
+  const ratios: number[] = []
+  for (let k = 0; k < 5; k++) {
+    let a: number
+    let b: number
+    if (k % 2 === 0) {
+      a = await cpuMs(subject)
+      b = await cpuMs(control)
+    } else {
+      b = await cpuMs(control)
+      a = await cpuMs(subject)
+    }
+    ratios.push(a / b)
   }
-  return best
+  return ratios.sort((a, b) => a - b)[2]
 }
 
 describe('#482 F1 (A9): markup compatibility runs first', () => {
@@ -1859,9 +1883,10 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
     const base = docx({
       body: `<w:p>${Array.from({ length: 90_000 }, (_, i) => `<w:r><w:t>${i}</w:t></w:r>`).join('')}</w:p>`,
     })
-    const ratio =
-      (await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))) /
-      (await cpuMs(() => ooxmlDisarm(base, MIME.docx)))
+    const ratio = await cpuRatio(
+      () => refusalOf(ooxmlDisarm(bytes, MIME.docx)),
+      () => ooxmlDisarm(base, MIME.docx),
+    )
     expect(ratio).toBeLessThan(2)
   }, 120_000)
 
@@ -1897,7 +1922,6 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
       '<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid><w:tr><w:tc>' +
       `<w:p>${run('VISIBLE')}${runs}</w:p></w:tc></w:tr></w:tbl>`
     const bytes = docx({ body, styles })
-    expect(everything((await ooxmlDisarm(bytes, MIME.docx)).bytes)).toContain('VISIBLE')
     // Relative, not absolute (see 2(a)): the baseline is the same part with
     // the same styles unchained, so only the chains' resolution differs.
     const flat = wStyles(
@@ -1912,10 +1936,41 @@ describe('#482 F2: the rules cost CPU linear in the part', () => {
         .join(''),
     )
     const base = docx({ body, styles: flat })
-    const ratio =
-      (await cpuMs(() => ooxmlDisarm(bytes, MIME.docx))) /
-      (await cpuMs(() => ooxmlDisarm(base, MIME.docx)))
-    expect(ratio).toBeLessThan(1.3)
+    // Count the chain's actual style-id lookups, independent of CPU scheduling.
+    // Three 255-deep chains are read once; resolving them afresh for 60,000
+    // runs must fail even if an implementation's native walks are cheap.
+    // Mutation: clear resolved, combined and all groups maps at levels() entry.
+    // Stop at the budget so the quadratic mutation fails promptly, rather
+    // than tying up the runner. Delegate every lookup and restore on failure.
+    let lookups = 0
+    const perChain: Record<string, number> = { c: 0, p: 0, t: 0 }
+    const get = Map.prototype.get
+    const spy = vi.spyOn(Map.prototype, 'get').mockImplementation(function (
+      this: Map<unknown, unknown>,
+      key: unknown,
+    ) {
+      if (typeof key === 'string' && /^[cpt]\d+$/i.test(key)) {
+        lookups++
+        perChain[key[0].toLowerCase()]++
+        if (lookups > 10_000) throw new Error('style chain lookup budget exceeded')
+      }
+      return get.call(this, key)
+    })
+    try {
+      expect(everything((await ooxmlDisarm(bytes, MIME.docx)).bytes)).toContain('VISIBLE')
+      // Parsing alone reads each id once; the chains must also be traversed.
+      for (const prefix of ['c', 'p', 't']) expect(perChain[prefix]).toBeGreaterThan(3 * 255)
+      expect(lookups).toBeLessThanOrEqual(10_000)
+    } finally {
+      spy.mockRestore()
+    }
+    // Work carries the close bound; CPU also catches walks outside Map.get.
+    // A 30% timing margin flaked on shared CI; leave room for GC/JIT noise.
+    const ratio = await cpuRatio(
+      () => ooxmlDisarm(bytes, MIME.docx),
+      () => ooxmlDisarm(base, MIME.docx),
+    )
+    expect(ratio).toBeLessThan(2)
   }, 120_000)
 })
 
@@ -3061,9 +3116,10 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
     // re-walk of either growing tree 5x and more.
     const ph = fixture(2048, true)
     const control = fixture(2048, false)
-    const cpu =
-      (await cpuMs(() => ooxmlDisarm(ph, MIME.pptx))) /
-      (await cpuMs(() => ooxmlDisarm(control, MIME.pptx)))
+    const cpu = await cpuRatio(
+      () => ooxmlDisarm(ph, MIME.pptx),
+      () => ooxmlDisarm(control, MIME.pptx),
+    )
     expect(cpu).toBeLessThan(3)
   }, 120_000)
 
@@ -3125,12 +3181,10 @@ describe('#492 F2: the resolver costs CPU linear in the part', () => {
     const ratioOf = async (where: 'layout' | 'master', bgPr: string): Promise<number> => {
       const padded = at(where, bgPr)
       const base = at('control', bgPr)
-      // Whichever fixture runs first in a cold process pays the engine's
-      // warm-up: take it on an untimed pass so the ratio compares like with like.
-      await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
-      const a = await cpuMs(() => ooxmlDisarm(padded, MIME.pptx))
-      const b = await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
-      return a / b
+      return cpuRatio(
+        () => ooxmlDisarm(padded, MIME.pptx),
+        () => ooxmlDisarm(base, MIME.pptx),
+      )
     }
     it.each(['master', 'layout'] as const)(
       'a wide %s p:bgPr',
@@ -3172,11 +3226,9 @@ describe('#517 A: placeholder lookup costs one step per run, not one per placeho
   const n = 8_000
   const growth = async (build: (size: number) => Uint8Array): Promise<number> => {
     const [small, large] = [build(n), build(4 * n)]
-    // Untimed pass: the first fixture in a cold process pays the engine's warm-up.
-    await cpuMs(() => ooxmlDisarm(small, MIME.pptx))
-    return (
-      (await cpuMs(() => ooxmlDisarm(large, MIME.pptx))) /
-      (await cpuMs(() => ooxmlDisarm(small, MIME.pptx)))
+    return cpuRatio(
+      () => ooxmlDisarm(large, MIME.pptx),
+      () => ooxmlDisarm(small, MIME.pptx),
     )
   }
   it.each([
@@ -3627,9 +3679,10 @@ describe('#520: the inheritance routes the reviewer’s pins left open', () => {
     }
     const wide = at(true)
     const narrow = at(false)
-    const ratio =
-      (await cpuMs(() => ooxmlDisarm(wide, MIME.pptx))) /
-      (await cpuMs(() => ooxmlDisarm(narrow, MIME.pptx)))
+    const ratio = await cpuRatio(
+      () => ooxmlDisarm(wide, MIME.pptx),
+      () => ooxmlDisarm(narrow, MIME.pptx),
+    )
     expect(ratio).toBeLessThan(3)
   }, 120_000)
 })
@@ -4363,10 +4416,11 @@ describe('#524: shared text-property levels are evaluated once per part, not onc
     async (_, levels) => {
       const wide = deckOf(16 * n, levels(16 * n))
       const base = deckOf(16 * n, control(levels(16 * n)))
-      await cpuMs(() => ooxmlDisarm(base, MIME.pptx))
       expect(
-        (await cpuMs(() => ooxmlDisarm(wide, MIME.pptx))) /
-          (await cpuMs(() => ooxmlDisarm(base, MIME.pptx))),
+        await cpuRatio(
+          () => ooxmlDisarm(wide, MIME.pptx),
+          () => ooxmlDisarm(base, MIME.pptx),
+        ),
       ).toBeLessThan(3)
     },
     120_000,

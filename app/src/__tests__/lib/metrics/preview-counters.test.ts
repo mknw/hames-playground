@@ -63,7 +63,7 @@ describe('utcDay', () => {
 describe('foldUsageRows', () => {
   it('sums input and output into one token total across tiers', () => {
     const folded = foldUsageRows([
-      { tier: 'verda', llm_calls: 3, input_tokens: 100, output_tokens: 20, turns: 1 },
+      { tier: 'self_deployed', llm_calls: 3, input_tokens: 100, output_tokens: 20, turns: 1 },
       { tier: 'anthropic', llm_calls: 1, input_tokens: 50, output_tokens: 5, turns: 1 },
     ])
     expect(folded.totalTokens).toBe(175)
@@ -75,7 +75,13 @@ describe('foldUsageRows', () => {
     // `pg` hands BIGINT back as a string. `'100' + '50'` is '10050', and a
     // header showing 10,050 tokens after two small turns is the bug.
     const folded = foldUsageRows([
-      { tier: 'verda', llm_calls: '2', input_tokens: '100', output_tokens: '20', turns: '1' },
+      {
+        tier: 'self_deployed',
+        llm_calls: '2',
+        input_tokens: '100',
+        output_tokens: '20',
+        turns: '1',
+      },
       { tier: 'anthropic', llm_calls: '2', input_tokens: '50', output_tokens: '5', turns: '1' },
     ])
     expect(folded.totalTokens).toBe(175)
@@ -84,16 +90,25 @@ describe('foldUsageRows', () => {
 
   it('computes the self-hosted share from calls that actually ran there', () => {
     const folded = foldUsageRows([
-      { tier: 'verda', llm_calls: 3, input_tokens: 0, output_tokens: 0, turns: 0 },
+      { tier: 'self_deployed', llm_calls: 3, input_tokens: 0, output_tokens: 0, turns: 0 },
       { tier: 'anthropic', llm_calls: 1, input_tokens: 0, output_tokens: 0, turns: 0 },
     ])
-    expect(folded.verdaCallShare).toBe(0.75)
+    expect(folded.selfDeployedCallShare).toBe(0.75)
+  })
+
+  it('includes legacy self-deployed counters in the same share', () => {
+    const folded = foldUsageRows([
+      { tier: 'verda', llm_calls: 2, input_tokens: 0, output_tokens: 0, turns: 0 },
+      { tier: 'self_deployed', llm_calls: 1, input_tokens: 0, output_tokens: 0, turns: 0 },
+      { tier: 'anthropic', llm_calls: 1, input_tokens: 0, output_tokens: 0, turns: 0 },
+    ])
+    expect(folded.selfDeployedCallShare).toBe(0.75)
   })
 
   it('reports null, not 0, when nothing has run today', () => {
     // 0% is a measurement ("none of today's calls were ours"); null is the
     // absence of one. The UI renders them differently for that reason.
-    expect(foldUsageRows([]).verdaCallShare).toBeNull()
+    expect(foldUsageRows([]).selfDeployedCallShare).toBeNull()
     expect(foldUsageRows([]).totalTokens).toBe(0)
   })
 
@@ -102,13 +117,13 @@ describe('foldUsageRows', () => {
       { tier: 'future-tier', llm_calls: 4, input_tokens: 10, output_tokens: 0, turns: 0 },
     ])
     expect(folded.llmCalls).toBe(4)
-    expect(folded.verdaCallShare).toBe(0)
+    expect(folded.selfDeployedCallShare).toBe(0)
   })
 })
 
 describe('addUsage', () => {
   const delta = {
-    tier: 'verda' as const,
+    tier: 'self_deployed' as const,
     llmCalls: 2,
     inputTokens: 300,
     outputTokens: 40,
@@ -121,7 +136,7 @@ describe('addUsage', () => {
 
     expect(sql).toContain('INSERT INTO usage_counters')
     expect(sql).toContain('ON CONFLICT (day, tier) DO UPDATE')
-    expect(params).toEqual(['2026-08-25', 'verda', 2, 300, 40, 1])
+    expect(params).toEqual(['2026-08-25', 'self_deployed', 2, 300, 40, 1])
   })
 
   it('ADDS to the existing row rather than replacing it', async () => {
@@ -144,7 +159,15 @@ describe('addUsage', () => {
 describe('getUsageToday', () => {
   it('reads only today’s rows, by day', async () => {
     query.mockResolvedValue({
-      rows: [{ tier: 'verda', llm_calls: '1', input_tokens: '9', output_tokens: '1', turns: '1' }],
+      rows: [
+        {
+          tier: 'self_deployed',
+          llm_calls: '1',
+          input_tokens: '9',
+          output_tokens: '1',
+          turns: '1',
+        },
+      ],
     })
     const usage = await getUsageToday(Date.UTC(2026, 7, 25, 3, 0, 0))
     const { sql, params } = lastRealQuery()

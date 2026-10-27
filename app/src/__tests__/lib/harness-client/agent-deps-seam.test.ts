@@ -62,7 +62,9 @@ const createRedisBackend = vi.fn(() => ({
 }))
 // The config parameter is declared so `mock.calls[0][0]` is typed: the tenant
 // assertion below reads the bag the adapter built, not just that it was called.
-const withSandbox = vi.fn((_config: { tenantId?: unknown; skills?: unknown }) => (p: unknown) => p)
+const withSandbox = vi.fn(
+  (_config: { tenantId?: unknown; skills?: unknown; lazy?: unknown }) => (p: unknown) => p,
+)
 const enrichNeo4jResult = vi.fn()
 // The skills resolver (#415) is observed at its seam: what matters here is
 // WHO it is asked for, not what the database holds.
@@ -77,7 +79,7 @@ vi.mock('../../../lib/harness-client/neo4j-enricher.server', () => ({ enrichNeo4
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation: vi.fn(),
   saveConversation: vi.fn(),
-  deleteConversation: vi.fn(),
+  deleteConversations: vi.fn(),
   deriveTitle: vi.fn(),
   updateConversationTitle: vi.fn(),
 }))
@@ -91,6 +93,8 @@ const toolsSpy = vi.spyOn(await import('@hames-ai/harness-patterns/tools.server'
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
 const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
+const { createDecisionDocuments } =
+  await import('../../../lib/harness-client/decision-documents.server')
 
 interface Pattern {
   name: string
@@ -143,11 +147,24 @@ describe('the bag the composition root supplies is the bag the moved factories r
     expect(bag.toolNamespaces).toBe(mcpNamespace)
     expect(bag.createRedisBackend).toBe(createRedisBackend)
     expect(bag.enrichNeo4jResult).toBe(enrichNeo4jResult)
+    // The Decide step's document source (#507) is the app's tier-aware one.
+    expect(bag.createDecisionDocuments).toBe(createDecisionDocuments)
     // `withSandbox` rides the app adapter (the narrowing onto the app's own
     // config type), so its identity is the adapter's — asserted by delegation:
     expect(typeof bag.withSandbox).toBe('function')
     bag.withSandbox!({ id: 'x' })(undefined as never)
     expect(withSandbox).toHaveBeenCalledWith(expect.objectContaining({ id: 'x' }))
+  })
+
+  // An agent that asks for a lazy sandbox must get one: the adapter used to narrow
+  // the attach config field by field, and a dropped `lazy` would boot every
+  // sandbox agent's container at turn entry again, silently.
+  it('forwards the attach config’s lazy flag, and leaves it unset when absent', () => {
+    const bag = agentDeps()
+    bag.withSandbox!({ id: 'x', lazy: true })(undefined as never)
+    expect(withSandbox.mock.calls.at(-1)![0]).toMatchObject({ lazy: true })
+    bag.withSandbox!({ id: 'x' })(undefined as never)
+    expect(withSandbox.mock.calls.at(-1)![0].lazy).toBeUndefined()
   })
 
   // The agent-path tenant source (docs/plan/sandbox.md → "Tenant identity
@@ -230,4 +247,24 @@ describe('the bag the composition root supplies is the bag the moved factories r
     })
     expect(resolveSandboxSkills).toHaveBeenLastCalledWith('owner-1', { includeGlobal: true })
   })
+})
+
+// Advertisement follows the real composition-root policy, not a test-only flag.
+// The embedder half is the shared predicate (boundary guards, ruling W).
+// MUTATION: compare with 'openrouter' again in `graphFileIngestEnabled`: the
+// unregistered `other` row turns true.
+it.each([
+  ['private', 'local', true],
+  ['', 'local', false],
+  ['private', 'openrouter', false],
+  ['private', 'other', false],
+  ['PRIVATE', 'local', false],
+])('P4 host capability: policy %s, embedder %s => %s', (policy, embedder, expected) => {
+  vi.stubEnv('INFERENCE_TIERS', policy)
+  vi.stubEnv('EMBEDDINGS_PROVIDER', embedder)
+  try {
+    expect(agentDeps().graphFileIngest).toBe(expected)
+  } finally {
+    vi.unstubAllEnvs()
+  }
 })

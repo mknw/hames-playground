@@ -255,10 +255,33 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server@sha256:33868c035b21dc63f7c60b7438774283fd99215bc319114eb03de5df4ce7cd6b
     profiles: ["app"]
     restart: unless-stopped
+    # Snapshot and verify even on restart or a direct compose up. The host
+    # bind can change despite :ro; only the private copy is ever loaded.
+    # $$ defers expansion to the container shell.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        # The launch seam owns -m; command overrides must not reopen /models.
+        for arg do
+          case "$$arg" in -m|--model|--model=*) exit 1 ;; esac
+        done
+        . /models/embedder.lock
+        source=/models/$$filename
+        [ ! -L "$$source" ] && [ -f "$$source" ] || exit 1
+        # A restart reuses the container filesystem: discard the old copy.
+        rm -rf /tmp/embedder-verified
+        mkdir -m 700 /tmp/embedder-verified
+        snapshot=/tmp/embedder-verified/model.gguf
+        dd if="$$source" of="$$snapshot" iflag=nofollow,nonblock status=none
+        chmod 400 "$$snapshot"
+        printf '%s  %s\n' "$$sha256" "$$snapshot" | sha256sum -c -
+        exec /app/llama-server -m "$$snapshot" "$$@"
+      - --
     command:
       - --embedding
-      - -m
-      - /models/Qwen3-Embedding-0.6B-Q8_0.gguf
+      - --n-gpu-layers
+      - "0"
       - --host
       - 0.0.0.0
       - --port
@@ -328,6 +351,7 @@ services:
       # suffix is required: `/embeddings` is appended verbatim by both the
       # Data Stash client and the memory wake's probe.
       - EMBEDDINGS_LOCAL_URL=http://embedder:8090/v1
+      - SANDBOX_ENVIRONMENT=local
     extra_hosts:
       # Linux hosts need this mapping spelled out; Docker Desktop/colima provide
       # host.docker.internal anyway and ignore it. Kept for the one thing that

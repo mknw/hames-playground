@@ -18,10 +18,10 @@ it.each([
     const preflight = /if \(live\) \{([\s\S]*?)\n {2}\} else \{/.exec(run())?.[1]
     expect(preflight).toBeDefined()
     const deployed = [
-      'VERDA_INFERENCE_ENDPOINT=https://verda.example.invalid/v1',
+      'LARGE_LLM_BASE_URL=https://self_deployed.example.invalid/v1',
       'SMALL_LLM_BASE_URL=https://small.example.invalid/v1',
       'SMALL_LLM_DECISIONS_URL=https://small.example.invalid/v1/systemone',
-      'VERDA_INFERENCE_API_KEY=synthetic',
+      'LARGE_LLM_API_KEY=synthetic',
       'SMALL_LLM_API_KEY=synthetic',
     ].join('\n')
     expect(() =>
@@ -34,6 +34,29 @@ it.each([
     ).toThrow(error)
   },
 )
+it('lets the hermetic fixture pick the scripted route by its key, not by a description that mentions it', () => {
+  // Execute only the real selection block (no server, no import: src/ may not import evals/).
+  // #689's read-documents wording contains "answer", the default route, and sits before it.
+  const block = /(const described = [\s\S]*?)\n\s*if \(!chosen\)/.exec(
+    read('evals/general-next/fixture-inference.ts'),
+  )?.[1]
+  expect(block).toBeDefined()
+  // The block is TypeScript; strip its one cast so the VM can run it.
+  const js = block!.replace(/\(question as \{[^}]*\}\)/, 'question')
+  const criteria = {
+    'office-data': 'Run code over uploaded files',
+    'info-retrieval':
+      'Look things up... it cannot open files uploaded to this conversation (that is read-documents)',
+    'read-documents': 'Use it when the answer needs text quoted from such a file',
+    answer: 'Reply directly',
+  }
+  const pick = (route: string) =>
+    runInNewContext(`${js}; chosen`, { question: { criteria }, route })
+  expect(pick('answer')).toBe('answer')
+  expect(pick('read-documents')).toBe('read-documents')
+  // A route with no key of its own selects nothing; the fixture's throw then fails closed.
+  expect(pick('quoted')).toBeUndefined()
+})
 it('awaits production wake after starting the scenario clock, fails and stops without fallback', () => {
   const s = run()
   expect(s.indexOf('started = Date.now()')).toBeLessThan(
@@ -41,7 +64,7 @@ it('awaits production wake after starting the scenario clock, fails and stops wi
   )
   expect(s.indexOf('await ensurePrivateTierAwake()')).toBeLessThan(s.indexOf('await driver.run('))
   expect(s).toMatch(
-    /catch\s*\{\s*budget.reason = 'VERDA_WAKE_FAILED'\s*results.push\(\{[^}]*status: 'fail'[^}]*VERDA_WAKE_FAILED[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
+    /catch\s*(?:\(err\)\s*)?\{\s*const reason = wakeFailureReason\(err\)\s*budget.reason = reason\s*(?:wakeDetail = describeWakeFailure\(err\)\s*)?results.push\(\{[^}]*status: 'fail'[^}]*error: reason[^}]*\}\)\s*tick\(\)\s*stop\(\)/,
   )
 })
 it('poisons after dotenv loading and before any inference configuration', () => {
@@ -71,11 +94,18 @@ it('connects the observer stop to synchronous exit, and checks wall-clock spend 
     /setInterval\(\(\) => \{\s*tick\(\)\s*if \(budget.stopped\) stop\(\)\s*\}, 100\)/,
   )
 })
+// The report is what the flip gate reads: the frozen general baseline has to ride in it.
+// MUTATION: `generalBaselineRecorded: undefined` in run.ts reddens this.
+it('carries the recorded general baseline in the report', () => {
+  expect(run()).toContain('generalBaselineRecorded: GENERAL_BASELINE')
+})
 it('uses live production metadata, records refusing writes, and never returns a precalculated total', () => {
   const driver = read('evals/general-next/driver.ts')
   expect(run()).toContain('productionCatalog(')
-  expect(run()).toContain('createDriver(fake, live, liveCatalog)')
-  expect(driver).toMatch(/const descriptions = live\s*\?\s*Object.keys\(NAMESPACES\)/)
+  expect(run()).toContain('createDriver(fake, live, liveCatalog, agents)')
+  expect(driver).toMatch(
+    /const descriptions = live\s*\?\s*liveDescriptions\(\s*Object.keys\(NAMESPACES\)/,
+  )
   expect(driver).toContain("write_neo4j_cypher: 'neo4j'")
   expect(driver).toContain("name !== 'write_neo4j_cypher'")
   expect(driver).toContain('trace?.tools.push({ name, args, success, turn })')
@@ -105,7 +135,7 @@ it('uses live production metadata, records refusing writes, and never returns a 
     expect(catalog).toMatch(new RegExp(`${key}: \\{`))
   }
 })
-it('keeps 17 scenarios, realistic messages, a runnable must multi-route case, and an explicit proof per scenario', () => {
+it('keeps 17 executable scenarios, 18 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),
   )
@@ -148,7 +178,7 @@ it('keeps 17 scenarios, realistic messages, a runnable must multi-route case, an
     for (const fact of facts) expect(answer).toContain(`'${fact}'`)
   }
   const catalogue = read('evals/general-next/SCENARIOS.md')
-  expect(catalogue.match(/A live pass proves:/g)).toHaveLength(17)
+  expect(catalogue.match(/A live pass proves:/g)).toHaveLength(18)
   expect(catalogue).toContain('Rollout criterion → evidence map')
   expect(catalogue).toContain('candidate only:')
   expect(read('evals/general-next/README.md')).not.toContain('/Users/')
@@ -157,11 +187,19 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
   const s = run()
   expect(s).toContain('flipGate: flipGate(')
   expect(s).toContain('budget.beginInfrastructure(active, started, [')
-  expect(s).toContain('seconds: verdaScaledownSeconds()')
+  // The large box's lines are conditional: dropped while the route switch
+  // sends the 27B roles to OpenRouter — there is no GPU to bill.
+  expect(s).toContain('seconds: largeScaledownSeconds()')
   expect(s).toContain('seconds: smallScaledownSeconds()')
-  expect(s).toContain('budget.infrastructure(active, Date.now() - started, verdaRate + smallRate)')
-  expect(s).toContain('floorHourlyRate(rates.verdaEurPerHour(), DEFAULT_VERDA_EUR_PER_HOUR)')
+  expect(s).toContain('openRouterLarge ? smallRate : largeRate + smallRate')
+  expect(s).toContain('...(openRouterLarge')
+  expect(s).toMatch(
+    /floorHourlyRate\(\s*rates\.largeEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
+  )
   expect(s).toContain('floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)')
+  // The route switch is read at the seam, before the budget exists.
+  expect(s.indexOf('largeOnOpenRouter()')).toBeGreaterThan(s.indexOf('clients.assertInferenceTier'))
+  expect(s.indexOf('largeOnOpenRouter()')).toBeLessThan(s.indexOf('new SpendBudget('))
   expect(read('scripts/release-check.ts')).toContain('eval:general-next --live')
   expect(read('../docs/plan/decision-loop-agent.md')).toContain(
     'on the private tier only (owner amendment, 2026-10-15; #507 W4)',
@@ -172,4 +210,29 @@ it('writes the screen subtotal beside every scenario row', () => {
 })
 it('marks hermetic reports with the vacuous-pass caveat', () => {
   expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)
+})
+it('captures decisions and controller outputs only behind the env flag, beside the gitignored report', () => {
+  const s = run()
+  // Off by default: the log exists only when the flag says so, and the report names the file only then.
+  expect(s).toMatch(
+    /const capture = captureEnabled\(process\.env\) \? new CaptureLog\(\) : undefined/,
+  )
+  expect(s).toContain('captureFile: capture ? captureFile : undefined')
+  // The capture file sits next to the report, inside evals/reports, which is gitignored.
+  expect(s).toContain("const captureFile = file.replace(/\\.json$/, '-capture.json')")
+  expect(read('.gitignore')).toMatch(/^evals\/reports\/\*$/m)
+  // Written with every checkpoint of the report, so an interrupted run keeps what it saw.
+  const write = /const write = \(\) => \{[\s\S]*?\n {2}\}\n {2}const tick/.exec(s)?.[0]
+  expect(write).toContain(
+    "if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\\n')",
+  )
+  // Fed from the graded trace, with the verdict that widens controller capture to every call.
+  expect(s).toMatch(
+    /const status = checks\.length > 0 && checks\.every\(\(c\) => c\.pass\) \? 'pass' : 'fail'\s*capture\?\.add\(active, trace, status === 'fail'\)\s*results\.push\(/,
+  )
+  expect(s.indexOf('grade(job.scenario')).toBeLessThan(s.indexOf('capture?.add('))
+  // A scenario that throws before grading still leaves a row, so a gap is never read as "no decisions".
+  expect(s).toMatch(
+    /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
+  )
 })

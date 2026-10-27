@@ -39,12 +39,18 @@ const claimConversation = vi.fn<
 const saveConversation = vi.fn<(row: Record<string, unknown>) => Promise<string>>(
   async () => 'v-saved',
 )
-const deleteConversation = vi.fn<(id: string, userId: string) => Promise<void>>(async () => {})
+const deleteConversations = vi.fn<(ids: string[], userId: string) => Promise<string[]>>(
+  async (ids) => ids,
+)
+const releaseDeletedSessions = vi.fn<(ids: readonly string[], userId: string) => Promise<void>>(
+  async () => {},
+)
+vi.mock('../../../lib/stash/release.server', () => ({ releaseDeletedSessions }))
 vi.mock('../../../lib/db/conversations.server', () => ({
   loadConversation,
   claimConversation,
   saveConversation,
-  deleteConversation,
+  deleteConversations,
   restoreConversationPaused,
   deriveTitle: (s: string) => (s ? s.slice(0, 12) : null),
 }))
@@ -65,6 +71,7 @@ const {
   claimSession,
   saveSession,
   deleteSession,
+  deleteSessions,
   hasPendingApproval,
 } = await import('../../../lib/harness-client/session.server')
 
@@ -106,7 +113,7 @@ describe('pattern cache', () => {
   })
 
   it('skips the cache when the build called doNotCachePatterns', async () => {
-    // A degraded build (e.g. the general agent's graph-schema fetch failing)
+    // A degraded build (e.g. an agent's graph-schema fetch failing)
     // is usable now but must not be frozen into the session — an eviction from
     // inside createPatterns would be overwritten by the write that follows it.
     createPatterns.mockImplementationOnce(async (sessionId: string) => {
@@ -287,7 +294,7 @@ describe('saveSession — title + status lifting', () => {
     const ctx = createContext('Explain the graph schema please', undefined, 'sess-a')
     const written = await saveSession('sess-a', 'u1', 'known', serializeContext(ctx), {
       version: 'v-7',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
     })
 
     expect(saveConversation).toHaveBeenCalledWith({
@@ -299,7 +306,7 @@ describe('saveSession — title + status lifting', () => {
       // The harness never flips a successful run to 'done' — a persisted
       // 'running' means "completed, never flipped".
       status: 'done',
-      inferenceTier: 'verda',
+      inferenceTier: 'self_deployed',
       // The save names the version the turn's claim holds…
       version: 'v-7',
     })
@@ -357,9 +364,42 @@ describe('deleteSession', () => {
     const built = await getOrBuildPatterns('del-1', 'known')
     await deleteSession('del-1', 'u1')
 
-    expect(deleteConversation).toHaveBeenCalledWith('del-1', 'u1')
+    expect(deleteConversations).toHaveBeenCalledWith(['del-1'], 'u1')
     const rebuilt = await getOrBuildPatterns('del-1', 'known')
     expect(rebuilt).not.toBe(built)
+  })
+
+  it('releases exactly the ids the database confirmed deleted, for the deleting user', async () => {
+    deleteConversations.mockResolvedValueOnce(['a'])
+    expect(await deleteSessions(['a', 'b'], 'u1')).toEqual(['a'])
+    expect(deleteConversations).toHaveBeenCalledWith(['a', 'b'], 'u1')
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
+  })
+
+  it('releases the stash after the delete has returned, not before', async () => {
+    const order: string[] = []
+    deleteConversations.mockImplementationOnce(async (ids) => {
+      order.push('delete')
+      return ids
+    })
+    releaseDeletedSessions.mockImplementationOnce(async () => {
+      order.push('release')
+    })
+    await deleteSession('del-3', 'u1')
+    expect(order).toEqual(['delete', 'release'])
+  })
+
+  it('resolves while the release is still pending', async () => {
+    releaseDeletedSessions.mockImplementationOnce(() => new Promise<void>(() => {}))
+    // MUTATION: `await` the release in `deleteSessions` → the delete never resolves (timeout).
+    await expect(deleteSessions(['a'], 'u1')).resolves.toEqual(['a'])
+    expect(releaseDeletedSessions).toHaveBeenCalledWith(['a'], 'u1')
+  })
+
+  it('does not release anything when the delete itself fails', async () => {
+    deleteConversations.mockRejectedValueOnce(new Error('rolled back'))
+    await expect(deleteSession('del-4', 'u1')).rejects.toThrow('rolled back')
+    expect(releaseDeletedSessions).not.toHaveBeenCalled()
   })
 
   it('clears a pending uncacheable flag for the deleted session', async () => {
@@ -462,7 +502,7 @@ it('claimSession reconciles committed memory sources without changing the claim 
   const sources = vi
     .spyOn(repo, 'listMemorySourcesForConversation')
     .mockResolvedValue([
-      { eventId: 'source-input', ordinal: 0, memoryId: 'surviving-memory', tier: 'verda' },
+      { eventId: 'source-input', ordinal: 0, memoryId: 'surviving-memory', tier: 'self_deployed' },
     ])
   const store = vi.spyOn(repo, 'createMemoryDbStore').mockReturnValue({
     transaction: async (fn: (tx: never) => Promise<unknown>) =>

@@ -60,7 +60,7 @@ before the first `docker compose up` on a machine that already has the stack.
   upstream releases cannot run this stack (#417); the comment on the service in
   `docker-compose.yaml` says why, and what a bump needs first
 - **Ports**: 127.0.0.1:8811:8811
-- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, memory, redis, playwright. None reaches Postgres: agents get no database access (#412), so the gateway is given no Postgres credential
+- **MCP Servers**: neo4j-cypher, fetch, web_search, context7, rust-mcp-filesystem, redis, playwright. None reaches Postgres: agents get no database access (#412), so the gateway is given no Postgres credential
 - **Transport**: streaming
 - **Config**: reads the RENDERED `/mcp/rendered/config.yaml`, written by the
   one-shot `mcp-config` service from `configs/mcp-config.yaml` with the root
@@ -242,7 +242,6 @@ All MCP configuration files are located in the `configs/` directory:
    - **web_search**: DuckDuckGo search
    - **context7**: Library documentation lookup
    - **rust-mcp-filesystem**: File system operations
-   - **memory**: Knowledge graph memory
    - **redis**: Redis operations (connects to redis container)
    - **playwright**: browser automation, for development and E2E only
    - Uses SHA256 digests for image references (e.g., `mcp/fetch@sha256:...`)

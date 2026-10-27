@@ -12,7 +12,6 @@ export {
   isEdgeElement,
   isNodeElement,
   isNeo4jGraphResult,
-  isMemoryGraphResult,
 } from './graph-extractor'
 export {
   extractReferences,
@@ -21,4 +20,4 @@ export {
 } from './reference-extractor'
 export { errorBubble, replayMessages, warningBubble, type ReplayedMessage } from './replay'
 export type { GraphElement } from './types'
-export type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from './types'
+export type { AgentData, AgentDefinition, AgentDeps, AgentGuards, SandboxAttach } from './types'

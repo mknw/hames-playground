@@ -23,8 +23,10 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   DecisionMadeEventData,
+  ModelCallEventData,
   MemoryRecalledEventData,
   MemoryWrittenEventData,
+  PlanCreatedEventData,
 } from '../types'
 
 assertServerOnImport()
@@ -547,6 +549,16 @@ function formatEventData(event: ContextEvent): string {
       const base = `${data.tool}: ${JSON.stringify(data.result)}`
       return data.summary ? `${base}\n[Summary: ${data.summary}]` : base
     }
+    case 'plan_created': {
+      // The full trace is observability-only (SD-1/SD-3); only the plan
+      // text and structural fields belong in the LLM-facing event view.
+      const data = event.data as PlanCreatedEventData
+      return JSON.stringify({
+        skipped: data.skipped,
+        n_steps: data.plan?.n_steps,
+        plan: data.plan?.plan,
+      })
+    }
     case 'content_sanitized': {
       // METADATA ONLY — never `event.data`. `findings[].match` holds the
       // injection verbatim, so falling through to the default branch below
@@ -623,6 +635,22 @@ function formatEventData(event: ContextEvent): string {
       const data = event.data as MemoryWrittenEventData
       return `memory ${data.action}: ${data.kind}`
     }
+    case 'model_call': {
+      // METADATA ONLY — the role and a label for what the call read. The call's
+      // own record (`llmCall`) is never rendered into an LLM-facing view, and a
+      // screen call read the untrusted content itself (SD-3).
+      const data = event.data as ModelCallEventData
+      return `${data.role} call${data.source ? `: ${data.source}` : ''}`
+    }
+    case 'egress_audit':
+      // NOTHING from the payload: `spans` are the roster's matches (text that
+      // names a person) and `hosts` are labels the request's author chose. The
+      // event is for a human auditing the egress gate, never for a model.
+      return 'an outgoing request was checked and sent'
+    case 'egress_refused':
+      // METADATA ONLY, and none of it: the controller already read the fixed
+      // refusal text in its own turn log; a later prompt needs only that one was.
+      return 'an outgoing request was refused'
     case 'approval_request':
     case 'approval_response':
       // Legacy (#433, F9): superseded by hitl_*, and never read by readHitl.

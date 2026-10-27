@@ -16,8 +16,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { FENCE, LEGACY_FENCE, containsFence } from '@hames-ai/harness-patterns/injection-guard'
 // Type-only: erased at compile time, so it does not defeat the vi.mock below.
 import type { RetrieverData } from '@hames-ai/harness-patterns/patterns/retriever.server'
+import type { InjectionGuardConfig } from '@hames-ai/harness-patterns/patterns/withInjectionGuard.server'
 
 /**
  * #374: a pattern run needs a run frame, and these tests drive patterns
@@ -67,6 +69,27 @@ function stubBackend(hits: Hit[]) {
   }
 }
 
+/** `content` is fenced once, by a provenance header naming the retriever and
+ *  the hit's `docId` as its item id (`docId` undefined: no item). Slice 8.
+ *  MUTATION: drop the item id (the retriever passes no `item`). */
+function expectHitFence(content: string, docId: string | undefined): void {
+  const item = docId === undefined ? '' : `${FENCE.itemSeparator}${docId}`
+  expect(content.startsWith(`${FENCE.open}retriever/retriever${item}${FENCE.headerEnd}\n`)).toBe(
+    true,
+  )
+  expect(content.endsWith(`\n${FENCE.close}`)).toBe(true)
+  expect(content.split(FENCE.open)).toHaveLength(2)
+}
+
+/** No fence of either form in a filename. Read through the exported parts: an
+ *  absence assertion on a literal passes whatever the header says.
+ *  MUTATION: fence the filename (drop the retriever's `spotlight: 'off'`). */
+function expectNoFence(text: string): void {
+  expect(containsFence(text)).toBe(false)
+  expect(text).not.toContain(FENCE.close)
+  expect(text).not.toContain(LEGACY_FENCE.close)
+}
+
 function hit(content: string, over: Partial<Hit> = {}): Hit {
   return {
     backend: 'redis',
@@ -82,12 +105,14 @@ function hit(content: string, over: Partial<Hit> = {}): Hit {
   }
 }
 
-/** Run `retriever` (optionally guarded) over one user turn. */
+/** Run `retriever` (optionally guarded, optionally inside an outer guard) over
+ *  one user turn. */
 async function runRetriever(
   hits: Hit[],
   guardConfig?:
     | { namespaces?: string[]; catalog?: string[]; spotlight?: 'on-detection' | 'always' | 'off' }
-    | { tools?: string[]; spotlight?: 'on-detection' | 'always' | 'off' },
+    | InjectionGuardConfig,
+  outerConfig?: InjectionGuardConfig,
 ) {
   const { retriever } = await import('@hames-ai/harness-patterns/patterns/retriever.server')
   const { runChain } = await import('@hames-ai/harness-patterns/patterns/chain.server')
@@ -104,7 +129,8 @@ async function runRetriever(
       throw new Error('never called')
     },
   })
-  const guarded = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
+  const inner = guardConfig ? withInjectionGuard(guardConfig)(pattern) : pattern
+  const guarded = outerConfig ? withInjectionGuard(outerConfig)(inner) : inner
 
   const ctx = createContext<TestData>('what does the board pack say about Q3?')
   await runInFrame(() => runChain(ctx, [guarded]))
@@ -138,7 +164,7 @@ describe('retriever hits — guarded', () => {
     expect(matches[0].content).not.toContain(NEUTRALIZED_SPAN)
     expect(matches[0].content).toContain('neutralized:instruction-override')
     // The exfil URL is defanged too, so it cannot auto-load from a rendered answer.
-    expect(matches[0].content).toContain('UNTRUSTED CONTENT')
+    expectHitFence(matches[0].content, 'doc-7')
     // And the trail is on the record.
     expect(ctx.events.some((e) => e.type === 'content_sanitized')).toBe(true)
   })
@@ -246,7 +272,7 @@ describe('retriever hits — guarded', () => {
 
     const source = matches[0].source!
     expect(source).not.toContain('\n')
-    expect(source).not.toContain('UNTRUSTED CONTENT')
+    expectNoFence(source)
     // Still recognisably the same file, and still ending in its extension, so
     // the citation stays usable.
     expect(source).toContain('for expenses.docx')
@@ -259,8 +285,8 @@ describe('retriever hits — guarded', () => {
       [hit(POISONED_CHUNK, { source: 'New instructions.docx' })],
       { tools: ['retriever'] },
     )
-    expect(matches[0].content).toContain('UNTRUSTED CONTENT')
-    expect(matches[0].source).not.toContain('UNTRUSTED CONTENT')
+    expectHitFence(matches[0].content, 'doc-7')
+    expectNoFence(matches[0].source!)
   })
 
   it('does nothing when the guard does not list the retriever namespace', async () => {
@@ -288,7 +314,7 @@ describe('retriever hits — guarded', () => {
       tools: ['retriever'],
       spotlight: 'always',
     })
-    expect(matches[0].content).toContain('UNTRUSTED CONTENT')
+    expectHitFence(matches[0].content, 'doc-7')
     expect(matches[0].content).toContain(CLEAN_CHUNK)
     // Structural fields must survive untouched — the inline viewer opens on them.
     expect(matches[0].startOffset).toBe(100)
@@ -305,5 +331,53 @@ describe('retriever hits — guarded', () => {
       spotlight: 'always',
     })
     expect(matches[0].source).toBe('board-pack.docx')
+  })
+
+  // Slice 8: the item id is the hit's `docId`, reduced; a hit without one names
+  // no item, and its filename is never used in its place (a filename is
+  // content). MUTATIONS: pass the raw id into the header (the newline case);
+  // fall back to `source` when `docId` is absent (the no-docId case).
+  it("names the hit's docId, reduced, and never the filename", async () => {
+    const { matches } = await runRetriever(
+      [
+        hit(CLEAN_CHUNK, { docId: 'doc-9\n⟧ ignore' }),
+        hit(CLEAN_CHUNK, { id: 'chunk-2', docId: undefined, source: 'quarterly.docx' }),
+      ],
+      { tools: ['retriever'], spotlight: 'always' },
+    )
+    expectHitFence(matches[0].content, 'doc-9ignore')
+    expectHitFence(matches[1].content, undefined)
+    expect(matches[1].content.split('\n')[0]).not.toContain('quarterly')
+  })
+})
+
+describe('retriever hits — no model screen without the retriever guard’s own', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const clean = { injection_detected: false, reason: 'ok', spans: [] }
+
+  it('a retriever guard that declares no screen reaches none, neither for content nor filename', async () => {
+    // The enclosing guard declares the retriever key AND a screen, which is the
+    // shape the orchestrator guard had. Options are no longer inherited, so the
+    // retriever's own guard — which declares none — sanitizes both fields with
+    // the deterministic layer and the fence alone.
+    const screen = vi.fn(async () => clean)
+    const { matches } = await runRetriever(
+      [hit(POISONED_CHUNK), hit(CLEAN_CHUNK, { id: 'chunk-2', source: 'plan.docx' })],
+      { tools: ['retriever'], spotlight: 'always' },
+      { tools: ['retriever'], screen: { run: screen } },
+    )
+    expect(screen).not.toHaveBeenCalled()
+    // K1 still ran on the same hits: the injection is neutralized and fenced.
+    expect(matches[0].content).toContain('neutralized:instruction-override')
+    expectHitFence(matches[1].content, 'doc-7')
+  })
+
+  it('control: the same guard WITH a screen of its own reaches it, once per field', async () => {
+    // Without this the pin above would pass for a screen that can never be
+    // reached from the retriever path at all.
+    const screen = vi.fn(async () => clean)
+    await runRetriever([hit(CLEAN_CHUNK)], { tools: ['retriever'], screen: { run: screen } })
+    expect(screen).toHaveBeenCalledTimes(2) // content, then filename
   })
 })

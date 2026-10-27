@@ -66,17 +66,42 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
     ).toHaveLength(1)
     expect(app.fakeGateway.toolCalls.filter((c) => c.name === 'read_neo4j_cypher')).toHaveLength(1)
     expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toHaveLength(1)
-    expect(
-      app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent').length,
-    ).toBeGreaterThan(0)
+    // Boundary guards slice 3, ruling O: a graph read is the deployment's own content,
+    // so the host's classifier keeps it to the deterministic pass and no screen runs.
+    // MUTATION: drop `classify` from general-next's info guard — a screen call appears.
+    expect(app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent')).toHaveLength(0)
     const decisions = app.fakeLlm.calls.filter(
       (c) => c.endpoint && JSON.parse(c.prompt).questions.next_step,
     )
     expect(decisions).toHaveLength(2)
     expect(decisions.every((c) => c.endpoint === 'jev')).toBe(true)
     expect(JSON.parse(decisions[1].prompt).state).toContain('42')
-    expect(JSON.parse(decisions[1].prompt).state).toContain('⟦UNTRUSTED CONTENT')
+    expect(JSON.parse(decisions[1].prompt).state).not.toContain('⟦')
     expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(true)
+  })
+
+  // FIX08 (#606 run 6, scenario 08): the decisions model read the earlier turn
+  // and the route it chose did not, so "the same count" was a guess. Layer 2's
+  // own claim, "the second turn saw the first", on the request the route's
+  // controller actually sent. MUTATION: drop `conversation` from decisionLoop's
+  // child data — turn 2's controller request no longer carries turn 1.
+  it("a follow-up's controller request carries the previous turn", async () => {
+    await app.setTier('anthropic')
+    const sessionId = newSessionId('general-next-follow-up')
+    const turn = (message: string) =>
+      app.runTurnOverSse({ sessionId, agentId: 'general-next', message })
+    expect((await turn('How many Project nodes are in the knowledge graph?')).status).toBe(200)
+    const afterFirst = app.fakeLlm.calls.length
+    const second = await turn('That failed earlier. Please try the same count again now.')
+    expect(second.status).toBe(200)
+    const controller = app.fakeLlm.calls
+      .slice(afterFirst)
+      .find((c) => c.fn === 'LoopController')?.prompt
+    expect(controller, 'turn 2 sent no LoopController request').toBeDefined()
+    expect(controller).toContain('Earlier conversation')
+    expect(controller).toContain('User: "How many Project nodes are in the knowledge graph?"')
+    expect(controller).toContain(`Assistant: "${FAKE_ANSWER_MARK}: the graph reports 42 nodes."`)
+    expect(controller).toContain('INSTRUCTIONS: That failed earlier. Please try the same count')
   })
 
   // #507 flip, review finding 1: every other scenario names its agent; this one names none, so
@@ -95,7 +120,7 @@ describe.runIf(IS_HERMETIC)('general-next conversation', () => {
   })
 
   it('P5: shows a visible error when the private decisions shim is absent', async () => {
-    await app.setTier('verda')
+    await app.setTier('self_deployed')
     const previous = process.env.SMALL_LLM_DECISIONS_URL
     delete process.env.SMALL_LLM_DECISIONS_URL
     try {

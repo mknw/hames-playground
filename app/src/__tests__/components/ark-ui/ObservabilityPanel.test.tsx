@@ -735,7 +735,7 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     const panel = openLLMRow(
       llmCall({
         provider: 'openai-generic',
-        clientName: 'VerdaQwen',
+        clientName: 'LargeQwen',
         metrics: metrics({
           attempts: 1,
           costEur: 0.0031,

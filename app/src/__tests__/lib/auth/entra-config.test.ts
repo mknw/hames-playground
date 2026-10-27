@@ -2,7 +2,7 @@
  * Entra config validation (#119). `buildEntraConfig` is pure w.r.t. its `env`
  * arg, so no `process.env` juggling.
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 // Bypass the server-only guard in the jsdom test env.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
@@ -24,6 +24,34 @@ const full = {
   AZURE_CLIENT_ID: 'cid',
   AZURE_CLIENT_SECRET: 'secret',
 }
+
+const REJECTED_SCOPES = [
+  'Calendars.Read',
+  'Mail.ReadWrite',
+  'Files.ReadWrite.All',
+  'Tasks.ReadWrite.Shared',
+  'Custom.Write',
+  'Custom.Write.All',
+  'Custom.Send',
+  'Custom.Send.Shared',
+  'Custom.SendMail',
+  'https://graph.microsoft.com/Mail.Send',
+  'mail.readWRITE',
+  'Sites.Manage.All',
+  'Sites.FullControl.All',
+  'Directory.AccessAsUser.All',
+  'sItEs.mAnAgE.aLl',
+  'https://graph.microsoft.com/.default',
+  '.default',
+  '00000003-0000-0000-c000-000000000000/.default',
+  'EWS.AccessAsUser.All',
+  'https://outlook.office365.com/EWS.AccessAsUser.All',
+  'User.Invite.All',
+  'Group.Create',
+  'Notes.Create',
+  'Unknown.Read',
+  'https://graph.microsoft.com/Mail.Read',
+]
 
 describe('isEntraConfigured', () => {
   it('is true only when all three secrets are present + non-blank', () => {
@@ -47,14 +75,64 @@ describe('buildEntraConfig', () => {
     const cfg = buildEntraConfig(full)
     // One consent must cover every connector: background runs have no user
     // present to consent later.
-    for (const s of ['User.Read', 'Mail.Read', 'Files.Read.All', 'Calendars.ReadWrite']) {
+    for (const s of [
+      'User.Read',
+      'email',
+      'Mail.Read',
+      'Mail.Send',
+      'Calendars.ReadWrite',
+      'Files.Read.All',
+      'Sites.Read.All',
+    ]) {
       expect(cfg.scopes).toContain(s)
     }
+  })
+
+  // Mutation: removing any scope, or adding Calendars.Read / any other scope, must turn red.
+  it('requests exactly the seven already-consented scopes in the default set', () => {
+    expect([...DEFAULT_GRAPH_SCOPES].sort()).toEqual([
+      'Calendars.ReadWrite',
+      'Files.Read.All',
+      'Mail.Read',
+      'Mail.Send',
+      'Sites.Read.All',
+      'User.Read',
+      'email',
+    ])
   })
 
   it('AZURE_GRAPH_SCOPES trims the set without a code change', () => {
     const cfg = buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: 'User.Read, Mail.Read' })
     expect(cfg.scopes).toEqual(['User.Read', 'Mail.Read'])
+  })
+
+  // Mutation: delete parseScopes' shared assertion; every rejected scope must fail.
+  it.each(REJECTED_SCOPES)(
+    'rejects the unapproved override %s instead of silently dropping it',
+    (scope) => {
+      expect(() =>
+        buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: `User.Read, ${scope} Mail.Read` }),
+      ).toThrow(/AZURE_GRAPH_SCOPES.*not in the consented set/)
+    },
+  )
+
+  it('compares approved scopes case-insensitively and preserves duplicates', () => {
+    expect(
+      buildEntraConfig({
+        ...full,
+        AZURE_GRAPH_SCOPES:
+          'OPENID, PROFILE\tOFFLINE_ACCESS\nuser.read, MAIL.SEND calendars.READWRITE user.read',
+      }).scopes,
+    ).toEqual(['user.read', 'MAIL.SEND', 'calendars.READWRITE', 'user.read'])
+    expect(
+      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: 'OPENID, PROFILE OFFLINE_ACCESS' }).scopes,
+    ).toEqual([...DEFAULT_GRAPH_SCOPES])
+  })
+
+  it('accepts all consented scopes in an override', () => {
+    expect(
+      buildEntraConfig({ ...full, AZURE_GRAPH_SCOPES: DEFAULT_GRAPH_SCOPES.join(', ') }).scopes,
+    ).toEqual([...DEFAULT_GRAPH_SCOPES])
   })
 
   it('accepts whitespace-separated overrides and ignores blanks', () => {
@@ -113,5 +191,30 @@ describe('buildEntraConfig', () => {
     expect(msal.auth.clientId).toBe('cid')
     expect(msal.auth.authority).toBe(`${AAD_HOST}/tid`)
     expect(msal.auth.clientSecret).toBe('secret')
+  })
+})
+
+describe('scope validation at server boot', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  // Mutation: delete the module-scope parseScopes call; this must turn red.
+  it.each(REJECTED_SCOPES)('refuses %s on import without credentials', async (scope) => {
+    vi.resetModules()
+    for (const key of ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET']) {
+      vi.stubEnv(key, '')
+    }
+    vi.stubEnv('AZURE_GRAPH_SCOPES', `User.Read ${scope}`)
+    await expect(import('../../../lib/auth/entra-config.server')).rejects.toThrow(
+      /AZURE_GRAPH_SCOPES.*not in the consented set/,
+    )
+  })
+
+  it('allows a consented override on import without credentials', async () => {
+    vi.resetModules()
+    vi.stubEnv('AZURE_GRAPH_SCOPES', 'Mail.Send Calendars.ReadWrite')
+    await expect(import('../../../lib/auth/entra-config.server')).resolves.toBeDefined()
   })
 })

@@ -5,6 +5,8 @@ export interface Check {
   detail: string
 }
 import type { SpendKey } from './spend-budget'
+import type { ArgsPredicate } from './tool-arguments'
+import type { GuardTurnCounts } from './guard-report'
 
 export interface ConversationScenario {
   id: string
@@ -14,14 +16,25 @@ export interface ConversationScenario {
   p4: boolean
   messages: string[]
   expectedTools: string[]
-  expectedArgs?: Record<string, (args: Record<string, unknown>) => boolean>
+  expectedArgs?: Record<string, ArgsPredicate>
   expectedRoutes: string[]
   answerIncludes: string[]
   artifacts: string[]
+  /** What a real run of the task leaves behind in the synthetic sandbox: the stdout its
+   * script prints and the content of each artifact. Default stdout names the saved paths. */
+  sandboxRun?: { stdout: string; files?: Record<string, string> }
+  /** A deliverable that is a transcription, not a computation: the file may be produced
+   * by `sandbox_write` to `/work/out/<name>` instead of a `sandbox_bash` run, because
+   * production promotes any file under `/work/out` at turn exit. Maps each such file to
+   * the predicate its written bytes must meet; only these files, and only this way, are
+   * credited. Absent = `sandbox_bash` is the only acceptable producer (a computation). */
+  writtenArtifacts?: Record<string, (content: string) => boolean>
   forbiddenTools: string[]
   maxIterations: number
   failFirstTurn?: boolean
   noTools?: boolean
+  /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`); absent = memory off. */
+  memory?: boolean
   turnAnswerIncludes?: string[][]
   citation?: string
   indexed?: string
@@ -29,7 +42,14 @@ export interface ConversationScenario {
 
 export interface ConversationTrace {
   turns: Array<{ response: string; status: string; events: ContextEvent[] }>
-  tools: Array<{ name: string; args: Record<string, unknown>; success: boolean; turn: number }>
+  tools: Array<{
+    name: string
+    args: Record<string, unknown>
+    success: boolean
+    turn: number
+    /** Set by the synthetic sandbox: the request, with the scripts it ran, met the scenario's predicate. */
+    valid?: boolean
+  }>
   artifacts: string[]
   indexed: string[]
   retrievals: Array<{ source: string; turn: number }>
@@ -39,6 +59,9 @@ export interface ConversationResult extends SpendKey {
   status: 'pass' | 'fail' | 'gated' | 'stopped'
   checks: Check[]
   error?: string
+  /** Per-turn guard counts (boundary guards slice 7), computed from the turn's
+   *  own events; present whenever a trace came back. */
+  guards?: GuardTurnCounts[]
 }
 
 export interface ConversationDriver {

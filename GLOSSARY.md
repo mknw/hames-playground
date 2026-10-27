@@ -45,11 +45,12 @@ somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
 uniform. See `packages/harness-patterns/run-frame.server.ts`.
 
-**Web pseudonymisation guard** — the web route's boundary over earlier results
-and outgoing tool arguments, retaining their content while replacing known
-identities with placeholders. Only the local `neo4j` and `memory`
-namespaces are exempt from the outgoing check; `context7` library lookup is
-outbound and checked like web search. See
+**Web pseudonymisation guard** — the web route's boundary over earlier
+results, retaining their content while replacing known identities with
+placeholders. It no longer checks outgoing tool arguments: the **egress gate**
+(`withEgressGate`) judges every outgoing call, on every tier, and only a
+declared local namespace (in `general-next`: `neo4j`, `graph`) is never asked
+about; `context7` library lookup is outbound and judged like web search. See
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
 **Proposal** — a question put to a person from outside a run, by a post-reply
@@ -70,8 +71,9 @@ also how its events are tagged and later queried.
 groups of capabilities: a loop over a table of _routes_ in which a decisions
 model picks the next route each time round, until it picks `answer` or the
 iteration bound is reached. What each route produced comes back as a _route
-output_ — a record built by code from the route's committed events, capped,
-sanitized as untrusted and rendered into the next decision and the next route's
+output_ — a record built by code from the route's committed events, capped
+(the loop sanitizes and screens nothing; the tool-result bodies it quotes keep
+their ingress fence) and rendered into the next decision and the next route's
 context as data, never as instructions. See
 [`docs/plan/decision-loop-agent.md`](docs/plan/decision-loop-agent.md) and
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md).
@@ -124,13 +126,14 @@ see" a configuration decision rather than a code change.
 
 **Tool namespace** — the group an MCP tool belongs to, inferred from its name and
 used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
-`filesystem`, `memory`, `redis` — plus `all`, which is every tool. There is no
+`filesystem`, `redis` — plus `all`, which is every tool. There is no
 `database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 
 **general-next** — the general agent that chooses successive groups of
-capabilities within a turn. HELD flip: it replaces `general` in the picker, is the
-agent a new chat opens with, and owns the memory opt-in, once the rollout evidence is in. See [`packages/agents/README.md`](packages/agents/README.md).
+capabilities within a turn. It replaces the removed `general` agent (stored
+`general` ids resolve to it) and is the default agent: a new chat opens on it. See
+[`packages/agents/README.md`](packages/agents/README.md).
 
 ## Storage and runtime
 
@@ -165,8 +168,8 @@ when a routine's trigger fires, its run lands as an ordinary action row marked
 `source='routine'`. See [`docs/ROUTINES.md`](docs/ROUTINES.md).
 
 **general-next Eval** — #507's conversation acceptance catalogue and opt-in runner,
-under `app/evals/general-next/`. Compares the candidate with the current `general`
-baseline on the private tier alone. Scripted inference proves wiring; live model
+under `app/evals/general-next/`. Compares the candidate with the removed `general` agent's
+recorded baseline (`general-baseline.ts`) on the private tier alone. Scripted inference proves wiring; live model
 behaviour is separate evidence. Shares one conservative USD spend ledger across
 scenarios, stops at 80% of the configured cap and reports P4-gated cases explicitly.
 See [the runner guide](app/evals/general-next/README.md).

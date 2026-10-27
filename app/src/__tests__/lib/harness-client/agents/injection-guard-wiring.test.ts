@@ -108,11 +108,3 @@ describe('agents that consume untrusted content are guarded', () => {
     })
   })
 })
-
-describe('agents deliberately NOT guarded (yet)', () => {
-  it('general: left to the sibling general-agent lane (#206) to wire at its seam', async () => {
-    const { generalAgent } = await import('@hames-ai/agents/agents/general.server')
-    const patterns = (await generalAgent.createPatterns('s', testAgentDeps)) as Pattern[]
-    expect(guardOf(patterns)).toBeUndefined()
-  })
-})

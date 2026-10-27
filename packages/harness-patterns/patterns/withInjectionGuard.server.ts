@@ -30,25 +30,31 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { createEvent } from '../context.server'
+import { createEvent, createModelCallEvent, redactCall } from '../context.server'
 import { emitLive } from '../live-event-context.server'
-import { amendRunFrame, currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
 import {
   applyScreenVerdict,
   redactReport,
   sanitizeUntrusted,
-  strictestSpotlight,
+  SCREEN_WITHHELD,
   type ActiveInjectionGuard,
+  type IngressClass,
+  type IngressClassifier,
   type InjectionGuardOptions,
-  type InjectionRule,
+  type InjectionScreenConfig,
   type SanitizeReport,
+  type ScreenMode,
 } from '../injection-guard'
 import { inferServer } from '../tools.server'
 import { isDegradedToolSurface } from '../gateway-health.server'
 import type {
+  ByTier,
   ConfiguredPattern,
   ContentSanitizedEventData,
   ContextEvent,
+  DecisionMadeEventData,
+  LLMCallRecord,
   PatternScope,
 } from '../types'
 
@@ -110,18 +116,19 @@ export function createInjectionGuard(
   emit: (event: ContextEvent) => void,
   patternId: string,
 ): ActiveInjectionGuard {
-  // UNION with any outer guard, never shadow it. ALS nesting would otherwise
-  // let an inner `withInjectionGuard({ namespaces: ['graph'] })` silently
-  // REMOVE the outer wrapper's `web` protection for its whole subtree — the one
-  // composition mistake a security control must not permit. Widening is always
-  // safe; narrowing is what needs an explicit decision, and there is no way to
-  // ask for it (deliberately).
+  // COVERAGE unions with any outer guard, never shadows it. ALS nesting would
+  // otherwise let an inner `withInjectionGuard({ namespaces: ['graph'] })`
+  // silently REMOVE the outer wrapper's `web` protection for its whole subtree —
+  // the one composition mistake a security control must not permit. Widening is
+  // always safe; narrowing is what needs an explicit decision, and there is no
+  // way to ask for it (deliberately). OPTIONS do not union: a tool is sanitized
+  // with the options of the guard that DECLARED it (see `optionsFor` below).
   const outer = currentRunFrame()?.guard
   // A guard that declares neither namespaces nor tools covers nothing and
   // would read as protection while doing none (#242 item 4). Omission is not
   // indistinguishable from decision: `namespaces: []` is the explicit line
-  // that says "this agent trusts everything it calls", and it still unions
-  // with any outer guard (SD-5).
+  // that says "this agent trusts everything it calls", and its coverage still
+  // unions with any outer guard (SD-5).
   if (
     config.namespaces === undefined &&
     (config.tools === undefined || config.tools.length === 0)
@@ -149,44 +156,156 @@ export function createInjectionGuard(
     refuseUnmatchableNamespaces(namespaces, config.catalog)
   }
 
+  const declares = (tool: string): boolean => tools.has(tool) || namespaces.has(inferServer(tool))
   const isUntrusted = (tool: string): boolean =>
-    tools.has(tool) || namespaces.has(inferServer(tool)) || (outer?.isUntrusted(tool) ?? false)
+    declares(tool) || (outer?.isUntrusted(tool) ?? false)
 
-  // The SANITIZER options are unioned on exactly the same charter as
-  // `isUntrusted` above — and unioning the namespaces alone was not enough.
-  // Once an inner guard widens the boundary, its `config` is what sanitizes the
-  // OUTER guard's namespaces too, so an inner `disableRules` or a weaker
-  // `spotlight` re-opened a hole for tools the inner wrapper never mentioned.
-  const options = unionOptions(config, outer?.options)
+  // A tool is sanitized with the options of the INNERMOST guard that declares
+  // it. A guard that does not declare the tool hands the question outward, so
+  // the options that govern an outer guard's namespace are always that guard's
+  // own: an inner `disableRules`, a weaker `spotlight` or a missing `screen`
+  // cannot reach a tool the inner wrapper never mentioned, and an outer
+  // `screen` is not inherited by a tool the inner guard declares. Each guard's
+  // declaration is therefore readable where the guard is written. The fallback
+  // is this guard's own options for a tool nobody declares, which `sanitize`
+  // never asks about.
+  const optionsFor = (tool: string): InjectionGuardOptions =>
+    declares(tool) ? config : (outer?.optionsFor(tool) ?? config)
+
+  if (config.screen) refuseUnreadableScreen(config.screen, namespaces)
+
+  /** The gate's answer as a `decision_made` event in the live scope, its call
+   *  record redacted (the gate's state is the payload it read). Best effort, like
+   *  the screen's `model_call`: a recording failure never changes a verdict. */
+  const recordGateDecision = (event: DecisionMadeEventData, call?: LLMCallRecord): void => {
+    try {
+      emit(createEvent('decision_made', patternId, event, redactCall(call)))
+    } catch (recordErr) {
+      console.error(
+        '[withInjectionGuard] recording the gate decision failed; the verdict is unaffected:',
+        recordErr,
+      )
+    }
+  }
+
+  /**
+   * Whether the model screen runs on this payload, in this order:
+   *   1. an `exempt` namespace: never (ruling L), whatever else holds;
+   *   2. mode `'off'` on this call's tier: never;
+   *   3. a deterministic finding: always, with no gate call — a hit is already
+   *      a positive, and the gate would only add a way to talk the screen out;
+   *   4. an internal payload, by the declaration's classifier: never (ruling O);
+   *   5. `'always'`: always; `'shadow'`: the gate is asked and recorded, and the
+   *      screen runs whatever it said; `'gated'`: the gate decides, and a gate
+   *      that is unavailable or throws runs the screen (the safe direction).
+   *
+   * Only `'off'` and `'gated'` can skip the screen, each by its exact value. The
+   * declaration is read on every call, so a value construction never saw (a cast,
+   * a later write) fails safe: anything else runs the screen, as `'shadow'` does.
+   *
+   * A gate whose answer is not obeyed is not waited for: its call is returned
+   * as `shadowGate`, to run beside the screen and be awaited after it, so a
+   * `'shadow'` result costs the slower of the two calls rather than their sum,
+   * and the gate's decision is still recorded inside this scope. It never
+   * rejects.
+   */
+  const shouldScreen = async (
+    screen: InjectionScreenConfig,
+    p: { tool: string; namespace: string; data: unknown; report: SanitizeReport },
+  ): Promise<{ run: boolean; shadowGate?: Promise<void> }> => {
+    if (screen.exempt?.includes(p.namespace)) return { run: false }
+    const mode = resolveByTier(screen.mode ?? (screen.gate ? 'shadow' : 'always'))
+    if (mode === 'off') return { run: false }
+    if (p.report.findings.length > 0) return { run: true }
+    if (classifyIngress(screen.classify, p) === 'internal') return { run: false }
+    const gate = screen.gate
+    if (mode === 'always' || !gate) return { run: true }
+    const asked = (async () =>
+      gate({
+        tool: p.tool,
+        namespace: p.namespace,
+        content: typeof p.data === 'string' ? p.data : (JSON.stringify(p.data) ?? ''),
+        ...(mode !== 'gated' && { shadow: true }),
+        onDecision: recordGateDecision,
+      }))()
+    if (mode !== 'gated') {
+      return {
+        run: true,
+        shadowGate: asked.then(
+          () => undefined,
+          () => undefined,
+        ),
+      }
+    }
+    try {
+      return { run: (await asked).run }
+    } catch {
+      return { run: true }
+    }
+  }
 
   return {
     isUntrusted,
-    options,
+    optionsFor,
 
-    async sanitize(tool, data, overrides) {
+    async sanitize(tool, data, call) {
       if (!isUntrusted(tool)) return { data }
 
       const namespace = inferServer(tool)
+      const item = call?.item
+      const options = optionsFor(tool)
       // Per-CALL overrides still win: they are a deliberate, local decision by a
       // known call site (the retriever's `spotlight: 'off'` on a filename), not
       // an agent-level config that could silently weaken a nested boundary.
-      const effective = overrides ? { ...options, ...overrides } : options
-      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
+      const effective = { ...options, spotlight: call?.spotlight ?? options.spotlight }
+      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace, item }, effective)
 
-      // Default: a second opinion on regex-clean content. Opt-in callers can
-      // also screen the sanitized projection after findings; never resubmit or
-      // restore the original spans. Screen outages are recorded and fail open
-      // here; decisionLoop applies its fail-closed output-boundary policy.
-      if (options.screen && (report.findings.length === 0 || options.screenDespiteFindings)) {
+      // The model screen, as its declaration says (`shouldScreen`). After a
+      // deterministic finding it reads the sanitized projection, never the
+      // original spans. A screen outage is recorded on the report; the
+      // declaration's `onUnavailable` decides whether the payload stands.
+      const screen = call?.screen === false ? undefined : options.screen
+      const decided = screen
+        ? await shouldScreen(screen, { tool, namespace, data, report })
+        : { run: false }
+      if (screen && decided.run) {
         const screenInput = report.findings.length > 0 ? out : data
         try {
-          const verdict = await options.screen({
+          const verdict = await screen.run({
             tool,
             namespace,
             content: typeof screenInput === 'string' ? screenInput : JSON.stringify(screenInput),
+            // The screen's own model call, recorded as it finishes — a failed
+            // one too, since it was billed. Emitted on the live scope beside
+            // the `content_sanitized` it may lead to, so the call shows in the
+            // run's observability with the client it actually ran on. Best
+            // effort: this closure is the guard's own, so whatever `emit` throws
+            // is contained here rather than left to a screen that may not catch
+            // it — a recording failure must never become a screen outage.
+            onCall: (call) => {
+              try {
+                emit(
+                  createModelCallEvent(
+                    patternId,
+                    { role: 'screen', source: `${namespace}/${tool}` },
+                    call,
+                  ),
+                )
+              } catch (recordErr) {
+                console.error(
+                  '[withInjectionGuard] recording the screen call failed; the verdict is unaffected:',
+                  recordErr,
+                )
+              }
+            },
           })
           if (verdict.injection_detected) {
-            const screened = applyScreenVerdict(screenInput, verdict, { tool, namespace }, report)
+            const screened = applyScreenVerdict(
+              screenInput,
+              verdict,
+              { tool, namespace, item },
+              report,
+            )
             out = screened.data
             report = screened.report
           }
@@ -196,8 +315,17 @@ export function createInjectionGuard(
             screenReason: `screen unavailable: ${err instanceof Error ? err.message : String(err)}`,
             screenUnavailable: true,
           }
+          // Any value but `'pass'` withholds: one construction never saw fails
+          // safe, like the mode.
+          if (screen.onUnavailable !== undefined && screen.onUnavailable !== 'pass') {
+            out = SCREEN_WITHHELD
+            report = { ...report, neutralized: true }
+          }
         }
       }
+      // A shadow gate ran beside the screen; its decision lands before this
+      // result is returned.
+      await decided.shadowGate
 
       if (report.findings.length === 0) {
         // Nothing was DETECTED. `out` may still differ from `data` — a bare
@@ -228,6 +356,101 @@ export function createInjectionGuard(
   }
 }
 
+/**
+ * A payload's class under the declaration's classifier. No classifier: every
+ * payload is external (the library default). A throw, or any answer but
+ * `'internal'`, is external: an unknown source is never trusted by accident.
+ */
+function classifyIngress(
+  classify: IngressClassifier | undefined,
+  p: { tool: string; namespace: string; data: unknown },
+): IngressClass {
+  if (!classify) return 'external'
+  try {
+    return classify({ namespace: p.namespace, tool: p.tool, data: p.data }) === 'internal'
+      ? 'internal'
+      : 'external'
+  } catch {
+    return 'external'
+  }
+}
+
+/** The four screen modes; any other value is refused at construction. */
+const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'shadow', 'gated', 'always'])
+
+/**
+ * REFUSE a screen declaration that reads like protection and is not:
+ *
+ *  - a `run` that is not a function — every call would be a screen outage;
+ *  - a `mode` that is not one of the four, on any tier, or a per-tier map with
+ *    no own `default` (it would resolve to the map itself) — whatever it was
+ *    meant to say, the guard would act on something else;
+ *  - an `onUnavailable` other than `'pass'` or `'withhold'`;
+ *  - a mode that asks the gate (`'shadow'`, `'gated'`) on any tier, with no
+ *    gate passed — it would run as nothing anyone declared;
+ *  - an `exempt` namespace the guard does not declare — it would match nothing
+ *    while reading like a decision (#242 item 4's rule, applied here).
+ *
+ * TypeScript catches a literal typo; this catches a JavaScript caller, a cast
+ * and a value read from configuration.
+ */
+function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<string>): void {
+  if (typeof screen.run !== 'function') {
+    throw new Error(
+      `[withInjectionGuard] the screen's \`run\` is not a function, so every payload ` +
+        `would record a screen outage. Pass \`run: createInjectionScreen()\` or your own.`,
+    )
+  }
+  const { mode } = screen
+  if (typeof mode === 'object' && mode !== null && !Object.hasOwn(mode, 'default')) {
+    throw new Error(
+      `[withInjectionGuard] the screen's per-tier mode has no \`default\`, so a tier it ` +
+        `does not name would resolve to the map itself. Add \`default\`.`,
+    )
+  }
+  const modes = mode === undefined ? [] : tierValues(mode)
+  const unknown = modes.filter((m) => !SCREEN_MODES.has(m))
+  if (unknown.length > 0) {
+    throw new Error(
+      `[withInjectionGuard] the screen's mode ${JSON.stringify(unknown[0])} is not one of ` +
+        `'off', 'shadow', 'gated' or 'always'.`,
+    )
+  }
+  if (
+    screen.onUnavailable !== undefined &&
+    screen.onUnavailable !== 'pass' &&
+    screen.onUnavailable !== 'withhold'
+  ) {
+    throw new Error(
+      `[withInjectionGuard] the screen's onUnavailable ${JSON.stringify(screen.onUnavailable)} ` +
+        `is not 'pass' or 'withhold'.`,
+    )
+  }
+  if (!screen.gate && modes.some((m) => m === 'shadow' || m === 'gated')) {
+    throw new Error(
+      `[withInjectionGuard] the screen's mode asks the guard gate ('shadow' or 'gated') ` +
+        `but no gate was passed. Pass \`gate: createGuardGate(decide)\`, or declare ` +
+        `'always' or 'off'.`,
+    )
+  }
+  for (const ns of screen.exempt ?? []) {
+    if (!namespaces.has(ns)) {
+      throw new Error(
+        `[withInjectionGuard] the screen exempts namespace '${ns}', which this guard does ` +
+          `not declare. An exemption must name one of the guard's own namespaces, or it ` +
+          `exempts nothing while reading like a decision. (#242 item 4)`,
+      )
+    }
+  }
+}
+
+/** Every value a `ByTier` setting can take, whichever tier a call is on. */
+function tierValues<T>(value: ByTier<T>): T[] {
+  return typeof value === 'object' && value !== null && Object.hasOwn(value, 'default')
+    ? Object.values(value as Record<string, T>)
+    : [value as T]
+}
+
 /** Declared namespaces already reported, so a per-turn pattern build doesn't
  *  repeat the degraded-surface warning for the whole process lifetime. */
 const warnedNamespaces = new Set<string>()
@@ -254,7 +477,7 @@ const warnedNamespaces = new Set<string>()
  * 2. **Healthy catalog, nothing produces the namespace** — the string IS a
  *    fixed point (`inferServer('wikipedia') === 'wikipedia'`), yet no name in
  *    the catalog resolves to it. This is the unregistered-catalog signature:
- *    the gateway answered its 86 names and none lands in the declared
+ *    the gateway answered its 77 names and none lands in the declared
  *    namespace, because `registerToolNamespaces(mcpNamespace)` never ran.
  *    Refused, with a message naming the registration and the package that
  *    exports it.
@@ -308,43 +531,6 @@ function refuseUnmatchableNamespaces(namespaces: Set<string>, catalog: string[])
 /** Test-only: forget which namespaces have already been warned about. */
 export function __resetInjectionGuardNamespaceWarnings(): void {
   warnedNamespaces.clear()
-}
-
-/**
- * Merge a guard's own sanitizer options with the enclosing guard's, taking the
- * STRICTEST of each. Every arm exists because the loose version was a way for a
- * nested guard to weaken a boundary it did not own:
- *
- *   - `disableRules` INTERSECTS. A rule is only switched off if every guard in
- *     the nest agreed to switch it off. `disableRules` is a false-positive
- *     escape hatch for one agent's corpus; inheriting it outward would let that
- *     agent's exemption apply to the outer wrapper's namespaces.
- *   - `rules` UNION (deduped by id) — extra detection is always safe to inherit.
- *   - `spotlight` takes the strictest mode (`always` > `on-detection` > `off`).
- *   - `screen` is kept if EITHER guard has one; a nested guard cannot remove the
- *     outer wrapper's paid-for second layer. The inner one wins when both are
- *     set, since it is the more specific declaration.
- */
-function unionOptions(
-  own: InjectionGuardOptions,
-  outer: InjectionGuardOptions | undefined,
-): InjectionGuardOptions {
-  if (!outer) return own
-
-  const outerDisabled = new Set(outer.disableRules ?? [])
-  const disableRules = (own.disableRules ?? []).filter((id) => outerDisabled.has(id))
-
-  const byId = new Map<string, InjectionRule>()
-  for (const r of [...(outer.rules ?? []), ...(own.rules ?? [])]) byId.set(r.id, r)
-
-  return {
-    ...own,
-    disableRules,
-    ...(byId.size > 0 ? { rules: [...byId.values()] } : {}),
-    spotlight: strictestSpotlight(own.spotlight, outer.spotlight),
-    screen: own.screen ?? outer.screen,
-    screenDespiteFindings: own.screenDespiteFindings || outer.screenDespiteFindings,
-  }
 }
 
 function buildEvent(patternId: string, report: SanitizeReport): ContextEvent {

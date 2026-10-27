@@ -6,7 +6,8 @@ import '../../../lib/inference/config.server'
  *
  * Owner decision, 2026-10-03: running agents were never meant to have Postgres
  * access. The `database-server` catalog server ran SQL against the app's own
- * database, and `general` hands every gateway tool to its planner and its loop.
+ * database, and the `general` agent (since removed) handed every gateway tool
+ * to its planner and its loop.
  *
  * Two layers. The server is gone from the catalog and the configs, and the
  * gateway gets no Postgres credential (pinned in
@@ -30,6 +31,7 @@ import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentDefinition } from '@hames-ai/agents'
 import type { ControllerInput } from '@hames-ai/harness-patterns/types'
 import { testAgentDeps } from '../harness-client/agents/test-deps'
+import { resetTierPolicy } from '../../mocks/reset-tier-policy'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -107,10 +109,26 @@ const KEPT = [
   'search',
   'resolve-library-id',
   'get-library-docs',
-  'read_graph',
-  'create_entities',
+  // Redis and filesystem: no shipped agent holds either, so a handed list
+  // that carries them (with the rest of KEPT) is the whole gateway surface.
+  'json_get',
+  'read_text_file',
   'graph_mail_recent',
   'graph_calendar_today',
+]
+
+/** The retired shared `memory` graph's tools, every one the server offered.
+ *  Written out rather than imported, so dropping one turns this red. */
+const MEMORY_GRAPH_TOOLS = [
+  'create_entities',
+  'create_relations',
+  'add_observations',
+  'delete_entities',
+  'delete_relations',
+  'delete_observations',
+  'open_nodes',
+  'search_nodes',
+  'read_graph',
 ]
 
 /** A gateway still serving `database-server` — the regression this layer is
@@ -144,6 +162,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.resetModules()
+  resetTierPolicy()
   vi.restoreAllMocks()
 })
 
@@ -240,7 +259,7 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
     // The five registered today. A new agent lands in this list by export,
     // without an edit here.
     expect(agents.map((a) => a.id).sort()).toEqual(
-      expect.arrayContaining(['general', 'microsoft-365', 'retriever', 'sandbox', 'search']),
+      expect.arrayContaining(['general-next', 'microsoft-365', 'retriever', 'sandbox', 'search']),
     )
 
     for (const agent of agents) {
@@ -253,10 +272,67 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
           expect(tools, `${agent.id} → ${factory} holds ${name}`).not.toContain(name)
     }
 
-    // Not vacuous: `general` hands its planner and its loop the whole gateway
-    // surface, so the listing above did reach the agents.
-    const general = handed.filter((h) => h.factory === 'planner' || h.factory === 'simpleLoop')
-    expect(general.some((h) => KEPT.every((t) => h.tools.includes(t)))).toBe(true)
+    // Not vacuous: the listing above did reach the agents — their loops hold
+    // gateway tools, not an empty list.
+    const loops = handed.filter((h) => h.factory === 'planner' || h.factory === 'simpleLoop')
+    expect(loops.some((h) => h.tools.includes('read_neo4j_cypher'))).toBe(true)
+  })
+
+  // The `general` agent was the only one handed `tools.all`. Removing it is what
+  // makes this a property of the whole package rather than of one agent: every
+  // other agent takes a namespace SLICE, so a tool that slipped past the
+  // listing would reach one slice, never every loop at once. If an agent is ever
+  // handed the full surface again, this is the pin that says so.
+  //
+  // The shared `memory` graph was retired (owner, 2026-10-22): per-user memory
+  // is `withMemory` over Postgres, and the graph's tools are neither catalogued
+  // nor withheld at the listing. The only thing keeping them from an agent is
+  // that no namespace names them and no agent is handed a namespace that would.
+  // So the check runs against the REAL namespaces, with a gateway that still
+  // serves them (a stale config or an old gateway volume), and the prefixed
+  // form too.
+  //
+  // MUTATION 1: restore `general.server.ts` (planner + simpleLoop over
+  // `tools.all`) and re-export it from agents/index.ts → one handed list holds
+  // every KEPT tool and the whole-surface assertion reddens.
+  // MUTATION 2: `general-next.server.ts` `infoTools` spreads
+  // `...(tools.all ?? [])` → `general-next → simpleLoop holds a memory-graph
+  // tool` reddens (the non-vacuity check below proves the listing is live).
+  // MUTATION 3: re-add `'search_nodes'` to `MCP_TOOL_CATALOG` under `neo4j` →
+  // the same assertion reddens for `general-next`'s info loop.
+  // MUTATION 4: `infoTools` also spreads `...(tools.filesystem ?? [])` → the
+  // `holds read_text_file` assertion reddens.
+  it('no agent is handed any memory-graph tool, or the whole gateway surface', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const prefixed = MEMORY_GRAPH_TOOLS.map((t) => `mcp__hames-mcp-gateway__${t}`)
+    mockListTools.mockResolvedValue(
+      gatewayListing([...new Set([...KEPT, ...MEMORY_GRAPH_TOOLS, ...prefixed])]),
+    )
+    const deps = { ...testAgentDeps, toolNamespaces: mcpNamespace }
+    for (const agent of await shippedAgents()) {
+      const before = handed.length
+      await agent.createPatterns(`whole-surface-${agent.id}`, deps)
+      const lists = handed.slice(before)
+      for (const { factory, tools } of lists) {
+        expect(
+          KEPT.every((t) => tools.includes(t)),
+          `${agent.id} → ${factory} holds the whole gateway surface`,
+        ).toBe(false)
+        for (const name of [...MEMORY_GRAPH_TOOLS, ...prefixed])
+          expect(
+            tools,
+            `${agent.id} → ${factory} holds the memory-graph tool ${name}`,
+          ).not.toContain(name)
+        // Redis and filesystem names are outside the info guard's namespaces,
+        // so a loop handed either would run them unguarded.
+        for (const raw of ['json_get', 'read_text_file'])
+          expect(tools, `${agent.id} → ${factory} holds ${raw}`).not.toContain(raw)
+      }
+    }
+
+    // Not vacuous: the listing reached the agents — a loop holds gateway tools.
+    const loops = handed.filter((h) => h.factory === 'planner' || h.factory === 'simpleLoop')
+    expect(loops.some((h) => h.tools.includes('read_neo4j_cypher'))).toBe(true)
   })
 })
 

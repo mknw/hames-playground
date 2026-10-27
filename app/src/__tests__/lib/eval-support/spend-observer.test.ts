@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SpendBudget, type SpendKey } from '../../../lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../../lib/eval-support/spend-observer'
-const key: SpendKey = { agent: 'general-next', scenario: 'test', tier: 'verda' }
+const key: SpendKey = { agent: 'general-next', scenario: 'test', tier: 'self_deployed' }
 const setup = (live = true) => {
   const budget = new SpendBudget(20, 0.8)
   const onStop = vi.fn()
@@ -18,11 +18,26 @@ describe('runner synchronous spend stop', () => {
       expect(onStop).toHaveBeenCalledTimes(1)
     },
   )
+  // MUTATION: drop 'LargeQwenOR' (or the Think twin) from the allowlist in
+  // spend-observer.ts — the route-switch eval stops on its first 27B-role call
+  // again, which is the run-2 failure this test pins. Adding an unrelated name
+  // to the list must equally fail the refusal case above.
+  it.each(['LargeQwen', 'LargeQwenOR', 'LargeQwenThinkOR', 'SmallQwen', 'PrivateSystemOne'])(
+    'accepts every client the private-tier seam can name: %s',
+    (clientName) => {
+      const { budget, observer, onStop } = setup()
+      observer.activate(key)
+      observer.observe({ clientName, metrics: { costEur: 0 } })
+      expect(onStop).not.toHaveBeenCalled()
+      expect(budget.reason).toBeUndefined()
+      expect(budget.totalUsd).toBe(0)
+    },
+  )
   it('stops usage outside the active scenario, including after deactivation', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
     observer.activate(undefined)
-    observer.observe({ clientName: 'VerdaQwen', metrics: { costEur: 0 } })
+    observer.observe({ clientName: 'LargeQwen', metrics: { costEur: 0 } })
     expect(budget.reason).toBe('Usage outside a scenario')
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.rows).toHaveLength(0)
@@ -30,7 +45,7 @@ describe('runner synchronous spend stop', () => {
   it('calls onStop synchronously at the 80% boundary', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)
-    observer.observe({ clientName: 'VerdaQwen', metrics: { costEur: 12.8 } })
+    observer.observe({ clientName: 'LargeQwen', metrics: { costEur: 12.8 } })
     expect(onStop).toHaveBeenCalledTimes(1)
     expect(budget.totalUsd).toBe(16)
   })
@@ -41,7 +56,7 @@ describe('runner synchronous spend stop', () => {
     expect(live.onStop).toHaveBeenCalledOnce()
     const hermetic = setup(false)
     hermetic.observer.activate(key)
-    hermetic.observer.observe({ clientName: 'LocalQwenSmall' })
+    hermetic.observer.observe({ clientName: 'SmallQwen' })
     expect(hermetic.budget.totalUsd).toBe(0)
     expect(hermetic.onStop).not.toHaveBeenCalled()
   })
@@ -50,16 +65,32 @@ describe('runner synchronous spend stop', () => {
     observer.activate(key)
     observer.observe({
       functionName: 'ScreenUntrustedContent',
-      clientName: 'VerdaQwen',
+      clientName: 'LargeQwen',
       metrics: { costEur: 0.2 },
     })
     observer.observe({
       functionName: 'Synthesize',
-      clientName: 'VerdaQwen',
+      clientName: 'LargeQwen',
       metrics: { costEur: 0.4 },
     })
     expect(budget.row(key).functions.ScreenUntrustedContent.calls).toBe(1)
     expect(budget.row(key).functions.ScreenUntrustedContent.observerUsd).toBeCloseTo(0.25)
     expect(budget.row(key).functions.Synthesize.calls).toBe(1)
+  })
+})
+
+describe('a Decide sample is filed under its question key (boundary guards slice 3)', () => {
+  // MUTATION: pass `sample.functionName` alone to the ledger: the gate's call is
+  // filed with every other Decide call and its share cannot be told apart.
+  it("the guard gate's Decide call is its own ledger line", () => {
+    const { budget, observer } = setup()
+    observer.activate(key)
+    observer.observe({
+      functionName: 'Decide',
+      decisionKey: 'guard.screen',
+      clientName: 'PrivateSystemOne',
+      metrics: { costEur: 0.001 },
+    })
+    expect(Object.keys(budget.row(key).functions)).toEqual(['Decide:guard.screen'])
   })
 })

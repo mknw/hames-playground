@@ -31,9 +31,10 @@
 
 import { getAuthenticatedUser } from '../auth/server'
 import { BYPASS_USER, isBypassEnabled } from '../auth/dev-bypass'
-import { defaultInferenceTier, getStoredInferenceTier } from '../db/user-prefs.server'
-import { verdaConfigured, type InferenceTier } from '../inference/config.server'
-import { verdaWarmth, type VerdaWarmth } from '../inference/verda-activity.server'
+import { getStoredInferenceTier } from '../db/user-prefs.server'
+import { resolveTier } from '../inference/tier.server'
+import { selfDeployedConfigured, type InferenceTier } from '../inference/config.server'
+import { largeWarmth, type LargeWarmth } from '../inference/large-activity.server'
 import {
   probeVerdaReplicas,
   type VerdaControlPlaneProbe,
@@ -54,7 +55,7 @@ async function requireUser(): Promise<{ id: string }> {
  * The warmth the strip DISPLAYS, after both of its sources have had their say.
  *
  * Two sources, deliberately not merged into one module's opinion: the
- * process-local completion clock (`verdaWarmth`) is the only thing allowed to
+ * process-local completion clock (`largeWarmth`) is the only thing allowed to
  * say `ready` — a real completion answered by the deployment, zero-second
  * accurate, never a timer — and the control-plane probe
  * (`inference/verda-control-plane.server.ts`) is the shared observation that
@@ -71,7 +72,7 @@ async function requireUser(): Promise<{ id: string }> {
  *   forever `unknown` to a process that had never seen a call.
  * - `unknown` — the DEGRADED display, and an error path: the probe is
  *   unconfigured, or it failed. Unreachable on every happy path. The ignite
- *   button stays available here (`igniteVerdaBox` is independent of the probe).
+ *   button stays available here (`igniteSelfDeployedBox` is independent of the probe).
  */
 export type WarmthDisplayState = 'answering' | 'starting' | 'ready' | 'cold' | 'unknown'
 
@@ -109,7 +110,7 @@ export interface PreviewHeaderState {
   tier: InferenceTier
   /** False when the endpoint is unconfigured. Gates the warm indicator: a
    *  countdown for a box this deployment cannot reach is noise. */
-  verdaAvailable: boolean
+  selfDeployedAvailable: boolean
   warmth: HeaderWarmth
   /** Distinct users with chat activity in the last {@link activeWindowMinutes}
    *  minutes. */
@@ -141,7 +142,7 @@ export interface PreviewHeaderState {
  * already had); and only the no-turn, no-evidence cases ask the control plane,
  * where an unavailable probe — the one error path — is `unknown`.
  */
-function displayWarmth(w: VerdaWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
+function displayWarmth(w: LargeWarmth, probe: VerdaControlPlaneProbe | null): HeaderWarmth {
   let state: WarmthDisplayState
   if (w.state === 'running') state = 'answering'
   else if (w.state === 'warm') state = 'ready'
@@ -201,13 +202,13 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
     getStoredInferenceTier(user.id),
     countActiveUsers(),
     getUsageToday(),
-    verdaConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
+    selfDeployedConfigured() ? probeVerdaReplicas() : Promise.resolve(null),
   ])
-  const tier = stored ?? defaultInferenceTier()
+  const tier = resolveTier(null, stored)
   return {
     tier,
-    verdaAvailable: verdaConfigured(),
-    warmth: displayWarmth(verdaWarmth(), probe),
+    selfDeployedAvailable: selfDeployedConfigured(),
+    warmth: displayWarmth(largeWarmth(), probe),
     activeUsers,
     activeWindowMinutes: ACTIVE_WINDOW_MINUTES,
     usage,
@@ -244,20 +245,20 @@ export async function getPreviewHeaderState(): Promise<PreviewHeaderState> {
  *
  * It waits for the box rather than returning immediately, so the caller learns
  * whether it actually came up. That can legitimately take minutes
- * (`VERDA_WAKE_TIMEOUT_MS`); a failure REJECTS, carrying the message that names
+ * (`LARGE_LLM_WAKE_TIMEOUT_MS`); a failure REJECTS, carrying the message that names
  * the box, because a wake that silently did nothing is the one outcome that
  * leaves a user believing their next message will be quick when it will not.
  */
-export async function igniteVerdaBox(): Promise<PreviewHeaderState> {
+export async function igniteSelfDeployedBox(): Promise<PreviewHeaderState> {
   await requireUser()
   // Same refusal as the tier switch, for the same reason: without an endpoint
   // there is nothing to start, and `ensurePrivateTierAwake` would otherwise fail on a
   // `fetch` to an empty URL — an error about a malformed request rather than
   // about an unconfigured deployment.
-  if (!verdaConfigured()) {
+  if (!selfDeployedConfigured()) {
     throw new Error(
       'The self-hosted inference endpoint is not configured on this deployment, so there is ' +
-        'nothing to start. Set VERDA_INFERENCE_ENDPOINT and VERDA_INFERENCE_API_KEY (see ' +
+        'nothing to start. Set LARGE_LLM_BASE_URL and LARGE_LLM_API_KEY (see ' +
         'app/.env.example).',
     )
   }

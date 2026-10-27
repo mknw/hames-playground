@@ -8,7 +8,15 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { harness, resumeHarness } from '../harness.server'
-import { askHumanHolding, HitlRequestError, readHitl } from '../hitl.server'
+import {
+  askHumanHolding,
+  canonicalJson,
+  held,
+  HitlRequestError,
+  HOLDING_EXPIRES_IN_MS,
+  readHitl,
+} from '../hitl.server'
+import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.server'
 import { configurePattern } from '../patterns/chain.server'
 import { simpleLoop } from '../patterns/simpleLoop.server'
 import { amendRunFrame, type RunFrame } from '../run-frame.server'
@@ -16,6 +24,7 @@ import type { ToolTransport } from '../tool-transport.server'
 import type {
   ControllerAction,
   ControllerFn,
+  DecideFn,
   HitlOption,
   HitlPayloadStore,
   HoldingOutcome,
@@ -311,5 +320,116 @@ describe('slice 8 · the logical call key', () => {
       frame,
     )
     expect(callKeys(paused.context.events)).toEqual([expect.stringMatching(/^[0-9a-f]{64}$/)])
+  })
+})
+
+// ============================================================================
+// Fix round 1 (#801 review)
+// ============================================================================
+
+/** A decide seam answering a scripted label per call. */
+function scriptedDecide(script: string[]) {
+  let n = 0
+  const fn = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+    const ids = spec.labels.map((l) => l.id)
+    const want = script[Math.min(n++, script.length - 1)]
+    return {
+      probs: Object.fromEntries(ids.map((id) => [id, id === want ? 1 : 0])),
+      method: 'jev',
+      calibrated: false,
+    }
+  }) as unknown as DecideFn
+  Object.assign(fn, { supportedTypes: ['choice'], limits: () => ({ contextWindow: 131_072 }) })
+  return { fn }
+}
+
+describe('fix round 1 · the held row and its request', () => {
+  // B1. MUTATION: drop the `expiresInMs` pass-through to `askHuman` → a request
+  // that names none never expires while its row is swept at 24 h → red.
+  it.each([
+    ['names none', undefined],
+    ['names one', 60_000],
+  ])('a request that %s expires together with its held row', async (_what, expiresInMs) => {
+    const holds: number[] = []
+    const store: HitlPayloadStore = {
+      hold: async ({ expiresAt }) => {
+        holds.push(expiresAt)
+        return { payloadRef: 'ref-x', inserted: true }
+      },
+      drop: async () => {},
+    }
+    const gate = configurePattern<Data>('gate', async (scope) => {
+      await amendRunFrame({ callKey: 'k' }, () =>
+        askHumanHolding({ ...REQUEST, ...(expiresInMs ? { expiresInMs } : {}) }, { a: 1 }),
+      )
+      return scope
+    })
+    const before = Date.now()
+    const paused = await harness<Data>(gate)('q', 's', undefined, undefined, {
+      hitlPayloads: store,
+    })
+    const [request] = readHitl(paused.context).pending
+    expect(request.expiresAt).toBeDefined()
+    expect(Math.abs(request.expiresAt! - holds[0])).toBeLessThan(50)
+    expect(holds[0] - before).toBeGreaterThanOrEqual((expiresInMs ?? HOLDING_EXPIRES_IN_MS) - 50)
+  })
+
+  // B3(a). MUTATION: leave the continuation out of the call key (`[runId, [],
+  // turn, position]`) → the second invocation of the route shares the first's
+  // key and its identical write is approved by replay → red.
+  it('the same route run twice, identical write at turn 0: the second iteration is asked, not approved by replay', async () => {
+    const t: ToolTransport = {
+      id: 'h',
+      ownsTool: (n) => n === 'gated_write',
+      callTool: async (_n, args) => {
+        const o = await askHumanHolding(REQUEST, args)
+        if (o.status === 'rebound') return { success: false, data: null, error: 'rebound' }
+        return o.status === 'pending'
+          ? { success: true, data: held(o) }
+          : { success: true, data: `answered: ${o.choice}` }
+      },
+      listTools: async () => [],
+    }
+    const writer = vi.fn<ControllerFn>(async (i) =>
+      i.turn === 0 ? act('gated_write', { title: 'A' }) : act('Return', 'done'),
+    )
+    const patterns = [
+      decisionLoop<Data>(
+        {
+          work: {
+            pattern: simpleLoop<Data>(writer, ['gated_write'], { patternId: 'work', maxTurns: 3 }),
+            description: 'w',
+          },
+        },
+        {
+          decide: scriptedDecide(['work', 'work', DECISION_LOOP_ANSWER]).fn,
+          answer: 'Answer now',
+          patternId: 'orchestrator',
+          gatedTools: ['gated_write'],
+          maxIterations: 3,
+        },
+      ),
+    ]
+    const frame: RunFrame = { transports: [t], hitlPayloads: memoryStore().store }
+    const paused = await harness<Data>(...patterns)('x', 's', undefined, undefined, frame)
+    const [first] = readHitl(paused.context).pending
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [first.requestId]: 'approve' },
+      { frame },
+    )
+    expect(resumed.status).toBe('paused')
+    expect(readHitl(resumed.context).pending).toHaveLength(1)
+  })
+})
+
+describe('fix round 1 · canonicalJson', () => {
+  // N4. MUTATION: drop the JSON round-trip → a Date canonicalises to `{}` and
+  // two different payloads share one digest → red.
+  it('canonicalises what JSON makes of a value, not its own enumerable keys', () => {
+    expect(canonicalJson({ b: 1, a: new Date(0) })).toBe('{"a":"1970-01-01T00:00:00.000Z","b":1}')
+    expect(canonicalJson({ d: new Date(0) })).not.toBe(canonicalJson({ d: new Date(1) }))
+    expect(canonicalJson(undefined)).toBe('null')
   })
 })

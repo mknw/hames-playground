@@ -26,7 +26,13 @@ import {
 } from '../../../lib/db/hitl.server'
 import { closePool, query } from '../../../lib/db/client.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
-import { purgeClosedPayloads } from '../../../lib/hitl/payloads.server'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import {
+  createHitlPayloadStore,
+  purgeClosedPayloads,
+  resolveHitlAnswer,
+} from '../../../lib/hitl/payloads.server'
 
 const SUFFIX = Math.random().toString(36).slice(2, 10)
 const sid = (name: string) => `test-held-${name}-${SUFFIX}`
@@ -86,14 +92,6 @@ describe('holding a payload for one logical call', () => {
         rebound: true,
       },
     )
-    expect(
-      await holdHitlPayload({
-        ...base,
-        kind: 'ingress-flag',
-        payload: { url: 'https://a.example', n: 1 },
-      }),
-    ).toEqual({ rebound: true })
-
     const rows = await rowsOf(sid('bind'))
     expect(rows).toHaveLength(1)
     const held = await getHitlPayload(rows[0].payload_ref, 'alice')
@@ -101,6 +99,46 @@ describe('holding a payload for one logical call', () => {
     // At rest: an envelope, not the address.
     expect(looksEncrypted(rows[0].payload)).toBe(true)
     expect(rows[0].payload).not.toContain('a.example')
+  })
+
+  // #801 review B2. MUTATION: bind on (owner, conversation, call) alone (drop
+  // `kind` from the unique key, the conflict target and the re-read) → the
+  // released call's flagged result is `rebound` → red.
+  it('another kind under one call is its own row; another payload of the same kind is still rebound', async () => {
+    const base = {
+      userId: 'alice',
+      sessionId: sid('kinds'),
+      callKey: 'call-k',
+      expiresAt: soon(),
+    }
+    const egress = await holdHitlPayload({ ...base, kind: 'egress-release', payload: { url: 'u' } })
+    const ingress = await holdHitlPayload({ ...base, kind: 'ingress-flag', payload: 'raw text' })
+    expect(egress).toMatchObject({ inserted: true })
+    expect(ingress).toMatchObject({ inserted: true })
+    expect((ingress as { payloadRef: string }).payloadRef).not.toBe(
+      (egress as { payloadRef: string }).payloadRef,
+    )
+    expect(await holdHitlPayload({ ...base, kind: 'ingress-flag', payload: 'other' })).toEqual({
+      rebound: true,
+    })
+    expect(await rowsOf(sid('kinds'))).toHaveLength(2)
+  })
+
+  // N2. MUTATION: drop the conversation from the store's delete → a store bound
+  // to one conversation drops another's row → red.
+  it("a conversation's store drops only its own rows", async () => {
+    const other = (await holdHitlPayload({
+      userId: 'alice',
+      sessionId: sid('other'),
+      callKey: 'call-x',
+      kind: 'egress-release',
+      expiresAt: soon(),
+      payload: { q: 'theirs' },
+    })) as { payloadRef: string }
+    await createHitlPayloadStore('alice', sid('mine')).drop(other.payloadRef)
+    expect(await getHitlPayload(other.payloadRef, 'alice')).not.toBeNull()
+    await createHitlPayloadStore('alice', sid('other')).drop(other.payloadRef)
+    expect(await getHitlPayload(other.payloadRef, 'alice')).toBeNull()
   })
 
   // MUTATION: drop the unique key from the table → two rows → red.
@@ -235,5 +273,25 @@ describe('holding a payload for one logical call', () => {
     expect(await getHitlPayload(closed.payloadRef, 'alice')).toBeNull()
     expect(await getHitlPayload(waiting.payloadRef, 'alice')).not.toBeNull()
     expect(await deleteHitlPayloads([waiting.payloadRef], 'mallory')).toBe(0)
+  })
+})
+
+describe('the table is insert-only, and the resolve is chosen by kind', () => {
+  // N1. MUTATION: add an `UPDATE hitl_payloads` statement to the repository →
+  // red. (The barrier is the module, which is the only SQL against the table:
+  // encryption-coverage.test.ts pins that.)
+  it('no statement in the repository updates a held payload', () => {
+    const source = readFileSync(path.resolve(process.cwd(), 'src/lib/db/hitl.server.ts'), 'utf8')
+    expect(source).not.toMatch(/UPDATE\s+hitl_payloads/i)
+  })
+
+  // N3. MUTATION: look the resolver up on a plain object → a kind named like
+  // an Object.prototype member resolves to that member (and returns its
+  // string) instead of the default → red.
+  it('a kind named like an Object.prototype member takes the default resolver', async (ctx) => {
+    skipWithoutDatabase(ctx, dbAvailable)
+    const resolve = resolveHitlAnswer('alice')
+    const request = { requestId: 'req-proto', kind: 'toString' } as never
+    expect(await resolve(request, { choice: 'x', flags: {} })).toBeUndefined()
   })
 })

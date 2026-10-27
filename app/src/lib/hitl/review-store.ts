@@ -42,3 +42,16 @@ export { erasedVersion }
 export const notifyMemoryErased = (): void => {
   setErasedVersion((v) => v + 1)
 }
+
+// A paused run's requests (decision-loop-agent slice 9) have a hand-off of
+// their own: the memory prompt clears every review target it reads, so sharing
+// `reviewTarget` would race. Carries one conversation id and nothing else.
+const [blockingReviewTarget, setBlockingReviewTarget] = createSignal<string | null>(null)
+export { blockingReviewTarget }
+/** Ask the conversation's blocking-request prompt to open its dialog. */
+export const requestBlockingReview = (sessionId: string): void => {
+  setBlockingReviewTarget(sessionId)
+}
+export const clearBlockingReview = (): void => {
+  setBlockingReviewTarget(null)
+}

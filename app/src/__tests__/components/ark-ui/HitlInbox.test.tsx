@@ -14,6 +14,14 @@ import { installDomStubs } from './dom-stubs'
 beforeAll(() => installDomStubs())
 
 const listMemoryInbox = vi.fn()
+// The inbox also lists conversations whose run waits on a decision
+// (decision-loop-agent slice 9); none here.
+const listBlockingInbox = vi.fn(async () => [] as { sessionId: string; title: string | null }[])
+vi.mock('~/lib/hitl/actions.server', () => ({
+  listBlockingInbox: () => listBlockingInbox(),
+  listBlockingRequests: async () => [],
+  answerHitl: async () => [],
+}))
 vi.mock('~/lib/memory/confirm-actions.server', () => ({
   listMemoryInbox: () => listMemoryInbox() as unknown,
 }))
@@ -38,8 +46,41 @@ const entry = (over = {}) => ({
 
 beforeEach(() => {
   listMemoryInbox.mockReset()
+  listBlockingInbox.mockReset()
+  listBlockingInbox.mockResolvedValue([])
   navigate.mockReset()
   clearReview()
+})
+
+describe('a conversation waiting on a decision (decision-loop-agent slice 9)', () => {
+  // MUTATION: route the row through `requestReview` (the memory prompt's
+  // hand-off, which it clears) or drop the blocking list → red.
+  it('is counted, named, and asks that conversation’s blocking prompt to open', async () => {
+    listMemoryInbox.mockResolvedValue([entry()])
+    listBlockingInbox.mockResolvedValue([{ sessionId: 's7', title: 'Graph edit' }])
+    render(() => <HitlInbox />)
+    await tick()
+    expect(q('hitl-inbox-count')!.textContent).toBe('2')
+    fireEvent.click(q('hitl-inbox-trigger')!)
+    await tick()
+    const row = q('hitl-inbox-blocking-item')!
+    expect(row.textContent).toContain('Decision needed')
+    expect(row.textContent).toContain('Graph edit')
+    fireEvent.click(row)
+    await tick()
+    expect(reviewStore.blockingReviewTarget()).toBe('s7')
+    expect(reviewTarget()).toBeNull()
+    expect(navigate).toHaveBeenCalledWith(expect.stringContaining('s7'))
+    reviewStore.clearBlockingReview()
+  })
+
+  it('a failing blocking read hides only its own rows', async () => {
+    listMemoryInbox.mockResolvedValue([entry()])
+    listBlockingInbox.mockRejectedValue(new Error('down'))
+    render(() => <HitlInbox />)
+    await tick()
+    expect(q('hitl-inbox-count')!.textContent).toBe('1')
+  })
 })
 
 describe('the count', () => {

@@ -104,7 +104,10 @@ vi.mock('@boundaryml/baml', () => {
 })
 
 // Mock Tools function
-vi.mock('@hames-ai/harness-patterns/tools.server', () => ({
+vi.mock('@hames-ai/harness-patterns/tools.server', async (importOriginal) => ({
+  // The egress gate names its outgoing tools at construction (slice 10).
+  inferServer: (await importOriginal<typeof import('@hames-ai/harness-patterns/tools.server')>())
+    .inferServer,
   Tools: vi.fn(async () => mockToolSets),
   ToolsFrom: vi.fn(async () => mockToolSets),
 }))

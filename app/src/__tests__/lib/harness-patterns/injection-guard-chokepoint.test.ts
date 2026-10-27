@@ -847,7 +847,11 @@ describe('per-call screen override source boundary', () => {
   it('no caller sets a per-call screen override in non-test source', () => {
     const callers: string[] = []
     for (const path of [...files(join(root, 'packages')), ...files(join(root, 'app/src'))]) {
-      walk(parse(path), (node) => {
+      const text = readFileSync(path, 'utf8')
+      // A property named `screen` needs the word: parse only the files that
+      // carry it, so the scan stays well inside the timeout as the tree grows.
+      if (!text.includes('screen')) continue
+      walk(ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true), (node) => {
         if (
           ts.isPropertyAssignment(node) &&
           node.name.getText().replace(/['"]/g, '') === 'screen' &&
@@ -858,7 +862,9 @@ describe('per-call screen override source boundary', () => {
       })
     }
     expect(callers).toEqual([])
-  })
+    // It reads the whole source tree: on a loaded CI runner under coverage it
+    // took longer than the default 5 s before the pre-filter above.
+  }, 30_000)
   it.each(['mcp-client.server.ts', 'patterns/retriever.server.ts'])(
     '%s sanitize calls pass no screen override',
     (file) => {

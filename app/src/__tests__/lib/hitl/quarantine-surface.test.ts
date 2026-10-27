@@ -75,6 +75,9 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
     expect(offenders.sort()).toEqual([
       'lib/harness-client/turn.server.ts',
       'lib/hitl/actions.server.ts',
+      // Decision-loop-agent slice 9: the blocking dialog's owner-scoped read of
+      // what waits and its held payloads — host code behind the gated RPC.
+      'lib/hitl/blocking.server.ts',
       // Decision-loop-agent slice 8: the held payloads' store, purge and the
       // resolve dispatch — host code the turn runner calls, taking an owner,
       // never a 'use server' module.

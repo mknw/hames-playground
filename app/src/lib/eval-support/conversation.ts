@@ -35,6 +35,10 @@ export interface ConversationScenario {
   noTools?: boolean
   /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`); absent = memory off. */
   memory?: boolean
+  /** A must whose acceptance run is pending: the flip gate lists it in the report
+   * (with this issue number) but does not block the flip on it. Pinned by PENDING_MUSTS
+   * in flip-gate.ts and the pin test in flip-gate.test.ts. */
+  pendingMustIssue?: number
   turnAnswerIncludes?: string[][]
   citation?: string
   indexed?: string

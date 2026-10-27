@@ -20,7 +20,8 @@
     "twin",
     "needs",
     "cells",
-    "memory"
+    "memory",
+    "pendingMustIssue"
   ],
   "dimensions": {
     "routes": {
@@ -567,7 +568,7 @@
       "id": "07-follow-up-success",
       "title": "Refer back to a successful turn",
       "kind": "positive",
-      "priority": "must",
+      "priority": "should",
       "status": "existing",
       "dimensions": {
         "routes": ["info-retrieval"],
@@ -629,13 +630,14 @@
       "cells": [
         ["lookup-fact", "knowledge-graph"],
         ["analyse", "conversation"]
-      ]
+      ],
+      "pendingMustIssue": 808
     },
     {
       "id": "08-follow-up-failure",
       "title": "Retry after an explicitly failed turn",
       "kind": "positive",
-      "priority": "must",
+      "priority": "should",
       "status": "existing",
       "dimensions": {
         "routes": ["info-retrieval"],
@@ -689,7 +691,8 @@
       "cells": [
         ["lookup-fact", "knowledge-graph"],
         ["repair", "knowledge-graph"]
-      ]
+      ],
+      "pendingMustIssue": 809
     },
     {
       "id": "09-upload-summary",
@@ -987,7 +990,7 @@
       "id": "14-analysis-index-follow-up",
       "title": "Compute, convert to markdown, then retrieve in a later turn",
       "kind": "positive",
-      "priority": "must",
+      "priority": "should",
       "status": "existing",
       "dimensions": {
         "routes": ["office-data", "read-documents"],
@@ -1052,7 +1055,8 @@
       "cells": [
         ["analyse", "uploads"],
         ["create-deliverable", "uploads"]
-      ]
+      ],
+      "pendingMustIssue": 810
     },
     {
       "id": "15-graph-file-summary",

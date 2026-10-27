@@ -169,7 +169,11 @@ exit, and judged against the whole message it rejects complete work for a part
 no tool of the route performs. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
-not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
+not once a plan exists; `allowReplan: true` on the route opts out. Any route is
+not offered again in the turn once two of its records in a row made no progress:
+the record failed, or none of its tool calls succeeded. A route that keeps
+returning the same failure therefore cannot spend the whole bound. `answer` is
+always offered, and when it is all that is left the loop answers. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
 A host can also tell the decisions model which documents the conversation holds,

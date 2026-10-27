@@ -19,8 +19,12 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
-  callTool: mockCallTool({ responses: { search: { rows: ['visible-row'] } } }),
-  listTools: mockListTools(['search']),
+  callTool: mockCallTool({
+    responses: { search: { rows: ['visible-row'] } },
+    // Run 7's scenario 08: every read of the turn fails.
+    errors: { down: 'Synthetic service unavailable; retry on the next user turn.' },
+  }),
+  listTools: mockListTools(['search', 'down']),
 }))
 
 import { runChain, configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
@@ -149,6 +153,35 @@ const returning = (id: string, text: string, reasoning?: string, cfg?: Record<st
     },
     cfg,
   )
+
+/** One `tool` call per entry of `calls`: `true` comes back successful, `false` failed. */
+function lookup(s: PatternScope<Data>, calls: readonly boolean[], tool = 'search') {
+  for (const ok of calls) {
+    trackEvent(s, 'tool_call', { callId: 'c', tool, args: {} }, true)
+    trackEvent(
+      s,
+      'tool_result',
+      ok
+        ? { callId: 'c', tool, result: 'row', success: true }
+        : { callId: 'c', tool, result: null, success: false, error: 'service unavailable' },
+      true,
+    )
+  }
+}
+
+/** A simpleLoop-shaped child that makes `calls` (default: one that succeeds), then
+ *  returns `text`. A route with a successful call makes progress, so the repeat rule
+ *  (#809) never withholds it. */
+const looking = (
+  id: string,
+  text: string | (() => string),
+  calls: readonly boolean[] = [true],
+  tool = 'search',
+) =>
+  fake('simpleLoop', id, (s) => {
+    lookup(s, calls, tool)
+    trackEvent(s, 'controller_action', returnAction(typeof text === 'string' ? text : text()), true)
+  })
 
 const route = (pattern: ConfiguredPattern<Data>, extra: Partial<Route> = {}): Route => ({
   pattern,
@@ -279,19 +312,9 @@ describe('decisionLoop — iteration, records, state', () => {
   it('counts N in iterations: a route that ran twice counts twice', async () => {
     const { decide, states } = scriptedDecide(['a', 'a', 'answer'])
     let n = 0
-    const loop = build(
-      {
-        a: route(
-          fake(
-            'simpleLoop',
-            'a-p',
-            (s) => void trackEvent(s, 'controller_action', returnAction(`OUT-${++n}`), true),
-          ),
-        ),
-      },
-      decide,
-      { handoff: { lastN: 2 } },
-    )
+    const loop = build({ a: route(looking('a-p', () => `OUT-${++n}`)) }, decide, {
+      handoff: { lastN: 2 },
+    })
     await run([loop])
     expect(states[2]).toContain('[a] "OUT-1"')
     expect(states[2]).toContain('[a] "OUT-2"')
@@ -2092,7 +2115,9 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
     expect(offeredAt[1]).toEqual(['info', 'answer'])
   })
 
-  // MUTATION: delete the `allowReplan` term from `guardedPlanners`: this goes red.
+  // MUTATION: delete the `allowReplan` term from `guardedPlanners`: this goes red. So
+  // does dropping `r.stats.kind === 'planner' ||` from `madeProgress` (#809): a plan
+  // calls no tool, and its repeats would read as stalled after two.
   it('allowReplan offers the route every time (replanning stays available to a host that wants it)', async () => {
     const { decide, taken } = fond()
     await run([
@@ -2180,10 +2205,277 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
 
   // MUTATION: drop `kinds.get(n) === 'planner' &&` from `guardedPlanners`: the second
   // `info` is withheld and the loop exits early with ['info'].
-  it('only a planner route is guarded: any other route may repeat', async () => {
-    const { decide } = scriptedDecide(['info', 'info', 'answer'])
-    const ctx = await run([build({ info: route(returning('i', 'x')) }, decide)])
+  it('only a planner route is guarded straight after itself: any other route that made progress may repeat', async () => {
+    const { decide } = scriptedDecide(['info', 'info', 'info', 'answer'])
+    const ctx = await run([build({ info: route(looking('i', 'x')) }, decide)])
+    expect(decided(ctx)).toEqual(['info', 'info', 'info', 'answer'])
+  })
+})
+
+describe('decisionLoop — a route is not offered again after two records in a row made no progress (#809)', () => {
+  /** A decider that records every option set and answers with `pick(ids, call)`. */
+  function deciding(pick: (ids: string[], call: number) => string) {
+    const offeredAt: string[][] = []
+    const fn = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+      const ids = spec.labels.map((l) => l.id)
+      offeredAt.push(ids)
+      const label = pick(ids, offeredAt.length - 1)
+      return {
+        probs: Object.fromEntries(ids.map((id) => [id, id === label ? 1 : 0])),
+        method: 'jev',
+        calibrated: false,
+      }
+    }) as unknown as DecideFn
+    Object.assign(fn, { supportedTypes: ['choice'], limits: () => ({ contextWindow: 131_072 }) })
+    return { decide: fn, offeredAt }
+  }
+  /** Run 7's decider in scenario 08: it takes `prefer` whenever the spec offers it,
+   *  else the first of `then` it has not taken yet, else `answer`. */
+  function stubborn(prefer: string, then: string[] = []) {
+    const taken: string[] = []
+    return deciding((ids) => {
+      const label = ids.includes(prefer)
+        ? prefer
+        : (then.find((id) => ids.includes(id) && !taken.includes(id)) ?? 'answer')
+      taken.push(label)
+      return label
+    })
+  }
+  const decided = (ctx: { events: ContextEvent[] }) =>
+    eventsOf(ctx, 'orchestrator', 'decision_made').map((e) => (e.data as { label: string }).label)
+  /** A child whose invocations behave in turn as `shapes` says, the last repeating:
+   *  `progress` makes one successful call, `none` makes none; both then return. */
+  const scripted = (id: string, shapes: Array<'none' | 'progress'>) => {
+    let n = 0
+    return fake('simpleLoop', id, (s) => {
+      const shape = shapes[Math.min(n++, shapes.length - 1)]
+      lookup(s, shape === 'progress' ? [true] : [])
+      trackEvent(s, 'controller_action', returnAction(`${shape}-${n}`), true)
+    })
+  }
+
+  // MUTATION: drop `!stalled.has(l.id) &&` from `offered` in decisionLoop.server.ts:
+  // info is dispatched on all six iterations and the loop ends on its bound, as in run 7.
+  it('replays 08 over a real simpleLoop whose every read fails: two dispatches, then absent, then answer', async () => {
+    const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    vi.mocked(callTool).mockClear()
+    let turn = 0
+    const controller = vi.fn(async () => ({
+      action:
+        ++turn % 2 === 1
+          ? ({
+              reasoning: 'count them',
+              tool_name: 'down',
+              tool_args: '{"query":"MATCH (p:Project) RETURN count(p)"}',
+              is_final: false,
+            } as ControllerAction)
+          : ({
+              reasoning: 'the graph is down',
+              tool_name: 'Return',
+              tool_args:
+                'I was unable to count the Project nodes: the graph service is unavailable.',
+              is_final: true,
+            } as ControllerAction),
+    }))
+    const info = simpleLoop<Data>(controller as never, ['down'], {
+      patternId: 'info-p',
+      returnStyle: 'answer',
+      maxTurns: 4,
+    })
+    const { decide, offeredAt } = stubborn('info')
+    vi.useFakeTimers()
+    const p = run([build({ info: route(info), other: route(returning('other-p', 'x')) }, decide)])
+    await vi.runAllTimersAsync()
+    const ctx = await p
+    vi.useRealTimers()
+
+    // The third dispatch never happens.
+    expect(vi.mocked(callTool).mock.calls.filter(([tool]) => tool === 'down')).toHaveLength(2)
+    const records = eventsOf(ctx, 'orchestrator', 'tool_result').map(
+      (e) => e.data as ToolResultEventData,
+    )
+    // Both records SUCCEEDED (the child Returned): the rule reads the calls, not the status.
+    expect(records.map((r) => [r.tool, r.success])).toEqual([
+      ['info', true],
+      ['info', true],
+    ])
+    expect(offeredAt).toEqual([
+      ['info', 'other', 'answer'],
+      ['info', 'other', 'answer'],
+      ['other', 'answer'],
+    ])
     expect(decided(ctx)).toEqual(['info', 'info', 'answer'])
+    // The withholding is visible on the decision that lacked it, and nothing errored.
+    const third = eventsOf(ctx, 'orchestrator', 'decision_made')[2].data as {
+      labels: { id: string }[]
+    }
+    expect(third.labels.map((l) => l.id)).toEqual(['other', 'answer'])
+    expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+  })
+
+  // MUTATION: in `madeProgress`, `r.stats.succeededCalls > 0` → `r.stats.errors === 0`
+  // (a Return with no call reads as progress): info is offered a third time.
+  it('a record that made NO tool call is no progress: the same withholding', async () => {
+    const { decide, offeredAt } = stubborn('info')
+    const ctx = await run([
+      build(
+        { info: route(returning('i', 'from memory')), other: route(returning('o', 'x')) },
+        decide,
+      ),
+    ])
+    expect(decided(ctx)).toEqual(['info', 'info', 'answer'])
+    expect(offeredAt[2]).toEqual(['other', 'answer'])
+  })
+
+  // MUTATION: drop `r.status === 'succeeded' &&` from `madeProgress`: the call that
+  // succeeded makes the failed record read as progress, and info is offered again.
+  it('a FAILED record is no progress even when one of its calls succeeded', async () => {
+    const { decide, offeredAt } = stubborn('info')
+    const noReturn = fake('simpleLoop', 'i', (s) => lookup(s, [true]))
+    const ctx = await run([
+      build({ info: route(noReturn), other: route(returning('o', 'x')) }, decide),
+    ])
+    expect(decided(ctx)).toEqual(['info', 'info', 'answer'])
+    expect(offeredAt[2]).toEqual(['other', 'answer'])
+    const records = eventsOf(ctx, 'orchestrator', 'tool_result').map(
+      (e) => e.data as ToolResultEventData,
+    )
+    expect(records.map((r) => r.success)).toEqual([false, false])
+  })
+
+  // MUTATIONS: in `madeProgress`, `r.stats.succeededCalls > 0` → `r.stats.errors === 0`
+  // (any failed call reads as no progress), or `madeProgress` returning false: info is
+  // withheld after two and the loop never reaches its bound.
+  it('a route that made a successful call is NOT withheld, even beside a failed one', async () => {
+    const { decide, offeredAt } = stubborn('info')
+    const ctx = await run([
+      build(
+        { info: route(looking('i', 'partial', [false, true])), other: route(returning('o', 'x')) },
+        decide,
+      ),
+    ])
+    expect(decided(ctx)).toEqual(Array(DECISION_LOOP_MAX_ITERATIONS).fill('info'))
+    expect(offeredAt.every((ids) => ids.includes('info'))).toBe(true)
+    const errors = eventsOf(ctx, 'orchestrator', 'error')
+    expect(errors.map((e) => (e.data as ErrorEventData).kind)).toEqual(['budget_exhausted'])
+  })
+
+  // MUTATION: drop `&& r.tool !== EXPAND_TOOL_NAME` from `succeededCalls` in computeStats:
+  // re-reading an earlier result counts as a lookup, and info is offered again.
+  it('an expandPreviousResult is not a successful call: it re-reads, it looks nothing up', async () => {
+    const { decide, offeredAt } = stubborn('info')
+    const ctx = await run([
+      build(
+        {
+          info: route(looking('i', 'nothing new', [true], EXPAND_TOOL_NAME)),
+          other: route(returning('o', 'x')),
+        },
+        decide,
+      ),
+    ])
+    expect(decided(ctx)).toEqual(['info', 'info', 'answer'])
+    expect(offeredAt[2]).toEqual(['other', 'answer'])
+  })
+
+  // MUTATIONS: in `stalledRoutes`, `records[i - 1]?.route === r.route ? streak + 1 : 1`
+  // → `streak + 1` (the count runs across routes: b is withheld after a), or a per-route
+  // count another route does not reset (a is withheld at its second record).
+  it('the count is per route and resets when ANOTHER route comes between', async () => {
+    const script = ['a', 'b', 'a', 'b', 'a', 'answer']
+    const { decide, offeredAt } = deciding((_ids, call) => script[call])
+    const ctx = await run([
+      build({ a: route(returning('a-p', 'none')), b: route(returning('b-p', 'none')) }, decide),
+    ])
+    expect(decided(ctx)).toEqual(script)
+    expect(offeredAt.every((ids) => ids.includes('a') && ids.includes('b'))).toBe(true)
+  })
+
+  // MUTATION: in `stalledRoutes`, `madeProgress(r) ? 0 : …` → `madeProgress(r) ? streak : …`
+  // (progress does not reset the count): a is withheld after its THIRD record.
+  it('the count resets when a record of the SAME route made progress', async () => {
+    const { decide, offeredAt } = stubborn('a')
+    const ctx = await run([
+      build(
+        {
+          a: route(scripted('a-p', ['none', 'progress', 'none', 'none'])),
+          b: route(returning('b-p', 'x')),
+        },
+        decide,
+      ),
+    ])
+    expect(decided(ctx)).toEqual(['a', 'a', 'a', 'a', 'answer'])
+    expect(offeredAt[3]).toContain('a')
+    expect(offeredAt[4]).toEqual(['b', 'answer'])
+  })
+
+  // MUTATION: in `stalledRoutes`, add the route only when its streak is the LAST record's
+  // (`i === records.length - 1 &&` before `streak >= REPEAT_LIMIT`): after b ran, a is back.
+  it('once withheld, the route stays withheld for the rest of the run, after another route ran', async () => {
+    const { decide, offeredAt } = stubborn('a', ['b'])
+    const ctx = await run([
+      build({ a: route(returning('a-p', 'none')), b: route(looking('b-p', 'x')) }, decide),
+    ])
+    expect(decided(ctx)).toEqual(['a', 'a', 'b', 'answer'])
+    expect(offeredAt[2]).toEqual(['b', 'answer'])
+    expect(offeredAt[3]).toEqual(['b', 'answer'])
+  })
+
+  // MUTATION: delete the `offered.length === 1` early exit: the decision is asked over
+  // `answer` alone, so the decider is called a third time and records an `answer`.
+  it('`answer` is never withheld: with every route withheld the loop ends as answer, unasked and error-free', async () => {
+    const { decide, offeredAt } = stubborn('a')
+    const synthRan: string[] = []
+    const synth = fake('compactExecution', 'synth', () => void synthRan.push('ran'))
+    const ctx = await run([build({ a: route(returning('a-p', 'none')) }, decide), synth])
+    expect(offeredAt).toHaveLength(2)
+    expect(decided(ctx)).toEqual(['a', 'a'])
+    expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+    expect(synthRan).toEqual(['ran'])
+    expect((ctx.data.decisions!.next_step as { label: string }).label).toBe('a')
+  })
+
+  // MUTATION: in `madeProgress`, test the kind before the status —
+  // `r.stats.kind === 'planner' || (r.status === 'succeeded' && r.stats.succeededCalls > 0)`
+  // (a failed plan reads as progress): think is offered a third time.
+  it('a plan is a planner’s progress: two failed plans in a row withhold even an allowReplan planner', async () => {
+    const { decide, offeredAt } = stubborn('think')
+    const failing = planner<Data>(
+      vi.fn(async () => ({
+        plan: { reasoning: 'r', plan: '', n_steps: 0 },
+        llmCall: undefined,
+        toolCount: 0,
+      })) as never,
+      [],
+      { patternId: 'think-p' },
+    )
+    const ctx = await run([
+      build(
+        {
+          think: route(failing, { allowReplan: true }),
+          info: route(returning('i', 'x')),
+        },
+        decide,
+      ),
+    ])
+    expect(decided(ctx)).toEqual(['think', 'think', 'answer'])
+    expect(offeredAt[2]).toEqual(['info', 'answer'])
+  })
+
+  // MUTATION: keep the withheld set in the `decisionLoop` closure (beside
+  // `guardedPlanners`) and add to it each iteration: turn one's stall blocks turn two
+  // (`harness()` reuses its pattern instances across turns).
+  it('the rule belongs to one run of the loop: the next turn on the same instance offers the route again', async () => {
+    const { decide, offeredAt } = stubborn('a')
+    const loop = build(
+      { a: route(returning('a-p', 'none')), b: route(returning('b-p', 'x')) },
+      decide,
+    )
+    const ctx = createContext<Data>('turn one')
+    await runInFrame(() => runChain(ctx, [loop]))
+    expect(offeredAt[2]).toEqual(['b', 'answer'])
+    const n = offeredAt.length
+    await runInFrame(() => runChain(ctx, [loop]))
+    expect(offeredAt[n]).toContain('a')
   })
 })
 
@@ -2195,7 +2487,7 @@ describe('decisionLoop — maxIterations', () => {
     const synth = fake('compactExecution', 'synth', (_s, view) => {
       synthSaw.push(view.fromAll().errors().get().at(-1)?.type ?? 'none')
     })
-    const ctx = await run([build({ a: route(returning('a-p', 'again')) }, decide), synth])
+    const ctx = await run([build({ a: route(looking('a-p', 'again')) }, decide), synth])
     expect(calls()).toBe(6)
     expect(eventsOf(ctx, 'orchestrator', 'tool_result')).toHaveLength(6)
     const errors = eventsOf(ctx, 'orchestrator', 'error')
@@ -2210,9 +2502,7 @@ describe('decisionLoop — maxIterations', () => {
 
   it('honours a configured bound, and `answer` before the bound records no budget error', async () => {
     const { decide, calls } = scriptedDecide(['a', 'a', 'a', 'answer'])
-    const ctx = await run([
-      build({ a: route(returning('a-p', 'x')) }, decide, { maxIterations: 3 }),
-    ])
+    const ctx = await run([build({ a: route(looking('a-p', 'x')) }, decide, { maxIterations: 3 })])
     expect(calls()).toBe(3)
     expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(1)
 

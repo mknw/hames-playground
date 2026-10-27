@@ -1967,23 +1967,59 @@ it produced, go again. `answer` is never withheld (see _What is offered_). The d
 no calibration, no threshold: the endpoint's probabilities are used for nothing
 beyond the label.
 
-**What is offered (#692).** `answer` and every route are offered on every
-iteration, except a `planner` route: it is withheld from the spec straight after
-its own iteration (even a failed one) and for the rest of the turn once any
-successful plan exists. The decisions model sees only each option's description
-and the state, so a model that favours `think` takes it every time it is offered
-(six of six in a recorded run, which spent the whole bound and never answered);
-the guard is therefore on the option SET, not in a prompt. A plan belongs to
-one run of the loop (its records are per call): the next turn may plan again.
-The guard reads only this run's records and latest plan, so it follows whatever
-the loop holds. Today a resume re-enters the loop with neither (resume step 11).
-Once resume inside a route (slice 6) rebuilds them, a plan made before the pause
-keeps the planner withheld.
-`allowReplan: true` on a planner route offers it every time, for a host that wants
-replanning (a later plan replaces the earlier one under PLAN); on any other kind of
-route it is refused at construction. If only `answer` is left, nothing is asked
-and the loop ends as `answer`. No `decision_made` is recorded for that ending, and
-`data.decisions.next_step` keeps the previous decision.
+**What is offered (#692, #809).** `answer` is offered on every iteration. A
+route is withheld from a decision's spec by one of two guards. Both act on the
+option SET, not on a prompt: the decisions model sees only each option's
+description and the state, so a model that favours an option takes it every time
+it is offered.
+
+- **The planner guard (#692).** A `planner` route is withheld straight after its
+  own iteration (even a failed one), and for the rest of the turn once any
+  successful plan exists. In one recorded run the model chose `think` six times
+  out of six, spent the whole bound and never answered. `allowReplan: true` on a
+  planner route offers it every time, for a host that wants replanning (a later
+  plan replaces the earlier one under PLAN). On any other kind of route,
+  `allowReplan` is refused at construction.
+- **The repeat rule (#809).** Any route is withheld for the rest of the turn once
+  two of its records in a row made no progress. In one recorded run a route whose
+  every read failed was dispatched six times, each time returning the same honest
+  failure, and the turn never answered. A record **makes progress** when it
+  `succeeded` and, for a route that calls tools (`simpleLoop`, `actorCritic`,
+  `retriever`), at least one of its own tool results came back `success: true`.
+  `expandPreviousResult` does not count, and a retriever's one result counts as
+  its call. A `planner` calls no tool, so a plan is its progress. A record makes
+  **no progress** in three cases:
+  - it `failed` (it threw, never returned, had no accepted attempt, no match or
+    no plan), even when one of its calls succeeded;
+  - it made no tool call;
+  - every one of its calls failed, including a call the egress gate refused.
+
+  The status alone does not decide it: a `simpleLoop` that Returns "I could not
+  count them" after three failed reads is `succeeded` and made no progress. The
+  count is per route and runs over adjacent records: a record of any other route,
+  or a record of the same route that made progress, resets it. The count comes
+  from `RouteStats.succeededCalls`, which the step line does not show. The
+  readers are `madeProgress` and `stalledRoutes` in
+  `decisionLoop-records.server.ts`. The rule binds an `allowReplan` planner too,
+  which is withheld after two failed plans in a row; a guarded planner is never
+  offered straight after itself, so it cannot reach two. The rule has no
+  configuration.
+
+While a route is withheld, the decisions model sees the same state as without
+the guard: the records that withheld it are in **This turn so far** and, within
+`handoff.lastN`, in **Latest results**. The spec lacks the route's label, and
+`decision_made.labels` records the set each decision was offered, so a
+withholding is visible on the decision that lacked the route. `answer` is not a
+route and no record names it, so neither guard can withhold it. If only `answer`
+is left, nothing is asked and the loop ends as `answer`, with no error. No
+`decision_made` is recorded for that ending, and `data.decisions.next_step` keeps
+the previous decision.
+
+Both guards read only this run's records and latest plan, which are per call, so
+the next turn may plan again and may dispatch a withheld route again. A resume
+rebuilds the finished iterations' records and the latest plan (slice 6), so a
+plan or a stall from before the pause still withholds after it. The paused
+iteration is re-entered with no decision.
 
 **The state** is one string, append-only within a turn: the conversation window
 (`routerTurnWindow`, the router's), then **This turn so far** — one line per
@@ -2176,6 +2212,7 @@ reach them); nothing writes new ones.
 | Situation                                                                                                                        | Behaviour                                                                                                                                                                                                                                                            |
 | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A route fails, or throws                                                                                                         | `failed` record; the loop decides again. Its own `error` events are committed as `recoverable`, or `runChain` would end the turn on a child's irrecoverable error.                                                                                                   |
+| Two records of one route in a row made no progress (failed, or no tool call that succeeded)                                      | The route is not offered again this turn (_What is offered_); `answer` stays. With every route withheld, the loop ends as `answer` with no error.                                                                                                                    |
 | The decision is not a decision (an error, an abstention for any reason, a label outside the options) or the state builder throws | Never dispatches a route. **Iteration 1**: an `irrecoverable` `error` ends the turn visibly (nothing ran, so synthesizing would answer without the agent's tools). **Later**: the loop stops as `answer` and the `recoverable` error stays for the synthesizer (N3). |
 | `maxIterations` reached                                                                                                          | Stops as `answer`, with a `recoverable` `error` of kind `budget_exhausted`, so the synthesizer says the work is partial (N5).                                                                                                                                        |
 | A route leaves a pending human request                                                                                           | The loop returns at once, as `chain()` does between children.                                                                                                                                                                                                        |
@@ -4087,7 +4124,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
     ├── retriever.server.ts     # retriever() — vector-store search as a pattern
     ├── typedDecision.server.ts # typed systemone evaluation, recording, typedDecision and decisionRouter
     ├── decisionLoop.server.ts  # #507: decisionLoop() — a loop over routes, a decisions model choosing the next; per-child synthetic context, route-output records built by code, capped and not sanitised, quoted tool bodies kept under their ingress fence
-    ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, and the state/handoff rendering
+    ├── decisionLoop-records.server.ts # #507: the per-kind extractors (committed events only, never content_sanitized), stats, progress (the #809 repeat rule), and the state/handoff rendering
     ├── decisionLoop-documents.server.ts # #507: the documents block of the decide state — deterministic name sanitising, type allowlist, caps
     ├── withMemory.server.ts    # #419 M5a: withMemory() + memoryStoreConfig() — one config and switch for both halves
     ├── memoryRecall.server.ts  # #419: memoryRecall() — the recall step (gate ∥ search ∥ wake, BM25 + cosine, floors before RRF, tier filter, per-turn clear, memory_recalled). The pure ranking half is ../memory-ranking.server.ts

@@ -404,6 +404,28 @@ describe('slice 6 · after an answer the run continues inside the route', () => 
     expect(decide.offered[2]).not.toContain('think')
   })
 
+  // MUTATION: leave the rebuilt records out of the repeat rule
+  // (`stalledRoutes(records.slice(paused?.finished.length ?? 0))`) → the first
+  // decision after the resume offers the stalled `idle` route again → red.
+  it('a route stalled before the pause stays out of the first resumed decision (#809)', async () => {
+    // Two records in a row with no tool call: `idle` is withheld from decision 3 on.
+    const idle = simpleLoop<Data>(
+      scripted([act('Return', {}, { tool_args: 'nothing to look up' })]).fn,
+      ['plain_read'],
+      { patternId: 'idle' },
+    )
+    const decide = scriptedDecide(['idle', 'idle', 'work', DECISION_LOOP_ANSWER])
+    const { resumed } = await pauseAndApprove(
+      agent({ idle, work: loopOf(readThenWriteThenReturn().fn) }, decide.fn),
+      [],
+    )
+
+    expect(resumed.status).not.toBe('error')
+    expect(decide.offered).toHaveLength(4)
+    expect(decide.offered[2]).toEqual(['work', DECISION_LOOP_ANSWER])
+    expect(decide.offered[3]).toEqual(['work', DECISION_LOOP_ANSWER])
+  })
+
   // MUTATION: call the selector on re-entry (ignore the recorded
   // `reference_attached`) → it is called twice → red. The selection cache is
   // cleared between the pause and the resume, as a resume served by another

@@ -38,13 +38,13 @@ The chat client sends `model: qwen3.5-4b-instruct`, which vLLM enforces, so the 
 
 ## Routes
 
-| Path                        | Upstream | Used by                                                          |
-| --------------------------- | -------- | ---------------------------------------------------------------- |
-| `POST /v1/chat/completions` | vLLM     | `describe` (summaries, titles, compaction)                       |
-| `GET /v1/models`            | vLLM     | smoke checks                                                     |
-| `POST /v1/systemone`        | shim     | `decide`                                                         |
-| `GET /health`               | shim     | the wake poll; re-checks the adapter is served                   |
-| `GET /status`               | file     | boot facts: restored-from-snapshot, phase timings, adapter check |
+| Path                        | Upstream | Used by                                                               |
+| --------------------------- | -------- | --------------------------------------------------------------------- |
+| `POST /v1/chat/completions` | vLLM     | `describe` (summaries, titles, compaction)                            |
+| `GET /v1/models`            | vLLM     | smoke checks                                                          |
+| `POST /v1/systemone`        | shim     | `decide`                                                              |
+| `GET /health`               | shim     | the wake poll; re-checks the adapter is served                        |
+| `GET /status`               | file     | boot facts: restored-from-snapshot, phase timings, adapter check, GPU |
 
 Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`, `/collective_rpc`, cache controls), which `VLLM_SERVER_DEV_MODE=1` registers unauthenticated, and the raw `/v1/completions` + `/tokenize` the shim uses, are reachable only on loopback inside the container. `app/src/__tests__/deploy/modal-pins.test.ts` pins the route list.
 
@@ -59,6 +59,14 @@ Everything else is a 404 at Caddy. vLLM's dev-mode routes (`/sleep`, `/wake_up`,
 With `HAMES_MODAL_SNAPSHOT=0` the same steps run in one `@modal.enter`, with no sleep. That is the baseline `measure.py` compares against.
 
 GPU snapshots are a Modal **alpha** feature. vLLM 0.30's source keeps a LoRA through level-1 sleep, but hybrid linear-attention models (Qwen3.5 is one) are listed as a coverage gap in vLLM's own sleep/wake tracking — which is why step 3 re-checks the distribution instead of trusting `/health`.
+
+## GPU fallbacks
+
+`HAMES_MODAL_GPU` takes one type or an ordered list, e.g. `L4,A10`: Modal starts a container on the first listed type with capacity ([GPU fallbacks](https://modal.com/docs/guide/gpu#gpu-fallbacks)). One app, one URL, and no app setting changes. Three consequences:
+
+- **Snapshots are per GPU type.** Each type in the list takes its own ([2–3 per type](https://modal.com/docs/guide/memory-snapshots)), so the first cold starts that land on a type are full boots, however warm the other type is. Changing the list obsoletes every snapshot, as any redeploy does. The pre-sleep reference that step 3 compares against is in the snapshot, so a restore is always checked against a boot on its own GPU type.
+- **`/status` names the GPU** the container landed on (`gpu`, from `nvidia-smi`), and `smoke.py` prints it, so a measurement records which type it timed.
+- **Each type bills at its own rate**, while the app prices the box at one `SMALL_LLM_EUR_PER_HOUR`. A call served on a dearer type shows a lower floor than it cost, one on a cheaper type a higher one.
 
 ## What leaves the compute region, and what does not
 

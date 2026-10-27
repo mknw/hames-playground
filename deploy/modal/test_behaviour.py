@@ -188,6 +188,53 @@ class SmallModelsBehaviour(unittest.TestCase):
         module = _load_modal_app("hames_small_models.py", HAMES_MODAL_SCALEDOWN_S="60")
         self.assertEqual(module.app.servers[0][1]["scaledown_window"], 60)
 
+    def test_one_gpu_type_deploys_the_plain_string(self):
+        for env, gpu in (({}, "L4"), ({"HAMES_MODAL_GPU": " A10 "}, "A10")):
+            module = _load_modal_app("hames_small_models.py", **env)
+            self.assertEqual(module.app.servers[0][1]["gpu"], gpu)
+
+    def test_a_gpu_list_deploys_an_ordered_list_with_snapshots_on(self):
+        module = _load_modal_app("hames_small_models.py", HAMES_MODAL_GPU="L4, A10")
+        kwargs = module.app.servers[0][1]
+        # A list in preference order; Modal's SDK takes nothing else as fallbacks.
+        self.assertEqual(kwargs["gpu"], ["L4", "A10"])
+        self.assertIs(kwargs["enable_memory_snapshot"], True)
+        self.assertEqual(kwargs["experimental_options"], {"enable_gpu_snapshot": True})
+
+    def test_an_empty_gpu_type_refuses_to_deploy(self):
+        for value in ("L4,", ",A10", "L4,,A10"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                _load_modal_app("hames_small_models.py", HAMES_MODAL_GPU=value)
+
+    def test_gpu_name_reads_nvidia_smi_and_never_stops_the_box(self):
+        m = _load_modal_app("hames_small_models.py")
+        answered = subprocess.CompletedProcess([], 0, stdout="NVIDIA A10\n")
+        with mock.patch.object(m.subprocess, "run", return_value=answered) as run:
+            self.assertEqual(m._gpu_name(), "NVIDIA A10")
+        self.assertEqual(run.call_args.args[0][0], "nvidia-smi")
+        for error in (FileNotFoundError(), subprocess.CalledProcessError(9, "nvidia-smi"),
+                      subprocess.TimeoutExpired("nvidia-smi", 10)):
+            with mock.patch.object(m.subprocess, "run", side_effect=error):
+                self.assertEqual(m._gpu_name(), f"unknown ({type(error).__name__})")
+
+    def test_status_names_the_gpu_it_served_on(self):
+        m = _load_modal_app("hames_small_models.py")
+        box = m.SmallModels.__new__(m.SmallModels)
+        box.vllm, box.shim, box.public_ready = mock.Mock(), mock.Mock(), threading.Event()
+        readings = {m.SUMMARIZER_MODEL: {"x": math.log(0.6)}, m.DECIDER_MODEL: {"x": math.log(0.4)}}
+        box.reference, box.boot = readings, {"snapshot_wall": 0.0}
+        with tempfile.TemporaryDirectory() as status_dir, \
+                mock.patch.object(m, "STATUS_DIR", Path(status_dir)), \
+                mock.patch.object(m, "_http", lambda *a, **k: (200, {})), \
+                mock.patch.object(m, "_wait_ok", lambda *a, **k: 0.0), \
+                mock.patch.object(m, "_reference_logprobs", lambda model, prompt: readings[model]), \
+                mock.patch.object(m, "_gpu_name", lambda: "NVIDIA A10"), \
+                mock.patch.object(m.subprocess, "Popen", lambda *a, **k: mock.Mock()), \
+                contextlib.redirect_stdout(io.StringIO()):
+            box._serve()
+            status = json.loads((Path(status_dir) / "status.json").read_text())
+        self.assertEqual(status["gpu"], "NVIDIA A10")
+
 
 def _chat(content="", **message):
     return 200, {"choices": [{"message": {"content": content, **message}}]}

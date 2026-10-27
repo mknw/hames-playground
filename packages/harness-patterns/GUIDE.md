@@ -240,8 +240,8 @@ configuration withholds earlier content and refuses web calls. The loop itself
 sanitises and screens nothing: the office and info route guards declare the
 screen, the documents route's guard none, and a route record carries the
 fence its tool results arrived in. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The rollout still requires live
-acceptance evidence; registration does not change the default agent.
+is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
+reference app's default agent, set by the host rather than by registration.
 
 ### Deciding with probabilities
 

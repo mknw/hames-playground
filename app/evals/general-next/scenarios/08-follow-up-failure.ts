@@ -4,7 +4,8 @@ import type { ConversationScenario } from '../types'
 export const scenario: ConversationScenario = {
   id: '08-follow-up-failure',
   title: 'Retry after an explicitly failed turn',
-  priority: 'must',
+  priority: 'should',
+  pendingMustIssue: 809,
   baseline: false,
   p4: false,
   messages: [

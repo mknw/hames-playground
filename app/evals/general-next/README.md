@@ -10,8 +10,8 @@ termination, facts, artifacts and retrieval locators. Each scenario has its own 
 **Private tier only**, per the owner amendment of 2026-10-15. The
 baseline cases run on the selected candidate only: `general` was removed on
 2026-10-21 and its last live results are a **recorded** baseline
-(`src/lib/eval-support/general-baseline.ts`), not a run. The default agent is unchanged.
-No live run or default-flip evidence was produced in this PR.
+(`src/lib/eval-support/general-baseline.ts`), not a run. The default-agent flip (#606) was made on an owner
+ruling (2026-10-27), not on a passed flip gate.
 
 ```bash
 # All scripts run from app/ (`.env` and `evals/reports/` are cwd-relative; package paths are not,

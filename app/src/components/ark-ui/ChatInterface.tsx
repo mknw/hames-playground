@@ -50,6 +50,7 @@ import {
   type SessionRunState,
 } from '~/lib/run-registry'
 import { useSessionRegistry } from '~/lib/session-registry-context'
+import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 
 // ============================================================================
 // Types
@@ -131,7 +132,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     const ids = registry.mergeGraph(sid, elements)
     if (sid === props.sessionId) props.onHighlightEntities?.(ids)
   }
-  const [selectedAgent, setSelectedAgent] = createSignal('search')
+  const [selectedAgent, setSelectedAgent] = createSignal(DEFAULT_AGENT_ID)
 
   // The registry's greeting for whichever agent is selected — what an empty
   // conversation says instead of the one fixed "your knowledge assistant"
@@ -165,7 +166,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   /** Bumped when a turn of the on-screen conversation settles, so the memory
    *  prompt knows to look for a proposal the store step may have raised. */
   const [settledTick, setSettledTick] = createSignal(0)
-  // Report the selected agent up to the parent (initial 'search', then on load
+  // Report the selected agent up to the parent (initial DEFAULT_AGENT_ID, then on load
   // and on every change) so agent-aware UI can react. Consumers today are the
   // SupportPanel's Data tab (uploads carry agentId, which gates auto-ingest) and
   // its Sandbox tab (the Shell needs the id to hydrate /work/in, and the tab is

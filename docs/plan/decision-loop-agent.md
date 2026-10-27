@@ -952,6 +952,8 @@ Ship as a new agent beside `general` (working id `general-next`). It replaces `g
 
 > **Update, 2026-10-21:** the owner removed `general` before this gate closed (the default agent is still `search`). `general` no longer runs, so criterion 1 is measured against its **recorded** last live results (`app/src/lib/eval-support/general-baseline.ts`), not a paired run; a stored `general` id resolves to `general-next`. Criteria 2 to 5 are unchanged.
 
+> **Update, 2026-10-27:** `general-next` became the default agent (#606) on an owner ruling, not on this gate: live run 7 failed three `must` scenarios (07, 08, 14); the owner reviewed them, judged them not deal-breakers, and had them tracked as pending musts to be fixed while the rest moves.
+
 1. an eval scenario shows no regression on `general`'s current cases, on the private tier only (owner amendment, 2026-10-15; #507 W4);
 2. a synthetic fetch → read back → compute request passes;
 3. P2, P3 (G13 landed with its evidence) and P5 (G11 deletion/client migration first) are met;

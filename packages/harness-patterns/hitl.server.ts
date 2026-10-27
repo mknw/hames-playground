@@ -456,8 +456,11 @@ export function currentRunId(): string | undefined {
 }
 
 /** JSON with object keys sorted at every level: "the same payload" is a byte
- *  comparison, whatever order the keys were written in. */
+ *  comparison, whatever order the keys were written in. The value is first
+ *  round-tripped through JSON, so a `Date`, a `Map` or a `Set` is what JSON
+ *  makes of it rather than an empty object two different values would share. */
 export function canonicalJson(value: unknown): string {
+  const plain: unknown = value === undefined ? null : JSON.parse(JSON.stringify(value) ?? 'null')
   const sort = (v: unknown): unknown =>
     Array.isArray(v)
       ? v.map(sort)
@@ -468,10 +471,11 @@ export function canonicalJson(value: unknown): string {
               .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
           )
         : v
-  return JSON.stringify(sort(value)) ?? 'null'
+  return JSON.stringify(sort(plain)) ?? 'null'
 }
 
-/** A held payload's default lifetime: the request's, when it names none. */
+/** A held payload's lifetime, and its request's, when the request names none:
+ *  the two always expire together. */
 export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
 
 /**
@@ -492,6 +496,10 @@ export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
  *    deliberate repeat from a retry of one call — and the `payloadRef`.
  * 4. An answered outcome on a row this call inserted means nothing waits on it
  *    (the unattended rule decided at once): the row is dropped.
+ *
+ * The row and the request expire TOGETHER: both take `expiresInMs`, or
+ * {@link HOLDING_EXPIRES_IN_MS} when the request names none, so a request is
+ * never answerable after its payload was swept.
  */
 export async function askHumanHolding<C extends string>(
   request: Omit<HitlRequest<C>, 'key' | 'payloadRef'>,
@@ -504,15 +512,17 @@ export async function askHumanHolding<C extends string>(
   if (!frame.hitlPayloads) refuse('this host holds no request payloads (no hitlPayloads store)')
   const store = frame.hitlPayloads
   const digest = createHash('sha256').update(canonicalJson(payload)).digest('hex')
+  const expiresInMs = request.expiresInMs ?? HOLDING_EXPIRES_IN_MS
   const held = await store.hold({
     callKey: frame.callKey,
     kind: request.kind,
     payload,
-    expiresAt: Date.now() + (request.expiresInMs ?? HOLDING_EXPIRES_IN_MS),
+    expiresAt: Date.now() + expiresInMs,
   })
   if ('rebound' in held) return { status: 'rebound' }
   const outcome = await askHuman({
     ...request,
+    expiresInMs,
     key: `${digest}:${frame.callKey}`,
     payloadRef: held.payloadRef,
   })

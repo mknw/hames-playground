@@ -632,15 +632,16 @@ export interface HitlPayloadRow {
 }
 
 /**
- * Hold a payload for one logical call, INSERT-ONLY (the `HitlPayloadStore`
- * contract):
+ * Hold a payload for one logical call and request kind, INSERT-ONLY (the
+ * `HitlPayloadStore` contract). Rows are never updated: no `UPDATE
+ * hitl_payloads` exists in this module, and a pin holds it there.
  *
- * - no row for `(owner, conversation, callKey)`: insert one under a fresh
- *   `payloadRef` → `inserted: true`;
- * - a row with the same kind and the same canonical payload (a retry of the
- *   same call): that row's `payloadRef` → `inserted: false`;
- * - a row with anything else: `rebound`, and the row is left as it was — a
- *   logical call is never rebound to another payload.
+ * - no row for `(owner, conversation, callKey, kind)`: insert one under a
+ *   fresh `payloadRef` → `inserted: true`;
+ * - a row with the same canonical payload (a retry of the same call): that
+ *   row's `payloadRef` → `inserted: false`;
+ * - a row with another payload: `rebound`, and the row is left as it was — a
+ *   logical call is never rebound to another payload of the same kind.
  *
  * Two concurrent inserts for one call: the loser's insert conflicts on the
  * unique key and does nothing, then reads the winner's row and is judged by the
@@ -661,7 +662,7 @@ export async function holdHitlPayload(input: {
     `INSERT INTO hitl_payloads
        (payload_ref, user_id, session_id, call_key, kind, expires_at, payload)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (user_id, session_id, call_key) DO NOTHING`,
+     ON CONFLICT (user_id, session_id, call_key, kind) DO NOTHING`,
     [
       payloadRef,
       input.userId,
@@ -673,10 +674,10 @@ export async function holdHitlPayload(input: {
     ],
   )
   if ((rowCount ?? 0) > 0) return { payloadRef, inserted: true }
-  const { rows } = await query<{ payload_ref: string; kind: string; payload: string }>(
-    `SELECT payload_ref, kind, payload FROM hitl_payloads
-      WHERE user_id = $1 AND session_id = $2 AND call_key = $3`,
-    [input.userId, input.sessionId, input.callKey],
+  const { rows } = await query<{ payload_ref: string; payload: string }>(
+    `SELECT payload_ref, payload FROM hitl_payloads
+      WHERE user_id = $1 AND session_id = $2 AND call_key = $3 AND kind = $4`,
+    [input.userId, input.sessionId, input.callKey, input.kind],
   )
   if (rows.length === 0) {
     // The winner's row was swept or purged between the two statements: the
@@ -684,9 +685,7 @@ export async function holdHitlPayload(input: {
     throw new Error('[hitl] the held payload for this call is gone')
   }
   const stored = decryptFieldOrNull(rows[0].payload, 'hitl_payloads.payload')
-  return rows[0].kind === input.kind && stored === json
-    ? { payloadRef: rows[0].payload_ref, inserted: false }
-    : { rebound: true }
+  return stored === json ? { payloadRef: rows[0].payload_ref, inserted: false } : { rebound: true }
 }
 
 /** One held payload of the caller's, not past its expiry, or null (unknown,
@@ -711,16 +710,20 @@ export async function getHitlPayload(
   }
 }
 
-/** Delete held payloads by ref, owner-scoped. Idempotent: the purge on close,
- *  and the drop of a row no request was left waiting on. */
+/** Delete held payloads by ref, owner-scoped — and conversation-scoped when
+ *  a conversation is named (the store's drop is bound to one). Idempotent: the
+ *  purge on close, and the drop of a row no request was left waiting on. */
 export async function deleteHitlPayloads(
   payloadRefs: readonly string[],
   userId: string,
+  sessionId?: string,
 ): Promise<number> {
   if (payloadRefs.length === 0) return 0
   const { rowCount } = await query(
-    `DELETE FROM hitl_payloads WHERE user_id = $1 AND payload_ref = ANY($2)`,
-    [userId, [...payloadRefs]],
+    sessionId === undefined
+      ? `DELETE FROM hitl_payloads WHERE user_id = $1 AND payload_ref = ANY($2)`
+      : `DELETE FROM hitl_payloads WHERE user_id = $1 AND payload_ref = ANY($2) AND session_id = $3`,
+    sessionId === undefined ? [userId, [...payloadRefs]] : [userId, [...payloadRefs], sessionId],
   )
   return rowCount ?? 0
 }

@@ -38,7 +38,7 @@ export function createHitlPayloadStore(userId: string, sessionId: string): HitlP
         expiresAt: new Date(input.expiresAt),
       }),
     drop: async (payloadRef) => {
-      await deleteHitlPayloads([payloadRef], userId)
+      await deleteHitlPayloads([payloadRef], userId, sessionId)
     },
   }
 }
@@ -78,15 +78,14 @@ type Resolver = (
 const dropQuarantine: Resolver = (request, _answer, userId) =>
   deleteQuarantine(request.requestId, userId)
 
-/** Each kind's resolver. A kind with none keeps the original behaviour. */
-const RESOLVERS: Readonly<Record<string, Resolver>> = {
-  provenance: dropQuarantine,
-}
+/** Each kind's resolver. A kind with none keeps the original behaviour. A
+ *  Map, so a kind named like an `Object.prototype` member is just a kind. */
+const RESOLVERS: ReadonlyMap<string, Resolver> = new Map([['provenance', dropQuarantine]])
 
 /** The host's `resolve` for one owner's resume: the request's kind picks it. */
 export function resolveHitlAnswer(userId: string) {
   return (
     request: HitlRequestEventData,
     answer: { readonly choice: string; readonly flags: Readonly<Record<string, boolean>> },
-  ): Promise<unknown> => (RESOLVERS[request.kind] ?? dropQuarantine)(request, answer, userId)
+  ): Promise<unknown> => (RESOLVERS.get(request.kind) ?? dropQuarantine)(request, answer, userId)
 }

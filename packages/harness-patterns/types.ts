@@ -1726,10 +1726,13 @@ export type HitlOutcome<C extends string = string> =
  */
 export interface HitlPayloadStore {
   /**
-   * Hold `payload` for the logical call `callKey`. INSERT-ONLY: a call with no
-   * row gets one under a fresh `payloadRef` (`inserted: true`); a retry of the
-   * same call with the same payload gets that row back; the same call with a
-   * DIFFERENT payload is refused (`rebound`), and the row is left as it was.
+   * Hold `payload` for the logical call `callKey` and the request's `kind`.
+   * INSERT-ONLY: a call and kind with no row gets one under a fresh
+   * `payloadRef` (`inserted: true`); a retry with the same payload gets that
+   * row back; the same call and kind with a DIFFERENT payload is refused
+   * (`rebound`), and the row is left as it was. Another kind under the same
+   * call is its own row: an outgoing call released by a person can still have
+   * its result flagged.
    */
   hold(input: {
     readonly callKey: string

@@ -9,6 +9,7 @@ import {
   type UnifiedContext,
 } from '@hames-ai/harness-patterns'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { resumableStep, wrapperResumable } from '@hames-ai/harness-patterns/resume.server'
 
 assertServerOnImport()
 
@@ -45,14 +46,19 @@ function infoEvent(event: ContextEvent): ContextEvent[] {
  * Copy the visible backing context so selectors, previews and expansion all
  * consume the same filtered events, even through unfiltered(). */
 export function withInfoDocumentReferences<T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> {
+  // A filter over the view and nothing else, so a resume passes straight
+  // through it to the info loop (resume inside a route).
+  const resumable = wrapperResumable('withInfoDocumentReferences', pattern)
   return {
     ...pattern,
     name: `withInfoDocumentReferences(${pattern.name})`,
     children: [pattern],
-    fn: (scope, view) => {
-      const ctx = (view as unknown as { ctx: UnifiedContext }).ctx
-      const filtered = { ...ctx, events: view.fromAll().get().flatMap(infoEvent) }
-      return pattern.fn(scope, createEventView(filtered, pattern.config.viewConfig, scope.id))
-    },
+    capabilities: { ...pattern.capabilities, resumable },
+    fn: (scope, view) =>
+      resumableStep('withInfoDocumentReferences', resumable, () => {
+        const ctx = (view as unknown as { ctx: UnifiedContext }).ctx
+        const filtered = { ...ctx, events: view.fromAll().get().flatMap(infoEvent) }
+        return pattern.fn(scope, createEventView(filtered, pattern.config.viewConfig, scope.id))
+      }),
   }
 }

@@ -10,7 +10,9 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { trackEvent, resolveConfig, createScope, createEvent } from '../context.server'
+import { trackEvent, resolveConfig, createScope, createEvent, shouldTrack } from '../context.server'
+import { hitlPending } from '../hitl.server'
+import { resumableStep, takeResume, wrapperResumable } from '../resume.server'
 import type {
   ConfiguredPattern,
   ContextEvent,
@@ -192,9 +194,37 @@ export function withReferences<T>(
   // (`bamlPatterns().selector` in the app) or its own deterministic policy —
   // core hosts no default import (#225 L3).
   const selector = config.selector
+  // A resume replays the selection it recorded instead of asking the selector
+  // again (slice 6): the same refs, and no model call. Resumable only while it
+  // records that selection: one that does not would call the selector again.
+  const recordsSelection = shouldTrack('reference_attached', resolved.trackHistory)
+  const resumable = recordsSelection
+    ? wrapperResumable('withReferences', wrappedPattern)
+    : undefined
 
-  const fn = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+  const fn = (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    if (!resumable) return attach(scope, view, undefined)
+    const recorded = takeResume(resumable.fingerprint)
+      ?.events.filter((e) => e.patternId === scope.id && e.type === 'reference_attached')
+      .at(-1)?.data as ReferenceAttachedEventData | undefined
+    return resumableStep('withReferences', resumable, () => attach(scope, view, recorded))
+  }
+
+  const attach = async (
+    scope: PatternScope<T>,
+    view: EventView,
+    recorded: ReferenceAttachedEventData | undefined,
+  ): Promise<PatternScope<T>> => {
     try {
+      if (recorded) {
+        ;(scope.data as { attachedRefs?: PriorResult[] }).attachedRefs = toPriorResults(
+          pickCandidatesByIds(
+            recorded.candidates.map((c) => ({ ...c }) as ReferenceCandidate),
+            recorded.selected,
+          ).slice(0, maxRefs),
+        )
+        return await runInner(scope, view)
+      }
       // 1. Build candidate list
       const allEvents = view.fromAll().get()
       const sourceList = config?.source
@@ -295,26 +325,7 @@ export function withReferences<T>(
       // 4. Stash on scope.data so the adapter can pick it up
       ;(scope.data as { attachedRefs?: PriorResult[] }).attachedRefs = toPriorResults(attached)
 
-      // 5. Dispatch to inner pattern with a child scope so its events are
-      //    surrounded by pattern_enter/exit. Mirrors `chain`'s per-step wrapping.
-      const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
-      const childScope = createScope<T>(innerPatternId, scope.data)
-      // The boundary is stamped when the inner pattern STARTS. The events are
-      // pushed after it finishes (so a throw leaves none behind), but an event
-      // stamped there reads as "entered after everything it contains" — the
-      // panel sorts by `ts`, so the enter row landed below the inner pattern's
-      // own events.
-      const enterEvent = createEvent('pattern_enter', innerPatternId, {
-        pattern: wrappedPattern.name,
-      })
-      const result = await wrappedPattern.fn(childScope, view)
-
-      scope.events.push(enterEvent)
-      scope.events.push(...result.events)
-      scope.events.push(createEvent('pattern_exit', innerPatternId, { status: 'completed' }))
-      scope.data = result.data
-
-      return scope
+      return await runInner(scope, view)
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
       const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
@@ -332,11 +343,39 @@ export function withReferences<T>(
     }
   }
 
+  // 5. Dispatch to inner pattern with a child scope so its events are
+  //    surrounded by pattern_enter/exit. Mirrors `chain`'s per-step wrapping.
+  const runInner = async (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> => {
+    const innerPatternId = wrappedPattern.config.patternId ?? wrappedPattern.name
+    const childScope = createScope<T>(innerPatternId, scope.data)
+    // The boundary is stamped when the inner pattern STARTS. The events are
+    // pushed after it finishes (so a throw leaves none behind), but an event
+    // stamped there reads as "entered after everything it contains" — the
+    // panel sorts by `ts`, so the enter row landed below the inner pattern's
+    // own events.
+    const enterEvent = createEvent('pattern_enter', innerPatternId, {
+      pattern: wrappedPattern.name,
+    })
+    const result = await wrappedPattern.fn(childScope, view)
+
+    scope.events.push(enterEvent)
+    scope.events.push(...result.events)
+    scope.events.push(
+      createEvent('pattern_exit', innerPatternId, {
+        status: hitlPending() ? 'paused' : 'completed',
+      }),
+    )
+    scope.data = result.data
+
+    return scope
+  }
+
   return {
     name: `withReferences(${wrappedPattern.name})`,
     fn,
     config: resolved,
     estimateTurns: (s) => wrappedPattern.estimateTurns?.(s) ?? 1,
     children: [wrappedPattern],
+    ...(resumable ? { capabilities: { resumable } } : {}),
   }
 }

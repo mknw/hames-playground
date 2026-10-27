@@ -33,6 +33,7 @@ import { assertServerOnImport } from '../assert.server'
 import { createEvent, createModelCallEvent, redactCall } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
+import { resumableStep, wrapperResumable } from '../resume.server'
 import {
   applyScreenVerdict,
   redactReport,
@@ -571,6 +572,9 @@ function buildEvent(patternId: string, report: SanitizeReport): ContextEvent {
 export function withInjectionGuard(config: InjectionGuardConfig) {
   return <T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> => {
     const patternId = pattern.config.patternId ?? pattern.name
+    // It holds no per-invocation state, so a resume passes straight through it
+    // (slice 6).
+    const resumable = wrapperResumable('withInjectionGuard', pattern)
 
     const fn = (scope: PatternScope<T>, view: Parameters<typeof pattern.fn>[1]) => {
       // Push directly rather than via `trackEvent`: a loop's `trackHistory` is
@@ -592,13 +596,16 @@ export function withInjectionGuard(config: InjectionGuardConfig) {
         },
         patternId,
       )
-      return amendRunFrame({ guard }, () => pattern.fn(scope, view))
+      return resumableStep('withInjectionGuard', resumable, () =>
+        amendRunFrame({ guard }, () => pattern.fn(scope, view)),
+      )
     }
 
     return {
       ...pattern,
       name: `withInjectionGuard(${pattern.name})`,
       fn,
+      capabilities: { ...pattern.capabilities, resumable },
       // Expose the wrapped pattern so static introspection (pattern-capabilities)
       // still sees patterns nested inside the guard.
       children: [pattern],

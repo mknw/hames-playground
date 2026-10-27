@@ -1030,6 +1030,47 @@ export interface PatternCapabilities {
    *  planner's agent map (#507). It describes what a model is OFFERED — the
    *  allowlist is still enforced by the loop itself, at call time. */
   tools?: readonly string[]
+  /** This pattern can be re-entered INSIDE a run after a pause: it records its
+   *  segment on the continuation a request carries and, on the resume, rebuilds
+   *  its state from its own events instead of starting over (resume inside a
+   *  route, slice 6). Declared by `decisionLoop`, `simpleLoop` and the wrappers
+   *  between them; `actorCritic`, `withSandbox`, `parallel`, `routes` and
+   *  `chain` declare none. A wrapper that spreads its inner pattern must set
+   *  its own value, never inherit the inner one. */
+  resumable?: ResumableCapability
+  /** Tool names below this pattern whose executor may pause for a person (a
+   *  write request). Construction refuses one, declared by any pattern, in any
+   *  allowlist whose path from the root is not resumable all the way down. At
+   *  run time the names reach a route's `simpleLoop` only through
+   *  `decisionLoop({ gatedTools })`, which refuses a batch holding one before
+   *  dispatching any of its calls. */
+  gatedTools?: readonly string[]
+}
+
+/** How a resumable pattern is found again from the composition (slice 6). */
+export interface ResumableCapability {
+  /** sha256 of the pattern's kind, `patternId` and replay-relevant
+   *  configuration. Recorded on each segment; `checkResume` recomputes it from
+   *  the current composition, so a changed pattern is `chain-changed`. */
+  readonly fingerprint: string
+  /** The direct child a continuation's NEXT segment must name, given this
+   *  segment: a wrapper's inner pattern, a `decisionLoop`'s route. Absent on a
+   *  pattern that raises or dispatches the gate itself, which ends the path. */
+  readonly next?: (segment: ContinuationSegment) => ConfiguredPattern<any> | undefined
+}
+
+/**
+ * One resumable pattern on the path from the top-level pattern to a gate, as a
+ * `hitl_request` records it (slice 6). The path is what a resume checks before
+ * any side effect and what each pattern on it follows to re-enter.
+ */
+export interface ContinuationSegment {
+  /** The pattern's kind, for reading; matching uses the fingerprint. */
+  readonly pattern: string
+  readonly fingerprint: string
+  /** `decisionLoop` only: the route it ran and the iteration it ran in. */
+  readonly route?: string
+  readonly iteration?: number
 }
 
 // ============================================================================
@@ -1197,6 +1238,12 @@ export interface ToolCallEventData {
    *  this the only record that a tool ran on rebuilt arguments is that it ran.
    *  Absent on the overwhelming majority of calls. */
   repaired?: import('./json-repair').JsonRepairNote
+  /** The LOGICAL identity of this call (decision-loop-agent slice 8): sha256 of
+   *  the run, the resumable path to the loop, the loop's turn and the call's
+   *  position in that turn's action. A retry of the same call recomputes it, in
+   *  any process; a deliberate repeat sits at another turn or position. Set by
+   *  `simpleLoop` inside a HITL run. */
+  callKey?: string
 }
 
 /** Data payload for tool_result event */
@@ -1229,6 +1276,9 @@ export interface ToolResultEventData {
    *  compaction summary of "waiting for a decision" can never mask the
    *  outcome (#433 Δ2). */
   heldBy?: string
+  /** A serial multi-call turn stopped before this call ran (its `error` says
+   *  why). Recorded so a resume rebuilds the turn exactly (slice 6). */
+  skipped?: true
 }
 
 /** Data payload for controller_action event */
@@ -1254,12 +1304,20 @@ export interface PatternEnterEventData {
   /** Pattern's configured maxTurns (simpleLoop/actorCritic) — used by the UI
    *  progress bar to compute fill ratio per controller_action. */
   maxTurns?: number
+  /** `decisionLoop` children: the loop's id, the route and the iteration, so a
+   *  route that ran twice in one turn is two invocations, not one. */
+  decisionLoop?: string
+  route?: string
+  iteration?: number
 }
 
 /** Data payload for pattern_exit event */
 export interface PatternExitEventData {
+  /** `paused` when the child stopped for a person (slice 6). */
   status: CtxStatus
   error?: string
+  /** `decisionLoop` children: this half's own run time, without any wait. */
+  wallMs?: number
 }
 
 /** Data payload for error event */
@@ -1428,6 +1486,9 @@ export interface LoopRecoveryEventData {
   turn: number
   /** The budget in force, so a reader has both halves of "3 of 12". */
   maxTurns: number
+  /** What the round's turn-log entry told the controller, when that is not
+   *  `error` (an unparseable answer): a resume rebuilds the entry from it. */
+  feedback?: string
 }
 
 /** Data payload for reference_attached event — emitted by `withReferences` on pattern entry */
@@ -1584,6 +1645,11 @@ export interface HitlRequestEventData {
   /** Where a resume re-enters: the top-level index and the full top-level
    *  name list. */
   readonly resumeAt?: { readonly index: number; readonly names: readonly string[] }
+  /** The resumable patterns from the top-level pattern down to the gate, when
+   *  the top-level pattern is resumable (slice 6). Absent below a top-level
+   *  pattern that is not: that pause re-enters the top-level pattern from its
+   *  start, as before. */
+  readonly continuation?: readonly ContinuationSegment[]
   /** The opaque inference tier the run took. */
   readonly tier?: string
 }
@@ -1651,6 +1717,40 @@ export type HitlOutcome<C extends string = string> =
       readonly by: HitlDecidedBy
     }
   | { readonly status: 'pending'; readonly requestId: string }
+
+/**
+ * The host's store for a blocking request's payload (decision-loop-agent slice
+ * 8), supplied on the run frame (`hitlPayloads`): what the person is shown
+ * rides here, encrypted, never on an event. Bound to the owner and the
+ * conversation by the host that built it, so core never names either.
+ */
+export interface HitlPayloadStore {
+  /**
+   * Hold `payload` for the logical call `callKey` and the request's `kind`.
+   * INSERT-ONLY: a call and kind with no row gets one under a fresh
+   * `payloadRef` (`inserted: true`); a retry with the same payload gets that
+   * row back; the same call and kind with a DIFFERENT payload is refused
+   * (`rebound`), and the row is left as it was. Another kind under the same
+   * call is its own row: an outgoing call released by a person can still have
+   * its result flagged.
+   */
+  hold(input: {
+    readonly callKey: string
+    readonly kind: string
+    readonly payload: unknown
+    readonly expiresAt: number
+  }): Promise<
+    { readonly payloadRef: string; readonly inserted: boolean } | { readonly rebound: true }
+  >
+  /** Drop a row a call inserted when no request was left waiting on it (the
+   *  unattended rule decided at once). Idempotent. */
+  drop(payloadRef: string): Promise<void>
+}
+
+/** What {@link askHumanHolding} answers: a decision, or a refusal to rebind a
+ *  logical call to a different payload. */
+export type HoldingOutcome<C extends string = string> =
+  HitlOutcome<C> | { readonly status: 'rebound' }
 
 /** What a gated tool executor returns while the run waits: the placeholder,
  *  never the content. A resume substitutes the outcome for it, sanitized, and
@@ -2528,6 +2628,9 @@ export const DEFAULT_TRACK_HISTORY: Record<string, TrackHistory> = {
   // compactExecution's thread mode reads. The children's events are merged by
   // the loop itself and do not pass through this filter.
   decisionLoop: ['decision_made', 'controller_action', 'tool_result'],
+  // The selection IS the replay state (resume inside a route, slice 6): a
+  // resume re-attaches it instead of asking the selector again.
+  withReferences: 'reference_attached',
 }
 
 /** Default commitStrategy by pattern type */

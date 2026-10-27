@@ -744,8 +744,9 @@ describe('H22 · the resolution reaches the model only after sanitizeUntrusted',
     // The verbatim span is nowhere in the record (SD-3): no content_sanitized
     // event carries it, and the response's resolution is never rendered.
     expect(ofType(result.context, 'content_sanitized')).toEqual([])
-    // The re-entered loop called the tool again and got the answer, not a hold.
-    expect(calls.filter((c) => c !== 'read')).toEqual(['held', 'ingest:sanitize'])
+    // The re-entered loop continues inside itself (slice 6): the held call is
+    // NOT dispatched again — its outcome is the sanitized resolution above.
+    expect(calls.filter((c) => c !== 'read')).toEqual(['held'])
   })
 
   it('with no resolve, the held result says what the person chose', async () => {
@@ -812,11 +813,13 @@ describe('H22b · a held result is never compacted, and substitution deletes its
     const substituted = heldEvent(resumed.context).data as ToolResultEventData
     expect(substituted).not.toHaveProperty('summary')
 
-    const reEntered = inputs[0].priorResults ?? []
-    const preview = reEntered.find((r) => r.tool === 'gated_ingest')?.summary ?? ''
-    expect(preview).toContain('doc-7')
-    expect(JSON.stringify(reEntered)).not.toContain('HELD-SUMMARY')
-    expect(JSON.stringify(reEntered)).not.toContain("waiting for a person's decision")
+    // The re-entered controller continues the paused loop (slice 6): the held
+    // call's outcome is in its rebuilt turn log, and neither that log nor its
+    // prior results serve the placeholder's summary or note.
+    const reEntered = JSON.stringify([inputs[0].turns, inputs[0].priorResults ?? []])
+    expect(JSON.stringify(inputs[0].turns)).toContain('doc-7')
+    expect(reEntered).not.toContain('HELD-SUMMARY')
+    expect(reEntered).not.toContain("waiting for a person's decision")
 
     inputs.length = 0
     await continueSession<Data>(resumed.serialized, patterns, 'later question', undefined, frame)

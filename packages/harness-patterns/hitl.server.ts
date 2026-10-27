@@ -72,11 +72,13 @@ import {
 } from './context.server'
 import { redactReport, sanitizeUntrusted } from './injection-guard'
 import { emitLive } from './live-event-context.server'
+import { followContinuation, ownResumable } from './pattern-capabilities'
 import { activeRunFrame, currentRunFrame } from './run-frame.server'
 import type {
   AssistantMessageEventData,
   ConfiguredPattern,
   ContextEvent,
+  ContinuationSegment,
   EventView,
   HeldResult,
   HitlAnswers,
@@ -87,6 +89,7 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   HitlUnattended,
+  HoldingOutcome,
   PatternConfig,
   PatternScope,
   ScopedPattern,
@@ -411,6 +414,8 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
     ...(request.expiresInMs !== undefined ? { expiresAt: Date.now() + request.expiresInMs } : {}),
     blocking: true,
     resumeAt: { index: position.index, names: position.names },
+    // The resumable patterns down to this gate (slice 6), checked on resume.
+    ...(frame.continuation.length > 0 ? { continuation: frame.continuation } : {}),
     ...(tier !== undefined ? { tier } : {}),
   }
   const event = mintHitlEvent('hitl_request', position.patternId, data)
@@ -441,6 +446,88 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   // going. Recorded as delivered, so the commit does not send it twice.
   emitLive(event, true)
   return { status: 'pending', requestId }
+}
+
+/** The id of the run this code runs in — its `user_message`'s — or undefined
+ *  outside a HITL run. Read once per loop invocation: it copies the log. */
+export function currentRunId(): string | undefined {
+  const run = hitlRunStore.getStore()
+  return run ? runIdOf(run.ownerEvents()) : undefined
+}
+
+/** JSON with object keys sorted at every level: "the same payload" is a byte
+ *  comparison, whatever order the keys were written in. The value is first
+ *  round-tripped through JSON, so a `Date`, a `Map` or a `Set` is what JSON
+ *  makes of it rather than an empty object two different values would share. */
+export function canonicalJson(value: unknown): string {
+  const plain: unknown = value === undefined ? null : JSON.parse(JSON.stringify(value) ?? 'null')
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v !== null && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
+          )
+        : v
+  return JSON.stringify(sort(plain)) ?? 'null'
+}
+
+/** A held payload's lifetime, and its request's, when the request names none:
+ *  the two always expire together. */
+export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Ask a person about a payload the request event must never carry
+ * (decision-loop-agent slice 8): the payload is HELD in the host's store under
+ * this call's logical identity first, and the request names it only by
+ * `payloadRef`. In order:
+ *
+ * 1. The call's `callKey` (set by `simpleLoop` around the dispatch) and the
+ *    host's `hitlPayloads` store are both required; either missing throws
+ *    {@link HitlRequestError} — a payload with nowhere to go, or a call with
+ *    no stable identity, cannot be asked about.
+ * 2. `digest` is the sha256 of the payload's canonical JSON. The store holds
+ *    the payload, insert-only; a different payload under the same call is
+ *    `rebound`, and nothing is asked.
+ * 3. `askHuman` with the key `${digest}:${callKey}` — the digest makes the key
+ *    cover everything the decision authorizes (F8), the call key separates a
+ *    deliberate repeat from a retry of one call — and the `payloadRef`.
+ * 4. An answered outcome on a row this call inserted means nothing waits on it
+ *    (the unattended rule decided at once): the row is dropped.
+ *
+ * The row and the request expire TOGETHER: both take `expiresInMs`, or
+ * {@link HOLDING_EXPIRES_IN_MS} when the request names none, so a request is
+ * never answerable after its payload was swept.
+ */
+export async function askHumanHolding<C extends string>(
+  request: Omit<HitlRequest<C>, 'key' | 'payloadRef'>,
+  payload: unknown,
+): Promise<HoldingOutcome<C>> {
+  const frame = activeRunFrame()
+  if (frame.callKey === undefined) {
+    refuse('a request that holds a payload must be raised from a dispatched tool call (no callKey)')
+  }
+  if (!frame.hitlPayloads) refuse('this host holds no request payloads (no hitlPayloads store)')
+  const store = frame.hitlPayloads
+  const digest = createHash('sha256').update(canonicalJson(payload)).digest('hex')
+  const expiresInMs = request.expiresInMs ?? HOLDING_EXPIRES_IN_MS
+  const held = await store.hold({
+    callKey: frame.callKey,
+    kind: request.kind,
+    payload,
+    expiresAt: Date.now() + expiresInMs,
+  })
+  if ('rebound' in held) return { status: 'rebound' }
+  const outcome = await askHuman({
+    ...request,
+    expiresInMs,
+    key: `${digest}:${frame.callKey}`,
+    payloadRef: held.payloadRef,
+  })
+  if (outcome.status === 'answered' && held.inserted) await store.drop(held.payloadRef)
+  return outcome
 }
 
 /** The note a held result carries when the consumer gives none. */
@@ -621,8 +708,17 @@ export function checkResume(
     readonly names: readonly string[]
     readonly tier: string | undefined
     readonly now: number
+    /** The current top-level patterns: a pause below a RESUMABLE one must
+     *  still lead to its gate through them (slice 6). */
+    readonly patterns?: readonly ConfiguredPattern<any>[]
   },
-): { readonly accepted: readonly AcceptedAnswer[]; readonly startAt: number } {
+): {
+  readonly accepted: readonly AcceptedAnswer[]
+  readonly startAt: number
+  /** The recorded path to re-enter through, when the top-level pattern is
+   *  resumable; absent for a top-level pattern that re-runs from its start. */
+  readonly continuation?: readonly ContinuationSegment[]
+} {
   if (ctx.status !== 'paused') {
     throw new HitlAnswerError('not-paused', `the context is '${ctx.status}', not paused`)
   }
@@ -681,6 +777,27 @@ export function checkResume(
       'chain-changed',
       "the agent's top-level patterns are not the ones this run paused in",
     )
+  }
+  // Slice 6: below a resumable top-level pattern the pause re-enters INSIDE
+  // the run, so every pending request must carry one path, and that path must
+  // still lead to its gate through the current composition. An absent, changed
+  // or non-resumable path is refused here, before any `resolve`. A request
+  // that RECORDED a path is bound to it whatever the top-level pattern is now:
+  // a composition that stopped being resumable must not re-run the loop from
+  // its start after `resolve`. Only a pause that recorded no path, below a
+  // top-level pattern that is not resumable, keeps the 0.x re-entry.
+  const top = at.patterns?.[startAt]
+  if (top && (ownResumable(top) || pending.some((r) => r.continuation !== undefined))) {
+    const path = pending[0].continuation
+    const samePath = (r: HitlRequestEventData): boolean =>
+      JSON.stringify(r.continuation) === JSON.stringify(path)
+    if (!path || !pending.every(samePath) || !followContinuation(top, path)) {
+      throw new HitlAnswerError(
+        'chain-changed',
+        'the patterns between the top-level pattern and the paused gate are not the ones this run paused in',
+      )
+    }
+    return { accepted, startAt, continuation: path }
   }
   return { accepted, startAt }
 }

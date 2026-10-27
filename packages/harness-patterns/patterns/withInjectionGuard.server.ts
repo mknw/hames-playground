@@ -30,16 +30,24 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
+import { askHumanHolding, canPauseHere, held, hitlRunAttended } from '../hitl.server'
 import { createEvent, createModelCallEvent, redactCall } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { amendRunFrame, currentRunFrame, resolveByTier } from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
 import {
+  announceNeutralised,
   applyScreenVerdict,
+  fenceItemId,
+  INGRESS_FLAG_KIND,
+  INGRESS_FLAG_OPTIONS,
+  INGRESS_TEXTS,
+  ingressFlagResolution,
   redactReport,
   sanitizeUntrusted,
   SCREEN_WITHHELD,
   type ActiveInjectionGuard,
+  type IngressFlagPayload,
   type IngressClass,
   type IngressClassifier,
   type InjectionGuardOptions,
@@ -307,8 +315,19 @@ export function createInjectionGuard(
               { tool, namespace, item },
               report,
             )
-            out = screened.data
             report = screened.report
+            out = screen.askPerson
+              ? await flagged(
+                  {
+                    namespace,
+                    tool,
+                    content: out,
+                    screened: screened.data,
+                    spans: verdict.spans,
+                  },
+                  item,
+                )
+              : screened.data
           }
         } catch (err) {
           report = {
@@ -355,6 +374,54 @@ export function createInjectionGuard(
       return { data: out, summary: redactReport(report, event.id) }
     },
   }
+}
+
+/**
+ * A screen finding, handed to the person (boundary guards slice 10, rulings H
+ * and N). In order:
+ *
+ * - nobody to ask (no attended run): the result is LEFT OUT, and its fixed
+ *   line says so (ruling T);
+ * - attended on a path that cannot pause (O14, ruled (b)): the flagged passages
+ *   are replaced, as without a person, and the result says so in fixed text;
+ * - otherwise an `ingress-flag` request holds the result in its payload row and
+ *   the call returns the placeholder: the loop pauses, and the host's `resolve`
+ *   returns what the person chose ({@link ingressFlagResolution}).
+ *
+ * Raised only on a screen verdict, never on a deterministic finding alone.
+ */
+async function flagged(payload: IngressFlagPayload, item?: string): Promise<unknown> {
+  // The fence's item id names the source in the dialog (guard slice 8). It is
+  // display-only, on the summary: an id of this invocation, it is not what the
+  // person decides about, and in the payload it would rebind a re-run.
+  const id = fenceItemId(item)
+  if (!hitlRunAttended()) return INGRESS_TEXTS.leftOut(payload.tool)
+  if (!canPauseHere()) return announceNeutralised(payload.tool, payload.screened)
+  let outcome: Awaited<ReturnType<typeof askHumanHolding>>
+  try {
+    outcome = await askHumanHolding(
+      {
+        kind: INGRESS_FLAG_KIND,
+        question: 'Use this result?',
+        options: INGRESS_FLAG_OPTIONS,
+        defaultOption: 'leave-out',
+        summary: {
+          namespace: payload.namespace,
+          tool: payload.tool,
+          ...(id !== undefined ? { item: id } : {}),
+        },
+      },
+      payload,
+    )
+  } catch {
+    // The payload could not be held (the host's store failed): nobody can be
+    // asked here, so the O14 default, never the screen-outage path, which
+    // would leave the flagged span in place (#804 review B1).
+    return announceNeutralised(payload.tool, payload.screened)
+  }
+  if (outcome.status === 'rebound') return announceNeutralised(payload.tool, payload.screened)
+  if (outcome.status === 'pending') return held(outcome, INGRESS_TEXTS.held)
+  return ingressFlagResolution(outcome.choice ?? 'leave-out', payload)
 }
 
 /**

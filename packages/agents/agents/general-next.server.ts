@@ -206,6 +206,9 @@ async function createPatterns(
       mode: screenMode,
       gate,
       classify: deps.guards?.classifyIngress,
+      // A finding goes to the person where the route can pause; the office
+      // route cannot (actorCritic, the sandbox), so it says so instead (O14).
+      askPerson: true,
     },
   }
   // The guard refuses a declared namespace that matches no catalog tool, so the
@@ -219,6 +222,9 @@ async function createPatterns(
       mode: screenMode,
       gate,
       classify: deps.guards?.classifyIngress,
+      // A finding goes to the person where the route can pause; the office
+      // route cannot (actorCritic, the sandbox), so it says so instead (O14).
+      askPerson: true,
     },
   }
   const doc = withInjectionGuard(docGuard)(office)
@@ -312,6 +318,9 @@ async function createPatterns(
     mode: deps.guards?.egressMode ?? 'filter',
     maxOutgoingRetriesPostTripwire: 0,
     loadedDecideDown: 'by-shape',
+    // An attended turn asks the person where the gate would refuse; an
+    // unattended one (a routine, an eval) still refuses (slice 10).
+    askPerson: true,
   })
   const orchestrator = withInjectionGuard({
     namespaces: [...infoGuard.namespaces, ...docGuard.namespaces],

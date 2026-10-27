@@ -28,9 +28,10 @@ your application (a tool catalog, a document store, a sandbox) you hand it in
 one object, `AgentDeps`. The package also ships browser-safe helpers that turn
 a run's history into graph elements, citations and a chat transcript.
 
-> **Note:** These packages are at 0.1: further guardrails are in active development
-> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
-> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.4.0: pre-1.0 and still
+> stabilising. The guardrails shipped so far are described in each README;
+> further guardrails are in active development ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so run
+> them against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 
@@ -139,7 +140,9 @@ configured in
 ### How the shipped agents are composed
 
 `general-next` is the selectable decision-loop agent. It replaced `general`, which
-was removed (see the changelog for the migration); the default remains `search`. It requires `deps.withSandbox` and
+was removed (see [the package's changelog](https://github.com/mknw/hames-playground/blob/main/packages/agents/CHANGELOG.md) for the package's history,
+and [the decision-loop design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md) for why `general` gave way);
+the default remains `search`. It requires `deps.withSandbox` and
 `deps.createRedisBackend`, and accepts `deps.guards` — the host's guard
 settings, from the `GUARD_*` operator switches (below) — plus
 `deps.egressRoster` for the egress gate. It chooses among Microsoft 365 work, Neo4j/web lookup,
@@ -174,10 +177,32 @@ Missing private host wiring withholds earlier
 content and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
+#### The `GUARD_*` operator switches
+
+Four environment variables let an operator weaken the guards this agent
+composes with. They are read once at boot and validated there — they narrow a
+guard, never widen one. They set the fields of
+[`AgentDeps.guards`](#what-an-agent-definition-contains); a host that composes
+guards in code sets the same fields directly:
+
+| Variable                 | Sets                                                                                          | Values                                |
+| ------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `GUARD_SCREEN`           | the injection screen's mode on the self-deployed tier                                         | `off` / `shadow` / `gated` / `always` |
+| `GUARD_SCREEN_ANTHROPIC` | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)         | `off` / `always`                      |
+| `GUARD_EGRESS`           | the egress gate's mode on every tier (`roster` vetoes on a directory match and asks no model) | `filter` / `roster`                   |
+| `GUARD_PSEUDONYMISE`     | the web route's input pseudonymiser (a temporary switch; it goes away with the feature)       | `on` / `off`                          |
+
+A value below a tier's declared default warns at boot, naming what it switches
+off; an unrecognised value refuses boot. The deterministic layers and the
+thresholds have no switch — those are decisions a reviewed line of code owns.
+The reference host reads these four in
+[`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts).
+
 `general-next` also opts into optional memory. Only its final synthesis receives recalled
-memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. The default-agent rollout remains gated by
-the design's acceptance evidence. See the
-[decision-loop design](../../docs/plan/decision-loop-agent.md).
+memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Rollout details — turn-results materialisation stays disabled, and the
+default-agent switch is gated on the design's acceptance evidence — are
+recorded in the
+[decision-loop design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md).
 
 These excerpts show how the shipped agents are built. Each definition's `createPatterns` composes patterns from
 `@hames-ai/harness-patterns` with what your application supplies in
@@ -382,6 +407,11 @@ email) before a model reads it.
 | `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
 | `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                      | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
 
+In the `general-next` row, `context7` is the MCP server that answers questions
+about software libraries; _Data Stash_ is the uploaded-document store behind
+`createRedisBackend`, described in the repository's
+[Data Stash doc](https://github.com/mknw/hames-playground/blob/main/docs/DATA_STASH.md).
+
 **Guardrail status.** Two guards ship today. The injection guard covers the
 tool results marked in the table above, and the sandbox agent also gets
 `@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
@@ -446,7 +476,9 @@ active development; the Warning below has the status and what to do meanwhile.
 
 The shape, simplified from `types.ts` (the source is the authority; the
 `typescript` samples under Usage are compiled against it by a test in this
-repository):
+repository, and this excerpt omits a few further optional fields —
+`memory`, `graphFileIngest`, `createDecisionDocuments` — that `types.ts`
+carries):
 
 ```
 // What a ready-made agent IS — data only, no presentation:
@@ -478,22 +510,32 @@ interface AgentDeps {
   clientOverride?: (role: string) => Record<string, unknown> | undefined
   persistTitle?: (sessionId: string, userId: string, title: string) => Promise<void>
   doNotCachePatterns?: (sessionId: string) => void
+  // The guards' host settings: the injection screen's per-tier mode, the
+  // egress gate's mode, the host's ingress classifier, the web-route
+  // pseudonymiser. Built once at boot from the GUARD_* operator switches
+  // above; absent, every guard keeps its per-tier default.
+  guards?: AgentGuards
+  // The egress gate's directory (who is who). Wiring, not a switch: the gate
+  // reads it at run time, and no GUARD_* variable turns it on or off.
+  egressRoster?: EgressRosterSource
 }
 ```
 
 #### What comes from where
 
-| Concern                                           | Where it lives               | How it reaches the agent                         |
-| ------------------------------------------------- | ---------------------------- | ------------------------------------------------ |
-| Model calls: adapters, prompt templates           | `@hames-ai/harness-baml`     | imported directly by the factories               |
-| Patterns, event views, guard, tool calling        | `@hames-ai/harness-patterns` | imported directly                                |
-| Tool→namespace catalog (your MCP gateway's map)   | your application             | `AgentDeps.toolNamespaces` — required            |
-| Neo4j tool-result enrichment                      | your application             | `AgentDeps.enrichNeo4jResult`                    |
-| Document search backend (uploaded files)          | your application             | `AgentDeps.createRedisBackend`                   |
-| Sandbox wrapper (built on `@hames-ai/sandbox`)    | your application             | `AgentDeps.withSandbox`                          |
-| Which model each role uses (your policy)          | your application             | `AgentDeps.clientOverride`                       |
-| Saving conversation titles; opting out of caching | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns` |
-| Icons + accent colours                            | your application             | added when you register the agent (see Usage)    |
+| Concern                                                                       | Where it lives               | How it reaches the agent                                                                   |
+| ----------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
+| Model calls: adapters, prompt templates                                       | `@hames-ai/harness-baml`     | imported directly by the factories                                                         |
+| Patterns, event views, guard, tool calling                                    | `@hames-ai/harness-patterns` | imported directly                                                                          |
+| Tool→namespace catalog (your MCP gateway's map)                               | your application             | `AgentDeps.toolNamespaces` — required                                                      |
+| Neo4j tool-result enrichment                                                  | your application             | `AgentDeps.enrichNeo4jResult`                                                              |
+| Document search backend (uploaded files)                                      | your application             | `AgentDeps.createRedisBackend`                                                             |
+| Sandbox wrapper (built on `@hames-ai/sandbox`)                                | your application             | `AgentDeps.withSandbox`                                                                    |
+| Guard settings (screen mode per tier, egress mode, classifier, pseudonymiser) | your application             | `AgentDeps.guards` — composed from the [`GUARD_*` switches](#the-guard_-operator-switches) |
+| The egress gate's directory (who is who)                                      | your application             | `AgentDeps.egressRoster`                                                                   |
+| Which model each role uses (your policy)                                      | your application             | `AgentDeps.clientOverride`                                                                 |
+| Saving conversation titles; opting out of caching                             | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns`                                           |
+| Icons + accent colours                                                        | your application             | added when you register the agent (see Usage)                                              |
 
 ## Reference
 
@@ -523,6 +565,6 @@ front-end code can import it without pulling in anything server-side:
 | `AgentDefinition`, `AgentData`, `AgentDeps`                         | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
-**server-only** — six registered agents plus three shared helpers
+**server-only** — five registered agents plus three shared helpers
 (`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
 calls core's `assertServerOnImport()` at load.

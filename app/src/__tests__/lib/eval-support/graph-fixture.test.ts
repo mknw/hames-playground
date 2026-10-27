@@ -22,11 +22,14 @@
  *    driver's comment also quotes `[{ count: 42 }]`);
  * 5. change any per-type `count` in the canned schema (e.g. CONNECTS_TO 3 → 99) — the
  *    per-type count pin goes red, since it derives every count from the triples;
- * 6. drop the nodeQuery arm from the read_neo4j_cypher branch, or break GRAPH_NODES'
- *    endpoint equality (e.g. rename 'Alder' in the GRAPH_NODES list) — the node-query
- *    pin goes red, and a `RETURN p.name, p.observations` query would be answered with
- *    the relationship triples again (R6DIAG row 07: the controller read "the same
- *    relationship data regardless of what I ask").
+ * 6. drop the nodeQuery arm from the read_neo4j_cypher branch (or rename 'Alder' in the
+ *    GRAPH_NODES list, breaking participant coverage) — the node-query pin goes red, and
+ *    a `RETURN p.name, p.observations` query would be answered with the relationship
+ *    triples again (R6DIAG row 07: the controller read "the same relationship data
+ *    regardless of what I ask");
+ * 7. delete one filler name from the GRAPH_NODES list (e.g. 'Maple'), leaving 41 node
+ *    rows against the 42 count anchor — the consistency pin goes red (R7DIAG row 07: the
+ *    run-7 child flagged the 10-vs-42 mismatch and declined the follow-up).
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -68,6 +71,17 @@ const ranked = [...new Set(triples.flatMap((t) => [t.from, t.to]))]
   .map((name) => ({ name, degree: degreeOf(name) }))
   .sort((a, b) => b.degree - a.degree)
 const topThree = ranked.slice(0, 3).map((r) => r.name)
+
+/** The node rows and the count anchor, extracted by source like the triples above. The
+ * slice stops at `.map` so only the names array is read, never the observations strings. */
+const nodesBlock = driver.slice(
+  driver.indexOf('const GRAPH_NODES'),
+  driver.indexOf('const FIXTURES'),
+)
+const nodeList = nodesBlock.slice(nodesBlock.indexOf('['), nodesBlock.indexOf('].map'))
+const nodeNames = [...nodeList.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1])
+const endpoints = new Set(triples.flatMap((t) => [t.from, t.to]))
+const countAnchor = Number(driver.match(/data: totalCount \? \[\{ count: (\d+) \}\]/)?.[1])
 
 /** The computation the follow-up's answer is expected to have performed: rank by
  * relationship degree, take the top three, union their participants. */
@@ -162,16 +176,10 @@ describe('07-follow-up-success graph fixture (owner option 2, probe-derived)', (
     // query that projects properties keeps its triples.
     expect(branch).toMatch(/\\w\+\\.\\w\+/)
     expect(branch).toContain('nodeQuery ? GRAPH_NODES : GRAPH_RELATIONSHIPS')
-    // The miniature graph is exactly the triples' endpoints: a node read and a
-    // relationship read describe the same graph.
-    const nodesBlock = driver.slice(
-      driver.indexOf('const GRAPH_NODES'),
-      driver.indexOf('const FIXTURES'),
-    )
-    const nodeNames = [...nodesBlock.matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1])
-    expect([...new Set(nodeNames)].sort()).toEqual(
-      [...new Set(triples.flatMap((t) => [t.from, t.to]))].sort(),
-    )
+    // A node read covers every relationship participant: the run-7 child was handed
+    // ten rows against a 42 anchor and read its own data as unreliable before declining
+    // (R7DIAG row 07). The rows' COUNT consistency with the anchor is the next pin.
+    for (const endpoint of endpoints) expect(nodeNames).toContain(endpoint)
     // The rows are raw node data shaped like the schema's Project label (name STRING,
     // observations LIST), and the observations carry no graded fact: the expected answer
     // stays derivable from GRAPH_RELATIONSHIPS alone.
@@ -179,6 +187,22 @@ describe('07-follow-up-success graph fixture (owner option 2, probe-derived)', (
     const observations = nodesBlock.match(/observations: \[([^\]]*)\]/)?.[1] ?? ''
     for (const name of computed) expect(observations).not.toContain(name)
     expect(observations).not.toMatch(/degree|popularity|USES|CONNECTS_TO/)
+  })
+
+  it('the node rows and the count anchor agree (R7DIAG row 07: the 10-vs-42 defect)', () => {
+    // The anchor is the branch literal, not a standalone 42: a count elsewhere in the
+    // driver must not satisfy this pin.
+    expect(countAnchor).toBe(42)
+    // The node rows total the anchor: 42 nodes, of which the endpoints are the
+    // participants and the rest are isolated.
+    expect(new Set(nodeNames).size).toBe(countAnchor)
+    // The rows beyond the endpoints are ISOLATED — no triple touches them, so their
+    // degree is 0 and the top-3 ranking (and the expected answer) is unchanged by them.
+    for (const name of new Set(nodeNames)) {
+      if (!endpoints.has(name)) {
+        expect(triples.filter((t) => t.from === name || t.to === name)).toEqual([])
+      }
+    }
   })
 
   it('SCENARIOS.md states the same expected answer', () => {

@@ -46,11 +46,15 @@ const GRAPH_RELATIONSHIPS = [
 ]
 // The miniature graph's node rows (R6DIAG row 07): a node-property query (RETURN p.name,
 // p.observations) used to get the relationship triples too, and the controller concluded
-// "the graph might be structured differently than the schema suggests". These are the
-// schema's Project nodes — one per distinct triple endpoint, so a node read and a
-// relationship read describe the same graph — with invented, deterministic, identity-free
-// observations: nothing here carries a graded fact or a relationship endpoint, so the
-// expected answers stay derivable from GRAPH_RELATIONSHIPS alone.
+// "the graph might be structured differently than the schema suggests". Run 7 sharpened
+// the defect: the rows covered only the triples' ten endpoints while the count anchor
+// said 42, and the child — having just caught its data inconsistent — declined the
+// follow-up outright. The rows now AGREE with the anchor: 42 Project nodes, of which the
+// ten named participants carry every graded relationship and the remaining 32 are
+// isolated (degree 0, so none can be among the three most popular and the expected
+// answers stay derivable from GRAPH_RELATIONSHIPS alone). Names are invented,
+// deterministic and identity-free; nothing here carries a graded fact or a relationship
+// endpoint.
 const GRAPH_NODES = [
   'Alder',
   'Birch',
@@ -62,6 +66,38 @@ const GRAPH_NODES = [
   'Haven',
   'Iris',
   'Juniper',
+  'Acacia',
+  'Aspen',
+  'Baobab',
+  'Bamboo',
+  'Beech',
+  'Catalpa',
+  'Chestnut',
+  'Dogwood',
+  'Elm',
+  'Fir',
+  'Hawthorn',
+  'Hazel',
+  'Larch',
+  'Linden',
+  'Mahogany',
+  'Mangrove',
+  'Maple',
+  'Oak',
+  'Olive',
+  'Palm',
+  'Pine',
+  'Poplar',
+  'Redwood',
+  'Rowan',
+  'Sassafras',
+  'Sequoia',
+  'Spruce',
+  'Sycamore',
+  'Teak',
+  'Walnut',
+  'Willow',
+  'Yew',
 ].map((name) => ({
   name,
   observations: ['Provisioned at fixture setup', 'No recorded findings'],

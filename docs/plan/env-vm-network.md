@@ -547,7 +547,12 @@ refused, and so is a delivery directory whose name holds anything but letters, d
   count a bounded connect can send; that is what makes each probe's expected counter amount a
   known number rather than the guest kernel's retransmission schedule (`scripts/env-vm-guard-bounded-connect.txt`
   pins the measured shape). Each probe is preceded by a quiet baseline of the same
-  length. The whole smoke is bounded at 300 s, half the dead-man bound, and fails past it.
+  length. The smoke is bounded at 300 s per configured environment, so 300 s for dev alone and
+  600 s for dev and release, and fails past it: each environment is a whole probe set, and one
+  took 161 s and 171 s on the host. The stand-in sleeps that same bound, so it outlives every
+  probe that needs its address. The smoke refuses to start while a dead-man is armed, and it
+  holds the guard's lock shared while it runs, so no dead-man can be armed and every writer is
+  refused until it ends. The bound changes nothing in the render.
 
 **A refusal passes only if all of these hold:**
 

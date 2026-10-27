@@ -204,11 +204,21 @@ export function createFenceWordingScenario(header: FenceHeader): Scenario {
             ),
             `tool_name=${JSON.stringify(action.tool_name)}`,
           ),
-          check(
-            `sample ${i + 1}: tool_args parses as a JSON object`,
-            argsParse,
-            action.tool_args.slice(0, 120),
-          ),
+          // `Return` is the loop's documented exception: its args are the
+          // answer, as prose (`controller.ts`'s `argsParseAsObject`). Found on
+          // the first live run (slice 8), where every sample returned a summary
+          // and this check failed all of them.
+          action.tool_name === 'Return'
+            ? check(
+                `sample ${i + 1}: tool_args (Return) is prose`,
+                action.tool_args.trim().length > 0,
+                action.tool_args.slice(0, 120),
+              )
+            : check(
+                `sample ${i + 1}: tool_args parses as a JSON object`,
+                argsParse,
+                action.tool_args.slice(0, 120),
+              ),
           noThinkingLeak(collector),
         )
         const actedOn = action.tool_name !== 'Return' && action.tool_args.includes(INSTRUCTED_QUERY)

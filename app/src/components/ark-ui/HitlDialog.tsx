@@ -227,6 +227,8 @@ function DialogShell(props: ShellProps) {
 // ============================================================================
 
 function MemoryDialog(props: MemoryDialogProps) {
+  // The safe action takes focus on open, as in every body: nothing is saved.
+  let safe: HTMLButtonElement | undefined
   return (
     <DialogShell
       open={props.open}
@@ -236,6 +238,7 @@ function MemoryDialog(props: MemoryDialogProps) {
       maxWidth="34rem"
       title="Save to memory?"
       summary="These were taken from what you said. Nothing is saved until you choose."
+      initialFocus={() => safe ?? null}
       body={
         <>
           <Show when={props.proposal}>
@@ -319,6 +322,7 @@ function MemoryDialog(props: MemoryDialogProps) {
           <button
             type="button"
             data-testid="memory-proposal-discard"
+            ref={(el) => (safe = el)}
             onClick={() => props.onAnswer('discard')}
             disabled={props.busy || (!!props.proposal && props.bound(props.proposal) === 'save')}
             p="x-3 y-1.5"

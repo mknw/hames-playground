@@ -144,3 +144,33 @@ describe('the blocking dialog', () => {
     expect(onRetry).toHaveBeenCalledOnce()
   })
 })
+
+describe('the memory body in the same shell', () => {
+  // Found by the browser layer (scenario 13): opened by keyboard, the memory
+  // dialog left focus outside itself once it moved into the shell. MUTATION:
+  // drop the memory body's `initialFocus` → focus is not on its safe action →
+  // red.
+  it('opens with focus on its safe action, "Don\'t save"', async () => {
+    render(() => (
+      <HitlDialog
+        open
+        onClose={() => {}}
+        proposal={
+          {
+            requestId: 'p1',
+            items: [{ ref: 'i0', kind: 'preference', content: 'c', evidence: 'e', effect: 'new' }],
+          } as never
+        }
+        busy={false}
+        notice={null}
+        isChecked={() => true}
+        bound={() => null}
+        selectedCount={1}
+        onToggle={() => {}}
+        onAnswer={() => {}}
+      />
+    ))
+    await tick(80)
+    expect(document.activeElement).toBe(q('memory-proposal-discard'))
+  })
+})

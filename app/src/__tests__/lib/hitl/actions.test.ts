@@ -65,6 +65,7 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
 }))
 
 const { answerHitl } = await import('../../../lib/hitl/actions.server')
+const { EGRESS_RELEASE_OPTIONS } = await import('@hames-ai/harness-patterns')
 
 const actionsSource = () =>
   readFileSync(path.resolve(process.cwd(), 'src/lib/hitl/actions.server.ts'), 'utf8')
@@ -271,6 +272,41 @@ describe('answerHitl', () => {
     })
     expect(await answerHitl('s1', { 'req-1': 'approve' })).toEqual([
       { requestId: 'req-1', outcome: 'unknown-request' },
+    ])
+  })
+
+  // Boundary guards slice 10 (row 83). MUTATION: load the conversation
+  // without its owner → another user's answer to an egress release is
+  // recorded → red.
+  it('another user cannot answer an egress release; its owner can', async () => {
+    const blob = JSON.parse(pausedBlob())
+    Object.assign(blob.events[1].data, {
+      requestId: 'req-e',
+      key: 'egress-release:abc',
+      kind: 'egress-release',
+      question: 'Send this request to an outside service?',
+      options: EGRESS_RELEASE_OPTIONS,
+      defaultOption: 'refuse',
+      unattended: 'apply-default',
+      summary: { category: 'personal', closes: true },
+    })
+    loadSession.mockImplementation(async (_s, userId) =>
+      userId === 'user-a'
+        ? {
+            serializedContext: JSON.stringify(blob),
+            agentId: 'general-next',
+            kind: 'conversation',
+            status: 'paused',
+          }
+        : null,
+    )
+    getAuthenticatedUser.mockResolvedValue({ id: 'user-b', email: 'b@x.example' })
+    await expect(answerHitl('s1', { 'req-e': 'accept' })).rejects.toThrow('Conversation not found')
+    expect(recordHitlAnswer).not.toHaveBeenCalled()
+
+    getAuthenticatedUser.mockResolvedValue({ id: 'user-a', email: 'a@x.example' })
+    expect(await answerHitl('s1', { 'req-e': 'accept' })).toEqual([
+      { requestId: 'req-e', outcome: 'answered' },
     ])
   })
 

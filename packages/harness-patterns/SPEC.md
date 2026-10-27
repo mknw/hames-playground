@@ -1435,8 +1435,10 @@ decides (D5): `loaded` vetoes on a roster match with the roster text; with Decid
 down, `loadedDecideDown: 'by-shape'` (default) refuses a call with a URL query or
 a block over 200 characters and leaves any other to the roster, `'ask'` refuses
 every one; `empty` and `none` veto on a match and refuse the rest; `unreadable`
-refuses. These refusals are where the design asks the person; until the prompts
-land they refuse, with nobody asked. An `empty` or `unreadable` directory, a
+refuses. Every refusal on Decide's answer, and the `empty`, `none` and asked
+`loaded` cells with Decide down, is where the design asks the person: with
+`askPerson`, see [Asking the person](#asking-the-person-at-the-boundaries-boundary-guards-slice-10);
+without it, or with nobody to ask, they refuse. An `empty` or `unreadable` directory, a
 damaged roster and a degraded turn (with its counts in `detail`) each record a
 `warning` with task `egress_check` and a fixed message.
 
@@ -2533,10 +2535,14 @@ call that raised it.
   another payload is `rebound`, and the row is left as it was. Another kind
   under one call is its own row, so an outgoing call a person released can
   still have its result flagged.
-- **`askHumanHolding(request, payload)`** needs both (it throws
+- **`askHumanHolding(request, payload, authorizes?)`** needs both (it throws
   `HitlRequestError` without either), holds the payload, and asks with the key
-  `${digest}:${callKey}` — the digest of the payload's canonical JSON, so the
-  key covers everything the decision authorizes (F8) — and the `payloadRef`.
+  `${digest}:${callKey}` — the digest of the canonical JSON of what the
+  decision AUTHORIZES, so the key covers exactly that (F8): `authorizes` when
+  given (an outgoing call's tool and arguments, beside a payload that also
+  carries what the person is shown about them), else the payload — and the
+  `payloadRef`. `recordedHolding(kind, options, authorizes)` reads the decision
+  this run holds for it at this call, raising and writing nothing.
   The row and the request expire together: both take the request's
   `expiresInMs`, or `HOLDING_EXPIRES_IN_MS` (24 h) when it names none.
   It answers `{ status: 'rebound' }` without asking when the store refused, and
@@ -2545,6 +2551,61 @@ call that raised it.
 - **The host** purges a payload when its request closes (after each save), with
   its conversation, and at its expiry; its `resolve` dispatches on the
   request's `kind`.
+
+### Asking the person at the boundaries (boundary guards slice 10)
+
+`withEgressGate({ askPerson: true })` and a screen declared with `askPerson:
+true` hand a finding to the person instead of deciding it themselves, where the
+run can pause. Both use the mechanism above; neither invents an answer path.
+
+- **Where a call can pause: `canPauseHere()`**, read at run time. An attended
+  HITL run; a `callKey` and a `hitlPayloads` store; and a whole recorded path:
+  its first step is the top-level pattern's own resumable fingerprint (the run
+  frame's `continuationRoot`, which `runChain` sets), each step names the next
+  one's fingerprint as its `child`, and the last is the loop that dispatched
+  the call. A pattern that cannot resume records no step, so a path through one
+  is broken. Construction already refuses a gated name on such a path; this is
+  the same rule for a call construction could not see.
+- **The egress prompt (`egress-release`).** A Decide refusal at τe, and the
+  `empty`, `none` and asked `loaded` cells with Decide down, raise it when the
+  call can pause and is not one of a batch (the run frame's `batch`, which
+  `simpleLoop` sets around each dispatch: a batch cannot pause part way, so a
+  batched call takes Refuse, O16). Its options, in the owner's order:
+  **Refuse** (the default and the only one the unattended rule may pick),
+  **Accept**, **Refuse all similar actions**, and **Interrupt** (`stopsRun`).
+  Its `summary` is `{ category, closes }` only; the arguments, their readable
+  lines, every host and the roster's matches are the payload row's, and the
+  decision authorizes the tool and its arguments alone. Nothing is sent: the
+  egress check returns `{ held }`, `callTool` returns the placeholder (marked
+  `redispatch`) without dispatching, and the loop pauses on it. A denial from
+  another check wins over a hold.
+- **Re-entry (O15).** `substituteHeld` keeps the `redispatch` mark on the
+  event; the resumed `simpleLoop` dispatches that call again, under its own
+  callId and callKey, before its next controller turn, and the gate answers
+  from `recordedHolding` without asking Decide again: Accept sends exactly that
+  call, once, inside the route's frame (so the ingress guard reads its result),
+  audited `allowedBy: 'person'`; Refuse is the tripwire it would have been;
+  Refuse all similar actions records an `egress_refused` that closes the turn
+  (`closes: 'turn'`), so every route's later outgoing calls are refused unasked
+  until the next user message. Interrupt stops the resume before anything is
+  re-entered. When a call has two results, the round is rebuilt from the latest.
+- **The ingress prompt (`ingress-flag`).** A screen verdict that reports
+  injection (never a deterministic finding alone) holds the result in the
+  payload row (as the deterministic layer left it, as the screen's spans left
+  it, and the spans) and returns the placeholder. Its options: **Leave it out**
+  (the default and the unattended pick), **Use it without the flagged text**,
+  **Use it unchanged**. The host's `resolve` turns the answer into the result
+  with `ingressFlagResolution(choice, payload)`; nothing is fetched again. The
+  screen's `reason` is never part of the request.
+- **Nobody to ask.** Unattended: the egress cells refuse as before, and a
+  flagged result is left out with `INGRESS_TEXTS.leftOut(tool)`. Attended on a
+  path that cannot pause: the egress cells refuse, and a flagged result is
+  neutralised as without a person and says so (`INGRESS_TEXTS.neutralised`),
+  keeping its own shape (a string is prefixed, an object gains a `notice`).
+- **Construction.** While `askPerson` is on, the egress gate declares every
+  outgoing name of its `catalog` as a gated name, so a composition that offers
+  one on a path that cannot resume refuses construction. Screened tools are not
+  gated: a route that cannot pause still reads them, under the O14 default.
 
 ### humanGate() and confirm()
 

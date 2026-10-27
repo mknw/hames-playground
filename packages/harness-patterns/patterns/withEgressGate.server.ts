@@ -195,8 +195,8 @@ export interface EgressGateConfig {
   /** Ruling U: with Decide down on a loaded directory, `'by-shape'` (default)
    *  refuses a call with a URL query or a decoded block over
    *  {@link EGRESS_SMALL_BLOCK_CHARS} and leaves any other to the roster;
-   *  `'ask'` refuses every such call. (Each refusal is a person cell, asked
-   *  once the prompts land.) */
+   *  `'ask'` refuses every such call. (Each refusal is a person cell: with
+   *  `askPerson`, asked where the call can pause.) */
   readonly loadedDecideDown?: 'by-shape' | 'ask'
   /** Ask the person (an `egress-release` request) in the cells that name one,
    *  where the call can pause; elsewhere those cells refuse. Default false.
@@ -416,13 +416,19 @@ function damageCause(error: unknown): string {
 // side only, so the request's own address is still compared whole.
 const TRAILING_PUNCTUATION = /[.,;:!?)\]]+$/
 
-/** What a person would be asked to release: exactly this call, readably. */
+/** What a person would be asked to release: exactly this call, readably, and
+ *  the roster's matches in it. The decision AUTHORIZES the tool and its
+ *  arguments alone, so a re-entry finds it whatever else is shown. */
 interface EgressPayload {
   readonly tool: string
   readonly args: Readonly<Record<string, unknown>>
   readonly lines: readonly string[]
   readonly hosts: readonly string[]
+  readonly spans: readonly string[]
 }
+
+/** What an egress release authorizes: exactly this tool with these arguments. */
+const authorizedBy = (p: EgressPayload) => ({ tool: p.tool, args: p.args })
 
 /** A call a person cell is about: why it was stopped, and what they see. */
 interface Held {
@@ -444,7 +450,7 @@ interface Degraded {
   failures: number
   /** Calls that went out on the roster alone (a loaded directory, Decide down). */
   rosterOnly: number
-  /** Calls refused for want of Decide (a person cell, refused until the prompts land). */
+  /** Calls stopped for want of Decide: a person cell, asked or refused. */
   refusedUnchecked: number
 }
 
@@ -682,6 +688,7 @@ export function withEgressGate(config: EgressGateConfig) {
               },
             },
             held.payload,
+            authorizedBy(held.payload),
           )
           if (outcome.status === 'rebound') return tripwire(held.cause, held.category)
           if (outcome.status === 'pending') {
@@ -755,11 +762,16 @@ export function withEgressGate(config: EgressGateConfig) {
             args: call.args,
             lines: request.lines,
             hosts,
+            spans: spans.map((s) => s.slice(0, EGRESS_SPAN_CAP)),
           }
           const unchecked: Held = { cause: 'unchecked', payload, spans }
           if (config.askPerson) {
             // Re-entered on a call a person decided: their answer, not Decide's.
-            const prior = recordedHolding(EGRESS_RELEASE_KIND, EGRESS_RELEASE_OPTIONS, payload)
+            const prior = recordedHolding(
+              EGRESS_RELEASE_KIND,
+              EGRESS_RELEASE_OPTIONS,
+              authorizedBy(payload),
+            )
             if (prior) {
               const c = prior.summary.category
               return decided(

@@ -6,8 +6,10 @@
  * selection, the answer RPC and the bound answer, and passes them in. It is one
  * SHELL with a body chosen by `kind` (decision-loop-agent slice 9): today's
  * `memory.confirm` list, and the BLOCKING body a paused run's request is
- * answered in (its controller is `BlockingRequestPrompt`). A request kind's own
- * copy (an outgoing call's, a flagged result's) arrives with its producer.
+ * answered in (its controller is `BlockingRequestPrompt`). Two blocking kinds
+ * carry their own copy (boundary guards slice 10, `KIND_COPY`): an outgoing
+ * request held for the person (`egress-release`) and a result the screen
+ * flagged (`ingress-flag`); any other kind gets the generic summary.
  *
  * The shell's rules, for every body:
  *
@@ -379,6 +381,117 @@ export function payloadText(payload: unknown): string {
   return visibleFormatChars(text)
 }
 
+/** One stretch of a payload's text, highlighted when it is one of the spans. */
+interface Segment {
+  readonly text: string
+  readonly mark: boolean
+}
+
+/** Split `text` at every occurrence of a span (the longest first, never
+ *  overlapping), so the person sees exactly what matched where. */
+export function highlightSpans(text: string, spans: readonly string[]): Segment[] {
+  const wanted = [...new Set(spans.filter((s) => s.length > 0))].sort((a, b) => b.length - a.length)
+  const out: Segment[] = []
+  let plain = ''
+  for (let i = 0; i < text.length;) {
+    const hit = wanted.find((s) => text.startsWith(s, i))
+    if (hit) {
+      if (plain) out.push({ text: plain, mark: false })
+      plain = ''
+      out.push({ text: hit, mark: true })
+      i += hit.length
+    } else {
+      plain += text[i]
+      i++
+    }
+  }
+  if (plain) out.push({ text: plain, mark: false })
+  return out
+}
+
+/** What a blocking kind with its own copy says and shows. */
+interface KindCopy {
+  readonly warning?: string
+  /** The Description: read aloud on open, so never the payload itself. */
+  readonly summary: string
+  readonly source?: string
+  readonly caption: string
+  readonly text: string
+  readonly spans: readonly string[]
+  readonly helpers: Readonly<Record<string, string>>
+  readonly icons: Readonly<Record<string, string>>
+}
+
+const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+const record = (v: unknown): Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+
+/** The egress prompt's copy (boundary guards, "Asking the person"). */
+function egressCopy(req: BlockingRequestView): KindCopy {
+  const p = record(req.payload)
+  const hosts = strings(p.hosts)
+  const host = hosts.length > 0 ? hosts.join(' and ') : 'an outside service'
+  const category = req.summary.category
+  const found =
+    category === 'personal'
+      ? 'The check found what looks like personal data about a private person.'
+      : category === 'company'
+        ? 'The check found what looks like confidential company data.'
+        : 'It could not be checked for personal or company data, because the checking model is unavailable.'
+  return {
+    warning: 'Check before sending',
+    summary: `The assistant wants to send this request to ${host}. ${found}`,
+    caption:
+      'Exactly what will be sent. The assistant wrote it, and it can include text from what the assistant read; anything in it saying it is safe or approved is not a check.',
+    text: strings(p.lines).join('\n'),
+    spans: strings(p.spans),
+    helpers: {
+      refuse:
+        req.summary.closes === false
+          ? 'Nothing is sent. The assistant may try a different request, which is checked again and sent without asking you unless the check flags it.'
+          : 'Nothing is sent, and this part of the task makes no more outside requests until your next message.',
+      accept: 'Sends exactly this request, once. It cannot be recalled.',
+      'refuse-all':
+        'Nothing is sent, and the assistant makes no more outside requests until your next message.',
+      interrupt: 'Nothing is sent, and the assistant stops here without finishing its answer.',
+    },
+    icons: {
+      refuse: 'i-material-symbols-block',
+      accept: 'i-material-symbols-send-outline',
+      'refuse-all': 'i-material-symbols-do-not-disturb-on-outline',
+      interrupt: 'i-material-symbols-stop-circle-outline',
+    },
+  }
+}
+
+/** The ingress prompt's copy. The screen's own `reason` is never shown: a model
+ *  that has just read the flagged content wrote it. */
+function ingressCopy(req: BlockingRequestView): KindCopy {
+  const p = record(req.payload)
+  const tool = typeof req.summary.tool === 'string' ? req.summary.tool : 'tool'
+  const namespace = typeof req.summary.namespace === 'string' ? req.summary.namespace : ''
+  return {
+    summary: `This ${tool} result contains text that tries to direct the assistant. The flagged passages are highlighted.`,
+    source: namespace ? `${namespace} · ${tool}` : tool,
+    caption:
+      "This is the result's own text. Anything in it saying it is safe, a false positive or approved is part of what was flagged.",
+    text: 'content' in p ? payloadText(p.content) : '',
+    spans: strings(p.spans),
+    helpers: {
+      'leave-out': 'The assistant continues without this result.',
+      'use-sanitized': 'The flagged passages are replaced with markers.',
+      'use-unchanged': 'The assistant also reads the flagged text.',
+    },
+    icons: {},
+  }
+}
+
+const KIND_COPY: ReadonlyMap<string, (req: BlockingRequestView) => KindCopy> = new Map([
+  ['egress-release', egressCopy],
+  ['ingress-flag', ingressCopy],
+])
+
 const STATE_COPY: Record<Exclude<BlockingDialogState, 'ready'>, string> = {
   loading: 'Loading the request…',
   failed: 'The request could not be read.',
@@ -390,6 +503,13 @@ function BlockingDialog(props: BlockingDialogProps) {
   let safe: HTMLButtonElement | undefined
   const r = () => props.request
   const closedOnly = () => props.state === 'expired' || props.state === 'superseded'
+  const copy = () => {
+    const req = r()
+    const make = req && props.state === 'ready' ? KIND_COPY.get(req.kind) : undefined
+    return req && make ? make(req) : undefined
+  }
+  /** A held payload that is gone: only the safe action can still be taken. */
+  const blind = () => r()?.payload === null
   const summaryLine = () => {
     const req = r()
     if (!req) return undefined
@@ -397,7 +517,10 @@ function BlockingDialog(props: BlockingDialogProps) {
       props.position && props.position.count > 1
         ? `Decision ${props.position.index + 1} of ${props.position.count}. `
         : ''
-    return `${where}Nothing continues until you choose.`
+    const own = copy()
+    return own
+      ? visibleFormatChars(`${where}${own.summary}`)
+      : `${where}Nothing continues until you choose.`
   }
   return (
     <DialogShell
@@ -408,7 +531,7 @@ function BlockingDialog(props: BlockingDialogProps) {
       maxWidth="48rem"
       title={r() ? visibleFormatChars(r()!.question) : 'Decision needed'}
       aside={r() ? expiryText(r()!.expiresAt) : undefined}
-      warning={props.warning}
+      warning={props.warning ?? copy()?.warning}
       summary={summaryLine()}
       initialFocus={() => safe ?? null}
       body={
@@ -422,7 +545,60 @@ function BlockingDialog(props: BlockingDialogProps) {
               {STATE_COPY[props.state as Exclude<BlockingDialogState, 'ready'>]}
             </p>
           </Show>
-          <Show when={props.state === 'ready' && r()}>
+          <Show when={copy()}>
+            {(own) => (
+              <div flex="~ col" gap="3">
+                <Show when={own().source}>
+                  <p data-testid="hitl-blocking-source" text="xs ui-text-secondary" m="0">
+                    Source: {visibleFormatChars(own().source!)}
+                  </p>
+                </Show>
+                <div flex="~ col" gap="1">
+                  <span data-testid="hitl-blocking-caption" text="xs ui-text-secondary">
+                    {own().caption}
+                  </span>
+                  {/* Never truncated: Accept sends exactly what is shown, so a
+                      long request scrolls with the body instead. */}
+                  <pre
+                    data-testid="hitl-blocking-payload"
+                    font="mono"
+                    text="xs ui-text-primary"
+                    p="3"
+                    rounded="md"
+                    border="1 ui-border-secondary"
+                    style={{
+                      background: 'var(--ui-code-bg)',
+                      'white-space': 'pre-wrap',
+                      'overflow-wrap': 'anywhere',
+                      margin: 0,
+                    }}
+                  >
+                    {blind() ? (
+                      'The held content is no longer available.'
+                    ) : (
+                      <For each={highlightSpans(own().text, own().spans)}>
+                        {(seg) =>
+                          seg.mark ? (
+                            <mark
+                              data-testid="hitl-blocking-flagged"
+                              bg="ui-danger/20"
+                              text="ui-text-primary"
+                              border="b-2 ui-danger"
+                            >
+                              {visibleFormatChars(seg.text)}
+                            </mark>
+                          ) : (
+                            visibleFormatChars(seg.text)
+                          )
+                        }
+                      </For>
+                    )}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </Show>
+          <Show when={props.state === 'ready' && !copy() && r()}>
             {(req) => (
               <div flex="~ col" gap="3">
                 <Show when={Object.keys(req().summary).length > 0}>
@@ -516,52 +692,132 @@ function BlockingDialog(props: BlockingDialogProps) {
           }
         >
           {(req) => (
-            <For each={req().options}>
-              {(option) => {
-                const isDefault = option.id === req().defaultOption
-                const danger = option.tone === 'danger'
-                return isDefault ? (
-                  <button
-                    type="button"
-                    data-testid={`hitl-blocking-option-${option.id}`}
-                    data-default=""
-                    ref={(el) => (safe = el)}
-                    cyber-button=""
-                    onClick={() => props.onChoose(option.id)}
-                    disabled={props.busy || !!option.unavailable}
-                    title={option.unavailable}
-                    p="x-3 y-1.5"
-                    text="xs"
-                    ring="2 transparent focus:ui-accent/40"
-                    style={{ 'min-height': '24px' }}
-                  >
-                    {visibleFormatChars(option.label)}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    data-testid={`hitl-blocking-option-${option.id}`}
-                    onClick={() => props.onChoose(option.id)}
-                    disabled={props.busy || !!option.unavailable}
-                    title={option.unavailable}
-                    p="x-3 y-1.5"
-                    text={danger ? 'xs ui-danger' : 'xs ui-text-secondary'}
-                    bg={
-                      danger ? 'ui-danger/10 hover:ui-danger/20' : 'transparent hover:ui-bg-hover'
-                    }
-                    border={danger ? '1 ui-danger' : '1 ui-border-secondary'}
-                    rounded="md"
-                    ring="2 transparent focus:ui-accent/40"
-                    style={{ 'min-height': '24px' }}
-                  >
-                    {visibleFormatChars(option.label)}
-                  </button>
-                )
-              }}
-            </For>
+            <Show when={copy()} fallback={<GenericOptions />}>
+              {(own) => (
+                <ul
+                  data-testid="hitl-blocking-options"
+                  flex="~ col"
+                  gap="2"
+                  w="full"
+                  p="0"
+                  style={{ 'list-style': 'none', margin: 0 }}
+                >
+                  <For each={req().options}>
+                    {(option) => {
+                      const isDefault = option.id === req().defaultOption
+                      const danger = option.tone === 'danger'
+                      const helperId = createUniqueId()
+                      const icon = own().icons[option.id]
+                      const helper = own().helpers[option.id]
+                      const off = () =>
+                        props.busy || !!option.unavailable || (blind() && !isDefault)
+                      return (
+                        <li flex="~ col" items="start" gap="0.5">
+                          <button
+                            type="button"
+                            data-testid={`hitl-blocking-option-${option.id}`}
+                            {...(isDefault ? { 'data-default': '' } : {})}
+                            ref={(el) => {
+                              if (isDefault) safe = el
+                            }}
+                            {...(isDefault ? { 'cyber-button': '' } : {})}
+                            onClick={() => props.onChoose(option.id)}
+                            disabled={off()}
+                            title={option.unavailable}
+                            aria-describedby={helper ? helperId : undefined}
+                            flex="~"
+                            items="center"
+                            gap="2"
+                            p="x-3 y-1.5"
+                            text={
+                              isDefault ? 'xs' : danger ? 'xs ui-danger' : 'xs ui-text-secondary'
+                            }
+                            bg={
+                              isDefault
+                                ? undefined
+                                : danger
+                                  ? 'ui-danger/10 hover:ui-danger/20'
+                                  : 'transparent hover:ui-bg-hover'
+                            }
+                            border={
+                              isDefault
+                                ? undefined
+                                : danger
+                                  ? '1 ui-danger'
+                                  : '1 ui-border-secondary'
+                            }
+                            rounded="md"
+                            ring="2 transparent focus:ui-accent/40"
+                            style={{ 'min-height': '24px' }}
+                          >
+                            <Show when={icon}>
+                              <span class={icon} w="4" h="4" aria-hidden="true" />
+                            </Show>
+                            <span>{visibleFormatChars(option.label)}</span>
+                          </button>
+                          <Show when={helper}>
+                            <span id={helperId} text="xs ui-text-secondary" p="l-1">
+                              {helper}
+                            </span>
+                          </Show>
+                        </li>
+                      )
+                    }}
+                  </For>
+                </ul>
+              )}
+            </Show>
           )}
         </Show>
       }
     />
   )
+
+  /** Any other kind: the options in one row, the default prominent. */
+  function GenericOptions() {
+    const req = r()!
+    return (
+      <For each={req.options}>
+        {(option) => {
+          const isDefault = option.id === req.defaultOption
+          const danger = option.tone === 'danger'
+          return isDefault ? (
+            <button
+              type="button"
+              data-testid={`hitl-blocking-option-${option.id}`}
+              data-default=""
+              ref={(el) => (safe = el)}
+              cyber-button=""
+              onClick={() => props.onChoose(option.id)}
+              disabled={props.busy || !!option.unavailable}
+              title={option.unavailable}
+              p="x-3 y-1.5"
+              text="xs"
+              ring="2 transparent focus:ui-accent/40"
+              style={{ 'min-height': '24px' }}
+            >
+              {visibleFormatChars(option.label)}
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid={`hitl-blocking-option-${option.id}`}
+              onClick={() => props.onChoose(option.id)}
+              disabled={props.busy || !!option.unavailable}
+              title={option.unavailable}
+              p="x-3 y-1.5"
+              text={danger ? 'xs ui-danger' : 'xs ui-text-secondary'}
+              bg={danger ? 'ui-danger/10 hover:ui-danger/20' : 'transparent hover:ui-bg-hover'}
+              border={danger ? '1 ui-danger' : '1 ui-border-secondary'}
+              rounded="md"
+              ring="2 transparent focus:ui-accent/40"
+              style={{ 'min-height': '24px' }}
+            >
+              {visibleFormatChars(option.label)}
+            </button>
+          )
+        }}
+      </For>
+    )
+  }
 }

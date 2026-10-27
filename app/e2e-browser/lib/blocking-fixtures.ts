@@ -6,11 +6,33 @@
 import pg from 'pg'
 import { BYPASS_USER_ID, TEST_DATABASE_URL } from './env'
 
+/** The request a seeded conversation waits on; a graph write unless a kind
+ *  with its own copy is named (boundary guards slice 10). */
+export interface SeededRequest {
+  readonly kind: string
+  readonly question: string
+  readonly options: readonly Record<string, unknown>[]
+  readonly defaultOption: string
+  readonly summary: Record<string, unknown>
+}
+
+const GRAPH_WRITE: SeededRequest = {
+  kind: 'graph-write',
+  question: 'Change the knowledge graph?',
+  options: [
+    { id: 'approve', label: 'Approve this change', tone: 'danger' },
+    { id: 'reject', label: 'Reject', unattended: true },
+  ],
+  defaultOption: 'reject',
+  summary: { route: 'knowledge-edit' },
+}
+
 export async function seedPaused(
   id: string,
   requestId: string,
   payload: unknown,
   title: string | null = null,
+  request: SeededRequest = GRAPH_WRITE,
 ): Promise<void> {
   const client = new pg.Client({ connectionString: TEST_DATABASE_URL })
   await client.connect()
@@ -34,16 +56,13 @@ export async function seedPaused(
           v: 1,
           requestId,
           runId: eventId,
-          key: `graph-write:${requestId}`,
-          kind: 'graph-write',
-          question: 'Change the knowledge graph?',
-          options: [
-            { id: 'approve', label: 'Approve this change', tone: 'danger' },
-            { id: 'reject', label: 'Reject', unattended: true },
-          ],
-          defaultOption: 'reject',
+          key: `${request.kind}:${requestId}`,
+          kind: request.kind,
+          question: request.question,
+          options: request.options,
+          defaultOption: request.defaultOption,
           unattended: 'apply-default',
-          summary: { route: 'knowledge-edit' },
+          summary: request.summary,
           blocking: true,
           payloadRef,
           expiresAt: Date.now() + 23 * 3_600_000,
@@ -59,8 +78,8 @@ export async function seedPaused(
     )
     await client.query(
       `INSERT INTO hitl_payloads (payload_ref, user_id, session_id, call_key, kind, expires_at, payload)
-       VALUES ($1, $2, $3, $4, 'graph-write', NOW() + INTERVAL '1 day', $5)`,
-      [payloadRef, BYPASS_USER_ID, id, `call-${requestId}`, JSON.stringify(payload)],
+       VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '1 day', $6)`,
+      [payloadRef, BYPASS_USER_ID, id, `call-${requestId}`, request.kind, JSON.stringify(payload)],
     )
   } finally {
     await client.end()

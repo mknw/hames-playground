@@ -488,9 +488,12 @@ export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
  *    host's `hitlPayloads` store are both required; either missing throws
  *    {@link HitlRequestError} — a payload with nowhere to go, or a call with
  *    no stable identity, cannot be asked about.
- * 2. `digest` is the sha256 of the payload's canonical JSON. The store holds
- *    the payload, insert-only; a different payload under the same call is
- *    `rebound`, and nothing is asked.
+ * 2. `digest` is the sha256 of the canonical JSON of what the decision
+ *    AUTHORIZES: `authorizes` when given (an outgoing call's tool and
+ *    arguments, beside a payload that also carries what the person is shown
+ *    about them), else the payload. The store holds the payload, insert-only;
+ *    a different payload under the same call is `rebound`, and nothing is
+ *    asked.
  * 3. `askHuman` with the key `${digest}:${callKey}` — the digest makes the key
  *    cover everything the decision authorizes (F8), the call key separates a
  *    deliberate repeat from a retry of one call — and the `payloadRef`.
@@ -504,6 +507,7 @@ export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
 export async function askHumanHolding<C extends string>(
   request: Omit<HitlRequest<C>, 'key' | 'payloadRef'>,
   payload: unknown,
+  authorizes: unknown = payload,
 ): Promise<HoldingOutcome<C>> {
   const frame = activeRunFrame()
   if (frame.callKey === undefined) {
@@ -511,7 +515,7 @@ export async function askHumanHolding<C extends string>(
   }
   if (!frame.hitlPayloads) refuse('this host holds no request payloads (no hitlPayloads store)')
   const store = frame.hitlPayloads
-  const digest = createHash('sha256').update(canonicalJson(payload)).digest('hex')
+  const digest = createHash('sha256').update(canonicalJson(authorizes)).digest('hex')
   const expiresInMs = request.expiresInMs ?? HOLDING_EXPIRES_IN_MS
   const held = await store.hold({
     callKey: frame.callKey,
@@ -531,8 +535,9 @@ export async function askHumanHolding<C extends string>(
 }
 
 /**
- * The decision this run already holds for a holding request of `kind` over
- * `payload` at THIS call, or undefined: {@link askHumanHolding}'s replay, read
+ * The decision this run already holds for a holding request of `kind` that
+ * authorized `authorizes` at THIS call (what {@link askHumanHolding} digested:
+ * its `authorizes`, or its payload), or undefined: its replay, read
  * without raising, holding or writing anything. A gate re-entered on a call a
  * person decided (boundary guards slice 10) reads its answer here instead of
  * asking its model again. `summary` is the request's own, as recorded.
@@ -540,7 +545,7 @@ export async function askHumanHolding<C extends string>(
 export function recordedHolding(
   kind: string,
   options: readonly HitlOption[],
-  payload: unknown,
+  authorizes: unknown,
 ):
   | {
       readonly choice: string
@@ -551,7 +556,7 @@ export function recordedHolding(
   const frame = currentRunFrame()
   const run = hitlRunStore.getStore()
   if (!run || frame?.callKey === undefined) return undefined
-  const digest = createHash('sha256').update(canonicalJson(payload)).digest('hex')
+  const digest = createHash('sha256').update(canonicalJson(authorizes)).digest('hex')
   const key = `${kind}:${digest}:${frame.callKey}`
   const events = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)]
   const answer = readHitl({ events }).answers.get(hitlReplayKey({ kind, key, options }))

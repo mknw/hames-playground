@@ -24,9 +24,10 @@ guard can refer to. Everything that touches identity stays with your
 application: the signed-in user, their access tokens and where files are
 stored are passed in, never held by the package.
 
-> **Note:** These packages are at 0.1: further guardrails are in active development
-> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
-> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.4.0: pre-1.0 and still
+> stabilising. The guardrails shipped so far are described in each README;
+> further guardrails are in active development ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so run
+> them against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 
@@ -163,6 +164,42 @@ the reason in `result.error`. When a query returns nodes and relationships,
 [Cytoscape.js](https://js.cytoscape.org), a graph-drawing library, in case you
 want to render them; for the counts above it is empty.
 
+### Graph-edit writes for your own UI
+
+`createGraphNode`, `linkGraphNodes` and `setGraphNodeProperty` in
+[`./neo4j/graph-edit.server`](https://github.com/mknw/hames-playground/blob/main/packages/connectors/neo4j/graph-edit.server.ts)
+are write operations for your application's own graph-editing affordances — a
+visualization's edit buttons — **not for agents**: no shipped agent holds a
+Neo4j write tool (the [Warning in `@hames-ai/agents`](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)
+says why), and these functions should not be handed to one either. They carry
+no identity of their own — your host must gate them the way it gates its other
+server actions — the caller sends intent (a label, a name, two element ids),
+never Cypher text, and every identifier is validated against a character-set
+allowlist before it is interpolated:
+
+```typescript
+import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
+import {
+  createGraphNode,
+  linkGraphNodes,
+  setGraphNodeProperty,
+} from '@hames-ai/connectors/neo4j/graph-edit.server'
+
+configureNeo4j({
+  url: 'bolt://localhost:7687',
+  user: 'neo4j',
+  password: process.env.NEO4J_PASSWORD ?? 'password',
+})
+
+declare const someOtherNodeId: string // an elementId from an earlier read
+
+const id = await createGraphNode('Concept', 'Hames', 'supports of a harness') // → the new node's elementId
+await linkGraphNodes(id, someOtherNodeId, 'RELATES_TO') // MERGE: a second call does not stack a duplicate edge
+await setGraphNodeProperty(id, 'status', 'published')
+
+await resetDriver()
+```
+
 ### Give an agent the Microsoft 365 tools (excerpt)
 
 This is an excerpt: the two `declare`d values are yours to write, from your own
@@ -275,17 +312,18 @@ tools is `microsoft-365` in
 
 ### Exports
 
-| Subpath                              | What lives there                                                                                                                                               |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.` (root entry point)               | browser-safe exports only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j → Cytoscape.js projection `transformNeo4jToCytoscape` / `parseNeo4jResults`          |
-| `./neo4j/client`                     | `configureNeo4j({ url, user, password })` + the driver singleton — **explicit-config-only**: unset config is a named error at first use, never an env fallback |
-| `./neo4j/queries`                    | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session opened in READ mode                                                             |
-| `./neo4j/graph-edit.server`          | the intent-shaped write ops (`createGraphNode`, `linkGraphNodes`, `setGraphNodeProperty`)                                                                      |
-| `./neo4j/plain`, `./neo4j/transform` | plain projections of driver values; the Cytoscape projection                                                                                                   |
-| `./app-tools/registry`               | `createAppToolRegistry({ resolveContext })` — a registry for tools that run inside your own process, beside the MCP gateway's                                  |
-| `./mcp-catalog`                      | `mcpNamespace`: a tool-name → namespace lookup for the MCP servers this repository's gateway runs (pure data)                                                  |
-| `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                           |
-| `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` works on both sides of it                                                                       |
+| Subpath                              | What lives there                                                                                                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.` (root entry point)               | browser-safe exports only: `mcpNamespace` / `MCP_TOOL_CATALOG`, the Neo4j → Cytoscape.js projection `transformNeo4jToCytoscape` / `parseNeo4jResults`                   |
+| `./neo4j/client`                     | `configureNeo4j({ url, user, password })` + the driver singleton — **explicit-config-only**: unset config is a named error at first use, never an env fallback          |
+| `./neo4j/queries`                    | the identity-free read ops (`getSchema`, `runManualCypher`, …) — every session opened in READ mode                                                                      |
+| `./neo4j/graph-edit.server`          | the intent-shaped write ops (`createGraphNode`, `linkGraphNodes`, `setGraphNodeProperty`) — see [Graph-edit writes for your own UI](#graph-edit-writes-for-your-own-ui) |
+| `./neo4j/plain`, `./neo4j/transform` | plain projections of driver values; the Cytoscape projection                                                                                                            |
+| `./document`                         | `ooxmlDisarm`: rebuilds an untrusted Office file (Word, Excel, PowerPoint) from an allowlist, so only what a person would see reaches the text extractor                |
+| `./app-tools/registry`               | `createAppToolRegistry({ resolveContext })` — a registry for tools that run inside your own process, beside the MCP gateway's                                           |
+| `./mcp-catalog`                      | `mcpNamespace`: a tool-name → namespace lookup for the MCP servers this repository's gateway runs (pure data)                                                           |
+| `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                                    |
+| `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` works on both sides of it                                                                                |
 
 ## How this package is tested (contributors)
 

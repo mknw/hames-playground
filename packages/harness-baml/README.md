@@ -28,9 +28,10 @@ pre-built, so you never run BAML's tooling yourself. Calls go to Anthropic
 models by default, and can be pointed at an OpenAI-compatible endpoint of your
 own.
 
-> **Note:** These packages are at 0.1: further guardrails are in active development
-> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
-> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.4.0: pre-1.0 and still
+> stabilising. The guardrails shipped so far are described in each README;
+> further guardrails are in active development ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so run
+> them against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 
@@ -301,16 +302,26 @@ await withRunFrame({ inference: { tier: 'anthropic' } }, async () => {
 
 ### Systemone decisions
 
-`createDecideAdapter()` and `createDecideAllAdapter()` supply single-question
-and set calls for `choice`, `score` and `noul`. Probabilities from the endpoint
-pass through untouched; decision events record the serving client.
+The `decide` role does not use the chat model: `createDecideAdapter()` and
+`createDecideAllAdapter()` send typed questions to a separate, small decision
+service that speaks TypeSafe's _Systemone_ protocol — one HTTP request per
+decision set, calibrated probabilities back. Three question types are
+supported: `choice` (multiple choice over labelled options), `score` (an
+ordered rating) and `noul` (the probability that one statement is true —
+see [TypeSafe's primitive docs](https://docs.typesafe.ai/primitives/noul)).
+Probabilities from the endpoint pass through untouched, and decision events
+record the serving client.
 
-The Anthropic tier records `JevDecide`, using `JEV_DECISIONS_URL` and
-`JEV_DECISIONS_API_KEY`. The private tier records `PrivateSystemOne`, using
-`SMALL_LLM_DECISIONS_URL` (a full URL ending in `/v1/systemone`) and the shared
-`SMALL_LLM_API_KEY`. An unset private URL refuses the call with no public
-fallback. Private calls use measured duration at `SMALL_LLM_EUR_PER_HOUR`.
-Request routing and validation live in `jev-decide.server.ts`.
+The endpoint is optional, and its absence is a refusal, not a fallback: with
+nothing configured the decision call fails and the run records it — no other
+provider is retried. To get one, set `JEV_DECISIONS_URL` and
+`JEV_DECISIONS_API_KEY` to a Systemone-protocol server and its key (TypeSafe's
+hosted API, `https://api.typesafe.ai/v1/systemone`, is the reference); on the
+self-hosted private tier, set `SMALL_LLM_DECISIONS_URL` (a full URL ending in
+`/v1/systemone`) plus the shared `SMALL_LLM_API_KEY` to your own. Private calls
+are priced by measured duration at `SMALL_LLM_EUR_PER_HOUR`; public calls use
+the provider-reported cost. Routing and validation live in
+[`jev-decide.server.ts`](https://github.com/mknw/hames-playground/blob/main/packages/harness-baml/jev-decide.server.ts).
 
 ### Optional self-hosted tier
 
@@ -329,7 +340,8 @@ overrides then throw before a request. Package adapters use
 same boundary and supply `clientOverrideFor(role)` in the positional options bag.
 Missing or shifted options are refused under the restriction. With `privateOnly`
 absent, existing routing and argument bytes are preserved. The reference app's
-operator setting is `INFERENCE_TIERS=self_deployed` (see `docs/PREVIEW.md` §6).
+operator setting is `INFERENCE_TIERS=self_deployed` (see [§6 of the preview
+runbook](https://github.com/mknw/hames-playground/blob/main/docs/PREVIEW.md#6-boot)).
 
 ## Reference
 

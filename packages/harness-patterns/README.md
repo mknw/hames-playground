@@ -32,9 +32,10 @@ argument, and the companion package
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme)
 gives you those functions ready-made, prompts included.
 
-> **Note:** These packages are at 0.1: further guardrails are in active development
-> and a release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so until then run them
-> against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+> **Note:** These packages are at 0.4.0: pre-1.0 and still
+> stabilising. The guardrails shipped so far are described in each README;
+> further guardrails are in active development ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so run
+> them against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
 
 ## Which package do you need?
 

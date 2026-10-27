@@ -6,7 +6,9 @@
 
 **Breaking:** retire the shared memory graph (the `memory` MCP server and its tools).
 Personal memory is unchanged: `withMemory` stores and recalls per-user memories in
-Postgres.
+Postgres. This supersedes the earlier entry that gave `general-next`'s info route
+the memory graph's targeted read tools (`search_nodes`, `open_nodes`): with the
+graph gone, those tools go with it.
 
 - `@hames-ai/connectors`: `MCP_TOOL_CATALOG` / `mcpNamespace` no longer map the nine
   memory-graph tools (`create_entities`, `create_relations`, `add_observations`,

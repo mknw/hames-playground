@@ -4,7 +4,7 @@
 "@hames-ai/agents": patch
 ---
 
-BREAKING (shipped as a minor bump; the 1.0.0 decision is the owner's): rename the
+BREAKING (shipped as a minor bump): rename the
 built-in inference tier from `verda` to `self_deployed`, the BAML clients to
 `LargeQwen` / `LargeQwenThink` (the 27B) and `SmallQwen` (was `LocalQwenSmall`; the
 small box runs on Modal, so `Local` was a misnomer, and `LocalGLM` keeps its name),

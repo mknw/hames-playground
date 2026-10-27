@@ -25,6 +25,7 @@ import type {
   EventView,
   ConfiguredPattern,
   ToolCallEventData,
+  ToolCallResult,
   ToolResultEventData,
   ControllerActionEventData,
 } from '../types'
@@ -35,11 +36,12 @@ import { runBatch, combineOutcomes } from '../parallel-tools.server'
 import type { SubCall, SubCallOutcome } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.server'
-import { hitlPending } from '../hitl.server'
+import { createHash } from 'node:crypto'
+import { currentRunId, hitlPending, isHeldResult } from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
-import { currentRunFrame } from '../run-frame.server'
+import { amendRunFrame, currentRunFrame } from '../run-frame.server'
 import { onPath, resumableFingerprint, takeResume } from '../resume.server'
 import { toolSurfaceOutage } from '../gateway-health.server'
 import {
@@ -433,8 +435,10 @@ function roundsOf(events: readonly ContextEvent[], patternId: string): LoopRound
     } else if (e.type === 'tool_call' && current) {
       current.calls.push({ call: e.data as ToolCallEventData })
     } else if (e.type === 'tool_result' && current) {
+      // The latest result of a call wins: a call a person released ran again
+      // on re-entry (slice 10), under the same callId.
       const d = e.data as ToolResultEventData
-      const pair = current.calls.find((c) => c.call.callId === d.callId && !c.result)
+      const pair = current.calls.find((c) => c.call.callId === d.callId)
       if (pair) pair.result = d
     }
   }
@@ -599,6 +603,62 @@ export function simpleLoop<T extends SimpleLoopData>(
       maxResultChars: settings.maxResultChars,
       resultOmit: config?.resultOmit,
     }
+    // Each call's LOGICAL identity (slice 8): the run, the resumable path to
+    // this loop, the turn and the call's position in its action. Every input
+    // is durable state of the run, so a retry of the call recomputes it in any
+    // process, and a deliberate repeat is at another turn or position. Not
+    // `currentToolCallId()`: a process-local counter a restart reissues.
+    const runId = currentRunId()
+    const callKeyOf = (turn: number, position: number): string | undefined =>
+      runId === undefined
+        ? undefined
+        : createHash('sha256')
+            .update(JSON.stringify([runId, currentRunFrame()?.continuation ?? [], turn, position]))
+            .digest('hex')
+    /** Dispatch under the call's key, so an executor that holds a payload for
+     *  a person (`askHumanHolding`) binds it to this call, and says whether it
+     *  is one of a batch, which cannot pause part way (slice 10). */
+    const dispatch = (
+      name: string,
+      args: Record<string, unknown>,
+      callKey: string | undefined,
+      batch = false,
+    ) =>
+      callKey !== undefined
+        ? amendRunFrame({ callKey, batch }, () => callTool(name, args))
+        : callTool(name, args)
+    /**
+     * The `onToolResult` hook, on a result before its event is committed.
+     * Failures are non-fatal: an error event, and the original result kept. A
+     * held placeholder is never handed to it: a hook that rewrote one would
+     * hide it from the resume, and the call a person releases gets the hook
+     * when it runs on re-entry (#804 review N1).
+     */
+    const hookResult = async (
+      tool: string,
+      result: ToolCallResult,
+      callId: string | undefined,
+      args: Record<string, unknown>,
+      turn: number,
+    ): Promise<void> => {
+      if (!config?.onToolResult || isHeldResult(result.data)) return
+      try {
+        const hooked = await config.onToolResult(tool, result, { callId, args })
+        if (hooked && 'data' in hooked && hooked.data !== undefined) result.data = hooked.data
+      } catch (hookErr) {
+        const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
+        trackEvent(
+          scope,
+          'error',
+          {
+            error: `onToolResult hook failed for ${tool}: ${message}`,
+            severity: 'recoverable',
+            turn,
+          } as ErrorEventData,
+          true,
+        )
+      }
+    }
     // Multi-call turns (ControllerAction.additional_calls). 'off' still
     // EXECUTES an un-advertised batch (serially) — it only stops the prompt
     // from inviting one, because the shared output schema means any agent's
@@ -719,13 +779,26 @@ export function simpleLoop<T extends SimpleLoopData>(
     // them, no tool is dispatched again, and the turn count and the recovery
     // streak continue across the pause against `maxTurns`.
     let firstTurn = 0
-    for (const round of roundsOf(replay ?? [], resolved.patternId)) {
+    const rounds = roundsOf(replay ?? [], resolved.patternId)
+    // Slice 10: a held call whose request asked for it (an outgoing request a
+    // person decided) runs AGAIN on re-entry, under its own callId and callKey,
+    // and its result is the round's. Only ever a singular call: a batch call is
+    // never held for that (O16).
+    const last = rounds[rounds.length - 1]
+    const again =
+      last?.action && !last.action.additional_calls?.length && last.calls.length === 1
+        ? last.calls[0].result?.redispatch === true
+          ? last
+          : undefined
+        : undefined
+    for (const round of rounds) {
       const entry = projectRound(round, projection)
-      if (entry) turns.push(entry)
+      if (entry && round !== again) turns.push(entry)
       const effect = roundEffect(round)
       if (effect === 'dispatched') streak.dispatched()
       else if (effect === 'unusable') streak.unusableAnswer()
       if (
+        round !== again &&
         round.action &&
         entry &&
         (round.action.tool_name === EXPAND_TOOL_NAME || entry.tool_result?.success)
@@ -736,6 +809,47 @@ export function simpleLoop<T extends SimpleLoopData>(
     }
 
     try {
+      if (again?.action) {
+        const { call } = again.calls[0]
+        const args = (call.args ?? {}) as Record<string, unknown>
+        const { resolved: resolvedArgs } = resolveRefsAndCapture(
+          args,
+          view,
+          settings.maxResultChars,
+          excluded,
+        )
+        // The gate that held it answers from the recorded decision on the way.
+        const result = await dispatch(call.tool, resolvedArgs, call.callKey)
+        await hookResult(call.tool, result, call.callId, resolvedArgs, again.n)
+        const resultData: ToolResultEventData = {
+          callId: call.callId,
+          tool: call.tool,
+          result: result.data,
+          success: result.success,
+          error: result.error,
+          ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+        }
+        trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
+        if (hitlPending()) return scope
+        turns.push(
+          projectRound(
+            { n: again.n, action: again.action, calls: [{ call, result: resultData }] },
+            projection,
+          )!,
+        )
+        if (!result.success) {
+          trackLoopRecovery(scope, {
+            failure: 'tool_error',
+            error: result.error ?? 'Tool call failed',
+            tool: call.tool,
+            turn: again.n,
+            maxTurns,
+          })
+        } else {
+          scope.data = { ...scope.data, turn: again.n, lastAction: again.action }
+        }
+      }
+
       for (let turn = firstTurn; turn < maxTurns; turn++) {
         // Trim oldest turns if they would overflow the controller's context window
         // (the client this call will actually use, not a hardcoded chain name).
@@ -941,7 +1055,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           const gated = new Set(currentRunFrame()?.gatedTools ?? [])
           const gatedCall = allCalls.find((c) => gated.has(c.tool_name))?.tool_name
 
-          for (const c of allCalls) {
+          const callKeys = allCalls.map((_, position) => callKeyOf(turn, position))
+          for (const [position, c] of allCalls.entries()) {
             const callId = generateId('tc')
             callIds.push(callId)
             if (gatedCall !== undefined) {
@@ -1002,32 +1117,9 @@ export function simpleLoop<T extends SimpleLoopData>(
             subCalls.push({
               tool: c.tool_name,
               run: async () => {
-                const result = await callTool(c.tool_name, resolvedArgs)
-                // onToolResult hook per sub-call — same non-fatal contract as
-                // the singular path.
-                if (config?.onToolResult) {
-                  try {
-                    const hookResult = await config.onToolResult(c.tool_name, result, {
-                      callId,
-                      args: resolvedArgs,
-                    })
-                    if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
-                      result.data = hookResult.data
-                    }
-                  } catch (hookErr) {
-                    const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
-                    trackEvent(
-                      scope,
-                      'error',
-                      {
-                        error: `onToolResult hook failed for ${c.tool_name}: ${message}`,
-                        severity: 'recoverable',
-                        turn,
-                      } as ErrorEventData,
-                      true,
-                    )
-                  }
-                }
+                const result = await dispatch(c.tool_name, resolvedArgs, callKeys[position], true)
+                // onToolResult hook per sub-call — same contract as the singular path.
+                await hookResult(c.tool_name, result, callId, resolvedArgs, turn)
                 return {
                   success: result.success,
                   result: result.data,
@@ -1046,6 +1138,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             tool: sc.tool,
             args: trackedArgs[i],
             ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
+            ...(sc.run && callKeys[i] !== undefined ? { callKey: callKeys[i] } : {}),
           }))
           for (const data of callData) trackEvent(scope, 'tool_call', data, resolved.trackHistory)
 
@@ -1229,44 +1322,23 @@ export function simpleLoop<T extends SimpleLoopData>(
         )
 
         // Track tool call event (with original args for readability)
+        const callKey = callKeyOf(turn, 0)
         const call: ToolCallEventData = {
           callId,
           tool: action.tool_name,
           args,
           ...(argsRepair ? { repaired: argsRepair } : {}),
+          ...(callKey !== undefined ? { callKey } : {}),
         }
         trackEvent(scope, 'tool_call', call, resolved.trackHistory)
 
         // Execute tool with resolved args. A dispatch ends any run of unusable
         // answers, whatever the tool then returns.
         streak.dispatched()
-        const result = await callTool(action.tool_name, resolvedArgs)
+        const result = await dispatch(action.tool_name, resolvedArgs, callKey)
 
         // onToolResult hook: enrich/transform result before the event is committed.
-        // Failures here are non-fatal — log an error event, keep the original result.
-        if (config?.onToolResult) {
-          try {
-            const hookResult = await config.onToolResult(action.tool_name, result, {
-              callId,
-              args: resolvedArgs,
-            })
-            if (hookResult && 'data' in hookResult && hookResult.data !== undefined) {
-              result.data = hookResult.data
-            }
-          } catch (hookErr) {
-            const message = hookErr instanceof Error ? hookErr.message : String(hookErr)
-            trackEvent(
-              scope,
-              'error',
-              {
-                error: `onToolResult hook failed for ${action.tool_name}: ${message}`,
-                severity: 'recoverable',
-                turn,
-              } as ErrorEventData,
-              true,
-            )
-          }
-        }
+        await hookResult(action.tool_name, result, callId, resolvedArgs, turn)
 
         // Track tool result event. `result.data` is already the sanitized
         // content when a `withInjectionGuard` wrapper neutralized it in

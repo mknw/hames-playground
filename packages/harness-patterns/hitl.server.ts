@@ -89,6 +89,7 @@ import type {
   HitlRequestEventData,
   HitlResponseEventData,
   HitlUnattended,
+  HoldingOutcome,
   PatternConfig,
   PatternScope,
   ScopedPattern,
@@ -445,6 +446,166 @@ export async function askHuman<C extends string>(request: HitlRequest<C>): Promi
   // going. Recorded as delivered, so the commit does not send it twice.
   emitLive(event, true)
   return { status: 'pending', requestId }
+}
+
+/** The id of the run this code runs in — its `user_message`'s — or undefined
+ *  outside a HITL run. Read once per loop invocation: it copies the log. */
+export function currentRunId(): string | undefined {
+  const run = hitlRunStore.getStore()
+  return run ? runIdOf(run.ownerEvents()) : undefined
+}
+
+/** JSON with object keys sorted at every level: "the same payload" is a byte
+ *  comparison, whatever order the keys were written in. The value is first
+ *  round-tripped through JSON, so a `Date`, a `Map` or a `Set` is what JSON
+ *  makes of it rather than an empty object two different values would share. */
+export function canonicalJson(value: unknown): string {
+  const plain: unknown = value === undefined ? null : JSON.parse(JSON.stringify(value) ?? 'null')
+  const sort = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(sort)
+      : v !== null && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+              .sort()
+              .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
+          )
+        : v
+  return JSON.stringify(sort(plain)) ?? 'null'
+}
+
+/** A held payload's lifetime, and its request's, when the request names none:
+ *  the two always expire together. */
+export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Ask a person about a payload the request event must never carry
+ * (decision-loop-agent slice 8): the payload is HELD in the host's store under
+ * this call's logical identity first, and the request names it only by
+ * `payloadRef`. In order:
+ *
+ * 1. The call's `callKey` (set by `simpleLoop` around the dispatch) and the
+ *    host's `hitlPayloads` store are both required; either missing throws
+ *    {@link HitlRequestError} — a payload with nowhere to go, or a call with
+ *    no stable identity, cannot be asked about.
+ * 2. `digest` is the sha256 of the canonical JSON of what the decision
+ *    AUTHORIZES: `authorizes` when given (an outgoing call's tool and
+ *    arguments, beside a payload that also carries what the person is shown
+ *    about them), else the payload. The store holds the payload, insert-only;
+ *    a different payload under the same call is `rebound`, and nothing is
+ *    asked.
+ * 3. `askHuman` with the key `${digest}:${callKey}` — the digest makes the key
+ *    cover everything the decision authorizes (F8), the call key separates a
+ *    deliberate repeat from a retry of one call — and the `payloadRef`.
+ * 4. An answered outcome on a row this call inserted means nothing waits on it
+ *    (the unattended rule decided at once): the row is dropped.
+ *
+ * The row and the request expire TOGETHER: both take `expiresInMs`, or
+ * {@link HOLDING_EXPIRES_IN_MS} when the request names none, so a request is
+ * never answerable after its payload was swept.
+ */
+export async function askHumanHolding<C extends string>(
+  request: Omit<HitlRequest<C>, 'key' | 'payloadRef'>,
+  payload: unknown,
+  authorizes: unknown = payload,
+): Promise<HoldingOutcome<C>> {
+  const frame = activeRunFrame()
+  if (frame.callKey === undefined) {
+    refuse('a request that holds a payload must be raised from a dispatched tool call (no callKey)')
+  }
+  if (!frame.hitlPayloads) refuse('this host holds no request payloads (no hitlPayloads store)')
+  const store = frame.hitlPayloads
+  const digest = createHash('sha256').update(canonicalJson(authorizes)).digest('hex')
+  const expiresInMs = request.expiresInMs ?? HOLDING_EXPIRES_IN_MS
+  const held = await store.hold({
+    callKey: frame.callKey,
+    kind: request.kind,
+    payload,
+    expiresAt: Date.now() + expiresInMs,
+  })
+  if ('rebound' in held) return { status: 'rebound' }
+  const outcome = await askHuman({
+    ...request,
+    expiresInMs,
+    key: `${digest}:${frame.callKey}`,
+    payloadRef: held.payloadRef,
+  })
+  if (outcome.status === 'answered' && held.inserted) await store.drop(held.payloadRef)
+  return outcome
+}
+
+/**
+ * The decision this run already holds for a holding request of `kind` that
+ * authorized `authorizes` at THIS call (what {@link askHumanHolding} digested:
+ * its `authorizes`, or its payload), or undefined: its replay, read
+ * without raising, holding or writing anything. A gate re-entered on a call a
+ * person decided (boundary guards slice 10) reads its answer here instead of
+ * asking its model again. `summary` is the request's own, as recorded.
+ */
+export function recordedHolding(
+  kind: string,
+  options: readonly HitlOption[],
+  authorizes: unknown,
+):
+  | {
+      readonly choice: string
+      readonly requestId: string
+      readonly summary: Readonly<Record<string, string | number | boolean | null>>
+    }
+  | undefined {
+  const frame = currentRunFrame()
+  const run = hitlRunStore.getStore()
+  if (!run || frame?.callKey === undefined) return undefined
+  const digest = createHash('sha256').update(canonicalJson(authorizes)).digest('hex')
+  const key = `${kind}:${digest}:${frame.callKey}`
+  const events = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)]
+  const answer = readHitl({ events }).answers.get(hitlReplayKey({ kind, key, options }))
+  if (!answer || !isAvailable(options, answer.choice)) return undefined
+  const request = events.find(
+    (e): e is ContextEvent & { data: HitlRequestEventData } =>
+      e.type === 'hitl_request' && isRequest(e) && e.data.requestId === answer.requestId,
+  )
+  return {
+    choice: answer.choice as string,
+    requestId: answer.requestId,
+    summary: request?.data.summary ?? {},
+  }
+}
+
+/** Is there an attended HITL run here, someone a request can reach? False
+ *  outside one and in an unattended one. */
+export function hitlRunAttended(): boolean {
+  const run = hitlRunStore.getStore()
+  return !!run && !run.closed && run.attended
+}
+
+/**
+ * May the code running here pause for a person and be resumed where it
+ * stopped (boundary guards slice 10)? True only when all of these hold:
+ *
+ * - a HITL run is open and ATTENDED: an unattended one has nobody to ask;
+ * - the call has a logical identity (`callKey`, set by `simpleLoop` around a
+ *   dispatch) and the host holds payloads (`hitlPayloads`);
+ * - the recorded path is whole, from the top-level pattern to the loop that
+ *   dispatched this call: its first step is the root `runChain` set, each
+ *   step names the next one's fingerprint as its child, and the last is a
+ *   loop that dispatches the call itself. A pattern that cannot resume
+ *   records no step, so a path through one is broken here.
+ *
+ * Read at RUN time, so it holds for a composition construction never saw.
+ * False outside a frame.
+ */
+export function canPauseHere(): boolean {
+  const frame = currentRunFrame()
+  if (!hitlRunAttended() || !frame?.hitl) return false
+  if (frame.callKey === undefined || !frame.hitlPayloads) return false
+  const path = frame.continuation
+  if (path.length === 0 || typeof frame.continuationRoot !== 'string') return false
+  if (path[0].fingerprint !== frame.continuationRoot) return false
+  for (let i = 0; i < path.length - 1; i++) {
+    if (path[i].child !== path[i + 1].fingerprint) return false
+  }
+  return path[path.length - 1].child === undefined
 }
 
 /** The note a held result carries when the consumer gives none. */
@@ -1138,6 +1299,9 @@ function substituteHeld(
       ...rest,
       result,
       heldBy: requestId,
+      // The held CALL runs again on re-entry (slice 10): kept on the event,
+      // which outlives the placeholder it replaces.
+      ...(data.result.redispatch === true ? { redispatch: true } : {}),
       ...(report.findings.length > 0 ? { sanitized: redactReport(report) } : {}),
     } satisfies ToolResultEventData
   }

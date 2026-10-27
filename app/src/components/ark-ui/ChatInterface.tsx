@@ -29,6 +29,7 @@ import { AgentSelector } from './AgentSelector'
 import { ConversationTierSwitch } from './ConversationTierSwitch'
 import { ShareConversationButton } from './ShareConversationButton'
 import { MemoryProposalPrompt } from './MemoryProposalPrompt'
+import { BlockingRequestPrompt } from './BlockingRequestPrompt'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
   promoteAction,
@@ -422,7 +423,12 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     }
   }
 
-  const runSend = async (content: string) => {
+  /**
+   * Run one turn: a message, or (`mode: 'resume'`) the continuation of a paused
+   * run whose answers the blocking prompt has just recorded — the same stream,
+   * the same sink, and no user message in the transcript.
+   */
+  const runSend = async (content: string, mode: 'interactive' | 'resume' = 'interactive') => {
     // Snapshot the active sessionId at submit time. The user may switch
     // threads mid-stream; without this, late-arriving events would corrupt
     // whichever thread happens to be in view (#47).
@@ -433,12 +439,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
     // Add the user message to *this run's* buffer. No "still on this thread"
     // guard is needed any more: the buffer is addressed by session id, so
     // switching away can't misfile it into the thread now on screen (#105).
-    registry.appendMessage(runSessionId, {
-      id: Date.now().toString(),
-      role: 'user',
-      content,
-      timestamp: new Date(),
-    })
+    if (mode === 'interactive') {
+      registry.appendMessage(runSessionId, {
+        id: Date.now().toString(),
+        role: 'user',
+        content,
+        timestamp: new Date(),
+      })
+    }
 
     // Settle any tier flip first — see `pendingTierWrite`.
     if (pendingTierWrite) await pendingTierWrite.catch(() => {})
@@ -454,6 +462,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           agentId: selectedAgent(),
           settings: getSettings(),
           signal: abortController.signal,
+          mode,
         },
         sinkFor(runSessionId),
       )
@@ -564,6 +573,14 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       />
 
       <MemoryProposalPrompt sessionId={props.sessionId} settledTick={settledTick()} />
+      <BlockingRequestPrompt
+        sessionId={props.sessionId}
+        settledTick={settledTick()}
+        busy={isProcessing()}
+        onResume={() => {
+          if (!isProcessing() && !atCap()) void runSend('', 'resume')
+        }}
+      />
 
       {/* Input */}
       <div border="t ui-border-primary" p="4" bg="ui-bg-secondary/80" backdrop-blur="sm">

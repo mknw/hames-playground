@@ -1,8 +1,10 @@
 /**
  * Header inbox — what is waiting on the person, across conversations (#433 S8).
  *
- * Lists the pending memory proposals (`listMemoryInbox`: owner from the
- * session, memory-off and erased proposals already absent server-side).
+ * Lists the conversations whose run waits on a decision (`listBlockingInbox`,
+ * decision-loop-agent slice 9) and the pending memory proposals
+ * (`listMemoryInbox`: owner from the session, memory-off and erased proposals
+ * already absent server-side).
  * Choosing a row hands the request id to the conversation's prompt
  * (`requestReview`) and navigates there; the shared `HitlDialog` opens once
  * that conversation has loaded. The row shows a count and the conversation
@@ -14,7 +16,14 @@ import { useNavigate } from '@solidjs/router'
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { listMemoryInbox } from '~/lib/memory/confirm-actions.server'
 import type { MemoryInboxEntry } from '~/lib/memory/proposals.server'
-import { erasedVersion, inboxVersion, requestReview } from '~/lib/hitl/review-store'
+import { listBlockingInbox } from '~/lib/hitl/actions.server'
+import type { BlockingInboxEntry } from '~/lib/hitl/blocking-view'
+import {
+  erasedVersion,
+  inboxVersion,
+  requestBlockingReview,
+  requestReview,
+} from '~/lib/hitl/review-store'
 import { CONVERSATION_PARAM } from '~/lib/share-link'
 
 /** A background re-read: the prompt's own polling is per conversation, so a
@@ -29,6 +38,8 @@ export const INBOX_FOCUS_MIN_GAP_MS = 15_000
 export function HitlInbox() {
   const navigate = useNavigate()
   const [entries, setEntries] = createSignal<readonly MemoryInboxEntry[]>([])
+  const [waiting, setWaiting] = createSignal<readonly BlockingInboxEntry[]>([])
+  const total = () => entries().length + waiting().length
   /** Reads are sequenced: an older response never overwrites a newer state, and
    *  an erase voids every read begun before it (#589 F1/F3). */
   let latest = 0
@@ -37,13 +48,12 @@ export function HitlInbox() {
   const refresh = async () => {
     const mine = ++latest
     lastRead = Date.now()
-    try {
-      const found = await listMemoryInbox()
-      if (mine === latest) setEntries(found)
-    } catch {
-      // Unreadable is empty, never a fabricated count.
-      if (mine === latest) setEntries([])
-    }
+    // Each list on its own: one failing read must not hide the other.
+    const [memory, blocking] = await Promise.allSettled([listMemoryInbox(), listBlockingInbox()])
+    if (mine !== latest) return
+    // Unreadable is empty, never a fabricated count.
+    setEntries(memory.status === 'fulfilled' ? memory.value : [])
+    setWaiting(blocking.status === 'fulfilled' ? blocking.value : [])
   }
 
   createEffect(on(inboxVersion, () => void refresh()))
@@ -74,13 +84,17 @@ export function HitlInbox() {
     requestReview({ sessionId: e.sessionId, requestId: e.requestId })
     navigate(`/?${CONVERSATION_PARAM}=${encodeURIComponent(e.sessionId)}`)
   }
+  const decide = (e: BlockingInboxEntry) => {
+    requestBlockingReview(e.sessionId)
+    navigate(`/?${CONVERSATION_PARAM}=${encodeURIComponent(e.sessionId)}`)
+  }
 
   return (
-    <Show when={entries().length > 0}>
+    <Show when={total() > 0}>
       <Menu.Root>
         <Menu.Trigger
           data-testid="hitl-inbox-trigger"
-          aria-label={`Waiting on you: ${entries().length}`}
+          aria-label={`Waiting on you: ${total()}`}
           title="Waiting on you"
           flex="~"
           items="center"
@@ -116,7 +130,7 @@ export function HitlInbox() {
               'line-height': '1rem',
             }}
           >
-            {entries().length}
+            {total()}
           </span>
         </Menu.Trigger>
         <Menu.Positioner>
@@ -130,6 +144,22 @@ export function HitlInbox() {
             z="50"
             style={{ 'min-width': '16rem' }}
           >
+            <For each={waiting()}>
+              {(e) => (
+                <Menu.Item
+                  value={`blocking:${e.sessionId}`}
+                  onClick={() => decide(e)}
+                  data-testid="hitl-inbox-blocking-item"
+                  flex="~ col"
+                  p="x-3 y-2"
+                  cursor="pointer"
+                  bg="hover:ui-bg-hover"
+                >
+                  <span text="sm ui-text-primary">Decision needed</span>
+                  <span text="xs ui-text-secondary">{e.title ?? 'Untitled conversation'}</span>
+                </Menu.Item>
+              )}
+            </For>
             <For each={entries()}>
               {(e) => (
                 <Menu.Item

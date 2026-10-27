@@ -138,6 +138,16 @@ vi.mock('@hames-ai/harness-patterns', async () => {
     readHitl: realHitl.readHitl,
     expireHitl: realHitl.expireHitl,
     HitlAnswerError: realHitl.HitlAnswerError,
+    // The host's resolvers are chosen by these kinds (boundary guards slice 10).
+    ...(await vi
+      .importActual<typeof import('@hames-ai/harness-patterns/injection-guard')>(
+        '@hames-ai/harness-patterns/injection-guard',
+      )
+      .then(({ INGRESS_FLAG_KIND, ingressFlagResolution }) => ({
+        INGRESS_FLAG_KIND,
+        ingressFlagResolution,
+      }))),
+    EGRESS_RELEASE_KIND: 'egress-release',
   }
 })
 

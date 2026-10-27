@@ -1071,6 +1071,11 @@ export interface ContinuationSegment {
   /** `decisionLoop` only: the route it ran and the iteration it ran in. */
   readonly route?: string
   readonly iteration?: number
+  /** The OWN resumable fingerprint of the child this step runs next, `null`
+   *  when that child is not resumable; ABSENT on a step that dispatches the
+   *  gate itself. What `canPauseHere()` reads to know, at run time, that no
+   *  pattern between two steps is one that cannot resume (slice 10). */
+  readonly child?: string | null
 }
 
 // ============================================================================
@@ -1238,6 +1243,12 @@ export interface ToolCallEventData {
    *  this the only record that a tool ran on rebuilt arguments is that it ran.
    *  Absent on the overwhelming majority of calls. */
   repaired?: import('./json-repair').JsonRepairNote
+  /** The LOGICAL identity of this call (decision-loop-agent slice 8): sha256 of
+   *  the run, the resumable path to the loop, the loop's turn and the call's
+   *  position in that turn's action. A retry of the same call recomputes it, in
+   *  any process; a deliberate repeat sits at another turn or position. Set by
+   *  `simpleLoop` inside a HITL run. */
+  callKey?: string
 }
 
 /** Data payload for tool_result event */
@@ -1273,6 +1284,9 @@ export interface ToolResultEventData {
   /** A serial multi-call turn stopped before this call ran (its `error` says
    *  why). Recorded so a resume rebuilds the turn exactly (slice 6). */
   skipped?: true
+  /** Carried over from a held placeholder that asked for it: the call is
+   *  dispatched again on re-entry (boundary guards slice 10, O15). */
+  redispatch?: true
 }
 
 /** Data payload for controller_action event */
@@ -1712,6 +1726,40 @@ export type HitlOutcome<C extends string = string> =
     }
   | { readonly status: 'pending'; readonly requestId: string }
 
+/**
+ * The host's store for a blocking request's payload (decision-loop-agent slice
+ * 8), supplied on the run frame (`hitlPayloads`): what the person is shown
+ * rides here, encrypted, never on an event. Bound to the owner and the
+ * conversation by the host that built it, so core never names either.
+ */
+export interface HitlPayloadStore {
+  /**
+   * Hold `payload` for the logical call `callKey` and the request's `kind`.
+   * INSERT-ONLY: a call and kind with no row gets one under a fresh
+   * `payloadRef` (`inserted: true`); a retry with the same payload gets that
+   * row back; the same call and kind with a DIFFERENT payload is refused
+   * (`rebound`), and the row is left as it was. Another kind under the same
+   * call is its own row: an outgoing call released by a person can still have
+   * its result flagged.
+   */
+  hold(input: {
+    readonly callKey: string
+    readonly kind: string
+    readonly payload: unknown
+    readonly expiresAt: number
+  }): Promise<
+    { readonly payloadRef: string; readonly inserted: boolean } | { readonly rebound: true }
+  >
+  /** Drop a row a call inserted when no request was left waiting on it (the
+   *  unattended rule decided at once). Idempotent. */
+  drop(payloadRef: string): Promise<void>
+}
+
+/** What {@link askHumanHolding} answers: a decision, or a refusal to rebind a
+ *  logical call to a different payload. */
+export type HoldingOutcome<C extends string = string> =
+  HitlOutcome<C> | { readonly status: 'rebound' }
+
 /** What a gated tool executor returns while the run waits: the placeholder,
  *  never the content. A resume substitutes the outcome for it, sanitized, and
  *  marks the result `heldBy` (#433 S3). */
@@ -1719,6 +1767,11 @@ export interface HeldResult {
   readonly held: true
   readonly requestId: string
   readonly note: string
+  /** The held CALL is dispatched again when the run re-enters it, and its
+   *  result is what the loop reads: a call a person released (an outgoing
+   *  request, boundary guards slice 10 / O15) rather than a result they judged.
+   *  The gate that held it answers from the recorded decision on the way. */
+  readonly redispatch?: true
 }
 
 /** One answer to `resumeHarness`: a bare option id, or the id with the
@@ -2364,9 +2417,9 @@ export interface EgressAuditEventData {
   readonly hosts: readonly string[]
   /** The roster's matched spans, as they occur in the request, each capped at 80. */
   readonly spans: readonly string[]
-  /** The egress question's answer. */
-  readonly probs: EgressProbabilities
-  /** Who let the call go: the egress question, or (once the person is asked) the person. */
+  /** The egress question's answer; absent when a person released the call. */
+  readonly probs?: EgressProbabilities
+  /** Who let the call go: the egress question, or the person (slice 10). */
   readonly allowedBy: 'decide' | 'person'
 }
 

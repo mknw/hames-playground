@@ -16,7 +16,7 @@ export const scenario: ConversationScenario = {
   ],
   expectedTools: ['graph_mail_recent', 'sandbox_bash'],
   expectedArgs: {
-    sandbox_bash: sandboxArgs(['lantern-launch.md']),
+    sandbox_bash: sandboxArgs('lantern-launch.md'),
     graph_mail_recent: mailArgs,
   },
   expectedRoutes: ['office-data'],

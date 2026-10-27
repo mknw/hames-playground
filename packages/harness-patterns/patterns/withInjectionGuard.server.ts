@@ -249,22 +249,23 @@ export function createInjectionGuard(
     isUntrusted,
     optionsFor,
 
-    async sanitize(tool, data, overrides) {
+    async sanitize(tool, data, call) {
       if (!isUntrusted(tool)) return { data }
 
       const namespace = inferServer(tool)
+      const item = call?.item
       const options = optionsFor(tool)
       // Per-CALL overrides still win: they are a deliberate, local decision by a
       // known call site (the retriever's `spotlight: 'off'` on a filename), not
       // an agent-level config that could silently weaken a nested boundary.
-      const effective = { ...options, spotlight: overrides?.spotlight ?? options.spotlight }
-      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace }, effective)
+      const effective = { ...options, spotlight: call?.spotlight ?? options.spotlight }
+      let { data: out, report } = sanitizeUntrusted(data, { tool, namespace, item }, effective)
 
       // The model screen, as its declaration says (`shouldScreen`). After a
       // deterministic finding it reads the sanitized projection, never the
       // original spans. A screen outage is recorded on the report; the
       // declaration's `onUnavailable` decides whether the payload stands.
-      const screen = overrides?.screen === false ? undefined : options.screen
+      const screen = call?.screen === false ? undefined : options.screen
       const decided = screen
         ? await shouldScreen(screen, { tool, namespace, data, report })
         : { run: false }
@@ -300,7 +301,12 @@ export function createInjectionGuard(
             },
           })
           if (verdict.injection_detected) {
-            const screened = applyScreenVerdict(screenInput, verdict, { tool, namespace }, report)
+            const screened = applyScreenVerdict(
+              screenInput,
+              verdict,
+              { tool, namespace, item },
+              report,
+            )
             out = screened.data
             report = screened.report
           }

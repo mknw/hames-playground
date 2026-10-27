@@ -178,7 +178,13 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ],
   [
     'ScreenUntrustedContent',
-    () => b.request.ScreenUntrustedContent('web/fetch', 'fetched page text', SELF_DEPLOYED),
+    () =>
+      b.request.ScreenUntrustedContent(
+        'web/fetch',
+        'fetched page text',
+        '0123456789abcdef',
+        SELF_DEPLOYED,
+      ),
   ],
 ]
 

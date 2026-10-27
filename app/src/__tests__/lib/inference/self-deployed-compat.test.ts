@@ -62,9 +62,14 @@ describe('one-release environment migration', () => {
     vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')
     applyLegacyInferenceEnv()
     const { b } = await import('@hames-ai/harness-baml/baml_client')
-    const request = await b.request.ScreenUntrustedContent('web/fetch', 'synthetic text', {
-      client: 'LargeQwen',
-    })
+    const request = await b.request.ScreenUntrustedContent(
+      'web/fetch',
+      'synthetic text',
+      '0123456789abcdef',
+      {
+        client: 'LargeQwen',
+      },
+    )
     expect(request.url).toBe('https://large.example.invalid/v1/chat/completions')
     expect(request.headers).toMatchObject({ authorization: 'Bearer synthetic-key' })
   })

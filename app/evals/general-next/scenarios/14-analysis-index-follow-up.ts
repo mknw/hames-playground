@@ -13,7 +13,9 @@ export const scenario: ConversationScenario = {
   ],
   expectedTools: ['sandbox_bash'],
   expectedArgs: {
-    sandbox_bash: sandboxArgs(['lantern-notes.md', 'lantern-sales.csv', 'lantern-analysis.md']),
+    // Declared output first, then inputs; the notes may arrive through a `sandbox_read`
+    // earlier in the turn (the run-6 shape) instead of being named by the script.
+    sandbox_bash: sandboxArgs('lantern-analysis.md', 'lantern-notes.md', 'lantern-sales.csv'),
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],

@@ -13,6 +13,8 @@ import {
   createEventView,
   createScope,
   EGRESS_TEXTS,
+  FENCE,
+  LEGACY_FENCE,
   harness,
   harnessHasRedisRetriever,
   harnessPseudonymisesInputs,
@@ -909,12 +911,19 @@ describe('general-next composition', () => {
         ],
       }),
     })
-    for (const tool of ['graph_mail_recent', 'search', 'retriever']) {
+    // Slice 8: each fence names its source and item: the call's id for a tool
+    // result, the hit's `docId` for a retrieved hit.
+    for (const [tool, header] of [
+      ['graph_mail_recent', /⟦external provenance: graph\/graph_mail_recent, call-\d+⟧/],
+      ['search', new RegExp(`⟦external provenance: ${inferServer('search')}/search, call-\\d+⟧`)],
+      ['retriever', /⟦external provenance: retriever\/retriever, synthetic-doc⟧/],
+    ] as const) {
       const event = result.context.events.find(
         (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
       )
       expect(event, tool).toBeDefined()
-      expect(JSON.stringify(event!.data), tool).toContain('⟦UNTRUSTED CONTENT')
+      expect(JSON.stringify(event!.data), tool).toMatch(header)
+      expect(JSON.stringify(event!.data), tool).not.toContain(LEGACY_FENCE.open)
     }
     // The office and info guards declare the screen; the documents guard does not.
     const screenedTools = mocks.screen.mock.calls.map(([input]) => input.tool)
@@ -1393,7 +1402,7 @@ describe('general-next composition', () => {
     const handoff = mocks.controller.mock.calls[0][0].planContext
     expect(handoff).toContain('PERSON_')
     expect(handoff).not.toContain('Otto Willow')
-    expect(handoff).toContain('⟦UNTRUSTED CONTENT')
+    expect(handoff).toContain(FENCE.open)
   })
 
   it.each([
@@ -1444,8 +1453,12 @@ describe('general-next composition', () => {
       expect(handoff).toContain('PERSON_')
       expect(handoff).not.toContain('Otto Willow')
       expect(handoff).not.toContain('otto.willow@outside.test')
-      // The record carries the fence the mail arrived in, not one of the loop's own.
-      expect(handoff).toContain('⟦UNTRUSTED CONTENT · source: graph/graph_mail_recent ·')
+      // The record carries the fence the mail arrived in, item id included, not one
+      // of the loop's own.
+      const carried = handoff.match(
+        /⟦external provenance: graph\/graph_mail_recent, (call-\d+)⟧/,
+      )?.[1]
+      expect(carried).toBeDefined()
       expect(handoff).not.toContain('PERSON_1_GIVEN PERSON_1_FAMILY')
       const mail = result.context.events.find(
         (e) =>
@@ -1459,10 +1472,17 @@ describe('general-next composition', () => {
             : []
       const strings = leaves((mail.data as { result: unknown }).result)
       expect(strings.length).toBeGreaterThan(0)
+      // One provenance fence per leaf, every leaf naming the SAME call, the one
+      // the handoff's carried fence names. MUTATIONS: fence a leaf twice; drop
+      // the item id.
       for (const leaf of strings) {
-        expect(leaf.match(/⟦UNTRUSTED CONTENT · source:/g)).toHaveLength(1)
-        expect(leaf.match(/⟦END UNTRUSTED CONTENT⟧/g)).toHaveLength(1)
-        expect(leaf).toContain('source: graph/graph_mail_recent ·')
+        expect(leaf.split(FENCE.open)).toHaveLength(2)
+        expect(leaf.split(FENCE.close)).toHaveLength(2)
+        expect(
+          leaf.startsWith(
+            `${FENCE.open}graph/graph_mail_recent${FENCE.itemSeparator}${carried}${FENCE.headerEnd}\n`,
+          ),
+        ).toBe(true)
       }
     },
   )

@@ -113,9 +113,12 @@ async function renderRouter(bag: Record<string, unknown>): Promise<{ model?: str
 
 async function renderScreen(bag: Record<string, unknown>): Promise<{ model?: string }> {
   const { b } = await import('@hames-ai/harness-baml/baml_client')
+  // `boundary` (the markers' per-call code) comes before the bag (slice 8). The
+  // cast hides a missing one from typecheck, which then lands the bag in the
+  // nonce slot and the render on the declared chain.
   const render = await (
     b.request as unknown as Record<string, (...args: unknown[]) => Promise<RenderedRequest>>
-  )['ScreenUntrustedContent']('web/fetch', 'fetched page text', bag as never)
+  )['ScreenUntrustedContent']('web/fetch', 'fetched page text', '0123456789abcdef', bag as never)
   return render.body.json() as { model?: string }
 }
 

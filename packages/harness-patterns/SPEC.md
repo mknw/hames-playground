@@ -2571,6 +2571,44 @@ re-enters inside the pattern that paused, "as if it had not stopped".
 - **A host's own wrapper** joins the path with `wrapperResumable(kind, inner)`
   and `resumableStep(kind, capability, fn)`.
 
+### Holding a payload for a person: `askHumanHolding(request, payload)`
+
+What a person decides about is sometimes content the request event must never
+carry — an outgoing call's arguments, a flagged result's raw text — because a
+request event is display-only and rides the blob (`summary` is untrusted, P3).
+Decision-loop-agent slice 8 holds it in the HOST's store instead, bound to the
+call that raised it.
+
+- **The logical call key.** `simpleLoop` computes one per dispatched call: the
+  sha256 of the run's id (its `user_message`), the resumable path to the loop
+  (the run frame's `continuation`, routes and iterations included), the loop's
+  turn and the call's position in that turn's action. It is recorded on the
+  call's `tool_call` event (`callKey`) and set on the run frame around the
+  dispatch. Every input is durable state of the run, so a retry of the same
+  call — a resume retried in another process — recomputes it, and a deliberate
+  repeat at another turn or position gets another one. It is never
+  `currentToolCallId()`, a process-local counter a restart reissues.
+- **The store** is the run frame's `hitlPayloads` (`HitlPayloadStore`), which
+  the host supplies around its main run, bound to the owner and conversation.
+  `hold` is insert-only and binds per call AND request kind: a new call and
+  kind gets a row under a fresh `payloadRef`; the same call and kind with the
+  same payload (canonical JSON) gets that row back; the same call and kind with
+  another payload is `rebound`, and the row is left as it was. Another kind
+  under one call is its own row, so an outgoing call a person released can
+  still have its result flagged.
+- **`askHumanHolding(request, payload)`** needs both (it throws
+  `HitlRequestError` without either), holds the payload, and asks with the key
+  `${digest}:${callKey}` — the digest of the payload's canonical JSON, so the
+  key covers everything the decision authorizes (F8) — and the `payloadRef`.
+  The row and the request expire together: both take the request's
+  `expiresInMs`, or `HOLDING_EXPIRES_IN_MS` (24 h) when it names none.
+  It answers `{ status: 'rebound' }` without asking when the store refused, and
+  drops the row it inserted when the outcome was decided at once (the unattended
+  rule), so an unattended run leaves no payload behind.
+- **The host** purges a payload when its request closes (after each save), with
+  its conversation, and at its expiry; its `resolve` dispatches on the
+  request's `kind`.
+
 ### humanGate() and confirm()
 
 The gate patterns (#433 S4): the custom case first, the one-call preset over

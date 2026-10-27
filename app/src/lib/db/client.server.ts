@@ -265,6 +265,32 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS hitl_quarantine_expires_idx
     ON hitl_quarantine (expires_at);
+
+  -- Blocking-request payloads (decision-loop-agent slice 8): what a person is
+  -- shown before a gated call proceeds — an outgoing call's arguments, a
+  -- flagged result's raw text — held here, encrypted, never on an event. The
+  -- row is BOUND to one logical call and one request kind: unique on (owner,
+  -- conversation, call_key, kind), insert-only, so a retry gets the same row
+  -- back, the same call and kind can never be rebound to another payload, and
+  -- a released outgoing call can still hold its flagged result under its own
+  -- kind. It is held
+  -- independently of the memory switch. Purged when its request closes, with
+  -- the conversation, and by the expiry sweep (SD-11). \`call_key\` is a
+  -- sha256 of run-state identifiers, not content; \`payload\` is the one
+  -- encrypted column, and no digest of it is stored in the clear.
+  CREATE TABLE IF NOT EXISTS hitl_payloads (
+    payload_ref TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    call_key    TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    payload     TEXT NOT NULL,
+    UNIQUE (user_id, session_id, call_key, kind)
+  );
+  CREATE INDEX IF NOT EXISTS hitl_payloads_expires_idx
+    ON hitl_payloads (expires_at);
 `
 
 /**

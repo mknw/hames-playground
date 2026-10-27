@@ -128,10 +128,22 @@ REFERENCE_PROMPT = "Ticket: checkout is down for every customer. Priority (P1, P
 # ---- deployment config: the operator's, read at deploy time ------------------
 
 
+def _gpu_request(value: str) -> str | list[str]:
+    """One GPU type, or an ordered fallback list ("L4,A10") Modal tries in turn.
+
+    One type stays the plain string this box has always deployed. Several become
+    a `list`, the only shape Modal's SDK reads as fallbacks (a tuple is refused).
+    """
+    types = [part.strip() for part in value.split(",")]
+    if not all(types):
+        raise SystemExit(f"HAMES_MODAL_GPU={value!r} has an empty GPU type; refusing to deploy.")
+    return types[0] if len(types) == 1 else types
+
+
 COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")
 ROUTING_REGION = _env("HAMES_MODAL_ROUTING_REGION")
 APP_NAME = _env("HAMES_MODAL_APP_NAME", "hames-small-models")
-GPU = _env("HAMES_MODAL_GPU", "L4")
+GPU = _gpu_request(_env("HAMES_MODAL_GPU", "L4"))
 CPU = float(_env("HAMES_MODAL_CPU", "2"))
 MEMORY_MIB = int(_env("HAMES_MODAL_MEMORY_MIB", "24576"))
 SCALEDOWN_S = int(_env("HAMES_MODAL_SCALEDOWN_S", "300"))
@@ -228,6 +240,19 @@ def _shim_argv() -> list[str]:
 # anything), so the shim's own lock turns that egress off: such a request is a
 # 422 and nothing leaves the container.
 SHIM_ENV = {"LIGHTNING_IMAGE_URLS": "off"}
+
+
+def _gpu_name() -> str:
+    """The GPU this container landed on: with a fallback list, which type served is not fixed."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10, check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        # A boot fact, not a check: failing to read it must not stop serving.
+        return f"unknown ({type(error).__name__})"
+    return result.stdout.strip()
 
 
 def _assert_adapter_active(base: dict[str, float], adapter: dict[str, float]) -> None:
@@ -352,6 +377,7 @@ class SmallModels:
         self.boot["adapter_check"] = "ok"
         self.boot["vllm_image"] = VLLM_IMAGE
         self.boot["card_revision"] = CARD_REVISION
+        self.boot["gpu"] = _gpu_name()  # after wake_s, which stays comparable
 
         STATUS_DIR.mkdir(parents=True, exist_ok=True)
         (STATUS_DIR / "status.json").write_text(json.dumps(self.boot))

@@ -93,7 +93,7 @@ const toolsSpy = vi.spyOn(await import('@hames-ai/harness-patterns/tools.server'
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
 const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
-const { createDecisionDocuments } =
+const { createDecisionDocuments, privateDecisionRun } =
   await import('../../../lib/harness-client/decision-documents.server')
 
 interface Pattern {
@@ -149,6 +149,8 @@ describe('the bag the composition root supplies is the bag the moved factories r
     expect(bag.enrichNeo4jResult).toBe(enrichNeo4jResult)
     // The Decide step's document source (#507) is the app's tier-aware one.
     expect(bag.createDecisionDocuments).toBe(createDecisionDocuments)
+    // The Decide step's memory tier line (#829) is the app's raw-slot check.
+    expect(bag.quoteMemoriesToDecider).toBe(privateDecisionRun)
     // `withSandbox` rides the app adapter (the narrowing onto the app's own
     // config type), so its identity is the adapter's — asserted by delegation:
     expect(typeof bag.withSandbox).toBe('function')

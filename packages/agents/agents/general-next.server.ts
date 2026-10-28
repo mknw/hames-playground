@@ -376,6 +376,7 @@ async function createPatterns(
           patternId: 'orchestrator',
           liveEvents: true,
           documents: deps.createDecisionDocuments?.(sessionId),
+          quoteMemories: deps.quoteMemoriesToDecider,
         },
       ),
     ),
@@ -392,7 +393,9 @@ async function createPatterns(
       liveEvents: true,
     }),
   ]
-  // Only synthesis consumes memory; decisionLoop builds fresh, memory-free child data.
+  // Synthesis and the decisions model read memory (the latter its text only where the
+  // host's tier line allows, a count elsewhere); decisionLoop builds fresh, memory-free
+  // child data, so no route reads it.
   return deps.memory ? withMemory<AgentData>(deps.memory)(patterns) : patterns
 }
 

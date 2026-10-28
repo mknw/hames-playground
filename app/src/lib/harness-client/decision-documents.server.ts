@@ -1,17 +1,19 @@
 /**
  * What the Decide step may be told about the conversation's documents (#507;
- * design: docs/plan/decide-document-context.md).
+ * design: docs/plan/decide-document-context.md) and about the turn's recalled
+ * memories (#829).
  *
- * This is the ONE place the tier line is drawn. Core's `decisionLoop` never
- * reads a tier and renders whatever it is handed; this source decides what a
- * run may reveal:
+ * This is the ONE place the tier line is drawn ({@link privateDecisionRun}).
+ * Core's `decisionLoop` never reads a tier and renders whatever it is handed;
+ * the host decides what a run may reveal:
  *
  *   - the run frame's raw tier slot is exactly `'self_deployed'` (the private tier:
  *     the self-hosted decisions shim, no public provider) → the visible total
- *     AND every visible document's name, type and size;
+ *     AND every visible document's name, type and size; the recalled memories'
+ *     text;
  *   - anything else (`'anthropic'`, an unrecognised value, a frame with no tier
- *     slot) → the visible total only. No uploaded-file name reaches the
- *     Anthropic tier's decisions host.
+ *     slot) → the visible total only; the memories' count only. No uploaded-file
+ *     name and no memory text reaches the Anthropic tier's decisions host.
  *
  * Three spellings of that check are wrong and each has a pin
  * (`decision-documents.test.ts`): `!== 'anthropic'` lets an unrecognised value or
@@ -35,6 +37,17 @@ import { userOwnsSession } from '../stash/ownership.server'
 import { getRequestUserId } from './request-user.server'
 
 assertServerOnImport()
+
+/**
+ * The tier line: true only when this run's RAW tier slot is the private tier's
+ * literal. A frame still carrying the pre-rename `verda` is routed as
+ * self_deployed by `activeInferenceTier()` but is false here: the closed
+ * direction, on purpose. Read when CALLED, because built patterns outlive the
+ * turn. It is also `AgentDeps.quoteMemoriesToDecider`.
+ */
+export function privateDecisionRun(): boolean {
+  return currentRunFrame()?.inference?.tier === 'self_deployed'
+}
 
 /** Seams for the unit tests; production uses the defaults. */
 export interface DecisionDocumentsDeps {
@@ -69,10 +82,7 @@ export function createDecisionDocuments(
     if (!(await owns(sessionId, userId))) return { total: 0 }
 
     const visible = (await list(sessionId, signal)).filter((d) => !d.excluded)
-    // The tier line. The RAW slot, compared with the private tier's literal. A frame
-    // still carrying the pre-rename `verda` is routed as self_deployed by
-    // `activeInferenceTier()` but gets the count here: the closed direction, on purpose.
-    if (currentRunFrame()?.inference?.tier !== 'self_deployed') return { total: visible.length }
+    if (!privateDecisionRun()) return { total: visible.length }
     return {
       total: visible.length,
       names: visible.map((d) => ({

@@ -1409,6 +1409,9 @@ export type WarningTask =
   | 'planner'
   /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
   | 'decision_documents'
+  /** `decisionLoop` could not quote this turn's recalled memories to its decisions
+   *  model and counted them instead (#829). */
+  | 'decision_memories'
   /** The egress gate checked outgoing calls with less than it should have: a
    *  damaged roster, a missing or unreadable directory, or Decide down. */
   | 'egress_check'

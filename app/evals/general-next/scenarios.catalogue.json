@@ -585,9 +585,9 @@
       },
       "turns": [
         "How many Project nodes are in the knowledge graph?",
-        "Who is involved in the three most popular?"
+        "Who is involved in the three projects with the most people working on them?"
       ],
-      "expected": "42, then the participants of the three most popular projects: Dune, Ember, Fern, Gulf, Haven, Iris and Juniper.",
+      "expected": "42, then the people working on the three projects with the most people: Zenith, Nadir and Apogee on Dune, Perigee and Azimuth on Birch, Meridian and Solstice on Cedar.",
       "grader": [
         {
           "check": "orderedTools",
@@ -602,7 +602,7 @@
         {
           "check": "answerContains",
           "says": "module answerIncludes",
-          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
+          "facts": ["Zenith", "Nadir", "Apogee", "Perigee", "Azimuth", "Meridian", "Solstice"]
         },
         {
           "check": "turnAnswerContains",
@@ -614,7 +614,7 @@
           "check": "turnAnswerContains",
           "says": "module turnAnswerIncludes",
           "turn": 2,
-          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
+          "facts": ["Zenith", "Nadir", "Apogee", "Perigee", "Azimuth", "Meridian", "Solstice"]
         },
         {
           "check": "routeCompleted",

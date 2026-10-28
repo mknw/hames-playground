@@ -220,6 +220,9 @@ it('a first-attempt pass runs once; a failing must earns exactly two more attemp
   const s = run()
   expect(s).toContain('MUST_RERUN_ATTEMPTS : 1')
   expect(s).toMatch(/if \(attempt === 1 && status === 'pass'\) break/)
+  // #842 fix round 1: the re-run count itself is pinned to the README's cost bound
+  // (at most two extra attempts per failing MUST) — mutating the value must redden here.
+  expect(read('src/lib/eval-support/flip-gate.ts')).toContain('MUST_RERUN_ATTEMPTS = 3')
 })
 it('captures decisions and controller outputs only behind the env flag, beside the gitignored report', () => {
   const s = run()

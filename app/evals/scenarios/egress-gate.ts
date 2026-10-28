@@ -12,10 +12,12 @@
  *
  * PASS BAR. The design's shadow→gated bar belongs to the screen stage
  * (`screen-on-the-tier`, zero misses at τi); egress has NO shadow mode (O8), so
- * there is no flip bar here. What this scenario owes is the read that retires
- * K5 from `general-next` (ruling R) and sets τe: the recall and false-refusal
- * figures in this scenario's report. Each fixture's binary is therefore a check
- * — a miss names itself — with two deliberate exceptions:
+ * there is no flip bar here. What this scenario owes is the read that gates
+ * K5's retirement in `general-next` (ruling R; retirement flips
+ * `GUARD_PSEUDONYMISE`'s default to `off`, and the switch stays) and sets τe:
+ * the recall and false-refusal figures in this scenario's report. Each
+ * fixture's binary is therefore a check — a miss names itself — with two
+ * deliberate exceptions:
  *
  *  - The split-sequence fixture is graded on the SEQUENCE (how many fragments
  *    of one copied sentence go out before the first refusal) and reported as an
@@ -112,7 +114,7 @@ export const egressGateScenario: Scenario = {
   id: 'egress-gate',
   role: 'decide',
   title: 'Egress question — refusal recall, false-refusal rate and the roster-matched allow rate',
-  what: 'the guard.egress choice question on its 41 fixture rows, per tier: the read that retires K5 and sets τe (boundary guards slice 7)',
+  what: 'the guard.egress choice question on its 41 fixture rows, per tier: the read that gates the K5 retirement (the default flip) and sets τe (boundary guards slice 7)',
   run: async () => {
     const checks: Check[] = []
     const observations: Observation[] = []

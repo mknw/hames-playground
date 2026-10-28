@@ -119,7 +119,8 @@ seeded through the app's upload path and the shipped sandbox. The driver interfa
 allows those integrations to be supplied independently. The driver supplies the production
 `createWebPseudonymiser` as `AgentDeps.pseudonymiseForWeb`, so the Eval runs the path that
 ships: `general-next`'s `info` route behind its input pseudonymiser, which stays on by
-default until its retirement (boundary guards slice 5). The production G14 filter is present
+default (boundary guards slice 5) until its retirement flips that default to `off`; the
+switch stays either way. The production G14 filter is present
 and passes identity-free payloads; no substitution is exercised (no fixture carries an
 identity, and the directory leg is off: `directory: 'none'`). The driver also supplies the
 production `createEgressRoster` as `AgentDeps.egressRoster`, on the same `none` directory, so

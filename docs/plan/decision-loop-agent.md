@@ -319,6 +319,9 @@ The table is built in memory, one per invocation, and dropped when the invocatio
 **Failure mode: withhold, never pass in clear.** On every run the wrapper applies to, it fails closed when:
 
 - **no pseudonymiser was supplied (D3).** `pseudonymiseForWeb` is optional because Anthropic-only deployments do not need it, but absent is never pass-through. The tier is known only per run, so this is enforced at run time, not at construction;
+
+  > **Since boundary guards slice 5** (#835, [`boundary-guards.md`](boundary-guards.md#k5-assessed)), `general-next` composes the wrapper only when the host supplies a filter. With no `guards`, or with `GUARD_PSEUDONYMISE=off`, the route has no wrapper and the egress gate judges every outgoing call. D3 still holds for a host that composes the wrapper with no filter.
+
 - building the roster or the table throws;
 - the directory cannot be read;
 - the directory reads as empty when the deployment did not declare that it has none.
@@ -368,6 +371,9 @@ This is consistent with ADR-0006. The input half rewrites the view and data a ch
 - the latest user message reaches the inner controller unchanged;
 - **(D2)** a frame with no tier slot, and one with an unrecognised tier value, both get the rewrite. A frame whose raw tier is exactly `'anthropic'` is a pass-through;
 - **(D3)** on a private-tier run with no `pseudonymiseForWeb`, nothing is attached, no result body is in the handoff, and a web call is refused;
+
+  > **Since boundary guards slice 5** (#835, [`boundary-guards.md`](boundary-guards.md#k5-assessed)), `general-next` composes the wrapper only when the host supplies a filter. With no `guards`, or with `GUARD_PSEUDONYMISE=off`, the route has no wrapper and the egress gate judges every outgoing call. D3 still holds for a host that composes the wrapper with no filter.
+
 - a roster or table failure, and an unreadable or undeclared-empty directory, each attach nothing and refuse web calls;
 - a web call whose URL carries a percent-encoded roster address is denied, and a nested `egressChecks` amend keeps the outer check;
 - **(D5)** a second production import of `lib/privacy/` fails the narrowed tripwire.

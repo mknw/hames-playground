@@ -104,6 +104,7 @@ export {
   typedDecision,
   decisionRouter,
   DECISION_ROUTER_KEY,
+  WITHHELD_ERROR_DETAIL,
   type DecisionCall,
   type EvaluatedDecision,
   type DecideOptions,

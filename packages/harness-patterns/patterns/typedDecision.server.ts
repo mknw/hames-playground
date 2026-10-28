@@ -195,7 +195,8 @@ export interface DecideOptions {
   /** Record the call WITHOUT what it read (`redactCall`): for a state quoting
    *  text that must not reach the persisted blob through the event — recalled
    *  memory, which `serializeContext` keeps out of `data` for the same reason
-   *  (#419 F1). Usage, cost and the client survive. */
+   *  (#419 F1). Usage, cost and the client survive; an error message keeps its
+   *  text before the first `': '` and {@link WITHHELD_ERROR_DETAIL}. */
   readonly redact?: boolean
 }
 
@@ -260,6 +261,17 @@ export async function evaluateDecision<S extends AnyDecisionSpec>(
   } as EvaluatedDecision<S>
 }
 
+/** What a redacted call's error message keeps: the text before its first `': '`
+ *  (who answered, and how, e.g. `Jev answered HTTP 422`), then this marker. The
+ *  detail after it is a transport's, and an endpoint that echoes its request
+ *  would carry the quoted state into the stored error. */
+export const WITHHELD_ERROR_DETAIL = '(detail withheld: the state quoted text that is not stored)'
+
+function withholdDetail(message: string): string {
+  const at = message.indexOf(': ')
+  return at < 0 ? message : `${message.slice(0, at)} ${WITHHELD_ERROR_DETAIL}`
+}
+
 /** Record one evaluated decision on the scope: exactly ONE `decision_made`,
  *  and — when it failed — ONE `error`. Returns the decision stamped with the
  *  recorded event's id (absent when `trackHistory` filtered the event out). */
@@ -271,6 +283,10 @@ function record(
 ): AnyDecision {
   const errorOwnsCall = evaluated.error?.kind === 'llm_call'
   const call = opts.redact ? redactCall(evaluated.llmCall) : evaluated.llmCall
+  const error =
+    evaluated.error && opts.redact
+      ? { ...evaluated.error, error: withholdDetail(evaluated.error.error) }
+      : evaluated.error
   const before = scope.events.length
   trackEvent(
     scope,
@@ -281,14 +297,14 @@ function record(
   )
   const recorded = scope.events[before]
   const eventId = recorded?.type === 'decision_made' ? recorded.id : undefined
-  if (evaluated.error && recordError) {
+  if (error && recordError) {
     trackEvent(
       scope,
       'error',
       {
-        ...evaluated.error,
+        ...error,
         severity: opts.errorSeverity ?? 'recoverable',
-        hint: getErrorHint(evaluated.error.error),
+        hint: getErrorHint(error.error),
       } as ErrorEventData,
       true,
       errorOwnsCall ? call : undefined,

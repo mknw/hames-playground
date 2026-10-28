@@ -504,6 +504,7 @@ export {
   evaluateDecision,
   assertDecisionSetSpec,
   DECISION_ROUTER_KEY,
+  WITHHELD_ERROR_DETAIL,
   type TypedDecisionConfig,
   type TypedDecisionData,
   type DecisionRouterConfig,

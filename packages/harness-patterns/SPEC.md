@@ -2076,9 +2076,10 @@ persists:** its decisions are recorded with the call redacted
 (`DecideOptions.redact`, `redactCall`: usage, cost and client kept, `variables`,
 `rawInput` and `rawOutput` dropped), on `decision_made` and on the `error` event
 that owns a failed call, so memory text never reaches the conversation blob
-through them (review F1, below). A transport error message is kept, minus any
-copy of the whole state; one that echoed only part of a request body could carry
-a fragment, capped at 500 characters. A `state` override receives
+through them (review F1, below). The error detail is withheld from the saved
+record as well: an error message keeps its text before the first `': '` (who
+answered, and how: `Jev answered HTTP 422`, which the hint still reads) and
+`WITHHELD_ERROR_DETAIL`. A `state` override receives
 `DecisionLoopStateInput.memories` (`{ total, quoted? }`, the text only on a
 quoting run) and owns its own quoting; `renderMemoriesBlock` is exported for it.
 
@@ -2943,8 +2944,10 @@ record carries usage and the recorded client, and its `rawInput` is the request
 body, state included: it is persisted with the conversation, so whatever the
 state holds (a `decisionLoop`'s documents block, route outputs) is stored.
 `DecideOptions.redact` records the call without what it read (`redactCall`) on
-the `decision_made` and on an `error` that owns the call, for a state quoting text
-that must not be stored (a `decisionLoop` quoting recalled memory). `PatternCapabilities.decisionKeys` and
+the `decision_made` and on an `error` that owns the call, and withholds an error
+message's detail (its text before the first `': '` and `WITHHELD_ERROR_DETAIL`),
+for a state quoting text that must not be stored (a `decisionLoop` quoting
+recalled memory). `PatternCapabilities.decisionKeys` and
 `harnessDecisionKeys(patterns)` expose declared keys without running the
 harness. Timeline previews show the decision type and verdict.
 

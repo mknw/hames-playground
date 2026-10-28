@@ -420,6 +420,45 @@ export interface InjectionGuardOptions {
    *  every option it applies to the tools the declaring guard declares, and to
    *  no others. */
   screen?: InjectionScreenConfig
+  /**
+   * Links a source writes itself, exempt from `exfil-data-url` and from no
+   * other rule (#784 item 6: the tenant's own SharePoint/OneDrive `webUrl`s).
+   * A string leaf is exempt only when all three hold: the payload's namespace
+   * is `namespace`; the leaf is the value of an object key named `field`; and
+   * the WHOLE value is one `https:` URL with no credentials or port whose
+   * hostname is exactly one of `hosts` (no wildcards, no subdomains). The same
+   * URL in any other leaf, namespace or host is scanned as before. See
+   * {@link isSourceLink}.
+   */
+  sourceLinks?: { namespace: string; field: string; hosts: readonly string[] }
+}
+
+/** The whole value is one URL by `exfil-data-url`'s own tokenization: nothing
+ *  that rule would read as the end of a URL. */
+const SINGLE_HTTPS_URL = /^https:\/\/[^\s)<>"'\\`]+$/
+
+/**
+ * Whether `value`, found under `key` in a payload from `namespace`, is a link
+ * `sourceLinks` exempts. The exemption is bound to WHERE the value sits, never
+ * to what it looks like: content can spell any URL, but it cannot make a
+ * connector write it into its own `field` of its own namespace's result.
+ */
+function isSourceLink(
+  value: string,
+  key: string | undefined,
+  namespace: string,
+  links: InjectionGuardOptions['sourceLinks'],
+): boolean {
+  if (!links || key !== links.field || namespace !== links.namespace) return false
+  if (!SINGLE_HTTPS_URL.test(value)) return false
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  if (url.username || url.password || url.port) return false
+  return links.hosts.some((host) => host.toLowerCase() === url.hostname)
 }
 
 /**
@@ -1027,16 +1066,20 @@ export function sanitizeUntrusted(
   options?: InjectionGuardOptions,
 ): SanitizeResult {
   const rules = resolveRules(options)
+  const linkRules = rules.filter((rule) => rule.id !== 'exfil-data-url')
   const spotlightMode = options?.spotlight ?? 'on-detection'
   const findings: SanitizeFinding[] = []
   let scanned = 0
   let spotlighted = false
   let changed = false
 
-  const walk = (node: unknown): unknown => {
+  const walk = (node: unknown, key?: string): unknown => {
     if (typeof node === 'string') {
       scanned += node.length
-      const { text, findings: found } = sanitizeText(node, rules, findings.length)
+      const leafRules = isSourceLink(node, key, ctx.namespace, options?.sourceLinks)
+        ? linkRules
+        : rules
+      const { text, findings: found } = sanitizeText(node, leafRules, findings.length)
       findings.push(...found)
       const wantFence =
         spotlightMode === 'always' || (spotlightMode === 'on-detection' && found.length > 0)
@@ -1048,7 +1091,7 @@ export function sanitizeUntrusted(
       return spotlight(text, ctx.tool, ctx.namespace, ctx.item)
     }
     if (Array.isArray(node)) {
-      const mapped = node.map(walk)
+      const mapped = node.map((v) => walk(v))
       return mapped.some((v, i) => v !== node[i]) ? mapped : node
     }
     if (node !== null && typeof node === 'object') {
@@ -1056,7 +1099,7 @@ export function sanitizeUntrusted(
       const mapped: Record<string, unknown> = {}
       let any = false
       for (const [k, v] of entries) {
-        const next = walk(v)
+        const next = walk(v, k)
         if (next !== v) any = true
         mapped[k] = next
       }

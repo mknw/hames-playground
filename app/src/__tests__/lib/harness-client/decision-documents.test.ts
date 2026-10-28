@@ -20,7 +20,10 @@ vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
 }))
 vi.mock('../../../lib/stash/ownership.server', () => ({ userOwnsSession: vi.fn() }))
 
-import { createDecisionDocuments } from '../../../lib/harness-client/decision-documents.server'
+import {
+  createDecisionDocuments,
+  privateDecisionRun,
+} from '../../../lib/harness-client/decision-documents.server'
 import { runWithUserId } from '../../../lib/harness-client/request-user.server'
 import { userOwnsSession } from '../../../lib/stash/ownership.server'
 import { runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
@@ -325,5 +328,98 @@ describe('what the decide request carries', () => {
     )
     expect(r.total).toBe(1)
     expect(ops.filter(([n]) => n === 'srem').map(([, a]) => a.value)).toEqual(['expired'])
+  })
+})
+
+// ============================================================================
+// Recalled memories (#829): the same tier line, as `quoteMemoriesToDecider`
+// ============================================================================
+
+describe('privateDecisionRun — may the decider quote recalled memories', () => {
+  const on = (tier: string | undefined) =>
+    withRunFrame(tier === undefined ? {} : { inference: { tier } }, async () =>
+      privateDecisionRun(),
+    )
+
+  // Mutation: return false everywhere, or compare against 'private' (the ruling is
+  // then never in force).
+  it("is true only for a run whose raw tier slot is 'self_deployed'", async () => {
+    expect(await on('self_deployed')).toBe(true)
+  })
+
+  // Mutation: test `!== 'anthropic'` (the unrecognised rows go red).
+  it.each([
+    ['anthropic', 'anthropic'],
+    ['an unrecognised value', 'Verda '],
+    ['a spelling the code does not have', 'private'],
+    ['an empty slot', ''],
+    ['the pre-rename spelling', 'verda'],
+  ])('%s is false', async (_what, tier) => {
+    expect(await on(tier)).toBe(false)
+  })
+
+  // Mutation: read `activeInferenceTier()` instead of the raw frame slot.
+  it('is false for a frameless run, even on a deployment whose default tier is self_deployed', async () => {
+    const { configureInferencePolicy } = await import('@hames-ai/harness-baml/clients.server')
+    configureInferencePolicy({ defaultTier: () => 'self_deployed' })
+    try {
+      expect(await on(undefined)).toBe(false)
+      expect(
+        await withRunFrame({ hitl: { attended: false } }, async () => privateDecisionRun()),
+      ).toBe(false)
+      expect(privateDecisionRun()).toBe(false)
+    } finally {
+      configureInferencePolicy({ defaultTier: () => 'anthropic' })
+    }
+  })
+
+  // The invariant at the request body: no memory text reaches the Anthropic
+  // tier's decisions host. Mutation: pass `() => true` as the host's answer.
+  it('what the decide request carries: the text on self_deployed, a count everywhere else', async () => {
+    const MEMORY = 'MEMORY-SENTINEL: the release tag is LANTERN-2'
+    const stateFor = async (tier: string | undefined) => {
+      const states: string[] = []
+      const decide = (async ({
+        spec,
+        state,
+      }: {
+        spec: { labels: readonly { id: string }[] }
+        state: string
+      }) => {
+        states.push(state)
+        return {
+          probs: Object.fromEntries(spec.labels.map((l) => [l.id, l.id === 'answer' ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, { supportedTypes: ['choice'] })
+      const route = configurePattern<Record<string, unknown>>('simpleLoop', async (s) => s, {
+        patternId: 'info-p',
+      })
+      const loop = decisionLoop<Record<string, unknown>>(
+        { info: { pattern: route as never, description: 'look it up' } },
+        {
+          decide,
+          answer: 'Answer now',
+          patternId: 'orchestrator',
+          quoteMemories: privateDecisionRun,
+        },
+      )
+      const ctx = createContext<Record<string, unknown>>('which tag do you have noted?', {
+        memories: [{ id: 'm', kind: 'semantic', tier: 't', content: MEMORY }],
+      })
+      await withRunFrame(tier === undefined ? {} : { inference: { tier } }, () =>
+        runChain(ctx, [loop as never]),
+      )
+      return states[0]
+    }
+    expect(await stateFor('self_deployed')).toContain(`> ${MEMORY}`)
+    for (const tier of ['anthropic', undefined, 'private', 'verda']) {
+      const state = await stateFor(tier)
+      expect(state).toContain('1 relevant memory (not shown)')
+      expect(state).not.toContain('SENTINEL')
+      expect(state).not.toContain('LANTERN')
+    }
   })
 })

@@ -74,6 +74,7 @@ interface Doc {
   encoding?: 'utf8' | 'base64'
   hidden?: boolean
   archived?: boolean
+  ingestStatus?: string
 }
 const docs = new Map<string, Doc>()
 const docKey = (sessionId: string, id: string) => `${sessionId}:${id}`
@@ -112,14 +113,12 @@ const listDocuments = vi.fn(async (sessionId: string) =>
 const deleteDocument = vi.fn(async (sessionId: string, id: string) => {
   docs.delete(docKey(sessionId, id))
 })
-const setDocumentFlags = vi.fn(
-  async (sessionId: string, id: string, patch: { hidden?: boolean; archived?: boolean }) => {
-    const doc = docs.get(docKey(sessionId, id))
-    if (!doc) return null
-    Object.assign(doc, patch)
-    return doc
-  },
-)
+const setDocumentFlags = vi.fn(async (sessionId: string, id: string, patch: Partial<Doc>) => {
+  const doc = docs.get(docKey(sessionId, id))
+  if (!doc) return null
+  Object.assign(doc, patch)
+  return doc
+})
 vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
   DEFAULT_TTL_SECONDS: 7 * 24 * 60 * 60,
   storeDocument: (...args: unknown[]) => storeDocument(...(args as [never])),
@@ -134,13 +133,15 @@ vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
 }))
 
 // ── Ingest / search ─────────────────────────────────────────────────────────
-const ingestDocument = vi.fn(async () => ({ chunks: 3 }))
 const searchDocuments = vi.fn(async () => [{ docId: 'doc-1', score: 0.9 }])
-const ingestStashDocument = vi.fn(async () => {})
+const ingestStashDocument = vi.fn(
+  async (_sessionId: string, _docId: string): Promise<{ chunks: number } | null> => ({
+    chunks: 3,
+  }),
+)
 vi.mock('@hames-ai/harness-patterns/stash/document-ingest.server', () => ({
-  ingestDocument: () => ingestDocument(),
   searchDocuments: () => searchDocuments(),
-  ingestStashDocument: () => ingestStashDocument(),
+  ingestStashDocument: (...args: unknown[]) => ingestStashDocument(...(args as [never, never])),
 }))
 
 // ── Upload-route collaborators (auto-ingest gate) ───────────────────────────
@@ -323,6 +324,8 @@ describe('stash routes — session ownership', () => {
     expect(searchDocuments).toHaveBeenCalledTimes(1)
   })
 
+  // The panel's "Index for search" button (#832) is this route. MUTATION: drop
+  // the `claimSession` gate → mallory's request ingests alice's document.
   it('scopes ingest to the owner', async () => {
     conversationOwners.set('s1', 'alice')
     const { id } = await uploadAs('alice', 's1')
@@ -332,14 +335,32 @@ describe('stash routes — session ownership', () => {
       evt(jsonRequest('http://x/api/stash/ingest', { sessionId: 's1', docId: id })),
     )
     expect(theirs.status).toBe(404)
-    expect(ingestDocument).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
 
     currentUser = 'alice'
     const mine = await ingestPost(
       evt(jsonRequest('http://x/api/stash/ingest', { sessionId: 's1', docId: id })),
     )
-    expect(mine.status).toBe(200)
-    expect(ingestDocument).toHaveBeenCalledTimes(1)
+    expect(mine.status).toBe(202)
+    expect(docs.get(`s1:${id}`)!.ingestStatus).toBe('pending')
+    expect(ingestStashDocument).toHaveBeenCalledTimes(1)
+    expect(ingestStashDocument.mock.calls[0].slice(0, 2)).toEqual(['s1', id])
+  })
+
+  // Both sessions are alice's, so the gate passes; the document is s2's, so
+  // naming it under s1 is not an ingest of anything. Both of the route's reads —
+  // the lookup and the pending write — are keyed by the named session, and each
+  // refuses on its own. MUTATION: drop both refusals → s2's copy is ingested.
+  it("refuses another session's document, even one the same user owns", async () => {
+    conversationOwners.set('s1', 'alice')
+    conversationOwners.set('s2', 'alice')
+    const { id } = await uploadAs('alice', 's2')
+
+    const res = await ingestPost(
+      evt(jsonRequest('http://x/api/stash/ingest', { sessionId: 's1', docId: id })),
+    )
+    expect(res.status).toBe(404)
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 })
 

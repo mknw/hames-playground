@@ -12,6 +12,10 @@ ways the guard refuses a declaration it cannot enforce.
 **The runnable version:** [`examples/guarding-an-agent.ts`](./examples/guarding-an-agent.ts) —
 this page's code assembled into one file you can copy out and run.
 
+This page covers the deterministic layer alone. The full guardrail system — the
+guard gate behind the screen, the egress gate, the person prompts and the
+operator switches — is [Guardrail engineering](./guardrail-engineering.md).
+
 ---
 
 ## 1. The unguarded agent

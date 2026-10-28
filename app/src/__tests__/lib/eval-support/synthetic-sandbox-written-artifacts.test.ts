@@ -121,7 +121,7 @@ const THE_THREE = [
 ]
 
 describe('scenario 11 as recorded in eval run 3: mail, then sandbox_write to /work/out', () => {
-  it('credits the written checklist as the artifact, indexed, and lets the actor read it back', async () => {
+  it('credits the written checklist as the artifact, unindexed, and lets the actor read it back', async () => {
     const { call, readMail, trace, documents, failed } = rig()
     readMail()
     const write = await call('sandbox_write', RECORDED_WRITE)
@@ -129,7 +129,7 @@ describe('scenario 11 as recorded in eval run 3: mail, then sandbox_write to /wo
     expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_write', success: true, valid: true })
     expect((await call('sandbox_read', { path: LAUNCH })).data).toBe(RECORDED_WRITE.content)
     expect(trace.artifacts).toEqual(['lantern-launch.md'])
-    expect(trace.indexed).toEqual(['lantern-launch.md'])
+    expect(trace.indexed).toEqual([])
     expect(documents.get('lantern-launch.md')).toBe(RECORDED_WRITE.content)
     expect(failed()).toEqual([])
   })
@@ -265,7 +265,7 @@ describe('a later sandbox_edit is judged on the file’s final bytes, as product
     await call('sandbox_edit', edit('TODO', 'Publish notes'))
     expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_edit', success: true, valid: true })
     expect(trace.artifacts).toEqual(['lantern-launch.md'])
-    expect(trace.indexed).toEqual(['lantern-launch.md'])
+    expect(trace.indexed).toEqual([])
     expect(failed()).toEqual([])
   })
 
@@ -318,7 +318,7 @@ describe('a later sandbox_edit is judged on the file’s final bytes, as product
     await call('sandbox_write', RECORDED_WRITE)
     await call('sandbox_write', { path: LAUNCH, content: `${RECORDED_WRITE.content}\n` })
     expect(trace.artifacts).toEqual(['lantern-launch.md'])
-    expect(trace.indexed).toEqual(['lantern-launch.md'])
+    expect(trace.indexed).toEqual([])
   })
 
   it('names the shell mutations it does not model (rm, mv, in-place edits of a credited file)', () => {

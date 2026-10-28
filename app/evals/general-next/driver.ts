@@ -9,25 +9,39 @@ import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
   createSyntheticWithSandbox,
+  indexForUser,
+  stashSearchable,
 } from '../../src/lib/eval-support/synthetic-sandbox'
 import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
-// 07-follow-up-success (owner option 2, rebuilt per the owner's shape-probe directive): the
-// per-entity structure is DERIVED from a read-only shape probe of the dev graph — labels,
-// relationship types, property vocabulary, the participant-bearing pattern (typed
-// relationships, not a property; there is no popularity property either, so popularity is
-// relationship degree) and the hub/isolated degree distribution — with every observable
+// What the person uploaded before turn 1, seeded into every scenario's stash.
+const UPLOADS = new Map([
+  ['lantern-notes.md', NOTES],
+  ['lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n'],
+])
+const UPLOADED: ReadonlySet<string> = new Set(UPLOADS.keys())
+// 07-follow-up-success (owner option 2, rebuilt per the owner's shape-probe directive; the
+// people fixture is TASK Q, #808): the per-entity structure is DERIVED from a read-only
+// shape probe of the dev graph — labels, relationship types, property vocabulary, the
+// participant-bearing pattern (typed relationships, not a property; there is no popularity
+// property either) and the hub/isolated degree distribution — with every observable
 // identity replaced by invented common nouns before anything landed here (the probe read
-// no node names at all). The miniature keeps the scenario's Project label so the turn-1
-// total-count anchor stays derivable, and every top-tier entity's relationships are
-// reciprocal, so the follow-up's answer is the same whether the model reads them directed
-// or undirected. The triples below are raw graph data, never a pre-ranked or aggregated
-// result: "the three most popular" and "who is involved" must be computed from them, and
-// the shape deliberately does not mirror the controller's degree-aggregation few-shot
-// (a pre-aggregated {name, degree} table).
+// no node names at all). The reworded follow-up ("the three projects with the most people
+// working on them") needed what the probed vocabulary does not carry — the dev graph's
+// people are org-governed, so the probe read no person-bearing type — so the miniature
+// gained the ONE deliberate addition: a Person label and a directed WORKS_ON involvement
+// relationship, person → project, one per person. Per-project people counts: Dune 3,
+// Birch 2, Cedar 2, Ember 1 — the top three (Dune, Birch, Cedar) are unambiguous, the
+// rank-3/rank-4 boundary does not straddle a tie (2 > 1), and "who is involved" is the
+// union of the top three's WORKS_ON in-neighbours. A project's non-involvement
+// relationships stay reciprocal, so their structure reads the same directed or
+// undirected. The triples below are raw graph data, never a pre-ranked or aggregated
+// result: the ranking and the people must be computed from them, and the shape
+// deliberately does not mirror the controller's degree-aggregation few-shot (a
+// pre-aggregated {name, degree} table).
 const GRAPH_RELATIONSHIPS = [
   { from: 'Alder', type: 'USES', to: 'Dune' },
   { from: 'Dune', type: 'RUNS_ON', to: 'Alder' },
@@ -43,6 +57,18 @@ const GRAPH_RELATIONSHIPS = [
   { from: 'Iris', type: 'USES', to: 'Cedar' },
   { from: 'Cedar', type: 'FALLS_BACK_TO', to: 'Juniper' },
   { from: 'Juniper', type: 'FALLS_BACK_TO', to: 'Cedar' },
+  // WORKS_ON (person → project): the involvement data the reworded follow-up ranks and
+  // reads. Every person works on exactly ONE project, so a project's people count is its
+  // WORKS_ON in-degree; no filler project carries a person, so the isolated remain
+  // isolated and the expected answer stays derivable from these triples alone.
+  { from: 'Zenith', type: 'WORKS_ON', to: 'Dune' },
+  { from: 'Nadir', type: 'WORKS_ON', to: 'Dune' },
+  { from: 'Apogee', type: 'WORKS_ON', to: 'Dune' },
+  { from: 'Perigee', type: 'WORKS_ON', to: 'Birch' },
+  { from: 'Azimuth', type: 'WORKS_ON', to: 'Birch' },
+  { from: 'Meridian', type: 'WORKS_ON', to: 'Cedar' },
+  { from: 'Solstice', type: 'WORKS_ON', to: 'Cedar' },
+  { from: 'Equinox', type: 'WORKS_ON', to: 'Ember' },
 ]
 // The miniature graph's node rows (R6DIAG row 07): a node-property query (RETURN p.name,
 // p.observations) used to get the relationship triples too, and the controller concluded
@@ -102,6 +128,24 @@ const GRAPH_NODES = [
   name,
   observations: ['Provisioned at fixture setup', 'No recorded findings'],
 }))
+// The miniature graph's Person rows (TASK Q, #808): the people the reworded follow-up's
+// answer names. Same invented, identity-free, no-real-names rule as GRAPH_NODES, in a
+// separate noun family (celestial/geometric), so a person name can never collide with a
+// project name and the two row sets stay tellable apart. One row per WORKS_ON triple's
+// person, same Project-row shape.
+const GRAPH_PEOPLE = [
+  'Zenith',
+  'Nadir',
+  'Apogee',
+  'Perigee',
+  'Azimuth',
+  'Meridian',
+  'Solstice',
+  'Equinox',
+].map((name) => ({
+  name,
+  observations: ['Provisioned at fixture setup', 'No recorded findings'],
+}))
 const FIXTURES: Record<string, unknown> = {
   // The probed get_neo4j_schema shape (an object keyed by label and relationship type;
   // property names and types are the probed vocabulary). No per-label count: a count on
@@ -121,6 +165,17 @@ const FIXTURES: Record<string, unknown> = {
         IMPLEMENTS: { direction: 'out', labels: ['Project'] },
         EXPOSES: { direction: 'out', labels: ['Project'] },
         FALLS_BACK_TO: { direction: 'out', labels: ['Project'] },
+        WORKS_ON: { direction: 'in', labels: ['Person'] },
+      },
+    },
+    Person: {
+      type: 'node',
+      properties: {
+        name: { indexed: false, type: 'STRING' },
+        observations: { indexed: false, type: 'LIST' },
+      },
+      relationships: {
+        WORKS_ON: { direction: 'out', labels: ['Project'] },
       },
     },
     USES: { type: 'relationship', count: 4 },
@@ -129,6 +184,7 @@ const FIXTURES: Record<string, unknown> = {
     IMPLEMENTS: { type: 'relationship', count: 1 },
     EXPOSES: { type: 'relationship', count: 2 },
     FALLS_BACK_TO: { type: 'relationship', count: 2 },
+    WORKS_ON: { type: 'relationship', count: 8 },
   },
   // 03-web-read (#775): the canned web result is the POPULAR package the scenario now
   // asks about. The seeded lantern-notes.md stays as the LOCAL decoy — its content does
@@ -221,21 +277,31 @@ export async function createDriver(
               ? 'Graph is read-only; write refused.'
               : 'Synthetic service unavailable; retry on the next user turn.',
         }
-      // Argument-aware where the three graph facts diverge: a TOTAL-count ask over
+      // Argument-aware where the four graph facts diverge: a TOTAL-count ask over
       // Project (the same shape the scenarios' own arg predicate grades) keeps returning
       // the pre-existing anchor `[{ count: 42 }]`, unchanged for 02/08/13 and 07 turn 1.
-      // A node-property query reads the miniature graph's node rows; a relationship or
-      // degree query — anything with a traversal pattern, or without property access —
-      // keeps the raw relationship triples. The traversal-pattern exclusion keeps every
-      // degree/participant query — including a degree-aggregation few-shot crib, whose
-      // shape must never be answered with the count row — on the triples.
+      // A person node query reads the Person rows; a Project node-property query reads
+      // the Project rows; a relationship, involvement or degree query — anything with a
+      // traversal pattern, or without property access — keeps the raw relationship
+      // triples. The traversal-pattern exclusion keeps every degree/participant query —
+      // including a degree-aggregation few-shot crib, whose shape must never be answered
+      // with the count row — on the triples, which is also where the WORKS_ON data the
+      // follow-up ranks and reads lives.
       if (name === 'read_neo4j_cypher') {
         const query = typeof args.query === 'string' ? args.query : ''
-        const totalCount = projectCountArgs(args) && !/-\[|\]-|--/.test(query)
-        const nodeQuery = /\w+\.\w+/.test(query) && !/-\[|\]-|--/.test(query)
+        const noTraversal = !/-\[|\]-|--/.test(query)
+        const totalCount = projectCountArgs(args) && noTraversal
+        const personQuery = /person/i.test(query) && noTraversal
+        const nodeQuery = /\w+\.\w+/.test(query) && noTraversal
         return {
           success: true,
-          data: totalCount ? [{ count: 42 }] : nodeQuery ? GRAPH_NODES : GRAPH_RELATIONSHIPS,
+          data: totalCount
+            ? [{ count: 42 }]
+            : personQuery
+              ? GRAPH_PEOPLE
+              : nodeQuery
+                ? GRAPH_NODES
+                : GRAPH_RELATIONSHIPS,
         }
       }
       return { success: true, data: FIXTURES[name] }
@@ -257,6 +323,10 @@ export async function createDriver(
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
   // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
   const { classifyIngress } = await import('../../src/lib/harness-client/ingress-classifier.server')
+  // The host's own tier line for what the Decide step may quote of recalled memory (#829):
+  // the eval's frame is `self_deployed`, so 05's memory reaches the decider as text.
+  const { privateDecisionRun } =
+    await import('../../src/lib/harness-client/decision-documents.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
@@ -282,15 +352,16 @@ export async function createDriver(
         mimeType: name.endsWith('.csv') ? 'text/csv' : 'text/markdown',
         size: content.length,
         uploadedAt: index,
-        searchable: name.endsWith('.md'),
+        searchable: stashSearchable(name, UPLOADED, trace),
       })),
     }),
+    quoteMemoriesToDecider: privateDecisionRun,
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',
       search: async () =>
         [...documents]
-          .filter(([source]) => source.endsWith('.md'))
+          .filter(([source]) => stashSearchable(source, UPLOADED, trace))
           .map(([source, content]) => {
             trace.retrievals.push({ source, turn })
             return {
@@ -333,8 +404,7 @@ export async function createDriver(
       scenario = next
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()
-      documents.set('lantern-notes.md', NOTES)
-      documents.set('lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n')
+      for (const [name, content] of UPLOADS) documents.set(name, content)
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
@@ -348,6 +418,10 @@ export async function createDriver(
           const run = harness(...patterns)
           let serialized: string | undefined
           for (turn = 0; turn < next.messages.length; turn++) {
+            // The person indexes the promoted deliverable from the Data Stash between
+            // turns (#832): the agent does not, so this is the only way it becomes
+            // searchable, and only if an earlier turn saved it.
+            if (turn > 0) indexForUser(next, trace)
             fake?.turn(next, turn)
             const result = serialized
               ? await continueSession(serialized, patterns, next.messages[turn])

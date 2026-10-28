@@ -471,7 +471,7 @@ active development; the Warning below has the status and what to do meanwhile.
 The shape, simplified from `types.ts` (the source is the authority; the
 `typescript` samples under Usage are compiled against it by a test in this
 repository, and this excerpt omits a few further optional fields —
-`memory`, `graphFileIngest`, `createDecisionDocuments` — that `types.ts`
+`memory`, `graphFileIngest`, `createDecisionDocuments`, `quoteMemoriesToDecider` — that `types.ts`
 carries):
 
 ```

@@ -184,6 +184,16 @@ of names. Core renders it into the state (capped, each name sanitised
 deterministically, an unreadable list shown as unknown, never as none) but never
 reads a tier itself. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
+With `withMemory` in the chain, the host can also tell the decisions model what
+was recalled this turn, through `quoteMemories` on the loop's config: a function
+asked once per run whether that run may quote the recalled memories. Answer
+`true` only where the decisions endpoint may see memory text (the reference app:
+a run whose raw tier slot is its private tier); every other answer gives a count.
+The quote is fenced as data under a per-run nonce, capped, and lives in the
+decide state alone: no route child receives it, and a quoting run records its
+decisions with the call redacted so the text is not stored with the
+conversation. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
 A planner caps the reasoning handed to downstream executors with
 `maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
 plan text. Its `plan_created` event and LLM call record retain the full trace.
@@ -243,6 +253,9 @@ update failure refuses further outgoing calls while delivering the result. The
 gate counts its refusals per route by the run frame's `route` slot, which
 `decisionLoop` writes around each child. See SPEC's
 [egress gate](SPEC.md#withegressgateconfigpattern-boundary-guards-slice-4).
+For the guards as one system — settings, defaults per tier, the person prompts
+and the operator switches — see the Guardrail engineering page in the repo's
+docs: <https://github.com/mknw/hames-playground/blob/main/docs/tutorials/guardrail-engineering.md>.
 
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
@@ -253,7 +266,8 @@ configuration withholds earlier content and refuses web calls. The loop itself
 sanitises and screens nothing: the office and info route guards declare the
 screen, the documents route's guard none, and a route record carries the
 fence its tool results arrived in. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
+is optional and reaches synthesis and the decisions model (its text only on the
+private tier, a count elsewhere), never a route. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
 reference app's default agent, set by the host rather than by registration.
 
 ### Deciding with probabilities
@@ -329,6 +343,9 @@ router, including nested routers, while `compactExecution` / `synthesize` still
 receive it for reply writing. Direct conversational router replies have no memory
 and still skip synthesis. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548). Unknown values throw at construction. The exported
 `RouterMemory` union names both choices; no extra router configuration is needed.
+Whichever choice is made, the saved router and synthesize call records are
+redacted (`redactCall` at the event sites), so the rendered memory block never
+rides the persisted conversation blob through an event's `llmCall` (review F1).
 Controllers and the planner get no direct memory block; with the default they can
 receive its facts indirectly through intent (#419 D13 / decision 6, amended by
 #535). This setting controls the current recalled block; it does not remove facts

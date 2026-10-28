@@ -155,7 +155,7 @@
     },
     "indexedAndRetrieved": {
       "exists": true,
-      "says": "the markdown file was indexed and a later turn retrieved it"
+      "says": "the person indexed the promoted markdown file between turns (the driver's mocked Data Stash click, #832; never the agent) and a later turn retrieved it"
     },
     "citationLocator": {
       "exists": true,
@@ -585,9 +585,9 @@
       },
       "turns": [
         "How many Project nodes are in the knowledge graph?",
-        "Who is involved in the three most popular?"
+        "Who is involved in the three projects with the most people working on them?"
       ],
-      "expected": "42, then the participants of the three most popular projects: Dune, Ember, Fern, Gulf, Haven, Iris and Juniper.",
+      "expected": "42, then the people working on the three projects with the most people: Zenith, Nadir and Apogee on Dune, Perigee and Azimuth on Birch, Meridian and Solstice on Cedar.",
       "grader": [
         {
           "check": "orderedTools",
@@ -602,7 +602,7 @@
         {
           "check": "answerContains",
           "says": "module answerIncludes",
-          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
+          "facts": ["Zenith", "Nadir", "Apogee", "Perigee", "Azimuth", "Meridian", "Solstice"]
         },
         {
           "check": "turnAnswerContains",
@@ -614,7 +614,7 @@
           "check": "turnAnswerContains",
           "says": "module turnAnswerIncludes",
           "turn": 2,
-          "facts": ["Dune", "Ember", "Fern", "Gulf", "Haven", "Iris", "Juniper"]
+          "facts": ["Zenith", "Nadir", "Apogee", "Perigee", "Azimuth", "Meridian", "Solstice"]
         },
         {
           "check": "routeCompleted",
@@ -1007,9 +1007,9 @@
       },
       "turns": [
         "I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.",
-        "From the analysis you just indexed, which region sold more and by how much? Cite that analysis."
+        "I have indexed lantern-analysis.md from the Data Stash. Which region sold more and by how much? Cite that analysis."
       ],
-      "expected": "lantern-analysis.md exists and is indexed; North 47 versus South 19, difference 28, cited.",
+      "expected": "Turn 1 saves lantern-analysis.md and tells the person it can be indexed for search from the Data Stash; once they have indexed it, turn 2 reports North 47 versus South 19, difference 28, cited.",
       "grader": [
         {
           "check": "orderedTools",
@@ -1025,6 +1025,12 @@
           "check": "answerContains",
           "says": "module answerIncludes",
           "facts": ["North", "47", "South", "19", "28"]
+        },
+        {
+          "check": "turnAnswerContains",
+          "says": "module turnAnswerIncludes",
+          "turn": 1,
+          "facts": ["Data Stash"]
         },
         {
           "check": "artifact",
@@ -1056,7 +1062,7 @@
         ["analyse", "uploads"],
         ["create-deliverable", "uploads"]
       ],
-      "pendingMustIssue": 810
+      "notes": "should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)"
     },
     {
       "id": "15-graph-file-summary",
@@ -1243,7 +1249,7 @@
         "Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.",
         "From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues."
       ],
-      "expected": "North 47, South 19, difference 28, cited to lantern-launch-analysis.md.",
+      "expected": "Turn 1 saves lantern-launch-analysis.md and tells the person it can be indexed for search from the Data Stash; once they have indexed it, North 47, South 19, difference 28, cited to lantern-launch-analysis.md.",
       "grader": [
         {
           "check": "orderedTools",
@@ -1264,6 +1270,12 @@
           "check": "answerContains",
           "says": "module answerIncludes",
           "facts": ["North", "47", "South", "19", "28"]
+        },
+        {
+          "check": "turnAnswerContains",
+          "says": "module turnAnswerIncludes",
+          "turn": 1,
+          "facts": ["Data Stash"]
         },
         {
           "check": "artifact",
@@ -1321,7 +1333,7 @@
         "Find lantern-review.docx, read it, and save lantern-review-analysis.md with the regional totals and their difference. Keep the original reviewer's name.",
         "From that saved analysis, which region sold more and by how much? Cite it."
       ],
-      "expected": "graph_files_search, then graph_file_ingest with the returned ids, then sandbox tools; the saved report names Mira Cedar, North 47, South 19, 28; indexed and cited next turn.",
+      "expected": "graph_files_search, then graph_file_ingest with the returned ids, then sandbox tools; the saved report names Mira Cedar, North 47, South 19, 28; indexed by the mocked Data Stash click and cited next turn.",
       "grader": [
         {
           "check": "orderedTools",

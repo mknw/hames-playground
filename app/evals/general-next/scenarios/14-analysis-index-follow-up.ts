@@ -4,13 +4,13 @@ import type { ConversationScenario } from '../types'
 export const scenario: ConversationScenario = {
   id: '14-analysis-index-follow-up',
   title: 'Compute, convert to markdown, then retrieve in a later turn',
+  // should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)
   priority: 'should',
-  pendingMustIssue: 810,
   baseline: false,
   p4: false,
   messages: [
     'I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.',
-    'From the analysis you just indexed, which region sold more and by how much? Cite that analysis.',
+    'I have indexed lantern-analysis.md from the Data Stash. Which region sold more and by how much? Cite that analysis.',
   ],
   expectedTools: ['sandbox_bash'],
   expectedArgs: {
@@ -20,6 +20,9 @@ export const scenario: ConversationScenario = {
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],
+  // The office step saves the file; the person indexes it (#832, owner 2026-10-28), and
+  // the driver makes that click between turns. So turn 1 says where.
+  turnAnswerIncludes: [['Data Stash']],
   artifacts: ['lantern-analysis.md'],
   forbiddenTools: [],
   maxIterations: 6,

@@ -4,8 +4,8 @@ import type { ConversationScenario } from '../types'
 export const scenario: ConversationScenario = {
   id: '14-analysis-index-follow-up',
   title: 'Compute, convert to markdown, then retrieve in a later turn',
+  // should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)
   priority: 'should',
-  pendingMustIssue: 810,
   baseline: false,
   p4: false,
   messages: [

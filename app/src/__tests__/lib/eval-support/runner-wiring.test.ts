@@ -236,6 +236,23 @@ it('captures decisions and controller outputs only behind the env flag, beside t
     /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
   )
 })
+// The egress-gate scenario runs under the runner, which opens the run's frame
+// (harness.ts `runScenario`). Its gate rows scope their fake transport BELOW
+// that frame, with `amendRunFrame` — the seam run-frame.server.ts names for
+// "a combinator that legitimately scopes below a run" — because a nested
+// `withRunFrame` that supplies a slot is refused ("a nested entry joins the
+// open frame and brings no slots"), which is what threw on every gate row
+// (#788 c6445541842). The runner frame is never absent when this scenario
+// runs, so an amend outside a frame refusing is the correct failure there.
+// MUTATION: revert the scenario's transport scope to `withRunFrame` (the
+// pre-fix shape at egress-gate.ts) — this pin reddens on both halves, and the
+// live run throws on every gate row again.
+it('scopes the egress-gate gate-row transports below the runner frame with amendRunFrame', () => {
+  const s = read('evals/scenarios/egress-gate.ts')
+  expect(s).toMatch(/await amendRunFrame\(\s*\{\s*transports: \[/)
+  expect(s).not.toContain('withRunFrame(')
+})
+
 // #832 (owner, 2026-10-28): the agent does not index a deliverable; the person does, from
 // the Data Stash. The driver makes that click before each later turn's run, and its
 // retriever and documents list serve only uploaded markdown and what the person indexed.

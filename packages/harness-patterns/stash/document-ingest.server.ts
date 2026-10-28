@@ -468,6 +468,12 @@ async function markIngestStatus(
  *  - `'failed'` — retried (usually a transient embedder-down at upload time);
  *  - absent (no status) — the gate never fired (e.g. uploaded before the
  *    session was persisted).
+ * EXCEPT sandbox outputs (`provenance: 'sandbox-output'`): a promotion stores
+ * no status precisely because indexing is the PERSON's choice (#832/#836 —
+ * the per-document "Index for search" button), so an absent status on one
+ * means "not chosen", not "the gate never fired". The net leaves it alone; a
+ * CHOSEN sandbox output carries a status ('pending'/'indexed' skipped above,
+ * 'failed' retried as for any other document).
  * Skips `'indexed'` (searchable), `'pending'` (the gate is actively ingesting
  * it — re-ingesting would double the work and contend on the serial gateway),
  * and non-convertible `base64` binaries. A fully-indexed corpus costs
@@ -488,6 +494,12 @@ export async function ensureSessionIngested(
   let skippedFlagged = 0
   for (const m of metas) {
     if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
+    // A sandbox output is indexed only when the person chooses it (#836): the
+    // promotion path (`promoteOutputs`) stores no `ingestStatus`, so an absent
+    // one here means "not chosen" — indexing it anyway would bypass that
+    // choice. A chosen one carries a status and is handled by the rules above
+    // and below ('failed' is retried like any other document's).
+    if (m.provenance === 'sandbox-output' && !m.ingestStatus) continue
     // Skip binaries we can't turn into text; convertible ones (with conversion
     // enabled) fall through to ingestStashDocument, which converts them.
     if (m.encoding === 'base64' && !(conversionEnabled() && isConvertible(m.mimeType))) continue

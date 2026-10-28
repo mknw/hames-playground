@@ -90,7 +90,7 @@ async function seed(
   fake: ReturnType<typeof makeFakeRedis>,
   id: string,
   content: string,
-  opts: { encoding?: 'base64'; mimeType?: string } = {},
+  opts: { encoding?: 'base64'; mimeType?: string; provenance?: 'sandbox-output' } = {},
 ) {
   return storeDocument(
     {
@@ -100,6 +100,7 @@ async function seed(
       mimeType: opts.mimeType ?? 'text/plain',
       content,
       ...(opts.encoding ? { encoding: opts.encoding } : {}),
+      ...(opts.provenance ? { provenance: opts.provenance } : {}),
     },
     fake.callTool,
   )
@@ -400,5 +401,36 @@ describe('ensureSessionIngested', () => {
     } finally {
       delete process.env.STASH_CONVERT_DOCS
     }
+  })
+
+  // #849: indexing a sandbox output is the PERSON's choice (#836's "Index for
+  // search" button). A promotion from /work/out stores no `ingestStatus`, so an
+  // absent status on one means "not chosen", not "the gate never fired" — the
+  // safety net must leave it for the button, while still covering the plain
+  // upload beside it.
+  it('leaves an unchosen sandbox output unindexed, ingesting the plain upload beside it', async () => {
+    const { embedFn } = makeEmbedder('m', 3)
+    const embedSpy = vi.fn(embedFn)
+    await seed(fake, 'sbx-out', 'Sandbox deliverable text.', { provenance: 'sandbox-output' })
+    await seed(fake, 'up', 'Plain upload text.')
+
+    await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn: embedSpy })
+
+    expect((await getDocument('s1', 'sbx-out', fake.callTool))?.ingestStatus).toBeUndefined()
+    expect((await getDocument('s1', 'up', fake.callTool))?.ingestStatus).toBe('indexed')
+    expect(embedSpy).toHaveBeenCalledTimes(1) // the upload only
+  })
+
+  // The choice, once made, is honoured like any other document's: a sandbox
+  // output the person indexed whose ingest failed is retried by the net —
+  // which is what rules out "skip every sandbox output" as the fix.
+  it('retries a CHOSEN sandbox output whose ingest failed', async () => {
+    const { embedFn } = makeEmbedder('m', 3)
+    await seed(fake, 'sbx-chosen', 'Chosen deliverable text.', { provenance: 'sandbox-output' })
+    await setDocumentFlags('s1', 'sbx-chosen', { ingestStatus: 'failed' }, fake.callTool)
+
+    await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn })
+
+    expect((await getDocument('s1', 'sbx-chosen', fake.callTool))?.ingestStatus).toBe('indexed')
   })
 })

@@ -454,7 +454,8 @@ describe('what a quoting run persists', () => {
   })
 
   // Mutation: compute the hint from the withheld marker alone (the prefix is what
-  // names a rate limit, a timeout or an oversized request).
+  // names a rate limit or an oversized request; a transport failure's cause, such
+  // as a timeout, sits after the first ': ' and loses its hint on a quoting run).
   it('the hint still reads the kept prefix', async () => {
     const { loop } = build(['answer'], { quoteMemories: () => true }, undefined, {
       at: 0,

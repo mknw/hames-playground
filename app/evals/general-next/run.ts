@@ -178,7 +178,7 @@ async function main() {
           generalBaselineRecorded: GENERAL_BASELINE,
           hermeticCaveat: live
             ? undefined
-            : "Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. `general-next` composes no input pseudonymiser (boundary guards slice 5); the egress roster's directory leg is off.",
+            : 'Hermetic passes are wiring only. Scripted Synthesize echoes the expected answer, so answer/read-only/no-write/failure-acknowledged checks are self-fulfilling; only tool order+arguments, route selection+completion, artifacts, index/retrieval and first-turn-failure checks discriminate. 06-read-only passes vacuously. No G14 substitution is exercised (no fixture identity, directory off).',
           tailLines: budget.tailLines,
           capUsd: cap,
           stopUsd: budget.stopUsd,

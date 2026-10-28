@@ -167,15 +167,19 @@ fence and no screen, so retrieved hits get the deterministic pass only. The
 orchestrator's loop sanitizes and screens nothing of its own: a route record
 is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web
 route admits only its own and retriever
-references, excluding sandbox-promoted documents, and reads them as they are:
-it composes no input pseudonymiser. Every route's outgoing calls are judged by
-the egress gate (`deps.egressRoster`; `deps.guards.egressMode` sets `filter`
-or `roster`), which refuses what it cannot judge. An unconfigured private decisions endpoint
+references, excluding sandbox-promoted documents, and pseudonymises inherited
+content when the host supplies `deps.guards.pseudonymiseForWeb`. Without it —
+the `GUARD_PSEUDONYMISE=off` switch, or no `guards` bag at all — the route is
+composed without the wrapper, so earlier content reaches it as written rather
+than withheld (boundary guards slice 5). The web route's outgoing calls are
+judged by the egress gate (`deps.egressRoster`; `deps.guards.egressMode` sets
+`filter` or `roster`). A supplied filter that cannot be built withholds earlier
+content, and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
 #### The `GUARD_*` operator switches
 
-Three environment variables let an operator weaken the guards this agent
+Four environment variables let an operator weaken the guards this agent
 composes with. They are read once at boot and validated there — they narrow a
 guard, never widen one. They set the fields of
 [`AgentDeps.guards`](#what-an-agent-definition-contains); a host that composes
@@ -186,11 +190,12 @@ guards in code sets the same fields directly:
 | `GUARD_SCREEN`           | the injection screen's mode on the self-deployed tier                                         | `off` / `shadow` / `gated` / `always` |
 | `GUARD_SCREEN_ANTHROPIC` | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)         | `off` / `always`                      |
 | `GUARD_EGRESS`           | the egress gate's mode on every tier (`roster` vetoes on a directory match and asks no model) | `filter` / `roster`                   |
+| `GUARD_PSEUDONYMISE`     | the web route's input pseudonymiser (default `on`; `off` is its retirement switch)            | `on` / `off`                          |
 
 A value below a tier's declared default warns at boot, naming what it switches
 off; an unrecognised value refuses boot. The deterministic layers and the
 thresholds have no switch — those are decisions a reviewed line of code owns.
-The reference host reads these three in
+The reference host reads these four in
 [`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts).
 
 `general-next` also opts into optional memory. Only its final synthesis receives recalled
@@ -393,13 +398,13 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                         | Injection guard                                                                                                                                       |
-| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                               | web route guarded; neo4j route not guarded (see the Warning below)                                                                                    |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                               | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                              |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token       | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                                          |
-| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; every outgoing call judged by the egress gate |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                      | not on tool results yet, on any route; shell commands are screened (below)                                                                            |
+| Agent           | Composition                                                      | Tools                                                         | Injection guard                                                                                                                            |
+| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                               | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
+| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                               | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
+| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token       | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
+| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
+| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                      | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
 
 In the `general-next` row, `context7` is the MCP server that answers questions
 about software libraries; _Data Stash_ is the uploaded-document store behind
@@ -505,9 +510,9 @@ interface AgentDeps {
   persistTitle?: (sessionId: string, userId: string, title: string) => Promise<void>
   doNotCachePatterns?: (sessionId: string) => void
   // The guards' host settings: the injection screen's per-tier mode, the
-  // egress gate's mode and the host's ingress classifier. Built once at boot
-  // from the GUARD_* operator switches above; absent, every guard keeps its
-  // per-tier default.
+  // egress gate's mode, the host's ingress classifier, the web-route
+  // pseudonymiser. Built once at boot from the GUARD_* operator switches
+  // above; absent, every guard keeps its per-tier default.
   guards?: AgentGuards
   // The egress gate's directory (who is who). Wiring, not a switch: the gate
   // reads it at run time, and no GUARD_* variable turns it on or off.
@@ -517,19 +522,19 @@ interface AgentDeps {
 
 #### What comes from where
 
-| Concern                                                        | Where it lives               | How it reaches the agent                                                                   |
-| -------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
-| Model calls: adapters, prompt templates                        | `@hames-ai/harness-baml`     | imported directly by the factories                                                         |
-| Patterns, event views, guard, tool calling                     | `@hames-ai/harness-patterns` | imported directly                                                                          |
-| Tool→namespace catalog (your MCP gateway's map)                | your application             | `AgentDeps.toolNamespaces` — required                                                      |
-| Neo4j tool-result enrichment                                   | your application             | `AgentDeps.enrichNeo4jResult`                                                              |
-| Document search backend (uploaded files)                       | your application             | `AgentDeps.createRedisBackend`                                                             |
-| Sandbox wrapper (built on `@hames-ai/sandbox`)                 | your application             | `AgentDeps.withSandbox`                                                                    |
-| Guard settings (screen mode per tier, egress mode, classifier) | your application             | `AgentDeps.guards` — composed from the [`GUARD_*` switches](#the-guard_-operator-switches) |
-| The egress gate's directory (who is who)                       | your application             | `AgentDeps.egressRoster`                                                                   |
-| Which model each role uses (your policy)                       | your application             | `AgentDeps.clientOverride`                                                                 |
-| Saving conversation titles; opting out of caching              | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns`                                           |
-| Icons + accent colours                                         | your application             | added when you register the agent (see Usage)                                              |
+| Concern                                                                       | Where it lives               | How it reaches the agent                                                                   |
+| ----------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
+| Model calls: adapters, prompt templates                                       | `@hames-ai/harness-baml`     | imported directly by the factories                                                         |
+| Patterns, event views, guard, tool calling                                    | `@hames-ai/harness-patterns` | imported directly                                                                          |
+| Tool→namespace catalog (your MCP gateway's map)                               | your application             | `AgentDeps.toolNamespaces` — required                                                      |
+| Neo4j tool-result enrichment                                                  | your application             | `AgentDeps.enrichNeo4jResult`                                                              |
+| Document search backend (uploaded files)                                      | your application             | `AgentDeps.createRedisBackend`                                                             |
+| Sandbox wrapper (built on `@hames-ai/sandbox`)                                | your application             | `AgentDeps.withSandbox`                                                                    |
+| Guard settings (screen mode per tier, egress mode, classifier, pseudonymiser) | your application             | `AgentDeps.guards` — composed from the [`GUARD_*` switches](#the-guard_-operator-switches) |
+| The egress gate's directory (who is who)                                      | your application             | `AgentDeps.egressRoster`                                                                   |
+| Which model each role uses (your policy)                                      | your application             | `AgentDeps.clientOverride`                                                                 |
+| Saving conversation titles; opting out of caching                             | your application             | `AgentDeps.persistTitle` / `.doNotCachePatterns`                                           |
+| Icons + accent colours                                                        | your application             | added when you register the agent (see Usage)                                              |
 
 ## Reference
 

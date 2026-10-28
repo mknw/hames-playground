@@ -268,6 +268,72 @@ describe('R1 flow 4', () => {
       expect(JSON.stringify(event.data)).toContain('PROMOTED-PRIVATE-BODY')
     },
   )
+  it('keeps promoted references excluded when the real private host rewrites their tag value', async () => {
+    const { createWebPseudonymiser } =
+      await import('../../../../lib/harness-client/web-pseudonymiser.server')
+    const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
+    const pseudonymiseForWeb = createWebPseudonymiser({ directory: 'none' })
+    const identity = shapeMessages({
+      value: [
+        {
+          from: {
+            emailAddress: { name: 'Sandbox Output', address: 'sandbox.output@outside.test' },
+          },
+        },
+      ],
+    })
+    const filter = await pseudonymiseForWeb([identity], 'find documents')
+    expect(filter.redact(filter.apply({ provenance: 'sandbox-output' })).provenance).not.toBe(
+      'sandbox-output',
+    )
+    const { backend } = await corpus()
+    const ctx = createContext('find documents', {})
+    const retrieval = retriever({
+      backends: [backend],
+      rewrite: async () => ({ value: '' }),
+      patternId: 'retriever',
+    })
+    const retrieved = await withRunFrame({}, () =>
+      retrieval.fn(createScope('retriever', {}), createEventView(ctx)),
+    )
+    const event = retrieved.events.find((e) => e.type === 'tool_result')!
+    ctx.events.push(...retrieved.events, {
+      id: 'identity',
+      type: 'tool_result',
+      patternId: 'doc',
+      ts: Date.now(),
+      data: { tool: 'graph_mail_recent', success: true, result: identity },
+    })
+    const controller = composed.controller
+      .mockReset()
+      .mockResolvedValueOnce({
+        action: {
+          reasoning: 'expand',
+          tool_name: 'expandPreviousResult',
+          tool_args: `ref:${event.id}`,
+          is_final: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        action: { reasoning: 'done', tool_name: 'Return', tool_args: 'done', is_final: true },
+      })
+    await generalNextAgent.createPatterns('s', {
+      toolNamespaces: mcpNamespace,
+      withSandbox: () => (pattern) => pattern,
+      createRedisBackend: () => backend,
+      guards: { pseudonymiseForWeb },
+    } satisfies AgentDeps)
+    const result = await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
+      composed.routes['info-retrieval'].pattern.fn(
+        createScope('info', {}),
+        createEventView(ctx, { fromLast: false }),
+      ),
+    )
+    expect(result.events.filter((e) => e.type === 'error')).toEqual([])
+    expect(JSON.stringify(controller.mock.calls)).toContain('UPLOADED-PUBLIC-BODY')
+    expect(JSON.stringify(controller.mock.calls)).not.toContain('PROMOTED-PRIVATE-BODY')
+  })
+
   it('removes all-promoted candidates and refuses explicit expansion', async () => {
     const { backend } = await corpus()
     const hits = await backend.search({ text: 'question' }, { k: 5 })

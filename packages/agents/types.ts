@@ -39,6 +39,7 @@ import type {
   EgressRosterSource,
   IngressClassifier,
   MemoryConfig,
+  PseudonymiseForWeb,
   RetrieverBackend,
   RetrieverData,
   ScreenMode,
@@ -80,15 +81,17 @@ export interface GraphElement extends ElementDefinition {
  *   screen's `classify`. Absent: every payload is external, the safe default.
  *   It rides `guards` rather than its own `AgentDeps` field — one path to the
  *   screen's gating, not two — and no env variable sets it.
- *
- * There is no input-pseudonymiser field: boundary guards slice 5 retired K5
- * from the registered agents, and a field nothing reads would look like
- * protection. A library user composes `withPseudonymisedInputs` directly.
+ * - `pseudonymiseForWeb` is the input pseudonymiser (K5): supplied, the agent
+ *   wraps its web route in `withPseudonymisedInputs` with it. Absent (the
+ *   host's switch is off, or no `guards` bag at all), the agent composes no
+ *   wrapper, never a null filter into one that would withhold every word of
+ *   inherited content on the tier it runs on (boundary guards slice 5).
  */
 export interface AgentGuards {
   readonly screenMode?: ByTier<ScreenMode>
   readonly egressMode?: ByTier<EgressMode>
   readonly classifyIngress?: IngressClassifier
+  readonly pseudonymiseForWeb?: PseudonymiseForWeb
 }
 
 /**

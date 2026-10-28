@@ -1342,14 +1342,10 @@ Wrap the web route's `withReferences` with this config-transparent input
 boundary (K5). What LEAVES is not this wrapper's: every outgoing call is judged
 by [`withEgressGate`](#withegressgateconfigpattern-boundary-guards-slice-4), which
 took this wrapper's outgoing check (K6) and its refusal of web calls (boundary
-guards, slice 4). The reference host's `general-next` no longer composes it
-(boundary guards slice 5): that agent's web route reads earlier results as they
-are, the egress gate is the only control on what leaves, and the app keeps its
-`createWebPseudonymiser` host factory with no registered agent handed it. The
-wrapper stays for library users. It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
+guards, slice 4). It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
 the answer the tier module registered into the run frame, so an absent or empty
 tier is whatever the host's policy defaults to (the self-deployed tier on the
-reference host, where no route composes this wrapper since slice 5) and a present but unrecognised tier is the
+reference host, which is protected) and a present but unrecognised tier is the
 self-deployed tier, refused when unreachable. With no tier module registered, core reads the
 raw `inference.tier`. Core imports no host
 privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
@@ -2278,8 +2274,11 @@ the removed `general` agent and is the default agent. Its `orchestrator` chooses
 `office-data` (guarded Microsoft 365 tools and an office sandbox),
 `info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
-route composes no input pseudonymiser (retired in boundary guards slice 5); the
-whole loop is wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
+route wraps `withReferences` in `withPseudonymisedInputs` when the host supplies
+the filter (`AgentGuards.pseudonymiseForWeb`), and composes no wrapper without
+one (boundary guards slice 5): the reference app supplies it unless
+`GUARD_PSEUDONYMISE=off`, the switch whose default flips at K5's retirement.
+The whole loop is wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
 'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local:
 `neo4j`, `graph`, and the office box's
 in-VM tools by name while that box is booted `mcp-only`). The info route admits only the

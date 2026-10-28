@@ -14,6 +14,7 @@ import {
   withEgressGate,
   withInjectionGuard,
   withMemory,
+  withPseudonymisedInputs,
   withReferences,
   type ConfiguredPattern,
 } from '@hames-ai/harness-patterns'
@@ -227,10 +228,7 @@ async function createPatterns(
     },
   }
   const doc = withInjectionGuard(docGuard)(office)
-  // No input pseudonymiser (K5, retired in boundary guards slice 5): the info
-  // controller reads names as they are, and what leaves is judged by the
-  // egress gate below, on every tier. The core wrapper stays for library users.
-  const infoRoute = withInfoDocumentReferences(
+  const infoLoop = withInfoDocumentReferences(
     withReferences<AgentData>(
       simpleLoop<AgentData>(
         createLoopControllerAdapter(
@@ -263,6 +261,17 @@ async function createPatterns(
       },
     ),
   )
+  // K5 (the web route's input filter) is composed exactly when the host
+  // supplies the filter: the app's default bag does (GUARD_PSEUDONYMISE unset
+  // or `on`). Without one — GUARD_PSEUDONYMISE=off, or a bag with no `guards`
+  // at all — the route is composed WITHOUT the wrapper, never with a null
+  // filter that would withhold every word of inherited content off the
+  // Anthropic tier (boundary guards slice 5, replacing G14 D3's withhold for
+  // the no-`guards` shape). The egress gate judges what leaves either way.
+  // Retirement is flipping the app's default, after the egress gate's
+  // measured gap has a measured fix.
+  const pseudonymise = deps.guards?.pseudonymiseForWeb
+  const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
   const info = withInjectionGuard(infoGuard)(infoRoute)
   const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
     retriever<AgentData>({

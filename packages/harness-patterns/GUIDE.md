@@ -203,14 +203,6 @@ See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
 
 ### Protecting the web route's earlier inputs
 
-The reference host's `general-next` does not compose this wrapper any more
-(boundary guards slice 5). There it ran only on the self-deployed tier, where
-every model is company-run, so it kept nothing from a provider; keeping names
-out of the context that writes outgoing queries served only what leaves, which
-the egress gate (below) judges call by call, and the controller paid for it by
-reasoning over placeholders. The wrapper stays for a library user who wants the
-rewrite.
-
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)
 and all inherited child data, preserving the latest user message. Rewritten

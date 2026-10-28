@@ -315,10 +315,11 @@ export async function createDriver(
     documents,
     descriptions: descriptions.filter((t) => isSandboxTool(t.name)),
   })
-  // The egress roster's production factory. `none` because the hermetic run has no org
-  // graph: the directory leg is NOT covered here (live mode keeps it off too, since the
-  // eval holds no tenant data).
-  const { createEgressRoster } =
+  // The production factory, so general-next's info route runs behind its real G14 filter
+  // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
+  // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
+  // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
+  const { createEgressRoster, createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
   // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
@@ -331,7 +332,10 @@ export async function createDriver(
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
-    guards: { classifyIngress },
+    guards: {
+      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+      classifyIngress,
+    },
     // The egress gate's production roster, on the same `none` directory: every outgoing
     // call of every route is asked about (boundary guards slice 4).
     egressRoster: createEgressRoster({ directory: 'none' }),

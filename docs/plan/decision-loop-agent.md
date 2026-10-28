@@ -20,7 +20,7 @@ const doc_ag = withInjectionGuard(DOC_GUARD)(                      // office + d
   ),
 )
 const info_ag = withInjectionGuard(INFO_GUARD)(                    // knowledge lookups
-  withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(   // G14: the web route, private tier only; retired by boundary guards slice 5 (note below)
+  withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(   // G14: the web route, private tier only
   withReferences(
     simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, ...WEB], { patternId: 'info', returnStyle: 'answer', rememberPriorTurns: false }),
     { selector, source: ['retriever', 'info'], viewConfig: { fromLastNTurns: 1 } },
@@ -51,8 +51,6 @@ const orchestrator = withInjectionGuard({
 // P4 tier flip: a confirmation screen before private-tier content reaches an Anthropic-tier turn.
 agent = withMemory(deps.memory)([privateContentRelease(deps.privateContent), orchestrator, compactExecution({ mode: 'thread', patternId: 'response-synth', viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 } })])
 ```
-
-> **`withPseudonymisedInputs` is retired from `general-next`** by boundary guards slice 5 (2026-10-28, [`boundary-guards.md`](boundary-guards.md#k5-assessed)): `info_ag` composes no input pseudonymiser, and the egress gate judges every outgoing call. See [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 
 There are three differences from the owner's sketch, each argued below:
 
@@ -277,8 +275,6 @@ A route output never passes the `callTool` chokepoint. `decisionLoop` records it
 Extractors and the later materialiser must never read `content_sanitized` event data (SD-3). Those human-only events may contain verbatim findings. Slices 1 and 5 each pin this using a fixture containing both a sanitized `tool_result` and a `content_sanitized` event with an unmistakable synthetic raw span.
 
 ### Pseudonymisation guard on the web route
-
-> **Retired from `general-next`** by boundary guards slice 5 (2026-10-28, [`boundary-guards.md`](boundary-guards.md#k5-assessed)): the agent composes no `withPseudonymisedInputs`, and the egress gate judges every outgoing call. The core wrapper stays for library users; this section describes it as G14 designed it.
 
 Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862); revised for delta review 2 (PR #566, comment 6192033926, D1–D6). `info_ag` is the one route whose tools can send text out of our environment, as a `web_search` query or a `fetch` URL, which is a GET to a public host. The guard makes sure the model composing those arguments never sees a real identity taken from earlier results. It is an extra, outbound-facing filter, and the injection guard stays as it is.
 

@@ -401,9 +401,10 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     expect(readFileSync(repoFile('app/.env.example'), 'utf8')).toContain(
       "# SANDBOX_ENVIRONMENT='local'",
     )
-    const changeset = readFileSync(repoFile('.changeset/clone-sandbox-namespace.md'), 'utf8')
-    expect(changeset).toContain('"@hames-ai/sandbox": minor')
-    expect(changeset).toContain('Production backends require an explicit environment namespace')
+    // The production requirement is documented for operators where it durably
+    // lives, not in a pending changeset (which `changeset version` consumes).
+    const configDoc = readFileSync(repoFile('docs/CONFIG.md'), 'utf8')
+    expect(configDoc).toContain('Production backends require an explicit environment namespace')
   })
 
   it('documents explicit legacy database grant revocation and the denied dev connection check', () => {

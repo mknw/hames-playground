@@ -29,9 +29,10 @@
  *   - `GUARD_EGRESS` sets the egress gate's mode on every tier
  *     (`filter|roster`). `roster` vetoes on a directory match and never asks
  *     the Decide model, so it is below `'filter'` and warns.
- *   - `GUARD_PSEUDONYMISE` (`on|off`) turns the web route's input
- *     pseudonymiser off. It exists only until the retirement slice removes K5
- *     from the registered agents, and goes away with it.
+ *   - `GUARD_PSEUDONYMISE` (`on|off`, default on) turns the web route's
+ *     input pseudonymiser off. `off` is K5's retirement switch (boundary
+ *     guards slice 5): retirement is flipping this default, after a fix for
+ *     the egress gate's measured gap has itself been measured.
  *
  * Weakening warns once at boot, naming what the value switches off, in the
  * order `off < gated < shadow < always` for the screen (gated asks the gate,

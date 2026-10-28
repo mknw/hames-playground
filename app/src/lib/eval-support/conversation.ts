@@ -66,6 +66,9 @@ export interface ConversationResult extends SpendKey {
   /** Per-turn guard counts (boundary guards slice 7), computed from the turn's
    *  own events; present whenever a trace came back. */
   guards?: GuardTurnCounts[]
+  /** 1-based attempt number of a graded run (#842): absent on a row that was never run
+   * (gated, stopped, not run) or that failed before any attempt could be graded. */
+  attempt?: number
 }
 
 export interface ConversationDriver {

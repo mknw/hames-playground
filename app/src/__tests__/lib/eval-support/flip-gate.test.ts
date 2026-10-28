@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { it, expect } from 'vitest'
-import { flipGate, PENDING_MUSTS } from '../../../lib/eval-support/flip-gate'
+import { flipGate, gradeMustAttempts, PENDING_MUSTS } from '../../../lib/eval-support/flip-gate'
 import { GENERAL_BASELINE } from '../../../lib/eval-support/general-baseline'
 import type {
   ConversationScenario,
@@ -26,6 +26,7 @@ it('requires live, complete evidence, all candidate musts and no regression on t
     eligible: true,
     reasons: [],
     pendingMusts: [],
+    flaky: [],
   })
   expect(flipGate(false, true, 'general-next', scenarios, rows, recorded).eligible).toBe(false)
   expect(flipGate(true, false, 'general-next', scenarios, rows, recorded).eligible).toBe(false)
@@ -160,6 +161,65 @@ it('a must that is not pending still blocks; a pending one is listed', () => {
       {},
     ).pendingMusts,
   ).toEqual([])
+})
+
+// #842 (owner ruling 2026-10-28): a failing MUST scenario is re-run twice more, and the
+// gate counts it as passing when 2 of the 3 attempts pass, marking it flaky. SHOULD
+// scenarios are unchanged. The counting rule itself, hermetically:
+//
+// MUTATION: relax the comparison in gradeMustAttempts (flip-gate.ts) to `passes > 0`
+// → the 1-of-3 assertion reddens; tighten it to `passes === attempts` → the 2-of-3
+// assertion reddens. MUTATION: make `flaky: status === 'pass'` (drop `&& passes <
+// attempts`) → the 3-of-3 assertion reddens.
+it('a must re-run: 1 of 3 fails, 2 of 3 passes flaky, 3 of 3 passes clean', () => {
+  expect(gradeMustAttempts(['pass', 'fail', 'fail'])).toEqual({
+    attempts: 3,
+    passes: 1,
+    status: 'fail',
+    flaky: false,
+  })
+  expect(gradeMustAttempts(['pass', 'fail', 'pass'])).toEqual({
+    attempts: 3,
+    passes: 2,
+    status: 'pass',
+    flaky: true,
+  })
+  expect(gradeMustAttempts(['pass', 'pass', 'pass'])).toEqual({
+    attempts: 3,
+    passes: 3,
+    status: 'pass',
+    flaky: false,
+  })
+  // A first-attempt pass is 1 of 1: it stands, and it is not flaky. A single failure
+  // still fails, and nothing at all cannot pass.
+  expect(gradeMustAttempts(['pass'])).toEqual({
+    attempts: 1,
+    passes: 1,
+    status: 'pass',
+    flaky: false,
+  })
+  expect(gradeMustAttempts(['fail']).status).toBe('fail')
+  expect(gradeMustAttempts([]).status).toBe('fail')
+})
+
+// The counting rule end to end in the gate: attempt rows (numbered by the runner) feed
+// the verdict, a flaky pass is listed and stays eligible, a 1-of-3 run blocks, and a
+// single first-attempt pass runs once.
+//
+// MUTATION: read the must verdict from a single `status === 'pass'` row again (drop the
+// attempt aggregation in flip-gate.ts) → the 1-of-3 case reddens on eligible.
+it('a re-run must passes 2 of 3 as flaky and eligible, and 1 of 3 blocks', () => {
+  const must = [{ id: 're-run', priority: 'must', baseline: false }] as ConversationScenario[]
+  const attempts = (statuses: ConversationResult['status'][]) =>
+    statuses.map((status, i) => ({ ...row('general-next', 're-run', status), attempt: i + 1 }))
+  expect(
+    flipGate(true, true, 'general-next', must, attempts(['fail', 'pass', 'pass']), {}),
+  ).toEqual({ eligible: true, reasons: [], pendingMusts: [], flaky: ['re-run'] })
+  const blocked = flipGate(true, true, 'general-next', must, attempts(['fail', 'fail', 'pass']), {})
+  expect(blocked.eligible).toBe(false)
+  expect(blocked.reasons).toContain('Candidate must pass re-run')
+  expect(blocked.flaky).toEqual([])
+  expect(flipGate(true, true, 'general-next', must, attempts(['pass']), {}).flaky).toEqual([])
 })
 
 // The pending-must record pins the shipped modules: it names exactly the must-priority

@@ -901,6 +901,49 @@ describe('memory-not-in-blob: the saved call records', () => {
     })
   }) as unknown as RouteFn
 
+  // The other two router saved-event sites: the missing-route error (the model
+  // named a route that is not on the list) and the routing status message.
+  const inventedRoute = (async (
+    _m: string,
+    _h: unknown,
+    _r: unknown,
+    extra?: { memoryContext?: string },
+  ) => {
+    routerSaw = extra?.memoryContext
+    return {
+      intent: 'convert it',
+      tool_call_needed: true,
+      tool_name: null,
+      response_text: '',
+      llmCall: {
+        functionName: 'Router',
+        variables: {},
+        rawInput: JSON.stringify({ memory_context: extra?.memoryContext ?? null }),
+        rawOutput: '{"tool_name":null}',
+      },
+    }
+  }) as unknown as RouteFn
+  const routingStatus = (async (
+    _m: string,
+    _h: unknown,
+    _r: unknown,
+    extra?: { memoryContext?: string },
+  ) => {
+    routerSaw = extra?.memoryContext
+    return {
+      intent: 'convert it',
+      tool_call_needed: true,
+      tool_name: 'search',
+      response_text: 'Looking into that…',
+      llmCall: {
+        functionName: 'Router',
+        variables: {},
+        rawInput: JSON.stringify({ memory_context: extra?.memoryContext ?? null }),
+        rawOutput: '{"tool_name":"search"}',
+      },
+    }
+  }) as unknown as RouteFn
+
   const finalAssistant = (ctx: { events: ContextEvent[] }) =>
     ctx.events.find(
       (e) => e.type === 'assistant_message' && (e.data as AssistantMessageEventData).final,
@@ -954,6 +997,37 @@ describe('memory-not-in-blob: the saved call records', () => {
     expect(routerSaw).toContain(SENTINEL)
     const ev = ctx.events.find((e) => e.type === 'error')
     expect((ev?.data as ErrorEventData).kind).toBe('llm_call')
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
+  })
+
+  it('the router record on the missing-route error event carries no memory text into the blob (mutation: drop redactCall at the router missing-route site)', async () => {
+    // `routeMessageOp` nulls `tool_name` when the model names a route that is
+    // not in `routeDescriptions` — the router carries the record onto the
+    // error event so the raw response survives (#225).
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [router<Data>({ search: 'Search the web' }, { route: inventedRoute })],
+    })
+    expect(routerSaw).toContain(SENTINEL)
+    const ev = ctx.events.find((e) => e.type === 'error')
+    expect((ev?.data as ErrorEventData).error).toContain('no tool_name')
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
+  })
+
+  it('the router record on the routing-status event carries no memory text into the blob (mutation: drop redactCall at the router status site)', async () => {
+    // The non-final assistant_message: the "Looking into that…" status that a
+    // downstream compactExecution supersedes.
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [router<Data>({ search: 'Search the web' }, { route: routingStatus })],
+    })
+    expect(routerSaw).toContain(SENTINEL)
+    const ev = ctx.events.find(
+      (e) => e.type === 'assistant_message' && !(e.data as AssistantMessageEventData).final,
+    )
+    expect((ev?.data as AssistantMessageEventData).content).toBe('Looking into that…')
     expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
     expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
     expect(serializeContext(ctx)).not.toContain(SENTINEL)

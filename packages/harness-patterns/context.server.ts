@@ -149,13 +149,14 @@ export function createEvent(
  *  step's `metrics`.
  *
  *  `keepOutput` is for the two records whose PROMPT renders the memory block
- *  (router, compactExecution's synthesize — review F1): their `rawOutput` never
- *  carries the block, because what the model said is persisted as the event's
- *  own content anyway, and it is the only record of what a failed call actually
- *  said — the raw-LLM visibility invariant (#225 owner review) that
- *  `raw-llm-visibility.test.ts` pins. Dropping it there would make those
- *  failures undebuggable from the UI without buying any privacy the content
- *  channel does not already give away. */
+ *  (router, compactExecution's synthesize — review F1): the reply their
+ *  `rawOutput` carries is the event's `content` already, and for a failed call
+ *  it is the only record of what was said — the raw-LLM visibility invariant
+ *  (#225 owner review) that `raw-llm-visibility.test.ts` pins. The accepted
+ *  residual is the model's own echo of the block, which is text the user was
+ *  shown. Dropping `rawOutput` there would make those failures undebuggable
+ *  from the UI without buying any privacy the content channel does not already
+ *  give away. */
 export function redactCall(
   call: LLMCallRecord | undefined,
   opts: { keepOutput?: boolean } = {},

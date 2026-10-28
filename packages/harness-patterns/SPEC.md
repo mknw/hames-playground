@@ -3073,11 +3073,12 @@ router record under the `routing-and-replies` default (conversational reply,
 routing status, missing-route and thrown-call records alike). Both are redacted
 with `redactCall` where the event is built, the same way every decide-path record
 is, with one deliberate difference: `rawInput` / `parsedOutput` / `variables`
-drop, while `rawOutput` is KEPT (`keepOutput`) — what the model said never
-carries the block (it is the event's `content` already) and it is the only record
-of what a failed call actually said (#225). Cost attribution survives. The
-redaction is at the saved-event site only — the live call is unchanged (pins in
-the `memory-not-in-blob: the saved call records` block, each verified against the
+drop, while `rawOutput` is KEPT (`keepOutput`) — the reply it carries is the
+event's `content` already, and for a failed call it is the only record of what
+was said (#225); the accepted residual is the model's own echo of the block,
+which is text the user was shown. Cost attribution survives. The redaction is at
+the saved-event site only — the live call is unchanged (pins in the
+`memory-not-in-blob: the saved call records` block, each verified against the
 mutation that removes its `redactCall`).
 
 ### Cost, and what is unrecordable

@@ -125,9 +125,12 @@ ride this same seam, so one wiring serves both.
 `askPerson: true` changes what a refusal does only where a person can actually
 be reached. A run frame opened with `hitl: { attended: true }` is attended; a
 routine or a trigger is not, and an unattended run never waits — it takes the
-option marked for it at once. On an attended run, on a path that can resume
-and not inside a parallel batch, a prompt is written into the conversation as
-a `hitl_request` event and the run **ends paused**: nothing waits in process.
+option marked for it at once. On an attended run, on a path that can resume, a
+prompt is written into the conversation as a `hitl_request` event and the run
+**ends paused**: nothing waits in process. The egress gate adds one condition
+of its own: an outgoing call that is one of a parallel batch is never held
+mid-batch — inside a batch its refusal takes the default Refuse, and only a
+retry of that call alone can prompt.
 The host stores the serialized conversation, shows the question (the two
 dialogs below), and resumes with `resumeHarness(serialized, patterns, {
 [requestId]: optionId })`, where `requestId` is the id the request event

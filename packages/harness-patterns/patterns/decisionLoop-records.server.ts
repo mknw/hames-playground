@@ -257,6 +257,40 @@ function extractSimpleLoop(events: ContextEvent[], max: number): Extracted {
   return { ok: true, result: capText(text, max), reasoning: action.reasoning ?? '' }
 }
 
+/** Every `/work/out/<name>` a body names. `/work/out` is the workspace
+ *  directory a deliverable is saved under (`packages/sandbox`'s promote path
+ *  stores it into the conversation's documents); the string is named here, not
+ *  imported, because core reads no sandbox module and the /work protocol is
+ *  shared on both sides. The name run stops at whitespace; a trailing
+ *  separator (a sentence period, a list comma) is not part of it. */
+const WORK_OUT_PATH = /\/work\/out\/[^\s"'\\<>{}()]+/g
+
+/** The fixed, echoable closing line an actorCritic record carries when its
+ *  accepted results show deliverable(s) under `/work/out` (#840, residual of
+ *  #507 run 9): the route's own deterministic statement that the file is kept
+ *  but NOT indexed, so the synthesizer has a quotable truth instead of only the
+ *  critic's prose — which it once inverted into "Saved and indexed for this
+ *  chat". "Not indexed BY THIS ROUTE" is the #836 route-description sentence's
+ *  own wording and stays true whatever the person does later; "the user can
+ *  index it for search from the Data Stash" is docs/DATA_STASH.md's "Index for
+ *  search". The paths are read from the accepted attempt's own tool RESULTS
+ *  (what the route reported), never from the reasoning, and one line per
+ *  distinct path, in first-appearance order. */
+function workOutSavedLines(bodies: readonly string[]): string {
+  const paths = new Set<string>()
+  for (const body of bodies) {
+    for (const m of body.matchAll(WORK_OUT_PATH)) {
+      paths.add(m[0].replace(/[.,;:)\]]+$/, ''))
+    }
+  }
+  return [...paths]
+    .map(
+      (path) =>
+        `Saved to ${path} (not indexed by this route; the user can index it for search from the Data Stash)`,
+    )
+    .join('\n')
+}
+
 function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   let action: ControllerActionEventData['action'] | undefined
   let results: ToolResultEventData[] = []
@@ -287,9 +321,9 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   // a batch can mix tools, and one label over all of them would name the wrong
   // source for all but one. The cap is split (less each fence) so the record stays near `max`.
   const n = accepted.results.length
-  const blocks = accepted.results.map((r) => {
+  const quoted = accepted.results.map((r) => {
     const value = r.success ? r.result : r.error
-    const quoted = unfence(
+    return unfence(
       n === 1
         ? value
         : r.success
@@ -297,14 +331,29 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
           : { tool: r.tool, error: value },
       r.tool,
     )
+  })
+  // The saved-deliverable line is measured BEFORE the blocks are capped, so its
+  // budget comes off the share and the whole record stays within `max` (a body
+  // longer than `max` cannot carry it and does not). The joining separators are
+  // budgeted too: n-1 between the blocks and the one before the line itself.
+  const saved = workOutSavedLines(quoted.map((q) => q.body))
+  const budget =
+    saved.length > 0 && saved.length + 1 < max
+      ? Math.max(1, max - saved.length - 1)
+      : max
+  const blocks = quoted.map((q) => {
     // The fence rides on top of the capped body, so its own length comes off the share.
-    const overhead = quoted.label ? refence('', quoted.label).length : 0
-    return carry(quoted, n === 1 ? max : Math.max(1, Math.floor(max / n) - overhead))
+    const overhead = q.label ? refence('', q.label).length : 0
+    return carry(q, n === 1 ? budget : Math.max(1, Math.floor(budget / n) - overhead))
   })
   const reasoning = [accepted.action.reasoning ?? '', accepted.why ? `Critic: ${accepted.why}` : '']
     .filter(Boolean)
     .join('\n')
-  return { ok: true, result: blocks.join('\n'), reasoning }
+  return {
+    ok: true,
+    result: saved.length > 0 ? `${blocks.join('\n')}\n${saved}` : blocks.join('\n'),
+    reasoning,
+  }
 }
 
 /** Short excerpt of one match: its first characters, one line. */

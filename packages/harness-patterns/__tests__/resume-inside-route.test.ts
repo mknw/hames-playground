@@ -404,6 +404,132 @@ describe('slice 6 · after an answer the run continues inside the route', () => 
     expect(decide.offered[2]).not.toContain('think')
   })
 
+  // MUTATION: leave the rebuilt records out of the repeat rule
+  // (`stalledRoutes(records.slice(paused?.finished.length ?? 0))`) → the first
+  // decision after the resume offers the stalled `idle` route again → red.
+  it('a route stalled before the pause stays out of the first resumed decision (#809)', async () => {
+    // Two records in a row with no tool call: `idle` is withheld from decision 3 on.
+    const idle = simpleLoop<Data>(
+      scripted([act('Return', {}, { tool_args: 'nothing to look up' })]).fn,
+      ['plain_read'],
+      { patternId: 'idle' },
+    )
+    const decide = scriptedDecide(['idle', 'idle', 'work', DECISION_LOOP_ANSWER])
+    const { resumed } = await pauseAndApprove(
+      agent({ idle, work: loopOf(readThenWriteThenReturn().fn) }, decide.fn),
+      [],
+    )
+
+    expect(resumed.status).not.toBe('error')
+    expect(decide.offered).toHaveLength(4)
+    expect(decide.offered[2]).toEqual(['work', DECISION_LOOP_ANSWER])
+    expect(decide.offered[3]).toEqual(['work', DECISION_LOOP_ANSWER])
+  })
+
+  // MUTATION: drop `&& r.redispatch !== true` from `succeededCalls` in
+  // computeStats → the superseded placeholder (`success: true`) reads as a
+  // successful call, the first record makes progress, and decision 3 offers
+  // `work` again → red (#825 review B1).
+  it.each(['reject', 'approve'])(
+    'a held call the person answered (%s) whose re-sent call failed is no progress (#809)',
+    async (choice) => {
+      // `gated_write` as an outgoing call held for a person (slice 10): its
+      // placeholder asks to be sent again on re-entry, and the call sent then
+      // fails, as the gate's refusal or a sent call that failed does. `down` fails.
+      const log: Log = []
+      const releasing: ToolTransport = {
+        id: 'releasing',
+        ownsTool: (name) => name === 'gated_write' || name === 'down' || name === 'plain_read',
+        callTool: async (name) => {
+          log.push(name)
+          if (name === 'plain_read') return { success: true, data: { rows: ['row-1'] } }
+          if (name === 'down') return { success: false, data: null, error: 'service unavailable' }
+          const outcome = await askHuman({
+            kind: 'graph-write',
+            question: 'Send this outgoing request?',
+            options: OPTIONS,
+            defaultOption: 'reject',
+          })
+          return outcome.status === 'pending'
+            ? { success: true, data: { ...held(outcome), redispatch: true as const } }
+            : { success: false, data: null, error: `not sent: ${outcome.choice}` }
+        },
+        listTools: async () => [],
+      }
+      // The first invocation calls the held tool; every later one calls `down`.
+      let invocation = 0
+      const controller = vi.fn<ControllerFn>(async (input) => {
+        if (input.turn > 0) return act('Return', {}, { tool_args: 'it could not be done' })
+        return ++invocation === 1 ? act('gated_write') : act('down')
+      })
+      // Takes `work` whenever it is offered, else `answer`.
+      const offered: string[][] = []
+      const decide = (async ({ spec }: { spec: { labels: readonly { id: string }[] } }) => {
+        const ids = spec.labels.map((l) => l.id)
+        offered.push(ids)
+        const want = ids.includes('work') ? 'work' : DECISION_LOOP_ANSWER
+        return {
+          probs: Object.fromEntries(ids.map((id) => [id, id === want ? 1 : 0])),
+          method: 'jev',
+          calibrated: false,
+        }
+      }) as unknown as DecideFn
+      Object.assign(decide, {
+        supportedTypes: ['choice'],
+        limits: () => ({ contextWindow: 131_072 }),
+      })
+      const patterns = agent(
+        {
+          work: simpleLoop<Data>(controller, ['gated_write', 'down'], {
+            patternId: 'work',
+            maxTurns: 3,
+          }),
+          other: simpleLoop<Data>(
+            scripted([act('Return', {}, { tool_args: 'x' })]).fn,
+            ['plain_read'],
+            { patternId: 'other' },
+          ),
+        },
+        decide,
+      )
+      const frame: RunFrame = { transports: [releasing] }
+      const paused = await harness<Data>(...patterns)(
+        'send it',
+        'sess-b1',
+        undefined,
+        undefined,
+        frame,
+      )
+      expect(paused.status).toBe('paused')
+      const [request] = readHitl(paused.context).pending
+      const resumed = await resumeHarness<Data>(
+        paused.serialized,
+        patterns,
+        { [request.requestId]: choice },
+        { frame, resolve: vi.fn(async () => undefined) },
+      )
+
+      expect(resumed.status).not.toBe('error')
+      // The held call was sent again and failed; the placeholder it superseded
+      // is still on the record's events with `success: true`.
+      const results = resumed.context.events
+        .filter((e) => e.type === 'tool_result' && e.patternId === 'work')
+        .map((e) => e.data as ToolResultEventData)
+      expect(results.map((r) => [r.tool, r.success, r.redispatch === true])).toEqual([
+        ['gated_write', true, true],
+        ['gated_write', false, false],
+        ['down', false, false],
+      ])
+      expect(log).toEqual(['gated_write', 'gated_write', 'down'])
+      // Two records in a row with no successful call: `work` is withheld at decision 3.
+      expect(offered).toEqual([
+        ['work', 'other', DECISION_LOOP_ANSWER],
+        ['work', 'other', DECISION_LOOP_ANSWER],
+        ['other', DECISION_LOOP_ANSWER],
+      ])
+    },
+  )
+
   // MUTATION: call the selector on re-entry (ignore the recorded
   // `reference_attached`) → it is called twice → red. The selection cache is
   // cleared between the pause and the resume, as a resume served by another

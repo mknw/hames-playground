@@ -261,22 +261,17 @@ async function createPatterns(
       },
     ),
   )
-  // K5 (the web route's input filter) runs where it runs today, unless the
-  // host turns it off. Two ways to be without it, deliberately different:
-  //   - a bag with NO `guards` field at all (a host that predates the switch,
-  //     or composes no guard settings) keeps the old shape: the wrapper is
-  //     composed with no filter, which withholds every word of inherited
-  //     content wherever the tier is not the Anthropic tier — the recorded
-  //     fail-closed default (G14 D3), never a silent pass-through.
-  //   - a bag WITH `guards` but no `pseudonymiseForWeb` (the operator's
-  //     GUARD_PSEUDONYMISE=off, or a host that chose this) composes the route
-  //     WITHOUT the wrapper — never a null filter into one that would
-  //     withhold. The switch is validated at boot; it goes away when the
-  //     retirement slice removes K5 from this agent.
-  const infoRoute =
-    deps.guards && !deps.guards.pseudonymiseForWeb
-      ? infoLoop
-      : withPseudonymisedInputs({ pseudonymise: deps.guards?.pseudonymiseForWeb })(infoLoop)
+  // K5 (the web route's input filter) is composed exactly when the host
+  // supplies the filter: the app's default bag does (GUARD_PSEUDONYMISE unset
+  // or `on`). Without one — GUARD_PSEUDONYMISE=off, or a bag with no `guards`
+  // at all — the route is composed WITHOUT the wrapper, never with a null
+  // filter that would withhold every word of inherited content off the
+  // Anthropic tier (boundary guards slice 5, replacing G14 D3's withhold for
+  // the no-`guards` shape). The egress gate judges what leaves either way.
+  // Retirement is flipping the app's default, after the egress gate's
+  // measured gap has a measured fix.
+  const pseudonymise = deps.guards?.pseudonymiseForWeb
+  const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
   const info = withInjectionGuard(infoGuard)(infoRoute)
   const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
     retriever<AgentData>({

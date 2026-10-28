@@ -2274,8 +2274,11 @@ the removed `general` agent and is the default agent. Its `orchestrator` chooses
 `office-data` (guarded Microsoft 365 tools and an office sandbox),
 `info-retrieval` (guarded Neo4j reads and web), `read-documents` (the guarded
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
-route wraps `withReferences` in `withPseudonymisedInputs`; the whole loop is
-wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
+route wraps `withReferences` in `withPseudonymisedInputs` when the host supplies
+the filter (`AgentGuards.pseudonymiseForWeb`), and composes no wrapper without
+one (boundary guards slice 5): the reference app supplies it unless
+`GUARD_PSEUDONYMISE=off`, the switch whose default flips at K5's retirement.
+The whole loop is wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
 'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local:
 `neo4j`, `graph`, and the office box's
 in-VM tools by name while that box is booted `mcp-only`). The info route admits only the

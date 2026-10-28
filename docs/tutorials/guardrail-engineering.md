@@ -458,9 +458,10 @@ that appears only in free prose, not in a labelled identity field, is
 invisible to it.
 
 Since the egress gate took over the judgement of what leaves, the
-pseudonymiser's remaining job is that one rewrite. The shipped agent still
-composes it on its lookup route, and its retirement there is the design's
-retirement slice; the wrapper stays available to library hosts either way.
+pseudonymiser's remaining job is that one rewrite. The shipped agent composes
+it on its lookup route by default. Retiring it there means flipping that
+default to `off`; the switch stays, and the wrapper stays available to library
+hosts either way.
 An operator can turn it off with `GUARD_PSEUDONYMISE=off` (below), which
 removes the wrapper rather than weakening it.
 
@@ -566,7 +567,8 @@ them:
 - the egress gate wrapped around the whole decision loop, `local` naming the
   graph database and the company tenant's read-only tools, the sandbox's
   in-VM tools local while its box has no network, and N = 0;
-- the pseudonymiser on the lookup route until its retirement slice.
+- the pseudonymiser on the lookup route, on by default; its retirement flips
+  `GUARD_PSEUDONYMISE`'s default to `off` and keeps the switch.
 
 Everything declared above is settable the same way in your own host: declare
 the guards at the agent definition, wrap the loop with the egress gate, and

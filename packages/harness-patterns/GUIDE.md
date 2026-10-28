@@ -90,7 +90,7 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `routes`                  | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
 | `parallel`                | run patterns concurrently, merge their event sets                                         |
 | `withReferences`          | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
-| `withPseudonymisedInputs` | rewrite the web route's earlier inputs and check outgoing web arguments                   |
+| `withPseudonymisedInputs` | rewrite a web route's earlier inputs before its controller reads them                     |
 | `withInjectionGuard`      | neutralize untrusted tool output before a controller reads it                             |
 | `decisionLoop`            | loop over routes, a decisions model choosing the next one each time, until `answer`       |
 

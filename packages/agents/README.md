@@ -168,14 +168,13 @@ orchestrator's loop sanitizes and screens nothing of its own: a route record
 is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web
 route admits only its own and retriever
 references, excluding sandbox-promoted documents, and pseudonymises inherited
-content when the host supplies `deps.guards.pseudonymiseForWeb` (omitting it
-with a `guards` bag present — the `GUARD_PSEUDONYMISE=off` switch — composes
-the route without the wrapper; a bag with no `guards` field at all keeps the
-wrapper, which withholds earlier content rather than pass it through
-unfiltered). The web route's outgoing calls are judged by the egress gate
-(`deps.egressRoster`; `deps.guards.egressMode` sets `filter` or `roster`).
-Missing private host wiring withholds earlier
-content and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
+content when the host supplies `deps.guards.pseudonymiseForWeb`. Without it —
+the `GUARD_PSEUDONYMISE=off` switch, or no `guards` bag at all — the route is
+composed without the wrapper, so earlier content reaches it as written rather
+than withheld (boundary guards slice 5). The web route's outgoing calls are
+judged by the egress gate (`deps.egressRoster`; `deps.guards.egressMode` sets
+`filter` or `roster`). A supplied filter that cannot be built withholds earlier
+content, and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
 produces a visible error without public fallback.
 
 #### The `GUARD_*` operator switches
@@ -191,7 +190,7 @@ guards in code sets the same fields directly:
 | `GUARD_SCREEN`           | the injection screen's mode on the self-deployed tier                                         | `off` / `shadow` / `gated` / `always` |
 | `GUARD_SCREEN_ANTHROPIC` | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)         | `off` / `always`                      |
 | `GUARD_EGRESS`           | the egress gate's mode on every tier (`roster` vetoes on a directory match and asks no model) | `filter` / `roster`                   |
-| `GUARD_PSEUDONYMISE`     | the web route's input pseudonymiser (a temporary switch; it goes away with the feature)       | `on` / `off`                          |
+| `GUARD_PSEUDONYMISE`     | the web route's input pseudonymiser (default `on`; `off` is its retirement switch)            | `on` / `off`                          |
 
 A value below a tier's declared default warns at boot, naming what it switches
 off; an unrecognised value refuses boot. The deterministic layers and the

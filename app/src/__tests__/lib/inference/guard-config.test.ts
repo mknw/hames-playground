@@ -36,6 +36,10 @@ afterEach(() => {
 })
 
 describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
+  // The pseudonymiser's default is ON (boundary guards slice 5, owner ruling
+  // (c) of 2026-10-28): retirement is flipping it, after a fix for the egress
+  // gate's measured gap has been measured. MUTATION: `PSEUDONYMISE_DEFAULT =
+  // false`: red here, and in guard-switches.test.ts's composition chain.
   it('unset, every value is the declared default, per tier', () => {
     expect(guardConfig()).toEqual({
       screenMode: { default: 'shadow', anthropic: 'always' },

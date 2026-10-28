@@ -236,3 +236,18 @@ it('captures decisions and controller outputs only behind the env flag, beside t
     /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
   )
 })
+// #832 (owner, 2026-10-28): the agent does not index a deliverable; the person does, from
+// the Data Stash. The driver makes that click before each later turn's run, and its
+// retriever and documents list serve only uploaded markdown and what the person indexed.
+// MUTATIONS: drop the click → 14, 16 and 17 have nothing to retrieve; restore either
+// `.endsWith('.md')` filter → an unindexed deliverable is served as if indexed.
+it('mocks the Data Stash click between turns and serves only searchable documents', () => {
+  const driver = read('evals/general-next/driver.ts')
+  const beforeRun =
+    /for \(turn = 0; turn < next\.messages\.length; turn\+\+\) \{([\s\S]*?)const result/.exec(
+      driver,
+    )?.[1]
+  expect(beforeRun).toContain('if (turn > 0) indexForUser(next, trace)')
+  expect(driver.match(/stashSearchable\((?:name|source), UPLOADED, trace\)/g)).toHaveLength(2)
+  expect(driver).not.toMatch(/endsWith\('\.md'\)/)
+})

@@ -339,6 +339,7 @@ async function createPatterns(
                 ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
                 : 'Graph file ingestion is unavailable. ') +
               'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox; ' +
+              "a file saved under /work/out is kept in this conversation's documents, and the user can index it for search from the Data Stash: nothing here indexes files, so when asked to index one, save it and tell the user they can index it from the Data Stash; " +
               "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
             capability:
               'Read Microsoft 365 mail and file metadata; ' +

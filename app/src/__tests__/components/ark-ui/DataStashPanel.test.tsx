@@ -14,7 +14,7 @@
  * the panel keeps a module-level document cache keyed by session.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent } from '@solidjs/testing-library'
+import { render, fireEvent, screen } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
@@ -76,6 +76,8 @@ interface FetchPlan {
   uploadResponse?: { ok?: boolean; body: unknown }
   /** GET /api/stash/upload fails like this (list-load error states). */
   listStatus?: number
+  /** POST /api/stash/ingest answers like this (default: 202, the route's own). */
+  ingestResponse?: { status: number; body: unknown }
 }
 let calls: { url: string; init?: RequestInit }[] = []
 const stubFetch = (plan: FetchPlan = {}) => {
@@ -89,6 +91,13 @@ const stubFetch = (plan: FetchPlan = {}) => {
     if (u.startsWith('/api/stash/upload')) {
       const status = plan.listStatus ?? 200
       return { ok: status < 400, status, json: async () => ({ documents: plan.documents ?? [] }) }
+    }
+    if (u === '/api/stash/ingest') {
+      const r = plan.ingestResponse ?? {
+        status: 202,
+        body: { ok: true, docId: 'doc-1', ingestStatus: 'pending' },
+      }
+      return { ok: r.status < 400, status: r.status, json: async () => r.body }
     }
     if (u.startsWith('/api/stash/document/')) {
       const status = plan.documentStatus ?? 200
@@ -857,5 +866,104 @@ describe('DataStashPanel — chat citations', () => {
     await settle()
 
     expect(container.querySelector('[title="Next reference"]')).toBeNull()
+  })
+})
+
+// "Index for search" (#832): the person turns indexing on for a copy nothing
+// indexed — a sandbox deliverable, or an upload no retriever indexed — and the
+// agent does not. The button sits in the eye's corner and calls the ingest route.
+describe('DataStashPanel — "Index for search"', () => {
+  const indexButton = () => screen.queryByRole('button', { name: /for search$/ })
+
+  // MUTATION: drop the `status() === undefined` arm of `indexable` → no button.
+  it('offers a copy nothing indexed a named button beside the eye, its glyph hidden from AT', async () => {
+    stubFetch({
+      documents: [doc({ filename: 'lantern-analysis.md', provenance: 'sandbox-output' })],
+    })
+    await renderPanel()
+
+    const button = screen.getByRole('button', { name: 'Index for search' })
+    expect(button.tagName).toBe('BUTTON')
+    const glyph = button.querySelector('.i-material-symbols-manage-search')
+    expect(glyph?.getAttribute('aria-hidden')).toBe('true')
+    // A tooltip carries the same words for a pointer user.
+    expect(
+      [...document.querySelectorAll('[data-part="content"]')].some(
+        (el) => el.textContent === 'Index for search',
+      ),
+    ).toBe(true)
+    // The eye's own chip.
+    expect(shell(button).querySelector('button[title="View file"]')).toBeTruthy()
+  })
+
+  // MUTATION: drop the `status() === 'failed'` arm → no retry for a failed copy.
+  it('offers a retry for a copy whose index failed', async () => {
+    stubFetch({ documents: [doc({ ingestStatus: 'failed', ingestError: 'embedder offline' })] })
+    await renderPanel()
+
+    expect(screen.getByRole('button', { name: 'Retry indexing for search' })).toBeTruthy()
+  })
+
+  // MUTATION: `indexable` returns true for every status → a button on each row.
+  it.each(['pending', 'indexed', 'not_indexed'] as const)(
+    'offers nothing for a %s copy',
+    async (ingestStatus) => {
+      stubFetch({ documents: [doc({ ingestStatus })] })
+      await renderPanel()
+      expect(indexButton()).toBeNull()
+    },
+  )
+
+  // MUTATIONS: drop the encoding clause → a binary gets one; drop `!grayed()` →
+  // a hidden or archived copy, kept out of search anyway, gets one.
+  it.each([
+    ['a binary', { filename: 'scan.pdf', encoding: 'base64' as const, converted: true }],
+    ['a hidden copy', { hidden: true }],
+    ['an archived copy', { archived: true }],
+  ])('offers nothing for %s', async (_what, over) => {
+    stubFetch({ documents: [doc(over)] })
+    await renderPanel()
+    expect(indexButton()).toBeNull()
+  })
+
+  // MUTATIONS: post without the session → the body differs; skip the optimistic
+  // `pending` → no "embedding…" until a poll; skip the watch → the route never
+  // gates the composer. The button sits beside the chip body, not inside it, so
+  // the click does not also open the chip's menu.
+  it('asks the ingest route for that document and shows "embedding…" at once', async () => {
+    const onUploaded = vi.fn()
+    stubFetch({ documents: [doc()] })
+    const sessionId = newSession()
+    const { container } = await renderPanel({ sessionId, onUploaded })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Index for search' }))
+    await settle()
+
+    const posts = calls.filter((c) => c.url === '/api/stash/ingest')
+    expect(posts).toHaveLength(1)
+    expect(posts[0].init?.method).toBe('POST')
+    expect(JSON.parse(String(posts[0].init?.body))).toEqual({ sessionId, docId: 'doc-1' })
+    expect(container.textContent).toContain('embedding…')
+    expect(indexButton()).toBeNull()
+    expect(menuButtons(docChips(container)[0])).toHaveLength(0)
+    expect(onUploaded).toHaveBeenCalledTimes(1)
+  })
+
+  // MUTATION: swallow the refusal → the reason is never shown.
+  it('says why when the route refuses, and leaves the button in place', async () => {
+    const onUploaded = vi.fn()
+    stubFetch({
+      documents: [doc()],
+      ingestResponse: { status: 404, body: { error: 'Document not found' } },
+    })
+    const { container } = await renderPanel({ onUploaded })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Index for search' }))
+    await settle()
+
+    expect(container.textContent).toContain('Document not found')
+    expect(container.textContent).not.toContain('embedding…')
+    expect(indexButton()).toBeTruthy()
+    expect(onUploaded).not.toHaveBeenCalled()
   })
 })

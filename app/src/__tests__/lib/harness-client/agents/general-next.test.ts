@@ -1345,6 +1345,13 @@ describe('general-next composition', () => {
       const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
       expect(request).toBe(message)
       expect(scope).toMatch(/^- office-data: Read Microsoft 365 mail and file metadata; /)
+      // #832 (owner, 2026-10-28): the office step saves the file and the user indexes it
+      // from the Data Stash, so "index it for this chat" is answered by saying so, not
+      // missing from the step's results. MUTATION: drop the sentence from the office-data
+      // description → red here.
+      expect(scope).toContain(
+        "a file saved under /work/out is kept in this conversation's documents, and the user can index it for search from the Data Stash: nothing here indexes files, so when asked to index one, save it and tell the user they can index it from the Data Stash; ",
+      )
       expect(scope).toContain('\n  Can: Read Microsoft 365 mail and file metadata; ')
       const tools = scope.split('\n').find((line) => line.startsWith('  Tools: '))!
       expect(tools).toContain('graph_mail_recent')

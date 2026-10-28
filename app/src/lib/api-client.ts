@@ -39,6 +39,7 @@ export const API = {
   toolResultStash: '/api/stash',
   stashDocuments: '/api/stash/upload',
   stashDocument: (id: string) => `/api/stash/document/${encodeURIComponent(id)}`,
+  stashIngest: '/api/stash/ingest',
   ptyResize: '/api/sandbox/pty/resize',
   ptyInput: '/api/sandbox/pty/input',
   ptyStream: '/api/sandbox/pty/stream',
@@ -209,6 +210,20 @@ export async function patchStashDocument(
   if (!response.ok) {
     const body = await readJson<{ error?: string }>(response)
     throw new ApiError(body?.error ?? `Update failed (${response.status})`, response.status, body)
+  }
+}
+
+/**
+ * Ask for one document to be indexed for search: the Data Stash panel's "Index
+ * for search" (#832). The route records `pending` before it answers and runs the
+ * ingest after, so this resolves at once; the outcome (`indexed`, or `failed`
+ * with its reason) is read off the document by the panel's next list.
+ */
+export async function indexStashDocument(id: string, sessionId: string): Promise<void> {
+  const response = await fetch(API.stashIngest, jsonRequest({ sessionId, docId: id }))
+  if (!response.ok) {
+    const body = await readJson<{ error?: string }>(response)
+    throw new ApiError(body?.error ?? `Indexing failed (${response.status})`, response.status, body)
   }
 }
 

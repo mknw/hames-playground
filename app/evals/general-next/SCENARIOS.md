@@ -208,17 +208,19 @@ A live pass proves: the model combines Project count 42 with target 50 and repor
 
 User: “I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.”
 
-Expected assistant: lantern-analysis.md exists and is queryable; offer questions over its content.
+Expected assistant: lantern-analysis.md is saved; the answer tells the person it can be indexed for search from the Data Stash (the agent does not index it, #832), and offers questions over its content.
 
-User: “From the analysis you just indexed, which region sold more and by how much? Cite that analysis.”
+Between the turns the driver indexes lantern-analysis.md as the person’s Data Stash click would, and only if turn 1 saved it.
+
+User: “I have indexed lantern-analysis.md from the Data Stash. Which region sold more and by how much? Cite that analysis.”
 
 Expected assistant: North sold 47 versus South 19, a difference of 28; cite lantern-analysis.md.
 
 Expected routes: `office-data`, `read-documents`. Expected tools: `sandbox_bash`.
 
-Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries North 47, South 19 and difference 28; stash artifact(s) exist: lantern-analysis.md; queryable markdown index: lantern-analysis.md, queried in the follow-up; answer has a reference locator for lantern-analysis.md; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; turn 1 answer carries Data Stash; final answer carries North 47, South 19 and difference 28; stash artifact(s) exist: lantern-analysis.md; queryable markdown index: lantern-analysis.md, indexed by the mocked click after turn 1 and queried in the follow-up; answer has a reference locator for lantern-analysis.md; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
-A live pass proves: the model requests analysis of both inputs, then retrieves the simulated indexed markdown on a later turn and reports North 47, South 19 and difference 28 with a citation; execution/index integration is unproved.
+A live pass proves: the model requests analysis of both inputs and tells the person the saved file can be indexed from the Data Stash, then, once the mocked click has indexed it, retrieves the simulated markdown on a later turn and reports North 47, South 19 and difference 28 with a citation; execution/index integration and the panel’s button are unproved here.
 
 ### 15-graph-file-summary — Graph file to sandbox summary
 
@@ -248,7 +250,7 @@ Expected assistant: Hosting is 5 over budget, with a citation to lantern-varianc
 
 Expected routes: `office-data`, `read-documents`. Expected tools: `graph_files_search`, `graph_file_ingest`, `sandbox_bash`.
 
-Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries Hosting; stash artifact(s) exist: lantern-variance.md; queryable markdown index: lantern-variance.md, queried in the follow-up; answer has a reference locator for lantern-variance.md; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries Hosting; stash artifact(s) exist: lantern-variance.md; queryable markdown index: lantern-variance.md, indexed by the mocked click after turn 1 and queried in the follow-up; answer has a reference locator for lantern-variance.md; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
 A live pass proves: no live pass is possible before P4; this case remains gated and proves nothing about file ingestion or spreadsheet execution.
 
@@ -258,7 +260,7 @@ A live pass proves: no live pass is possible before P4; this case remains gated 
 
 User: “Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.”
 
-Expected assistant: Reads the launch mail, uses both uploads, requests analysis and writes/indexes lantern-launch-analysis.md.
+Expected assistant: Reads the launch mail, uses both uploads, requests analysis and writes lantern-launch-analysis.md; indexing it is the person’s step, from the Data Stash (#832), which the driver mocks between the turns.
 
 User: “From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues.”
 
@@ -266,7 +268,7 @@ Expected assistant: North 47, South 19, difference 28; cite lantern-launch-analy
 
 Expected routes: `office-data`, then `read-documents`. Expected tools: `graph_mail_recent`, then `sandbox_bash` with a production-shaped command naming both inputs and the output.
 
-Pass: successful tools in order with valid arguments; indexed artifact exists and is retrieved on the later turn; final answer contains every stated fact and a citation with a source locator; candidate only: route children complete without error before their turn’s `answer`, within 6 decisions per turn.
+Pass: successful tools in order with valid arguments; the artifact exists, is indexed by the mocked click after turn 1, and is retrieved on the later turn; final answer contains every stated fact and a citation with a source locator; candidate only: route children complete without error before their turn’s `answer`, within 6 decisions per turn.
 
 A live pass proves: the model composes mailbox lookup, a valid shell request naming both uploads and output, simulated indexing and later retrieval, and reports all regional facts with a citation; generated-code execution and upload/index integration remain unproved.
 

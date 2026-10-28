@@ -40,27 +40,29 @@ interface Doc {
   content: string
   encoding?: 'utf8' | 'base64'
   derivedText?: string
+  ingestError?: string
 }
 let doc: Doc | null = null
 const storeDocument = vi.fn<(input: Record<string, unknown>) => Promise<Doc>>()
 const deleteDocument = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 const listDocuments = vi.fn(async () => [])
+const setDocumentFlags = vi.fn<(...args: unknown[]) => Promise<Doc | null>>()
 vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
   DEFAULT_TTL_SECONDS: 604800,
   storeDocument: (...a: unknown[]) => storeDocument(...(a as [never])),
   getDocument: async () => doc,
   listDocuments: () => listDocuments(),
   deleteDocument: (...a: unknown[]) => deleteDocument(...(a as [never])),
-  setDocumentFlags: async () => null,
+  setDocumentFlags: (...a: unknown[]) => setDocumentFlags(...a),
   stripContent: (d: Doc) => d,
 }))
 
-const ingestDocument = vi.fn<() => Promise<{ chunks: number }>>()
+const ingestStashDocument =
+  vi.fn<(sessionId: string, docId: string, opts?: unknown) => Promise<{ chunks: number } | null>>()
 const searchDocuments = vi.fn<() => Promise<unknown[]>>()
 vi.mock('@hames-ai/harness-patterns/stash/document-ingest.server', () => ({
-  ingestDocument: () => ingestDocument(),
   searchDocuments: () => searchDocuments(),
-  ingestStashDocument: async () => {},
+  ingestStashDocument: (...a: unknown[]) => ingestStashDocument(...(a as [never, never])),
 }))
 
 vi.mock('../../../lib/harness-client/registry.server', () => ({
@@ -101,7 +103,9 @@ beforeEach(() => {
   vi.clearAllMocks()
   doc = textDoc()
   storeDocument.mockResolvedValue(textDoc())
-  ingestDocument.mockResolvedValue({ chunks: 3 })
+  ingestStashDocument.mockResolvedValue({ chunks: 3 })
+  // Resolves null for an id that isn't stored — the PATCH 404 below reads that.
+  setDocumentFlags.mockResolvedValue(null)
   searchDocuments.mockResolvedValue([])
 })
 
@@ -283,40 +287,106 @@ describe('GET /api/stash/search', () => {
 })
 
 describe('POST /api/stash/ingest', () => {
-  it('400s a body that is not JSON, or one missing docId', async () => {
-    expect((await ingest.POST(evt(jsonReq('http://x/i', 'not json')))).status).toBe(400)
+  // The flag write finds the document, as it does in the store.
+  beforeEach(() => {
+    setDocumentFlags.mockImplementation(async () => doc)
+  })
 
-    const noDoc = await ingest.POST(evt(jsonReq('http://x/i', { sessionId: 's1' })))
+  const post = (body: unknown) => ingest.POST(evt(jsonReq('http://x/i', body)))
+  /** Let the ingest the route started after answering settle. */
+  const settled = () => new Promise((r) => setTimeout(r, 0))
+
+  it('400s a body that is not JSON, or one missing docId', async () => {
+    expect((await post('not json')).status).toBe(400)
+
+    const noDoc = await post({ sessionId: 's1' })
     expect(noDoc.status).toBe(400)
-    expect(ingestDocument).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 
   it('404s a document that is not in the session', async () => {
     doc = null
-    const res = await ingest.POST(evt(jsonReq('http://x/i', { sessionId: 's1', docId: 'ghost' })))
+    const res = await post({ sessionId: 's1', docId: 'ghost' })
     expect(res.status).toBe(404)
-    expect(ingestDocument).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
+  })
+
+  // The store keys a lookup by the session it names, so this is a second line:
+  // a record that says it belongs to another session is refused before ingest,
+  // which would index it under THAT session. MUTATION: drop the
+  // `doc.sessionId !== sessionId` clause → 202 and an ingest of s2's copy.
+  it("404s a record that names another session, the caller's own session notwithstanding", async () => {
+    doc = textDoc({ sessionId: 's2' })
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
+    expect(res.status).toBe(404)
+    expect(setDocumentFlags).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 
   it('415s a binary document — embedding raw bytes would index garbage', async () => {
     doc = textDoc({ encoding: 'base64', content: 'QkxPQg==' })
-    const res = await ingest.POST(evt(jsonReq('http://x/i', { sessionId: 's1', docId: 'doc-1' })))
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
 
     expect(res.status).toBe(415)
     expect((await res.json()).error).toMatch(/binary/)
-    expect(ingestDocument).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 
-  it('500s with the reason when the embedding step fails', async () => {
-    ingestDocument.mockRejectedValue(new Error('embedding model mismatch'))
-    const res = await ingest.POST(evt(jsonReq('http://x/i', { sessionId: 's1', docId: 'doc-1' })))
+  // The panel's "Index for search" (#832) reads `pending` → `indexed` off the
+  // document, and only a stored status says so. MUTATIONS: drop the pending
+  // write → no flag call; move it after the ingest starts → order reversed; call
+  // `ingestDocument(doc, …)` as the route used to → no status-tracked run.
+  it('stores pending before answering, then runs the status-tracked ingest with the caller’s options', async () => {
+    const res = await post({
+      sessionId: 's1',
+      docId: 'doc-1',
+      chunk: { size: 400 },
+      allowSpaceChange: true,
+    })
+    expect(res.status).toBe(202)
+    expect(await res.json()).toEqual({ ok: true, docId: 'doc-1', ingestStatus: 'pending' })
+    expect(setDocumentFlags).toHaveBeenCalledWith('s1', 'doc-1', {
+      ingestStatus: 'pending',
+      ingestError: null,
+    })
+    expect(ingestStashDocument).toHaveBeenCalledWith('s1', 'doc-1', {
+      chunk: { size: 400 },
+      embedding: undefined,
+      allowSpaceChange: true,
+    })
+    expect(setDocumentFlags.mock.invocationCallOrder[0]).toBeLessThan(
+      ingestStashDocument.mock.invocationCallOrder[0],
+    )
+  })
+
+  it('500s with the reason when pending cannot be stored, and starts no ingest', async () => {
+    setDocumentFlags.mockRejectedValue(new Error('Failed to update document: READONLY'))
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toBe('embedding model mismatch')
+    expect((await res.json()).error).toMatch(/READONLY/)
+    expect(ingestStashDocument).not.toHaveBeenCalled()
   })
 
-  it('returns the chunk count on a successful ingest', async () => {
-    const res = await ingest.POST(evt(jsonReq('http://x/i', { sessionId: 's1', docId: 'doc-1' })))
-    expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true, chunks: 3 })
+  it('404s a document deleted between the lookup and the pending write', async () => {
+    setDocumentFlags.mockResolvedValue(null)
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
+    expect(res.status).toBe(404)
+    expect(ingestStashDocument).not.toHaveBeenCalled()
+  })
+
+  // The ingest is documented not to throw; if it does, the `pending` the route
+  // stored must not stand as an "embedding…" that never ends. MUTATION: drop the
+  // failure write from the route's `.catch` → the document stays pending.
+  it('records a failure when the ingest throws anyway, so "embedding…" ends', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    ingestStashDocument.mockRejectedValue(new Error('gateway closed'))
+    expect((await post({ sessionId: 's1', docId: 'doc-1' })).status).toBe(202)
+    await settled()
+    expect(setDocumentFlags).toHaveBeenLastCalledWith('s1', 'doc-1', {
+      ingestStatus: 'failed',
+      ingestError: 'gateway closed',
+    })
+    expect(error).toHaveBeenCalled()
+    error.mockRestore()
   })
 })

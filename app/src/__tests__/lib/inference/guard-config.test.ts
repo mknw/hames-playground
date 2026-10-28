@@ -347,8 +347,13 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
   })
 
   // The deployment template carries every guard variable the module reads
-  // (#845 review, finding 1). MUTATION: drop one variable's block from either
-  // template: the scan misses it and this goes red.
+  // (#845 review, finding 1). Whole names only: `toContain(variable)` matched
+  // substrings, so `GUARD_EGRESS` was found inside `GUARD_EGRESS_THRESHOLD`
+  // and `GUARD_SCREEN` inside `GUARD_SCREEN_ANTHROPIC` — deleting those two
+  // variables' own lines left the scan green (fix round 2). The form scanned
+  // is the one each template uses to document a variable, `NAME='`.
+  // MUTATION: drop one variable's block from either template: the scan misses
+  // it and this goes red.
   it('every GUARD_* variable read here appears in both env templates', () => {
     const source = readFileSync(
       resolve(__dirname, '../../../lib/inference/guard-config.server.ts'),
@@ -360,7 +365,9 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     for (const template of ['.env.example', '../.env.production.example']) {
       const text = readFileSync(resolve(__dirname, '../../../..', template), 'utf8')
       for (const variable of read) {
-        expect(text, `${template} does not document ${variable}`).toContain(variable)
+        expect(text, `${template} does not document ${variable}`).toMatch(
+          new RegExp(`\\b${variable}='`),
+        )
       }
     }
   })

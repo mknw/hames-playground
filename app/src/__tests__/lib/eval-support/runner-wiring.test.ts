@@ -150,8 +150,24 @@ it('wires the guards’ settings into the driver’s bag, one env read (#845 rev
   expect(driver).toMatch(
     /maxOutgoingRetriesPostTripwire: guardNumbers\.maxOutgoingRetriesPostTripwire/,
   )
-  // One read: the runner counts against the same bag, never a second env read.
-  expect([...driver.matchAll(/= guardConfig\(\)/g)]).toHaveLength(1)
+  // The bag has to BE the deps slot it fills, not a rebuilt subset of it.
+  // MUTATION: rebuild the deps literal's `guards` slot without the three
+  // numbers (`guards: { pseudonymiseForWeb: guards.pseudonymiseForWeb,
+  // classifyIngress: guards.classifyIngress }` — tsc-clean) → the scan of the
+  // literal below misses `/^\s*guards,$/m` and this goes red; the eval's agent
+  // is back on the library's defaults while the report counts at the env's τi.
+  const depsLiteral = /const deps: AgentDeps = \{([\s\S]*?)\n {2}\}\n/.exec(driver)?.[1]
+  expect(depsLiteral, 'the deps literal').toBeDefined()
+  expect(depsLiteral!).toMatch(/^\s*guards,$/m)
+  // And the return carries the same read, not a second one or a re-read.
+  // MUTATION: `guards: guardConfig()` in the return → both this pin and the
+  // one-call count below go red.
+  expect(driver).toMatch(/guards: guardNumbers,\s*async run/)
+  // One read: every `guardConfig(` call in the file, exactly one — the count
+  // excludes the comments' backtick-quoted mentions via the lookbehind, so a
+  // second read anywhere in code reddens. The runner counts against the same
+  // bag, never a second env read.
+  expect(driver.match(/(?<!`)guardConfig\(/g)).toHaveLength(1)
   expect(run()).toMatch(/guardTurnCounts\(trace\.turns, driver\.guards\.gateThreshold\)/)
   expect(run()).not.toContain('guardConfig()')
 })

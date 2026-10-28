@@ -983,6 +983,68 @@ describe('DataStashPanel — "Index for search"', () => {
     expect(cachedDocuments(b)?.map((d) => [d.id, d.ingestStatus])).toEqual([['b-1', undefined]])
   })
 
+  // Two clicks before the answer are one request: the button is disabled while
+  // its request is out (#836 review). MUTATION: drop `disabled={loading()}` → two
+  // POSTs.
+  it('sends one request for two clicks made before the answer', async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const stubbed = stubFetch({ documents: [doc()] })
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url) === '/api/stash/ingest') await held
+      return stubbed(url, init)
+    }) as unknown as typeof fetch
+    await renderPanel()
+
+    const button = screen.getByRole('button', { name: 'Index for search' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    release()
+    await settle()
+
+    expect(calls.filter((c) => c.url === '/api/stash/ingest')).toHaveLength(1)
+  })
+
+  // MUTATION: drop `setUploadError(null)` from `indexDocument` → the refusal is
+  // still shown beside an "embedding…" copy.
+  it('clears an earlier refusal once a retry is accepted', async () => {
+    const plan: FetchPlan = {
+      documents: [doc()],
+      ingestResponse: { status: 503, body: { error: 'Embedder unreachable' } },
+    }
+    stubFetch(plan)
+    const { container } = await renderPanel()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Index for search' }))
+    await settle()
+    expect(container.textContent).toContain('Embedder unreachable')
+
+    plan.ingestResponse = undefined
+    fireEvent.click(screen.getByRole('button', { name: 'Index for search' }))
+    await settle()
+    expect(container.textContent).toContain('embedding…')
+    expect(container.textContent).not.toContain('Embedder unreachable')
+  })
+
+  // The button unmounts once its copy reads "embedding…"; the keyboard focus it
+  // held goes to the same chip's eye, not to <body>. MUTATION: drop the hand-off
+  // at the end of `indexDocument` → focus on <body>.
+  it('hands the focus to the same chip’s eye once the button is gone', async () => {
+    stubFetch({ documents: [doc({ id: 'doc-a', filename: 'a.md' }), doc({ id: 'doc-b' })] })
+    await renderPanel()
+
+    const button = screen
+      .getAllByRole('button', { name: 'Index for search' })
+      .find((b) => b.closest('[data-doc-id]')?.getAttribute('data-doc-id') === 'doc-b')!
+    button.focus()
+    fireEvent.click(button)
+    await settle()
+
+    const focused = document.activeElement as HTMLElement
+    expect(focused.getAttribute('title')).toBe('View file')
+    expect(focused.closest('[data-doc-id]')?.getAttribute('data-doc-id')).toBe('doc-b')
+  })
+
   // MUTATION: swallow the refusal → the reason is never shown.
   it('says why when the route refuses, and leaves the button in place', async () => {
     const onUploaded = vi.fn()

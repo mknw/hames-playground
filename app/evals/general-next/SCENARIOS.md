@@ -297,7 +297,8 @@ Expected routes/tools: `office-data`: `graph_files_search` → `graph_file_inges
 with the returned `item_id` and `drive_id` → sandbox inspection of the original
 `/work/in/lantern-review.docx` → code saving `/work/out/lantern-review-analysis.md`.
 The original bytes are unchanged; the saved report names Mira Cedar, North 47,
-South 19 and difference 28. The promoted Markdown is indexed in this conversation.
+South 19 and difference 28. The promoted Markdown is indexed in this conversation by the
+person's Data Stash click, which the driver mocks: the agent does not index it (#832).
 An ingest receipt alone does not pass. A failed/not_indexed copy is reported as
 not searchable; it is never presented as indexed.
 

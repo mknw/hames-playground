@@ -2,9 +2,10 @@
  * Data Stash Ingest API (#8/#9)
  *
  *   POST /api/stash/ingest  — chunk → embed → index a stored document for search
- *     body: { sessionId, docId, chunk?, embedding?, allowSpaceChange? }
+ *     body: { sessionId, docId }
  *     202:  { ok, docId, ingestStatus: 'pending' } — the outcome lands on the
  *           document's `ingestStatus` (`indexed`, or `failed` + `ingestError`)
+ *     200:  { ok, docId, ingestStatus: 'indexed' } — already searchable; nothing ran
  *
  * The explicit ingest: the Data Stash panel's "Index for search" button (#832).
  * Upload runs the same ingest on its own when the session's agent composes a
@@ -18,6 +19,13 @@
  * status-tracked `ingestStashDocument`. This route used to await `ingestDocument`
  * itself, which indexed the chunks and wrote no status at all, so nothing the
  * panel reads ever said the copy had become searchable.
+ *
+ * The server decides how a copy is indexed, as it does for upload and for the
+ * retriever's safety net: the embedder, its endpoint and key, the chunking and
+ * the one-model-per-corpus guard all come from the server's own configuration,
+ * never from the request. A caller-supplied embedding config would have the app
+ * post the document's text to a URL of the caller's choosing, past the boot
+ * check that refuses an untrusted embedder.
  */
 
 import type { APIEvent } from '@solidjs/start/server'
@@ -30,13 +38,7 @@ import { claimSession, json, withUser } from '../../../lib/stash/http.server'
 
 export async function POST(event: APIEvent) {
   return withUser(async (userId) => {
-    let body: {
-      sessionId?: string
-      docId?: string
-      chunk?: Record<string, unknown>
-      embedding?: Record<string, unknown>
-      allowSpaceChange?: boolean
-    }
+    let body: { sessionId?: string; docId?: string }
     try {
       body = await event.request.json()
     } catch {
@@ -67,6 +69,19 @@ export async function POST(event: APIEvent) {
         415,
       )
     }
+    // One run per copy. A copy already `pending` has a run in flight — two tabs,
+    // a list that has not caught up, or a direct POST would start a second one,
+    // which contends on the serial gateway and, the status write being last-writer-
+    // wins, could write `failed` over the `indexed` the first one wrote. A copy
+    // already `indexed` holds the text it was indexed from: a document's content
+    // is fixed when it is stored under a freshly minted id. This reads, then
+    // writes, so it bounds repeated clicks, not two requests in the same instant.
+    if (doc.ingestStatus === 'pending') {
+      return json({ ok: true, docId, ingestStatus: 'pending' }, 202)
+    }
+    if (doc.ingestStatus === 'indexed') {
+      return json({ ok: true, docId, ingestStatus: 'indexed' }, 200)
+    }
 
     try {
       const marked = await setDocumentFlags(sessionId, docId, {
@@ -81,11 +96,7 @@ export async function POST(event: APIEvent) {
     // Records its own outcome on the document and is documented not to throw. A
     // throw anyway would leave the `pending` above standing — an "embedding…"
     // that never ends — so it is recorded as the failure it is, and logged.
-    void ingestStashDocument(sessionId, docId, {
-      chunk: body.chunk,
-      embedding: body.embedding,
-      allowSpaceChange: body.allowSpaceChange,
-    }).catch(async (err: unknown) => {
+    void ingestStashDocument(sessionId, docId).catch(async (err: unknown) => {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[ingest] ${docId} threw for session ${sessionId}:`, reason)
       // Capped as the package caps its own recorded reasons.

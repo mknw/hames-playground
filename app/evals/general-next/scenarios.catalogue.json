@@ -1333,7 +1333,7 @@
         "Find lantern-review.docx, read it, and save lantern-review-analysis.md with the regional totals and their difference. Keep the original reviewer's name.",
         "From that saved analysis, which region sold more and by how much? Cite it."
       ],
-      "expected": "graph_files_search, then graph_file_ingest with the returned ids, then sandbox tools; the saved report names Mira Cedar, North 47, South 19, 28; indexed and cited next turn.",
+      "expected": "graph_files_search, then graph_file_ingest with the returned ids, then sandbox tools; the saved report names Mira Cedar, North 47, South 19, 28; indexed by the mocked Data Stash click and cited next turn.",
       "grader": [
         {
           "check": "orderedTools",

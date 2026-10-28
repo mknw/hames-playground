@@ -51,7 +51,7 @@ db-coupled.
 | `GET /api/stash/document/:id?sessionId=&download` | Stream the raw file (base64 decoded for binary) with `Content-Disposition` (#89)   |
 | `DELETE /api/stash/document/:id?sessionId=`       | Remove a document + its index entry                                                |
 | `PATCH /api/stash/document/:id`                   | Toggle `hidden` / `archived` (`{sessionId, hidden?, archived?}`)                   |
-| `POST /api/stash/ingest`                          | Index a text doc for search: stores `pending`, answers 202, then ingests           |
+| `POST /api/stash/ingest`                          | Index a text doc for search: stores `pending`, answers 202, ingests; once per copy |
 | `GET /api/stash/search?sessionId=&q=&k=`          | KNN similarity search over a session's chunks (hidden/archived documents excluded) |
 
 The **client** never calls these directly: `app/src/lib/api-client.ts` owns the
@@ -60,7 +60,7 @@ URLs, request/response types and error contract (#226 B4), and
 single-flight guard over the list call — the Data Stash panel and the chat
 route's embedding gate poll the same endpoint and coalesce onto one request.
 
-Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`), and every route additionally scopes the `sessionId` it is given to the caller — see [Session ownership](#session-ownership) below. Ingest runs two ways: **explicitly** via `POST /api/stash/ingest` — the panel's per-document **Index for search** button (#832), the person's switch for a copy nothing indexed (a sandbox deliverable promoted from `/work/out`, which the agent does not index) — or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model.
+Auth follows the existing posture (dev-bypass aware; see `lib/auth/dev-bypass.ts`), and every route additionally scopes the `sessionId` it is given to the caller — see [Session ownership](#session-ownership) below. Ingest runs two ways: **explicitly** via `POST /api/stash/ingest` — the panel's per-document **Index for search** button (#832), the person's switch for a copy nothing indexed (a sandbox deliverable promoted from `/work/out`, which the agent does not index) — or **automatically on upload** when the session's agent composes a `retriever` wired to the redis backend (see [Harness-aware ingest](#harness-aware-ingest-the-retriever-pattern) below). Either way it needs an embedding backend and binds the corpus to one model, and either way the server chooses the embedder and the chunking from its own configuration: the explicit route reads only `sessionId` and `docId` from its body, so a caller cannot point the embed at an endpoint of its choosing. The explicit route starts at most one run per copy: a copy already `pending` answers 202 and one already `indexed` answers 200, and neither starts another.
 
 Documents don't only arrive over HTTP: the `graph_file_ingest` app tool calls
 `storeDocument` + `ingestStashDocument` in-process to copy one of the signed-in

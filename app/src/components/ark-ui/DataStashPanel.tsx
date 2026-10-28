@@ -531,7 +531,7 @@ const DocChip = (props: {
   }
 
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div data-doc-id={d().id} style={{ position: 'relative', display: 'inline-block' }}>
       {/* "Eye" — open the inline file viewer. Text docs, plus converted
           binaries (docx/pdf/… whose derived markdown is viewable); a raw binary
           has no text view. Stops propagation so it doesn't also open the menu. */}
@@ -576,7 +576,9 @@ const DocChip = (props: {
             onClick={() => void handle('index')}
             aria-label={indexLabel()}
             disabled={loading()}
-            style={{ position: 'absolute', top: '0px', left: '0px', 'z-index': '6' }}
+            position="absolute"
+            inset="t-0 l-0"
+            z="6"
             w="6"
             h="6"
             flex="~"
@@ -1192,6 +1194,8 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // status transitions even before the first `pending` lands.
   const [watching, setWatching] = createSignal(false)
   let watchTimer: ReturnType<typeof setTimeout> | undefined
+  // The document chips' row, where "Index for search" hands its focus on.
+  let gallery: HTMLDivElement | undefined
   // Inline file viewer: which doc is open + an optional char range to highlight.
   const [viewer, setViewer] = createSignal<{
     doc: StashDocumentMeta
@@ -1318,6 +1322,8 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // the chip can say "embedding…" from here on without waiting for a poll, and
   // the watch window (as after an upload) reconciles it to indexed or failed.
   const indexDocument = async (sid: string, id: string) => {
+    // A refusal from an earlier click must not outlive a retry that succeeds.
+    setUploadError(null)
     try {
       await indexStashDocument(id, sid)
     } catch (err) {
@@ -1333,6 +1339,15 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       ),
     )
     watchIngest()
+    // The copy is a new object now, so its chip was rendered again without the
+    // index button, and the keyboard focus that button held fell to <body>. Hand
+    // it to the same chip's eye, there whenever that button was (both need text).
+    if (document.activeElement === document.body) {
+      const chip = [...(gallery?.querySelectorAll<HTMLElement>('[data-doc-id]') ?? [])].find(
+        (el) => el.dataset.docId === id,
+      )
+      chip?.querySelector<HTMLElement>('button[title="View file"]')?.focus()
+    }
   }
 
   const handleDocAction = async (id: string, action: DocAction) => {
@@ -1468,7 +1483,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       <CollapsibleSection title="Your Uploads" count={docs().length} defaultOpen={true}>
         <UploadZone uploading={uploading()} error={uploadError()} onFiles={uploadFiles} />
         <Show when={docs().length > 0}>
-          <div flex="~ wrap" gap="2" p="x-3 y-2">
+          <div ref={gallery} flex="~ wrap" gap="2" p="x-3 y-2">
             <For each={docs()}>
               {(doc) => (
                 <DocChip

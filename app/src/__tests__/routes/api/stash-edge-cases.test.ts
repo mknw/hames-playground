@@ -40,6 +40,7 @@ interface Doc {
   content: string
   encoding?: 'utf8' | 'base64'
   derivedText?: string
+  ingestStatus?: 'pending' | 'indexed' | 'failed' | 'not_indexed'
   ingestError?: string
 }
 let doc: Doc | null = null
@@ -336,27 +337,59 @@ describe('POST /api/stash/ingest', () => {
   // document, and only a stored status says so. MUTATIONS: drop the pending
   // write → no flag call; move it after the ingest starts → order reversed; call
   // `ingestDocument(doc, …)` as the route used to → no status-tracked run.
-  it('stores pending before answering, then runs the status-tracked ingest with the caller’s options', async () => {
-    const res = await post({
-      sessionId: 's1',
-      docId: 'doc-1',
-      chunk: { size: 400 },
-      allowSpaceChange: true,
-    })
+  it('stores pending before answering, then runs the status-tracked ingest', async () => {
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
     expect(res.status).toBe(202)
     expect(await res.json()).toEqual({ ok: true, docId: 'doc-1', ingestStatus: 'pending' })
     expect(setDocumentFlags).toHaveBeenCalledWith('s1', 'doc-1', {
       ingestStatus: 'pending',
       ingestError: null,
     })
-    expect(ingestStashDocument).toHaveBeenCalledWith('s1', 'doc-1', {
-      chunk: { size: 400 },
-      embedding: undefined,
-      allowSpaceChange: true,
-    })
+    expect(ingestStashDocument).toHaveBeenCalledTimes(1)
     expect(setDocumentFlags.mock.invocationCallOrder[0]).toBeLessThan(
       ingestStashDocument.mock.invocationCallOrder[0],
     )
+  })
+
+  // The server decides the embedder, as upload and the retriever's safety net do:
+  // an `embedding` from the body would have the app post the document's text to
+  // the caller's `baseUrl` with the caller's key, past the boot refusal of an
+  // untrusted embedder (#836 security review). MUTATION: hand the body's
+  // `chunk` / `embedding` / `allowSpaceChange` to the ingest again → red.
+  it('indexes with the server’s own embedder, whatever the body asks for', async () => {
+    const res = await post({
+      sessionId: 's1',
+      docId: 'doc-1',
+      chunk: { size: 400 },
+      embedding: { provider: 'local', baseUrl: 'https://collector.example/v1', apiKey: 'k' },
+      allowSpaceChange: true,
+    })
+    expect(res.status).toBe(202)
+    expect(ingestStashDocument.mock.calls).toEqual([['s1', 'doc-1']])
+  })
+
+  // One run per copy (#836 reviews): a click on a copy whose run is in flight, or
+  // that is already searchable, starts nothing and writes nothing. MUTATIONS: drop
+  // the `pending` guard → a second ingest and a fresh `pending` write; drop the
+  // `indexed` guard → a re-ingest of a searchable copy.
+  it.each([
+    ['pending', 202],
+    ['indexed', 200],
+  ] as const)('starts no second run for a copy already %s', async (ingestStatus, status) => {
+    doc = textDoc({ ingestStatus })
+    const res = await post({ sessionId: 's1', docId: 'doc-1' })
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ ok: true, docId: 'doc-1', ingestStatus })
+    expect(setDocumentFlags).not.toHaveBeenCalled()
+    expect(ingestStashDocument).not.toHaveBeenCalled()
+  })
+
+  // The retry the panel offers: a failed copy is indexed again. MUTATION: refuse
+  // every copy that has a status → no retry.
+  it('runs again for a copy whose index failed', async () => {
+    doc = textDoc({ ingestStatus: 'failed', ingestError: 'embedder offline' })
+    expect((await post({ sessionId: 's1', docId: 'doc-1' })).status).toBe(202)
+    expect(ingestStashDocument).toHaveBeenCalledTimes(1)
   })
 
   it('500s with the reason when pending cannot be stored, and starts no ingest', async () => {

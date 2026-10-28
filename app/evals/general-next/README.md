@@ -126,7 +126,19 @@ Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph
 
 The acceptance gate after S3 is: all `must` scenarios pass and no recorded `general`
 baseline result regresses (the candidate passes every scenario `general` last passed) on the **private tier**, with all expected scenarios present and live
-model evidence. `should` / `nice` outcomes remain visible. No scenario can pass
+model evidence. `should` / `nice` outcomes remain visible.
+
+**MUST re-runs (#842, owner ruling 2026-10-28):** a failing `must` scenario is re-run
+twice more — at most **2 extra attempts per failing MUST scenario** (3 attempts in
+total) — and the gate counts it as passing when 2 of the 3 attempts pass, listing it
+under the report's `flipGate.flaky`. A first-attempt pass runs once, so a clean run
+pays nothing extra; the bound applies only where a MUST actually failed. `should` and
+`nice` scenarios are unchanged (one attempt). A scenario that throws, or fails before
+any attempt is graded (a wake failure), is not a graded failure and gets no re-run.
+The report carries every attempt as its own numbered row (`attempt`), and the runner's
+exit code follows the same counting rule as the gate. The counting rule lives in
+`src/lib/eval-support/flip-gate.ts` (`gradeMustAttempts`), pinned hermetically by
+`flip-gate.test.ts`. No scenario can pass
 with zero checks. A separate default-flip draft is prepared only after that evidence.
 
 The pure ledger, preconditions and trace checks live under `src/lib/eval-support`

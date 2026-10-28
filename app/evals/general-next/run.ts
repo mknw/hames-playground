@@ -11,7 +11,11 @@ import {
   type SpendKey,
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
-import { flipGate } from '../../src/lib/eval-support/flip-gate'
+import {
+  flipGate,
+  MUST_RERUN_ATTEMPTS,
+  candidateScenarioStatus,
+} from '../../src/lib/eval-support/flip-gate'
 import { GENERAL_BASELINE } from '../../src/lib/eval-support/general-baseline'
 import { describeWakeFailure, wakeFailureReason } from '../../src/lib/eval-support/wake-failure'
 import {
@@ -149,15 +153,20 @@ async function main() {
   let started = 0
   let driver: ConversationDriver | undefined
   const write = () => {
-    const rows = jobs.map(
-      ({ key }) =>
-        results.find((r) => r.agent === key.agent && r.scenario === key.scenario) ?? {
+    // Every attempt of a re-run scenario is its own row (#842); a scenario with no
+    // graded attempt yet falls back to the not-run/gated row.
+    const rows = jobs.flatMap(({ key }): ConversationResult[] => {
+      const attempts = results.filter((r) => r.agent === key.agent && r.scenario === key.scenario)
+      if (attempts.length > 0) return attempts
+      return [
+        {
           ...key,
-          status: budget.stopped ? 'stopped' : 'gated',
+          status: (budget.stopped ? 'stopped' : 'gated') as ConversationResult['status'],
           checks: [],
           error: budget.reason ?? 'not run',
         },
-    )
+      ]
+    })
     writeFileSync(
       file,
       JSON.stringify(
@@ -282,17 +291,46 @@ async function main() {
               stop()
             }
           }
-          const trace = await driver.run(job.scenario, active)
-          const checks = grade(job.scenario, trace, false)
-          if ((await takeEgressAttempts?.())?.length)
-            checks.push({
-              name: 'no unexpected egress',
-              pass: false,
-              detail: 'Hermetic egress backstop refused requests',
-            })
-          const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
-          capture?.add(active, trace, status === 'fail')
-          results.push({ ...active, status, checks, guards: guardTurnCounts(trace.turns) })
+          // #842 (owner ruling 2026-10-28): a MUST scenario that fails is re-run twice
+          // more — at most `MUST_RERUN_ATTEMPTS` attempts in total — and the gate counts
+          // it as passing when 2 of the 3 attempts pass. Every other priority runs once.
+          // A first-attempt pass runs once; a scenario that throws is not a graded
+          // failure and gets no re-run.
+          let attempt = 0
+          while (attempt < (job.scenario.priority === 'must' ? MUST_RERUN_ATTEMPTS : 1)) {
+            attempt++
+            try {
+              const trace = await driver.run(job.scenario, active)
+              const checks = grade(job.scenario, trace, false)
+              if ((await takeEgressAttempts?.())?.length)
+                checks.push({
+                  name: 'no unexpected egress',
+                  pass: false,
+                  detail: 'Hermetic egress backstop refused requests',
+                })
+              const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
+              capture?.add(active, trace, status === 'fail')
+              results.push({
+                ...active,
+                attempt,
+                status,
+                checks,
+                guards: guardTurnCounts(trace.turns),
+              })
+              // First failure earns exactly two more attempts, pass or fail.
+              if (attempt === 1 && status === 'pass') break
+            } catch (err) {
+              capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
+              results.push({
+                ...active,
+                status: 'fail',
+                checks: [],
+                error: err instanceof Error ? err.message : 'Scenario threw',
+              })
+              break
+            }
+            if (budget.stopped) break
+          }
         } catch (err) {
           capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
           results.push({
@@ -311,7 +349,24 @@ async function main() {
       observer.activate(undefined)
     }
     console.log(`Report: ${file}`)
-    process.exitCode = results.some((r) => r.status === 'fail') ? 1 : 0
+    // The exit code follows the graded verdicts, not the raw rows: a MUST that
+    // passed 2 of its 3 re-run attempts is a pass here and in the gate, while a
+    // scenario that failed before any attempt (a throw, a wake failure) still fails
+    // the run. Gated and not-run scenarios are reported, not failed.
+    process.exitCode = picked.some((s) => {
+      const rows = results.filter((r) => r.agent === candidate && r.scenario === s.id)
+      const attemptRows = rows.filter((r) => r.attempt !== undefined)
+      if (attemptRows.length > 0)
+        return (
+          candidateScenarioStatus(
+            s.priority,
+            attemptRows.map((r) => r.status),
+          ) === 'fail'
+        )
+      return rows.some((r) => r.status === 'fail')
+    })
+      ? 1
+      : 0
   } finally {
     clearInterval(timer)
     unobserve()

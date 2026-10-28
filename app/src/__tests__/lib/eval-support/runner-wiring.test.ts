@@ -211,6 +211,16 @@ it('writes the screen subtotal beside every scenario row', () => {
 it('marks hermetic reports with the vacuous-pass caveat', () => {
   expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)
 })
+// #842: a failing must is re-run twice more, and only failures are re-run — a
+// first-attempt pass breaks out of the attempt loop after one run, so it is not spent
+// twice. Every other priority still runs exactly once.
+// MUTATION: drop the `&& attempt === 1` from run.ts's break condition → this reddens
+// (a first-attempt pass would be re-run); restore it → green.
+it('a first-attempt pass runs once; a failing must earns exactly two more attempts', () => {
+  const s = run()
+  expect(s).toContain('MUST_RERUN_ATTEMPTS : 1')
+  expect(s).toMatch(/if \(attempt === 1 && status === 'pass'\) break/)
+})
 it('captures decisions and controller outputs only behind the env flag, beside the gitignored report', () => {
   const s = run()
   // Off by default: the log exists only when the flag says so, and the report names the file only then.

@@ -259,7 +259,8 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
   return capture
 }
 
-/** One entry per finished scenario, written whole each time like the report itself. */
+/** One entry per finished graded attempt (a re-run MUST scenario adds one per attempt),
+ * written whole each time like the report itself. */
 export class CaptureLog {
   readonly entries: Array<SpendKey & ScenarioCapture> = []
   add(key: SpendKey, trace: ConversationTrace, failed: boolean): void {

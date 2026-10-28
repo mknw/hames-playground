@@ -16,6 +16,7 @@ import {
   withMemory,
   withPseudonymisedInputs,
   withReferences,
+  GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
   type ConfiguredPattern,
 } from '@hames-ai/harness-patterns'
 import {
@@ -316,7 +317,8 @@ async function createPatterns(
     // stands without it.
     mode: deps.guards?.egressMode ?? 'filter',
     threshold: deps.guards?.egressThreshold,
-    maxOutgoingRetriesPostTripwire: deps.guards?.maxOutgoingRetriesPostTripwire ?? 0,
+    maxOutgoingRetriesPostTripwire:
+      deps.guards?.maxOutgoingRetriesPostTripwire ?? GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
     loadedDecideDown: 'by-shape',
     // An attended turn asks the person where the gate would refuse; an
     // unattended one (a routine, an eval) still refuses (slice 10).

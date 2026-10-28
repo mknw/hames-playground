@@ -1,5 +1,5 @@
 /** Real package agent + real harness, with synthetic dependencies on every tool edge. */
-import type { AgentDefinition, AgentDeps } from '@hames-ai/agents'
+import type { AgentDefinition, AgentDeps, AgentGuards } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
 import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
@@ -230,6 +230,7 @@ export async function createDriver(
   const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
   const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
   const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
+  const { guardConfig } = await import('../../src/lib/inference/guard-config.server')
   let trace: ConversationTrace
   let scenario: ConversationScenario
   let turn = 0
@@ -328,14 +329,25 @@ export async function createDriver(
   // the eval's frame is `self_deployed`, so 05's memory reaches the decider as text.
   const { privateDecisionRun } =
     await import('../../src/lib/harness-client/decision-documents.server')
+  // The guards' bag the production agent takes, with the same three settings
+  // the runner counts against (#844, #845 review finding 2): one
+  // `guardConfig()` read shared by the bag and the runner, so the eval's gate
+  // runs at the env's τi and its egress gate at the env's τe and N, and the
+  // report's τi is never a second env read. Building the bag never logs; only
+  // `assertGuardsConfigured()` does.
+  const guardNumbers = guardConfig()
+  const guards: AgentGuards = {
+    gateThreshold: guardNumbers.gateThreshold,
+    egressThreshold: guardNumbers.egressThreshold,
+    maxOutgoingRetriesPostTripwire: guardNumbers.maxOutgoingRetriesPostTripwire,
+    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    classifyIngress,
+  }
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
     clientOverride: clientOverrideFor,
-    guards: {
-      pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
-      classifyIngress,
-    },
+    guards,
     // The egress gate's production roster, on the same `none` directory: every outgoing
     // call of every route is asked about (boundary guards slice 4).
     egressRoster: createEgressRoster({ directory: 'none' }),
@@ -403,6 +415,10 @@ export async function createDriver(
     throw err
   }
   return {
+    // The same `guardConfig()` read the bag carries: the runner reads τi from
+    // here, so the report's skip count is the run's own τi (#845 review
+    // finding 2).
+    guards: guardNumbers,
     async run(next, key) {
       const agent = await loadAgent(key.agent)
       scenario = next

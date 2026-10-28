@@ -34,7 +34,6 @@ import {
 import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
-import { guardConfig } from '../../src/lib/inference/guard-config.server'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
@@ -316,7 +315,7 @@ async function main() {
                 attempt,
                 status,
                 checks,
-                guards: guardTurnCounts(trace.turns, guardConfig().gateThreshold),
+                guards: guardTurnCounts(trace.turns, driver.guards.gateThreshold),
               })
               // First failure earns exactly two more attempts, pass or fail.
               if (attempt === 1 && status === 'pass') break

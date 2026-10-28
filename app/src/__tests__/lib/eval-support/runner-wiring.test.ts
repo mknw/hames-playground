@@ -135,6 +135,26 @@ it('uses live production metadata, records refusing writes, and never returns a 
     expect(catalog).toMatch(new RegExp(`${key}: \\{`))
   }
 })
+it('wires the guards’ settings into the driver’s bag, one env read (#845 review finding 2)', () => {
+  // The driver’s bag carries `guardConfig()`’s three settings — the same
+  // numbers the runner counts against — so the eval’s gate runs at the env’s
+  // τi and its egress gate at the env’s τe and N, never the library defaults.
+  // Structural by necessity: nothing under src/ may import evals/
+  // (`evals-not-in-ci.test.ts`), so a behavioural pin with
+  // GUARD_EGRESS_THRESHOLD=0.4 stubbed cannot import the driver here; the
+  // parse itself is pinned in `guard-config.test.ts`.
+  const driver = read('evals/general-next/driver.ts')
+  expect(driver).toMatch(/const guardNumbers = guardConfig\(\)/)
+  expect(driver).toMatch(/gateThreshold: guardNumbers\.gateThreshold/)
+  expect(driver).toMatch(/egressThreshold: guardNumbers\.egressThreshold/)
+  expect(driver).toMatch(
+    /maxOutgoingRetriesPostTripwire: guardNumbers\.maxOutgoingRetriesPostTripwire/,
+  )
+  // One read: the runner counts against the same bag, never a second env read.
+  expect([...driver.matchAll(/= guardConfig\(\)/g)]).toHaveLength(1)
+  expect(run()).toMatch(/guardTurnCounts\(trace\.turns, driver\.guards\.gateThreshold\)/)
+  expect(run()).not.toContain('guardConfig()')
+})
 it('keeps 17 executable scenarios, 18 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),

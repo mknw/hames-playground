@@ -90,8 +90,8 @@ const SCREEN_DEFAULTS = { self_deployed: 'shadow', anthropic: 'always' } as cons
 const EGRESS_DEFAULT = 'filter' as const
 /** The declared default for the input pseudonymiser. */
 const PSEUDONYMISE_DEFAULT = true
-/** τi's and τe's defaults are the patterns' own; N's is general-next's
- *  declared 0, which is also the egress gate's. */
+/** τi's and τe's defaults are the patterns' own; N's default is the patterns'
+ *  constant too, the one spelling the egress gate and general-next share. */
 const GATE_THRESHOLD_DEFAULT = GUARD_GATE_THRESHOLD
 const EGRESS_THRESHOLD_DEFAULT = GUARD_EGRESS_THRESHOLD
 const TRIPWIRE_N_DEFAULT = GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE

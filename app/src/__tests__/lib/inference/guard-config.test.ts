@@ -19,6 +19,8 @@
 // `privateInferenceOnly()`), so each test stubs and unstub its own values and
 // the suite stays hermetic — nothing here contacts an endpoint, wakes a box or
 // reads a database.
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { assertGuardsConfigured, guardConfig } from '../../../lib/inference/guard-config.server'
 
@@ -261,6 +263,28 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     expect(() => assertGuardsConfigured()).toThrow(`${variable} must be ${range};`)
   })
 
+  // Empty and whitespace-only values (#845 review, finding 3): '' keeps the
+  // default with no warning (a falsy check, like the mode switches); '   '
+  // (whitespace only) refuses boot. MUTATION O2: read the raw value with
+  // `!== undefined` instead of truthiness: '' refuses boot and the first row
+  // goes red. MUTATION O3: skip the trim (or accept whitespace-only as the
+  // default): the second row goes red.
+  it.each(NUMBERS.map(([variable]) => variable))(
+    '%s (empty) keeps the default and logs no warning',
+    (variable) => {
+      vi.stubEnv(variable, '')
+      expect(() => assertGuardsConfigured()).not.toThrow()
+      expect(warns).toEqual([])
+    },
+  )
+  it.each(NUMBERS.map(([variable]) => variable))(
+    '%s (whitespace only) refuses boot',
+    (variable) => {
+      vi.stubEnv(variable, '   ')
+      expect(() => assertGuardsConfigured()).toThrow(variable)
+    },
+  )
+
   // The refusal never quotes what it refused. MUTATION: interpolate the raw
   // value into the message: red.
   it.each(NUMBERS.map(([variable]) => variable))(
@@ -320,5 +344,24 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     guardConfig()
     guardConfig()
     expect(warns).toHaveLength(3)
+  })
+
+  // The deployment template carries every guard variable the module reads
+  // (#845 review, finding 1). MUTATION: drop one variable's block from either
+  // template: the scan misses it and this goes red.
+  it('every GUARD_* variable read here appears in both env templates', () => {
+    const source = readFileSync(
+      resolve(__dirname, '../../../lib/inference/guard-config.server.ts'),
+      'utf8',
+    )
+    const read = [...source.matchAll(/process\.env\.(GUARD_[A-Z_]+)/g)].map((m) => m[1])
+    expect(read.length).toBeGreaterThan(0)
+    // The app package's template and the deployment template at the repo root.
+    for (const template of ['.env.example', '../.env.production.example']) {
+      const text = readFileSync(resolve(__dirname, '../../../..', template), 'utf8')
+      for (const variable of read) {
+        expect(text, `${template} does not document ${variable}`).toContain(variable)
+      }
+    }
   })
 })

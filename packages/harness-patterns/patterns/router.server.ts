@@ -26,7 +26,7 @@ import type {
   RouteFn,
 } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
-import { trackEvent, resolveConfig, createEvent, createScope } from '../context.server'
+import { trackEvent, resolveConfig, createEvent, createScope, redactCall } from '../context.server'
 import { emitLive } from '../live-event-context.server'
 import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
 import { currentRunFrame } from '../run-frame.server'
@@ -193,12 +193,18 @@ export function router<T extends RouterData>(
         // Track assistant message with LLM call data. `final: true` because
         // on the conversational route the router IS the final responder —
         // the downstream compactExecution skips BAML in this case.
+        // The record is REDACTED here, before it rides the saved event
+        // (review F1): under `routerMemory: 'routing-and-replies'` the router
+        // prompt renders `memoryRecall`'s `memoryContext` block, so an
+        // unredacted `rawInput` would persist recalled memory text in the
+        // conversation blob that `serializeContext` scrubs from `data`. Same
+        // redaction as every decide-path record.
         trackEvent(
           scope,
           'assistant_message',
           { content: responseText, final: true } as AssistantMessageEventData,
           resolved.trackHistory,
-          result.llmCall,
+          redactCall(result.llmCall, { keepOutput: true }),
         )
 
         return scope
@@ -218,8 +224,9 @@ export function router<T extends RouterData>(
           // `routeMessageOp` nulls a route the model invented (it validates
           // against `routeDescriptions`), so this fires exactly when the
           // router named a route that does not exist. WHICH name it invented
-          // lives only in the raw response — carry it.
-          result.llmCall,
+          // lives only in the raw response — carry it. Redacted (review F1):
+          // same rendered memory block as every other router record.
+          redactCall(result.llmCall, { keepOutput: true }),
         )
         return clearRouting(scope)
       }
@@ -230,12 +237,14 @@ export function router<T extends RouterData>(
       // response. Chat-history replay filters these out.
       const statusText = result.response_text || ''
       if (statusText) {
+        // Redacted like the conversational record above (review F1): the
+        // routing prompt renders the same memory block.
         trackEvent(
           scope,
           'assistant_message',
           { content: statusText } as AssistantMessageEventData,
           resolved.trackHistory,
-          result.llmCall,
+          redactCall(result.llmCall, { keepOutput: true }),
         )
       }
 
@@ -253,6 +262,9 @@ export function router<T extends RouterData>(
       // The adapter wraps a failed `b.Router` as `LLMCallError` so the raw
       // response survives the throw — same contract as simpleLoop / planner.
       const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
+      // Redacted like the success paths above (review F1): a failed router
+      // call read the same rendered memory block, and its record rides the
+      // `error` event into the same blob.
       trackEvent(
         scope,
         'error',
@@ -261,7 +273,7 @@ export function router<T extends RouterData>(
           ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
         } as ErrorEventData,
         true,
-        failedLlmCall,
+        redactCall(failedLlmCall, { keepOutput: true }),
       )
       return clearRouting(scope)
     }

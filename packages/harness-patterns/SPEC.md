@@ -3115,6 +3115,21 @@ conversation blob or the nightly dump (pin `memory-not-in-blob`). For the same
 reason a `decisionLoop` that quotes memory to its decisions model records those
 decisions' calls redacted (#829).
 
+The same invariant binds the two saved **call records** whose prompts render the
+block: the synthesize record compactExecution attaches to its `assistant_message`
+event (and to the `error` event when the call failed as `LLMCallError`), and the
+router record under the `routing-and-replies` default (conversational reply,
+routing status, missing-route and thrown-call records alike). Both are redacted
+with `redactCall` where the event is built, the same way every decide-path record
+is, with one deliberate difference: `rawInput` / `parsedOutput` / `variables`
+drop, while `rawOutput` is KEPT (`keepOutput`) — the reply it carries is the
+event's `content` already, and for a failed call it is the only record of what
+was said (#225); the accepted residual is the model's own echo of the block,
+which is text the user was shown. Cost attribution survives. The redaction is at
+the saved-event site only — the live call is unchanged (pins in the
+`memory-not-in-blob: the saved call records` block, each verified against the
+mutation that removes its `redactCall`).
+
 ### Cost, and what is unrecordable
 
 The gate's `llmCall` rides the `memory_recalled` event on the success path AND

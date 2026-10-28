@@ -54,7 +54,7 @@ import {
 import { evaluateDecision } from '@hames-ai/harness-patterns/patterns/typedDecision.server'
 import { withEgressGate } from '@hames-ai/harness-patterns/patterns/withEgressGate.server'
 import { callTool } from '@hames-ai/harness-patterns/mcp-client.server'
-import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
+import { amendRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { createContext, createScope } from '@hames-ai/harness-patterns/context.server'
 import { configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
@@ -215,7 +215,13 @@ export const egressGateScenario: Scenario = {
         addressSources: [],
         roster: rosterFor(row),
       })(probe)
-      const scope = await withRunFrame(
+      // The runner opened this run's frame (`runScenario`, harness.ts), so the
+      // rows' transport scope is an AMEND below it, not a nested entry: a nested
+      // `withRunFrame` that supplies a slot is refused (the nested entry joins
+      // the open frame and brings no slots), which is what threw on every gate
+      // row before this was an amend (#788 c6445541842). Prepending puts the
+      // fake transport innermost, where `callTool` reads it first.
+      const scope = await amendRunFrame(
         {
           transports: [
             {

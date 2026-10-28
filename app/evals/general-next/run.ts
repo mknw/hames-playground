@@ -30,6 +30,7 @@ import {
 import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
+import { guardConfig } from '../../src/lib/inference/guard-config.server'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
@@ -292,7 +293,12 @@ async function main() {
             })
           const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
           capture?.add(active, trace, status === 'fail')
-          results.push({ ...active, status, checks, guards: guardTurnCounts(trace.turns) })
+          results.push({
+            ...active,
+            status,
+            checks,
+            guards: guardTurnCounts(trace.turns, guardConfig().gateThreshold),
+          })
         } catch (err) {
           capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
           results.push({

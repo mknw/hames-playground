@@ -45,6 +45,11 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
       screenMode: { default: 'shadow', anthropic: 'always' },
       egressMode: 'filter',
       pseudonymise: true,
+      // #844: today's numbers, as literals rather than the constants they come
+      // from, so moving a constant is a red here and not a silent new default.
+      gateThreshold: 0.15,
+      egressThreshold: 0.3,
+      maxOutgoingRetriesPostTripwire: 0,
     })
     expect(warns).toEqual([])
   })
@@ -184,5 +189,136 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     vi.stubEnv('GUARD_EGRESS', 'filter')
     vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
     expect(() => assertGuardsConfigured()).not.toThrow()
+  })
+})
+
+// #844: the guards' numbers as settings. Each variable's default is today's
+// value exactly (the unset pin above), each one takes effect, an invalid value
+// refuses boot naming the variable and its range and never the value, and a
+// value looser than the default warns once at boot, never per call.
+describe('the guard thresholds and the tripwire N as settings (#844)', () => {
+  const NUMBERS = [
+    ['GUARD_GATE_THRESHOLD', 'gateThreshold', 'a number from 0 to 1'],
+    ['GUARD_EGRESS_THRESHOLD', 'egressThreshold', 'a number from 0 to 1'],
+    [
+      'GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE',
+      'maxOutgoingRetriesPostTripwire',
+      'a whole number, 0 or greater',
+    ],
+  ] as const
+
+  // MUTATION: read the wrong variable for one setting (or drop its parse and
+  // keep the default): that row goes red.
+  it.each([
+    ['GUARD_GATE_THRESHOLD', '0.4', 'gateThreshold', 0.4],
+    ['GUARD_GATE_THRESHOLD', ' .05 ', 'gateThreshold', 0.05],
+    ['GUARD_GATE_THRESHOLD', '0', 'gateThreshold', 0],
+    ['GUARD_GATE_THRESHOLD', '1', 'gateThreshold', 1],
+    ['GUARD_EGRESS_THRESHOLD', '0.5', 'egressThreshold', 0.5],
+    ['GUARD_EGRESS_THRESHOLD', '1.0', 'egressThreshold', 1],
+    ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '2', 'maxOutgoingRetriesPostTripwire', 2],
+    ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '0', 'maxOutgoingRetriesPostTripwire', 0],
+  ] as const)('%s=%j sets %s to %j', (variable, raw, field, want) => {
+    vi.stubEnv(variable, raw)
+    expect(guardConfig()[field]).toBe(want)
+  })
+
+  // Each setting moves its own field only.
+  it('each variable sets its own field and leaves the others at their defaults', () => {
+    vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.1')
+    expect(guardConfig()).toMatchObject({
+      gateThreshold: 0.15,
+      egressThreshold: 0.1,
+      maxOutgoingRetriesPostTripwire: 0,
+    })
+  })
+
+  // MUTATION: parse with a bare `Number(raw)` (no digits-only check): '1e-1',
+  // '0x0' and '' + spaces coerce to numbers in range and these go green-to-
+  // red; widen the range check: '1.5' and '-0' parse.
+  const INVALID = [
+    '1.5',
+    '-0.1',
+    '-0',
+    '1e-1',
+    '0x0',
+    'NaN',
+    'Infinity',
+    'high',
+    '0.1.2',
+    '+0.2',
+    '0. 2',
+  ]
+  it.each(
+    NUMBERS.flatMap(([variable, , range]) =>
+      [...INVALID, ...(variable.endsWith('TRIPWIRE') ? ['0.5', '1.0'] : [])].map(
+        (value) => [variable, value, range] as const,
+      ),
+    ),
+  )('%s=%j refuses boot, naming the variable and its range', (variable, value, range) => {
+    vi.stubEnv(variable, value)
+    expect(() => guardConfig()).toThrow(`${variable} must be ${range};`)
+    expect(() => assertGuardsConfigured()).toThrow(`${variable} must be ${range};`)
+  })
+
+  // The refusal never quotes what it refused. MUTATION: interpolate the raw
+  // value into the message: red.
+  it.each(NUMBERS.map(([variable]) => variable))(
+    '%s: the refusal never echoes the value',
+    (variable) => {
+      const secretish = '7.77-SYNTHETIC-VALUE'
+      vi.stubEnv(variable, secretish)
+      let message = ''
+      try {
+        guardConfig()
+      } catch (err) {
+        message = (err as Error).message
+      }
+      expect(message).toContain(variable)
+      expect(message).not.toContain(secretish)
+      expect(message).not.toContain('7.77')
+    },
+  )
+
+  // MUTATION: drop one warning (or compare with `<` so a looser value is
+  // silent): that row's count is 0, red. Warning on `>=` instead: the
+  // at-default row below goes red.
+  it.each([
+    ['GUARD_GATE_THRESHOLD', '0.16', 'skips the screen'],
+    ['GUARD_EGRESS_THRESHOLD', '0.31', 'without a refusal or a prompt'],
+    ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '1', 'closes at refusal 2'],
+  ])('%s=%j (looser) logs ONE boot warning saying what it loosened', (variable, raw, loosened) => {
+    vi.stubEnv(variable, raw)
+    assertGuardsConfigured()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain(variable)
+    expect(warns[0]).toContain(loosened)
+  })
+
+  it.each([
+    ['GUARD_GATE_THRESHOLD', '0.15'],
+    ['GUARD_GATE_THRESHOLD', '0.05'],
+    ['GUARD_EGRESS_THRESHOLD', '0.3'],
+    ['GUARD_EGRESS_THRESHOLD', '0'],
+    ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '0'],
+  ])('%s=%j (at or stricter than the default) logs no warning', (variable, raw) => {
+    vi.stubEnv(variable, raw)
+    assertGuardsConfigured()
+    expect(warns).toEqual([])
+  })
+
+  // Once: the parse that builds the agents' bag never logs, so a bag built per
+  // agent registration cannot repeat a warning; only the boot assert does.
+  // MUTATION: log the warnings inside `readGuards()` itself: the guardConfig()
+  // calls here log and this goes red.
+  it('a looser value warns once per boot, and building the bag logs nothing', () => {
+    vi.stubEnv('GUARD_GATE_THRESHOLD', '0.5')
+    vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.5')
+    vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '3')
+    assertGuardsConfigured()
+    expect(warns).toHaveLength(3)
+    guardConfig()
+    guardConfig()
+    expect(warns).toHaveLength(3)
   })
 })

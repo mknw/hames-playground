@@ -86,6 +86,7 @@ import {
   EGRESS_WARNINGS,
   egressToolLabel,
   GUARD_EGRESS,
+  GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
   GUARD_EGRESS_THRESHOLD,
   GUARD_EGRESS_TIMEOUT_MS,
   readOutgoing,
@@ -190,7 +191,8 @@ export interface EgressGateConfig {
    *  {@link GUARD_EGRESS_TIMEOUT_MS}. */
   readonly timeoutMs?: number
   /** N (ruling M): refusals a route admits after its first before it closes.
-   *  Default 0: the first refusal closes the route for the turn. */
+   *  Default {@link GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE} (0): the first
+   *  refusal closes the route for the turn. */
   readonly maxOutgoingRetriesPostTripwire?: number
   /** Ruling U: with Decide down on a loaded directory, `'by-shape'` (default)
    *  refuses a call with a URL query or a decoded block over
@@ -399,7 +401,7 @@ function refuseUnreadableSettings(config: EgressGateConfig): void {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error(`[withEgressGate] timeoutMs must be an integer >= 1, got ${timeoutMs}`)
   }
-  const n = config.maxOutgoingRetriesPostTripwire ?? 0
+  const n = config.maxOutgoingRetriesPostTripwire ?? GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
   if (!Number.isInteger(n) || n < 0) {
     throw new Error(
       `[withEgressGate] maxOutgoingRetriesPostTripwire must be an integer >= 0, got ${n}`,
@@ -488,7 +490,7 @@ export function withEgressGate(config: EgressGateConfig) {
   const fetchTools = new Set(config.fetchTools ?? [])
   const threshold = config.threshold ?? GUARD_EGRESS_THRESHOLD
   const timeoutMs = config.timeoutMs ?? GUARD_EGRESS_TIMEOUT_MS
-  const maxRetries = config.maxOutgoingRetriesPostTripwire ?? 0
+  const maxRetries = config.maxOutgoingRetriesPostTripwire ?? GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
   const loadedDecideDown = config.loadedDecideDown ?? 'by-shape'
   const addressSources = new Set(config.addressSources ?? [])
   const isLocal = (name: string): boolean => localTools.has(name) || local.has(inferServer(name))

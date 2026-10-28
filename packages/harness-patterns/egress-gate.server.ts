@@ -138,6 +138,10 @@ export const EGRESS_WARNINGS = {
  *  of data splits its mass between them. An unmeasured placeholder. */
 export const GUARD_EGRESS_THRESHOLD = 0.3
 
+/** N (ruling M): the refusals a route admits after its first before its
+ *  outgoing calls close for the turn. 0: the first refusal closes the route. */
+export const GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE = 0
+
 /** The egress question's deadline, retry included. An unmeasured placeholder. */
 export const GUARD_EGRESS_TIMEOUT_MS = 5_000
 

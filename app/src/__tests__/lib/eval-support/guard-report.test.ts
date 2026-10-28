@@ -113,4 +113,13 @@ describe('the per-turn guard counts', () => {
     expect(rows[1]!.decideDown).toBe(1)
     expect(rows[0]!.decideDown).toBe(0)
   })
+
+  // #844: a run whose gate ran with GUARD_GATE_THRESHOLD set reads its skips
+  // against that τi, not the default. MUTATION: drop the threshold argument
+  // from the guardGateSkipRate call: the 0.2 answer is not a skip, red.
+  it('reads the skip count against the τi the run used (default 0.15)', () => {
+    const turn = turnOf(gateAnswer(0.2), gateAnswer(0.9))
+    expect(guardTurnCounts(turn)[0]!.gateSkipped).toBe(0)
+    expect(guardTurnCounts(turn, 0.25)[0]!.gateSkipped).toBe(1)
+  })
 })

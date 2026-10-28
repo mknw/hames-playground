@@ -86,12 +86,28 @@ export interface GraphElement extends ElementDefinition {
  *   host's switch is off, or no `guards` bag at all), the agent composes no
  *   wrapper, never a null filter into one that would withhold every word of
  *   inherited content on the tier it runs on (boundary guards slice 5).
+ * - `gateThreshold` is τi, the guard gate's `threshold` (`createGuardGate`):
+ *   the screen runs when the gate's pTrue is at or above it. It decides
+ *   anything only where the screen's mode is `'gated'`. Absent:
+ *   `GUARD_GATE_THRESHOLD`.
+ * - `egressThreshold` is τe, the egress gate's `threshold`: a call is refused
+ *   (or the person asked) when 1 − P(`nothing_private`) is at or above it, on
+ *   every tier. Absent: `GUARD_EGRESS_THRESHOLD`.
+ * - `maxOutgoingRetriesPostTripwire` is the egress tripwire's N: refusal N + 1
+ *   on a route closes it for the turn. Absent: the agent's declared 0.
+ *
+ * The three numbers are the host's to validate (the app refuses boot on an
+ * out-of-range value and warns on one looser than the default); the patterns
+ * themselves still refuse a value outside their range at construction.
  */
 export interface AgentGuards {
   readonly screenMode?: ByTier<ScreenMode>
   readonly egressMode?: ByTier<EgressMode>
   readonly classifyIngress?: IngressClassifier
   readonly pseudonymiseForWeb?: PseudonymiseForWeb
+  readonly gateThreshold?: number
+  readonly egressThreshold?: number
+  readonly maxOutgoingRetriesPostTripwire?: number
 }
 
 /**
@@ -142,10 +158,11 @@ export interface AgentDeps {
    * (`guard-config.server.ts`); a host that composes no guard settings leaves
    * it absent, which keeps every guard at the design's per-tier defaults.
    *
-   * These are the ONLY fields an env variable can set: the deterministic
-   * layers and the thresholds have no switch, and a value the design leaves in
-   * code (an `exempt` list, the egress tripwire's N, `loadedDecideDown`) stays
-   * there. An invalid value REFUSES boot; one below a tier's default warns.
+   * These are the ONLY fields an env variable can set: the modes, the two
+   * thresholds and the egress tripwire's N (#844). The deterministic layers
+   * have no switch, and a value the design leaves in code (an `exempt` list,
+   * `loadedDecideDown`) stays there. An invalid value REFUSES boot; one weaker
+   * than a tier's default warns.
    */
   guards?: AgentGuards
   /**

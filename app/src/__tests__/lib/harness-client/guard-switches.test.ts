@@ -73,6 +73,9 @@ beforeEach(() => {
   vi.stubEnv('GUARD_SCREEN_ANTHROPIC', undefined)
   vi.stubEnv('GUARD_EGRESS', undefined)
   vi.stubEnv('GUARD_PSEUDONYMISE', undefined)
+  vi.stubEnv('GUARD_GATE_THRESHOLD', undefined)
+  vi.stubEnv('GUARD_EGRESS_THRESHOLD', undefined)
+  vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', undefined)
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -84,6 +87,9 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
     expect(guards).toMatchObject({
       screenMode: { default: 'shadow', anthropic: 'always' },
       egressMode: 'filter',
+      gateThreshold: 0.15,
+      egressThreshold: 0.3,
+      maxOutgoingRetriesPostTripwire: 0,
     })
     expect(guards!.classifyIngress).toBeTypeOf('function')
     expect(guards!.pseudonymiseForWeb).toMatchObject({ SYNTHETIC_FILTER: true })
@@ -109,6 +115,19 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
       egressMode: 'roster',
     })
     expect(guardConfig().screenMode).toMatchObject({ default: 'off', anthropic: 'off' })
+  })
+
+  // #844. MUTATION: omit one of the three numbers from agentDeps()'s bag (the
+  // agent then keeps its own default whatever the operator set): red.
+  it('the guard numbers in the bag are the ones guardConfig() parses', () => {
+    vi.stubEnv('GUARD_GATE_THRESHOLD', '0.1')
+    vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.2')
+    vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '2')
+    expect(agentDeps().guards).toMatchObject({
+      gateThreshold: 0.1,
+      egressThreshold: 0.2,
+      maxOutgoingRetriesPostTripwire: 2,
+    })
   })
 })
 

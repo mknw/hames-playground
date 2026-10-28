@@ -204,7 +204,7 @@ A live pass proves: the model combines Project count 42 with target 50 and repor
 
 ### 14-analysis-index-follow-up — Compute, convert to markdown, then retrieve in a later turn
 
-**RUNNABLE NOW · should** · pending must (owner 2026-10-27)
+**RUNNABLE NOW · should** · should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)
 
 User: “I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.”
 

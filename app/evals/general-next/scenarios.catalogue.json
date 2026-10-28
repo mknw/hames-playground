@@ -1056,7 +1056,7 @@
         ["analyse", "uploads"],
         ["create-deliverable", "uploads"]
       ],
-      "pendingMustIssue": 810
+      "notes": "should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)"
     },
     {
       "id": "15-graph-file-summary",

@@ -1325,9 +1325,10 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       void refresh()
       return
     }
+    // That session's own list: the panel may be showing another one by now.
     applyDocs(
       sid,
-      docs().map((d) =>
+      (cachedDocuments(sid) ?? []).map((d) =>
         d.id === id ? { ...d, ingestStatus: 'pending' as const, ingestError: undefined } : d,
       ),
     )

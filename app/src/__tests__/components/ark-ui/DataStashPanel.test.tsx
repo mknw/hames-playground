@@ -21,6 +21,7 @@ import type { OpenReferenceTarget } from '@hames-ai/agents'
 import type { StashDocumentMeta } from '@hames-ai/harness-patterns/stash/document-store.server'
 
 const { DataStashPanel } = await import('../../../components/ark-ui/DataStashPanel')
+const { cachedDocuments } = await import('../../../lib/stash-documents')
 
 // The viewer scrolls the focused highlight into view; jsdom implements no
 // scrollIntoView, and the call sits in a createEffect where a throw surfaces
@@ -947,6 +948,39 @@ describe('DataStashPanel — "Index for search"', () => {
     expect(indexButton()).toBeNull()
     expect(menuButtons(docChips(container)[0])).toHaveLength(0)
     expect(onUploaded).toHaveBeenCalledTimes(1)
+  })
+
+  // The answer can arrive after the person has opened another conversation.
+  // MUTATION: patch `docs()` (what the panel shows now) instead of that session's
+  // own cached list → B's documents are cached under A, and A's copy never reads
+  // pending.
+  it('marks the copy pending in its own session when the panel has moved on', async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const a = newSession()
+    const b = newSession()
+    globalThis.fetch = vi.fn(async (url: string) => {
+      const u = String(url)
+      if (u === '/api/stash/ingest') {
+        await held
+        return { ok: true, status: 202, json: async () => ({}) }
+      }
+      const sid = new URL(u, 'http://x').searchParams.get('sessionId')
+      const documents = sid === a ? [doc({ id: 'a-1' })] : [doc({ id: 'b-1', filename: 'b.md' })]
+      return { ok: true, status: 200, json: async () => ({ documents }) }
+    }) as unknown as typeof fetch
+    const [sessionId, setSessionId] = createSignal(a)
+    render(() => <DataStashPanel events={[]} sessionId={sessionId()} onStashAction={noopAction} />)
+    await settle()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Index for search' }))
+    setSessionId(b)
+    await settle()
+    release()
+    await settle()
+
+    expect(cachedDocuments(a)?.map((d) => [d.id, d.ingestStatus])).toEqual([['a-1', 'pending']])
+    expect(cachedDocuments(b)?.map((d) => [d.id, d.ingestStatus])).toEqual([['b-1', undefined]])
   })
 
   // MUTATION: swallow the refusal → the reason is never shown.

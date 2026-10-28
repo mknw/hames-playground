@@ -36,7 +36,7 @@ vi.mock('../../../lib/harness-client/registry.server', () => ({
   canonicalAgentId: vi.fn((id: string) => id),
 }))
 // The web-pseudonymiser builds a real directory-backed roster; the switch pin
-// must not depend on one. The factory identity is what the OFF test pins.
+// must not depend on one. The factory identities are what the pins read.
 vi.mock('../../../lib/harness-client/web-pseudonymiser.server', () => ({
   createWebPseudonymiser: vi.fn(() => ({ SYNTHETIC_FILTER: true })),
   createEgressRoster: vi.fn(() => ({ SYNTHETIC_ROSTER: true })),
@@ -61,26 +61,34 @@ afterEach(() => {
 })
 
 describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', () => {
-  it('unset, the bag carries the design defaults and the real web filter', () => {
+  it('unset, the bag carries the design defaults', () => {
     const { guards, egressRoster } = agentDeps()
     expect(guards).toMatchObject({
       screenMode: { default: 'shadow', anthropic: 'always' },
       egressMode: 'filter',
     })
     expect(guards!.classifyIngress).toBeTypeOf('function')
-    expect(guards!.pseudonymiseForWeb).toMatchObject({ SYNTHETIC_FILTER: true })
     expect(egressRoster).toMatchObject({ SYNTHETIC_ROSTER: true })
   })
 
-  // MUTATION: drop the `pseudonymise ? …` branch (build the filter whatever
-  // the switch says): the off case here goes red — the bag carries a filter
-  // nothing reads, and the wrapper below is still composed with it.
-  it('GUARD_PSEUDONYMISE=off omits the web filter from the bag; on builds it', () => {
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
-    expect(agentDeps().guards!.pseudonymiseForWeb).toBeUndefined()
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
-    expect(agentDeps().guards!.pseudonymiseForWeb).toMatchObject({ SYNTHETIC_FILTER: true })
-  })
+  // Boundary guards slice 5: the input pseudonymiser left with K5, so the bag
+  // never builds one, whatever the retired switch says. MUTATION: restore the
+  // `pseudonymiseForWeb: createWebPseudonymiser(…)` entry in agentDeps(): the
+  // bag carries a key and the factory is called, red.
+  it.each([undefined, 'on', 'off'])(
+    'the bag carries no input pseudonymiser, with GUARD_PSEUDONYMISE=%j',
+    async (value) => {
+      vi.stubEnv('GUARD_PSEUDONYMISE', value)
+      const { createWebPseudonymiser } =
+        await import('../../../lib/harness-client/web-pseudonymiser.server')
+      expect(Object.keys(agentDeps().guards!).sort()).toEqual([
+        'classifyIngress',
+        'egressMode',
+        'screenMode',
+      ])
+      expect(createWebPseudonymiser).not.toHaveBeenCalled()
+    },
+  )
 
   it('the switch values in the bag are the ones guardConfig() parses', () => {
     vi.stubEnv('GUARD_SCREEN', 'off')

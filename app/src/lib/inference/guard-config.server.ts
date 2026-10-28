@@ -1,7 +1,7 @@
 /**
  * The boundary guards' operator switches (boundary guards, slice 6).
  *
- * Four `GUARD_*` variables let an operator weaken a guard without a code
+ * Three `GUARD_*` variables let an operator weaken a guard without a code
  * change (O2, ruled). Everything else about the guards — the deterministic
  * layers, the thresholds, the tripwire's N, the directory declaration — has no
  * switch on purpose: it costs no model call, or it is a decision a reviewed
@@ -29,9 +29,13 @@
  *   - `GUARD_EGRESS` sets the egress gate's mode on every tier
  *     (`filter|roster`). `roster` vetoes on a directory match and never asks
  *     the Decide model, so it is below `'filter'` and warns.
- *   - `GUARD_PSEUDONYMISE` (`on|off`) turns the web route's input
- *     pseudonymiser off. It exists only until the retirement slice removes K5
- *     from the registered agents, and goes away with it.
+ *
+ * `GUARD_PSEUDONYMISE` was a fourth, for the web route's input pseudonymiser
+ * (K5). Boundary guards slice 5 retired K5 from the registered agents and the
+ * switch with it. A deployment that still sets it gets one boot warning saying
+ * it has no effect, whatever the value: refusing boot would break an upgrade
+ * over a variable that now changes nothing, and ignoring it silently would let
+ * an operator who wrote `on` believe names are still rewritten.
  *
  * Weakening warns once at boot, naming what the value switches off, in the
  * order `off < gated < shadow < always` for the screen (gated asks the gate,
@@ -40,8 +44,8 @@
  * `roster < filter` for egress. Every value below a tier's DECLARED default
  * warns — the declared defaults are `general-next`'s (the Settings table):
  * `'shadow'` on the self-deployed tier until the eval bar moves it to
- * `'gated'`, `'always'` on the Anthropic tier, `'filter'` for the egress gate,
- * on for the pseudonymiser. A value AT or above the default warns never.
+ * `'gated'`, `'always'` on the Anthropic tier, `'filter'` for the egress gate.
+ * A value AT or above the default warns never.
  *
  * An unknown value REFUSES with a message naming the variable and its allowed
  * values — the same refusal `INFERENCE_TIERS` gets — and never echoes the
@@ -61,8 +65,6 @@ assertServerOnImport()
 const SCREEN_DEFAULTS = { self_deployed: 'shadow', anthropic: 'always' } as const
 /** The declared default for the egress gate's mode. */
 const EGRESS_DEFAULT = 'filter' as const
-/** The declared default for the input pseudonymiser. */
-const PSEUDONYMISE_DEFAULT = true
 
 const SCREEN_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>([
   'off',
@@ -81,8 +83,6 @@ export interface GuardSwitches {
   readonly screenMode: ByTier<ScreenMode>
   /** The egress gate's mode, as the gate's config takes it. */
   readonly egressMode: EgressMode
-  /** The web route's input pseudonymiser switch; `false` omits the filter. */
-  readonly pseudonymise: boolean
 }
 
 /** One parse: the effective values, plus the warning each weakened value has
@@ -126,20 +126,11 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
     )
   }
 
-  const pseudonymiseRaw = process.env.GUARD_PSEUDONYMISE
-  let pseudonymise: boolean = PSEUDONYMISE_DEFAULT
-  if (pseudonymiseRaw) {
-    if (pseudonymiseRaw === 'on') pseudonymise = true
-    else if (pseudonymiseRaw === 'off') pseudonymise = false
-    else
-      throw new Error(
-        'GUARD_PSEUDONYMISE must be one of: on, off; refusing to boot with an unrecognised value.',
-      )
-  }
-  if (pseudonymiseRaw === 'off') {
+  // Retired with K5 (slice 5): read only to say so, never parsed.
+  if (process.env.GUARD_PSEUDONYMISE) {
     warnings.push(
-      "[guards] GUARD_PSEUDONYMISE=off switches off the web route's input pseudonymiser: names are " +
-        'no longer rewritten before they reach the model. Restore the default by unsetting it.',
+      '[guards] GUARD_PSEUDONYMISE is retired and has no effect: no agent composes the input ' +
+        'pseudonymiser any more, and the egress gate judges what leaves. Remove the variable.',
     )
   }
 
@@ -147,7 +138,6 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
     switches: {
       screenMode: { default: selfDeployedScreen, anthropic: anthropicScreen },
       egressMode,
-      pseudonymise,
     },
     warnings,
   }

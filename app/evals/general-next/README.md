@@ -116,11 +116,12 @@ prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.
 Those integration claims remain owed to app-path evidence using synthetic documents
 seeded through the app's upload path and the shipped sandbox. The driver interface
-allows those integrations to be supplied independently. The driver supplies the production
-`createWebPseudonymiser` as `AgentDeps.pseudonymiseForWeb`, so `general-next`'s `info`
-route is not refused. The production G14 filter is present and passes identity-free
-payloads; no substitution is exercised (no fixture carries an identity, and the directory
-leg is off: `directory: 'none'`). Scripted inference checks
+allows those integrations to be supplied independently. `general-next` has no input
+pseudonymiser (boundary guards slice 5 retired it): its `info` route reads earlier results
+as they are, and the egress gate is the only control on what leaves. The driver supplies
+the production `createEgressRoster` as `AgentDeps.egressRoster`, with the directory leg off
+(`directory: 'none'`), so every outgoing call is judged by the egress question with the
+payload roster as evidence. Scripted inference checks
 wiring only: hermetic green does not certify model behaviour or authorize a flip.
 Scenarios 15/16 remain gated in this driver; scenario 18 is written only. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled.
 

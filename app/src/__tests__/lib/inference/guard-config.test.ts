@@ -40,7 +40,6 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     expect(guardConfig()).toEqual({
       screenMode: { default: 'shadow', anthropic: 'always' },
       egressMode: 'filter',
-      pseudonymise: true,
     })
     expect(warns).toEqual([])
   })
@@ -89,17 +88,29 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     },
   )
 
-  it("GUARD_PSEUDONYMISE=on|off flips the web route's input filter", () => {
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
-    expect(guardConfig().pseudonymise).toBe(false)
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
-    expect(guardConfig().pseudonymise).toBe(true)
-  })
+  // Boundary guards slice 5 retired GUARD_PSEUDONYMISE with K5. A deployment
+  // that still sets it boots (refusing would break an upgrade over a variable
+  // that now changes nothing) and is told, once, that it has no effect — so an
+  // operator who wrote `on` does not go on believing names are rewritten.
+  // MUTATION: drop the retired-variable warning (or parse the value and refuse
+  // an unknown one): a value here logs nothing, or throws, red.
+  it.each(['on', 'off', 'maybe'])(
+    'GUARD_PSEUDONYMISE=%j is retired: boot proceeds and logs ONE warning that it has no effect',
+    (value) => {
+      vi.stubEnv('GUARD_PSEUDONYMISE', value)
+      expect(guardConfig()).toEqual({
+        screenMode: { default: 'shadow', anthropic: 'always' },
+        egressMode: 'filter',
+      })
+      expect(() => assertGuardsConfigured()).not.toThrow()
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toContain('GUARD_PSEUDONYMISE is retired and has no effect')
+    },
+  )
 
   it.each([
     ['GUARD_SCREEN', 'nonsense', 'off, shadow, gated, always'],
     ['GUARD_EGRESS', 'by-hope', 'filter, roster'],
-    ['GUARD_PSEUDONYMISE', 'maybe', 'on, off'],
   ])('%s=%j refuses boot, naming the variable and the allowed values', (variable, value, names) => {
     vi.stubEnv(variable, value)
     expect(() => guardConfig()).toThrow(
@@ -152,7 +163,6 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   it.each([
     ['GUARD_SCREEN_ANTHROPIC', 'off'],
     ['GUARD_EGRESS', 'roster'],
-    ['GUARD_PSEUDONYMISE', 'off'],
   ])(
     '%s=%j logs its own boot warning, naming the variable and what it switches off',
     (variable, value) => {
@@ -167,18 +177,16 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     vi.stubEnv('GUARD_SCREEN', 'off')
     vi.stubEnv('GUARD_EGRESS', 'roster')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
     assertGuardsConfigured()
-    expect(warns).toHaveLength(4)
+    expect(warns).toHaveLength(3)
     assertGuardsConfigured()
-    expect(warns).toHaveLength(8)
+    expect(warns).toHaveLength(6)
   })
 
   it('valid values never refuse boot', () => {
     vi.stubEnv('GUARD_SCREEN', 'gated')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
     vi.stubEnv('GUARD_EGRESS', 'filter')
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
     expect(() => assertGuardsConfigured()).not.toThrow()
   })
 })

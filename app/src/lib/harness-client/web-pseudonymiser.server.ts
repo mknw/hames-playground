@@ -1,9 +1,10 @@
 /** G14's single production import site for lib/privacy. Builds one ephemeral
  *  roster/table per invocation; nothing is persisted, cached or reversed. Two
- *  factories over one table build: `createWebPseudonymiser` (K5, the info route's
- *  rewritten view) and `createEgressRoster` (the egress gate's roster: the
- *  directory status, the spans an outgoing request names, and its extension
- *  from local results). */
+ *  factories over one table build: `createWebPseudonymiser` (K5, a web route's
+ *  rewritten view; no registered agent is handed it since boundary guards
+ *  slice 5 retired K5 from `general-next`) and `createEgressRoster` (the egress
+ *  gate's roster: the directory status, the spans an outgoing request names,
+ *  and its extension from local results). */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   RosterUnavailable,

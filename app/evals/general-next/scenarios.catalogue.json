@@ -60,7 +60,7 @@
       "values": ["answer", "citation", "created-file", "refusal", "clarification"]
     },
     "tier": {
-      "why": "Routing, the decision-documents block and K5 differ by tier. The owner ruled on 2026-10-15 that this Eval runs the private tier only, so the dimension has one live value; anthropic stays in the vocabulary so the exclusion is visible, not forgotten.",
+      "why": "Routing, the decision-documents block and the injection screen's mode differ by tier. The owner ruled on 2026-10-15 that this Eval runs the private tier only, so the dimension has one live value; anthropic stays in the vocabulary so the exclusion is visible, not forgotten.",
       "values": ["self_deployed", "anthropic"]
     },
     "guardPaths": {

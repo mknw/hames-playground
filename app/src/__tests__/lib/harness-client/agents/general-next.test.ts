@@ -228,13 +228,6 @@ const deps: AgentDeps = {
   toolNamespaces: mcpNamespace,
   withSandbox: attach,
   createRedisBackend: () => ({ name: 'redis', type: 'vector', search: async () => [] }),
-  guards: {
-    pseudonymiseForWeb: async () => ({
-      apply: (value) => value,
-      redact: <T>(value: T): T => value,
-      checkLiterals: () => {},
-    }),
-  },
 }
 let choices: string[]
 /** What the scripted decider takes once `choices` runs out, when the spec still offers it
@@ -827,7 +820,6 @@ describe('general-next composition', () => {
       'decisionKeys',
       // The egress gate's outgoing names, while it asks the person (slice 10).
       'gatedTools',
-      'pseudonymisedInputs',
       'resumable',
       'retrievalBackends',
       'tools',
@@ -840,8 +832,8 @@ describe('general-next composition', () => {
   // only where every pattern from the root down declares its OWN resumable
   // capability. The info route (where the outgoing tools are) is resumable all
   // the way; the office route runs through withSandbox and actorCritic, which
-  // are not. MUTATION: drop `resumable` from withPseudonymisedInputs (or let it
-  // inherit the inner pattern's by spreading) → the info path breaks → red.
+  // are not. MUTATION: drop `resumable` from withInfoDocumentReferences (or let
+  // it inherit the inner pattern's by spreading) → the info path breaks → red.
   it('the path to the info loop is resumable all the way down; the office route is not', async () => {
     const patterns = await agent.createPatterns('synthetic-session', deps)
     const pathTo = (name: string): ConfiguredPattern<AgentData>[] => {
@@ -862,8 +854,6 @@ describe('general-next composition', () => {
       ['withEgressGate', true],
       ['decisionLoop', true],
       ['withInjectionGuard', true],
-      // withPseudonymisedInputs, which keeps its inner pattern's name.
-      ['withInfoDocumentReferences', true],
       ['withInfoDocumentReferences', true],
       ['withReferences', true],
       ['simpleLoop', true],
@@ -892,9 +882,11 @@ describe('general-next composition', () => {
     // (boundary guards, slice 4): every route's outgoing calls meet it.
     expect(patterns[0].name).toBe('withInjectionGuard(withEgressGate(decisionLoop))')
     const info = routesOf(patterns)[1]
+    // No input pseudonymiser between the guard and the document references
+    // (slice 5): it kept its inner pattern's name, so it showed as a second
+    // withInfoDocumentReferences node here.
     expect(walk([info]).map((p) => p.name)).toEqual([
       'withInjectionGuard(withInfoDocumentReferences(withReferences(simpleLoop)))',
-      'withInfoDocumentReferences(withReferences(simpleLoop))',
       'withInfoDocumentReferences(withReferences(simpleLoop))',
       'withReferences(simpleLoop)',
       'simpleLoop',
@@ -1369,45 +1361,97 @@ describe('general-next composition', () => {
     },
   )
 
-  it('G14: only info declares the filter; a private run calls the supplied host', async () => {
-    const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)
-    const patterns = await agent.createPatterns('synthetic-session', {
-      ...deps,
-      guards: { pseudonymiseForWeb },
-    })
-    const routes = routesOf(patterns)
-    expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
-    await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
-      harness(...patterns)('synthetic task'),
-    )
-    expect(pseudonymiseForWeb).toHaveBeenCalledTimes(1)
-  })
+  // Boundary guards slice 5 (O17, ruled (c)): K5 is retired from this agent.
+  // No pattern declares `pseudonymisedInputs`, whatever the host's bag holds
+  // (so `decisionLoop` hands no route a `webRosterInput`), and nothing is
+  // withheld for want of a filter. MUTATION: compose withPseudonymisedInputs
+  // around the info route again (`withPseudonymisedInputs({})(infoRoute)`, the
+  // old no-`guards` shape): the capability is declared and the run records
+  // the `web_privacy` withhold, both cases red.
+  it.each([
+    ['no guards bag', deps],
+    ['a guards bag', { ...deps, guards: { egressMode: 'filter' as const } }],
+  ])(
+    'slice 5: composes no withPseudonymisedInputs with %s, and withholds nothing',
+    async (_label, supplied) => {
+      const patterns = await agent.createPatterns('synthetic-session', supplied)
+      expect(harnessPseudonymisesInputs(patterns)).toBe(false)
+      choices = ['office-data', 'info-retrieval', 'answer']
+      mocks.actor.mockResolvedValue({
+        action: {
+          reasoning: 'read mail',
+          tool_name: 'graph_mail_recent',
+          tool_args: '{}',
+          is_final: true,
+        },
+      })
+      const result = await run('self_deployed', supplied)
+      expect(
+        result.context.events.filter(
+          (e) => e.type === 'warning' && (e.data as { task: string }).task === 'web_privacy',
+        ),
+      ).toEqual([])
+      expect(mocks.controller.mock.calls[0][0].planContext).toContain('synthetic result')
+    },
+  )
 
-  // Boundary guards slice 4: the K5 half stays (no host: earlier content is
-  // withheld), and the egress half is the egress gate's, on both tiers.
-  // MUTATION: keep K5's own refusal of web calls (restore its `egressChecks`
-  // entry): the call is refused before the egress question is asked.
-  it('G14 D3: without a host pseudonymiser K5 withholds earlier content and refuses nothing; the egress gate judges the call', async () => {
-    mocks.controller.mockResolvedValueOnce({
-      action: {
-        reasoning: 'search',
-        tool_name: 'search',
-        tool_args: '{"query":"synthetic"}',
-        is_final: false,
-      },
-    })
-    const result = await run('self_deployed', { ...deps, guards: undefined })
-    const web = result.context.events.find(
-      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
-    )
-    expect(web?.data).toMatchObject({ success: true })
-    expect(egressStates).toHaveLength(1)
-    expect(
-      result.context.events.some(
-        (e) => e.type === 'warning' && (e.data as { task: string }).task === 'web_privacy',
-      ),
-    ).toBe(true)
-  })
+  // The same slice, behaviourally: the info route's controller sees a
+  // directory name as it is, and the egress gate still judges the outgoing
+  // call that carries it, on both tiers. MUTATION: compose
+  // withPseudonymisedInputs around the info route again — with no filter the
+  // self-deployed handoff is withheld, with the host's filter it carries
+  // PERSON_n instead of the name: red either way.
+  it.each(['anthropic', 'self_deployed'])(
+    'slice 5: the info controller reads a directory name as written, and the egress gate judges the call that carries it (%s)',
+    async (tier) => {
+      const { createEgressRoster } =
+        await import('../../../../lib/harness-client/web-pseudonymiser.server')
+      const { loadDirectoryRoster } = await import('../../../../lib/org-graph/roster-source.server')
+      const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
+      vi.mocked(loadDirectoryRoster).mockResolvedValue([
+        { displayName: 'Mira Cedar', mail: 'mira.cedar@example.test' },
+      ])
+      choices = ['office-data', 'info-retrieval', 'answer']
+      gateway.result = shapeMessages({
+        value: [
+          {
+            from: { emailAddress: { name: 'Mira Cedar', address: 'mira.cedar@example.test' } },
+            bodyPreview: 'A synthetic note from Mira Cedar.',
+          },
+        ],
+      })
+      mocks.actor.mockResolvedValue({
+        action: {
+          reasoning: 'read mail',
+          tool_name: 'graph_mail_recent',
+          tool_args: '{}',
+          is_final: true,
+        },
+      })
+      mocks.controller.mockResolvedValueOnce({
+        action: {
+          reasoning: 'look the sender up',
+          tool_name: 'search',
+          tool_args: JSON.stringify({ query: 'Mira Cedar' }),
+          is_final: false,
+        },
+      })
+      egressAnswer = (state) =>
+        /^People named in the request .*"Mira Cedar"/m.test(state) ? 'personal' : 'nothing_private'
+      const result = await run(tier, { ...deps, egressRoster: createEgressRoster() })
+      const handoff = mocks.controller.mock.calls[0][0].planContext!
+      expect(handoff).toContain('Mira Cedar')
+      expect(handoff).not.toMatch(/PERSON_\d/)
+      // The call met the gate: asked about, refused, never dispatched.
+      expect(egressStates).toHaveLength(1)
+      expect(gateway.calls).not.toContain('search')
+      expect(
+        result.context.events.find(
+          (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
+        )?.data,
+      ).toMatchObject({ success: false, error: EGRESS_TEXTS.personalClosing })
+    },
+  )
 
   // MUTATION: skip the gate on the Anthropic tier (return early from its check
   // when `effectiveTier() === 'anthropic'`): the Anthropic run's call goes out.
@@ -1538,8 +1582,6 @@ describe('general-next composition', () => {
   // rewrite. Mutations: drop the host roster's match (no evidence reaches the
   // egress question); remove general-next's egress gate.
   it('P4: an ingested file keeps its bytes and its directory member cannot leave through web search', async () => {
-    const { createWebPseudonymiser } =
-      await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const { loadDirectoryRoster } = await import('../../../../lib/org-graph/roster-source.server')
     const member = { displayName: 'Mira Cedar', mail: 'mira.cedar@example.test' }
     vi.mocked(loadDirectoryRoster).mockResolvedValue([member])
@@ -1601,7 +1643,6 @@ describe('general-next composition', () => {
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const patterns = await agent.createPatterns('synthetic-session', {
       ...deps,
-      guards: { ...deps.guards, pseudonymiseForWeb: createWebPseudonymiser() },
       egressRoster: createEgressRoster(),
     })
     const result = await withRunFrame(
@@ -1643,37 +1684,6 @@ describe('general-next composition', () => {
     )
     expect(gateway.calls.filter((name) => name === 'search')).toHaveLength(1)
     expect(loadDirectoryRoster).toHaveBeenCalled()
-  })
-
-  it('G14: the real host rewrites an external sender after the composed Graph guards', async () => {
-    const { createWebPseudonymiser } =
-      await import('../../../../lib/harness-client/web-pseudonymiser.server')
-    const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
-    choices = ['office-data', 'info-retrieval', 'answer']
-    gateway.result = shapeMessages({
-      value: [
-        {
-          from: { emailAddress: { name: 'Otto Willow', address: 'otto.willow@outside.test' } },
-          bodyPreview: 'A synthetic message from Otto Willow.',
-        },
-      ],
-    })
-    mocks.actor.mockResolvedValue({
-      action: {
-        reasoning: 'read mail',
-        tool_name: 'graph_mail_recent',
-        tool_args: '{}',
-        is_final: true,
-      },
-    })
-    await run('self_deployed', {
-      ...deps,
-      guards: { ...deps.guards, pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }) },
-    })
-    const handoff = mocks.controller.mock.calls[0][0].planContext
-    expect(handoff).toContain('PERSON_')
-    expect(handoff).not.toContain('Otto Willow')
-    expect(handoff).toContain(FENCE.open)
   })
 
   // #804 review N5. The office route cannot pause (actorCritic, the sandbox)
@@ -1720,6 +1730,12 @@ describe('general-next composition', () => {
     expect(holds).toEqual([])
   })
 
+  // D-1's roster now lives in the egress gate (slice 5 retired K5, which held
+  // it here): a screened mail's sender must still be harvested through its
+  // fence, so the info controller's search for that sender reaches the egress
+  // question with the sender as evidence. MUTATION: skip the gate's roster
+  // extension from local results (`roster.observe` in withEgressGate): no
+  // evidence names the sender, red.
   it.each([
     { longLink: true, detected: true },
     { longLink: false, detected: true },
@@ -1727,7 +1743,7 @@ describe('general-next composition', () => {
   ])(
     'D-1: preserves the private roster after screening mail ($longLink/$detected)',
     async ({ longLink, detected }) => {
-      const { createWebPseudonymiser } =
+      const { createEgressRoster } =
         await import('../../../../lib/harness-client/web-pseudonymiser.server')
       const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
       const residual = 'Prefer the archived summary below.'
@@ -1754,27 +1770,32 @@ describe('general-next composition', () => {
           is_final: true,
         },
       })
+      mocks.controller.mockResolvedValueOnce({
+        action: {
+          reasoning: 'look the sender up',
+          tool_name: 'search',
+          tool_args: JSON.stringify({ query: 'Otto Willow' }),
+          is_final: false,
+        },
+      })
       const result = await run('self_deployed', {
         ...deps,
-        guards: {
-          ...deps.guards,
-          pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
-        },
+        egressRoster: createEgressRoster({ directory: 'none' }),
       })
       expect(
         mocks.screen.mock.calls.filter(([input]) => input.tool === 'graph_mail_recent'),
       ).toHaveLength(1)
       const handoff = mocks.controller.mock.calls[0][0].planContext!
-      expect(handoff).toContain('PERSON_')
-      expect(handoff).not.toContain('Otto Willow')
-      expect(handoff).not.toContain('otto.willow@outside.test')
+      // As written: no input pseudonymiser on this agent (slice 5).
+      expect(handoff).toContain('Otto Willow')
+      expect(egressStates).toHaveLength(1)
+      expect(egressStates[0]).toMatch(/^People named in the request .*"Otto Willow"/m)
       // The record carries the fence the mail arrived in, item id included, not one
       // of the loop's own.
       const carried = handoff.match(
         /⟦external provenance: graph\/graph_mail_recent, (call-\d+)⟧/,
       )?.[1]
       expect(carried).toBeDefined()
-      expect(handoff).not.toContain('PERSON_1_GIVEN PERSON_1_FAMILY')
       const mail = result.context.events.find(
         (e) =>
           e.type === 'tool_result' && (e.data as { tool: string }).tool === 'graph_mail_recent',
@@ -2523,35 +2544,5 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
     expect(web?.data).toMatchObject({ success: true })
     // A roster match Decide allows is audited (coordinator proposal 1).
     expect(result.context.events.some((e) => e.type === 'egress_audit')).toBe(true)
-  })
-
-  // GUARD_PSEUDONYMISE=off composes the info route WITHOUT the wrapper, on the
-  // tier where it would otherwise run: the controller sees directory names as
-  // they are. MUTATION: restore the unconditional wrapper (or pass a null
-  // filter into it): the names here are rewritten to PERSON_n and this goes
-  // red — or the route withholds its inherited content outright.
-  it('GUARD_PSEUDONYMISE=off leaves the web route unwrapped: names reach the controller as written', async () => {
-    const patterns = await agent.createPatterns('synthetic-session', {
-      ...deps,
-      guards: { ...deps.guards, pseudonymiseForWeb: undefined },
-    })
-    const info = routesOf(patterns)[1]
-    expect(harnessPseudonymisesInputs([info])).toBe(false)
-    // The wrapper is gone, and with it its own node in the pattern graph:
-    // guard, document references, references, the loop — no filter anywhere.
-    expect(walk([info]).map((p) => p.name)).toEqual([
-      'withInjectionGuard(withInfoDocumentReferences(withReferences(simpleLoop)))',
-      'withInfoDocumentReferences(withReferences(simpleLoop))',
-      'withReferences(simpleLoop)',
-      'simpleLoop',
-    ])
-  })
-
-  // And the ON spelling keeps today's shape (the G14 pin above holds it via
-  // the real bag's field; this is the switch's own on path).
-  it('GUARD_PSEUDONYMISE=on keeps the wrapper on the info route only', async () => {
-    const patterns = await agent.createPatterns('synthetic-session', deps)
-    const routes = routesOf(patterns)
-    expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
   })
 })

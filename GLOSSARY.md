@@ -45,9 +45,10 @@ somewhere else". Combinators that scope _below_ a run (`withInjectionGuard`,
 `withSandbox`) amend individual slots, and the per-slot merge rules are not
 uniform. See `packages/harness-patterns/run-frame.server.ts`.
 
-**Web pseudonymisation guard** — the web route's boundary over earlier
-results, retaining their content while replacing known identities with
-placeholders. It no longer checks outgoing tool arguments: the **egress gate**
+**Web pseudonymisation guard** — a library wrapper (`withPseudonymisedInputs`)
+over a web route's earlier results, retaining their content while replacing
+known identities with placeholders. `general-next` no longer composes it
+(boundary guards slice 5). It no longer checks outgoing tool arguments: the **egress gate**
 (`withEgressGate`) judges every outgoing call, on every tier, and only a
 declared local namespace (in `general-next`: `neo4j`, `graph`) is never asked
 about; `context7` library lookup is outbound and judged like web search. See

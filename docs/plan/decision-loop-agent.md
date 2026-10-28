@@ -271,6 +271,8 @@ Extractors and the later materialiser must never read `content_sanitized` event 
 
 ### Pseudonymisation guard on the web route
 
+> **Retired from `general-next`** by boundary guards slice 5 (2026-10-28, [`boundary-guards.md`](boundary-guards.md#k5-assessed)): the agent composes no `withPseudonymisedInputs`, and the egress gate judges every outgoing call. The core wrapper stays for library users; this section describes it as G14 designed it.
+
 Ruled in [G14](https://github.com/mknw/hames-playground/issues/507#issuecomment-6191473862); revised for delta review 2 (PR #566, comment 6192033926, D1–D6). `info_ag` is the one route whose tools can send text out of our environment, as a `web_search` query or a `fetch` URL, which is a GET to a public host. The guard makes sure the model composing those arguments never sees a real identity taken from earlier results. It is an extra, outbound-facing filter, and the injection guard stays as it is.
 
 **Where it sits.** It is a core wrapper, `withPseudonymisedInputs`, directly around `withReferences` inside `info_ag`, as in [the shape](#the-shape).

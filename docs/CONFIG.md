@@ -205,15 +205,17 @@ to wake.
 
 ## 11. Boundary guards (operator switches)
 
-Four `GUARD_*` variables let an operator weaken a guard WITHOUT a code change;
+Three `GUARD_*` variables let an operator weaken a guard WITHOUT a code change;
 each logs what it switched off (`app/src/lib/inference/guard-config.server.ts`).
+A fourth, `GUARD_PSEUDONYMISE`, was retired with the input pseudonymiser
+(boundary guards slice 5): if it is still set, boot logs once that it has no
+effect, whatever its value.
 
-| Variable                 | Values                       | Default                                                   | Failure mode                                                                             |
-| ------------------------ | ---------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GUARD_SCREEN`           | `off, shadow, gated, always` | `shadow` on the self-deployed tier, `always` on Anthropic | An unrecognised value refuses boot. Weakening logs at boot.                              |
-| `GUARD_SCREEN_ANTHROPIC` | `off, always`                | `always`                                                  | Same.                                                                                    |
-| `GUARD_EGRESS`           | `filter, roster`             | `filter`                                                  | Same.                                                                                    |
-| `GUARD_PSEUDONYMISE`     | `on, off`                    | `on`                                                      | `off` refuses nothing but logs that names are no longer substituted (SD-8/SD-9 posture). |
+| Variable                 | Values                       | Default                                                   | Failure mode                                                |
+| ------------------------ | ---------------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
+| `GUARD_SCREEN`           | `off, shadow, gated, always` | `shadow` on the self-deployed tier, `always` on Anthropic | An unrecognised value refuses boot. Weakening logs at boot. |
+| `GUARD_SCREEN_ANTHROPIC` | `off, always`                | `always`                                                  | Same.                                                       |
+| `GUARD_EGRESS`           | `filter, roster`             | `filter`                                                  | Same.                                                       |
 
 ## 12. Data services and documents
 

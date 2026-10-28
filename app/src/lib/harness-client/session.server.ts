@@ -13,7 +13,6 @@
 
 import { graphFileIngestEnabled } from '../inference/tier-config.server'
 import { guardConfig } from '../inference/guard-config.server'
-import { createWebPseudonymiser } from './web-pseudonymiser.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { deserializeContext } from '@hames-ai/harness-patterns'
@@ -81,20 +80,14 @@ export function agentDeps(): AgentDeps {
     graphFileIngest: graphFileIngestEnabled(),
     memory: createHostMemoryConfig(),
     // The guards' host settings, from the GUARD_* operator switches, read once
-    // per build (boundary guards, slice 6). The web route's input filter rides
-    // `guards` too (GUARD_PSEUDONYMISE): off, the field is OMITTED — the agent
-    // then composes no withPseudonymisedInputs, never a null filter into a
-    // wrapper that would withhold — and the field's own presence says on.
-    // `classifyIngress` rides `guards` so the screen's gating has one
-    // `AgentDeps` path, not two.
+    // per build (boundary guards, slice 6). No input pseudonymiser: slice 5
+    // retired it from the registered agents. `classifyIngress` rides `guards`
+    // so the screen's gating has one `AgentDeps` path, not two.
     guards: (() => {
       const switches = guardConfig()
       return {
         screenMode: switches.screenMode,
         egressMode: switches.egressMode,
-        ...(switches.pseudonymise
-          ? { pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }) }
-          : {}),
         classifyIngress,
       }
     })(),

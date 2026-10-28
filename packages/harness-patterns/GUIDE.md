@@ -90,7 +90,7 @@ Every combinator takes patterns and returns a pattern, so they nest freely:
 | `routes`                  | dispatch on `data.route` (set by `router` or `decisionRouter`); pass-through on `'user'`  |
 | `parallel`                | run patterns concurrently, merge their event sets                                         |
 | `withReferences`          | attach the relevant results of earlier turns at pattern ingress, expandable on demand     |
-| `withPseudonymisedInputs` | rewrite the web route's earlier inputs and check outgoing web arguments                   |
+| `withPseudonymisedInputs` | rewrite a web route's earlier inputs before its controller reads them                     |
 | `withInjectionGuard`      | neutralize untrusted tool output before a controller reads it                             |
 | `decisionLoop`            | loop over routes, a decisions model choosing the next one each time, until `answer`       |
 
@@ -187,6 +187,14 @@ a same-endpoint retry; the pattern records a warning even if that retry fails.
 See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
 
 ### Protecting the web route's earlier inputs
+
+The reference host's `general-next` does not compose this wrapper any more
+(boundary guards slice 5). There it ran only on the self-deployed tier, where
+every model is company-run, so it kept nothing from a provider; keeping names
+out of the context that writes outgoing queries served only what leaves, which
+the egress gate (below) judges call by call, and the controller paid for it by
+reasoning over placeholders. The wrapper stays for a library user who wants the
+rewrite.
 
 Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 `withReferences`. It rewrites both the reference view (previews and expansion)

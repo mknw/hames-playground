@@ -14,7 +14,6 @@ import {
   withEgressGate,
   withInjectionGuard,
   withMemory,
-  withPseudonymisedInputs,
   withReferences,
   type ConfiguredPattern,
 } from '@hames-ai/harness-patterns'
@@ -228,7 +227,10 @@ async function createPatterns(
     },
   }
   const doc = withInjectionGuard(docGuard)(office)
-  const infoLoop = withInfoDocumentReferences(
+  // No input pseudonymiser (K5, retired in boundary guards slice 5): the info
+  // controller reads names as they are, and what leaves is judged by the
+  // egress gate below, on every tier. The core wrapper stays for library users.
+  const infoRoute = withInfoDocumentReferences(
     withReferences<AgentData>(
       simpleLoop<AgentData>(
         createLoopControllerAdapter(
@@ -261,22 +263,6 @@ async function createPatterns(
       },
     ),
   )
-  // K5 (the web route's input filter) runs where it runs today, unless the
-  // host turns it off. Two ways to be without it, deliberately different:
-  //   - a bag with NO `guards` field at all (a host that predates the switch,
-  //     or composes no guard settings) keeps the old shape: the wrapper is
-  //     composed with no filter, which withholds every word of inherited
-  //     content wherever the tier is not the Anthropic tier — the recorded
-  //     fail-closed default (G14 D3), never a silent pass-through.
-  //   - a bag WITH `guards` but no `pseudonymiseForWeb` (the operator's
-  //     GUARD_PSEUDONYMISE=off, or a host that chose this) composes the route
-  //     WITHOUT the wrapper — never a null filter into one that would
-  //     withhold. The switch is validated at boot; it goes away when the
-  //     retirement slice removes K5 from this agent.
-  const infoRoute =
-    deps.guards && !deps.guards.pseudonymiseForWeb
-      ? infoLoop
-      : withPseudonymisedInputs({ pseudonymise: deps.guards?.pseudonymiseForWeb })(infoLoop)
   const info = withInjectionGuard(infoGuard)(infoRoute)
   const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
     retriever<AgentData>({

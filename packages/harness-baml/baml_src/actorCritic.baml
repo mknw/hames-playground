@@ -250,6 +250,10 @@ template_string ActorControllerBody(
     While you still have work to do, keep is_final=false and call the next tool.
     In particular, a script you have only WRITTEN is not done: keep is_final=false
     and run it (and confirm its output) before you set is_final=true.
+    If the result of your previous attempt already completes the task, repeat
+    that attempt's call exactly (same tool_name and tool_args) with
+    is_final=true. An exact repeat of a single successful call is not run
+    again: the critic judges the result you already have.
     {{ ActorMultiCalls(multi_call_mode, with_reasoning) }}
     {{ ActorFewShots(few_shots, with_reasoning) }}
 

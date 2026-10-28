@@ -911,6 +911,21 @@ critic _trigger_ here, never an exit. With `N > 1`, `maxRetries` bounds actor
 turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
 critic can never be disabled.
 
+**A final-marking repeat is not run again (#784 item 7).** The actor names a
+tool on every attempt, so on the attempt it believes it is done it used to
+repeat the call whose result it already held, with identical arguments, only to
+set `is_final`. When an `is_final` action repeats the newest attempt exactly —
+that attempt a single call that succeeded, same tool name, same parsed
+arguments — nothing is dispatched: no `tool_call` or `tool_result` event, the
+consecutive-recovery count is left where it was, and the attempt log records
+the repeat with the result already held, which is what the critic judges (it
+evaluates the most recent result). The actor prompt states the affordance, and
+a `decisionLoop` record of such an accepted attempt carries the repeated call's
+result (`extractActorCritic`), counted as one tool call. Any
+other repeat still runs — a non-final one, one after another attempt, one of a
+failed call, a repeated batch — because the sandbox tools are stateful and such
+a repeat may legitimately return something new.
+
 **The intent, and a route's scope (#606 run 7).** The actor and the critic read
 ONE `intent`: `data.intent`, else the user's latest message, followed (when
 `data.routeScope` is set) by a blank line and that scope. `decisionLoop` sets

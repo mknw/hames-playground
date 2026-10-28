@@ -729,6 +729,102 @@ describe('actorCritic criticCadence', () => {
 
     expect(mockCritic).toHaveBeenCalledTimes(2)
   })
+
+  // #784 item 7: the actor must name a tool on every attempt, so it marked
+  // itself done by re-running the call it had just made, with identical args
+  // and an identical result. That repeat is no longer dispatched. The other
+  // cases characterise its scope: the sandbox tools are stateful, so anything
+  // but a final-marking repeat of the newest, successful call still runs.
+  describe('a final-marking repeat of the previous call (#784 item 7)', () => {
+    const step = (args: string, is_final = false) => ({
+      action: mockAction({ tool_name: 'code-mode', tool_args: args, is_final }),
+      llmCall: undefined,
+    })
+    const accept = () =>
+      vi.fn().mockResolvedValue({
+        result: mockCriticResult({ is_sufficient: true }),
+        llmCall: undefined,
+      })
+
+    it('is not dispatched again; the critic judges the result already held', async () => {
+      callToolMock.mockResolvedValueOnce({ success: true, data: { files: ['a.docx'] } })
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce(step('{"top": 5}', true))
+      const mockCritic = accept()
+
+      const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 3 })
+
+      expect(callToolMock).toHaveBeenCalledTimes(1)
+      expect(result.events.filter((e) => e.type === 'tool_call')).toHaveLength(1)
+      expect(result.events.filter((e) => e.type === 'tool_result')).toHaveLength(1)
+      expect(mockCritic).toHaveBeenCalledTimes(1)
+      const judged = mockCritic.mock.calls[0][1] as { output: string; error?: string | null }[]
+      expect(judged).toHaveLength(2)
+      expect(judged[1].output).toBe(JSON.stringify({ files: ['a.docx'] }))
+      expect(judged[1].error).toBeNull()
+      expect(result.data.result).toEqual({ files: ['a.docx'] })
+    })
+
+    it('runs when the args differ', async () => {
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce(step('{"top": 10}', true))
+
+      await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 })
+
+      expect(callToolMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('runs on a non-final turn (a poll may return something new)', async () => {
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce(step('{"top": 5}', true))
+
+      await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 })
+
+      // The second (non-final) repeat ran; only the final-marking third did not.
+      expect(callToolMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('runs when another attempt came in between', async () => {
+      // A batch is the case that matters: it records its own attempt without
+      // replacing the remembered singular call, and a write-then-run batch is
+      // exactly what changes the sandbox state the repeat would read.
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce({
+          action: mockAction({
+            tool_name: 'code-mode',
+            tool_args: '{"script": "write"}',
+            additional_calls: [{ tool_name: 'code-mode', tool_args: '{"script": "run"}' }],
+          }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce(step('{"top": 5}', true))
+
+      await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 })
+
+      expect(callToolMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('runs when the previous call failed', async () => {
+      callToolMock.mockResolvedValueOnce({ success: false, data: null, error: 'busy' })
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"top": 5}'))
+        .mockResolvedValueOnce(step('{"top": 5}', true))
+
+      await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 })
+
+      expect(callToolMock).toHaveBeenCalledTimes(2)
+    })
+  })
 })
 
 /**

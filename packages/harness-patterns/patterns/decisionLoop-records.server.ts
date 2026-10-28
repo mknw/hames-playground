@@ -324,19 +324,25 @@ function workOutSavedLines(argsText: string, successfulBodies: readonly string[]
 function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   let action: ControllerActionEventData['action'] | undefined
   let results: ToolResultEventData[] = []
+  // The results of the last attempt that had any. An attempt reaches the critic
+  // with none of its own only when it repeated the previous call and was not
+  // dispatched again (#784 item 7): what the critic judged is that call's result.
+  let previous: ToolResultEventData[] = []
   let accepted:
     | { action: ControllerActionEventData['action']; results: ToolResultEventData[]; why: string }
     | undefined
   for (const e of events) {
     if (e.type === 'controller_action') {
       action = (e.data as ControllerActionEventData).action
+      if (results.length > 0) previous = results
       results = []
     } else if (e.type === 'tool_result') {
       results.push(e.data as ToolResultEventData)
     } else if (e.type === 'critic_result') {
       const critic = (e.data as CriticResultEventData).result
       if (critic.is_sufficient && action) {
-        accepted = { action, results: [...results], why: critic.explanation ?? '' }
+        const judged = results.length > 0 ? results : previous
+        accepted = { action, results: [...judged], why: critic.explanation ?? '' }
       }
     }
   }

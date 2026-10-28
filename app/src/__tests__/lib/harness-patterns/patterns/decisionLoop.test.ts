@@ -2670,7 +2670,7 @@ describe('decisionLoop — default extractors over real patterns', () => {
       action: {
         reasoning: `reasoning-${++attempt}`,
         tool_name: 'search',
-        tool_args: '{}',
+        tool_args: `{"page": ${attempt}}`,
         is_final: true,
       } as ControllerAction,
     }))
@@ -2692,6 +2692,44 @@ describe('decisionLoop — default extractors over real patterns', () => {
     expect(action.reasoning).toBe('reasoning-2\nCritic: verdict-2')
     expect(states[1]).toContain('1. doc — succeeded (actorCritic: 2 of 3 attempts, 2 tool calls')
   })
+
+  // #784 item 7: the accepted attempt repeated the previous call exactly with
+  // is_final, so it was not dispatched and has no tool_result of its own. The
+  // record is the repeated call's result — not "no attempt was accepted". At 3
+  // the critic also rejected a first repeat, so two attempts in a row ran nothing.
+  it.each([2, 3])(
+    'actorCritic: a repeat accepted at attempt %i carries the repeated call`s result',
+    async (acceptAt) => {
+      let attempt = 0
+      const actor = vi.fn(async () => ({
+        action: {
+          reasoning: `reasoning-${++attempt}`,
+          tool_name: 'search',
+          tool_args: '{}',
+          is_final: true,
+        } as ControllerAction,
+      }))
+      const critic = vi.fn(async () => ({
+        result: { is_sufficient: attempt >= acceptAt, explanation: `verdict-${attempt}` },
+      }))
+      const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
+        patternId: 'doc',
+        maxRetries: 3,
+      })
+      const { decide, states } = scriptedDecide(['doc', 'answer'])
+      const ctx = await run([build({ doc: route(doc) }, decide)])
+      const result = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
+      expect(result.success).toBe(true)
+      expect(result.result).toContain('visible-row')
+      const action = (
+        eventsOf(ctx, 'orchestrator', 'controller_action')[0].data as { action: ControllerAction }
+      ).action
+      expect(action.reasoning).toBe(`reasoning-${acceptAt}\nCritic: verdict-${acceptAt}`)
+      expect(states[1]).toContain(
+        `1. doc — succeeded (actorCritic: ${acceptAt} of 3 attempts, 1 tool call`,
+      )
+    },
+  )
 
   it('simpleLoop: the Return text is the result; tool calls and wall time are counted', async () => {
     let turn = 0

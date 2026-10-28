@@ -265,30 +265,60 @@ function extractSimpleLoop(events: ContextEvent[], max: number): Extracted {
  *  separator (a sentence period, a list comma) is not part of it. */
 const WORK_OUT_PATH = /\/work\/out\/[^\s"'\\<>{}()]+/g
 
-/** The fixed, echoable closing line an actorCritic record carries when its
- *  accepted results show deliverable(s) under `/work/out` (#840, residual of
+/** At most this many distinct saved paths get their own line; the excess is
+ *  summarized in one closing "and K more" line, so a listing-shaped result can
+ *  never inflate the record. Set value, not measurement. */
+const MAX_SAVED_PATH_LINES = 4
+
+/** Strip a trailing separator (a sentence period, a list comma) that is not
+ *  part of a file name. */
+function cleanWorkOutPath(match: string): string {
+  return match.replace(/[.,;:)\]]+$/, '')
+}
+
+/** The fixed, echoable closing line an actorCritic record carries when the
+ *  accepted attempt SAVED deliverable(s) under `/work/out` (#840, residual of
  *  #507 run 9): the route's own deterministic statement that the file is kept
  *  but NOT indexed, so the synthesizer has a quotable truth instead of only the
  *  critic's prose — which it once inverted into "Saved and indexed for this
  *  chat". "Not indexed BY THIS ROUTE" is the #836 route-description sentence's
  *  own wording and stays true whatever the person does later; "the user can
- *  index it for search from the Data Stash" is docs/DATA_STASH.md's "Index for
- *  search". The paths are read from the accepted attempt's own tool RESULTS
- *  (what the route reported), never from the reasoning, and one line per
- *  distinct path, in first-appearance order. */
-function workOutSavedLines(bodies: readonly string[]): string {
-  const paths = new Set<string>()
-  for (const body of bodies) {
+ *  index A TEXT ONE for search from the Data Stash" is that same sentence's
+ *  wording and docs/DATA_STASH.md's "Index for search" — a binary deliverable
+ *  cannot be indexed, so the line never claims it can (#841 review S1).
+ *
+ *  A path is eligible only when the accepted attempt's own tool_args declared
+ *  it AND a SUCCESSFUL result reports it back — the pair that reports a save.
+ *  A path merely MENTIONED in a result body (an `ls /work/out` listing of
+ *  deliverables from earlier turns, a path inside an error body) produces NO
+ *  line: the workspace persists across turns (SD-21), so a mention does not
+ *  mean this attempt saved the file (#841 review S2). Known trade-off, on the
+ *  record: a script that writes the deliverable and then exits non-zero loses
+ *  its stdout, so that save gets no line — no line is preferred over a
+ *  possibly false one. One line per distinct path, in first-appearance order,
+ *  capped at {@link MAX_SAVED_PATH_LINES}. */
+function workOutSavedLines(argsText: string, successfulBodies: readonly string[]): string {
+  const argPaths = new Set<string>()
+  for (const m of argsText.matchAll(WORK_OUT_PATH)) argPaths.add(cleanWorkOutPath(m[0]))
+  const saved: string[] = []
+  for (const body of successfulBodies) {
     for (const m of body.matchAll(WORK_OUT_PATH)) {
-      paths.add(m[0].replace(/[.,;:)\]]+$/, ''))
+      const path = cleanWorkOutPath(m[0])
+      if (argPaths.has(path) && !saved.includes(path)) saved.push(path)
     }
   }
-  return [...paths]
-    .map(
-      (path) =>
-        `Saved to ${path} (not indexed by this route; the user can index it for search from the Data Stash)`,
+  if (saved.length === 0) return ''
+  const shown = saved.slice(0, MAX_SAVED_PATH_LINES)
+  const extra = saved.length - shown.length
+  const lines = shown.map(
+    (path) =>
+      `Saved to ${path} (not indexed by this route; the user can index a text one for search from the Data Stash)`,
+  )
+  if (extra > 0)
+    lines.push(
+      `… and ${extra} more file(s) saved under /work/out (not indexed by this route; the user can index a text one for search from the Data Stash)`,
     )
-    .join('\n')
+  return lines.join('\n')
 }
 
 function extractActorCritic(events: ContextEvent[], max: number): Extracted {
@@ -333,14 +363,22 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
     )
   })
   // The saved-deliverable line is measured BEFORE the blocks are capped, so its
-  // budget comes off the share and the whole record stays within `max` (a body
-  // longer than `max` cannot carry it and does not). The joining separators are
-  // budgeted too: n-1 between the blocks and the one before the line itself.
-  const saved = workOutSavedLines(quoted.map((q) => q.body))
-  const budget =
-    saved.length > 0 && saved.length + 1 < max
-      ? Math.max(1, max - saved.length - 1)
-      : max
+  // budget comes off the share (the line and the one separator before it). The
+  // n-1 separators BETWEEN the blocks stay unbudgeted — the pre-existing slack
+  // this file already had (a multi-result record can exceed `max` by up to n-1).
+  // The line is appended ONLY when it fits: a record that would breach the cap
+  // carries no line at all (#841 review S2) — the cap invariant of this module
+  // (every returned text field is capped) outranks the echoable line.
+  const argsText = [
+    accepted.action.tool_args,
+    ...(accepted.action.additional_calls ?? []).map((c) => c.tool_args),
+  ].join('\n')
+  const saved = workOutSavedLines(
+    argsText,
+    quoted.filter((_, i) => accepted.results[i].success).map((q) => q.body),
+  )
+  const withLine = saved.length > 0 && saved.length + 1 < max
+  const budget = withLine ? Math.max(1, max - saved.length - 1) : max
   const blocks = quoted.map((q) => {
     // The fence rides on top of the capped body, so its own length comes off the share.
     const overhead = q.label ? refence('', q.label).length : 0
@@ -351,7 +389,7 @@ function extractActorCritic(events: ContextEvent[], max: number): Extracted {
     .join('\n')
   return {
     ok: true,
-    result: saved.length > 0 ? `${blocks.join('\n')}\n${saved}` : blocks.join('\n'),
+    result: withLine ? `${blocks.join('\n')}\n${saved}` : blocks.join('\n'),
     reasoning,
   }
 }

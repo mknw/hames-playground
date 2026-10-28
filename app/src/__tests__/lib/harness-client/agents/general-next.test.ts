@@ -40,6 +40,7 @@ import type { AgentData, AgentDeps } from '@hames-ai/agents'
 import { buildGraphHarness } from '../../../../../../packages/connectors/__tests__/graph/harness'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
 import { captureTrace } from '../../../../lib/eval-support/capture'
+import { privateDecisionRun } from '../../../../lib/harness-client/decision-documents.server'
 import type {
   ConversationScenario,
   ConversationTrace,
@@ -1345,6 +1346,18 @@ describe('general-next composition', () => {
       const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
       expect(request).toBe(message)
       expect(scope).toMatch(/^- office-data: Read Microsoft 365 mail and file metadata; /)
+      // #832 (owner, 2026-10-28): the office step saves the file and the user indexes it
+      // from the Data Stash, so "index it for this chat" is answered by saying so, not
+      // missing from the step's results. MUTATION: drop the sentence from the office-data
+      // description → red here.
+      expect(scope).toContain(
+        "a file saved under /work/out is kept in this conversation's documents, and the user can index a text one for search from the Data Stash: a file saved under /work/out is never indexed by this route, so when asked to index one of those, save it and tell the user they can index it from the Data Stash; ",
+      )
+      // This route's graph_file_ingest DOES index (deps here enable it, and the office
+      // actor is told to finish once indexStatus is indexed), so the claim is scoped to
+      // saved files, never to the route. MUTATION: restore "nothing here indexes files" →
+      // red here.
+      expect(scope).not.toMatch(/nothing here indexes/)
       expect(scope).toContain('\n  Can: Read Microsoft 365 mail and file metadata; ')
       const tools = scope.split('\n').find((line) => line.startsWith('  Tools: '))!
       expect(tools).toContain('graph_mail_recent')
@@ -1913,6 +1926,55 @@ describe('general-next composition', () => {
     )
     expect(mocks.synthesize.mock.calls[0][0].memoryContext).toBe('MEMORY-SENTINEL')
   })
+
+  // #829 (eval 05). The decider reads recalled memory through the host's tier line:
+  // its text goes to the private decisions shim only, the Anthropic tier's decisions
+  // host gets a count, and no route ever gets either. Checked at the request body and
+  // the URL it is posted to. MUTATIONS: stop passing `quoteMemories` to the loop in
+  // general-next.server.ts (the self_deployed row loses the text); pass `() => true`
+  // (the anthropic row carries it); drop `redact` (the persisted blob carries it).
+  it.each([
+    ['self_deployed', 'http://127.0.0.1:59997/v1/systemone', true],
+    ['anthropic', 'http://127.0.0.1:59998/v1/systemone', false],
+  ] as const)(
+    '#829: on %s the decider is told about recalled memory, and no route is',
+    async (tier, url, quoted) => {
+      const memory = { owner: () => null, enabled: () => false } as unknown as MemoryConfig
+      const patterns = await agent.createPatterns('synthetic-session', {
+        ...deps,
+        memory,
+        quoteMemoriesToDecider: privateDecisionRun,
+      })
+      choices = ['info-retrieval', 'answer']
+      const ctx = createContext<AgentData>('synthetic task', {
+        memories: [{ id: 'm', kind: 'semantic', tier, content: 'MEMORY-SENTINEL LANTERN-2' }],
+      })
+      const orchestrator = patterns[1]
+      const finished = await withRunFrame({ inference: { tier } }, () =>
+        orchestrator.fn(createScope<AgentData>('orchestrator', ctx.data), createEventView(ctx)),
+      )
+      expect(states).toHaveLength(2)
+      const decideCalls = requests.mock.calls.filter(
+        ([, init]) => JSON.parse(String(init.body)).questions.next_step,
+      )
+      expect(decideCalls.map(([u]) => u)).toEqual([url, url])
+      for (const state of states) {
+        if (quoted) {
+          expect(state).toContain('> MEMORY-SENTINEL LANTERN-2')
+        } else {
+          expect(state).toContain('1 relevant memory (not shown)')
+          expect(state).not.toContain('MEMORY-SENTINEL')
+          expect(state).not.toContain('LANTERN-2')
+        }
+      }
+      // No route was handed it, on either tier.
+      expect(mocks.controller).toHaveBeenCalled()
+      expect(JSON.stringify(mocks.controller.mock.calls)).not.toContain('MEMORY-SENTINEL')
+      // And the persisted blob never carries it (#419 F1).
+      ctx.events.push(...finished.events)
+      expect(serializeContext(ctx)).not.toContain('MEMORY-SENTINEL')
+    },
+  )
 
   // MUTATION: delete `threadTurns: 2` from the response-synth config in
   // general-next.server.ts (a follow-up turn then loses turn 1's records).

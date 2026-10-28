@@ -24,6 +24,7 @@ import '../../mocks/namespace-catalog'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
+  indexForUser,
 } from '../../../lib/eval-support/synthetic-sandbox'
 import { grade } from '../../../lib/eval-support/conversation-checks'
 import type {
@@ -271,7 +272,7 @@ describe('fixture 11-mail-to-file (capture: mail, then the printf redirect of th
     )
     expect(t.trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: true })
     expect(t.trace.artifacts).toEqual(['lantern-launch.md'])
-    expect(t.trace.indexed).toEqual(['lantern-launch.md'])
+    expect(t.trace.indexed).toEqual([])
     expect((await t.call('sandbox_read', { path: '/work/out/lantern-launch.md' })).data).toContain(
       'Publish notes',
     )
@@ -280,7 +281,7 @@ describe('fixture 11-mail-to-file (capture: mail, then the printf redirect of th
 })
 
 describe('fixture 14-analysis-index-follow-up (capture: list/read cycles and the blocked echoes)', () => {
-  it('prints the exploration and credits the run that produces the indexed analysis', async () => {
+  it('prints the exploration and credits the run that produces the analysis the person indexes', async () => {
     const t = rig(analysis)
     expect(out(await t.call('sandbox_bash', { command: 'ls -la /work/in/' })).stdout).toContain(
       'lantern-sales.csv',
@@ -301,8 +302,11 @@ describe('fixture 14-analysis-index-follow-up (capture: list/read cycles and the
     expect(run.stdout).toBe('Saved /work/out/lantern-analysis.md')
     expect(t.trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: true })
     expect(t.trace.artifacts).toEqual(['lantern-analysis.md'])
+    // The sandbox only saves (#832); the person's Data Stash click, which the driver
+    // makes between turns, indexes it, and the later turn cites it.
+    expect(t.trace.indexed).toEqual([])
+    indexForUser(analysis, t.trace)
     expect(t.trace.indexed).toEqual(['lantern-analysis.md'])
-    // The later turn cites the indexed analysis the first turn produced.
     expect(
       t.grade('South took 19 and North took 47, a 28 gap. See lantern-analysis.md [1].', {
         retrievals: [{ source: 'lantern-analysis.md', turn: 1 }],
@@ -328,6 +332,8 @@ describe('fixture 17-mail-analysis-follow-up (capture: mail, ls+cat, `echo waiti
     )
     expect(t.trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: true })
     expect(t.trace.artifacts).toEqual(['lantern-launch-analysis.md'])
+    expect(t.trace.indexed).toEqual([])
+    indexForUser(seventeen, t.trace)
     expect(t.trace.indexed).toEqual(['lantern-launch-analysis.md'])
     expect(
       t.grade('North 47 over South 19, a 28 gap — lantern-launch-analysis.md [1].', {

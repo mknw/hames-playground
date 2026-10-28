@@ -9,12 +9,20 @@ import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
   createSyntheticWithSandbox,
+  indexForUser,
+  stashSearchable,
 } from '../../src/lib/eval-support/synthetic-sandbox'
 import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
+// What the person uploaded before turn 1, seeded into every scenario's stash.
+const UPLOADS = new Map([
+  ['lantern-notes.md', NOTES],
+  ['lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n'],
+])
+const UPLOADED: ReadonlySet<string> = new Set(UPLOADS.keys())
 // 07-follow-up-success (owner option 2, rebuilt per the owner's shape-probe directive; the
 // people fixture is TASK Q, #808): the per-entity structure is DERIVED from a read-only
 // shape probe of the dev graph — labels, relationship types, property vocabulary, the
@@ -316,6 +324,10 @@ export async function createDriver(
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
   // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
   const { classifyIngress } = await import('../../src/lib/harness-client/ingress-classifier.server')
+  // The host's own tier line for what the Decide step may quote of recalled memory (#829):
+  // the eval's frame is `self_deployed`, so 05's memory reaches the decider as text.
+  const { privateDecisionRun } =
+    await import('../../src/lib/harness-client/decision-documents.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
@@ -344,15 +356,16 @@ export async function createDriver(
         mimeType: name.endsWith('.csv') ? 'text/csv' : 'text/markdown',
         size: content.length,
         uploadedAt: index,
-        searchable: name.endsWith('.md'),
+        searchable: stashSearchable(name, UPLOADED, trace),
       })),
     }),
+    quoteMemoriesToDecider: privateDecisionRun,
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',
       search: async () =>
         [...documents]
-          .filter(([source]) => source.endsWith('.md'))
+          .filter(([source]) => stashSearchable(source, UPLOADED, trace))
           .map(([source, content]) => {
             trace.retrievals.push({ source, turn })
             return {
@@ -395,8 +408,7 @@ export async function createDriver(
       scenario = next
       trace = { turns: [], tools: [], artifacts: [], indexed: [], retrievals: [] }
       documents.clear()
-      documents.set('lantern-notes.md', NOTES)
-      documents.set('lantern-sales.csv', 'region,revenue\nNorth,47\nSouth,19\n')
+      for (const [name, content] of UPLOADS) documents.set(name, content)
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
@@ -410,6 +422,10 @@ export async function createDriver(
           const run = harness(...patterns)
           let serialized: string | undefined
           for (turn = 0; turn < next.messages.length; turn++) {
+            // The person indexes the promoted deliverable from the Data Stash between
+            // turns (#832): the agent does not, so this is the only way it becomes
+            // searchable, and only if an earlier turn saved it.
+            if (turn > 0) indexForUser(next, trace)
             fake?.turn(next, turn)
             const result = serialized
               ? await continueSession(serialized, patterns, next.messages[turn])

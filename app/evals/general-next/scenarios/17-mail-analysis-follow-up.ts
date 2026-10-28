@@ -22,6 +22,9 @@ export const scenario: ConversationScenario = {
   },
   expectedRoutes: ['office-data', 'read-documents'],
   answerIncludes: ['North', '47', 'South', '19', '28'],
+  // As 14 (#832): the office step saves the file, the person indexes it from the Data
+  // Stash and the driver makes that click between turns. So turn 1 says where.
+  turnAnswerIncludes: [['Data Stash']],
   artifacts: ['lantern-launch-analysis.md'],
   forbiddenTools: [],
   maxIterations: 6,

@@ -339,6 +339,7 @@ async function createPatterns(
                 ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
                 : 'Graph file ingestion is unavailable. ') +
               'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox; ' +
+              "a file saved under /work/out is kept in this conversation's documents, and the user can index a text one for search from the Data Stash: a file saved under /work/out is never indexed by this route, so when asked to index one of those, save it and tell the user they can index it from the Data Stash; " +
               "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
             capability:
               'Read Microsoft 365 mail and file metadata; ' +
@@ -376,6 +377,7 @@ async function createPatterns(
           patternId: 'orchestrator',
           liveEvents: true,
           documents: deps.createDecisionDocuments?.(sessionId),
+          quoteMemories: deps.quoteMemoriesToDecider,
         },
       ),
     ),
@@ -392,7 +394,9 @@ async function createPatterns(
       liveEvents: true,
     }),
   ]
-  // Only synthesis consumes memory; decisionLoop builds fresh, memory-free child data.
+  // Synthesis and the decisions model read memory (the latter its text only where the
+  // host's tier line allows, a count elsewhere); decisionLoop builds fresh, memory-free
+  // child data, so no route reads it.
   return deps.memory ? withMemory<AgentData>(deps.memory)(patterns) : patterns
 }
 

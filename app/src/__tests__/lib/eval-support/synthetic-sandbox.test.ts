@@ -25,6 +25,8 @@ import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
+  indexForUser,
+  stashSearchable,
 } from '../../../lib/eval-support/synthetic-sandbox'
 import type {
   ConversationScenario,
@@ -312,7 +314,7 @@ describe('scenario 17 as recorded: a computation that prints and saves nothing',
       ['sandbox_bash', true, true],
     ])
     expect(r.trace.artifacts).toEqual(['lantern-launch-analysis.md'])
-    expect(r.trace.indexed).toEqual(['lantern-launch-analysis.md'])
+    expect(r.trace.indexed).toEqual([])
     expect(r.critic.at(-1)).toContain('Saved /work/out/lantern-launch-analysis.md')
     expect(exhausted(r.events)).toBe(false)
   })
@@ -600,4 +602,74 @@ it('replays the requests and predicates of scenarios 09 and 10 as they are writt
   expect(nine).toContain(summary.messages[0])
   expect(nine).toContain("sandboxArgs('lantern-summary.docx')")
   expect(nine).toContain("artifacts: ['lantern-summary.docx']")
+})
+
+// #832 (owner, 2026-10-28): the agent saves a deliverable and the person indexes it from
+// the Data Stash. The sandbox models promotion only; the driver mocks the click between
+// turns with `indexForUser`, and its retriever and documents list read `stashSearchable`.
+describe('the Data Stash click the driver mocks', () => {
+  const empty = (): ConversationTrace => ({
+    turns: [],
+    tools: [],
+    artifacts: [],
+    indexed: [],
+    retrievals: [],
+  })
+  const fourteen = {
+    id: '14-analysis-index-follow-up',
+    indexed: 'lantern-analysis.md',
+  } as unknown as ConversationScenario
+
+  // MUTATION: restore the sandbox's own `trace.indexed.push` for a written .md → red.
+  it('the sandbox promotes a markdown deliverable without indexing it', async () => {
+    const trace = empty()
+    const scenario = {
+      ...analysis,
+      writtenArtifacts: { 'lantern-launch-analysis.md': () => true },
+    } as unknown as ConversationScenario
+    const sandbox = createSyntheticSandbox({
+      scenario: () => scenario,
+      trace: () => trace,
+      turn: () => 0,
+      documents: new Map(),
+      descriptions: [BASH, ...SANDBOX_FILE_TOOLS],
+    })
+    await sandbox.callTool('sandbox_write', {
+      path: '/work/out/lantern-launch-analysis.md',
+      content: '# Launch analysis\nNorth 47, South 19.\n',
+    })
+    expect(trace.artifacts).toEqual(['lantern-launch-analysis.md'])
+    expect(trace.indexed).toEqual([])
+  })
+
+  // MUTATIONS: drop the `artifacts.includes` clause → a file no turn saved is indexed;
+  // index whatever .md was promoted instead of the declared file → the decoy is indexed.
+  it('indexes the declared deliverable once a turn promoted it, and nothing else', () => {
+    const trace = empty()
+    indexForUser(fourteen, trace)
+    expect(trace.indexed, 'nothing promoted yet: nothing to click').toEqual([])
+
+    trace.artifacts.push('lantern-draft.md', 'lantern-analysis.md')
+    indexForUser(fourteen, trace)
+    indexForUser(fourteen, trace)
+    expect(trace.indexed).toEqual(['lantern-analysis.md'])
+
+    const plain = empty()
+    plain.artifacts.push('lantern-launch.md')
+    indexForUser({ id: '11-mail-to-file' } as unknown as ConversationScenario, plain)
+    expect(plain.indexed, 'a scenario that declares no index gets no click').toEqual([])
+  })
+
+  // MUTATION: `stashSearchable` back to `name.endsWith('.md')` (the driver's old rule)
+  // → an unindexed deliverable is searchable.
+  it('searches uploaded markdown and what the person indexed, never an unindexed deliverable', () => {
+    const uploads = new Set(['lantern-notes.md', 'lantern-sales.csv'])
+    const trace = empty()
+    trace.artifacts.push('lantern-analysis.md')
+    expect(stashSearchable('lantern-notes.md', uploads, trace)).toBe(true)
+    expect(stashSearchable('lantern-sales.csv', uploads, trace)).toBe(false)
+    expect(stashSearchable('lantern-analysis.md', uploads, trace)).toBe(false)
+    indexForUser(fourteen, trace)
+    expect(stashSearchable('lantern-analysis.md', uploads, trace)).toBe(true)
+  })
 })

@@ -236,7 +236,6 @@ it('captures decisions and controller outputs only behind the env flag, beside t
     /\} catch \(err\) \{\s*capture\?\.addError\(active, err instanceof Error \? err\.message : 'Scenario threw'\)\s*results\.push\(/,
   )
 })
-
 // The egress-gate scenario runs under the runner, which opens the run's frame
 // (harness.ts `runScenario`). Its gate rows scope their fake transport BELOW
 // that frame, with `amendRunFrame` — the seam run-frame.server.ts names for
@@ -252,4 +251,36 @@ it('scopes the egress-gate gate-row transports below the runner frame with amend
   const s = read('evals/scenarios/egress-gate.ts')
   expect(s).toMatch(/await amendRunFrame\(\s*\{\s*transports: \[/)
   expect(s).not.toContain('withRunFrame(')
+})
+
+// #832 (owner, 2026-10-28): the agent does not index a deliverable; the person does, from
+// the Data Stash. The driver makes that click before each later turn's run, and its
+// retriever and documents list serve only uploaded markdown and what the person indexed.
+// MUTATIONS: drop the click → 14, 16 and 17 have nothing to retrieve; restore either
+// `.endsWith('.md')` filter → an unindexed deliverable is served as if indexed.
+it('mocks the Data Stash click between turns and serves only searchable documents', () => {
+  const driver = read('evals/general-next/driver.ts')
+  const beforeRun =
+    /for \(turn = 0; turn < next\.messages\.length; turn\+\+\) \{([\s\S]*?)const result/.exec(
+      driver,
+    )?.[1]
+  expect(beforeRun).toContain('if (turn > 0) indexForUser(next, trace)')
+  expect(driver.match(/stashSearchable\((?:name|source), UPLOADED, trace\)/g)).toHaveLength(2)
+  expect(driver).not.toMatch(/endsWith\('\.md'\)/)
+})
+// The same ruling, per scenario (PM addition, 2026-10-28): every runnable scenario that
+// declares an `indexed` deliverable depends on the click, so its turn 1 must tell the
+// person where to index it. Today that is 14 and 17 (a must); 16 is P4-gated.
+// MUTATION: drop 17's `turnAnswerIncludes` (with its catalogue item) → red here only.
+it('every runnable scenario with an indexed deliverable names the Data Stash on turn 1', () => {
+  const dir = 'evals/general-next/scenarios'
+  const runnable = readdirSync(resolve(dir))
+    .map((file) => [file, read(`${dir}/${file}`)] as const)
+    .filter(([, source]) => /\n {2}indexed: '/.test(source) && /\n {2}p4: false/.test(source))
+  expect(runnable.map(([file]) => file)).toEqual([
+    '14-analysis-index-follow-up.ts',
+    '17-mail-analysis-follow-up.ts',
+  ])
+  for (const [, source] of runnable)
+    expect(source).toMatch(/\n {2}turnAnswerIncludes: \[\['Data Stash'\]/)
 })

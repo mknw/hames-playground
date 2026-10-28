@@ -31,6 +31,12 @@
  * file's predicate, and a modelled `>`/`>>` redirect is judged the same way — the last
  * write of a file decides, as the exit-time diff over its final bytes would.
  *
+ * Promotion stores; it does not index. A promoted file reaches the Data Stash with no
+ * ingest status (`work-artifacts.server.ts:182-190`), and the person indexes it from the
+ * panel's "Index for search" (#832, owner 2026-10-28), so nothing here marks a written
+ * file indexed: {@link indexForUser} is the person's click, and the driver makes it
+ * between turns.
+ *
  * Not modelled: `rm`, `mv` and in-place shell edits of a credited file (the synthetic
  * shell cannot run arbitrary commands; production's exit-time `find` would not see a
  * deleted file, and `diffWorkFiles` ignores deletions, `work-sync.server.ts:168-177`),
@@ -642,7 +648,6 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     state.documents.set(file, text)
     const trace = state.trace()
     if (trace && !trace.artifacts.includes(file)) trace.artifacts.push(file)
-    if (trace && file.endsWith('.md') && !trace.indexed.includes(file)) trace.indexed.push(file)
   }
   /** The file's last write is not a deliverable (any more): what the exit-time diff would
    * promote is that write, so an earlier credit for the same file is withdrawn. */
@@ -884,4 +889,30 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     listTools: async () => state.descriptions,
     callTool: call,
   }
+}
+
+/**
+ * The person's "Index for search" click in the Data Stash (#832), mocked between turns:
+ * production indexes a promoted deliverable only when the person asks
+ * (`POST /api/stash/ingest`). The click lands on the scenario's declared `indexed` file
+ * and only once a turn promoted it, so a turn that never saved the file leaves the next
+ * turn nothing to retrieve.
+ */
+export function indexForUser(scenario: ConversationScenario, trace: ConversationTrace): void {
+  const file = scenario.indexed
+  if (file && trace.artifacts.includes(file) && !trace.indexed.includes(file))
+    trace.indexed.push(file)
+}
+
+/**
+ * Whether the synthetic Data Stash can retrieve a document: uploaded markdown (the upload
+ * gate indexes an upload for an agent with a redis retriever, as `general-next` is) or a
+ * file the person indexed. A deliverable nobody indexed is stored, not searchable.
+ */
+export function stashSearchable(
+  name: string,
+  uploads: ReadonlySet<string>,
+  trace: ConversationTrace,
+): boolean {
+  return name.endsWith('.md') && (uploads.has(name) || trace.indexed.includes(name))
 }

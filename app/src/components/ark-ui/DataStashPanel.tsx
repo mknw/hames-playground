@@ -18,6 +18,7 @@ import type { ContextEvent, ToolResultEventData } from '@hames-ai/harness-patter
 import {
   deleteStashDocument,
   getStashDocument,
+  indexStashDocument,
   patchStashDocument,
   stashDocumentDownloadUrl,
   uploadStashDocument,
@@ -40,9 +41,10 @@ import { SanitizedChip } from './SanitizedChip'
 // ============================================================================
 
 export type StashAction = 'hide' | 'unhide' | 'archive' | 'unarchive'
-/** Document actions add `delete` (removable) and `download` (fetch the raw
- *  file — base64-decoded for binary via the `?download` route). */
-export type DocAction = StashAction | 'delete' | 'download'
+/** Document actions add `delete` (removable), `download` (fetch the raw
+ *  file — base64-decoded for binary via the `?download` route) and `index`
+ *  (index it for search — the chip's own button, #832). */
+export type DocAction = StashAction | 'delete' | 'download' | 'index'
 
 export interface DataStashPanelProps {
   events: ContextEvent[]
@@ -53,7 +55,8 @@ export interface DataStashPanelProps {
   onStashAction: (eventId: string, action: StashAction) => Promise<void>
   /** A citation clicked in the chat — open the inline viewer at this reference. */
   pendingReference?: OpenReferenceTarget | null
-  /** Fired after a successful upload (so the route can watch embedding status). */
+  /** Fired after a successful upload or index request (so the route can watch
+   *  embedding status). */
   onUploaded?: () => void
 }
 
@@ -482,6 +485,14 @@ const DocChip = (props: {
   // no marker it read exactly like an indexed copy (PR #424 review F4).
   // Absent → not ingested (the agent has no redis retriever) — show nothing.
   const status = () => d().ingestStatus
+  // "Index for search" (#832): the person's switch for a copy nothing indexed —
+  // a sandbox deliverable, or an upload with no retriever to index it — and the
+  // retry for one whose index failed. Not for a binary (no text of its own to
+  // index) nor a hidden or archived copy (kept out of search either way).
+  const indexable = () =>
+    d().encoding !== 'base64' && !grayed() && (status() === undefined || status() === 'failed')
+  const indexLabel = () =>
+    status() === 'failed' ? 'Retry indexing for search' : 'Index for search'
   const notSearchable = () =>
     `Not searchable — indexing failed: ${d().ingestError ?? 'no reason was recorded'}`
   const [loading, setLoading] = createSignal(false)
@@ -520,7 +531,7 @@ const DocChip = (props: {
   }
 
   return (
-    <div style={{ position: 'relative', display: 'inline-block' }}>
+    <div data-doc-id={d().id} style={{ position: 'relative', display: 'inline-block' }}>
       {/* "Eye" — open the inline file viewer. Text docs, plus converted
           binaries (docx/pdf/… whose derived markdown is viewable); a raw binary
           has no text view. Stops propagation so it doesn't also open the menu. */}
@@ -555,6 +566,54 @@ const DocChip = (props: {
             style={{ width: '13px', height: '13px', color: '#22d3ee', display: 'block' }}
           />
         </button>
+      </Show>
+      {/* "Index for search" — the eye's corner on the left. Gone while
+          "embedding…" and once the copy is searchable; the chip's status lines
+          below carry the outcome. */}
+      <Show when={indexable()}>
+        <Tooltip.Root openDelay={200} closeDelay={100} positioning={{ placement: 'top' }}>
+          <Tooltip.Trigger
+            onClick={() => void handle('index')}
+            aria-label={indexLabel()}
+            disabled={loading()}
+            position="absolute"
+            inset="t-0 l-0"
+            z="6"
+            w="6"
+            h="6"
+            flex="~"
+            items="center"
+            justify="center"
+            p="0"
+            bg="transparent"
+            border="none"
+            rounded="md"
+            cursor="pointer"
+            op="55 hover:100 focus-visible:100"
+            ring="2 transparent focus-visible:ui-accent/40"
+            transition="all"
+          >
+            <span
+              class="i-material-symbols-manage-search"
+              w="3.5"
+              h="3.5"
+              text="ui-accent"
+              aria-hidden="true"
+            />
+          </Tooltip.Trigger>
+          <Tooltip.Positioner>
+            <Tooltip.Content
+              bg="ui-bg-tertiary"
+              border="1 ui-border-primary"
+              rounded="md"
+              p="x-2 y-1"
+              text="xs ui-text-primary"
+              shadow="md"
+            >
+              {indexLabel()}
+            </Tooltip.Content>
+          </Tooltip.Positioner>
+        </Tooltip.Root>
       </Show>
       {/* Native title tooltip — keeps the chip simple; Ark's Tooltip is used by
           the tool-result chips above. */}
@@ -1135,6 +1194,8 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
   // status transitions even before the first `pending` lands.
   const [watching, setWatching] = createSignal(false)
   let watchTimer: ReturnType<typeof setTimeout> | undefined
+  // The document chips' row, where "Index for search" hands its focus on.
+  let gallery: HTMLDivElement | undefined
   // Inline file viewer: which doc is open + an optional char range to highlight.
   const [viewer, setViewer] = createSignal<{
     doc: StashDocumentMeta
@@ -1245,11 +1306,47 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       // early fetch would race the background ingest and clobber the optimistic
       // `pending` back to none. Open a ~25s watch window instead; the poll
       // reconciles pending → indexed once redis catches up.
-      setWatching(true)
-      if (watchTimer) clearTimeout(watchTimer)
-      watchTimer = setTimeout(() => setWatching(false), 25000)
-      // Let the route track embedding status (to block the chat composer).
-      props.onUploaded?.()
+      watchIngest()
+    }
+  }
+
+  const watchIngest = () => {
+    setWatching(true)
+    if (watchTimer) clearTimeout(watchTimer)
+    watchTimer = setTimeout(() => setWatching(false), 25000)
+    // Let the route track embedding status (to block the chat composer).
+    props.onUploaded?.()
+  }
+
+  // "Index for search" (#832). The route stores `pending` before it answers, so
+  // the chip can say "embedding…" from here on without waiting for a poll, and
+  // the watch window (as after an upload) reconciles it to indexed or failed.
+  const indexDocument = async (sid: string, id: string) => {
+    // A refusal from an earlier click must not outlive a retry that succeeds.
+    setUploadError(null)
+    try {
+      await indexStashDocument(id, sid)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Indexing failed')
+      void refresh()
+      return
+    }
+    // That session's own list: the panel may be showing another one by now.
+    applyDocs(
+      sid,
+      (cachedDocuments(sid) ?? []).map((d) =>
+        d.id === id ? { ...d, ingestStatus: 'pending' as const, ingestError: undefined } : d,
+      ),
+    )
+    watchIngest()
+    // The copy is a new object now, so its chip was rendered again without the
+    // index button, and the keyboard focus that button held fell to <body>. Hand
+    // it to the same chip's eye, there whenever that button was (both need text).
+    if (document.activeElement === document.body) {
+      const chip = [...(gallery?.querySelectorAll<HTMLElement>('[data-doc-id]') ?? [])].find(
+        (el) => el.dataset.docId === id,
+      )
+      chip?.querySelector<HTMLElement>('button[title="View file"]')?.focus()
     }
   }
 
@@ -1268,6 +1365,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       a.remove()
       return
     }
+    if (action === 'index') return indexDocument(sid, id)
     try {
       if (action === 'delete') {
         applyDocs(
@@ -1385,7 +1483,7 @@ export const DataStashPanel = (props: DataStashPanelProps) => {
       <CollapsibleSection title="Your Uploads" count={docs().length} defaultOpen={true}>
         <UploadZone uploading={uploading()} error={uploadError()} onFiles={uploadFiles} />
         <Show when={docs().length > 0}>
-          <div flex="~ wrap" gap="2" p="x-3 y-2">
+          <div ref={gallery} flex="~ wrap" gap="2" p="x-3 y-2">
             <For each={docs()}>
               {(doc) => (
                 <DocChip

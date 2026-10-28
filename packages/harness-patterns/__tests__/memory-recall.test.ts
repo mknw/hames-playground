@@ -17,6 +17,8 @@
  *                                  `skip` attach nothing and record why
  *   event-hygiene                — no memory content in `serialize()`, either
  *                                  `serializeCompact()` branch or the event
+ *   memory-not-in-blob           — the persisted blob: the data keys, and the
+ *                                  saved synthesize/router call records
  *   recall-wake                  — the wake shares the gate's budget: `waking`,
  *                                  never unbounded, never an error
  */
@@ -851,6 +853,7 @@ describe('memory-not-in-blob: the saved call records', () => {
     functionName: 'Synthesize',
     variables: {},
     rawInput: JSON.stringify({ memory_context: input.memoryContext ?? null }),
+    rawOutput: 'ok',
   })
 
   let flowed = ''
@@ -880,6 +883,7 @@ describe('memory-not-in-blob: the saved call records', () => {
         functionName: 'Router',
         variables: {},
         rawInput: JSON.stringify({ memory_context: extra?.memoryContext ?? null }),
+        rawOutput: 'Right — metric units.',
       },
     }
   }) as unknown as RouteFn
@@ -911,6 +915,9 @@ describe('memory-not-in-blob: the saved call records', () => {
     expect(flowed).toContain(SENTINEL)
     const ev = finalAssistant(ctx)
     expect(ev?.llmCall).toMatchObject({ functionName: 'Synthesize' }) // cost attribution survives
+    // rawOutput is KEPT (the raw-LLM visibility invariant, #225) — it is the
+    // mutation that reddens a future wholesale redaction too.
+    expect(ev?.llmCall?.rawOutput).toBe('ok')
     expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
     expect(serializeContext(ctx)).not.toContain(SENTINEL)
   })
@@ -935,6 +942,7 @@ describe('memory-not-in-blob: the saved call records', () => {
     expect(routerSaw).toContain(SENTINEL)
     const ev = finalAssistant(ctx)
     expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
+    expect(ev?.llmCall?.rawOutput).toBe('Right — metric units.') // rawOutput kept (#225)
     expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
     expect(serializeContext(ctx)).not.toContain(SENTINEL)
   })

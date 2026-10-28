@@ -146,8 +146,20 @@ export function createEvent(
  *  `rawInput`, `rawOutput` and `parsedOutput` are what the call READ and what
  *  the model said — a memory's text, a tool result, a page under screening.
  *  Cost attribution survives: the client BAML selected, usage, duration and the
- *  step's `metrics`. */
-export function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | undefined {
+ *  step's `metrics`.
+ *
+ *  `keepOutput` is for the two records whose PROMPT renders the memory block
+ *  (router, compactExecution's synthesize — review F1): their `rawOutput` never
+ *  carries the block, because what the model said is persisted as the event's
+ *  own content anyway, and it is the only record of what a failed call actually
+ *  said — the raw-LLM visibility invariant (#225 owner review) that
+ *  `raw-llm-visibility.test.ts` pins. Dropping it there would make those
+ *  failures undebuggable from the UI without buying any privacy the content
+ *  channel does not already give away. */
+export function redactCall(
+  call: LLMCallRecord | undefined,
+  opts: { keepOutput?: boolean } = {},
+): LLMCallRecord | undefined {
   if (!call) return undefined
   return {
     functionName: call.functionName,
@@ -157,6 +169,7 @@ export function redactCall(call: LLMCallRecord | undefined): LLMCallRecord | und
     ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
     ...(call.provider ? { provider: call.provider } : {}),
     ...(call.clientName ? { clientName: call.clientName } : {}),
+    ...(opts.keepOutput && call.rawOutput !== undefined ? { rawOutput: call.rawOutput } : {}),
   }
 }
 

@@ -393,13 +393,15 @@ export function compactExecution<T extends CompactExecutionData>(
       // `assistant_message` event would persist recalled memory text in the
       // conversation blob that `serializeContext` scrubs from `data`. Same
       // redaction as every decide-path record; `variables`/`rawInput`/
-      // `rawOutput`/`parsedOutput` drop, cost attribution survives.
+      // `parsedOutput` drop, cost attribution survives. `rawOutput` is KEPT
+      // (`keepOutput`): the reply is already the event's `content`, and it is
+      // the only record of what a failed call actually said (#225).
       trackEvent(
         scope,
         'assistant_message',
         { content: synthesizedResponse, final: true } as AssistantMessageEventData,
         resolved.trackHistory,
-        redactCall(llmCall),
+        redactCall(llmCall, { keepOutput: true }),
       )
 
       scope.data = {
@@ -430,7 +432,7 @@ export function compactExecution<T extends CompactExecutionData>(
           ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
         } as ErrorEventData,
         true,
-        redactCall(failedLlmCall),
+        redactCall(failedLlmCall, { keepOutput: true }),
       )
       return scope
     }

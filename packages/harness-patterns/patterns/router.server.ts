@@ -204,7 +204,7 @@ export function router<T extends RouterData>(
           'assistant_message',
           { content: responseText, final: true } as AssistantMessageEventData,
           resolved.trackHistory,
-          redactCall(result.llmCall),
+          redactCall(result.llmCall, { keepOutput: true }),
         )
 
         return scope
@@ -226,7 +226,7 @@ export function router<T extends RouterData>(
           // router named a route that does not exist. WHICH name it invented
           // lives only in the raw response — carry it. Redacted (review F1):
           // same rendered memory block as every other router record.
-          redactCall(result.llmCall),
+          redactCall(result.llmCall, { keepOutput: true }),
         )
         return clearRouting(scope)
       }
@@ -244,7 +244,7 @@ export function router<T extends RouterData>(
           'assistant_message',
           { content: statusText } as AssistantMessageEventData,
           resolved.trackHistory,
-          redactCall(result.llmCall),
+          redactCall(result.llmCall, { keepOutput: true }),
         )
       }
 
@@ -273,7 +273,7 @@ export function router<T extends RouterData>(
           ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
         } as ErrorEventData,
         true,
-        redactCall(failedLlmCall),
+        redactCall(failedLlmCall, { keepOutput: true }),
       )
       return clearRouting(scope)
     }

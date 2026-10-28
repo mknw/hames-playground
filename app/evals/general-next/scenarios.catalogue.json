@@ -1249,7 +1249,7 @@
         "Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.",
         "From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues."
       ],
-      "expected": "North 47, South 19, difference 28, cited to lantern-launch-analysis.md.",
+      "expected": "Turn 1 saves lantern-launch-analysis.md and tells the person it can be indexed for search from the Data Stash; once they have indexed it, North 47, South 19, difference 28, cited to lantern-launch-analysis.md.",
       "grader": [
         {
           "check": "orderedTools",
@@ -1270,6 +1270,12 @@
           "check": "answerContains",
           "says": "module answerIncludes",
           "facts": ["North", "47", "South", "19", "28"]
+        },
+        {
+          "check": "turnAnswerContains",
+          "says": "module turnAnswerIncludes",
+          "turn": 1,
+          "facts": ["Data Stash"]
         },
         {
           "check": "artifact",

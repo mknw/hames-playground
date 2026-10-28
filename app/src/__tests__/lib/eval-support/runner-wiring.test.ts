@@ -251,3 +251,19 @@ it('mocks the Data Stash click between turns and serves only searchable document
   expect(driver.match(/stashSearchable\((?:name|source), UPLOADED, trace\)/g)).toHaveLength(2)
   expect(driver).not.toMatch(/endsWith\('\.md'\)/)
 })
+// The same ruling, per scenario (PM addition, 2026-10-28): every runnable scenario that
+// declares an `indexed` deliverable depends on the click, so its turn 1 must tell the
+// person where to index it. Today that is 14 and 17 (a must); 16 is P4-gated.
+// MUTATION: drop 17's `turnAnswerIncludes` (with its catalogue item) → red here only.
+it('every runnable scenario with an indexed deliverable names the Data Stash on turn 1', () => {
+  const dir = 'evals/general-next/scenarios'
+  const runnable = readdirSync(resolve(dir))
+    .map((file) => [file, read(`${dir}/${file}`)] as const)
+    .filter(([, source]) => /\n {2}indexed: '/.test(source) && /\n {2}p4: false/.test(source))
+  expect(runnable.map(([file]) => file)).toEqual([
+    '14-analysis-index-follow-up.ts',
+    '17-mail-analysis-follow-up.ts',
+  ])
+  for (const [, source] of runnable)
+    expect(source).toMatch(/\n {2}turnAnswerIncludes: \[\['Data Stash'\]/)
+})

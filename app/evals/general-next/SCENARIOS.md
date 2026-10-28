@@ -260,7 +260,7 @@ A live pass proves: no live pass is possible before P4; this case remains gated 
 
 User: “Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.”
 
-Expected assistant: Reads the launch mail, uses both uploads, requests analysis and writes lantern-launch-analysis.md; indexing it is the person’s step, from the Data Stash (#832), which the driver mocks between the turns.
+Expected assistant: Reads the launch mail, uses both uploads, requests analysis and writes lantern-launch-analysis.md; the answer tells the person it can be indexed for search from the Data Stash, because indexing is their step (#832), which the driver mocks between the turns.
 
 User: “From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues.”
 
@@ -268,7 +268,7 @@ Expected assistant: North 47, South 19, difference 28; cite lantern-launch-analy
 
 Expected routes: `office-data`, then `read-documents`. Expected tools: `graph_mail_recent`, then `sandbox_bash` with a production-shaped command naming both inputs and the output.
 
-Pass: successful tools in order with valid arguments; the artifact exists, is indexed by the mocked click after turn 1, and is retrieved on the later turn; final answer contains every stated fact and a citation with a source locator; candidate only: route children complete without error before their turn’s `answer`, within 6 decisions per turn.
+Pass: successful tools in order with valid arguments; turn 1 answer carries Data Stash; the artifact exists, is indexed by the mocked click after turn 1, and is retrieved on the later turn; final answer contains every stated fact and a citation with a source locator; candidate only: route children complete without error before their turn’s `answer`, within 6 decisions per turn.
 
 A live pass proves: the model composes mailbox lookup, a valid shell request naming both uploads and output, simulated indexing and later retrieval, and reports all regional facts with a citation; generated-code execution and upload/index integration remain unproved.
 

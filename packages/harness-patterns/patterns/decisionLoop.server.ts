@@ -61,6 +61,11 @@
  *     `think` picks it every time it is offered — six of six in a recorded run,
  *     which spent the whole bound and never answered. The guard is on the
  *     option SET, not in a prompt: the label is absent from that decision's spec.
+ *   - any route is not offered again this turn once two of its records in a row
+ *     made no progress: failed, or no tool call that succeeded (`madeProgress`,
+ *     `stalledRoutes`). A route whose every read failed was re-dispatched six
+ *     times over the same honest failure in a recorded run (#809). Same guard,
+ *     same place: the option set; `answer` is never a route, so it stays.
  *   - `maxIterations` (default {@link DECISION_LOOP_MAX_ITERATIONS}) stops the
  *     loop as `answer`, with a recoverable `budget_exhausted` error so the
  *     synthesizer says the work is partial (N5).
@@ -111,6 +116,7 @@ import {
   renderHandoff,
   resultBlock,
   routeKind,
+  stalledRoutes,
   stepLine,
   type RouteKind,
   type RouteOutput,
@@ -167,7 +173,8 @@ export interface DecisionLoopRoute<T> {
    *  nothing else. Naming an id no route's pattern emits under is refused. */
   readonly siblingResults?: readonly string[]
   /** A `planner` route is withheld from the options straight after its own
-   *  iteration and once a plan exists this turn. `true` offers it every time;
+   *  iteration and once a plan exists this turn. `true` offers it every time
+   *  (until two plans in a row fail: the repeat rule binds every route);
    *  planner routes only, refused on any other kind of route. */
   readonly allowReplan?: boolean
 }
@@ -651,11 +658,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         }
       } else {
         // The options THIS decision offers: a guarded planner is absent straight
-        // after itself and once a plan exists. Only `answer` left means nothing to ask.
+        // after itself and once a plan exists, and a stalled route for the rest of
+        // the run. Only `answer` left means nothing to ask.
+        const stalled = stalledRoutes(records)
         const offered = labels.filter(
           (l) =>
-            !guardedPlanners.has(l.id) ||
-            (latestPlan === undefined && records[records.length - 1]?.route !== l.id),
+            !stalled.has(l.id) &&
+            (!guardedPlanners.has(l.id) ||
+              (latestPlan === undefined && records[records.length - 1]?.route !== l.id)),
         )
         if (offered.length === 1) {
           ended = 'answer'

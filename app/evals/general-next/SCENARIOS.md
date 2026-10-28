@@ -104,15 +104,15 @@ User: “How many Project nodes are in the knowledge graph?”
 
 Expected assistant: There are 42 Project nodes.
 
-User: “Who is involved in the three most popular?”
+User: “Who is involved in the three projects with the most people working on them?”
 
-Expected assistant: The participants of the three most popular projects: Dune, Ember, Fern, Gulf, Haven, Iris and Juniper.
+Expected assistant: The people working on those projects: Zenith, Nadir and Apogee on Dune, Perigee and Azimuth on Birch, Meridian and Solstice on Cedar.
 
 Expected routes: `info-retrieval`. Expected tools: `read_neo4j_cypher`.
 
-Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries each of Dune, Ember, Fern, Gulf, Haven, Iris and Juniper; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: all listed tools occur successfully in order (across the same conversation); candidate only: each listed route selects a child that completes without error before its turn’s `answer`; final answer carries each of Zenith, Nadir, Apogee, Perigee, Azimuth, Meridian and Solstice; candidate only: chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
-A live pass proves: the model answers the follow-up from the canned graph fixture's per-entity relationship data — the three most popular projects by relationship degree and the union of their participants — in the same conversation. The fixture answers by query shape: a node-property query (e.g. `RETURN p.name, p.observations`) gets the miniature graph's node rows; relationship and degree queries get the triples.
+A live pass proves: the model answers the follow-up from the canned graph fixture's per-entity relationship data — the three projects ranked by WORKS_ON people (Dune 3, Birch 2, Cedar 2; rank-4 Ember has 1) and the union of their people — in the same conversation. The fixture answers by query shape: a Project node-property query (e.g. `RETURN p.name, p.observations`) gets the Project rows, a Person node query gets the Person rows, and relationship, involvement and degree queries get the triples.
 
 ### 08-follow-up-failure — Retry after an explicitly failed turn
 
@@ -204,7 +204,7 @@ A live pass proves: the model combines Project count 42 with target 50 and repor
 
 ### 14-analysis-index-follow-up — Compute, convert to markdown, then retrieve in a later turn
 
-**RUNNABLE NOW · should** · pending must (owner 2026-10-27)
+**RUNNABLE NOW · should** · should (owner 2026-10-28: depends on sandbox-output ingestion, not yet verified)
 
 User: “I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.”
 

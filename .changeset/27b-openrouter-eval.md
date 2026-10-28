@@ -1,9 +1,0 @@
----
-"@hames-ai/harness-baml": minor
----
-
-**The 27B model id is env-overridable, an eval-only OpenRouter route composes at the consumer client seam, and the 27B leaves price off the provider's reported cost.**
-
-- `LargeQwen` / `LargeQwenThink` declare `model env.LARGE_LLM_MODEL`. The DEFAULT (`DEFAULT_LARGE_LLM_MODEL`, `'Qwen/Qwen3.8-27B-FP8'`) is held in `inference-env.server.ts` and applied to `process.env` at the routing seam's module load, so the unset wire path is byte-identical to the previously pinned literal; an empty value normalizes to the default. `largeLlmModelId()` is the one reader — the wake ping resolves the same variable the declared client reads.
-- New `openrouter-eval.server.ts`: when `LARGE_LLM_BASE_URL` names an OpenRouter host, `activateOpenRouterLargeOverride()` registers a consumer client layer (#374 D1) routing every role the tier map sends to the 27B through a per-call `ClientRegistry` client re-declared under the SAME name — the env-resolved model id plus `provider: { zdr: true }`, forwarded verbatim by the same `openai-generic` mechanism `chat_template_kwargs` rides. `describe`/`decide` are derived-absent (from `SELF_DEPLOYED_CLIENT_BY_ROLE`), so the small box keeps its traffic; the wake skips the large poll and a private-only deployment refuses any registry bag. With the vars unset the layer is inert and nothing on the wire changes.
-- `computeEventMetrics` reads the provider-reported `usage.cost` (USD) off every attempt's raw response and passes it to the cost estimator, so a client in `PROVIDER_COST_CLIENTS` prices from the provider's own bill. The host's time-priced map now holds `SmallQwen` / `PrivateSystemOne` only; the 27B leaves price from `usage.cost` × `EUR_PER_USD`, and a call the provider priced nothing for reads unknown — never free, never a wall-clock floor for a box it never touched.

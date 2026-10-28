@@ -87,7 +87,8 @@ function scriptedDecide(script: string[], fail?: { at: number }) {
   return { decide: fn, states }
 }
 
-/** A simpleLoop-shaped child; `seen` records what it was handed. */
+/** A simpleLoop-shaped child; `seen` records what it was handed. Its one lookup
+ *  succeeds, so `info` makes progress and may repeat (#809's repeat rule). */
 function child(
   id: string,
   seen: { data: unknown[]; events: unknown[] } = { data: [], events: [] },
@@ -97,6 +98,13 @@ function child(
     async (scope, view) => {
       seen.data.push(JSON.parse(JSON.stringify(scope.data)))
       seen.events.push(view.unfiltered().get())
+      trackEvent(scope, 'tool_call', { callId: 'c', tool: 'search', args: {} }, true)
+      trackEvent(
+        scope,
+        'tool_result',
+        { callId: 'c', tool: 'search', result: 'row', success: true },
+        true,
+      )
       trackEvent(
         scope,
         'controller_action',

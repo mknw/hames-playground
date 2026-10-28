@@ -1209,9 +1209,11 @@ instead, which tells the controller to answer without it.
 is the cheap question in front of the screen: ONE `noul` decision,
 `GUARD_SCREEN` (key `guard.screen`), asked through the same `DecideFn` seam the
 decision loop uses, over the same 20 000-character head the screen reads. The
-screen runs when its pTrue is at or above `threshold` (τi, default 0.15, an
-unmeasured placeholder; on the self-deployed tier it must stay below 0.199, where
-the decision box floors an unsure "no"). Its state quotes the head with every line
+screen runs when its pTrue is at or above `threshold` (τi, default
+`GUARD_GATE_THRESHOLD`, 0.15, an unmeasured placeholder; on the self-deployed
+tier it must stay below 0.199, where the decision box floors an unsure "no"). A
+host sets it per deployment; the reference app reads `GUARD_GATE_THRESHOLD` from
+its environment (#844). Its state quotes the head with every line
 prefixed `"> "` (a line starts after CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028
 or U+2029) between markers carrying a per-call 16-hex nonce from the platform's
 cryptographic source, drawn again if the quoted text contains it, after the
@@ -1477,7 +1479,9 @@ JSON-quoted on one line; the roster's spans as evidence under a header that
 claims no trust, each capped at 80, neutralised and quoted; the user's latest
 message (its first 4 000 characters) and the block, every line prefixed `"> "`
 and each quote bounded by markers carrying a per-call nonce. A state over the
-decision box's byte budget is unavailable. At or above τe (0.3) on
+decision box's byte budget is unavailable. At or above τe (`threshold`, default
+`GUARD_EGRESS_THRESHOLD`, 0.3; the reference app reads `GUARD_EGRESS_THRESHOLD`
+from its environment, #844) on
 1 − P(`nothing_private`) the call is refused with the larger private label's
 text (a tie names personal); below it the call goes out, and a roster match is
 recorded as an `egress_audit` event (human-facing only: one fixed line with no
@@ -1503,7 +1507,9 @@ it: its fallback says outside requests were still checked, which a turn that
 makes none would contradict. A resumed invocation reads the turn's events and
 does not warn again.
 
-**The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default 0). A refusal on
+**The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default
+`GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE`, 0; the reference app reads
+`GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` from its environment, #844). A refusal on
 Decide's answer or for want of one is a tripwire and an `egress_refused` event:
 refusal N + 1 on a route closes that route until the user's next message, and
 every later outgoing call of the route is refused with no model call. A route is

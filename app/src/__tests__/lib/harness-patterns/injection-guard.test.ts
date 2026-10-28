@@ -831,10 +831,10 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
     expect(rulesOf(data, c)).toContain('exfil-data-url')
   })
 
-  // MUTATION: `url.hostname.endsWith(host)` instead of equality: the subdomain
-  // case goes red; `value.includes(host)`: the suffix and userinfo cases too.
-  // Drop the credentials/port check: the port and reversed-userinfo cases.
-  // Drop SINGLE_HTTPS_URL: the http and second-shape cases.
+  // MUTATION: `url.hostname.endsWith(host)` instead of equality: the prefix and
+  // subdomain cases go red; `value.includes(host)`: the suffix case too. Drop
+  // the credentials/port check: the port and reversed-userinfo cases. Drop
+  // SINGLE_HTTPS_URL: the http and second-shape cases.
   it.each([
     ['suffix', `https://contoso-my.sharepoint.com.evil.example${PATH}`],
     ['prefix', `https://evilcontoso-my.sharepoint.com${PATH}`],

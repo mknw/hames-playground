@@ -3,7 +3,7 @@ import { GENERAL_BASELINE, type BaselineStatus } from './general-baseline'
 
 /**
  * Existing musts whose acceptance run is still pending, with the tracking issue
- * (owner ruling 2026-10-27, #808–#810). The flip gate does not block the flip on
+ * (owner ruling 2026-10-27, #808–#809). The flip gate does not block the flip on
  * a pending must: it lists it in the report instead. The pin in flip-gate.test.ts
  * keeps this record in step with the scenario modules' `pendingMustIssue` — a
  * module that gains or loses the flag without this record, or the other way
@@ -12,7 +12,6 @@ import { GENERAL_BASELINE, type BaselineStatus } from './general-baseline'
 export const PENDING_MUSTS: Readonly<Record<string, number>> = {
   '07-follow-up-success': 808,
   '08-follow-up-failure': 809,
-  '14-analysis-index-follow-up': 810,
 }
 
 /**

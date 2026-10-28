@@ -193,6 +193,22 @@ Verified in this checkout (each cited above): the state's construction and its s
 
 **Not verified:** the effect on routing (the whole value of this note rests on it); the ~1.6 s per-call stash figure; the Anthropic tier's decider.
 
+## Recalled memories (#829)
+
+Built after this note, on the same tier line, for eval scenario 05: a turn asking what was noted earlier was routed to `read-documents` because the decider could not know the answer was remembered. The host's one function (`privateDecisionRun` in `app/src/lib/harness-client/decision-documents.server.ts`, the raw slot compared with `'self_deployed'`) now answers both questions, and `decisionLoop`'s `quoteMemories` asks it once per run.
+
+| Tier                                             | What the decide state carries about the memories `withMemory` recalled this turn |
+| ------------------------------------------------ | -------------------------------------------------------------------------------- |
+| private (`'self_deployed'`)                      | their text, at most 5 memories of 280 code points, 2,000 characters in all       |
+| every other, including unrecognised or frameless | `N relevant memories (not shown)`                                                |
+
+What differs from names, and why:
+
+- **Quoted, not withheld on a rule.** A memory is the user's own words (its evidence is a verbatim span of a user message), and the user is the principal, so the injection corpus is not run over it. Structure is still protected: each memory is one line of visible characters (the same cap, NFKC, separator and invisible-character steps as a name), prefixed `"> "`, between markers carrying a nonce drawn once per run from the platform's cryptographic source that the quoted text does not contain, as the guard gate's and the egress question's states are.
+- **Not persisted (unlike T6).** Recalled memory text is kept out of the conversation blob by an existing rule (`serializeContext` drops `data.memories`; SPEC, review F1), so a run that quotes memory records its decisions with the call redacted: usage, cost and client survive, the state and request body do not. A transport error that echoed part of a request body could still carry a fragment into the error message (capped at 500 characters).
+- **The developer's `routerMemory: 'replies-only'`** keeps memory out of the decision entirely.
+- **Onward flow (T5)** is the same: the block exists only in the decide state string; no child, record, handoff or synthesizer input carries it. The decider's output is one label.
+
 ## See also
 
 - #507 · [Eval run 3](https://github.com/mknw/hames-playground/issues/507#issuecomment-6281039851) · #697 (route wording) · #698 · #692 · #705

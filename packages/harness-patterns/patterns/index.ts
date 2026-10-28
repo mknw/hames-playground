@@ -142,6 +142,14 @@ export {
   type ResolvedDecisionDocuments,
 } from './decisionLoop-documents.server'
 export {
+  renderMemoriesBlock,
+  DECISION_MEMORIES_HEADING,
+  DECISION_MEMORIES_MAX,
+  DECISION_MEMORY_CODE_POINTS,
+  DECISION_MEMORIES_MAX_CHARS,
+  type DecisionMemories,
+} from './decisionLoop-memories.server'
+export {
   collectToolNames,
   type RouteOutput,
   type RouteStats,

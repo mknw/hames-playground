@@ -32,6 +32,14 @@
  * Never `memories`, `memoryContext` or `intent`. Nothing a child writes to
  * `data` flows back.
  *
+ * ## What the decisions model is told about memory
+ *
+ * With `quoteMemories` configured, the state counts the memories `withMemory`
+ * recalled this turn and, only on a run the host says may see them, quotes
+ * them, fenced as data (`decisionLoop-memories.server.ts`). Its output is a
+ * route choice, so they reach no child: the block lives in the decide state
+ * alone, and a quoting run records its decisions without the call's text.
+ *
  * ## What comes back
  *
  * One record per iteration, built by code from the child's COMMITTED events
@@ -121,6 +129,8 @@ import {
   type DecisionDocumentsSource,
   type ResolvedDecisionDocuments,
 } from './decisionLoop-documents.server'
+import { renderMemoriesBlock, type DecisionMemories } from './decisionLoop-memories.server'
+import type { RecalledMemory } from './memoryRecall.server'
 import type { PlannerData } from './planner.server'
 import {
   harnessPseudonymisesInputs,
@@ -185,6 +195,11 @@ export interface DecisionLoopStateInput {
    *  when the config names no source. Off a run the host trusts with names it
    *  holds none. An override owns its own quoting, cap and placement. */
   readonly documents?: ResolvedDecisionDocuments
+  /** This turn's recalled memories as resolved once for this run: the count,
+   *  and their text only when the host's `quoteMemories` said this run may see
+   *  it. Absent when the config names no `quoteMemories` or nothing was
+   *  recalled. An override owns its own quoting, cap and placement. */
+  readonly memories?: DecisionMemories
 }
 
 export interface DecisionLoopConfig extends PatternConfig {
@@ -211,6 +226,14 @@ export interface DecisionLoopConfig extends PatternConfig {
   readonly documents?: DecisionDocumentsSource
   /** Timeout of `documents` in ms (default {@link DECISION_DOCUMENTS_TIMEOUT_MS}). */
   readonly documentsTimeoutMs?: number
+  /** Whether this run may QUOTE the memories `withMemory` recalled this turn
+   *  (`data.memories`) to the decisions model, called ONCE per run before
+   *  iteration 1. Core never reads a tier: this is the host's tier line. Only
+   *  `true` quotes them, fenced as data under a per-run nonce, and the run's
+   *  decisions are then recorded without the call's text; anything else, a
+   *  throw included (one `warning`), gives a count. Absent: the state says
+   *  nothing about memory. `routerMemory: 'replies-only'` withholds both. */
+  readonly quoteMemories?: () => boolean
   /** Tool names in its routes whose executor may pause for a person (a write
    *  request; slice 6). Construction refuses one offered on a path that cannot
    *  be resumed inside the run, and a route's `simpleLoop` refuses a batch that
@@ -277,6 +300,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     state: stateOverride,
     documents: documentsSource,
     documentsTimeoutMs: documentsTimeoutConfig,
+    quoteMemories,
     gatedTools = [],
     ...patternConfig
   } = config
@@ -423,13 +447,19 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
 
   // --------------------------------------------------------------------------
 
-  const renderState = (input: DecisionLoopStateInput, fn: DecideFn): string => {
+  const renderState = (
+    input: DecisionLoopStateInput,
+    fn: DecideFn,
+    memoriesBlock: string | undefined,
+  ): string => {
     if (stateOverride) return stateOverride(input)
     const window = readContextWindow(fn)
     const steps = input.records.map(stepLine)
     const latest = input.lastN > 0 ? input.records.slice(-input.lastN).map(resultBlock) : []
-    // A fixed section of the default render: it counts toward the budget (the
-    // closures below re-render the whole state) but is never itself trimmed.
+    // Fixed sections of the default render: they count toward the budget (the
+    // closures below re-render the whole state) but are never themselves trimmed.
+    // The memories block is rendered once per run (its nonce is drawn once), so
+    // the state stays append-only within the turn.
     const documents = input.documents && renderDocumentsBlock(input.documents)
     const render = (c: readonly string[], s: readonly string[], r: readonly string[]): string =>
       [
@@ -437,6 +467,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         c.join('\n\n'),
         '',
         ...(documents ? [documents, ''] : []),
+        ...(memoriesBlock ? [memoriesBlock, ''] : []),
         'This turn so far:',
         s.length > 0 ? s.join('\n') : '(nothing yet)',
         ...(r.length > 0
@@ -513,6 +544,50 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       return 'unknown'
     } finally {
       clearTimeout(timer)
+    }
+  }
+
+  /** This turn's recalled memories, once per run, as the host lets this run see
+   *  them, and the block they render to. Fail-closed on disclosure: a host
+   *  answer that throws, or a quote that cannot be fenced, is the count. */
+  const resolveMemories = (
+    scope: PatternScope<T>,
+  ): { memories: DecisionMemories; block: string | undefined } | undefined => {
+    if (!quoteMemories) return undefined
+    const data = scope.data as { memories?: unknown; routerMemory?: unknown }
+    // The developer's choice to keep recalled memory away from routing (#548).
+    if (data.routerMemory === 'replies-only') return undefined
+    const recalled = (Array.isArray(data.memories) ? data.memories : []).filter(
+      (m): m is RecalledMemory => typeof (m as RecalledMemory | null)?.content === 'string',
+    )
+    if (recalled.length === 0) return undefined
+    const counted: DecisionMemories = { total: recalled.length }
+    const warn = (e: unknown): { memories: DecisionMemories; block: string | undefined } => {
+      trackEvent(
+        scope,
+        'warning',
+        {
+          task: 'decision_memories',
+          message: 'The recalled memories could not be quoted for the next-step decision.',
+          fallback: 'The decision state counts them instead.',
+          error: e instanceof Error ? e.message : String(e),
+        } satisfies WarningEventData,
+        true,
+      )
+      return { memories: counted, block: renderMemoriesBlock(counted) }
+    }
+    let quote: boolean
+    try {
+      quote = quoteMemories() === true
+    } catch (e) {
+      return warn(e)
+    }
+    if (!quote) return { memories: counted, block: renderMemoriesBlock(counted) }
+    const memories: DecisionMemories = { ...counted, quoted: recalled.map((m) => m.content) }
+    try {
+      return { memories, block: renderMemoriesBlock(memories) }
+    } catch (e) {
+      return warn(e)
     }
   }
 
@@ -604,6 +679,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       }
     }
     const documents = await resolveDocuments(scope)
+    const memories = resolveMemories(scope)
     let latestPlan: { text: string; steps: number } | undefined
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
@@ -680,8 +756,10 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
               lastN,
               iteration,
               ...(documents !== undefined ? { documents } : {}),
+              ...(memories !== undefined ? { memories: memories.memories } : {}),
             },
             decideFn,
+            memories?.block,
           )
         } catch (e) {
           stateError = `decisionLoop state builder failed: ${e instanceof Error ? e.message : String(e)}`
@@ -699,6 +777,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           {
             trackHistory: resolved.trackHistory,
             errorSeverity: iteration === 1 ? 'irrecoverable' : 'recoverable',
+            // Memory text never rides the persisted blob (#419 F1): a run whose
+            // state builder was handed it records the call without its text.
+            redact: memories?.memories.quoted !== undefined,
           },
         )
         scope.data = {

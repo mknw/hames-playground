@@ -177,6 +177,13 @@ export interface AgentDeps {
    */
   createDecisionDocuments?: (sessionId: string) => DecisionDocumentsSource
   /**
+   * Whether the Decide step may QUOTE the turn's recalled memories (#829), read
+   * once per run. The host owns the tier rule, as for documents: `true` only on
+   * a run it trusts with memory text, and anything else gives the decider a
+   * count. Without it the state says nothing about memory.
+   */
+  quoteMemoriesToDecider?: () => boolean
+  /**
    * The app's sandbox wrapper (the app's `with-sandbox.server.ts`), curried
    * onto the attach config the factories pass. The pattern type is
    * `AgentData`-specific: these factories only ever wrap the agent's own

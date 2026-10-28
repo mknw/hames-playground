@@ -179,6 +179,16 @@ of names. Core renders it into the state (capped, each name sanitised
 deterministically, an unreadable list shown as unknown, never as none) but never
 reads a tier itself. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
+With `withMemory` in the chain, the host can also tell the decisions model what
+was recalled this turn, through `quoteMemories` on the loop's config: a function
+asked once per run whether that run may quote the recalled memories. Answer
+`true` only where the decisions endpoint may see memory text (the reference app:
+a run whose raw tier slot is its private tier); every other answer gives a count.
+The quote is fenced as data under a per-run nonce, capped, and lives in the
+decide state alone: no route child receives it, and a quoting run records its
+decisions with the call redacted so the text is not stored with the
+conversation. See SPEC's [decisionLoop](SPEC.md#decisionlooproutes-config-507).
+
 A planner caps the reasoning handed to downstream executors with
 `maxReasoningChars` (default 2000), alongside the existing `maxPlanChars` for
 plan text. Its `plan_created` event and LLM call record retain the full trace.
@@ -240,7 +250,8 @@ configuration withholds earlier content and refuses web calls. The loop itself
 sanitises and screens nothing: the office and info route guards declare the
 screen, the documents route's guard none, and a route record carries the
 fence its tool results arrived in. Memory
-is optional and reaches synthesis alone. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
+is optional and reaches synthesis and the decisions model (its text only on the
+private tier, a count elsewhere), never a route. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It is the
 reference app's default agent, set by the host rather than by registration.
 
 ### Deciding with probabilities

@@ -258,6 +258,10 @@ export async function createDriver(
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
   // Microsoft 365 result carries the connector's provenance stamp, so every one is external.
   const { classifyIngress } = await import('../../src/lib/harness-client/ingress-classifier.server')
+  // The host's own tier line for what the Decide step may quote of recalled memory (#829):
+  // the eval's frame is `self_deployed`, so 05's memory reaches the decider as text.
+  const { privateDecisionRun } =
+    await import('../../src/lib/harness-client/decision-documents.server')
   const dispose = registerTransport(transport)
   const deps: AgentDeps = {
     toolNamespaces: transport.namespaceFor,
@@ -289,6 +293,7 @@ export async function createDriver(
         searchable: name.endsWith('.md'),
       })),
     }),
+    quoteMemoriesToDecider: privateDecisionRun,
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',

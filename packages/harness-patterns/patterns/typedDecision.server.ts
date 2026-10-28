@@ -28,7 +28,7 @@ import type {
   UserMessageEventData,
   ViewConfig,
 } from '../types'
-import { resolveConfig, trackEvent } from '../context.server'
+import { redactCall, resolveConfig, trackEvent } from '../context.server'
 import { getErrorHint } from '../error-hints'
 import { currentRunFrame } from '../run-frame.server'
 import { DEFAULT_RUNTIME_CONFIG } from '../runtime-config'
@@ -192,6 +192,11 @@ export interface DecideOptions {
   readonly trackHistory?: TrackHistory
 
   readonly errorSeverity?: 'recoverable' | 'irrecoverable'
+  /** Record the call WITHOUT what it read (`redactCall`): for a state quoting
+   *  text that must not reach the persisted blob through the event — recalled
+   *  memory, which `serializeContext` keeps out of `data` for the same reason
+   *  (#419 F1). Usage, cost and the client survive. */
+  readonly redact?: boolean
 }
 
 export function readContextWindow(fn: { limits?: DecideFn['limits'] } | undefined): number {
@@ -265,13 +270,14 @@ function record(
   recordError = true,
 ): AnyDecision {
   const errorOwnsCall = evaluated.error?.kind === 'llm_call'
+  const call = opts.redact ? redactCall(evaluated.llmCall) : evaluated.llmCall
   const before = scope.events.length
   trackEvent(
     scope,
     'decision_made',
     evaluated.event,
     opts.trackHistory ?? 'decision_made',
-    errorOwnsCall ? undefined : evaluated.llmCall,
+    errorOwnsCall ? undefined : call,
   )
   const recorded = scope.events[before]
   const eventId = recorded?.type === 'decision_made' ? recorded.id : undefined
@@ -285,7 +291,7 @@ function record(
         hint: getErrorHint(evaluated.error.error),
       } as ErrorEventData,
       true,
-      errorOwnsCall ? evaluated.llmCall : undefined,
+      errorOwnsCall ? call : undefined,
     )
   }
   return (eventId ? { ...evaluated.decision, eventId } : evaluated.decision) as AnyDecision

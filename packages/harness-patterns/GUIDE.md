@@ -230,6 +230,9 @@ update failure refuses further outgoing calls while delivering the result. The
 gate counts its refusals per route by the run frame's `route` slot, which
 `decisionLoop` writes around each child. See SPEC's
 [egress gate](SPEC.md#withegressgateconfigpattern-boundary-guards-slice-4).
+For the guards as one system — settings, defaults per tier, the person prompts
+and the operator switches — see the Guardrail engineering page in the repo's
+docs: <https://github.com/mknw/hames-playground/blob/main/docs/tutorials/guardrail-engineering.md>.
 
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.

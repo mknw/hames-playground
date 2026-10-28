@@ -179,23 +179,29 @@ produces a visible error without public fallback.
 
 #### The `GUARD_*` operator switches
 
-Four environment variables let an operator weaken the guards this agent
-composes with. They are read once at boot and validated there — they narrow a
-guard, never widen one. They set the fields of
+Seven environment variables set the guards this agent composes with: four
+modes, which can only weaken a guard, and three numbers, which can move it
+either way. They are read once at boot and validated there. They set the
+fields of
 [`AgentDeps.guards`](#what-an-agent-definition-contains); a host that composes
 guards in code sets the same fields directly:
 
-| Variable                 | Sets                                                                                          | Values                                |
-| ------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `GUARD_SCREEN`           | the injection screen's mode on the self-deployed tier                                         | `off` / `shadow` / `gated` / `always` |
-| `GUARD_SCREEN_ANTHROPIC` | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)         | `off` / `always`                      |
-| `GUARD_EGRESS`           | the egress gate's mode on every tier (`roster` vetoes on a directory match and asks no model) | `filter` / `roster`                   |
-| `GUARD_PSEUDONYMISE`     | the web route's input pseudonymiser (default `on`; `off` is its retirement switch)            | `on` / `off`                          |
+| Variable                                 | Sets                                                                                                                                 | Values                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| `GUARD_SCREEN`                           | the injection screen's mode on the self-deployed tier                                                                                | `off` / `shadow` / `gated` / `always` |
+| `GUARD_SCREEN_ANTHROPIC`                 | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)                                                | `off` / `always`                      |
+| `GUARD_EGRESS`                           | the egress gate's mode on every tier (`roster` vetoes on a directory match and asks no model)                                        | `filter` / `roster`                   |
+| `GUARD_PSEUDONYMISE`                     | the web route's input pseudonymiser (default `on`; `off` is its retirement switch)                                                   | `on` / `off`                          |
+| `GUARD_GATE_THRESHOLD`                   | τi, `gateThreshold`: the screen runs when the gate's probability is at or above it (default `0.15`; obeyed only by a `gated` screen) | a number from 0 to 1                  |
+| `GUARD_EGRESS_THRESHOLD`                 | τe, `egressThreshold`: an outgoing call is refused or asked about when the private mass is at or above it (default `0.3`)            | a number from 0 to 1                  |
+| `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | the tripwire's N, `maxOutgoingRetriesPostTripwire`: refusal N + 1 on a route closes it for the turn (default `0`)                    | a whole number, 0 or greater          |
 
-A value below a tier's declared default warns at boot, naming what it switches
-off; an unrecognised value refuses boot. The deterministic layers and the
-thresholds have no switch — those are decisions a reviewed line of code owns.
-The reference host reads these four in
+A mode below a tier's declared default, or a number looser than its default (a
+threshold above it, an N above 0), warns at boot, naming what it loosens; an
+unrecognised or out-of-range value refuses boot without echoing it. Unset, each
+keeps today's default. The deterministic layers have no switch — those are
+decisions a reviewed line of code owns.
+The reference host reads these seven in
 [`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts).
 
 `general-next` also opts into optional memory. Only its final synthesis receives recalled

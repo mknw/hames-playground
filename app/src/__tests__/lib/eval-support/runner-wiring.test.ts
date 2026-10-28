@@ -135,6 +135,42 @@ it('uses live production metadata, records refusing writes, and never returns a 
     expect(catalog).toMatch(new RegExp(`${key}: \\{`))
   }
 })
+it('wires the guards’ settings into the driver’s bag, one env read (#845 review finding 2)', () => {
+  // The driver’s bag carries `guardConfig()`’s three settings — the same
+  // numbers the runner counts against — so the eval’s gate runs at the env’s
+  // τi and its egress gate at the env’s τe and N, never the library defaults.
+  // Structural by necessity: nothing under src/ may import evals/
+  // (`evals-not-in-ci.test.ts`), so a behavioural pin with
+  // GUARD_EGRESS_THRESHOLD=0.4 stubbed cannot import the driver here; the
+  // parse itself is pinned in `guard-config.test.ts`.
+  const driver = read('evals/general-next/driver.ts')
+  expect(driver).toMatch(/const guardNumbers = guardConfig\(\)/)
+  expect(driver).toMatch(/gateThreshold: guardNumbers\.gateThreshold/)
+  expect(driver).toMatch(/egressThreshold: guardNumbers\.egressThreshold/)
+  expect(driver).toMatch(
+    /maxOutgoingRetriesPostTripwire: guardNumbers\.maxOutgoingRetriesPostTripwire/,
+  )
+  // The bag has to BE the deps slot it fills, not a rebuilt subset of it.
+  // MUTATION: rebuild the deps literal's `guards` slot without the three
+  // numbers (`guards: { pseudonymiseForWeb: guards.pseudonymiseForWeb,
+  // classifyIngress: guards.classifyIngress }` — tsc-clean) → the scan of the
+  // literal below misses `/^\s*guards,$/m` and this goes red; the eval's agent
+  // is back on the library's defaults while the report counts at the env's τi.
+  const depsLiteral = /const deps: AgentDeps = \{([\s\S]*?)\n {2}\}\n/.exec(driver)?.[1]
+  expect(depsLiteral, 'the deps literal').toBeDefined()
+  expect(depsLiteral!).toMatch(/^\s*guards,$/m)
+  // And the return carries the same read, not a second one or a re-read.
+  // MUTATION: `guards: guardConfig()` in the return → both this pin and the
+  // one-call count below go red.
+  expect(driver).toMatch(/guards: guardNumbers,\s*async run/)
+  // One read: every `guardConfig(` call in the file, exactly one — the count
+  // excludes the comments' backtick-quoted mentions via the lookbehind, so a
+  // second read anywhere in code reddens. The runner counts against the same
+  // bag, never a second env read.
+  expect(driver.match(/(?<!`)guardConfig\(/g)).toHaveLength(1)
+  expect(run()).toMatch(/guardTurnCounts\(trace\.turns, driver\.guards\.gateThreshold\)/)
+  expect(run()).not.toContain('guardConfig()')
+})
 it('keeps 17 executable scenarios, 18 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),

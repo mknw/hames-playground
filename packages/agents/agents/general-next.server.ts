@@ -16,6 +16,7 @@ import {
   withMemory,
   withPseudonymisedInputs,
   withReferences,
+  GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
   type ConfiguredPattern,
 } from '@hames-ai/harness-patterns'
 import {
@@ -195,7 +196,9 @@ async function createPatterns(
   // the deterministic pass alone unless that pass finds something.
   const screenMode: ByTier<ScreenMode> =
     deps.guards?.screenMode ?? ({ default: 'shadow', anthropic: 'always' } as const)
-  const gate = createGuardGate(createDecideAdapter())
+  // τi from the composition root's GUARD_GATE_THRESHOLD (#844), validated at
+  // boot; absent, the gate's own default.
+  const gate = createGuardGate(createDecideAdapter(), { threshold: deps.guards?.gateThreshold })
   const docGuard = {
     namespaces: ['graph'],
     tools: sandboxTools,
@@ -294,6 +297,8 @@ async function createPatterns(
   // that box has no network. Everything else is egress, so a route that gains
   // an outgoing tool later is covered with no declaration.
   // N = 0: a refusal closes its route's egress until the user's next message.
+  // N and τe are the composition root's GUARD_EGRESS_* settings (#844),
+  // validated at boot; absent, these declared values stand.
   // A fetch address must come from the user or from content the run did not
   // compute: web pages, library docs and Microsoft 365 data give addresses; a
   // Cypher RETURN and the office box's output do not (O21).
@@ -311,7 +316,9 @@ async function createPatterns(
     // the design's default — Decide decides, a roster match is evidence —
     // stands without it.
     mode: deps.guards?.egressMode ?? 'filter',
-    maxOutgoingRetriesPostTripwire: 0,
+    threshold: deps.guards?.egressThreshold,
+    maxOutgoingRetriesPostTripwire:
+      deps.guards?.maxOutgoingRetriesPostTripwire ?? GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
     loadedDecideDown: 'by-shape',
     // An attended turn asks the person where the gate would refuse; an
     // unattended one (a routine, an eval) still refuses (slice 10).

@@ -315,7 +315,7 @@ async function main() {
                 attempt,
                 status,
                 checks,
-                guards: guardTurnCounts(trace.turns),
+                guards: guardTurnCounts(trace.turns, driver.guards.gateThreshold),
               })
               // First failure earns exactly two more attempts, pass or fail.
               if (attempt === 1 && status === 'pass') break

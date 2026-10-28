@@ -19,7 +19,11 @@
  * not a gate call, whatever its shape.
  */
 import type { ContextEvent } from '@hames-ai/harness-patterns'
-import { guardGateSkipRate, GUARD_SCREEN } from '@hames-ai/harness-patterns/guard-gate.server'
+import {
+  guardGateSkipRate,
+  GUARD_GATE_THRESHOLD,
+  GUARD_SCREEN,
+} from '@hames-ai/harness-patterns/guard-gate.server'
 import type { ConversationTrace } from './conversation'
 
 export interface GuardTurnCounts {
@@ -72,7 +76,12 @@ const latencyOf = (events: readonly ContextEvent[]): number | null => {
   return seen ? total : null
 }
 
-export function guardTurnCounts(turns: ConversationTrace['turns']): GuardTurnCounts[] {
+/** `gateThreshold` is the τi the run's gate ran with (`GUARD_GATE_THRESHOLD`
+ *  when the deployment sets it, #844): the skip count is read against it. */
+export function guardTurnCounts(
+  turns: ConversationTrace['turns'],
+  gateThreshold: number = GUARD_GATE_THRESHOLD,
+): GuardTurnCounts[] {
   return turns.map((turn, index) => {
     const events = turn.events
     const decision = (key: string) =>
@@ -80,7 +89,7 @@ export function guardTurnCounts(turns: ConversationTrace['turns']): GuardTurnCou
         ContextEvent & { data: Record<string, unknown> }
       >
     const gate = decision(GUARD_SCREEN.key)
-    const rate = guardGateSkipRate(events)
+    const rate = guardGateSkipRate(events, gateThreshold)
     const guardsDown = events.filter(
       (e) =>
         e.type === 'decision_made' &&

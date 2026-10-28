@@ -251,6 +251,9 @@ let gateP: number
  *  given all the mass. `nothing_private` lets every outgoing call go. */
 let egressStates: string[]
 let egressAnswer: (state: string) => 'personal' | 'company' | 'nothing_private'
+/** The egress answer's probabilities when a test needs a split mass (#844's
+ *  τe pins); unset, all of it on `egressAnswer`'s label. */
+let egressMass: ((state: string) => Record<string, number>) | undefined
 let requests: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
@@ -275,6 +278,7 @@ beforeEach(() => {
   gateP = 0.05
   egressStates = []
   egressAnswer = () => 'nothing_private'
+  egressMass = undefined
   mocks.screen.mockImplementation(async () => ({
     injection_detected: false,
     reason: 'clean',
@@ -319,7 +323,9 @@ beforeEach(() => {
             type: 'choice',
             choice: answer,
             confidence: 1,
-            probabilities: Object.fromEntries(labels.map((l) => [l, l === answer ? 1 : 0])),
+            probabilities:
+              egressMass?.(body.state) ??
+              Object.fromEntries(labels.map((l) => [l, l === answer ? 1 : 0])),
           },
         },
         usage: { input_tokens: 1, output_tokens: 0 },
@@ -2768,4 +2774,113 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
       ).toMatchObject({ success: false, error: EGRESS_TEXTS.personalClosing })
     },
   )
+})
+
+// #844: the guards' numbers reach general-next's patterns from the host's
+// `guards` bag, and absent they are today's values. Real turns against the real
+// guard modules; only inference is scripted.
+describe('general-next: the guard thresholds and the tripwire N as settings (#844)', () => {
+  const searchCall = (q: string) =>
+    mocks.controller.mockResolvedValueOnce({
+      action: {
+        reasoning: 'look',
+        tool_name: 'search',
+        tool_args: JSON.stringify({ q }),
+        is_final: false,
+      },
+    })
+  const toolResults = (events: readonly { type: string; data: unknown }[]) =>
+    events
+      .filter((e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search')
+      .map((e) => e.data as { success: boolean; error?: string })
+  const gated = { default: 'gated', anthropic: 'always' } as const
+
+  // τi, default 0.15: a gate answer of 0.2 is at or above it, so a gated
+  // screen runs. MUTATION: change GUARD_GATE_THRESHOLD to 0.25 (or have
+  // general-next pass a fixed threshold): red.
+  it('unset, τi is 0.15: a gated screen runs on a gate answer of 0.2', async () => {
+    searchCall('x')
+    gateP = 0.2
+    await run('self_deployed', { ...deps, guards: { ...deps.guards, screenMode: gated } })
+    expect(gateStates).toHaveLength(1)
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+  })
+
+  // MUTATION: drop `{ threshold: deps.guards?.gateThreshold }` from
+  // general-next's createGuardGate: the screen still runs, red.
+  it('gateThreshold 0.25: the same answer skips the gated screen', async () => {
+    searchCall('x')
+    gateP = 0.2
+    await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: gated, gateThreshold: 0.25 },
+    })
+    expect(gateStates).toHaveLength(1)
+    expect(mocks.screen).not.toHaveBeenCalled()
+  })
+
+  // τe, default 0.3: 0.35 of the mass on the private labels is at or above
+  // it, so the call is refused. MUTATION: change GUARD_EGRESS_THRESHOLD to
+  // 0.4: the call goes out, red.
+  it.each(['anthropic', 'self_deployed'])(
+    'unset, τe is 0.3: a request with 0.35 private mass is refused (%s)',
+    async (tier) => {
+      searchCall('x')
+      egressMass = () => ({ nothing_private: 0.65, personal: 0.35, company: 0 })
+      const result = await run(tier)
+      expect(composition.egress.threshold).toBeUndefined()
+      expect(toolResults(result.context.events)).toEqual([
+        expect.objectContaining({ success: false, error: EGRESS_TEXTS.personalClosing }),
+      ])
+      expect(gateway.calls).not.toContain('search')
+    },
+  )
+
+  // MUTATION: drop `threshold: deps.guards?.egressThreshold` from
+  // general-next's egress gate: the call is refused, red.
+  it.each(['anthropic', 'self_deployed'])(
+    'egressThreshold 0.4: the same request goes out (%s)',
+    async (tier) => {
+      searchCall('x')
+      egressMass = () => ({ nothing_private: 0.65, personal: 0.35, company: 0 })
+      const result = await run(tier, { ...deps, guards: { ...deps.guards, egressThreshold: 0.4 } })
+      expect(composition.egress.threshold).toBe(0.4)
+      expect(toolResults(result.context.events)).toEqual([
+        expect.objectContaining({ success: true }),
+      ])
+      expect(gateway.calls).toContain('search')
+    },
+  )
+
+  // N, default 0: the first refusal closes the route, so a second request on
+  // it is refused with no egress question. MUTATION: change general-next's
+  // `?? 0` to `?? 1`: the second request is asked, red.
+  it('unset, N is 0: the first refusal closes the route; the next request is not asked', async () => {
+    searchCall('first')
+    searchCall('second')
+    egressAnswer = () => 'personal'
+    const result = await run('self_deployed')
+    expect(egressStates).toHaveLength(1)
+    expect(toolResults(result.context.events).map((r) => r.error)).toEqual([
+      EGRESS_TEXTS.personalClosing,
+      EGRESS_TEXTS.routeClosed,
+    ])
+  })
+
+  // MUTATION: drop `deps.guards?.maxOutgoingRetriesPostTripwire` from
+  // general-next's egress gate (keep the literal 0): red.
+  it('maxOutgoingRetriesPostTripwire 1: the route stays open after one refusal and closes at the second', async () => {
+    searchCall('first')
+    searchCall('second')
+    egressAnswer = () => 'personal'
+    const result = await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, maxOutgoingRetriesPostTripwire: 1 },
+    })
+    expect(egressStates).toHaveLength(2)
+    expect(toolResults(result.context.events).map((r) => r.error)).toEqual([
+      EGRESS_TEXTS.personalOpen,
+      EGRESS_TEXTS.personalClosing,
+    ])
+  })
 })

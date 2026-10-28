@@ -1,11 +1,14 @@
 /**
- * The boundary guards' operator switches (boundary guards, slice 6).
+ * The boundary guards' operator switches (boundary guards, slice 6) and
+ * settings (#844).
  *
- * Four `GUARD_*` variables let an operator weaken a guard without a code
- * change (O2, ruled). Everything else about the guards — the deterministic
- * layers, the thresholds, the tripwire's N, the directory declaration — has no
- * switch on purpose: it costs no model call, or it is a decision a reviewed
- * line of code must own.
+ * Four `GUARD_*` mode variables let an operator weaken a guard without a code
+ * change (O2, ruled), and three more set the guards' numbers: the two
+ * thresholds and the egress tripwire's N (the owner's 2026-10-28 rule that any
+ * deployment can be parametrised). Everything else about the guards — the
+ * deterministic layers, the directory declaration, the trusted-embedding set —
+ * has no switch on purpose: it costs no model call, or it is a decision a
+ * reviewed line of code must own.
  *
  * The variables are read and validated here and nowhere else (the design's
  * "one module"), per call like every other env-backed setting in this tree, so
@@ -33,6 +36,20 @@
  *     input pseudonymiser off. `off` is K5's retirement switch (boundary
  *     guards slice 5): retirement is flipping this default, after a fix for
  *     the egress gate's measured gap has itself been measured.
+ *   - `GUARD_GATE_THRESHOLD` is τi (a number from 0 to 1, default
+ *     `GUARD_GATE_THRESHOLD`, 0.15): the screen runs when the guard gate's
+ *     pTrue is at or above it. It decides anything only where the screen is
+ *     `'gated'`; under `'shadow'` it changes no call. Higher is looser.
+ *   - `GUARD_EGRESS_THRESHOLD` is τe (0 to 1, default
+ *     `GUARD_EGRESS_THRESHOLD`, 0.3): an outgoing call is refused, or the
+ *     person asked, when 1 − P(`nothing_private`) is at or above it, on every
+ *     tier, in `'filter'` mode. Higher is looser.
+ *   - `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` is the tripwire's N (a whole
+ *     number, default 0): refusal N + 1 on a route closes its outgoing calls
+ *     for the turn. Higher is looser.
+ *   Each number is one value for both tiers, because each pattern takes one:
+ *   neither threshold moves a body to another processor, which is what made
+ *   the screen's switch per tier.
  *
  * Weakening warns once at boot, naming what the value switches off, in the
  * order `off < gated < shadow < always` for the screen (gated asks the gate,
@@ -42,17 +59,26 @@
  * warns — the declared defaults are `general-next`'s (the Settings table):
  * `'shadow'` on the self-deployed tier until the eval bar moves it to
  * `'gated'`, `'always'` on the Anthropic tier, `'filter'` for the egress gate,
- * on for the pseudonymiser. A value AT or above the default warns never.
+ * on for the pseudonymiser. A value AT or above the default warns never. A
+ * number warns when it is looser than its default (a threshold above it, an N
+ * above 0); one at or stricter than it warns never.
  *
  * An unknown value REFUSES with a message naming the variable and its allowed
  * values — the same refusal `INFERENCE_TIERS` gets — and never echoes the
  * offending value: an env var's value is not a secret, but nothing here needs
  * to quote one to be diagnosable, and the parse's trim/lower-case normalises
- * casing without ever widening the set.
+ * casing without ever widening the set. A number is read as plain decimal
+ * digits only, so `Number()`'s coercions (an exponent, hex, a sign,
+ * `Infinity`, whitespace inside) refuse rather than parse.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier } from '@hames-ai/harness-patterns/types'
 import type { EgressMode, ScreenMode } from '@hames-ai/harness-patterns'
+import { GUARD_GATE_THRESHOLD } from '@hames-ai/harness-patterns/guard-gate.server'
+import {
+  GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
+  GUARD_EGRESS_THRESHOLD,
+} from '@hames-ai/harness-patterns/egress-gate.server'
 
 assertServerOnImport()
 
@@ -64,6 +90,11 @@ const SCREEN_DEFAULTS = { self_deployed: 'shadow', anthropic: 'always' } as cons
 const EGRESS_DEFAULT = 'filter' as const
 /** The declared default for the input pseudonymiser. */
 const PSEUDONYMISE_DEFAULT = true
+/** τi's and τe's defaults are the patterns' own; N's default is the patterns'
+ *  constant too, the one spelling the egress gate and general-next share. */
+const GATE_THRESHOLD_DEFAULT = GUARD_GATE_THRESHOLD
+const EGRESS_THRESHOLD_DEFAULT = GUARD_EGRESS_THRESHOLD
+const TRIPWIRE_N_DEFAULT = GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
 
 const SCREEN_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>([
   'off',
@@ -84,6 +115,12 @@ export interface GuardSwitches {
   readonly egressMode: EgressMode
   /** The web route's input pseudonymiser switch; `false` omits the filter. */
   readonly pseudonymise: boolean
+  /** τi, as `createGuardGate`'s `threshold` takes it. */
+  readonly gateThreshold: number
+  /** τe, as the egress gate's `threshold` takes it. */
+  readonly egressThreshold: number
+  /** The egress tripwire's N, as `maxOutgoingRetriesPostTripwire`. */
+  readonly maxOutgoingRetriesPostTripwire: number
 }
 
 /** One parse: the effective values, plus the warning each weakened value has
@@ -144,14 +181,85 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
     )
   }
 
+  const gateRaw = process.env.GUARD_GATE_THRESHOLD
+  const gateThreshold = gateRaw
+    ? parseProbability('GUARD_GATE_THRESHOLD', gateRaw)
+    : GATE_THRESHOLD_DEFAULT
+  if (gateThreshold > GATE_THRESHOLD_DEFAULT) {
+    warnings.push(
+      `[guards] GUARD_GATE_THRESHOLD=${gateThreshold} raises the guard gate's threshold above its ` +
+        `default of ${GATE_THRESHOLD_DEFAULT}: where the injection screen is gated, more content the ` +
+        'gate scores as possibly manipulative skips the screen. Restore the default by unsetting it.',
+    )
+  }
+
+  const egressThresholdRaw = process.env.GUARD_EGRESS_THRESHOLD
+  const egressThreshold = egressThresholdRaw
+    ? parseProbability('GUARD_EGRESS_THRESHOLD', egressThresholdRaw)
+    : EGRESS_THRESHOLD_DEFAULT
+  if (egressThreshold > EGRESS_THRESHOLD_DEFAULT) {
+    warnings.push(
+      `[guards] GUARD_EGRESS_THRESHOLD=${egressThreshold} raises the egress gate's threshold above ` +
+        `its default of ${EGRESS_THRESHOLD_DEFAULT}: outgoing requests the decision model judges more ` +
+        'likely to carry private data go out without a refusal or a prompt. Restore the default by unsetting it.',
+    )
+  }
+
+  const tripwireRaw = process.env.GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
+  const maxOutgoingRetriesPostTripwire = tripwireRaw
+    ? parseCount('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', tripwireRaw)
+    : TRIPWIRE_N_DEFAULT
+  if (maxOutgoingRetriesPostTripwire > TRIPWIRE_N_DEFAULT) {
+    warnings.push(
+      `[guards] GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE=${maxOutgoingRetriesPostTripwire} keeps a ` +
+        `route's outgoing requests open after a refusal (default ${TRIPWIRE_N_DEFAULT}: the first ` +
+        `refusal closes the route for the turn): the route now closes at refusal ` +
+        `${maxOutgoingRetriesPostTripwire + 1}, so a refused request can be rephrased and asked again. ` +
+        'Restore the default by unsetting it.',
+    )
+  }
+
   return {
     switches: {
       screenMode: { default: selfDeployedScreen, anthropic: anthropicScreen },
       egressMode,
       pseudonymise,
+      gateThreshold,
+      egressThreshold,
+      maxOutgoingRetriesPostTripwire,
     },
     warnings,
   }
+}
+
+/** Plain decimal digits, with an optional fractional part: no sign, exponent,
+ *  hex prefix or inner whitespace, all of which `Number()` would coerce. */
+const DECIMAL = /^(?:\d+(?:\.\d*)?|\.\d+)$/
+
+/** A threshold: a probability from 0 to 1. Refuses with the variable and the
+ *  range, never the value. */
+function parseProbability(variable: string, raw: string): number {
+  const text = raw.trim()
+  const value = DECIMAL.test(text) ? Number(text) : Number.NaN
+  if (!(value >= 0 && value <= 1)) {
+    throw new Error(
+      `${variable} must be a number from 0 to 1; refusing to boot with a value outside that range.`,
+    )
+  }
+  return value
+}
+
+/** A count: a whole number, 0 or more. Refuses with the variable and the
+ *  range, never the value. */
+function parseCount(variable: string, raw: string): number {
+  const text = raw.trim()
+  const value = /^\d+$/.test(text) ? Number(text) : Number.NaN
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(
+      `${variable} must be a whole number, 0 or greater; refusing to boot with a value outside that range.`,
+    )
+  }
+  return value
 }
 
 function parseMode<T extends string>(

@@ -92,6 +92,11 @@ export function agentDeps(): AgentDeps {
       return {
         screenMode: switches.screenMode,
         egressMode: switches.egressMode,
+        // The guards' numbers (#844): τi, τe and the tripwire's N, each the
+        // pattern's own default when its variable is unset.
+        gateThreshold: switches.gateThreshold,
+        egressThreshold: switches.egressThreshold,
+        maxOutgoingRetriesPostTripwire: switches.maxOutgoingRetriesPostTripwire,
         ...(switches.pseudonymise
           ? { pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }) }
           : {}),

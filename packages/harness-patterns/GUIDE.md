@@ -169,7 +169,12 @@ exit, and judged against the whole message it rejects complete work for a part
 no tool of the route performs. And a decision that is not a decision — an error, an
 abstention, a state that would not build — never dispatches a route. A `planner`
 route is offered at most once per run of the loop: not straight after itself, and
-not once a plan exists; `allowReplan: true` on the route opts out. See SPEC's
+not once a plan exists; `allowReplan: true` on the route opts out. Any route is
+not offered again in the turn once two of its records in a row made no progress:
+the record failed, or none of its tool calls succeeded. A route that keeps
+returning the same failure therefore cannot be dispatched again and again in a
+row. `answer` is
+always offered, and when it is all that is left the loop answers. See SPEC's
 [decisionLoop](SPEC.md#decisionlooproutes-config-507).
 
 A host can also tell the decisions model which documents the conversation holds,
@@ -240,6 +245,9 @@ update failure refuses further outgoing calls while delivering the result. The
 gate counts its refusals per route by the run frame's `route` slot, which
 `decisionLoop` writes around each child. See SPEC's
 [egress gate](SPEC.md#withegressgateconfigpattern-boundary-guards-slice-4).
+For the guards as one system — settings, defaults per tier, the person prompts
+and the operator switches — see the Guardrail engineering page in the repo's
+docs: <https://github.com/mknw/hames-playground/blob/main/docs/tutorials/guardrail-engineering.md>.
 
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.

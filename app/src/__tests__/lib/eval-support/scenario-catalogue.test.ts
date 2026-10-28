@@ -505,11 +505,13 @@ function againstModule(s: Json, t: string): string[] {
   const args =
     t.match(/\n {2}expectedArgs: \{(.+)\},?\n/)?.[1] ??
     t.match(/\n {2}expectedArgs: \{\n([\s\S]*?)\n {2}\},?\n/)?.[1]
-  const turnFacts = [
-    ...((t.match(/\n {2}turnAnswerIncludes: \[(.*)\],?\n/) ?? [])[1] ?? '').matchAll(
-      /\[([^\]]*)\]/g,
-    ),
-  ].map((m) => strs(m[1]))
+  // The outer array renders one-line or multi-line with prettier (printWidth 100), so
+  // both renderings are read before the per-turn groups are extracted.
+  const turnFactsBlock =
+    (t.match(/\n {2}turnAnswerIncludes: \[([\s\S]*?)\n {2}\],?/) ??
+      t.match(/\n {2}turnAnswerIncludes: \[(.*)\],?\n/) ??
+      [])[1] ?? ''
+  const turnFacts = [...turnFactsBlock.matchAll(/\[([^\]]*)\]/g)].map((m) => strs(m[1]))
   const gr = graderOf(s)
   const find = (check: string) => gr.filter((i) => i.check === check)
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)

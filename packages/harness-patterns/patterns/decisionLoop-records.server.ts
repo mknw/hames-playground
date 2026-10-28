@@ -11,7 +11,8 @@
  *      that event is human-facing and holds the matched injection span verbatim
  *      (SD-3), so an extractor that touched it would convert a neutralised
  *      problem into a decision-stage one.
- *   2. the stats, counted from those same events.
+ *   2. the stats, counted from those same events, and what they say about
+ *      progress: which routes the repeat rule withholds.
  *   3. the rendering of the decision state and the child handoff from records,
  *      and of the child's earlier-conversation block.
  *
@@ -63,6 +64,12 @@ export interface RouteStats {
   readonly used?: number
   readonly bound?: number
   readonly toolCalls: number
+  /** Tool results that came back `success: true`, `expandPreviousResult`
+   *  excluded (it re-reads the context and looks nothing up). The retriever's
+   *  one result counts as its call. A held call's placeholder that a re-sent
+   *  call superseded (`redispatch`, slice 10) is not counted: the re-sent
+   *  call's own result is. */
+  readonly succeededCalls: number
   readonly errors: number
   readonly wallMs: number
   /** The route ran into its own bound (an `error` of kind `budget_exhausted`). */
@@ -417,15 +424,19 @@ export function computeStats(
   const budget = errorEvents
     .map((e) => e.data as ErrorEventData)
     .find((d) => d.kind === 'budget_exhausted')
-  const failedResults = own.filter(
-    (e) => e.type === 'tool_result' && (e.data as ToolResultEventData).success === false,
-  ).length
+  const results = own
+    .filter((e) => e.type === 'tool_result')
+    .map((e) => e.data as ToolResultEventData)
+  const failedResults = results.filter((r) => r.success === false).length
   const toolCalls = own.filter(
     (e) => e.type === 'tool_call' && (e.data as ToolCallEventData).tool !== EXPAND_TOOL_NAME,
   ).length
   const base = {
     kind,
     toolCalls,
+    succeededCalls: results.filter(
+      (r) => r.success === true && r.redispatch !== true && r.tool !== EXPAND_TOOL_NAME,
+    ).length,
     errors: errorEvents.length + (kind === 'retriever' ? 0 : failedResults),
     wallMs,
     hitBound: budget !== undefined,
@@ -457,6 +468,40 @@ export function computeStats(
       return { ...base, planSteps: plan?.n_steps }
     }
   }
+}
+
+// ============================================================================
+// Progress — the repeat rule
+// ============================================================================
+
+/** Consecutive no-progress records of one route that withhold it for the rest
+ *  of the run (the owner's "two", #809). */
+const REPEAT_LIMIT = 2
+
+/** Whether a record moved the turn on: it succeeded AND, for a route that calls
+ *  tools, at least one of its own tool results came back successful. A planner
+ *  calls no tool, so a plan is its progress. Every call failed (an egress refusal
+ *  included), no call at all, or a failed record: no progress. */
+export function madeProgress(r: RouteOutput): boolean {
+  return r.status === 'succeeded' && (r.stats.kind === 'planner' || r.stats.succeededCalls > 0)
+}
+
+/**
+ * The routes no later decision of this run offers: each that has
+ * {@link REPEAT_LIMIT} records in a row that made no progress. The count is per
+ * route and adjacency-based — any other route's record, or a record of the same
+ * route that made progress, resets it — and once reached the route stays
+ * withheld until the run ends. Read from the records alone, so a resume, which
+ * rebuilds them, withholds what the live run did.
+ */
+export function stalledRoutes(records: readonly RouteOutput[]): Set<string> {
+  const stalled = new Set<string>()
+  let streak = 0
+  records.forEach((r, i) => {
+    streak = madeProgress(r) ? 0 : records[i - 1]?.route === r.route ? streak + 1 : 1
+    if (streak >= REPEAT_LIMIT) stalled.add(r.route)
+  })
+  return stalled
 }
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`

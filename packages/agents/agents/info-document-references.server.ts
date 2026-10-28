@@ -19,8 +19,10 @@ function infoEvent(event: ContextEvent): ContextEvent[] {
   if (data.tool !== 'retriever') return [event]
   const result = data.result as RetrieverResult
   if (!Array.isArray(result?.matches)) return [event]
-  // The private host can rewrite string VALUES while preserving object keys.
-  // Presence is the boundary: a rewritten provenance must still be excluded.
+  // Presence is the boundary, not the value. `general-next` composes no input
+  // pseudonymiser (boundary guards slice 5), but a library composition that
+  // wraps this in one can rewrite string VALUES while preserving object keys,
+  // and a rewritten provenance must still be excluded.
   const matches = result.matches.filter((hit) => hit.provenance === undefined)
   if (matches.length === result.matches.length) return [event]
   if (matches.length === 0) return []
@@ -42,7 +44,8 @@ function infoEvent(event: ContextEvent): ContextEvent[] {
   ]
 }
 
-/** Place OUTSIDE withReferences, inside the web pseudonymisation wrapper.
+/** Place OUTSIDE withReferences (and inside any input pseudonymiser a library
+ * composition adds; `general-next` adds none since boundary guards slice 5).
  * Copy the visible backing context so selectors, previews and expansion all
  * consume the same filtered events, even through unfiltered(). */
 export function withInfoDocumentReferences<T>(pattern: ConfiguredPattern<T>): ConfiguredPattern<T> {

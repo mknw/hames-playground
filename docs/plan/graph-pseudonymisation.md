@@ -1,7 +1,11 @@
 # Pseudonymising Graph tool results — the roster is already in the payload
 
-**Status:** core built and tested; G14 now supplies the web route's private-tier
-filter through `app/src/lib/harness-client/web-pseudonymiser.server.ts`.
+**Status:** core built and tested. `app/src/lib/harness-client/web-pseudonymiser.server.ts`
+supplies the egress gate's roster only (`createEgressRoster`, on every tier). The
+input pseudonymiser (`withPseudonymisedInputs`, K5) is composed by no registered
+agent: boundary guards slice 5 retired it from `general-next`. The core wrapper
+and the module's `createWebPseudonymiser` factory stay for library users, with
+no production caller.
 Q1: input view/handoff plus outgoing web arguments only. Q2: stored history
 unchanged. Q3: invocation-local table, never stored or reversed. The deferred
 seams below remain open; see [the G14 design](decision-loop-agent.md#pseudonymisation-guard-on-the-web-route).

@@ -1367,10 +1367,25 @@ describe('general-next composition', () => {
   // withheld for want of a filter. MUTATION: compose withPseudonymisedInputs
   // around the info route again (`withPseudonymisedInputs({})(infoRoute)`, the
   // old no-`guards` shape): the capability is declared and the run records
-  // the `web_privacy` withhold, both cases red.
+  // the `web_privacy` withhold, both cases red. The third case is a host whose
+  // bag, built in a variable and so past TypeScript's excess-property check,
+  // still carries the retired `pseudonymiseForWeb`. MUTATION: compose
+  // `withPseudonymisedInputs({ pseudonymise: stale })(infoRoute)` whenever
+  // the bag carries that field: that case red.
   it.each([
     ['no guards bag', deps],
     ['a guards bag', { ...deps, guards: { egressMode: 'filter' as const } }],
+    [
+      'a stale bag still carrying pseudonymiseForWeb',
+      {
+        ...deps,
+        guards: {
+          pseudonymiseForWeb: async () => {
+            throw new Error('a retired field is never called')
+          },
+        } as unknown as AgentDeps['guards'],
+      },
+    ],
   ])(
     'slice 5: composes no withPseudonymisedInputs with %s, and withholds nothing',
     async (_label, supplied) => {

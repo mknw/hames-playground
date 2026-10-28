@@ -20,7 +20,7 @@ const doc_ag = withInjectionGuard(DOC_GUARD)(                      // office + d
   ),
 )
 const info_ag = withInjectionGuard(INFO_GUARD)(                    // knowledge lookups
-  withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(   // G14: the web route, private tier only
+  withPseudonymisedInputs({ pseudonymise: deps.pseudonymiseForWeb })(   // G14: the web route, private tier only; retired by boundary guards slice 5 (note below)
   withReferences(
     simpleLoop(createLoopControllerAdapter(), [...NEO4J_READ, ...WEB], { patternId: 'info', returnStyle: 'answer', rememberPriorTurns: false }),
     { selector, source: ['retriever', 'info'], viewConfig: { fromLastNTurns: 1 } },
@@ -51,6 +51,8 @@ const orchestrator = withInjectionGuard({
 // P4 tier flip: a confirmation screen before private-tier content reaches an Anthropic-tier turn.
 agent = withMemory(deps.memory)([privateContentRelease(deps.privateContent), orchestrator, compactExecution({ mode: 'thread', patternId: 'response-synth', viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 } })])
 ```
+
+> **`withPseudonymisedInputs` is retired from `general-next`** by boundary guards slice 5 (2026-10-28, [`boundary-guards.md`](boundary-guards.md#k5-assessed)): `info_ag` composes no input pseudonymiser, and the egress gate judges every outgoing call. See [Pseudonymisation guard on the web route](#pseudonymisation-guard-on-the-web-route).
 
 There are three differences from the owner's sketch, each argued below:
 

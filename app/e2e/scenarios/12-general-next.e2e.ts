@@ -1,7 +1,8 @@
 /** #507 S3, layer 2: W4's RUNNABLE NOW 02-graph-count through the real
  * registered candidate, SSE, adapters, guard and persistence. No sandbox boots
- * on this route. Anthropic explicitly passes through G14; private rewrite and
- * egress are layer-1 evidence in S7, and P4 file-path cases remain gated. */
+ * on this route. Runs on the Anthropic tier. `general-next` composes no input
+ * pseudonymiser (boundary guards slice 5); the egress gate is layer-1 evidence
+ * (`general-next.test.ts`), and P4 file-path cases remain gated. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { bootApp, eventsOfType, newSessionId, settleSummaries, type AppHandles } from '../lib/app'
 import { FAKE_ANSWER_MARK } from '../lib/fake-llm'

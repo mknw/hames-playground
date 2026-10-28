@@ -21,7 +21,7 @@ import { LLMCallError } from '../types'
 import { DIRECT_RESPONSE_ROUTE } from '../types'
 import type { ErrorEventData } from '../types'
 import { getErrorHint } from '../error-hints'
-import { trackEvent, resolveConfig } from '../context.server'
+import { trackEvent, resolveConfig, redactCall } from '../context.server'
 
 assertServerOnImport()
 
@@ -386,12 +386,20 @@ export function compactExecution<T extends CompactExecutionData>(
       // distinguishes the compactExecution's user-facing response from router
       // status messages that share the same event type — chat-history
       // replay reads this flag to skip intermediate emits.
+      //
+      // The record is REDACTED here, before it rides the saved event
+      // (review F1): the synthesize prompt renders `memoryRecall`'s
+      // `memoryContext` block, so an unredacted `rawInput` on the
+      // `assistant_message` event would persist recalled memory text in the
+      // conversation blob that `serializeContext` scrubs from `data`. Same
+      // redaction as every decide-path record; `variables`/`rawInput`/
+      // `rawOutput`/`parsedOutput` drop, cost attribution survives.
       trackEvent(
         scope,
         'assistant_message',
         { content: synthesizedResponse, final: true } as AssistantMessageEventData,
         resolved.trackHistory,
-        llmCall,
+        redactCall(llmCall),
       )
 
       scope.data = {
@@ -409,6 +417,9 @@ export function compactExecution<T extends CompactExecutionData>(
       // call attaches. A custom `synthesize` that throws its own error still
       // degrades to a bare message — honestly: there is no record to show.
       const failedLlmCall = error instanceof LLMCallError ? error.llmCall : undefined
+      // Redacted like the success path above (review F1): a failed synthesize
+      // read the same rendered memory block, and its record rides the `error`
+      // event into the same blob.
       trackEvent(
         scope,
         'error',
@@ -419,7 +430,7 @@ export function compactExecution<T extends CompactExecutionData>(
           ...(failedLlmCall ? { kind: 'llm_call' as const } : {}),
         } as ErrorEventData,
         true,
-        failedLlmCall,
+        redactCall(failedLlmCall),
       )
       return scope
     }

@@ -3066,6 +3066,17 @@ is part of the serialized session. `serializeContext` therefore drops
 but the same plaintext). Without it Forget and retention would never reach the
 conversation blob or the nightly dump (pin `memory-not-in-blob`).
 
+The same invariant binds the two saved **call records** whose prompts render the
+block: the synthesize record compactExecution attaches to its `assistant_message`
+event (and to the `error` event when the call failed as `LLMCallError`), and the
+router record under the `routing-and-replies` default (conversational reply,
+routing status, missing-route and thrown-call records alike). Both are redacted
+with `redactCall` where the event is built, the same way every decide-path record
+is: `rawInput` / `rawOutput` / `parsedOutput` / `variables` drop, cost attribution
+survives. The redaction is at the saved-event site only — the live call is
+unchanged (pins in the `memory-not-in-blob: the saved call records` block, each
+verified against the mutation that removes its `redactCall`).
+
 ### Cost, and what is unrecordable
 
 The gate's `llmCall` rides the `memory_recalled` event on the success path AND

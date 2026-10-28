@@ -324,6 +324,9 @@ router, including nested routers, while `compactExecution` / `synthesize` still
 receive it for reply writing. Direct conversational router replies have no memory
 and still skip synthesis. It is a per-turn boundary, not a guarantee that remembered facts never reach a tool: a fact the reply states becomes conversation history, and on a later turn the router sees that history and may put the fact into `intent`, and so into tool arguments (#548). Unknown values throw at construction. The exported
 `RouterMemory` union names both choices; no extra router configuration is needed.
+Whichever choice is made, the saved router and synthesize call records are
+redacted (`redactCall` at the event sites), so the rendered memory block never
+rides the persisted conversation blob through an event's `llmCall` (review F1).
 Controllers and the planner get no direct memory block; with the default they can
 receive its facts indirectly through intent (#419 D13 / decision 6, amended by
 #535). This setting controls the current recalled block; it does not remove facts

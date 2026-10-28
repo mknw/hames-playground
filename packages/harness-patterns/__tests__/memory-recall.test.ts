@@ -40,18 +40,27 @@ import {
   type RankInput,
 } from '@hames-ai/harness-patterns/memory-ranking.server'
 import { configurePattern, runChain } from '@hames-ai/harness-patterns/patterns/chain.server'
+import { compactExecution } from '@hames-ai/harness-patterns/patterns/compactExecution.server'
+import { router } from '@hames-ai/harness-patterns/patterns/router.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
 import { createContext, serializeContext } from '@hames-ai/harness-patterns/context.server'
 import { harnessUsesMemory } from '@hames-ai/harness-patterns/pattern-capabilities'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type {
+  AssistantMessageEventData,
   ContextEvent,
+  CompactExecutionInput,
   DecideFn,
   DecideResult,
+  ErrorEventData,
+  LLMCallRecord,
+  LLMResult,
   MemoryCandidate,
   MemoryRecalledEventData,
   MemoryStore,
+  RouteFn,
 } from '@hames-ai/harness-patterns/types'
+import { LLMCallError } from '@hames-ai/harness-patterns/types'
 
 // ----------------------------------------------------------------------------
 // Fixtures
@@ -818,6 +827,128 @@ describe('memory-not-in-blob', () => {
     const ctx = await run(config({ store: fakeStore(rows).store }))
     ctx.status = 'paused'
     expect(serializeContext(ctx)).toContain(SENTINEL)
+  })
+})
+
+// ============================================================================
+// memory-not-in-blob: the saved call records (review F1) — the two legs whose
+// prompts RENDER the block into `rawInput`: the synthesize record on
+// `assistant_message` and on the `error` event, and the router record under
+// the `routing-and-replies` default on both. Each pin names the mutation that
+// reddens it: dropping the `redactCall` at that saved-event site puts the
+// sentinel back in the blob while the data keys stay scrubbed.
+// ============================================================================
+
+describe('memory-not-in-blob: the saved call records', () => {
+  const SENTINEL = '⟦SENTINEL-call-record⟧'
+  const rows = [mem('m-1', `prefers metric units ${SENTINEL}`, 0.9)]
+
+  // Both fakes render the memory block they were handed into the record's
+  // `rawInput` — the way the BAML-backed implementations put the rendered HTTP
+  // body on the record — so the sentinel genuinely flows
+  // memoryRecall → memoryContext → prompt render → record.
+  const synthesizeCall = (input: CompactExecutionInput): LLMCallRecord => ({
+    functionName: 'Synthesize',
+    variables: {},
+    rawInput: JSON.stringify({ memory_context: input.memoryContext ?? null }),
+  })
+
+  let flowed = ''
+  const synthesize = async (input: CompactExecutionInput): Promise<LLMResult<string>> => {
+    flowed = input.memoryContext ?? ''
+    return { value: 'ok', call: synthesizeCall(input) }
+  }
+  const throwingSynthesize = async (input: CompactExecutionInput): Promise<LLMResult<string>> => {
+    flowed = input.memoryContext ?? ''
+    throw new LLMCallError('synthetic synthesize failure', synthesizeCall(input))
+  }
+
+  let routerSaw: string | undefined
+  const route = (async (
+    _m: string,
+    _h: unknown,
+    _r: unknown,
+    extra?: { memoryContext?: string },
+  ) => {
+    routerSaw = extra?.memoryContext
+    return {
+      intent: 'chat',
+      tool_call_needed: false,
+      tool_name: null,
+      response_text: 'Right — metric units.',
+      llmCall: {
+        functionName: 'Router',
+        variables: {},
+        rawInput: JSON.stringify({ memory_context: extra?.memoryContext ?? null }),
+      },
+    }
+  }) as unknown as RouteFn
+  const throwingRoute = (async (
+    _m: string,
+    _h: unknown,
+    _r: unknown,
+    extra?: { memoryContext?: string },
+  ) => {
+    routerSaw = extra?.memoryContext
+    throw new LLMCallError('synthetic router failure', {
+      functionName: 'Router',
+      variables: {},
+      rawInput: JSON.stringify({ memory_context: extra?.memoryContext ?? null }),
+    })
+  }) as unknown as RouteFn
+
+  const finalAssistant = (ctx: { events: ContextEvent[] }) =>
+    ctx.events.find(
+      (e) => e.type === 'assistant_message' && (e.data as AssistantMessageEventData).final,
+    )
+
+  it('the synthesize record on assistant_message carries no memory text into the blob (mutation: drop redactCall at the compactExecution success site)', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [compactExecution<Data>({ mode: 'message', synthesize })],
+    })
+    // The block actually reached the synthesizer — the pin measures redaction,
+    // not a routing change that never hands the block over.
+    expect(flowed).toContain(SENTINEL)
+    const ev = finalAssistant(ctx)
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Synthesize' }) // cost attribution survives
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
+  })
+
+  it('the failed synthesize record on the error event carries no memory text into the blob (mutation: drop redactCall at the compactExecution error site)', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [compactExecution<Data>({ mode: 'message', synthesize: throwingSynthesize })],
+    })
+    expect(flowed).toContain(SENTINEL)
+    const ev = ctx.events.find((e) => e.type === 'error')
+    expect((ev?.data as ErrorEventData).kind).toBe('llm_call')
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Synthesize' })
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
+  })
+
+  it('the router record on assistant_message carries no memory text into the blob (mutation: drop redactCall at the router conversational site)', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [router<Data>({ search: 'Search the web' }, { route })],
+    })
+    // The default `routing-and-replies` choice hands the block to the router.
+    expect(routerSaw).toContain(SENTINEL)
+    const ev = finalAssistant(ctx)
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
+  })
+
+  it('the failed router record on the error event carries no memory text into the blob (mutation: drop redactCall at the router error site)', async () => {
+    const ctx = await run(config({ store: fakeStore(rows).store }), {
+      after: [router<Data>({ search: 'Search the web' }, { route: throwingRoute })],
+    })
+    expect(routerSaw).toContain(SENTINEL)
+    const ev = ctx.events.find((e) => e.type === 'error')
+    expect((ev?.data as ErrorEventData).kind).toBe('llm_call')
+    expect(ev?.llmCall).toMatchObject({ functionName: 'Router' })
+    expect(JSON.stringify(ev?.llmCall)).not.toContain(SENTINEL)
+    expect(serializeContext(ctx)).not.toContain(SENTINEL)
   })
 })
 

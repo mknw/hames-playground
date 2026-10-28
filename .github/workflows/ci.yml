@@ -601,14 +601,66 @@ jobs:
         id: pack_smoke
         run: scripts/pack-smoke.sh
 
+  # Which paths a PR touches, for clone-mutations below. Pushes to main skip
+  # this job; clone-mutations runs there unconditionally. Built from the same
+  # checkout + `git diff` against the PR base the format check in `static`
+  # uses — no third-party paths-filter action.
+  clone-changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needed to diff against the PR base for the changed-path check.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # clone-mutations' subject is scripts/ or deploy/ (bootstrap
+          # preflight, clone validator), its own definition, or its test
+          # files — scripts/bootstrap-vps.test.sh (under scripts/) and the one
+          # vitest file the validator mutants run,
+          # app/src/__tests__/lib/config/compose-clones.test.ts. A job-level
+          # `if` cannot diff, so this job computes the answer and clone-mutations
+          # reads the output.
+          set -euo pipefail
+          changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+          if printf '%s\n' "$changed" | grep -qE '^(scripts/|deploy/|\.github/workflows/ci\.yml$|app/src/__tests__/lib/config/compose-clones\.test\.ts$)'; then
+            echo "relevant=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >>"$GITHUB_OUTPUT"
+          fi
+
   # The clone mutation corpus (bootstrap preflight and clone validator) on its
   # own runner, beside the gate: with the dev environment VM corpus, the old single
   # job's shell step went from 552s (main) to 1110s and the job past its cap. Each
   # bootstrap mutant re-runs `bootstrap-vps.test.sh --clones-only` (bash,
   # python3, openssl, git, node, all on ubuntu-latest); each validator mutant
   # runs one vitest file from app/, hence the workspace install.
+  #
+  # NOT in the required gate (`check` does not need it), so it can afford to
+  # skip on a PR whose paths cannot touch its subject (see clone-changes
+  # above) — it reports as skipped, not failed and not pending. It ALWAYS runs
+  # on push to main, which is the backstop if the path filter ever misses.
+  # The `always()` is load-bearing: without it the implicit success() would
+  # read the SKIPPED clone-changes on every push to main as a failed need and
+  # skip this job too. `result == 'failure'` keeps the filter fail-closed: if
+  # the changed-path job itself errors, the mutations run rather than
+  # silently not.
   clone-mutations:
     name: shell · clone mutations
+    needs: [clone-changes]
+    if: always() && (github.event_name == 'push' || needs.clone-changes.result == 'failure' || needs.clone-changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
     # #777 (release VM, 38 -> 45 bootstrap mutants) took 23m28s against the old 25.
     timeout-minutes: 40

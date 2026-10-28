@@ -108,7 +108,7 @@ it('the shipped record covers exactly the baseline-flagged scenarios', () => {
 
 // The shipped record end to end: a candidate that fails a recorded-pass baseline
 // scenario is refused, one that fails the recorded-fail scenario is not.
-// A pending must (#808–#810, owner ruling 2026-10-27) does not block the flip: a
+// A pending must (#808–#809, owner ruling 2026-10-27) does not block the flip: a
 // failing run leaves it eligible, but the report must still carry the pending list.
 it('lists a pending must that failed instead of blocking, and a passing one is not listed', () => {
   const pending = (id: string) =>
@@ -184,6 +184,22 @@ it('PENDING_MUSTS names exactly the must modules flagged pending, by issue numbe
   for (const s of flagged) expect(PENDING_MUSTS[s.id]).toBe(Number(s.issue))
   // A pending row that loses its priority is stale: it must still be a must.
   for (const s of flagged) expect(s.priority).toBe('should')
+})
+
+// 14-analysis-index-follow-up is a plain should (owner 2026-10-28: depends on
+// sandbox-output ingestion, not yet verified): it neither blocks the flip nor is
+// listed as a pending must, so it carries neither a `pendingMustIssue` flag nor a
+// record entry. The gate report still lists it, as every scenario's results row.
+//
+// MUTATION: re-add `pendingMustIssue: 810` to its module and/or an entry to
+// PENDING_MUSTS — the half-way form reddens the pending-musts pin above, the
+// consistent form reddens here — or flip its priority to 'must', which reddens here.
+it('14-analysis-index-follow-up is a plain should: no pending flag, no record entry', () => {
+  const fourteen = pendingFromModules.find((s) => s.id === '14-analysis-index-follow-up')
+  expect(fourteen).toBeDefined()
+  expect(fourteen!.issue).toBeUndefined()
+  expect(fourteen!.priority).toBe('should')
+  expect(PENDING_MUSTS['14-analysis-index-follow-up']).toBeUndefined()
 })
 
 it('bars on a recorded pass and not on a recorded fail', () => {

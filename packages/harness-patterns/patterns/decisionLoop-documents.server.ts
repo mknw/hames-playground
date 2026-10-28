@@ -118,7 +118,7 @@ const SEPARATORS_AND_CONTROLS = /[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g
 /** The state's own section headers. A name containing one is withheld: quoting
  *  keeps it off a line of its own, but nothing here needs such a name readable. */
 const STATE_HEADER =
-  /(?:This turn so far|Conversation \(recent turns\)|Latest results(?: \(most recent last\))?|Uploaded documents in this conversation)\s*:/i
+  /(?:This turn so far|Conversation \(recent turns\)|Latest results(?: \(most recent last\))?|Uploaded documents in this conversation|Remembered about the user from earlier conversations)\s*:/i
 
 /** Every default-ignorable and format code point: soft hyphen, combining grapheme
  *  joiner, Hangul fillers, ZW*, bidi controls, invisible operators, variation
@@ -131,22 +131,30 @@ const INVISIBLE_OR_FORMAT = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu
 const HIDDEN_TEXT_RULES = INJECTION_RULES.filter((r) => r.layer === 'hidden-text')
 
 /**
+ * `text` as one line of visible characters. Order matters: cap first (nothing
+ * past the cap reaches a rule, SD-2), then NFKC (and the cap again, since a
+ * compatibility form can expand), then separators, then invisible/format
+ * characters (so a keyword split by a soft hyphen is whole again for a rule that
+ * looks for it). Shared with the memories block (`decisionLoop-memories`).
+ */
+export function oneVisibleLine(text: string, maxCodePoints: number): string {
+  const capped = codePointPrefix(
+    codePointPrefix(text, maxCodePoints).normalize('NFKC'),
+    maxCodePoints,
+  )
+  const flat = capped.replace(SEPARATORS_AND_CONTROLS, ' ')
+  return sanitizeText(flat.replace(INVISIBLE_OR_FORMAT, ''), HIDDEN_TEXT_RULES).text
+}
+
+/**
  * The text a name is shown as, JSON-quoted on one line, or `undefined` when it
- * must be withheld. Order matters: cap first (nothing past the cap reaches a
- * rule, SD-2), then NFKC (and the cap again, since a compatibility form can
- * expand), then separators, then invisible/format characters (so a keyword split
- * by a soft hyphen is whole again for the rule that looks for it), then the whole
- * rule corpus. The LLM screen is never involved: a name is not a
+ * must be withheld: {@link oneVisibleLine}, then the state's own headers, then
+ * the whole rule corpus. The LLM screen is never involved: a name is not a
  * route output, and a screen call per name per turn would give names an outage
  * policy nobody chose.
  */
 export function safeDocumentName(name: string): string | undefined {
-  const capped = codePointPrefix(
-    codePointPrefix(name, DECISION_DOCUMENT_NAME_CODE_POINTS).normalize('NFKC'),
-    DECISION_DOCUMENT_NAME_CODE_POINTS,
-  )
-  const flat = capped.replace(SEPARATORS_AND_CONTROLS, ' ')
-  const visible = sanitizeText(flat.replace(INVISIBLE_OR_FORMAT, ''), HIDDEN_TEXT_RULES).text
+  const visible = oneVisibleLine(name, DECISION_DOCUMENT_NAME_CODE_POINTS)
   if (STATE_HEADER.test(visible)) return undefined
   if (sanitizeText(visible, INJECTION_RULES).findings.length > 0) return undefined
   return JSON.stringify(visible)

@@ -105,7 +105,8 @@ Latest results (most recent last):
   - On the Anthropic tier the decide call goes to the systemone provider, not to an Anthropic model. That transport records no cache reads (`jev-decide.server.ts:180-182`), and the provider documents no prompt cache, so there is nothing to switch on today.
   - The prompts that grow and do run on Anthropic models are the children's. Their handoff rides `plan_context`, which renders in the run-static tier 2 behind the #122 `cache_control` breakpoints. So within one child run the handoff is cached after its first call, and across iterations the system block and tier 1 stay byte-identical.
   - Nothing new is needed for v1. Measure the cache-read share on a multi-iteration turn before designing more.
-- **What is left out.** The route descriptions are not in the state: they are the question's options. Memory is not in the state either (see [Memory](#where-memory-guards-and-the-sandbox-sit)). **Neither are the conversation's uploaded documents**, and Eval run 3 shows the cost: a question naming an uploaded file by its bare name was routed to the web. The owner has decided how to tell the decisions model (the private tier sees a capped name list, every other tier a count), designed but not built in [`decide-document-context.md`](decide-document-context.md).
+- **"Remembered about the user from earlier conversations"** (#829, built; amended from "memory is not in the state") is an optional block after the documents block: on the private tier the memories recalled this turn, quoted as data under a per-run nonce and capped; on every other tier a count only. Same tier line as the documents block; why the decider may read memory at all is under [Memory](#where-memory-guards-and-the-sandbox-sit).
+- **What is left out.** The route descriptions are not in the state: they are the question's options. The conversation's uploaded documents were left out until #507 slice 10, and Eval run 3 showed the cost: a question naming an uploaded file by its bare name was routed to the web. The owner decided how to tell the decisions model (the private tier sees a capped name list, every other tier a count), built per [`decide-document-context.md`](decide-document-context.md).
 
 Route outputs are untrusted: they carry what the agents read on the web or in mail. They enter the state only as **sanitized** text (see [When a route fails and other boundaries](#untrusted-content-on-the-way-up)), fenced by the guard's spotlight.
 
@@ -235,11 +236,13 @@ The child's own `error` events stay inside its `pattern_enter`/`pattern_exit`, b
 
 ## Where memory, guards and the sandbox sit
 
-**Memory.** `withMemory(deps.memory)` wraps the top-level array, outermost, as #419 requires. On main, recalled memory has exactly two readers, `router` and `compactExecution`. This shape has no `router`: `decisionLoop` uses the decide path, which reads no memory. So memory reaches **only the synthesizer**:
+**Memory.** `withMemory(deps.memory)` wraps the top-level array, outermost, as #419 requires. On main, recalled memory has exactly two readers, `router` and `compactExecution`. This shape has no `router`. **Amended (#829, eval scenario 05): the decisions model reads memory too.** A turn asking what was noted earlier was routed to `read-documents` instead of `answer`, because nothing in the state said the answer was already remembered. So `decisionLoop`'s state now carries the memories recalled this turn, tier-gated exactly as the documents block is ([`decide-document-context.md`](decide-document-context.md#recalled-memories-829)): their text on the private tier (the run frame's raw tier slot is exactly `'self_deployed'`), a count on every other, so no memory text reaches the Anthropic tier's decisions host. Memory therefore reaches the synthesizer and the decisions model:
 
-- it does not reach the decisions model or any child's task;
-- `routerMemory` (#546) has nothing to act on in this agent;
-- the round-1 concern that memory could flow into web queries and sandbox code is settled by construction.
+- it is safe for the decider to read, because the decider's output is a route choice only: one label out of the offered options, with no text, no tool argument and nothing that flows into a child. What a remembered fact can do there is pick a route, the same bound as a document name (T1 of that note);
+- it still does not reach any child's task: the block lives only in the decide state string, and fresh child data excludes `memories` and `memoryContext` (above, which stands);
+- a run that quotes memory records its decisions with the call redacted, so the text is not stored with the conversation (#419 F1);
+- `routerMemory: 'replies-only'` (#546) keeps the block and the count out of the decide state; the default lets the decider read it;
+- the round-1 concern that memory could flow into web queries and sandbox code stays settled by construction: the decider writes no query and no code.
 
 Recall, wake and settle still run only on interactive turns (#553).
 
@@ -932,7 +935,7 @@ All 11 round-2 calls and the 3 departures from the sketch were accepted as recom
 - **S-d, the screen.** Fail-closed for this agent (#206 D1): a screen that cannot run blocks the route output from reaching the next decision.
 - **S-e, derived files.** They persist as the deliverable, and verbatim copies stay blocked by the hash check. Persisted files leave the sandbox only through the existing owner-scoped `/work` ⇄ DataStash sync, never a new path. This applies once materialisation is built.
 - **S-f, pseudonymisation.** The `graph_file_ingest` → `/work/in` path is pseudonymised too. **The path stays off until wired**, enforced by withholding the tool by name until P4.
-- **N1, the decision state.** As in [What the decisions model sees](#what-the-decisions-model-sees-each-iteration), with no memory. On the Anthropic tier the state goes to the systemone provider like any other Anthropic-tier call. On the private tier it goes only to the self-hosted shim (#418 G11).
+- **N1, the decision state.** As in [What the decisions model sees](#what-the-decisions-model-sees-each-iteration); since #829 with recalled memory as text on the private tier and a count elsewhere. On the Anthropic tier the state goes to the systemone provider like any other Anthropic-tier call. On the private tier it goes only to the self-hosted shim (#418 G11).
 - **N2, the handoff.** `handoff.lastN` defaults to 2, counted in iterations.
 - **N3, decide failure.** It ends the turn visibly on iteration 1, and stops as `answer` with the answer marked partial on a later iteration.
 - **N4, re-hydration.** `withSandbox` re-hydrates after a stash-storing tool call in its scope. This is its own slice, with its own review.

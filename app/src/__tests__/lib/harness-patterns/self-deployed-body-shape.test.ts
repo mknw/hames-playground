@@ -330,6 +330,32 @@ describe('private-tier request bodies', () => {
     }
   })
 
+  // #829 (eval 05, D5): a question about what is remembered is answered FROM the
+  // memory block and attributed to memory; everywhere else the block only tailors the
+  // answer. The clause rides inside the memory block's own user message, so a turn
+  // with nothing recalled is byte-identical (pinned above). This grades the rendered
+  // wording, not the behaviour: that is the eval's 05. MUTATION: drop the clause, or
+  // move it out of the memory block.
+  it('tells Synthesize to answer a "what do you remember" question from the memory block', async () => {
+    const body = (
+      await b.request.Synthesize('q', 'i', TURNS, false, null, 'MEMTOKEN', null, SELF_DEPLOYED)
+    ).body.json() as Body
+    const messages = body.messages as { role: string; content: unknown }[]
+    const memory = JSON.stringify(
+      messages.find((m) => JSON.stringify(m.content).includes('MEMTOKEN'))!.content,
+    )
+    const clause =
+      'One exception: when the user asks what you remember about them or what you have noted, answer from this block and say it is what you remember from earlier conversations, even when no tool result mentions it.'
+    expect(memory.replace(/\\n\s*/g, ' ')).toContain(clause)
+    expect(memory.indexOf('One exception')).toBeLessThan(memory.indexOf('---BEGIN DATA---'))
+    const absent = JSON.stringify(
+      (
+        await b.request.Synthesize('q', 'i', TURNS, false, null, null, null, SELF_DEPLOYED)
+      ).body.json(),
+    )
+    expect(absent).not.toContain('One exception')
+  })
+
   it('sends no cache_control anywhere in the body, where the Anthropic chain does', async () => {
     const self_deployed = JSON.stringify((await CALLS[0][1]()).body.json())
     expect(self_deployed).not.toContain('cache_control')

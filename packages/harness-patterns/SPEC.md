@@ -1943,6 +1943,7 @@ interface DecisionLoopConfig extends PatternConfig {
   state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision
   documents?: DecisionDocumentsSource // the conversation's documents, read ONCE per run (below)
   documentsTimeoutMs?: number // default DECISION_DOCUMENTS_TIMEOUT_MS (30 000); positive integer
+  quoteMemories?: () => boolean // the host's answer, ONCE per run: may this run quote recalled memories (below)
 }
 
 type DecisionDocumentsSource = (signal: AbortSignal) => Promise<DecisionDocuments>
@@ -2032,7 +2033,7 @@ time; a route that hit its bound reads differently from one that finished early;
 the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the extractor puts the same fence back around the block it quotes) — it does not
 record how many documents it _searched_) — then **Latest results**, the last
 `handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
-window. It never holds memory.
+window. Memory reaches it only through the memories block (below).
 
 **The documents block (#507).** With `documents` configured, the state gains one
 block between the conversation and **This turn so far**, constant within a turn.
@@ -2083,10 +2084,49 @@ memory's. A `state` override receives the resolved value as
 `DecisionLoopStateInput.documents` and owns its own quoting, cap, sanitising and
 placement; `renderDocumentsBlock` is exported for it to call.
 
+**The memories block (#829).** With `quoteMemories` configured, the state gains
+one more block, after the documents block and before **This turn so far**, for
+the memories `withMemory` recalled this turn (`data.memories`). Core never reads
+a tier, as for documents: `quoteMemories()` is the host's answer, asked ONCE per
+run before iteration 1, to whether this run may quote them. Only `true` quotes
+them; any other answer, a throw included, gives the count alone,
+`Remembered about the user from earlier conversations: N relevant memories (not
+shown).` The quote is data, built so its content cannot end it: each memory is
+cut to `DECISION_MEMORY_CODE_POINTS` (280) code points before anything else runs,
+NFKC-normalised, separators and controls replaced, invisible and format
+characters removed (the documents block's own steps), and becomes one line
+prefixed `"> "` between `---BEGIN MEMORIES <nonce>---` and `---END MEMORIES
+<nonce>---`. The nonce is 16 hex characters from the platform's cryptographic
+source, drawn once per run (so the state stays append-only within the turn) and
+never one the quoted text contains (`drawFenceNonce`, as the guard gate's and the
+egress question's states). At most `DECISION_MEMORIES_MAX` (5) memories, in
+recall's order, and at most `DECISION_MEMORIES_MAX_CHARS` (2 000) characters,
+shed from the tail; a last line `(+K relevant memories not quoted)` counts the
+rest. Memory text is the user's own words (its evidence is a verbatim span of a
+user message), so it is quoted, not withheld on a rule as a document name is.
+Nothing recalled, or no `quoteMemories`, omits the block: such a state is
+byte-identical to one built without memory. `routerMemory: 'replies-only'`
+withholds the block and the count, and the host is not asked. A `quoteMemories`
+that throws, or a quote no nonce can be drawn for, gives the count and one
+`warning` (task `decision_memories`). The decider's output is one label, so the
+text reaches no tool argument; the block lives in the decide state alone and is
+in no child's data or view, no record and no handoff. **What a quoting run
+persists:** its decisions are recorded with the call redacted
+(`DecideOptions.redact`, `redactCall`: usage, cost and client kept, `variables`,
+`rawInput` and `rawOutput` dropped), on `decision_made` and on the `error` event
+that owns a failed call, so memory text never reaches the conversation blob
+through them (review F1, below). The error detail is withheld from the saved
+record as well: an error message keeps its text before the first `': '` (who
+answered, and how: `Jev answered HTTP 422`, which the hint still reads) and
+`WITHHELD_ERROR_DETAIL`. A `state` override receives
+`DecisionLoopStateInput.memories` (`{ total, quoted? }`, the text only on a
+quoting run) and owns its own quoting; `renderMemoriesBlock` is exported for it.
+
 **The state persists, in two fields.** `decision_made.data` carries `stateChars`,
 never the state text, but the event's `llmCall` holds the state twice: in
 `rawInput` (the whole decide request body) and in `variables.state`. Both are
-saved with the conversation (encrypted at rest, no expiry). On a run whose host
+saved with the conversation (encrypted at rest, no expiry), except on a run that
+quotes memories, whose calls are recorded redacted (above). On a run whose host
 revealed names, the capped list is therefore stored every turn, beyond the
 document's own TTL, and trimming one of the two fields leaves the names in the
 other. Deleting, hiding or archiving a document does not remove its name from
@@ -2942,7 +2982,12 @@ when the endpoint supplies no cost.
 the probabilities and `stateChars`, never the state text in `data`. The call
 record carries usage and the recorded client, and its `rawInput` is the request
 body, state included: it is persisted with the conversation, so whatever the
-state holds (a `decisionLoop`'s documents block, route outputs) is stored. `PatternCapabilities.decisionKeys` and
+state holds (a `decisionLoop`'s documents block, route outputs) is stored.
+`DecideOptions.redact` records the call without what it read (`redactCall`) on
+the `decision_made` and on an `error` that owns the call, and withholds an error
+message's detail (its text before the first `': '` and `WITHHELD_ERROR_DETAIL`),
+for a state quoting text that must not be stored (a `decisionLoop` quoting
+recalled memory). `PatternCapabilities.decisionKeys` and
 `harnessDecisionKeys(patterns)` expose declared keys without running the
 harness. Timeline previews show the decision type and verdict.
 
@@ -3011,8 +3056,10 @@ distance`; the **floors BEFORE fusion** — a row survives a channel only if
 
 `data.memories` is `RecalledMemory[]` (`{ id, kind, tier, content }`) and
 `data.memoryContext` the formatted block (`- [kind] content`, one line per
-memory, no ids) that a responder renders in its run-static part. Two patterns
-consume it (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
+memory, no ids) that a responder renders in its run-static part. A third reader,
+`decisionLoop` with `quoteMemories` (#829), reads `data.memories` for its decide
+state: the text only where the host allows, a count elsewhere (see its memories
+block). Two patterns consume the formatted block (#419 M5a): `compactExecution` copies a non-blank `data.memoryContext`
 into `CompactExecutionInput.memoryContext` (the key is ABSENT when nothing was
 recalled), and `router` (unless `routerMemory: 'replies-only'`) hands it to `route` as a trailing fourth argument,
 `RouteExtra { memoryContext? }`, again only when non-blank — so a `route` written
@@ -3064,7 +3111,9 @@ is part of the serialized session. `serializeContext` therefore drops
 `TRANSIENT_DATA_KEYS` (`memories`, `memoryContext`) unless the run is `paused`
 (a resume re-enters from the blob, so a paused blob keeps the block — short-lived,
 but the same plaintext). Without it Forget and retention would never reach the
-conversation blob or the nightly dump (pin `memory-not-in-blob`).
+conversation blob or the nightly dump (pin `memory-not-in-blob`). For the same
+reason a `decisionLoop` that quotes memory to its decisions model records those
+decisions' calls redacted (#829).
 
 ### Cost, and what is unrecordable
 

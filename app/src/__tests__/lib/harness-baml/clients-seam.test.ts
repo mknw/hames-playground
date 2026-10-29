@@ -229,18 +229,26 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(unknown.basis).toBeUndefined()
   })
 
-  it('registers exactly the time-priced clients settings.ts prices', async () => {
+  it('registers exactly the time-priced clients settings.ts prices, each at its box rate', async () => {
     const clients = await loadWired()
-    const { TIME_PRICED_CLIENTS } = await import(SETTINGS)
-    expect(Object.keys(clients.activeCostPricing().timePricedClients ?? {}).sort()).toEqual(
-      Object.keys(TIME_PRICED_CLIENTS).sort(),
-    )
+    const { TIME_PRICED_CLIENTS, DEFAULT_LARGE_LLM_EUR_PER_HOUR, DEFAULT_SMALL_LLM_EUR_PER_HOUR } =
+      await import(SETTINGS)
+    const pricing = clients.activeCostPricing().timePricedClients ?? {}
+    expect(Object.keys(pricing).sort()).toEqual(Object.keys(TIME_PRICED_CLIENTS).sort())
+    // Each client's reader resolves to its OWN box's rate: the 27B leaves to
+    // the metered large GPU's, the rest to the metered small GPU's. Copying the
+    // small reader onto the 27B (or the reverse) would bill those calls at the
+    // wrong €/h while the key set still agreed.
+    expect(pricing.LargeQwen!()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    expect(pricing.LargeQwenThink!()).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    expect(pricing.SmallQwen!()).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
+    expect(pricing.PrivateSystemOne!()).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
   })
 
   it('prices a step spanning the provider and time bases independently', async () => {
-    // Each attempt under its OWN client's basis: the 27B leaf off the
-    // provider-reported cost, the metered 4B off wall-clock. Pricing either
-    // by the other's model would bill one of the two wrong.
+    // Each attempt under its OWN client's basis: the OpenRouter-route 27B twin
+    // off the provider-reported cost, the metered 4B off wall-clock. Pricing
+    // either by the other's model would bill one of the two wrong.
     await loadWired()
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { DEFAULT_EUR_PER_USD } = await import(SETTINGS)
@@ -249,7 +257,7 @@ describe('the configuration the host registers is the configuration the resoluti
         {
           calls: [
             {
-              clientName: 'LargeQwen',
+              clientName: 'LargeQwenOR',
               httpResponse: {
                 body: {
                   json: () => ({ usage: { input_tokens: 10, output_tokens: 2, cost: 0.02 } }),

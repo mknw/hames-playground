@@ -1500,7 +1500,7 @@ stage_env() {
         [[ -n $v ]] && env_set "$key" "$v" && chg "set $key (value not shown)"
       done
       note "With all five values configured, a user who never chose starts on Private; the first turn may pay a cold start."
-      printf '  Also default non-conversation runs to Private (USE_SELF_DEPLOYED_INFERENCE=1)? [y/N] ' >/dev/tty
+      printf '  Also require the self-deployed tier to be configured (USE_SELF_DEPLOYED_INFERENCE=1)? [y/N] ' >/dev/tty
       IFS= read -r v </dev/tty
       [[ $v =~ ^[Yy] ]] && env_set USE_SELF_DEPLOYED_INFERENCE 1 && chg "set USE_SELF_DEPLOYED_INFERENCE=1"
     fi

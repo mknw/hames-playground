@@ -272,7 +272,9 @@ async function prompt(values: Record<string, string>, configure = true) {
           .filter(([key]) => !values[key])
           .map(([key, value]): [string, string] => [`${key} (`, value])
       : []),
-    ...(configure ? [['Also default non-conversation runs', 'n'] as [string, string]] : []),
+    ...(configure
+      ? [['Also require the self-deployed tier to be configured', 'n'] as [string, string]]
+      : []),
   ]
   const output = await new Promise<string>((resolve, reject) => {
     const terminal = spawn(

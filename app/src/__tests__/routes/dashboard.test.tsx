@@ -129,7 +129,11 @@ describe('Dashboard route', () => {
     // The caveat is stated on the page, not only in a tooltip.
     expect(text).toContain('LARGE_LLM_EUR_PER_HOUR')
     expect(text).toContain('SMALL_LLM_EUR_PER_HOUR')
-    expect(text).toContain('LARGE_LLM_EUR_PER_HOUR and SMALL_LLM_EUR_PER_HOUR')
+    expect(text).toContain('LARGE_LLM_EUR_PER_HOUR, and SMALL_LLM_EUR_PER_HOUR')
+    // #848: the footnote names the small box's rate basis — the GPU actually
+    // served, per-GPU overrides for the fallback types, and the highest-known
+    // floor when that could not be read.
+    expect(text).toMatch(/highest known rate/)
     expect(text).toMatch(/cold start/)
     expect(text).toMatch(/floors on the bill/)
   })

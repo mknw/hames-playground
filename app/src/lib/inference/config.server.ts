@@ -23,7 +23,8 @@
 import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
-import { eurPerUsdRate, largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { eurPerUsdRate, largeEurPerHour } from '../cost-rates.server'
+import { smallGpuEurPerHour } from './small-gpu.server'
 import { privateInferenceOnly, assertPrivateTierConfigured } from './tier-config.server'
 export {
   privateInferenceOnly,
@@ -113,8 +114,10 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 // client-to-rate mapping rides along: it is what makes a usage-less attempt on
 // a metered box price as a floor instead of being dropped. Both boxes' clients
 // are here — the 27B leaves under the owner's 2026-10-13
-// metered-infrastructure decision (TIME_PRICED_CLIENTS in settings.ts), the 4B
-// summarizer and the private systemone client at their own rate. The
+// metered-infrastructure decision (TIME_PRICED_CLIENTS in settings.ts), and
+// since #848 the small clients read the GPU-AWARE rate — the GPU the box
+// actually served (its `/status` sample, `small-gpu.server.ts`), not one rate
+// for the box, because #782's fallback list can land the box on an A10. The
 // OpenRouter-route twins are deliberately ABSENT: when the eval re-points the
 // large endpoint at a per-token public API, those calls have no GPU-hour bill
 // and price off the provider's reported `usage.cost` instead.
@@ -123,8 +126,8 @@ configureCostPricing({
   timePricedClients: {
     LargeQwen: largeEurPerHour,
     LargeQwenThink: largeEurPerHour,
-    SmallQwen: smallLlmEurPerHour,
-    PrivateSystemOne: smallLlmEurPerHour,
+    SmallQwen: smallGpuEurPerHour,
+    PrivateSystemOne: smallGpuEurPerHour,
   },
 })
 

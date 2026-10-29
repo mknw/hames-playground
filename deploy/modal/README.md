@@ -67,7 +67,7 @@ GPU snapshots are a Modal **alpha** feature. vLLM 0.30's source keeps a LoRA thr
 
 - **Snapshots are per GPU type.** Each type in the list takes its own ([2–3 per type](https://modal.com/docs/guide/memory-snapshots)), so the first cold starts that land on a type are full boots, however warm the other type is. Changing the list obsoletes every snapshot, as any redeploy does. The pre-sleep reference that step 3 compares against is in the snapshot, so a restore is always checked against a boot on its own GPU type.
 - **`/status` names the GPU** the container landed on (`gpu`, from `nvidia-smi`), and `smoke.py` prints it, so a measurement records which type it timed.
-- **Each type bills at its own rate**, while the app prices the box at one `SMALL_LLM_EUR_PER_HOUR`. A call served on a dearer type shows a lower floor than it cost, one on a cheaper type a higher one.
+- **Each type bills at its own rate**, and since #848 the app prices the box by the GPU actually served: it samples the `gpu` field `/status` reports (once per wake, then at most once per scale-down window), `SMALL_LLM_EUR_PER_HOUR` is the L4 rate, and each other family needs a row in `app/src/lib/inference/small-gpu.server.ts`'s table plus its override var (`SMALL_LLM_EUR_PER_HOUR_A10` for the A10) — a type in the fallback list that the table does not know prices at the highest rate the table knows. A call served on a cheaper type than the fallback showed used to read low; that is what per-GPU pricing fixes.
 
 ## What leaves the compute region, and what does not
 

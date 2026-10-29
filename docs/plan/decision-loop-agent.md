@@ -422,7 +422,7 @@ A check on a URL would decide the same call differently on two hosts, which is w
 
 **The table (Q3).** There is none: nothing is rewritten, so nothing is reversed.
 
-**Formats.** There are no format rules. `/work/in` receives the original bytes whatever the format (`packages/sandbox/work-artifacts.server.ts:119-121`), and the actor's code reads them. Indexing covers text formats and, with conversion on, PDF plus the Word, OpenDocument and PowerPoint formats (`stash/doc-convert.server.ts:50-61`); spreadsheets, images and everything else are stored `not_indexed`. Scenario 16's spreadsheets are read by code in the sandbox, and what gets indexed is the report that code writes.
+**Formats.** There are no format rules. `/work/in` receives the original bytes whatever the format (`packages/sandbox/work-artifacts.server.ts:119-121`), and the actor's code reads them. Indexing covers text formats and, with conversion on, PDF plus the Word, OpenDocument and PowerPoint formats (`stash/doc-convert.server.ts:50-61`); spreadsheets, images and everything else are stored `not_indexed`. Scenario 16's spreadsheets are read by code in the sandbox, and what gets indexed is a text report the code writes — a binary output (PDF, DOCX, PPTX, ODT) is indexable by no path today (#853).
 
 **Q5, a stable pseudonym.** Not applicable: this path mints no placeholders.
 

@@ -230,12 +230,29 @@ describe('createPatterns', () => {
     // untrusted content on a trusted transport, and the agent must declare it.
     const patterns = await microsoft365Agent.createPatterns('test-session', testAgentDeps)
 
-    expect(injectionGuard).toHaveBeenCalledWith({ namespaces: ['graph'], catalog: graphNamespace })
+    expect(injectionGuard).toHaveBeenCalledWith({
+      namespaces: ['graph'],
+      catalog: graphNamespace,
+      sourceLinks: { namespace: 'graph', field: 'webUrl', hosts: [] },
+    })
     // The guard wraps the LOOP (so it is active for every tool call), and the
     // chain shape is otherwise unchanged.
     expect(patterns).toHaveLength(2)
     expect((patterns[0] as { name: string }).name).toBe('withInjectionGuard(simpleLoop)')
     expect((patterns[1] as { name: string }).name).toBe('compactExecution')
+  })
+
+  // #784 item 6. MUTATION: drop `sourceLinks` from the guard, or pass it a
+  // literal host list instead of the host's: red.
+  it("exempts only the Graph tools' own webUrl, on the hosts the host configured", async () => {
+    const hosts = ['contoso.sharepoint.com', 'contoso-my.sharepoint.com']
+    await microsoft365Agent.createPatterns('test-session', {
+      ...testAgentDeps,
+      guards: { documentHosts: hosts },
+    })
+    expect(injectionGuard).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sourceLinks: { namespace: 'graph', field: 'webUrl', hosts } }),
+    )
   })
 
   it('leaves the loop config untouched when guarded (transparent wrapper)', async () => {

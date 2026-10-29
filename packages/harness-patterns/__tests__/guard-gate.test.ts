@@ -105,6 +105,20 @@ describe("the gate in 'gated' mode", () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  // MUTATION: drop `if (shadow)` from the `wouldRun` stamp in
+  // `createGuardGate`: the field is shadow-only, and a gated row that read
+  // 'would skip' would describe a gate that DID skip the screen.
+  it('a gated decision carries no wouldRun', async () => {
+    const events: ContextEvent[] = []
+    const run = vi.fn(async () => verdictClean)
+    const guard = guardWith({ run, mode: 'gated', gate: createGuardGate(fakeDecide(0.01)) }, events)
+    await guard.sanitize('fetch_page', CLEAN)
+    expect(run).not.toHaveBeenCalled()
+    const [decision] = decisions(events)
+    expect(decision).toBeDefined()
+    expect(decision.data).not.toHaveProperty('wouldRun')
+  })
+
   // MUTATION: drop `signal: abort.signal` from the gate's `evaluateDecision`
   // call (or the `signal` pass-through in `evaluateDecision`): the request the
   // gate stopped waiting for is never aborted.
@@ -165,6 +179,68 @@ describe("mode 'shadow'", () => {
     const [decision] = decisions(events)
     expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
     expect((decision.data as DecisionMadeEventData).pTrue).toBeCloseTo(0.01)
+  })
+
+  // MUTATION: stamp `wouldRun` from a literal 0.15 instead of the gate's own
+  // configured `threshold`: a deployment that raises τi (#845) would see rows
+  // claim the screen would run when the gate would skip it.
+  it('the shadow event records what the gate would have done at the CONFIGURED τi, both sides', async () => {
+    // pTrue 0.3 sits between the default τi and 0.5: the model's argmax label
+    // is 'false' (#784 item 10) while the gate would have run the screen.
+    for (const [threshold, wouldRun] of [
+      [undefined, true], // default τi 0.15: 0.3 >= τi
+      [0.4, false], // a raised, configured τi: 0.3 < τi
+      [0.05, true], // a lowered, configured τi: 0.3 >= τi
+    ] as const) {
+      const events: ContextEvent[] = []
+      const run = vi.fn(async () => verdictClean)
+      const gate = createGuardGate(fakeDecide(0.3), threshold === undefined ? {} : { threshold })
+      await guardWith({ run, mode: 'shadow', gate }, events).sanitize('fetch_page', CLEAN)
+      const [decision] = decisions(events)
+      const data = decision.data as DecisionMadeEventData
+      expect(data.wouldRun, `τi ${threshold ?? 'default'}`).toBe(wouldRun)
+      expect(data.label, `τi ${threshold ?? 'default'}`).toBe('false')
+    }
+  })
+
+  // MUTATION: record `wouldRun` only when true (`if (shadow && wouldRun)` in
+  // `createGuardGate`): an answer below τi loses the row's would-be label.
+  it('the shadow event records wouldRun false when the gate would have skipped', async () => {
+    const events: ContextEvent[] = []
+    const run = vi.fn(async () => verdictClean)
+    await guardWith(
+      { run, mode: 'shadow', gate: createGuardGate(fakeDecide(0.01)) },
+      events,
+    ).sanitize('fetch_page', CLEAN)
+    expect((decisions(events)[0].data as DecisionMadeEventData).wouldRun).toBe(false)
+  })
+
+  // MUTATION: stamp `wouldRun` AFTER `onDecision` in `createGuardGate`: the
+  // recorder emits the event live and the panel timeline is built from those
+  // live copies, so the live row keeps the argmax label until a reload — only
+  // the persisted blob (which shares the object reference) is corrected. This
+  // pin snapshots every event AT EMIT TIME, so it is red on the late stamp
+  // even though the by-reference pins above stay green.
+  it('the shadow event is stamped before it is emitted, not only before it is persisted', async () => {
+    const atEmit: Array<DecisionMadeEventData | undefined> = []
+    const run = vi.fn(async () => verdictClean)
+    const guard = createInjectionGuard(
+      {
+        tools: ['fetch_page'],
+        screen: { run, mode: 'shadow', gate: createGuardGate(fakeDecide(0.3)) },
+      },
+      // Snapshot, don't keep the reference: a snapshot is what the live SSE
+      // bridge serializes (`JSON.stringify`) at emit time.
+      (e) => {
+        if (e.type === 'decision_made' && (e.data as DecisionMadeEventData).key === 'guard.screen')
+          atEmit.push(JSON.parse(JSON.stringify(e.data)) as DecisionMadeEventData)
+      },
+      'guard',
+    )
+    await guard.sanitize('fetch_page', CLEAN)
+    expect(atEmit).toHaveLength(1)
+    // pTrue 0.3 at the default τi 0.15: the gate would have run the screen.
+    expect(atEmit[0]?.wouldRun).toBe(true)
   })
 })
 

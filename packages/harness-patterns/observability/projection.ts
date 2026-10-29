@@ -180,15 +180,22 @@ function actionPreview(type: EventType, data: unknown): string {
     }
     case 'decision_made': {
       // `key: label`, or the abstain reason — the same fields `formatEventData`
-      // renders, and never the question or the state (#418).
+      // renders, and never the question or the state (#418). A shadow gate's
+      // row says what the gate WOULD have done at its configured threshold
+      // (`wouldRun`, #784 item 10): the argmax `label` can read 'false' while
+      // the gate would have run the screen.
       const d = data as DecisionMadeEventData
+      const verdict =
+        d.shadow && typeof d.wouldRun === 'boolean'
+          ? `would ${d.wouldRun ? 'screen' : 'skip'}`
+          : d.label
       const head = d.abstained
-        ? `${d.key}: abstained${d.reason ? ` (${d.reason})` : ''} → ${d.label}`
+        ? `${d.key}: abstained${d.reason ? ` (${d.reason})` : ''} → ${verdict}`
         : d.type === 'score'
-          ? `${d.key}: ${d.label} (E=${d.expected?.toFixed(2) ?? 'unknown'})`
+          ? `${d.key}: ${verdict} (E=${d.expected?.toFixed(2) ?? 'unknown'})`
           : d.type === 'noul'
-            ? `${d.key}: ${d.label} (p=${d.pTrue?.toFixed(2) ?? 'unknown'})`
-            : `${d.key}: ${d.label}`
+            ? `${d.key}: ${verdict} (p=${d.pTrue?.toFixed(2) ?? 'unknown'})`
+            : `${d.key}: ${verdict}`
       return head.length > 50 ? head.slice(0, 50) + '...' : head
     }
     case 'model_call': {

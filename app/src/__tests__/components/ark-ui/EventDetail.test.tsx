@@ -63,6 +63,52 @@ describe('EventDetail score/noul observability', () => {
     expect(panel.querySelector('[data-role="decision-cut"]')).toBeNull()
     expect(panel.textContent).not.toContain('margin')
   })
+  // MUTATION: keep rendering the argmax `label` in the detail pane: expanding
+  // a shadow row at p between τi and 0.5 would show the exact 'false' the row
+  // corrects (#784 item 10 fix round).
+  it('a shadow noul detail reads the would-be verdict, not the argmax label', () => {
+    const panel = detail({
+      type: 'noul',
+      pTrue: 0.3,
+      label: 'false',
+      top: 'false',
+      margin: 0.4,
+      shadow: true,
+      wouldRun: true,
+    })
+    const verdict = panel.querySelector('[data-role="decision-verdict"]')!.textContent
+    expect(verdict).toContain('would screen')
+    expect(verdict).not.toContain('false')
+  })
+
+  // MUTATION: drop the `shadow &&` guard from the verdict: a gated event that
+  // carried a wouldRun would read 'would skip' for a gate that DID skip.
+  it('a gated detail keeps the argmax label even when a wouldRun is present', () => {
+    const panel = detail({
+      type: 'noul',
+      pTrue: 0.3,
+      label: 'false',
+      top: 'false',
+      margin: 0.4,
+      wouldRun: true,
+    })
+    expect(panel.querySelector('[data-role="decision-verdict"]')!.textContent).toContain('→ false')
+  })
+
+  // MUTATION: drop the wouldRun branch from the verdict fallback: a shadow
+  // event recorded before the field existed still reads its argmax label.
+  it('a shadow detail without wouldRun keeps the argmax label', () => {
+    const panel = detail({
+      type: 'noul',
+      pTrue: 0.3,
+      label: 'true',
+      top: 'true',
+      margin: 0.4,
+      shadow: true,
+    })
+    expect(panel.querySelector('[data-role="decision-verdict"]')!.textContent).toContain('→ true')
+  })
+
   it.each([0, 2])('places the mean at scale endpoint %s', (expected) => {
     expect(
       detail({ expected }).querySelector<HTMLElement>('[data-role="decision-mean"]')!.style.left,

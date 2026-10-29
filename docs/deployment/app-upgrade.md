@@ -98,17 +98,21 @@ rendered configuration; a failed render or validator must prevent boot.
 ```bash
 set -o pipefail
 docker compose config --format json |
-  docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint node \
+  docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
+    --user "$(id -u):$(id -g)" --entrypoint node \
     -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
     hames-app:local "$PWD/scripts/validate-clones.mjs" &&
   bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
     --acme-email ops@example.invalid --ref '<full-target-sha>' --only boot --no-seed
 ```
 
-The validator runs inside the release app image: mount the §12 dev checkout
-path from `.env` at its own path as shown (and each `*_SANDBOX_DOCKER_TLS_*`
-file the same way when a VM overlay is selected); the host needs no Node
-(#681). A missing image refuses until `--only images` builds it.
+The validator runs inside the release app image, as you, so the host needs no
+Node (#681); export the §12 `DEV_CLONE_PATH` from `.env`. The block is for the
+socket shapes only, run from real (non-symlink) checkout paths: it mounts the
+two checkouts and nothing else. With a VM overlay selected, run bootstrap's own
+preflight instead (`--only boot --dry-run` changes nothing), which resolves
+every host path on the host before it mounts the checkouts and each TLS file.
+A missing image refuses until `--only images` builds it.
 
 If Caddyfile contents or imported sites changed, recreate only Caddy with
 `docker compose up -d --no-deps --force-recreate caddy` under the full deployment
@@ -245,16 +249,20 @@ prevent startup. Never print or save the rendered configuration:
 ```bash
 set -o pipefail
 docker compose config --format json |
-  docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint node \
+  docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
+    --user "$(id -u):$(id -g)" --entrypoint node \
     -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
     hames-app:local "$PWD/scripts/validate-clones.mjs" &&
   docker compose up -d --no-build --force-recreate app app-dev
 ```
 
-The validator runs inside the release app image: mount the §12 dev checkout
-path from `.env` at its own path as shown (and each `*_SANDBOX_DOCKER_TLS_*`
-file the same way when a VM overlay is selected); the host needs no Node
-(#681). A missing image refuses until `--only images` builds it.
+The validator runs inside the release app image, as you, so the host needs no
+Node (#681); export the §12 `DEV_CLONE_PATH` from `.env`. The block is for the
+socket shapes only, run from real (non-symlink) checkout paths: it mounts the
+two checkouts and nothing else. With a VM overlay selected, run bootstrap's own
+preflight instead (`--only boot --dry-run` changes nothing), which resolves
+every host path on the host before it mounts the checkouts and each TLS file.
+A missing image refuses until `--only images` builds it.
 
 The single-app command above is unchanged. Do not rebuild over the retained
 image. Repeat the full smoke before reopening ingress; do not roll back a leaked

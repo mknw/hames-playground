@@ -422,7 +422,7 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     ({ configExit, validateExit }) => {
       const preview = readFileSync(repoFile('docs/PREVIEW.md'), 'utf8')
       const snippet = preview.match(
-        /```bash\n((?:set[^\n]*\n)?docker compose config --format json \|\n[\s\S]*?docker run --rm -i --network none[\s\S]*?)\n```/,
+        /```bash\n((?:set[^\n]*\n)?docker compose config --format json \|\n[\s\S]*?docker run --rm -i --pull never --network none[\s\S]*?)\n```/,
       )?.[1]
       expect(snippet).toBeDefined()
       // Execute the actual copyable block with shell functions replacing only

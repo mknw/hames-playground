@@ -1247,7 +1247,8 @@ the inputs above:
 ```bash
 set -o pipefail
 docker compose config --format json |
-  docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint node \
+  docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
+    --user "$(id -u):$(id -g)" --entrypoint node \
     -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
     hames-app:local "$PWD/scripts/validate-clones.mjs" &&
   docker compose up -d --build app app-dev
@@ -1262,11 +1263,15 @@ and refuses a dev command override, a shared canonical build path, shared config
 a dev socket without owner opt-in or a published dev port.
 Re-run it before every manual recreate. Bootstrap runs this same validator
 itself before clone Compose operations, including `images`, `boot`, and smoke
-probes. The validator runs inside the release app image (`hames-app:local`), so the
-host needs no Node; export `DEV_CLONE_PATH` from the root `.env` (§12) — the
-block mounts both checkouts read-only at their own paths — and each
-`*_SANDBOX_DOCKER_TLS_*` file the same way when a VM overlay is selected. A missing image, a failed render, or failed validation
-prevents the operation.
+probes. The validator runs inside the release app image (`hames-app:local`,
+never pulled) as you, so the host needs no Node; export `DEV_CLONE_PATH` from
+the root `.env` (§12). The block above is for the socket shapes only, run from
+real (non-symlink) checkout paths: it mounts the two checkouts and nothing else.
+With a VM overlay selected, run bootstrap's own preflight instead
+(`--only boot --dry-run` changes nothing): it resolves every host path on the
+host, then mounts the checkouts and each `*_SANDBOX_DOCKER_TLS_*` file at its
+real path. A missing image, a failed render, or failed validation prevents the
+operation.
 Rendered configuration goes directly to the validator; it is never saved or
 printed. This is an operator preflight, not a runtime Docker authorization boundary.
 

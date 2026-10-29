@@ -786,6 +786,20 @@ jobs:
             exit 1
           }
 
+      # #681: bootstrap's clone preflight runs scripts/validate-clones.mjs inside
+      # the release app image. Only the real image and daemon show what that
+      # container can see of the host — its mounts, its user, its dropped
+      # capabilities — so the preflight's mount cases (an operator-owned 0600
+      # key, symlinked TLS and checkout paths) run here against the image just
+      # built, and its mutants (no --user, no host canonicalisation, a missing
+      # TLS mount) must each turn them red.
+      - name: Clone preflight inside the image
+        working-directory: .
+        run: |
+          docker tag hames-app:ci hames-app:local
+          scripts/bootstrap-vps.test.sh --clone-image
+          scripts/bootstrap-vps.test.sh --clone-image-mutations
+
       # A container that builds but does not boot is not a passing gate. This
       # runs the image with NO dependencies attached: /api/health is a liveness
       # probe that touches none of them, and the routine scheduler's tick

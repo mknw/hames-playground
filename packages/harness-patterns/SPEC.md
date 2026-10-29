@@ -967,6 +967,7 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   screen?: InjectionScreenConfig // optional model screen; OFF by default
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
+  sourceLinks?: { namespace: string; field: string; hosts: readonly string[] } // a source's own links, exempt from `exfil-data-url` and no other rule (see below)
 }
 
 interface InjectionScreenConfig {
@@ -978,6 +979,15 @@ interface InjectionScreenConfig {
   classify?: IngressClassifier // the host's; absent = every payload is external
 }
 ```
+
+**`sourceLinks` — a source's own links (#784 item 6).** A connector that writes
+its own links into its own result (a Graph result's `webUrl`) is exempt from
+`exfil-data-url` — and from no other rule — when the whole value is one bare
+`https:` URL on exactly one of `hosts`: the payload's namespace, the leaf's key
+and the host must all match, and the value must carry no second scheme, no
+credentials and no port. The exemption is bound to where the value sits, never
+to what it looks like; the same URL in any other leaf, namespace or host is
+scanned as before. Empty hosts: no link is exempt.
 
 **Threat model.** `tool_result` content from an untrusted source (web search, a
 fetched page, a SharePoint/ms-graph document, a retrieved Data Stash chunk) that
@@ -1228,7 +1238,11 @@ request itself through `DecideInput.signal`, not only the wait for it. Each answ
 is a `decision_made` event keyed `guard.screen`, `shadow: true` whenever the
 answer is not obeyed, carrying the state's size and never its text (the call record
 is redacted as the screen's is); an unavailable answer, a state it could not render
-included, is an abstained one. So `guardGateSkipRate(events)` computes the skip
+included, is an abstained one. A shadow event also carries `wouldRun` — what the
+gate WOULD have decided at its own configured threshold — and it is stamped before
+the event is emitted, because the live timeline row reads it instead of the argmax
+`label`, which can disagree with the threshold rule (#784 item 10); a gated event
+carries no `wouldRun`. So `guardGateSkipRate(events)` computes the skip
 rate from any run's events (a custom gate that throws records nothing, so it is not
 counted): a gate that is wrong rather than down is caught by measurement, never by
 `onUnavailable`.
@@ -1311,13 +1325,14 @@ two guards both declare takes the inner guard's options. The `content_sanitized`
 event and the screen's `model_call` event go to the innermost guard's scope
 either way.
 
-| Dimension            | Nesting rule                                       | Why                                                                                      |
-| -------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools` | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`       | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`              | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared               |
-| `spotlight`          | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself   |
-| `screen`             | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen |
+| Dimension            | Nesting rule                                       | Why                                                                                                                                     |
+| -------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `namespaces`/`tools` | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree                                                     |
+| `disableRules`       | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary                                                |
+| `rules`              | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared                                                              |
+| `spotlight`          | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself                                                  |
+| `screen`             | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen                                                |
+| `sourceLinks`        | the declaring guard's own                          | general-next's orchestrator also declares `graph` but has no `sourceLinks`, so a Graph result sanitized in that scope gets no exemption |
 
 A guard that wants a screen, a fence or an extra rule on a tool declares it
 itself. Declaring one on an enclosing guard no longer reaches the guards inside

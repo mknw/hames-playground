@@ -215,6 +215,40 @@ describe('getEventPreview', () => {
     expect(getEventPreview('model_call', { role: 'describe', items: 3 })).toBe('describe ×3')
   })
 
+  // A shadow gate's row says what the gate WOULD have done at its configured
+  // threshold (`wouldRun`, #784 item 10), not the argmax label, which can read
+  // 'false' while the gate would have run the screen.
+  // MUTATION: drop the `wouldRun` branch from the `decision_made` preview: a
+  // shadow row at p=0.30 reads 'false' again.
+  it('previews a shadow guard.screen row with what the gate would have done', () => {
+    const decision = { question: 'Q', abstained: false, stateChars: 9 }
+    const shadow = (wouldRun: boolean, label: string, pTrue: number) =>
+      getEventPreview('decision_made', {
+        ...decision,
+        key: GUARD_SCREEN.key,
+        type: 'noul',
+        label,
+        pTrue,
+        shadow: true as const,
+        wouldRun,
+      })
+    expect(shadow(true, 'false', 0.3)).toBe('injection · guard.screen: would screen (p=0.30)')
+    expect(shadow(false, 'true', 0.1)).toBe('injection · guard.screen: would skip (p=0.10)')
+    // Not shadow: the label, even when a `wouldRun` is present — a gated row
+    // must not read 'would skip' for a gate that DID skip the screen.
+    // MUTATION: drop the `shadow &&` guard from the verdict condition.
+    expect(
+      getEventPreview('decision_made', {
+        ...decision,
+        key: GUARD_SCREEN.key,
+        type: 'noul',
+        label: 'false',
+        pTrue: 0.3,
+        wouldRun: true,
+      }),
+    ).toBe('injection · guard.screen: false (p=0.30)')
+  })
+
   // Mutation: quote `spans` in the audit preview → a person's name on the row.
   it('previews an egress audit by counting the matched names, never quoting them', () => {
     const audit = {

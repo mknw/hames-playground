@@ -57,7 +57,9 @@ function stepCost(
       label: 'Compute time (step)',
       title:
         `Billed by the second on the self-hosted GPU at €${m.timeRate.eurPerHour}/h — ` +
-        `${seconds}s of measured call time. Tokens on it are free. ` +
+        `${seconds}s of measured call time. The rate is the GPU type the box actually ` +
+        'served on (the box reports it); when that could not be read, the highest known ' +
+        'box rate is shown, so the floor does not understate. Tokens on it are free. ' +
         FLOOR_CAVEAT,
     }
   }
@@ -92,7 +94,9 @@ function stepCost(
       title:
         `Part of this step ran on the self-hosted GPU` +
         (m.timeRate ? ` (${seconds}s at €${m.timeRate.eurPerHour}/h, tokens free)` : '') +
-        `, the rest on tokens. ` +
+        ', the rest on tokens. As on the all-wall-clock steps: the rate is the GPU type ' +
+        'the box actually served on, or the highest known box rate when that could not ' +
+        'be read. ' +
         FLOOR_CAVEAT +
         ` Token part: ${tokenTitle}.`,
     }

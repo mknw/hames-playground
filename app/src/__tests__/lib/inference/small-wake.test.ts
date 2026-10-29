@@ -31,8 +31,14 @@ import {
   noteLargeCallCompleted,
   resetLargeActivity,
 } from '../../../lib/inference/large-activity.server'
+import { resampleSmallBoxGpu } from '../../../lib/inference/small-gpu.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
+// The GPU sampler hits the network; the wake tests stub it out and pin the
+// HOOK (and the synchronous drop) in small-gpu.test.ts's sibling assertions.
+vi.mock('../../../lib/inference/small-gpu.server', () => ({
+  resampleSmallBoxGpu: vi.fn(),
+}))
 
 const SMALL = 'https://example.invalid/small/health'
 const LARGE = 'https://example.invalid/large/v1/chat/completions'
@@ -60,6 +66,7 @@ beforeEach(() => {
     vi.stubEnv(name, undefined)
   fetchMock = vi.fn(async () => ok())
   vi.stubGlobal('fetch', fetchMock)
+  vi.mocked(resampleSmallBoxGpu).mockClear()
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -104,6 +111,22 @@ describe('small box wake', () => {
       expect(init.body).toBeUndefined()
     }
     expect(smallProvenWarm()).toBe(true)
+  })
+
+  it('a landed small wake resamples the box /status GPU; a refused one does not (#848)', async () => {
+    await ensureSmallAwake()
+    expect(resampleSmallBoxGpu).toHaveBeenCalledTimes(1)
+    resetSmallWake()
+    resetSmallActivity() // the success stamped the warm clock; expire it
+    fetchMock.mockResolvedValue(new Response('refused', { status: 401 }))
+    await expect(ensureSmallAwake()).rejects.toThrow(SMALL_LLM_WAKE_FAILED)
+    expect(resampleSmallBoxGpu).toHaveBeenCalledTimes(1)
+    // A proven-warm box skips the poll — and the sample, which the small-call
+    // refresh site owns until the next real wake.
+    noteSmallCallCompleted()
+    await ensureSmallAwake()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(resampleSmallBoxGpu).toHaveBeenCalledTimes(1)
   })
 
   it('omits authorization when no optional small key is configured', async () => {

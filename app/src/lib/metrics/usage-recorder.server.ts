@@ -54,6 +54,7 @@ import {
 import { noteLargeCallCompleted, LARGE_LLM_CLIENT_NAME } from '../inference/large-activity.server'
 import { largeOnOpenRouter } from '@hames-ai/harness-baml/inference-env.server'
 import { noteSmallCallCompleted, settleColdStart } from '../inference/cold-start.server'
+import { refreshSmallBoxGpuIfStale } from '../inference/small-gpu.server'
 import { addUsage, type UsageDelta } from './preview-counters.server'
 import { noteCallLatency } from './call-latency.server'
 import {
@@ -118,7 +119,15 @@ export function recordSample(sample: LlmUsageSample, at: number = Date.now()): v
 
   // The 4B's warm clock. Same evidence rule as the 27B's: a call that spent
   // tokens is a box that answered. A cold ingress's immediate 503 spends none.
-  if (sample.clientName === 'SmallQwen' && sample.metrics) noteSmallCallCompleted(at)
+  // This is ALSO the GPU sample's TTL-bounded refresh site (#848): the pricing
+  // seam must stay pure — a rate read from a step on any tier must never fire
+  // a `/status` GET that could wake and bill the scaled-to-zero box — so the
+  // refresh is kicked only HERE, where a small call just proved the box up,
+  // and in the small wake's `onUp`.
+  if (sample.clientName === 'SmallQwen' && sample.metrics) {
+    noteSmallCallCompleted(at)
+    refreshSmallBoxGpuIfStale()
+  }
 
   // Latency is recorded on its own condition, BEFORE the metrics gate below: a
   // call that failed after reaching the model spent the user's wall-clock time

@@ -183,6 +183,7 @@ import {
   type WakeBox,
 } from './cold-start.server'
 import { noteLargeCallCompleted } from './large-activity.server'
+import { resampleSmallBoxGpu } from './small-gpu.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -356,6 +357,14 @@ interface WakeTarget {
   interval: () => number
   provenWarm: (now: number) => boolean
   completed: () => void
+  /** Fire-and-forget bookkeeping for the SUCCESS path only, after `completed`
+   *  — never awaited, never pricing. The small wake re-samples the box's
+   *  `/status` GPU here (#848): a container that just came up has a fresh
+   *  `gpu` in `/status`, a GPU can only change with a container change —
+   *  exactly the event a wake just detected — and the previous sample may
+   *  name the dead container's GPU, so it is dropped synchronously and
+   *  nothing prices on it while the re-read is in flight. */
+  onUp?: () => void
   request: () => { url: string; init: RequestInit }
 }
 /**
@@ -480,6 +489,9 @@ const smallWake = createWake({
     wakeEnvMs('SMALL_LLM_WAKE_POLL_INTERVAL_MS', DEFAULT_SMALL_LLM_WAKE_POLL_INTERVAL_MS),
   provenWarm: smallProvenWarm,
   completed: noteSmallCallCompleted,
+  onUp: () => {
+    resampleSmallBoxGpu()
+  },
   request: (): { url: string; init: RequestInit } => ({
     // assertPrivateTierConfigured already requires the /v1 suffix.
     url: `${(process.env.SMALL_LLM_BASE_URL ?? '').replace(/\/v1\/?$/, '')}/health`,
@@ -579,6 +591,7 @@ async function poll(target: WakeTarget, signal: AbortSignal): Promise<number> {
       // an unknown model id, or on the platform's own 504, would suppress the
       // next wake on the strength of a box that answered an error.
       target.completed()
+      target.onUp?.()
       return Date.now() - started
     }
     lastReason = failure

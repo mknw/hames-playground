@@ -29,8 +29,10 @@ assertServerOnImport()
 
 /** Shared shape of the readers: a positive finite number, or the default with
  *  a warning. A `0` or a garbage value would render as "every call was free",
- *  which is the one reading worse than a stale rate. */
-function positiveRate(name: string, raw: string | undefined, fallback: number): number {
+ *  which is the one reading worse than a stale rate. Exported for the one
+ *  reader that lives outside rates proper (`small-gpu.server.ts`'s per-GPU
+ *  overrides) so the validation policy cannot drift into a second copy. */
+export function positiveRate(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback
   const parsed = Number(raw)
   if (!Number.isFinite(parsed) || parsed <= 0) {

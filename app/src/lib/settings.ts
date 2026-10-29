@@ -363,7 +363,9 @@ export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
  */
 export const DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
 
-/** Metered small summarizer GPU rate; overridable at SMALL_LLM_EUR_PER_HOUR. */
+/** Metered small summarizer GPU rate — the L4 rate, and the base the other GPU
+ *  families' defaults derive from (#848, `lib/inference/small-gpu.server.ts`);
+ *  overridable at SMALL_LLM_EUR_PER_HOUR. */
 export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
 
 /** Default EUR/hour by selected client. Keys are pinned against the routing

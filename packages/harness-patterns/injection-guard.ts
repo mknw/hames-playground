@@ -425,8 +425,9 @@ export interface InjectionGuardOptions {
    * other rule (#784 item 6: the tenant's own SharePoint/OneDrive `webUrl`s).
    * A string leaf is exempt only when all three hold: the payload's namespace
    * is `namespace`; the leaf is the value of an object key named `field`; and
-   * the WHOLE value is one `https:` URL with no credentials or port whose
-   * hostname is exactly one of `hosts` (no wildcards, no subdomains). The same
+   * the WHOLE value is one `https:` URL — no second scheme inside it, no
+   * credentials or port — whose hostname is exactly one of `hosts` (no
+   * wildcards, no subdomains). The same
    * URL in any other leaf, namespace or host is scanned as before. See
    * {@link isSourceLink}.
    */
@@ -451,6 +452,10 @@ function isSourceLink(
 ): boolean {
   if (!links || key !== links.field || namespace !== links.namespace) return false
   if (!SINGLE_HTTPS_URL.test(value)) return false
+  // One URL means one URL: `SINGLE_HTTPS_URL` admits `(`, `!`, `[` and `]`, and
+  // `exfil-data-url`'s pattern is unanchored, so without this a second scheme
+  // inside the token would ride along under the exemption.
+  if (/https?:\/\//i.test(value.slice('https://'.length))) return false
   let url: URL
   try {
     url = new URL(value)

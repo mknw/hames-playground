@@ -166,8 +166,9 @@ export interface AgentDeps {
    *
    * These are the ONLY fields an env variable can set: the modes, the two
    * thresholds and the egress tripwire's N (#844), plus the tenant's own
-   * document hosts, which name a fact rather than weaken a guard. The deterministic layers
-   * have no switch, and a value the design leaves in code (an `exempt` list,
+   * document hosts — a deployment fact that narrows one deterministic rule
+   * (`exfil-data-url`) on one field, not a guard mode. The deterministic layers
+   * have no other switch, and a value the design leaves in code (an `exempt` list,
    * `loadedDecideDown`) stays there. An invalid value REFUSES boot; one weaker
    * than a tier's default warns.
    */

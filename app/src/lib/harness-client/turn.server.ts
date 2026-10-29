@@ -1181,7 +1181,8 @@ async function generateTitle(
  * turn: logged, never rethrown, and it never flips the row to 'error'. A
  * summarizer that fails is recorded by `compactBulkData` as a `warning` event in
  * the context this re-saves (#420), which is how it reaches the transcript and
- * the observability panel on the conversation's next load.
+ * the observability panel — on the conversation's next load, or live through
+ * the settled turn's trailing-refresh poll (#784 item 12).
  * `compactBulkData` skips the persist callback entirely when there is nothing
  * to summarize, so a tool-less turn still writes once — unless `mustPersist`
  * says this turn's context gained something after its own save: the title

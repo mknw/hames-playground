@@ -595,6 +595,41 @@ describe('the screen and a cheap-rule hit: the hit forces the screen over the wh
     expect(message.webLink).toContain(OWA_ITEM_ID)
   })
 
+  // #784 item 6: the narrow alternative to `disableRules` above. Only the Graph
+  // result's own `webUrl` on a configured host is exempt, so the gate decides
+  // (here: skip) instead of a false positive forcing the screen. MUTATION:
+  // ignore `sourceLinks` in `sanitizeUntrusted`: the finding returns and the
+  // screen is forced — red.
+  it("sourceLinks: the tenant's own webUrl forces no screen; the same link in a mail preview still does", async () => {
+    const createInjectionGuard = await loadGuard()
+    const screen = vi.fn().mockResolvedValue(verdictDetected)
+    const gate = vi.fn(async () => ({ run: false, pTrue: 0.01, why: 'gate' as const }))
+    const guard = createInjectionGuard(
+      {
+        namespaces: ['graph'],
+        catalog: ['list_graph_messages'],
+        screen: { run: screen, gate, mode: 'gated' },
+        sourceLinks: { namespace: 'graph', field: 'webUrl', hosts: ['contoso-my.sharepoint.com'] },
+      },
+      () => {},
+      'microsoft-365',
+    )
+    const link =
+      'https://contoso-my.sharepoint.com/personal/first_last_contoso_com/Documents/Project_Planning/Quarterly-Reviews/Report.docx'
+
+    const file = await guard.sanitize(CTX.tool, { files: [{ name: 'Report.docx', webUrl: link }] })
+    expect(file.summary).toBeUndefined()
+    expect(screen).not.toHaveBeenCalled()
+
+    const mail = await guard.sanitize(CTX.tool, {
+      messages: [
+        mailMessage({ preview: link, webLink: 'https://outlook.office365.com/owa/?ItemID=SHORT' }),
+      ],
+    })
+    expect(mail.summary?.rules).toContain('exfil-data-url')
+    expect(screen).toHaveBeenCalledTimes(1)
+  })
+
   it('documents current behavior: the screen is handed the JSON-stringified result, blob and all', async () => {
     // `content: typeof data === 'string' ? data : JSON.stringify(data)`. For a
     // 10-mail batch that is every `webLink` too, so the screening call pays for

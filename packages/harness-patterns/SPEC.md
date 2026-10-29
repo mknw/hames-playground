@@ -911,6 +911,27 @@ critic _trigger_ here, never an exit. With `N > 1`, `maxRetries` bounds actor
 turns (tool steps), not critic calls; values `< 1` are clamped to `1` so the
 critic can never be disabled.
 
+**A final-marking repeat is not run again (#784 item 7).** The actor names a
+tool on every attempt, so on the attempt it believes it is done it used to
+repeat the call whose result it already held, with identical arguments, only to
+set `is_final`. When an `is_final` action repeats the newest attempt exactly —
+that attempt a single call that succeeded, same tool name, same parsed
+arguments, and the critic has not yet given feedback on it — nothing is
+dispatched: no `tool_call` or `tool_result` event, the consecutive-recovery
+count is left where it was, and the attempt log records the repeat with the
+result already held, which is what the critic judges (it evaluates the most
+recent result). The critic judging that result clears the repeat memory (fix
+round 1): the next repeat of a rejected result is dispatched again, the critic
+is never asked to judge the identical output twice, and at `criticCadence: 1` —
+where every successful attempt is judged — the skip is unreachable. The actor
+prompt states the affordance, and
+a `decisionLoop` record of such an accepted attempt carries the repeated call's
+result (`extractActorCritic`), counted as one tool call. Any
+other repeat still runs — a non-final one, one after another attempt, one of a
+failed call, a repeated batch, one whose result the critic has already
+rejected — because the sandbox tools are stateful and such
+a repeat may legitimately return something new.
+
 **The intent, and a route's scope (#606 run 7).** The actor and the critic read
 ONE `intent`: `data.intent`, else the user's latest message, followed (when
 `data.routeScope` is set) by a blank line and that scope. `decisionLoop` sets
@@ -967,6 +988,7 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   screen?: InjectionScreenConfig // optional model screen; OFF by default
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
+  sourceLinks?: { namespace: string; field: string; hosts: readonly string[] } // a source's own links, exempt from `exfil-data-url` and no other rule (see below)
 }
 
 interface InjectionScreenConfig {
@@ -978,6 +1000,15 @@ interface InjectionScreenConfig {
   classify?: IngressClassifier // the host's; absent = every payload is external
 }
 ```
+
+**`sourceLinks` — a source's own links (#784 item 6).** A connector that writes
+its own links into its own result (a Graph result's `webUrl`) is exempt from
+`exfil-data-url` — and from no other rule — when the whole value is one bare
+`https:` URL on exactly one of `hosts`: the payload's namespace, the leaf's key
+and the host must all match, and the value must carry no second scheme, no
+credentials and no port. The exemption is bound to where the value sits, never
+to what it looks like; the same URL in any other leaf, namespace or host is
+scanned as before. Empty hosts: no link is exempt.
 
 **Threat model.** `tool_result` content from an untrusted source (web search, a
 fetched page, a SharePoint/ms-graph document, a retrieved Data Stash chunk) that
@@ -1315,13 +1346,14 @@ two guards both declare takes the inner guard's options. The `content_sanitized`
 event and the screen's `model_call` event go to the innermost guard's scope
 either way.
 
-| Dimension            | Nesting rule                                       | Why                                                                                      |
-| -------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `namespaces`/`tools` | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree      |
-| `disableRules`       | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary |
-| `rules`              | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared               |
-| `spotlight`          | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself   |
-| `screen`             | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen |
+| Dimension            | Nesting rule                                       | Why                                                                                                                                     |
+| -------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `namespaces`/`tools` | union (OR of `isUntrusted`)                        | a narrow inner wrapper must not drop the outer one's coverage for its whole subtree                                                     |
+| `disableRules`       | the declaring guard's own; never reaches another's | it is one agent's false-positive escape hatch, not a licence over the enclosing boundary                                                |
+| `rules`              | the declaring guard's own                          | extra detection applies to the namespaces the guard that wrote it declared                                                              |
+| `spotlight`          | the declaring guard's own                          | each guard says whether its tools are fenced; a route guard declares `'always'` itself                                                  |
+| `screen`             | the declaring guard's own; none is inherited       | a guard that declares no screen runs none, so the retriever's hits reach no model screen                                                |
+| `sourceLinks`        | the declaring guard's own                          | general-next's orchestrator also declares `graph` but has no `sourceLinks`, so a Graph result sanitized in that scope gets no exemption |
 
 A guard that wants a screen, a fence or an extra rule on a tool declares it
 itself. Declaring one on an enclosing guard no longer reaches the guards inside

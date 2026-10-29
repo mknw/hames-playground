@@ -244,6 +244,20 @@ export function createGuardGate(decide: DecideFn, settings: GuardGateSettings = 
       clearTimeout(timer)
     }
 
+    const pTrue = evaluated.decision.pTrue
+    // Under 'shadow' the answer changes nothing, so the event carries what the
+    // gate WOULD have decided at this gate's own threshold (#784 item 10): the
+    // row's label reads it instead of the model's argmax label, which for a
+    // pTrue between the threshold and 0.5 says 'false' while the gate would
+    // have run the screen.
+    //
+    // The stamp lands BEFORE `onDecision`: the recorder emits the event live
+    // and the panel timeline is built from those live copies, so a stamp after
+    // the emit leaves the live row on the argmax label until a reload. An
+    // abstained answer is recorded without the field, as before.
+    if (shadow && !evaluated.decision.abstained && pTrue !== null) {
+      evaluated.event.wouldRun = pTrue >= threshold
+    }
     try {
       onDecision?.(evaluated.event, evaluated.llmCall)
     } catch (err) {
@@ -252,7 +266,6 @@ export function createGuardGate(decide: DecideFn, settings: GuardGateSettings = 
         err,
       )
     }
-    const pTrue = evaluated.decision.pTrue
     if (evaluated.decision.abstained || pTrue === null) {
       return { run: true, pTrue: null, why: 'gate-unavailable' }
     }

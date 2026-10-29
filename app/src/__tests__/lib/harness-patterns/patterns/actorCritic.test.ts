@@ -774,33 +774,40 @@ describe('actorCritic criticCadence', () => {
     // rejected — that result. Cadence 1 is the shape where it bit hardest: the
     // critic judges every successful attempt, so the only repeat it could skip
     // is one it has already rejected, and the loop burned attempts judging the
-    // identical output on stale state. Passes on main; MUTATION: delete the
+    // identical output on stale state. Passes on main; MUTATIONS: delete the
     // `lastRun = undefined` on the rejection branch of `runCadenceAndCritic`
-    // and this goes red (1 callTool call, the stale `{ status: 'running' }`).
-    it('runs a repeat the critic has already rejected (a poll that came back running)', async () => {
-      callToolMock
-        .mockResolvedValueOnce({ success: true, data: { status: 'running' } })
-        .mockResolvedValueOnce({ success: true, data: { status: 'done' } })
-      const mockActor = vi
-        .fn()
-        .mockResolvedValueOnce(step('{"script":"poll"}'))
-        .mockResolvedValueOnce(step('{"script":"poll"}', true))
-      const mockCritic = vi
-        .fn()
-        .mockResolvedValueOnce({
-          result: mockCriticResult({ is_sufficient: false, explanation: 'poll again' }),
-          llmCall: undefined,
-        })
-        .mockResolvedValueOnce({
-          result: mockCriticResult({ is_sufficient: true }),
-          llmCall: undefined,
-        })
+    // and BOTH cases go red (1 callTool call, the stale `{ status: 'running' }`);
+    // weaken it to `if (evaluation.feedback) lastRun = undefined` and only the
+    // empty-explanation case goes red — a rejection whose explanation is empty
+    // clears the repeat memory too, or the critic judges the identical output
+    // again.
+    it.each([['poll again'], ['']])(
+      'runs a repeat the critic has already rejected (a poll that came back running, explanation %j)',
+      async (explanation) => {
+        callToolMock
+          .mockResolvedValueOnce({ success: true, data: { status: 'running' } })
+          .mockResolvedValueOnce({ success: true, data: { status: 'done' } })
+        const mockActor = vi
+          .fn()
+          .mockResolvedValueOnce(step('{"script":"poll"}'))
+          .mockResolvedValueOnce(step('{"script":"poll"}', true))
+        const mockCritic = vi
+          .fn()
+          .mockResolvedValueOnce({
+            result: mockCriticResult({ is_sufficient: false, explanation }),
+            llmCall: undefined,
+          })
+          .mockResolvedValueOnce({
+            result: mockCriticResult({ is_sufficient: true }),
+            llmCall: undefined,
+          })
 
-      const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 1 })
+        const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 1 })
 
-      expect(callToolMock).toHaveBeenCalledTimes(2)
-      expect(result.data.result).toEqual({ status: 'done' })
-    })
+        expect(callToolMock).toHaveBeenCalledTimes(2)
+        expect(result.data.result).toEqual({ status: 'done' })
+      },
+    )
 
     it('runs when the args differ', async () => {
       const mockActor = vi

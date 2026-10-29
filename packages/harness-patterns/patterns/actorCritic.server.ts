@@ -739,7 +739,10 @@ export function actorCritic<T extends ActorCriticData>(
             error: null,
           }
           previousAttempts.push(repeat)
-          lastRun = { ...lastRun, attempt: repeat }
+          // `lastRun` is left pointing at the ORIGINAL attempt: after the
+          // repeat the only exits are the critic accepting (return) or
+          // rejecting (which clears `lastRun`), so its `attempt` is never
+          // re-consulted against the repeat.
           if (
             (await runCadenceAndCritic(scope, action, lastRun.data, attempt, intent)) === 'accepted'
           ) {

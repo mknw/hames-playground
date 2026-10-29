@@ -2699,45 +2699,73 @@ describe('decisionLoop — default extractors over real patterns', () => {
   // Fix round 1: attempt 1 is non-final at criticCadence 3 — an is_final
   // attempt 1 would be judged, and its rejected result would clear the repeat
   // memory, so the repeat would run. The skip now holds only while the critic
-  // has not yet given feedback on the held result: at 3 the critic rejected the
-  // FIRST repeat, so attempt 3 runs again (2 tool calls) instead of both
-  // repeats being skipped.
-  it.each([2, 3])(
-    'actorCritic: a repeat accepted at attempt %i carries the repeated call`s result',
-    async (acceptAt) => {
-      let attempt = 0
-      const actor = vi.fn(async () => ({
-        action: {
-          reasoning: `reasoning-${++attempt}`,
-          tool_name: 'search',
-          tool_args: '{}',
-          is_final: attempt >= 2,
-        } as ControllerAction,
-      }))
-      const critic = vi.fn(async () => ({
-        result: { is_sufficient: attempt >= acceptAt, explanation: `verdict-${attempt}` },
-      }))
-      const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
-        patternId: 'doc',
-        maxRetries: 3,
-        criticCadence: 3,
-      })
-      const { decide, states } = scriptedDecide(['doc', 'answer'])
-      const ctx = await run([build({ doc: route(doc) }, decide)])
-      const result = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
-      expect(result.success).toBe(true)
-      expect(result.result).toContain('visible-row')
-      const action = (
-        eventsOf(ctx, 'orchestrator', 'controller_action')[0].data as { action: ControllerAction }
-      ).action
-      expect(action.reasoning).toBe(`reasoning-${acceptAt}\nCritic: verdict-${acceptAt}`)
-      // The repeat itself dispatches nothing, so the call count is the number
-      // of attempts that RAN: acceptAt - 1.
-      expect(states[1]).toContain(
-        `1. doc — succeeded (actorCritic: ${acceptAt} of 3 attempts, ${acceptAt - 1} tool call`,
-      )
-    },
-  )
+  // has not yet given feedback on the held result.
+  it('actorCritic: a repeat accepted at attempt 2 carries the repeated call`s result', async () => {
+    let attempt = 0
+    const actor = vi.fn(async () => ({
+      action: {
+        reasoning: `reasoning-${++attempt}`,
+        tool_name: 'search',
+        tool_args: '{}',
+        is_final: attempt >= 2,
+      } as ControllerAction,
+    }))
+    const critic = vi.fn(async () => ({
+      result: { is_sufficient: attempt >= 2, explanation: `verdict-${attempt}` },
+    }))
+    const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
+      patternId: 'doc',
+      maxRetries: 3,
+      criticCadence: 3,
+    })
+    const { decide, states } = scriptedDecide(['doc', 'answer'])
+    const ctx = await run([build({ doc: route(doc) }, decide)])
+    const result = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
+    expect(result.success).toBe(true)
+    expect(result.result).toContain('visible-row')
+    const action = (
+      eventsOf(ctx, 'orchestrator', 'controller_action')[0].data as { action: ControllerAction }
+    ).action
+    expect(action.reasoning).toBe('reasoning-2\nCritic: verdict-2')
+    // The repeat itself dispatches nothing, so the call count is the number of
+    // attempts that RAN: 1.
+    expect(states[1]).toContain('1. doc — succeeded (actorCritic: 2 of 3 attempts, 1 tool call')
+  })
+
+  // The critic rejected the FIRST repeat (attempt 2), which cleared the repeat
+  // memory, so attempt 3 runs again — the record carries attempt 3's OWN
+  // tool_result, not a carried-over one. MUTATION (M7): dropping the
+  // extractor's fall-back to the previous attempt's results keeps this green;
+  // only the attempt-2 case above reddens.
+  it('actorCritic: after a rejected repeat, attempt 3 runs again (2 tool calls)', async () => {
+    let attempt = 0
+    const actor = vi.fn(async () => ({
+      action: {
+        reasoning: `reasoning-${++attempt}`,
+        tool_name: 'search',
+        tool_args: '{}',
+        is_final: attempt >= 2,
+      } as ControllerAction,
+    }))
+    const critic = vi.fn(async () => ({
+      result: { is_sufficient: attempt >= 3, explanation: `verdict-${attempt}` },
+    }))
+    const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
+      patternId: 'doc',
+      maxRetries: 3,
+      criticCadence: 3,
+    })
+    const { decide, states } = scriptedDecide(['doc', 'answer'])
+    const ctx = await run([build({ doc: route(doc) }, decide)])
+    const result = eventsOf(ctx, 'orchestrator', 'tool_result')[0].data as ToolResultEventData
+    expect(result.success).toBe(true)
+    expect(result.result).toContain('visible-row')
+    const action = (
+      eventsOf(ctx, 'orchestrator', 'controller_action')[0].data as { action: ControllerAction }
+    ).action
+    expect(action.reasoning).toBe('reasoning-3\nCritic: verdict-3')
+    expect(states[1]).toContain('1. doc — succeeded (actorCritic: 3 of 3 attempts, 2 tool calls')
+  })
 
   it('simpleLoop: the Return text is the result; tool calls and wall time are counted', async () => {
     let turn = 0

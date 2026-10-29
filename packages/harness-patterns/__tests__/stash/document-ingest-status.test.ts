@@ -433,4 +433,21 @@ describe('ensureSessionIngested', () => {
 
     expect((await getDocument('s1', 'sbx-chosen', fake.callTool))?.ingestStatus).toBe('indexed')
   })
+
+  // The unchosen-output skip must fire BEFORE the hidden/archived check. If it
+  // sat below it, a hidden unchosen output would be counted in
+  // `skippedFlagged`, and the redis backend would re-arm the net on every
+  // search for the backend's lifetime — one `listDocuments` per search that
+  // never stops, because the output never gets a status.
+  // Mutation: move the skip below the `hidden || archived` block → skippedFlagged 1.
+  it('does not count a hidden, unchosen sandbox output as skippedFlagged', async () => {
+    const { embedFn } = makeEmbedder('m', 3)
+    await seed(fake, 'sbx-hidden', 'Hidden deliverable text.', { provenance: 'sandbox-output' })
+    await setDocumentFlags('s1', 'sbx-hidden', { hidden: true }, fake.callTool)
+
+    const res = await ensureSessionIngested('s1', { callTool: fake.callTool, embedFn })
+
+    expect(res.skippedFlagged).toBe(0)
+    expect((await getDocument('s1', 'sbx-hidden', fake.callTool))?.ingestStatus).toBeUndefined()
+  })
 })

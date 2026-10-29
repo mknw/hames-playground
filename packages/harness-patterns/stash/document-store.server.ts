@@ -75,7 +75,8 @@ export interface StashDocumentMeta {
    * progress, `'indexed'` searchable, `'failed'` ingest errored (e.g. embedder
    * offline), `'not_indexed'` stored by a path that wanted it searchable but
    * whose format has no text to index (an image; a docx with conversion off —
-   * #420). Absent → never ingested (no redis-retriever in the harness).
+   * #420). Absent → never ingested — no redis-retriever in the harness, or an
+   * unchosen sandbox output whose indexing is the person's choice (#836).
    */
   ingestStatus?: IngestStatus
   /**

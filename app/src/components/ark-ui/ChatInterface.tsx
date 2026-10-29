@@ -41,8 +41,10 @@ import {
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import { runTurn, type TurnSink } from '~/lib/turn-stream'
+import { startTrailingRefresh } from '~/lib/trailing-refresh'
+import { warningBubble } from '@hames-ai/agents/replay'
 import type { GraphElement } from './SupportPanel'
-import type { UnifiedContext } from '@hames-ai/harness-patterns'
+import type { UnifiedContext, WarningEventData } from '@hames-ai/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -481,6 +483,35 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         })
       }
       if (!aborted) {
+        // The turn's trailing pass (the post-turn summaries) runs detached,
+        // after this stream closed, so its describe calls, memory writes and
+        // the summaries they leave behind reach the panels only through the
+        // persisted context (#784 item 12). Poll for it rather than holding
+        // the stream open — see `trailing-refresh.ts`.
+        if (outcome === 'done') {
+          startTrailingRefresh({
+            local: () => registry.events(runSessionId),
+            fetch: async () => {
+              const loaded = await loadConversation(runSessionId)
+              return (JSON.parse(loaded.serialized) as UnifiedContext).events ?? []
+            },
+            append: (events) => {
+              registry.appendEvents(runSessionId, [...events])
+              // A summarizer-failure `warning` reaches the transcript as the
+              // same amber bubble the live stream (`turn-stream.ts`) and replay
+              // (`replay.ts`) paint, so all three views agree without a reload.
+              for (const evt of events) {
+                if (evt.type !== 'warning') continue
+                registry.appendMessage(runSessionId, {
+                  id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  timestamp: new Date(),
+                  ...warningBubble(evt.data as WarningEventData),
+                })
+              }
+            },
+            map: (map) => registry.mapEvents(runSessionId, map),
+          })
+        }
         props.onRunSettled?.(runSessionId, outcome)
         if (runSessionId === props.sessionId) setSettledTick((n) => n + 1)
       }

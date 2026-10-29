@@ -234,7 +234,9 @@ describe('getEventPreview', () => {
       })
     expect(shadow(true, 'false', 0.3)).toBe('injection · guard.screen: would screen (p=0.30)')
     expect(shadow(false, 'true', 0.1)).toBe('injection · guard.screen: would skip (p=0.10)')
-    // Not shadow (or an event from before the field existed): the label, unchanged.
+    // Not shadow: the label, even when a `wouldRun` is present — a gated row
+    // must not read 'would skip' for a gate that DID skip the screen.
+    // MUTATION: drop the `shadow &&` guard from the verdict condition.
     expect(
       getEventPreview('decision_made', {
         ...decision,
@@ -242,6 +244,7 @@ describe('getEventPreview', () => {
         type: 'noul',
         label: 'false',
         pTrue: 0.3,
+        wouldRun: true,
       }),
     ).toBe('injection · guard.screen: false (p=0.30)')
   })

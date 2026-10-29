@@ -10,15 +10,16 @@
  *     convert to EUR at a STATIC rate. A live FX lookup is not wanted; the pin
  *     here is that the conversion happens on the rates, so the `rates` audit
  *     field is the €/MTok that was really applied.
- *  2. **Time-priced clients** (`SmallQwen` / `PrivateSystemOne`, the metered
- *     small GPU) are `€/h × measured wall-clock`, and `undefined` — not zero —
- *     when nothing measured the call. A time bill with no time is not a free
- *     call.
- *  3. **Provider-priced clients** (`JevDecide`, and since the OpenRouter eval
- *     the two 27B leaves) are the provider's own reported `usage.cost`,
- *     converted once at the static rate. The large box's wall-clock is the
- *     WRONG model for a per-token public API; unknown (not zero) when the
- *     provider reported nothing.
+ *  2. **Time-priced clients** (`LargeQwen` / `LargeQwenThink` at
+ *     `LARGE_LLM_EUR_PER_HOUR`, `SmallQwen` / `PrivateSystemOne` at
+ *     `SMALL_LLM_EUR_PER_HOUR`) are `€/h × measured wall-clock`, and
+ *     `undefined` — not zero — when nothing measured the call. A time bill
+ *     with no time is not a free call.
+ *  3. **Provider-priced clients** (`JevDecide`, plus the OpenRouter-route
+ *     twins `LargeQwenOR` / `LargeQwenThinkOR`) are the provider's own
+ *     reported `usage.cost`, converted once at the static rate. A per-token
+ *     public API priced by wall-clock would be the WRONG model; unknown
+ *     (not zero) when the provider reported nothing.
  *  4. **Attribution is the client BAML SELECTED.** This is the property with
  *     teeth: a call that fell back to Anthropic on a self_deployed-tier turn must be
  *     priced by tokens, and a self-deployed call on an anthropic-tier turn by its own
@@ -366,11 +367,11 @@ describe('attribution: the SELECTED client decides the model', () => {
 
   it('every client the private tier routes a role to has a pricing basis, never silently unknown when measurable', async () => {
     // Derived from the route map rather than listed, so a role added to the tier
-    // with a client in none of the four sets fails here. The provider-priced
-    // leaves are measurable only when the provider reported a cost — the
-    // owner's recorded consequence of the OpenRouter eval switch — so this
-    // prices them WITH the provider figure; the no-cost reading is pinned in
-    // the provider describe above.
+    // with a client in none of the four sets fails here. No value in the map is
+    // provider-priced today, so the provider figure below is inert for the
+    // current sets; it is passed anyway so a FUTURE provider-priced map value
+    // is priced WITH the provider figure rather than unknown — the no-cost
+    // reading is pinned in the provider describe above.
     const { SELF_DEPLOYED_CLIENT_BY_ROLE } = await import('@hames-ai/harness-baml/clients.server')
     const clients = new Set(Object.values(SELF_DEPLOYED_CLIENT_BY_ROLE))
     expect(clients).toContain('PrivateSystemOne')

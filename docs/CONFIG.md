@@ -150,22 +150,20 @@ selected — never by the tier the run intended.
 | Variable                 | What it does                                                                                                                              | Default               | Applies to                      | Unset / wrong                                                                                  |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `EUR_PER_USD`            | Static USD→EUR multiplier (`0.86`), set by hand. Deliberately NOT a live FX lookup: two page loads of one conversation must not disagree. | `DEFAULT_EUR_PER_USD` | every USD figure                | A non-positive or garbage value warns and falls back to the default — never renders as "free". |
-| `LARGE_LLM_EUR_PER_HOUR` | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `1.819`               | the GPU box's calls             | Non-positive warns and falls back. Moves WITH the host (Modal's rate differs).                 |
+| `LARGE_LLM_EUR_PER_HOUR` | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `1.819`               | `LargeQwen`, `LargeQwenThink`   | Non-positive warns and falls back. Moves WITH the host (Modal's rate differs).                 |
 | `SMALL_LLM_EUR_PER_HOUR` | EUR/hour the small metered box is awake.                                                                                                  | `1.54`                | `SmallQwen`, `PrivateSystemOne` | Same rule.                                                                                     |
 
 The bases (pinned disjoint by `pricing-eur.test.ts`):
 
 - **Token** (Anthropic chains): vendor list price in USD from `CLIENT_PRICING`
   (`app/src/lib/settings.ts`), converted once at `EUR_PER_USD`.
-- **Provider** (`PROVIDER_COST_CLIENTS`: `JevDecide`, and all four 27B leaves —
-  `LargeQwen`, `LargeQwenThink`, `LargeQwenOR`, `LargeQwenThinkOR`): the
-  provider-reported `usage.cost` (USD), converted once. A response with no
-  cost is UNKNOWN, never free. On the GPU box, where vLLM reports no
-  `usage.cost`, a 27B step therefore prices as unknown rather than carrying a
-  time-floor from the wrong model.
-- **Time** (`TIME_PRICED_CLIENTS`: `SmallQwen`, `PrivateSystemOne`): measured
-  call duration × the box's hourly rate; tokens free. A time bill with no
-  duration reads as unknown, not free.
+- **Provider** (`PROVIDER_COST_CLIENTS`: `JevDecide`, plus the OpenRouter-route
+  twins `LargeQwenOR` / `LargeQwenThinkOR`): the provider-reported `usage.cost`
+  (USD), converted once. A response with no cost is UNKNOWN, never free.
+- **Time** (`TIME_PRICED_CLIENTS`): `LargeQwen` / `LargeQwenThink` at
+  `LARGE_LLM_EUR_PER_HOUR`, and `SmallQwen` / `PrivateSystemOne` at
+  `SMALL_LLM_EUR_PER_HOUR` — measured call duration × the box's hourly rate;
+  tokens free. A time bill with no duration reads as unknown, not free.
 - **Local** (`LOCAL_PRICED_CLIENTS`: `LocalGLM`): exact €0.00 — no marginal bill.
 
 Rendered figures for time-priced steps are FLOORS, labelled `≥` ("compute

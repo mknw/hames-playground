@@ -76,6 +76,7 @@ beforeEach(() => {
   vi.stubEnv('GUARD_GATE_THRESHOLD', undefined)
   vi.stubEnv('GUARD_EGRESS_THRESHOLD', undefined)
   vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', undefined)
+  vi.stubEnv('GRAPH_DOCUMENT_HOSTS', undefined)
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -128,6 +129,19 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
       egressThreshold: 0.2,
       maxOutgoingRetriesPostTripwire: 2,
     })
+  })
+})
+
+// #784 item 6. MUTATION: omit `documentHosts` from agentDeps()'s bag: the
+// configured case goes red, and no Graph link is ever exempt.
+describe('agentDeps() carries the tenant document hosts', () => {
+  it('unset: none; set: the ones documentHosts() parses', () => {
+    expect(agentDeps().guards!.documentHosts).toEqual([])
+    vi.stubEnv('GRAPH_DOCUMENT_HOSTS', 'contoso.sharepoint.com,contoso-my.sharepoint.com')
+    expect(agentDeps().guards!.documentHosts).toEqual([
+      'contoso.sharepoint.com',
+      'contoso-my.sharepoint.com',
+    ])
   })
 })
 

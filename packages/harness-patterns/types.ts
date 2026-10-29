@@ -1991,6 +1991,11 @@ export interface DecisionMadeEventData {
   /** The SIZE of the state, never the text. */
   stateChars: number
   shadow?: true
+  /** Shadow mode only, and only when the gate answered: what the gate WOULD
+   *  have decided at its own configured threshold — run the screen (true) or
+   *  skip it (false). The timeline row reads this, not `label`, whose argmax
+   *  can disagree with the threshold rule (#784 item 10). */
+  wouldRun?: boolean
 }
 
 // ============================================================================

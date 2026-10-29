@@ -105,6 +105,28 @@ describe('one-release environment migration', () => {
     expect(second.inferenceEnv('LARGE_LLM_API_KEY')).toBe('synthetic-key')
     expect(second.inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')).toBe('300')
   })
+  // Mixed-environment twin of the test above: the fold record must not swallow
+  // an operator-set conflict, so the second copy still reports IGNORED for a
+  // name the operator set under both spellings while folding the legacy pair.
+  it('a second bundled instance reports IGNORED when the operator set both spellings', async () => {
+    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://synthetic.example.invalid/v1')
+    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')
+    vi.stubEnv('VERDA_SCALEDOWN_SECONDS', '300')
+    vi.stubEnv('LARGE_LLM_SCALEDOWN_SECONDS', '600')
+    applyLegacyInferenceEnv()
+    vi.resetModules()
+    const second = await import('@hames-ai/harness-baml/inference-env.server')
+    vi.mocked(console.warn).mockClear()
+    second.applyLegacyInferenceEnv()
+    const lines = vi.mocked(console.warn).mock.calls.map((c) => String(c[0]))
+    expect(lines.filter((l) => l.includes('IGNORED'))).toEqual([
+      expect.stringMatching(/^\[inference\] VERDA_SCALEDOWN_SECONDS .*IGNORED/),
+    ])
+    // The fold did not swallow the conflict, and the pair still resolves.
+    expect(second.inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')).toBe('600')
+    expect(second.inferenceEnv('LARGE_LLM_BASE_URL')).toBe('https://synthetic.example.invalid/v1')
+    expect(second.inferenceEnv('LARGE_LLM_API_KEY')).toBe('synthetic-key')
+  })
   it.each(Object.entries(LEGACY_INFERENCE_ENV))(
     '%s wins over legacy %s, including empty',
     (name, old) => {

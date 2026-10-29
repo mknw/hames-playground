@@ -52,7 +52,7 @@ from vllm_box import (
 
 # ---- deployment config: the operator's, read at deploy time ------------------
 
-COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION", default=None)
+COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")
 ROUTING_REGION = _env("HAMES_MODAL_ROUTING_REGION")
 APP_NAME = _env("HAMES_MODAL_27B_APP_NAME", "hames-private-27b")
 # Level-1 sleep moves the ~31 GB of weights to CPU RAM before the snapshot,

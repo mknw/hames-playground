@@ -11,6 +11,7 @@ The private tier's two small roles on one scale-to-zero GPU container: the Qwen3
 ```bash
 cd deploy/modal
 cp deploy.env.example deploy.local.env       # fill in the two regions; git-ignored
+# HAMES_MODAL_SMALL_COMPUTE_REGION overrides the shared region for the small box only; unset shares the 27B's.
 uv run modal token new                       # once per machine; opens the browser
 uv run --env-file deploy.local.env modal deploy hames_small_models.py
 ```

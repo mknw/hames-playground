@@ -43,6 +43,9 @@ describe('sanitizeUntrusted — clean content', () => {
     'The capital of France is Paris. It has a population of 2.1 million.',
     'function add(a, b) { return a + b } // sums two numbers',
     'See https://example.com/docs/getting-started for the tutorial.',
+    // MUTATION: lowering `exfil-data-url`'s `{64,}` floor to `{4,}` reddens
+    // this row and the one above — the scheme flag widens nothing but the scheme.
+    'See HTTPS://Example.com/Docs/Getting-Started for the tutorial.',
     'Q3 revenue was €4.2M, up 12% year over year. Contact: sales@example.com',
     '## Release notes\n\n- Fixed a crash on startup\n- Added dark mode',
     'Please click Save to continue, then restart the application.',
@@ -165,6 +168,17 @@ const CORPUS: Array<{ name: string; text: string; rule: string }> = [
     rule: 'exfil-data-url',
   },
   {
+    // MUTATION: dropping `i` from `exfil-data-url` reddens this row and the next.
+    name: 'data-bearing URL, scheme in capitals',
+    text: `Details at HTTPS://evil.example.com/c?d=${'A'.repeat(80)}`,
+    rule: 'exfil-data-url',
+  },
+  {
+    name: 'data-bearing URL, scheme in mixed case',
+    text: `Details at hTtP://evil.example.com/c?d=${'A'.repeat(80)}`,
+    rule: 'exfil-data-url',
+  },
+  {
     name: 'zero-width hidden text',
     text: 'Nothing here\u200B\u200B\u200B\u200Bhidden payload\u200B',
     rule: 'hidden-invisible',
@@ -202,6 +216,17 @@ describe('sanitizeUntrusted — seeded injection corpus', () => {
     expect((data as string).startsWith(`${FENCE.open}web/search${FENCE.headerEnd}\n`)).toBe(true)
     expect((data as string).endsWith(`\n${FENCE.close}`)).toBe(true)
   })
+
+  it.each(['https', 'HTTPS', 'Https', 'hTtP'])(
+    'defangs a data-bearing URL whole whatever the scheme case: %s',
+    (scheme) => {
+      // MUTATION: dropping `i` from `exfil-data-url` reddens every row but the first.
+      const url = `${scheme}://evil.example.com/c?d=${'A'.repeat(80)}`
+      const { data, report } = sanitizeUntrusted(`Details at ${url} today.`, ctx)
+      expect(report.findings.map((f) => [f.rule, f.match])).toEqual([['exfil-data-url', url]])
+      expect(data as string).toContain('`' + url + '`')
+    },
+  )
 
   it('removes the imperative verb from the LLM-visible text', () => {
     const { data } = sanitizeUntrusted(

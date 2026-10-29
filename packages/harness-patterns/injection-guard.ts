@@ -659,7 +659,10 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     // TERMINAL unbounded run, same exemption as `exfil-instruction`: `{64,}` is
     // the last thing in the pattern, so it cannot backtrack, and capping it
     // would defang only the head of a long blob.
-    re: /https?:\/\/[^\s)<>"']{0,200}?[?&/][A-Za-z0-9+/=_-]{64,}/g,
+    // `i`: a URL scheme is case-insensitive (RFC 3986 §3.1), so the scheme is
+    // normalised before matching, as in the other URL rules. The blob class
+    // already names both cases, so the flag changes nothing else.
+    re: /https?:\/\/[^\s)<>"']{0,200}?[?&/][A-Za-z0-9+/=_-]{64,}/gi,
     action: 'defang' as const,
   },
 ])

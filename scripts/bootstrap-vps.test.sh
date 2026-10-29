@@ -94,6 +94,7 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
     exit 0
   fi
   if [[ $args == *'{{range .Mounts}'* ]]; then
+    [[ ${CLONE_CADDY_INSPECT_FAIL:-0} == 0 ]] || exit 1
     [[ -n ${CLONE_CADDY_MOUNTS:-} ]] && cat "$CLONE_CADDY_MOUNTS"
     exit 0
   fi
@@ -306,7 +307,11 @@ clone_tests() {
   # and what `docker exec` reads back out of a mounted file (a fresh one).
   printf 'synthetic-caddy\n' >"$dir/caddy-id"
   printf 'bind %s/configs/Caddyfile /etc/caddy/Caddyfile\n' "$dir/release" >"$dir/caddy-mounts"
-  : >"$dir/caddy-served"
+  # Fresh ("limit 10") and stale ("limit 20") served content are deliberately
+  # the SAME LENGTH as the checkout's Caddyfile: a byte-count mutant must not
+  # be able to stand in for the byte-for-byte cmp and read as fresh.
+  printf 'limit 10\n' >"$dir/release/configs/Caddyfile"
+  printf 'limit 10\n' >"$dir/caddy-served"
   # Release's record is read for structure: a guard smoke record whose
   # environments hold release's probes. The bad ones are each refused.
   printf '%s\n' '{"render_sha256": "synthetic", "environments": {"dev": [{"probe": "1"}], "release": [{"probe": "1"}]}}' >"$dir/release-evidence.json"
@@ -387,7 +392,13 @@ ENV
     }
     case ${1:-boot} in
       boot|owner) vps_check() { :; }; stage_boot ;;
-      smoke) NO_SEED=1 PROBE_PRIVATE_HEALTH=${SHIM_HEALTH:-0}; stage_smoke ;;
+      smoke)
+        NO_SEED=1 PROBE_PRIVATE_HEALTH=${SHIM_HEALTH:-0}
+        # main runs `set -euo pipefail`; SHIM_SET_E=1 reproduces that for the
+        # smoke (the review's BLOCKING died silently under exactly this).
+        [[ ${SHIM_SET_E:-0} == 0 ]] || set -e
+        stage_smoke
+        ;;
       dc) dc exec -T app true ;;
       images) stage_images ;;
       probe) vps_check --clones ;;
@@ -572,7 +583,7 @@ ENV
   # boot with no running Caddy are left alone. The smoke fails on the same
   # staleness instead of leaving it serving.
   clone_reset
-  printf 'stale\n' >"$dir/caddy-served"
+  printf 'limit 20\n' >"$dir/caddy-served"
   out=$(clone_boot 2>&1); rc=$?
   recreate="$clones|app|compose up -d --no-deps --force-recreate caddy"
   if ((rc == 0)) && grep -Fxq "$recreate" "$dir/calls" &&
@@ -583,14 +594,16 @@ ENV
     pass "clones boot recreates only a Caddy serving a changed Caddyfile, before the waits"
   else flunk "clones boot did not recreate the stale Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
   clone_reset
-  : >"$dir/caddy-served"
+  printf 'limit 10\n' >"$dir/caddy-served"
   out=$(clone_boot 2>&1); rc=$?
   if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
     pass "clones boot leaves a fresh Caddy alone"
   else flunk "clones boot recreated a fresh Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
   clone_reset
-  printf 'volume caddy_data /data\nbind %s/configs /configs\n' "$dir/release" >"$dir/caddy-mounts"
-  printf 'stale\n' >"$dir/caddy-served"
+  # The volume and the directory mount sit next to the Caddyfile's own bind
+  # mount (fail closed now needs one comparable regular file to be present).
+  printf 'volume caddy_data /data\nbind %s/configs /configs\nbind %s/configs/Caddyfile /etc/caddy/Caddyfile\n' "$dir/release" "$dir/release" >"$dir/caddy-mounts"
+  printf 'limit 10\n' >"$dir/caddy-served"
   out=$(clone_boot 2>&1); rc=$?
   if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
     pass "clones boot compares only bind-mounted regular files"
@@ -602,18 +615,50 @@ ENV
   if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
     pass "clones first boot with no running Caddy compares nothing"
   else flunk "clones first boot compared a nonexistent Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
-  : >"$dir/caddy-served"
+  printf 'limit 10\n' >"$dir/caddy-served"
   clone_reset
-  printf 'stale\n' >"$dir/caddy-served"
+  printf 'limit 20\n' >"$dir/caddy-served"
   out=$(clone_boot smoke 2>&1); rc=$?
   if ((rc != 0)) && grep -q '1c the running Caddy serves a changed Caddyfile' <<<"$out"; then
     pass 'clones smoke fails on a Caddy serving a changed Caddyfile'
   else flunk 'clones smoke passed with a stale Caddyfile' "$out"; fi
-  : >"$dir/caddy-served"
+  printf 'limit 10\n' >"$dir/caddy-served"
   out=$(clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q "1c the running Caddy serves the checkout's Caddyfile" <<<"$out"; then
     pass "clones smoke reports a fresh Caddyfile"
   else flunk "clones smoke failed with a fresh Caddyfile (rc=$rc)" "$out"; fi
+  # The review's BLOCKING, pinned as its reproduction: main runs the smoke
+  # under `set -euo pipefail`, and with no running Caddy the stale comparison
+  # must not end the run silently at 1c — the 1c WARN prints and the later
+  # checks (the redirect check, at least) still run.
+  clone_reset
+  mv "$dir/caddy-id" "$dir/held-caddy"
+  out=$(SHIM_SET_E=1 clone_boot smoke 2>&1); rc=$?
+  mv "$dir/held-caddy" "$dir/caddy-id"
+  if ((rc == 0)) && grep -q '1c no running Caddy container' <<<"$out" &&
+    grep -q '1  http redirects to https' <<<"$out"; then
+    pass 'clones smoke with no Caddy survives set -e and runs the later checks'
+  else flunk 'clones smoke stopped silently under set -e with no Caddy' "$out"; fi
+  # Fail closed when the running Caddy cannot be checked: inspect failing, or
+  # no bind-mounted regular file at all (the Caddyfile mount is always there),
+  # refuses boot and fails the smoke instead of reading as fresh.
+  clone_reset
+  : >"$dir/caddy-mounts"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && grep -q "cannot compare the running Caddy's mounts" <<<"$out"; then
+    pass 'clones boot refuses an empty Caddy mount listing instead of reading fresh'
+  else flunk "clones boot treated an uncheckable Caddy as fresh (rc=$rc)" "$out"; fi
+  printf 'bind %s/configs/Caddyfile /etc/caddy/Caddyfile\n' "$dir/release" >"$dir/caddy-mounts"
+  clone_reset
+  out=$(CLONE_CADDY_INSPECT_FAIL=1 clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && grep -q "cannot compare the running Caddy's mounts" <<<"$out"; then
+    pass 'clones boot refuses a failed Caddy inspect instead of reading fresh'
+  else flunk "clones boot ignored a failed Caddy inspect (rc=$rc)" "$out"; fi
+  clone_reset
+  out=$(CLONE_CADDY_INSPECT_FAIL=1 SHIM_SET_E=1 clone_boot smoke 2>&1); rc=$?
+  if ((rc != 0)) && grep -q '1c could not inspect the running Caddy' <<<"$out"; then
+    pass 'clones smoke fails on a Caddy it cannot inspect'
+  else flunk "clones smoke passed with an uninspectable Caddy (rc=$rc)" "$out"; fi
   # The tests below expect the default (single-app) shape again.
   printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 SHIM_PS_FAIL=1 clone_boot 2>&1); rc=$?
@@ -923,12 +968,34 @@ mutants = [
      'FAIL 2b SIGPIPE-prone pipeline'),
     # #672: the boot recreate of a Caddy serving a changed Caddyfile, and its
     # smoke counterpart.
-    ('caddy-stale-check-skipped', '    stale_files=$(caddy_stale_files "$caddy_id")', '    stale_files=""'),
+    ('caddy-stale-check-skipped', '''    stale_files=$(caddy_stale_files "$caddy_id") || refuse "cannot compare the running Caddy\'s mounts with the checkout\'s (docker inspect failed, or no bind-mounted regular file)"''', '    stale_files=""'),
+    ('boot-caddy-stale-refuse-dropped',
+     'stale_files=$(caddy_stale_files "$caddy_id") || refuse "cannot compare',
+     'stale_files=$(caddy_stale_files "$caddy_id") || : # refuse'),
     ('caddy-recreate-everything', 'run dc up -d --no-deps --force-recreate caddy', 'run dc up -d --no-deps --force-recreate'),
     ('caddy-always-stale', 'sudo docker exec "$id" cat "$tgt" 2>/dev/null | cmp -s - "$src" || printf', 'printf'),
     ('caddy-mounts-unfiltered', '[[ $mtype == bind && -f $src ]] || continue', ':'),
-    ('smoke-caddy-stale-ignored', 'caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")', 'caddy_stale=""'),
-    ('smoke-caddy-id-ignored', 'caddy_id=$(caddy_container_id)\n  caddy_stale=', 'caddy_id=""\n  caddy_stale='),
+    ('smoke-caddy-stale-ignored', '    caddy_stale=$(caddy_stale_files "$caddy_id") || {', '    caddy_stale="" || {'),
+    ('smoke-caddy-inspect-fail-swallowed', '    caddy_stale=$(caddy_stale_files "$caddy_id") || {', '    caddy_stale=$(caddy_stale_files "$caddy_id") && {'),
+    ('smoke-caddy-id-ignored',
+     'caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container for smoke check 1c (the Compose project lookup failed)"\n  caddy_stale=""',
+     'caddy_id=""\n  caddy_stale=""'),
+    # The review's BLOCKING reproduction, restored as a mutant: the stale
+    # comparison runs unconditionally again, and under main's set -e the
+    # no-Caddy smoke dies at `[[ -n $caddy_id ]] &&` before the later checks.
+    ('smoke-no-caddy-set-e-unhandled', '  caddy_stale=""\n  if [[ -n $caddy_id ]]; then',
+     '  caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")\n  if [[ -n $caddy_id ]]; then'),
+    # The review's surviving byte-count mutant: killed only once fresh and
+    # stale served content are the same length as the checkout's file.
+    ('caddy-stale-by-size',
+     'sudo docker exec "$id" cat "$tgt" 2>/dev/null | cmp -s - "$src" || printf \'%s -> %s\\n\' "$src" "$tgt"',
+     '[[ $(sudo docker exec "$id" cat "$tgt" 2>/dev/null | wc -c) -eq $(wc -c <"$src") ]] || printf \'%s -> %s\\n\' "$src" "$tgt"'),
+    # caddy_stale_files must fail closed: inspect's own status, and an empty
+    # mount listing (the Caddyfile mount is always there).
+    ('caddy-mount-inspect-fail-open',
+     'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id") || return 1',
+     'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id" 2>/dev/null) || return 0'),
+    ('caddy-mounts-none-fail-open', '((found)) || return 1', '((found)) || return 0'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:

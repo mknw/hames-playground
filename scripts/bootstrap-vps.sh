@@ -1705,11 +1705,17 @@ caddy_container_id() {
 # (#672). Volume and directory mounts are skipped: they always carry the
 # checkout's live content.
 caddy_stale_files() {
-  local id=$1 mtype src tgt
+  local id=$1 mtype src tgt mounts found=0
+  # Fail CLOSED: inspect's own exit status is checked, and no bind-mounted
+  # regular file at all is a failure, never "fresh" — the Caddyfile mount is
+  # always there, so an empty list means this comparison did not run.
+  mounts=$(sudo docker inspect -f '{{range .Mounts}}{{printf "%s %s %s\n" .Type .Source .Destination}}{{end}}' "$id") || return 1
   while read -r mtype src tgt; do
     [[ $mtype == bind && -f $src ]] || continue
+    found=1
     sudo docker exec "$id" cat "$tgt" 2>/dev/null | cmp -s - "$src" || printf '%s -> %s\n' "$src" "$tgt"
-  done < <(sudo docker inspect -f '{{range .Mounts}}{{printf "%s %s %s\n" .Type .Source .Destination}}{{end}}' "$id")
+  done <<<"$mounts"
+  ((found)) || return 1
 }
 
 stage_boot() {
@@ -1784,6 +1790,8 @@ stage_boot() {
   else
     run dc up -d
   fi
+  ((DRY_RUN)) &&
+    note "(dry run: after 'up -d', a running Caddy serving a changed Caddyfile is recreated alone: docker compose up -d --no-deps --force-recreate caddy)"
   ((DRY_RUN)) && return 0
   if ! vps_check --network; then
     dc stop || refuse "Neo4j network verification failed and stopping the stack failed; stop it manually and follow docs/deployment/docker-engine-upgrade.md"
@@ -1798,9 +1806,11 @@ stage_boot() {
   # one differs: caddy_data persists, so no certificate is re-issued, and no
   # other service is touched.
   local caddy_id stale_files
-  caddy_id=$(caddy_container_id)
+  # Under main's `set -euo pipefail` a bare failing assignment here ends the
+  # run silently, with the stack already up — every failure below is named.
+  caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container (the Compose project lookup failed)"
   if [[ -n $caddy_id ]]; then
-    stale_files=$(caddy_stale_files "$caddy_id")
+    stale_files=$(caddy_stale_files "$caddy_id") || refuse "cannot compare the running Caddy's mounts with the checkout's (docker inspect failed, or no bind-mounted regular file)"
     if [[ -n $stale_files ]]; then
       warn "the running Caddy serves a changed Caddyfile; recreating Caddy only"
       run dc up -d --no-deps --force-recreate caddy
@@ -1957,11 +1967,21 @@ stage_smoke() {
     fi
   fi
 
-  # #672's counterpart in the smoke: a boot that skipped the recreate (or a
-  # manual config edit) must fail here rather than keep serving a stale file.
+  # #672's counterpart in the smoke: a boot that skipped the recreate must
+  # fail here rather than keep serving a stale file. NOT detected: an in-place
+  # edit (an inode-preserving write). The bind mount shows the new content, so
+  # cmp reads fresh while Caddy without --watch keeps the config it parsed at
+  # start; comparing Caddy's LOADED config is the follow-up.
   local caddy_id caddy_stale
-  caddy_id=$(caddy_container_id)
-  caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")
+  caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container for smoke check 1c (the Compose project lookup failed)"
+  caddy_stale=""
+  if [[ -n $caddy_id ]]; then
+    caddy_stale=$(caddy_stale_files "$caddy_id") || {
+      fail "1c could not inspect the running Caddy's mounts, so its config was not compared"
+      fails=$((fails + 1))
+      caddy_stale=""
+    }
+  fi
   if [[ -z $caddy_id ]]; then
     # Nothing to compare against; Caddy's own liveness is check 2's business.
     warn "1c no running Caddy container, so its config was not compared"

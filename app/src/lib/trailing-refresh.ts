@@ -77,7 +77,8 @@ export interface TrailingDelta {
  *
  * Returns null when nothing past the anchor is new — the trailing pass has not
  * landed yet, or this turn had nothing trailing at all. The caller keeps
- * polling until null flips to a delta or the attempt cap runs out.
+ * polling until an anchored addition arrives (see `startTrailingRefresh`) or
+ * the attempt cap runs out; a summaries-only delta does not end the poll.
  */
 export function trailingDelta(
   local: readonly ContextEvent[],
@@ -132,10 +133,11 @@ export interface TrailingRefreshHooks {
 
 /**
  * Poll for the just-settled turn's trailing pass and merge it into the panel
- * buffers. Stops at the first delta that is the settled turn's (anchored — see
- * `trailingDelta`), when the buffer is empty (cleared by the user or pruned —
- * hydration owns the view then), when the conversation is gone, or at the
- * attempt cap.
+ * buffers. Stops at the first anchored addition — the pass's own appended
+ * events; a summaries-only delta is applied but keeps polling, because a stale
+ * summary from an earlier turn must not end the poll (see `trailingDelta`) —
+ * when the buffer is empty (cleared by the user or pruned — hydration owns the
+ * view then), when the conversation is gone, or at the attempt cap.
  */
 export function startTrailingRefresh(hooks: TrailingRefreshHooks): void {
   let attempts = 0
@@ -153,9 +155,10 @@ export function startTrailingRefresh(hooks: TrailingRefreshHooks): void {
     void (async () => {
       // An empty buffer means the user cleared the panel or the registry
       // pruned the session: either way hydration reloads from Postgres on the
-      // next visit, and resurrecting cleared events here would fight it.
-      // Re-checked after the fetch too — the fetch is a network round trip,
-      // and a clear landing inside it must win.
+      // next visit, and resurrecting cleared events here would fight it. The
+      // pre-fetch check is a fast exit only — the anchor is the guarantee: an
+      // empty buffer shares no ids, so `trailingDelta` returns null and a
+      // clear landing inside the fetch round trip cannot be resurrected.
       if (hooks.local().length === 0) return stop()
       let fetched: readonly ContextEvent[]
       try {
@@ -163,11 +166,17 @@ export function startTrailingRefresh(hooks: TrailingRefreshHooks): void {
       } catch {
         return stop()
       }
-      if (hooks.local().length === 0) return stop()
       const delta = trailingDelta(hooks.local(), fetched)
       if (delta) {
         applyDelta(hooks, delta)
-        return stop()
+        // Only the pass's own appended events end the poll. A summaries-only
+        // delta — an earlier turn's tool_result summarised after this poll
+        // started (an errored turn's pass still runs, a stopped one, a pass
+        // that outlasted the cap, a reload before it landed) — is applied but
+        // does not stop: every describe call `compactBulkData` makes appends
+        // a `model_call`, so a pass that writes a summary always carries an
+        // anchored addition after the anchor.
+        if (delta.additions.length > 0) return stop()
       }
       if (attempts >= TRAILING_REFRESH_MAX_ATTEMPTS) return stop()
       timer = setTimeout(tick, TRAILING_REFRESH_INTERVAL_MS)

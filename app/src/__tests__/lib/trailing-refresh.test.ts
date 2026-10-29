@@ -316,6 +316,94 @@ describe('startTrailingRefresh', () => {
     expect(h.appended[0].map((e) => e.id)).toEqual(['mc'])
     expect(h.buffer.map((e) => e.id)).toEqual(['u2', 'r2', 'mc'])
   })
+
+  // B1 residual (fix round 2): the anchor covers additions, but a summary on
+  // an EARLIER turn's tool_result still reached the poll. The buffer holds a
+  // prior turn's result without its summary — an errored turn's pass still
+  // runs, a stopped turn, a pass that outlasted the cap, a reload before it
+  // landed — while the persisted row already has it. The summaries-only delta
+  // was applied (right) but also ENDED the poll, so this turn's pass never
+  // landed. Now only an anchored addition stops it. Mutation: stop on any
+  // delta (drop the `delta.additions.length > 0` gate) — this goes red.
+  it('does not end the poll on a stale summary from an earlier turn (B1 residual)', async () => {
+    vi.useFakeTimers()
+    const local = [
+      ev('u1', 'user_message'),
+      ev('r1', 'tool_result'),
+      ev('u2', 'user_message'),
+      ev('r2', 'tool_result', { result: 'raw' }),
+    ]
+    const turn1 = [
+      ev('u1', 'user_message'),
+      ev('r1', 'tool_result', { result: 'raw', summary: 's1' }),
+      ev('mc1', 'model_call'),
+    ]
+    const turn2 = [
+      ev('u2', 'user_message'),
+      ev('r2', 'tool_result', { result: 'raw', summary: 's2' }),
+      ev('mc2', 'model_call'),
+    ]
+    let calls = 0
+    const h = makeHarness(local, async () => {
+      calls += 1
+      return calls === 1 ? [...turn1, ...local.slice(2)] : [...turn1, ...turn2]
+    })
+    startTrailingRefresh(h.hooks)
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS)
+    // Fetch 1 is a summaries-only delta relative to the anchor: r1's summary
+    // rides an event BEFORE r2 (the anchor), so mc1 is not an addition. The
+    // summary is applied — but the poll keeps running.
+    expect(h.buffer.find((e) => e.id === 'r1')?.data).toMatchObject({ summary: 's1' })
+    expect(h.fetchCalls).toBe(1)
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_INTERVAL_MS)
+
+    // This turn's pass: r2 summarised and mc2 appended, then it stops.
+    expect(h.appended).toHaveLength(1)
+    expect(h.appended[0].map((e) => e.id)).toEqual(['mc2'])
+    expect(h.buffer.map((e) => e.id)).toEqual(['u1', 'r1', 'u2', 'r2', 'mc2'])
+    expect(h.buffer.find((e) => e.id === 'r2')?.data).toMatchObject({ summary: 's2' })
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_INTERVAL_MS * 5)
+    expect(h.fetchCalls).toBe(2)
+  })
+
+  // Fix round 2 (resume pin): the real resume shape INTERLEAVES — the buffer
+  // holds the paused turn's events and the resume's own, and core's
+  // `hitl_response` sits BETWEEN them in the persisted context. The round-1
+  // pin had `hr` before every buffered event, so anchoring on the FIRST shared
+  // id instead of the last stayed green there; here that mutation re-adds `hr`
+  // and ends the poll on it. Mutation: first-shared anchor — this goes red.
+  it('does not stop on an interleaved hitl_response the buffer never held (resume)', async () => {
+    vi.useFakeTimers()
+    const local = [
+      ev('u1', 'user_message'),
+      ev('r1', 'tool_result'),
+      ev('r2', 'tool_result', { result: 'raw' }),
+    ]
+    const before = [
+      ev('u1', 'user_message'),
+      ev('r1', 'tool_result'),
+      ev('hr', 'hitl_response'),
+      ev('r2', 'tool_result', { result: 'raw' }),
+    ]
+    let calls = 0
+    const h = makeHarness(local, async () => {
+      calls += 1
+      return calls === 1 ? before : [...before, ev('mc', 'model_call')]
+    })
+    startTrailingRefresh(h.hooks)
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS)
+    // `hr` sits before the anchor (r2): it is never re-added, and the poll
+    // keeps running for the resume turn's own pass.
+    expect(h.appended).toHaveLength(0)
+    expect(h.fetchCalls).toBe(1)
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_INTERVAL_MS)
+
+    expect(h.appended).toHaveLength(1)
+    expect(h.appended[0].map((e) => e.id)).toEqual(['mc'])
+    expect(h.buffer.map((e) => e.id)).toEqual(['u1', 'r1', 'r2', 'mc'])
+  })
   it('writes a summary without clobbering the event data the user set', async () => {
     vi.useFakeTimers()
     const local = [ev('t1', 'tool_result', { result: 'raw', hidden: true })]

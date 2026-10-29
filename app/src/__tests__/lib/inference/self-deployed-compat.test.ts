@@ -4,6 +4,7 @@ import { activeInferenceTier, clientOverrideFor } from '@hames-ai/harness-baml/c
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   applyLegacyInferenceEnv,
+  __resetInferenceEnvFoldForTests,
   inferenceEnv,
   LEGACY_INFERENCE_ENV,
 } from '@hames-ai/harness-baml/inference-env.server'
@@ -14,6 +15,7 @@ import {
 } from '../../../lib/inference/tier-config.server'
 
 beforeEach(() => {
+  __resetInferenceEnvFoldForTests()
   for (const [name, old] of Object.entries(LEGACY_INFERENCE_ENV)) {
     vi.stubEnv(name, undefined)
     vi.stubEnv(old, undefined)
@@ -80,6 +82,28 @@ describe('one-release environment migration', () => {
     applyLegacyInferenceEnv()
     expect(process.env[name]).toBe('synthetic-value')
     expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).not.toContain('synthetic-value')
+  })
+  // The app bundles this module twice: a second copy's `warned` set is fresh
+  // while the first copy's fold has already copied the legacy values onto the
+  // canonical names. Without the process-scoped fold record the copy reports
+  // the fold's own copies as operator-set and tells the operator to remove
+  // the legacy name — the only copy of the value on a legacy-only deployment (#733).
+  it('a second bundled instance reports no IGNORED line on a legacy-only environment', async () => {
+    vi.stubEnv('VERDA_INFERENCE_ENDPOINT', 'https://synthetic.example.invalid/v1')
+    vi.stubEnv('VERDA_INFERENCE_API_KEY', 'synthetic-key')
+    vi.stubEnv('VERDA_SCALEDOWN_SECONDS', '300')
+    applyLegacyInferenceEnv()
+    vi.resetModules()
+    const second = await import('@hames-ai/harness-baml/inference-env.server')
+    vi.mocked(console.warn).mockClear()
+    second.applyLegacyInferenceEnv()
+    const lines = vi.mocked(console.warn).mock.calls.map((c) => String(c[0]))
+    expect(lines.join(' ')).toContain('deprecated; use')
+    expect(lines.join(' ')).not.toContain('IGNORED')
+    // And the second copy still resolves the legacy values it did not fold.
+    expect(second.inferenceEnv('LARGE_LLM_BASE_URL')).toBe('https://synthetic.example.invalid/v1')
+    expect(second.inferenceEnv('LARGE_LLM_API_KEY')).toBe('synthetic-key')
+    expect(second.inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')).toBe('300')
   })
   it.each(Object.entries(LEGACY_INFERENCE_ENV))(
     '%s wins over legacy %s, including empty',

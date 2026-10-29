@@ -106,12 +106,33 @@ function warn(oldName: string, newName: string, ignored: boolean): void {
  */
 const PAIR: readonly string[] = ['LARGE_LLM_BASE_URL', 'LARGE_LLM_API_KEY']
 
+const FOLDED_KEY: unique symbol = Symbol.for('hames.harness-baml.inference-env-folded') as never
+type FoldedGlobal = typeof globalThis & { [FOLDED_KEY]?: Set<string> }
+/** The canonical names THIS PROCESS's fold wrote from the legacy values, on a
+ *  `globalThis` symbol the way `tier.server.ts` keeps the one policy holder: the
+ *  app bundles this module twice, so a second copy's `warned` set is fresh while
+ *  the fold's copies are already in the environment. Without the record, the copy
+ *  reads the fold's own copies as operator-set and tells the operator to remove
+ *  the legacy name — the only copy of the value on a legacy-only deployment (#733).
+ *  A name the operator set BEFORE the fold is never recorded here, so a genuine
+ *  legacy-vs-new conflict still reports IGNORED. */
+const foldedByFold = ((globalThis as FoldedGlobal)[FOLDED_KEY] ??= new Set<string>())
+
+/** Test isolation for the process-scoped fold record (see {@link foldedByFold}). */
+export function __resetInferenceEnvFoldForTests(): void {
+  foldedByFold.clear()
+}
+
 export function inferenceEnv(name: string): string | undefined {
   const oldName = LEGACY_INFERENCE_ENV[name as keyof typeof LEGACY_INFERENCE_ENV]
   const canonical = process.env[name]
   const pairMigrated = PAIR.includes(name) && PAIR.some((n) => process.env[n] !== undefined)
   const useLegacy = oldName !== undefined && canonical === undefined && !pairMigrated
-  if (oldName && process.env[oldName] !== undefined) warn(oldName, name, !useLegacy)
+  // IGNORED is only honest when the canonical name was set by the operator: a
+  // canonical value this process's own fold wrote from the legacy value means
+  // the legacy name is still the only source, not a conflict (#733).
+  const ignored = !useLegacy && !foldedByFold.has(name)
+  if (oldName && process.env[oldName] !== undefined) warn(oldName, name, ignored)
   return useLegacy ? process.env[oldName] : canonical
 }
 
@@ -131,12 +152,18 @@ export function applyLegacyInferenceEnv(): void {
     (name) => [name, inferenceEnv(name)] as const,
   )
   for (const [name, value] of resolved) {
-    if (process.env[name] === undefined && value !== undefined) process.env[name] = value
+    if (process.env[name] === undefined && value !== undefined) {
+      process.env[name] = value
+      foldedByFold.add(name)
+    }
   }
   if (!process.env[LARGE_LLM_MODEL_ENV]) {
     process.env[LARGE_LLM_MODEL_ENV] = DEFAULT_LARGE_LLM_MODEL
     defaultModelAppliedByUs = true
-  } else if (!defaultModelAppliedByUs || process.env[LARGE_LLM_MODEL_ENV] !== DEFAULT_LARGE_LLM_MODEL) {
+  } else if (
+    !defaultModelAppliedByUs ||
+    process.env[LARGE_LLM_MODEL_ENV] !== DEFAULT_LARGE_LLM_MODEL
+  ) {
     largeLlmModelWasExplicit = true
   }
   if (process.env.INFERENCE_TIERS === 'private') {

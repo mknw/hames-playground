@@ -570,7 +570,7 @@ class Wiring(unittest.TestCase):
         env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; };
         escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
         rendered_exposure() { :; }; run() { echo "RUN $*"; }; sudo() { :; };
-        dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic"}'; else echo "DC $*"; fi; };
+        dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic","services":{"caddy":{"environment":{"ACME_EMAIL":"ops@example.invalid","APP_DOMAIN":"app.example.invalid"}}}}'; else echo "DC $*"; fi; };
         vps_check() { echo "$*"; return 1; }; wait_state() { echo WAIT; };
         stage_boot''')
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)

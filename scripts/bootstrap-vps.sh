@@ -686,6 +686,22 @@ if "--enable-all-servers" in cmd or not any(a.startswith("--servers=") for a in 
 ' <<<"$json"
 }
 
+# compose_caddy_env KEY — KEY's value in the rendered caddy service's
+# environment, i.e. by construction what Caddy substitutes at start
+# (docker-compose.prod.yaml's APP_DOMAIN/ACME_EMAIL, substituted into
+# configs/Caddyfile). Reading .env's own text is not enough: Compose's .env
+# parser also reads spellings env_get cannot (`export KEY=…`, `KEY = …`, a
+# leading space; the last line wins) (#664 review). Empty when the key is
+# absent; the value itself is captured, never printed.
+compose_caddy_env() {
+  local key=$1 json
+  json=$(dc config --format json) || return 1
+  python3 -c '
+import json, sys
+env = json.load(sys.stdin).get("services", {}).get("caddy", {}).get("environment") or {}
+print(env.get(sys.argv[1]) or "")' "$key" <<<"$json"
+}
+
 # public_listeners ALLOWED_PORTS — read `ss -H -ln[tu]` on stdin; print every
 # socket listening on a non-loopback address whose port is not allowed.
 public_listeners() {
@@ -1744,25 +1760,50 @@ stage_boot() {
   fi
   if [[ -n $problems ]]; then
     refuse ".env is not ready: $(tr '\n' ';' <<<"$problems")"
-  else ok ".env passes the docs/PREVIEW.md §6 preflight"; fi
-  # #664: the gate Caddy makes real is the .env value, not this run's
-  # argument: configs/Caddyfile and docker-compose.prod.yaml substitute
-  # ACME_EMAIL from .env, so a placeholder an earlier hostname stage wrote
-  # would reach Caddy even with a real --acme-email here.
-  local env_acme
-  env_acme=$(env_get ACME_EMAIL)
-  if [[ -z $env_acme ]]; then
-    refuse "ACME_EMAIL is not set in .env; Caddy reads ACME_EMAIL from .env, not the --acme-email argument (the hostname stage writes it)"
-  elif reserved_name "$env_acme"; then
-    refuse "the ACME_EMAIL in .env is a reserved placeholder; Let's Encrypt cannot issue for or mail it (set the real address in .env; the hostname stage writes it)"
+  else
+    ok ".env passes the docs/PREVIEW.md §6 preflight"
+    # The clone preflight runs BEFORE the #664 gates below: the gates read the
+    # same render the preflight validates, so a render that fails must be
+    # refused by the preflight's own pipeline (its pipefail guard), not
+    # silently by a later reader.
+    clone_preflight "$files" || return 1
+  fi
+  # #664: the gates Caddy makes real are the .env values, not this run's
+  # arguments: configs/Caddyfile and docker-compose.prod.yaml substitute
+  # ACME_EMAIL and APP_DOMAIN from .env, so a placeholder an earlier hostname
+  # stage wrote would reach Caddy even with real arguments here. The values
+  # are read from the RENDERED config (compose_caddy_env): Compose's .env
+  # parser also reads spellings env_get cannot.
+  local env_acme="" env_domain="" render_ok=0
+  if env_acme=$(compose_caddy_env ACME_EMAIL) && env_domain=$(compose_caddy_env APP_DOMAIN); then render_ok=1; fi
+  ((render_ok)) || refuse "cannot render the Compose config, so the ACME_EMAIL/APP_DOMAIN Caddy gets are unreadable"
+  if ((render_ok)); then
+    if [[ -z $env_acme ]]; then
+      refuse "ACME_EMAIL is not set in .env; Caddy reads ACME_EMAIL from .env, not the --acme-email argument (the hostname stage writes it)"
+    elif reserved_name "$env_acme"; then
+      refuse "the ACME_EMAIL in .env is a reserved placeholder; Let's Encrypt cannot issue for or mail it (set the real address in .env; the hostname stage writes it)"
+    fi
   fi
   if reserved_name "$HOSTNAME_ARG"; then
     refuse "--hostname is a reserved placeholder; Let's Encrypt cannot issue for it"
   fi
-  [[ $env_acme == "$ACME_EMAIL_ARG" ]] || owner_stop "the ACME_EMAIL in .env differs from this run's --acme-email; Caddy reads ACME_EMAIL from .env: set the real address in .env (re-run the hostname stage) or re-run with the same --acme-email"
+  if ((render_ok)); then
+    [[ $env_acme == "$ACME_EMAIL_ARG" ]] || owner_stop "the ACME_EMAIL in .env differs from this run's --acme-email; Caddy reads ACME_EMAIL from .env: set the real address in .env (re-run the hostname stage) or re-run with the same --acme-email"
+    if [[ -z $env_domain ]]; then
+      refuse "APP_DOMAIN is not set in .env; Caddy serves {\$APP_DOMAIN} from .env, not the --hostname argument (the hostname stage writes it)"
+    elif reserved_name "$env_domain"; then
+      refuse "the APP_DOMAIN in .env is a reserved placeholder; Let's Encrypt cannot issue for it"
+    fi
+    [[ $env_domain == "$HOSTNAME_ARG" ]] || owner_stop "the APP_DOMAIN in .env differs from this run's --hostname; Caddy serves {\$APP_DOMAIN} from .env: set the real hostname in .env (re-run the hostname stage) or re-run with the same --hostname"
+  fi
   [[ -n $missing ]] && owner_stop "fill the owner-supplied values in $ENV_FILE: $(tr '\n' ' ' <<<"$missing")"
   escrow_recorded || owner_stop "escrow the configured application keys off the box (both runtime files' six keys in clone mode; docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"
-  dns_points_here "$HOSTNAME_ARG" || owner_stop "point DNS for $HOSTNAME_ARG at this box and wait for it to resolve (docs/PREVIEW.md §4)"
+  # DNS is checked for the domain Caddy will serve — the .env value, which the
+  # gates above have already tied to --hostname (a render that could not be
+  # read, e.g. a fresh-box dry run, falls back to the argument).
+  local dns_name=$env_domain
+  [[ -n $dns_name ]] || dns_name=$HOSTNAME_ARG
+  dns_points_here "$dns_name" || owner_stop "point DNS for $dns_name at this box and wait for it to resolve (docs/PREVIEW.md §4)"
 
   assert_dynamic_tools_off
   # GitHub surface (#261 P0-2): a dev config copied onto the box must not
@@ -1787,7 +1828,7 @@ stage_boot() {
 
   # A clone project owns app-dev too. Never orphan-prune during a clone boot.
   files=$(compose_files) || return 1
-  clone_preflight "$files" || return 1
+  files=$(compose_files) || return 1
   prepare_embedder || return 1
   if [[ $files == "$COMPOSE_FILES" ]]; then
     if ((!DRY_RUN)); then

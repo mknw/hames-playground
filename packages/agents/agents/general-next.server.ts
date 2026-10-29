@@ -204,6 +204,8 @@ async function createPatterns(
     tools: sandboxTools,
     catalog: tools.all,
     spotlight: 'always' as const,
+    // The tenant's own document links, as the Graph tools write them (#784 item 6).
+    sourceLinks: { namespace: 'graph', field: 'webUrl', hosts: deps.guards?.documentHosts ?? [] },
     screen: {
       run: createInjectionScreen(),
       mode: screenMode,

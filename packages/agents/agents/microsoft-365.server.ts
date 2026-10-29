@@ -120,8 +120,13 @@ async function createPatterns(
   // outside the org (`graph_files_shared`). A mail body or a .docx is therefore
   // exactly the "instructions hidden in a document" case, and hidden text in an
   // Office document is the classic delivery vehicle. Behaviour is unchanged
-  // unless a detection fires.
-  const guarded = withInjectionGuard({ namespaces: ['graph'], catalog: tools.all })(graphPattern)
+  // unless a detection fires. The one exemption is the tenant's own document
+  // links, as the Graph tools write them into `webUrl` (#784 item 6).
+  const guarded = withInjectionGuard({
+    namespaces: ['graph'],
+    catalog: tools.all,
+    sourceLinks: { namespace: 'graph', field: 'webUrl', hosts: deps.guards?.documentHosts ?? [] },
+  })(graphPattern)
 
   return [guarded, responseSynth]
 }

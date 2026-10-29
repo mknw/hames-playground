@@ -20,6 +20,13 @@ vi.mock('../../../lib/metrics/preview-counters.server', () => ({
   addUsage: (delta: unknown, now?: number) => addUsage(delta, now),
 }))
 
+// The GPU refresh site is stubbed, not run: the sampler hits the network, and
+// the small-gpu suite owns its behaviour. Here the pin is the WIRING — that a
+// small call with metrics kicks the TTL-bounded refresh and nothing else does.
+vi.mock('../../../lib/inference/small-gpu.server', () => ({
+  refreshSmallBoxGpuIfStale: vi.fn(),
+}))
+
 import {
   flushUsage,
   installUsageRecorder,
@@ -37,6 +44,7 @@ import {
   resetSmallActivity,
   smallProvenWarm,
 } from '../../../lib/inference/cold-start.server'
+import { refreshSmallBoxGpuIfStale } from '../../../lib/inference/small-gpu.server'
 import { resetCallLatency, tierLatency } from '../../../lib/metrics/call-latency.server'
 import type { EventMetrics } from '@hames-ai/harness-patterns/types'
 // Namespace import: the tier map is read as DATA here, to prove the recorder
@@ -58,6 +66,7 @@ beforeEach(async () => {
   resetLargeActivity()
   resetSmallActivity()
   resetCallLatency()
+  vi.mocked(refreshSmallBoxGpuIfStale).mockClear()
   await flushUsage() // drain anything a previous case left pending
   addUsage.mockReset()
 })
@@ -177,12 +186,28 @@ describe('the small warm clock requires metrics', () => {
     )
     expect(smallProvenWarm(now)).toBe(true)
   })
-
   it('leaves an expired clock cold when the sample has no metrics', () => {
     const now = Date.now()
     noteSmallCallCompleted(now - 400_000)
     recordSample({ functionName: 'DescribeToolResult', clientName: 'SmallQwen' }, now)
     expect(smallProvenWarm(now)).toBe(false)
+  })
+
+  it('a describe sample with metrics also kicks the TTL-bounded GPU refresh (#848)', () => {
+    recordSample(
+      { functionName: 'DescribeToolResult', clientName: 'SmallQwen', metrics: metrics() },
+      Date.now(),
+    )
+    // The refresh site, not the pricing read: the pricing seam must stay pure —
+    // a rate read on ANY tier's step must never fire a `/status` GET that could
+    // wake and bill the scaled-to-zero box — and THIS site has just proven the
+    // box up.
+    expect(vi.mocked(refreshSmallBoxGpuIfStale)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a sample without metrics kicks no GPU refresh — no evidence the box is up', () => {
+    recordSample({ functionName: 'DescribeToolResult', clientName: 'SmallQwen' }, Date.now())
+    expect(vi.mocked(refreshSmallBoxGpuIfStale)).not.toHaveBeenCalled()
   })
 })
 

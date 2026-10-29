@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import {
   SMALL_GPU_SAMPLE_TTL_MS,
   refreshSmallBoxGpu,
+  refreshSmallBoxGpuIfStale,
+  resampleSmallBoxGpu,
   resetSmallGpuForTests,
   smallGpuEurPerHour,
   smallGpuFamily,
@@ -118,11 +120,13 @@ describe('the /status sampler', () => {
     )
   })
 
-  it('a failed read keeps what the previous sample knew', async () => {
+  it('a failed read prices at the HIGHEST known rate, not the previous family', async () => {
     await sampled('NVIDIA L4')
     fetchMock.mockResolvedValue(new Response('gone', { status: 404 }))
     await refreshSmallBoxGpu()
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    // The box may have come back on the dearer family; a floor priced on the
+    // dead container's L4 can understate, so a failed read records UNKNOWN.
+    expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
   })
 
   it('no endpoint configured: no fetch, and no retry on every read', async () => {
@@ -142,41 +146,63 @@ describe('the /status sampler', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('a fresh sample prices without re-reading; a stale one refreshes once', async () => {
+  it('a fresh sample prices without re-reading; the read NEVER fires a fetch', async () => {
     await sampled('NVIDIA L4')
     expect(smallGpuEurPerHour()).toBe(1.54)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(SMALL_GPU_SAMPLE_TTL_MS - 1)
     expect(smallGpuEurPerHour()).toBe(1.54)
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    // Past the TTL the sync read still prices on the sample it HAS and kicks
-    // exactly one background read; the new rate prices the calls after it lands.
-    fetchMock.mockResolvedValue(Response.json({ gpu: 'NVIDIA A10G' }))
+    // Past the TTL the pricing read stays PURE — it prices at the HIGHEST
+    // known rate (the box may have come back on the dearer family; a stale
+    // sample must not understate) and touches no network, because a rate read
+    // can run on ANY tier's step and a `/status` GET could wake and bill the
+    // scaled-to-zero box.
     await vi.advanceTimersByTimeAsync(1)
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    fetchMock.mockClear()
+    expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('the TTL-bounded refresh fires only from a site that proved the box up', async () => {
+    await sampled('NVIDIA L4')
+    fetchMock.mockClear()
+    refreshSmallBoxGpuIfStale() // fresh sample: no read
+    expect(fetchMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(SMALL_GPU_SAMPLE_TTL_MS + 1)
+    fetchMock.mockResolvedValue(Response.json({ gpu: 'NVIDIA A10G' }))
+    refreshSmallBoxGpuIfStale() // stale: exactly one read, deduped by the sampler
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(0)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
   })
 
-  it('an unanswered read is bounded and leaves the previous knowledge', async () => {
+  it('resample drops the sample synchronously, before its re-read lands', async () => {
     await sampled('NVIDIA L4')
-    fetchMock.mockImplementation(
-      (_url: string, init: RequestInit) =>
-        // Never settles on its own; the sample's own abort ends it, as the
-        // wake's `stalled` helper models the same thing.
-        new Promise<Response>((_resolve, reject) => {
-          init.signal!.addEventListener(
-            'abort',
-            () => reject(new DOMException('Aborted', 'AbortError')),
-            { once: true },
-          )
-        }),
-    )
+    // The re-read never lands within the test: until it does, the dead
+    // container's L4 must not price — the highest rate is the honest floor.
+    fetchMock.mockImplementation(() => new Promise<Response>(() => {}))
+    resampleSmallBoxGpu()
+    expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
+  })
+
+  it('an unanswered read is aborted at its bound and prices the highest rate', async () => {
+    await sampled('NVIDIA L4')
+    let seenSignal: AbortSignal | undefined
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => {
+      seenSignal = init.signal ?? undefined
+      // Never settles on its own; the sample's own abort ends it, as the
+      // wake's `stalled` helper models the same thing.
+      return new Promise<Response>(() => {})
+    })
     await vi.advanceTimersByTimeAsync(SMALL_GPU_SAMPLE_TTL_MS + 1)
-    smallGpuEurPerHour() // kicks the stale refresh
+    refreshSmallBoxGpuIfStale() // the stale refresh; the pricing read no longer kicks it
     await vi.advanceTimersByTimeAsync(5_000) // the sample's own timeout
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    // THE BOUND, not just the outcome: this must fail if the abort timer is
+    // removed — a read that never ends would otherwise hang the refresh site.
+    expect(seenSignal!.aborted).toBe(true)
+    // And the aborted read recorded UNKNOWN, not the previous family.
+    expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
   })
 })
 

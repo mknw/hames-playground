@@ -17,19 +17,28 @@
  * container, and it sits on the public route list beside `/health`, which the
  * small wake already reaches at the same root URL. A GPU can only change when
  * the container dies and a new one starts, which is exactly the event a wake
- * exists to detect, so the sample is refreshed twice and never per step:
+ * exists to detect, so the sample is refreshed twice and never per step — and
+ * NEVER from the pricing read itself:
  *
  *  1. when the small wake lands (`poll()`'s success path calls
- *     `refreshSmallBoxGpu()` through the wake's `onUp` hook) — a container that
- *     just came up has a fresh `gpu` waiting in `/status`;
- *  2. at most once per {@link SMALL_GPU_SAMPLE_TTL_MS} from the sync pricing
- *     read, bounding the one staleness a wake cannot see: another actor (a
- *     second app instance, `measure.py`) keeping a NEW container alive while
- *     this process's warm clock is still valid. The TTL is one configured
- *     scale-down window (`SMALL_LLM_SCALEDOWN_SECONDS`, 300s default) — within
- *     it the same container must still be serving, so its GPU cannot have
- *     changed except by a crash, and past it this process's own next call wakes
- *     and re-samples anyway.
+ *     `resampleSmallBoxGpu()` through the wake's `onUp` hook) — a container
+ *     that just came up has a fresh `gpu` waiting in `/status`, and the old
+ *     sample may name the dead container's GPU;
+ *  2. at most once per {@link SMALL_GPU_SAMPLE_TTL_MS} when a small call has
+ *     just completed (`refreshSmallBoxGpuIfStale()`, called from the usage
+ *     recorder beside `noteSmallCallCompleted`), bounding the one staleness a
+ *     wake cannot see: another actor (a second app instance, `measure.py`)
+ *     keeping a NEW container alive while this process's warm clock is still
+ *     valid.
+ *
+ * BOTH refresh sites are ones that have just proven the box UP, and that is
+ * the whole point: `/status` sits beside `/health` on the same Caddy route
+ * list, and a valid-token request to a scaled-to-zero box starts a GPU
+ * container. A read fired from a step on ANY tier — the pricing seam serves
+ * every client, Anthropic included — could therefore wake and bill the box
+ * the step does not even need, and keep it billed. The pricing read is
+ * accordingly PURE: it prices from the cached sample or the highest known
+ * rate, and touches no network.
  *
  * The sample FAILS OPEN into the pricing rule the owner set for #848: a GPU
  * this table cannot name (no sample yet, the read failed, a host without
@@ -80,10 +89,12 @@ const SMALL_GPU_FAMILIES: readonly SmallGpuFamily[] = [
   },
 ]
 
-/** How long a `/status` sample prices calls before the next read refreshes it —
- *  one configured scale-down window (see the module docstring). Not an env var:
- *  it is a staleness bound on a fact only a container change can alter, not a
- *  rate an operator would tune. */
+/** How long a `/status` sample prices calls before the next refresh may fire
+ *  (`refreshSmallBoxGpuIfStale`). A hard-coded 300s, chosen to match the
+ *  DEFAULT scale-down window (`SMALL_LLM_SCALEDOWN_SECONDS`) rather than
+ *  derived from it: it is a staleness bound on a fact only a container change
+ *  can alter, not a rate an operator would tune, and a changed idle window
+ *  must not silently change the sampling cadence. */
 export const SMALL_GPU_SAMPLE_TTL_MS = 300_000
 
 /** Bounded like every other probe this route makes: Node's `fetch` has no
@@ -123,28 +134,31 @@ const state = ((globalThis as typeof globalThis & { [KEY]?: SmallGpuState })[KEY
 } as SmallGpuState)
 
 /** EUR/hour the small box's time-priced calls bill at: the rate of the GPU the
- *  box actually served, from the cached `/status` sample. Synchronous by seam —
- *  the cost pricing readers are sync — so a stale sample is refreshed in the
- *  background and prices the calls AFTER it lands, never the one being read.
- *  Unknown prices at the highest known rate (module docstring). */
+ *  box actually served, from the cached `/status` sample. Synchronous by seam
+ *  AND pure by threat model — the cost pricing readers are sync and this read
+ *  runs on EVERY tier's step, so it must never start a network call that
+ *  could wake the box (`refreshSmallBoxGpuIfStale` is the only TTL-bounded
+ *  kick, and only from a site that has just proven the box up). A missing,
+ *  stale or unreadable sample prices at the HIGHEST known rate — never the
+ *  previous container's family, never the base: the rendered figure is a
+ *  floor (`≥`) and a floor must not understate (module docstring). */
 export function smallGpuEurPerHour(): number {
+  const highest = () => Math.max(...SMALL_GPU_FAMILIES.map(rateFor))
   const sample = state.sample
   if (sample === undefined || Date.now() - sample.sampledAt >= SMALL_GPU_SAMPLE_TTL_MS) {
-    void refreshSmallBoxGpu()
+    return highest()
   }
-  const family = state.sample?.family
-  if (family !== undefined) {
-    const entry = SMALL_GPU_FAMILIES.find((candidate) => candidate.family === family)
-    if (entry) return rateFor(entry)
-  }
-  return Math.max(...SMALL_GPU_FAMILIES.map(rateFor))
+  const entry = SMALL_GPU_FAMILIES.find((candidate) => candidate.family === sample.family)
+  return entry ? rateFor(entry) : highest()
 }
 
 /** Read `/status` once and cache which GPU it names. Deduped (concurrent
- *  callers share one read), never throws, never prices: a failure keeps whatever
- *  the previous sample knew and only advances the clock, so a host without
- *  `/status` pays one bounded failed GET per TTL window rather than one per
- *  priced call. Exported for the wake's `onUp` hook and for tests. */
+ *  callers share one read), never throws, never prices: a failure records
+ *  UNKNOWN so nothing prices on the previous read's stale knowledge (the
+ *  floor rule above), and a host without `/status` pays one bounded failed
+ *  GET per refresh rather than one per priced call. Fire this only from a
+ *  site that has just proven the box up — the wake's `onUp` and the usage
+ *  recorder's small-call site are the two. */
 export function refreshSmallBoxGpu(): Promise<void> {
   if (state.refreshing) return state.refreshing
   const refreshing = sampleOnce().finally(() => {
@@ -152,6 +166,24 @@ export function refreshSmallBoxGpu(): Promise<void> {
   })
   state.refreshing = refreshing
   return refreshing
+}
+/** Kick a `/status` refresh when the cached sample is missing or past its TTL.
+ *  The TTL-bounded refresh site for a caller that has just proven the box UP
+ *  (the usage recorder, beside `noteSmallCallCompleted`) — never the pricing
+ *  read, which must stay pure. */
+export function refreshSmallBoxGpuIfStale(): void {
+  const sample = state.sample
+  if (sample === undefined || Date.now() - sample.sampledAt >= SMALL_GPU_SAMPLE_TTL_MS) {
+    void refreshSmallBoxGpu()
+  }
+}
+
+/** The box just (re)started, so its GPU may differ: drop the cached sample
+ *  SYNCHRONOUSLY — nothing may price on the dead container's GPU while the
+ *  re-read is in flight — then kick the refresh. The wake's `onUp` site. */
+export function resampleSmallBoxGpu(): void {
+  state.sample = undefined
+  void refreshSmallBoxGpu()
 }
 
 async function sampleOnce(): Promise<void> {
@@ -180,7 +212,12 @@ async function sampleOnce(): Promise<void> {
     const body = (await res.json()) as { gpu?: unknown }
     mark(smallGpuFamily(typeof body.gpu === 'string' ? body.gpu : ''))
   } catch {
-    mark(state.sample?.family)
+    // A failed read (timeout, 4xx/5xx, unreadable body) records UNKNOWN, not
+    // the previous sample: the box may have come back on a different GPU
+    // family, and a floor priced on the old one can understate. The failed
+    // read costs nothing; the highest rate is the honest answer until the
+    // next successful read.
+    mark(undefined)
   } finally {
     clearTimeout(timer)
   }

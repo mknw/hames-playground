@@ -183,7 +183,7 @@ import {
   type WakeBox,
 } from './cold-start.server'
 import { noteLargeCallCompleted } from './large-activity.server'
-import { refreshSmallBoxGpu } from './small-gpu.server'
+import { resampleSmallBoxGpu } from './small-gpu.server'
 import { WakeFailure } from './wake-failure'
 
 assertServerOnImport()
@@ -358,10 +358,12 @@ interface WakeTarget {
   provenWarm: (now: number) => boolean
   completed: () => void
   /** Fire-and-forget bookkeeping for the SUCCESS path only, after `completed`
-   *  — never awaited, never pricing. The small wake samples the box's
-   *  `/status` GPU here (#848): a container that just came up has a fresh `gpu`
-   *  in `/status`, and a GPU can only change with a container change, which is
-   *  exactly the event a wake just detected. */
+   *  — never awaited, never pricing. The small wake re-samples the box's
+   *  `/status` GPU here (#848): a container that just came up has a fresh
+   *  `gpu` in `/status`, a GPU can only change with a container change —
+   *  exactly the event a wake just detected — and the previous sample may
+   *  name the dead container's GPU, so it is dropped synchronously and
+   *  nothing prices on it while the re-read is in flight. */
   onUp?: () => void
   request: () => { url: string; init: RequestInit }
 }
@@ -488,7 +490,7 @@ const smallWake = createWake({
   provenWarm: smallProvenWarm,
   completed: noteSmallCallCompleted,
   onUp: () => {
-    void refreshSmallBoxGpu()
+    resampleSmallBoxGpu()
   },
   request: (): { url: string; init: RequestInit } => ({
     // assertPrivateTierConfigured already requires the /v1 suffix.

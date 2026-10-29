@@ -4,9 +4,10 @@
 import '../../../lib/inference/config.server'
 import { LARGE_LLM_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
 // These pins price through the REAL wiring, which since #848 reads the served
-// GPU's rate: without a sample the box prices at the HIGHEST known rate (the
-// A10-derived one), so the base-rate expectations below need the L4 sample —
-// far-future-stamped so no TTL refresh fires a stray fetch mid-suite.
+// GPU's rate: without a fresh L4 sample the box prices at the HIGHEST known
+// rate (the A10-derived one), so the base-rate expectations below seed one —
+// far-future-stamped so it never goes stale mid-suite (and the pricing read
+// itself never touches the network either way — pinned below).
 import { seedSmallGpuForTests } from '../../../lib/inference/small-gpu.server'
 seedSmallGpuForTests('L4', Number.MAX_SAFE_INTEGER)
 /**
@@ -410,6 +411,32 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     expect(m.timePricedAttempts).toBeUndefined()
     expect(isTimePricedStep(m)).toBe(false)
+  })
+
+  it('pricing a step NEVER touches the network, even on a stale GPU sample (B1)', async () => {
+    // The reviewer's red probe, turned into a pin: the pricing read runs on
+    // EVERY tier's step, so a `/status` GET fired from it could wake and bill
+    // the scaled-to-zero small box on an Anthropic-only step. The read is
+    // therefore PURE — it prices from the cached sample or the highest known
+    // rate, and the refresh lives only where the box was just proven up.
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const fetchSpy = vi.fn(async () => Response.json({ gpu: 'NVIDIA A10G' }))
+    vi.stubEnv('SMALL_LLM_BASE_URL', 'https://example.invalid/small/v1')
+    try {
+      vi.stubGlobal('fetch', fetchSpy)
+      // A stale sample — the exact state the removed code answered with a read.
+      seedSmallGpuForTests('L4', 1)
+      const collector = fakeCollector([
+        { calls: [apiCall('AnthropicSonnet5', { input_tokens: 100, output_tokens: 50 })] },
+      ])
+      const m = computeEventMetrics(collector as never)!
+      expect(m.attempts).toBe(1)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+      seedSmallGpuForTests('L4', Number.MAX_SAFE_INTEGER)
+    }
   })
 
   it('omits the whole step cost when a provider-priced attempt reported no cost', async () => {

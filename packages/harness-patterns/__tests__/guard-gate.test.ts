@@ -166,6 +166,40 @@ describe("mode 'shadow'", () => {
     expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
     expect((decision.data as DecisionMadeEventData).pTrue).toBeCloseTo(0.01)
   })
+
+  // MUTATION: stamp `wouldRun` from a literal 0.15 instead of the gate's own
+  // configured `threshold`: a deployment that raises τi (#845) would see rows
+  // claim the screen would run when the gate would skip it.
+  it('the shadow event records what the gate would have done at the CONFIGURED τi, both sides', async () => {
+    // pTrue 0.3 sits between the default τi and 0.5: the model's argmax label
+    // is 'false' (#784 item 10) while the gate would have run the screen.
+    for (const [threshold, wouldRun] of [
+      [undefined, true], // default τi 0.15: 0.3 >= τi
+      [0.4, false], // a raised, configured τi: 0.3 < τi
+      [0.05, true], // a lowered, configured τi: 0.3 >= τi
+    ] as const) {
+      const events: ContextEvent[] = []
+      const run = vi.fn(async () => verdictClean)
+      const gate = createGuardGate(fakeDecide(0.3), threshold === undefined ? {} : { threshold })
+      await guardWith({ run, mode: 'shadow', gate }, events).sanitize('fetch_page', CLEAN)
+      const [decision] = decisions(events)
+      const data = decision.data as DecisionMadeEventData
+      expect(data.wouldRun, `τi ${threshold ?? 'default'}`).toBe(wouldRun)
+      expect(data.label, `τi ${threshold ?? 'default'}`).toBe('false')
+    }
+  })
+
+  // MUTATION: record `wouldRun` only when true (`if (shadow && wouldRun)` in
+  // `createGuardGate`): an answer below τi loses the row's would-be label.
+  it('the shadow event records wouldRun false when the gate would have skipped', async () => {
+    const events: ContextEvent[] = []
+    const run = vi.fn(async () => verdictClean)
+    await guardWith(
+      { run, mode: 'shadow', gate: createGuardGate(fakeDecide(0.01)) },
+      events,
+    ).sanitize('fetch_page', CLEAN)
+    expect((decisions(events)[0].data as DecisionMadeEventData).wouldRun).toBe(false)
+  })
 })
 
 describe("mode 'shadow': the gate runs beside the screen", () => {

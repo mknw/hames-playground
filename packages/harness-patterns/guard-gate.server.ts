@@ -256,6 +256,12 @@ export function createGuardGate(decide: DecideFn, settings: GuardGateSettings = 
     if (evaluated.decision.abstained || pTrue === null) {
       return { run: true, pTrue: null, why: 'gate-unavailable' }
     }
+    // Under 'shadow' the answer changes nothing, so the event carries what the
+    // gate WOULD have decided at this gate's own threshold (#784 item 10): the
+    // row's label reads it instead of the model's argmax label, which for a
+    // pTrue between the threshold and 0.5 says 'false' while the gate would
+    // have run the screen.
+    if (shadow) evaluated.event.wouldRun = pTrue >= threshold
     return { run: pTrue >= threshold, pTrue, why: 'gate' }
   }
 }

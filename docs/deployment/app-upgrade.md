@@ -104,8 +104,10 @@ docker compose config --format json | node scripts/validate-clones.mjs &&
 
 If Caddyfile contents or imported sites changed, recreate only Caddy with
 `docker compose up -d --no-deps --force-recreate caddy` under the full deployment
-Compose list; keep `caddy_data` and its certificates. Automatic detection remains
-#672.
+Compose list; keep `caddy_data` and its certificates. Boot does this itself now
+(#672): it compares the running Caddy's bind-mounted regular files against the
+checkout and recreates only Caddy when one differs, and the smoke fails (check
+1c) when the running Caddy still serves a file the checkout no longer holds.
 
 No automatic update of the dev branch is implied. Boot can start
 Caddy; keep ingress blocked by the operator's maintenance control until the

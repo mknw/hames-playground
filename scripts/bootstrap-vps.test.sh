@@ -85,6 +85,22 @@ cat >"$tmproot/bin/docker" <<'SHIM'
 args=" $* "
 if [[ ${SHIM_CLONES:-0} == 1 ]]; then
   printf '%s|%s|%s\n' "${COMPOSE_FILE:-}" "${COMPOSE_PROFILES:-}" "$*" >>"$CLONE_LOG"
+  # #672: the running Caddy and what it serves. $CLONE_CADDY holds its
+  # container id (absent: no running Caddy), $CLONE_CADDY_MOUNTS the
+  # `docker inspect` mount listing, $CLONE_CADDY_SERVED what `docker exec`
+  # reads back out of a mounted file.
+  if [[ $args == *compose.service=caddy* ]]; then
+    [[ -f $CLONE_CADDY ]] && cat "$CLONE_CADDY"
+    exit 0
+  fi
+  if [[ $args == *'{{range .Mounts}'* ]]; then
+    [[ -n ${CLONE_CADDY_MOUNTS:-} ]] && cat "$CLONE_CADDY_MOUNTS"
+    exit 0
+  fi
+  if [[ $args == *" exec "* && $args == *" cat "* ]]; then
+    [[ -n ${CLONE_CADDY_SERVED:-} ]] && cat "$CLONE_CADDY_SERVED"
+    exit 0
+  fi
   if [[ $args == *" config "* ]]; then
     [[ ${SHIM_RENDER_FAIL:-0} == 0 ]] || { echo synthetic-secret >&2; exit 1; }
     cat "$SHIM_COMPOSE_JSON"
@@ -286,6 +302,11 @@ clone_tests() {
     ) >/dev/null 2>&1 || flunk 'clone fixture TLS material could not be generated'
   done
   echo 'synthetic firewall evidence record' >"$dir/firewall-evidence.txt"
+  # #672 fixtures: the running Caddy's id, its `docker inspect` mount listing
+  # and what `docker exec` reads back out of a mounted file (a fresh one).
+  printf 'synthetic-caddy\n' >"$dir/caddy-id"
+  printf 'bind %s/configs/Caddyfile /etc/caddy/Caddyfile\n' "$dir/release" >"$dir/caddy-mounts"
+  : >"$dir/caddy-served"
   # Release's record is read for structure: a guard smoke record whose
   # environments hold release's probes. The bad ones are each refused.
   printf '%s\n' '{"render_sha256": "synthetic", "environments": {"dev": [{"probe": "1"}], "release": [{"probe": "1"}]}}' >"$dir/release-evidence.json"
@@ -343,6 +364,7 @@ ENV
     lib "$dir/release"
     export SHIM_CLONES=1 CLONE_LOG="$dir/calls" CLONE_ALIVE="$dir/app-dev-alive"
     export SHIM_COMPOSE_JSON="$dir/render.json"
+    export CLONE_CADDY="$dir/caddy-id" CLONE_CADDY_MOUNTS="$dir/caddy-mounts" CLONE_CADDY_SERVED="$dir/caddy-served"
     : >"$CLONE_LOG"
     touch "$CLONE_ALIVE"
     [[ ${SHIM_NO_DEV:-0} == 0 ]] || rm "$CLONE_ALIVE"
@@ -525,17 +547,75 @@ WAIT mcp-gateway running 120
 WAIT doc-convert running 120
 WAIT caddy running 120
 ENV
+  # #672 adds three read-only Caddy state probes to the transcript (its id,
+  # its mount listing, what a mounted file serves); they are excluded here the
+  # same way, and required.
+  caddy_ps='||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=caddy'
+  caddy_inspect='||inspect -f {{range .Mounts}}{{printf "%s %s %s\n" .Type .Source .Destination}}{{end}} synthetic-caddy'
+  caddy_exec='||exec synthetic-caddy cat /etc/caddy/Caddyfile'
   grep -Fxv -e "$base|app|compose config --format json" \
     -e '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' \
+    -e "$caddy_ps" -e "$caddy_inspect" -e "$caddy_exec" \
     "$dir/calls" >"$dir/default-changing"
   if ((rc == 0)) && cmp -s "$dir/default-expected" "$dir/default-changing" &&
-    grep -Fxq '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' "$dir/calls"; then
+    grep -Fxq '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' "$dir/calls" &&
+    grep -Fxq "$caddy_ps" "$dir/calls"; then
     pass "clones default boot box-changing transcript is byte-identical"
   else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
   out=$(clone_boot 2>&1); rc=$?
   if ((rc != 0)) && [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses live app-dev under base:prod before orphan pruning'
   else flunk "clones pruned live app-dev under base:prod (rc=$rc)" "$out"; fi
+  # #672: a running Caddy whose bind-mounted file no longer matches the
+  # checkout's is recreated (only Caddy) during boot, after `up -d` and before
+  # the health waits; a fresh one, a volume or directory mount, and a first
+  # boot with no running Caddy are left alone. The smoke fails on the same
+  # staleness instead of leaving it serving.
+  clone_reset
+  printf 'stale\n' >"$dir/caddy-served"
+  out=$(clone_boot 2>&1); rc=$?
+  recreate="$clones|app|compose up -d --no-deps --force-recreate caddy"
+  if ((rc == 0)) && grep -Fxq "$recreate" "$dir/calls" &&
+    (( $(grep -nFx "$clones|app|compose up -d" "$dir/calls" | cut -d: -f1) <
+      $(grep -nFx "$recreate" "$dir/calls" | cut -d: -f1) )) &&
+    (( $(grep -nFx "$recreate" "$dir/calls" | cut -d: -f1) <
+      $(grep -nFx 'WAIT caddy running 120' "$dir/calls" | cut -d: -f1) )); then
+    pass "clones boot recreates only a Caddy serving a changed Caddyfile, before the waits"
+  else flunk "clones boot did not recreate the stale Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
+  clone_reset
+  : >"$dir/caddy-served"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
+    pass "clones boot leaves a fresh Caddy alone"
+  else flunk "clones boot recreated a fresh Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
+  clone_reset
+  printf 'volume caddy_data /data\nbind %s/configs /configs\n' "$dir/release" >"$dir/caddy-mounts"
+  printf 'stale\n' >"$dir/caddy-served"
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
+    pass "clones boot compares only bind-mounted regular files"
+  else flunk "clones boot compared a volume or directory mount (rc=$rc)" "$out $(cat "$dir/calls")"; fi
+  printf 'bind %s/configs/Caddyfile /etc/caddy/Caddyfile\n' "$dir/release" >"$dir/caddy-mounts"
+  mv "$dir/caddy-id" "$dir/held-caddy"
+  out=$(clone_boot 2>&1); rc=$?
+  mv "$dir/held-caddy" "$dir/caddy-id"
+  if ((rc == 0)) && ! grep -q -- '--force-recreate' "$dir/calls"; then
+    pass "clones first boot with no running Caddy compares nothing"
+  else flunk "clones first boot compared a nonexistent Caddy (rc=$rc)" "$out $(cat "$dir/calls")"; fi
+  : >"$dir/caddy-served"
+  clone_reset
+  printf 'stale\n' >"$dir/caddy-served"
+  out=$(clone_boot smoke 2>&1); rc=$?
+  if ((rc != 0)) && grep -q '1c the running Caddy serves a changed Caddyfile' <<<"$out"; then
+    pass 'clones smoke fails on a Caddy serving a changed Caddyfile'
+  else flunk 'clones smoke passed with a stale Caddyfile' "$out"; fi
+  : >"$dir/caddy-served"
+  out=$(clone_boot smoke 2>&1); rc=$?
+  if ((rc == 0)) && grep -q "1c the running Caddy serves the checkout's Caddyfile" <<<"$out"; then
+    pass "clones smoke reports a fresh Caddyfile"
+  else flunk "clones smoke failed with a fresh Caddyfile (rc=$rc)" "$out"; fi
+  # The tests below expect the default (single-app) shape again.
+  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 SHIM_PS_FAIL=1 clone_boot 2>&1); rc=$?
   if ((rc != 0)) && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses inconclusive single-app box-state query'
@@ -841,6 +921,14 @@ mutants = [
     if [[ -n $profiles ]] && grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$' <<<"$profiles"; then''',
      '''if grep -E '^[[:space:]]*profiles:' "$APP_DIR/$path" | grep -Evq '^[[:space:]]*profiles:[[:space:]]*\\["app"\\][[:space:]]*$'; then''',
      'FAIL 2b SIGPIPE-prone pipeline'),
+    # #672: the boot recreate of a Caddy serving a changed Caddyfile, and its
+    # smoke counterpart.
+    ('caddy-stale-check-skipped', '    stale_files=$(caddy_stale_files "$caddy_id")', '    stale_files=""'),
+    ('caddy-recreate-everything', 'run dc up -d --no-deps --force-recreate caddy', 'run dc up -d --no-deps --force-recreate'),
+    ('caddy-always-stale', 'sudo docker exec "$id" cat "$tgt" 2>/dev/null | cmp -s - "$src" || printf', 'printf'),
+    ('caddy-mounts-unfiltered', '[[ $mtype == bind && -f $src ]] || continue', ':'),
+    ('smoke-caddy-stale-ignored', 'caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")', 'caddy_stale=""'),
+    ('smoke-caddy-id-ignored', 'caddy_id=$(caddy_container_id)\n  caddy_stale=', 'caddy_id=""\n  caddy_stale='),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:

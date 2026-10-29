@@ -192,14 +192,14 @@ describe('computeEventMetrics', () => {
     expect(m.inputUncachedTokens).toBe(900_000)
   })
 
-  it('prices a 27B attempt on the provider basis, from the reported usage.cost', async () => {
-    // The OpenRouter eval's basis: the provider reports the call's own cost in
-    // USD (usage.cost, probe-verified), and the estimator converts it once at
-    // EUR_PER_USD. Duration and tokens do NOT enter it — a per-token public
-    // API has no GPU-hour bill, and an invented per-MTok rate would render as
-    // a confident figure.
+  it('prices a 27B attempt by the metered box wall-clock, ignoring any provider cost', async () => {
+    // The owner's 2026-10-13 metered-infrastructure decision: the large GPU is
+    // metered like the small one, so the 27B attempt pays wall-clock at
+    // LARGE_LLM_EUR_PER_HOUR. vLLM reports no usage.cost on the box; if a
+    // provider figure somehow rode along on the response, the time basis
+    // ignores it — the auditable bill for this client is the GPU-hour.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_EUR_PER_USD } = await import('../../../lib/settings')
+    const { DEFAULT_LARGE_LLM_EUR_PER_HOUR } = await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
@@ -215,20 +215,23 @@ describe('computeEventMetrics', () => {
       },
     ])
     const m = computeEventMetrics(collector as never)!
-    expect(m.basis).toBe('provider')
-    expect(m.costEur).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD, 12)
+    expect(m.basis).toBe('time')
+    expect(m.costEur).toBeCloseTo((6.3 / 3600) * DEFAULT_LARGE_LLM_EUR_PER_HOUR, 12)
     expect(m.noCacheEur).toBeCloseTo(m.costEur!, 12)
     expect(m.rates).toBeUndefined()
-    expect(m.timePricedAttempts).toBeUndefined()
+    expect(m.timeRate).toEqual({
+      eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+      durationMs: 6_300,
+    })
     // The tokens are still counted — they are the size of the call, just not its price.
     expect(m.inputUncachedTokens).toBe(900_000)
   })
 
-  it('a 27B attempt the provider priced nothing for makes the step unknown, never free', async () => {
-    // OpenRouter reported usage.cost on every probe response; when it does
-    // not, the honest reading is unknown — and NOT the box's €/h floor, since
-    // the call never touched the box. A missing cost must also not zero the
-    // step: unknown beats silently wrong.
+  it('a 27B attempt with no measured duration makes the step unknown, never free', async () => {
+    // The 27B box is time-priced now: a time bill with no time is not a free
+    // call. BAML reports no duration when it measured none, and a 0 there
+    // would read as a call that cost nothing on a box that was demonstrably
+    // awake to answer it — unknown beats silently wrong.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
       {
@@ -287,12 +290,13 @@ describe('computeEventMetrics', () => {
     })
   })
 
-  it('sums a mixed step across bases: provider cost plus a token-priced retry', async () => {
-    // The 27B eval's mixed shape: the OpenRouter attempt priced by the
-    // provider, the Anthropic fallback by tokens. Each attempt under its own
-    // client's basis; the sums still add.
+  it('sums a mixed step across bases: metered 27B wall-clock plus a token-priced retry', async () => {
+    // The private tier's mixed shape: the 27B attempt priced by the metered
+    // box's wall-clock, the Anthropic fallback by tokens. Each attempt under
+    // its own client's basis; the sums still add.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
-    const { DEFAULT_EUR_PER_USD } = await import('../../../lib/settings')
+    const { DEFAULT_EUR_PER_USD, DEFAULT_LARGE_LLM_EUR_PER_HOUR } =
+      await import('../../../lib/settings')
     const collector = fakeCollector([
       {
         calls: [
@@ -314,13 +318,18 @@ describe('computeEventMetrics', () => {
     const m = computeEventMetrics(collector as never)!
     const anthropicEur = ((5_000 * 2 + 100 * 10) / 1e6) * DEFAULT_EUR_PER_USD
     expect(m.attempts).toBe(2)
-    expect(m.costEur).toBeCloseTo(0.004 * DEFAULT_EUR_PER_USD + anthropicEur, 9)
-    // An hour of attempt duration on a provider-priced client is NOT a floor:
-    // the provider measured the bill, and no GPU was awake behind it.
-    expect(m.timePricedAttempts).toBeUndefined()
+    expect(m.costEur).toBeCloseTo(DEFAULT_LARGE_LLM_EUR_PER_HOUR + anthropicEur, 9)
+    // An hour of attempt duration on the metered 27B IS a floor — the box was
+    // awake for it — and the marker survives the mixed step rather than riding
+    // on the last attempt's basis.
+    expect(m.timePricedAttempts).toBe(1)
     const { isTimePricedStep } = await import('@hames-ai/harness-patterns/metrics/aggregate')
-    expect(isTimePricedStep(m as never)).toBe(false)
+    expect(isTimePricedStep(m as never)).toBe(true)
     expect(m.basis).toBe('tokens')
+    expect(m.timeRate).toEqual({
+      eurPerHour: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+      durationMs: 3_600_000,
+    })
   })
 
   it('counts a time-priced attempt that reported NO token usage, and bills it', async () => {
@@ -442,11 +451,12 @@ describe('computeEventMetrics', () => {
   it('omits the whole step cost when a provider-priced attempt reported no cost', async () => {
     // A provider bill with no reported cost is unknown, never free — and the
     // step's other attempts cannot stand in for it: the honest reading is
-    // unknown. (On the GPU box this was the unmeasured-time case; on
-    // OpenRouter it is the missing usage.cost case — same reading.)
+    // unknown. On the OpenRouter-route twins this is the missing usage.cost
+    // case; the box twins are time-priced and their unmeasured case is the
+    // no-duration test above.
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const collector = fakeCollector([
-      { calls: [apiCall(LARGE_LLM_CLIENT_NAME, { input_tokens: 5_000, output_tokens: 100 })] },
+      { calls: [apiCall('LargeQwenOR', { input_tokens: 5_000, output_tokens: 100 })] },
     ])
     const m = computeEventMetrics(collector as never)!
     expect(m.attempts).toBe(1)

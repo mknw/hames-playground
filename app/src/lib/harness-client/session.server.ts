@@ -23,6 +23,7 @@ import { enrichNeo4jResult } from './neo4j-enricher.server'
 import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
 import { createDecisionDocuments, privateDecisionRun } from './decision-documents.server'
 import { classifyIngress } from './ingress-classifier.server'
+import { documentHosts } from './document-hosts.server'
 import { withSandbox, type WithSandboxConfig } from '@hames-ai/sandbox'
 import { clientOverrideFor, type BamlRole } from '@hames-ai/harness-baml/clients.server'
 import { canonicalAgentId, getAgent } from './registry.server'
@@ -101,6 +102,7 @@ export function agentDeps(): AgentDeps {
           ? { pseudonymiseForWeb: createWebPseudonymiser({ directory: 'required' }) }
           : {}),
         classifyIngress,
+        documentHosts: documentHosts(),
       }
     })(),
     egressRoster: createEgressRoster({ directory: 'required' }),

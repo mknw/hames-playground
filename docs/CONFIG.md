@@ -56,6 +56,7 @@ The three secrets rotate at wildly different costs, which is why
 | `VITE_DEV_BYPASS_AUTH`                                      | DEV-only auth bypass. Requires both the dev build constant and this env var; a production build replaces the constant with `false`, so it cannot be switched on from a prod bundle. A prod build still carrying the var warns at module load.                                                                  | off                   | dev only                          | Ignored in production builds. All bypassed callers share one identity and one conversation namespace — a documented footgun, not a defect. |
 | `GRAPH_TIMEZONE`                                            | IANA timezone Graph renders calendar times in.                                                                                                                                                                                                                                                                 | the server's own zone | Microsoft 365 tools               | Falls back.                                                                                                                                |
 | `HOME_EMAIL_DOMAINS`                                        | This deployment's own email domains, comma-separated. A Microsoft 365 result from one of these domains reads as "internal".                                                                                                                                                                                    | none                  | Microsoft 365 tools               | Falls back (no internal classification).                                                                                                   |
+| `GRAPH_DOCUMENT_HOSTS`                                      | This deployment's own SharePoint/OneDrive hosts, comma-separated exact hostnames. A Graph result's own `webUrl` on one of them is exempt from the `exfil-data-url` rule, and from no other rule; an entry must be a bare hostname, never a wildcard or pattern.                                                | none                  | Microsoft Graph tools             | Falls back (no link is exempt).                                                                                                            |
 
 ## 3. Inference tiers and client routing
 
@@ -150,22 +151,20 @@ selected — never by the tier the run intended.
 | Variable                 | What it does                                                                                                                              | Default               | Applies to                      | Unset / wrong                                                                                  |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `EUR_PER_USD`            | Static USD→EUR multiplier (`0.86`), set by hand. Deliberately NOT a live FX lookup: two page loads of one conversation must not disagree. | `DEFAULT_EUR_PER_USD` | every USD figure                | A non-positive or garbage value warns and falls back to the default — never renders as "free". |
-| `LARGE_LLM_EUR_PER_HOUR` | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `1.819`               | the GPU box's calls             | Non-positive warns and falls back. Moves WITH the host (Modal's rate differs).                 |
+| `LARGE_LLM_EUR_PER_HOUR` | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `1.819`               | `LargeQwen`, `LargeQwenThink`   | Non-positive warns and falls back. Moves WITH the host (Modal's rate differs).                 |
 | `SMALL_LLM_EUR_PER_HOUR` | EUR/hour the small metered box is awake.                                                                                                  | `1.54`                | `SmallQwen`, `PrivateSystemOne` | Same rule.                                                                                     |
 
 The bases (pinned disjoint by `pricing-eur.test.ts`):
 
 - **Token** (Anthropic chains): vendor list price in USD from `CLIENT_PRICING`
   (`app/src/lib/settings.ts`), converted once at `EUR_PER_USD`.
-- **Provider** (`PROVIDER_COST_CLIENTS`: `JevDecide`, and all four 27B leaves —
-  `LargeQwen`, `LargeQwenThink`, `LargeQwenOR`, `LargeQwenThinkOR`): the
-  provider-reported `usage.cost` (USD), converted once. A response with no
-  cost is UNKNOWN, never free. On the GPU box, where vLLM reports no
-  `usage.cost`, a 27B step therefore prices as unknown rather than carrying a
-  time-floor from the wrong model.
-- **Time** (`TIME_PRICED_CLIENTS`: `SmallQwen`, `PrivateSystemOne`): measured
-  call duration × the box's hourly rate; tokens free. A time bill with no
-  duration reads as unknown, not free.
+- **Provider** (`PROVIDER_COST_CLIENTS`: `JevDecide`, plus the OpenRouter-route
+  twins `LargeQwenOR` / `LargeQwenThinkOR`): the provider-reported `usage.cost`
+  (USD), converted once. A response with no cost is UNKNOWN, never free.
+- **Time** (`TIME_PRICED_CLIENTS`): `LargeQwen` / `LargeQwenThink` at
+  `LARGE_LLM_EUR_PER_HOUR`, and `SmallQwen` / `PrivateSystemOne` at
+  `SMALL_LLM_EUR_PER_HOUR` — measured call duration × the box's hourly rate;
+  tokens free. A time bill with no duration reads as unknown, not free.
 - **Local** (`LOCAL_PRICED_CLIENTS`: `LocalGLM`): exact €0.00 — no marginal bill.
 
 Rendered figures for time-priced steps are FLOORS, labelled `≥` ("compute

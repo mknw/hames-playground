@@ -297,20 +297,19 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalGLM'])
 
 /**
  * The fourth basis: clients whose price is what the PROVIDER reported on the
- * response — Jev's `usage.cost`, which is USD (#418 T4) — and, since the
- * OpenRouter eval, the two 27B leaves.
+ * response — Jev's `usage.cost`, which is USD (#418 T4).
  *
- * `LargeQwen` / `LargeQwenThink` moved here when the 27B eval pointed
- * `LARGE_LLM_BASE_URL` at OpenRouter (`qwen/qwen3.8-27b`): a per-token public
- * API has no GPU-hour bill, so the time basis (measured wall-clock × the box
- * rate) was pricing calls the box never served. The provider's own `usage.cost`
- * — present on every OpenRouter response, probe-verified — is the auditable
- * figure, converted once at `EUR_PER_USD` like every USD number. THE
- * CONSEQUENCE, on the record: on the GPU box, where vLLM reports no
- * `usage.cost`, a 27B step now prices as UNKNOWN rather than carrying the
- * time-floor `≥` — unknown beats a confident figure from the wrong model.
- * SmallQwen / PrivateSystemOne keep the time basis: their endpoint is the
- * metered small GPU, and that bill is wall-clock.
+ * JevDecide reports `usage.cost` on every response (probe-verified), so the
+ * provider's own figure — converted once at `EUR_PER_USD` like every USD
+ * number — is the auditable one. The same holds for the OpenRouter-route
+ * twins: when the eval points the large endpoint at a per-token public API,
+ * there is no GPU-hour bill behind those calls, and wall-clock would price
+ * calls the box never served — which is exactly why the box twins themselves
+ * (`LargeQwen` / `LargeQwenThink`) are NOT here: their endpoint is the metered
+ * large GPU, so their bill is wall-clock and they live in
+ * {@link TIME_PRICED_CLIENTS} (the owner's 2026-10-13 metered-infrastructure
+ * decision). If the large endpoint is ever re-pointed at a per-token public
+ * API again, the box twins move here and the time basis leaves them.
  *
  * Output tokens are free on the provider basis and the docs state no per-input
  * list price, so an invented per-MTok rate would render as a confident figure;
@@ -320,11 +319,8 @@ export const LOCAL_PRICED_CLIENTS: ReadonlySet<string> = new Set(['LocalGLM'])
  */
 export const PROVIDER_COST_CLIENTS: ReadonlySet<string> = new Set([
   'JevDecide',
-  'LargeQwen',
-  'LargeQwenThink',
-  // The OpenRouter-route twins: same basis as their box counterparts — a
-  // per-token public API reports usage.cost and has no GPU-hour bill. The
-  // route changes the WIRE shape, never the pricing basis.
+  // The OpenRouter-route twins: a per-token public API reports usage.cost and
+  // has no GPU-hour bill — wall-clock would price calls the box never served.
   'LargeQwenOR',
   'LargeQwenThinkOR',
 ])
@@ -376,15 +372,17 @@ export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
  * vocabulary; server-side overrides are read per call in cost-rates.server.ts.
  * Keys are written as literals because this file is client-safe.
  *
- * The 27B leaves are NOT here any more — see {@link PROVIDER_COST_CLIENTS}:
- * with the large endpoint on OpenRouter during the eval, a wall-clock bill is
- * the wrong model for their calls, and the provider's own `usage.cost` is the
- * auditable figure. `DEFAULT_LARGE_LLM_EUR_PER_HOUR` stays: it is the box's
- * rate, and the eval's INFRASTRUCTURE accounting (scenario wall-clock on the
- * boxes) still uses it — for the large box only while that box is actually
- * being served (the runner drops its lines when the large endpoint is
- * OpenRouter). */
+ * `LargeQwen` / `LargeQwenThink` are here under the owner's 2026-10-13
+ * metered-infrastructure decision: their endpoint is the metered large GPU, so
+ * their bill is wall-clock at `LARGE_LLM_EUR_PER_HOUR` — the same basis the
+ * metered small box's clients ride at `SMALL_LLM_EUR_PER_HOUR`. The
+ * OpenRouter-route twins stay in {@link PROVIDER_COST_CLIENTS}: when the eval
+ * re-points the large endpoint at a per-token public API, no GPU is awake
+ * behind those calls and the provider's reported `usage.cost` is the
+ * auditable figure instead. */
 export const TIME_PRICED_CLIENTS: Readonly<Record<string, number>> = {
+  LargeQwen: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+  LargeQwenThink: DEFAULT_LARGE_LLM_EUR_PER_HOUR,
   SmallQwen: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
   PrivateSystemOne: DEFAULT_SMALL_LLM_EUR_PER_HOUR,
 }

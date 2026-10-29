@@ -2560,6 +2560,21 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
   })
 })
 
+// #784 item 6. MUTATION: drop `sourceLinks` from the office guard, or hand it
+// a literal host list: red. The orchestrator and info guards declare none, so
+// a Graph link reaching them is scanned as before.
+describe("general-next: the office guard exempts the tenant's own document links", () => {
+  it('the guard declaring graph carries the host-configured hosts; no other guard has any', async () => {
+    const hosts = ['contoso.sharepoint.com', 'contoso-my.sharepoint.com']
+    await agent.createPatterns('s', { ...deps, guards: { ...deps.guards, documentHosts: hosts } })
+    const configs = composition.guardConfigs as { namespaces?: string[]; sourceLinks?: unknown }[]
+    const withLinks = configs.filter((c) => c.sourceLinks !== undefined)
+    expect(withLinks).toHaveLength(1)
+    expect(withLinks[0].namespaces).toEqual(['graph'])
+    expect(withLinks[0].sourceLinks).toEqual({ namespace: 'graph', field: 'webUrl', hosts })
+  })
+})
+
 describe('general-next: the GUARD_* operator switches (boundary guards slice 6)', () => {
   const searchOnce = () =>
     mocks.controller.mockResolvedValueOnce({

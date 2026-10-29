@@ -83,12 +83,12 @@ const ONE_MTOK_EACH = {
 
 describe('the time-priced client mapping', () => {
   it('contains exactly the metered clients and their default rates', async () => {
-    // The 27B leaves are NOT here any more: with the large endpoint on
-    // OpenRouter during the eval, a wall-clock bill is the wrong model for
-    // their calls — they price off the provider's own usage.cost (the
-    // provider-cost set below). This box's rate stays for the INFRASTRUCTURE
-    // accounting the eval charges separately.
+    // Both boxes' clients are here under the owner's 2026-10-13
+    // metered-infrastructure decision: the 27B leaves at the large GPU's rate,
+    // the 4B summarizer and the private systemone client at the small GPU's.
     expect(TIME_PRICED_CLIENTS).toEqual({
+      LargeQwen: 1.819,
+      LargeQwenThink: 1.819,
       SmallQwen: 1.54,
       PrivateSystemOne: 1.54,
     })
@@ -101,18 +101,16 @@ describe('the time-priced client mapping', () => {
       expect(PROVIDER_COST_CLIENTS.has(name), name).toBe(false)
     }
     expect(LOCAL_PRICED_CLIENTS.has('LocalGLM')).toBe(true)
-    // The 27B leaves left this table for the provider basis, and took the
-    // thinking twin with them — same model, same endpoint, same bill.
-    for (const name of ['LargeQwen', 'LargeQwenThink']) {
-      expect(Object.hasOwn(TIME_PRICED_CLIENTS, name), name).toBe(false)
-      expect(PROVIDER_COST_CLIENTS.has(name), name).toBe(true)
-    }
+    // The 27B leaves are back in this table (2026-10-13): their endpoint is
+    // the metered large GPU, so the wall-clock loop above covers them too.
+    expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwen')).toBe(true)
+    expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwenThink')).toBe(true)
   })
 })
 
 describe('provider pricing → EUR', () => {
-  it('prices the 27B leaves from the provider-reported cost, unknown when none was reported', () => {
-    for (const name of ['LargeQwen', 'LargeQwenThink', 'JevDecide']) {
+  it('prices the provider-reported clients from the reported cost, unknown when none was reported', () => {
+    for (const name of ['JevDecide', 'LargeQwenOR', 'LargeQwenThinkOR']) {
       const est = estimateLlmCostEur(ONE_MTOK_EACH, name, { providerCostUsd: 0.02 })!
       expect(est.basis, name).toBe('provider')
       expect(est.costEur, name).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD, 12)
@@ -130,7 +128,7 @@ describe('provider pricing → EUR', () => {
     // the honest reading is unknown. In particular NOT the box's €/h floor:
     // the call never touched the box, and a floor would understate a real
     // spend as a fraction of a cent.
-    for (const name of ['LargeQwen', 'LargeQwenThink']) {
+    for (const name of ['JevDecide', 'LargeQwenOR', 'LargeQwenThinkOR']) {
       expect(estimateLlmCostEur(ONE_MTOK_EACH, name), name).toBeUndefined()
       expect(
         estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 6_300, eurPerHour: 1.819 }),
@@ -145,11 +143,11 @@ describe('provider pricing → EUR', () => {
   })
 
   it('scales with EUR_PER_USD like every USD figure', () => {
-    const at1 = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+    const at1 = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwenOR', {
       providerCostUsd: 0.01,
       eurPerUsd: 1,
     })!
-    const atHalf = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+    const atHalf = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwenOR', {
       providerCostUsd: 0.01,
       eurPerUsd: 0.5,
     })!
@@ -158,7 +156,7 @@ describe('provider pricing → EUR', () => {
 
   it('a zero reported cost is a zero bill, not unknown', () => {
     // `0` is a measurement the provider made; only an ABSENT one is unknown.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', { providerCostUsd: 0 })!
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwenOR', { providerCostUsd: 0 })!
     expect(est).toMatchObject({ basis: 'provider', costEur: 0, noCacheEur: 0 })
   })
 })
@@ -207,28 +205,33 @@ describe('token pricing → EUR', () => {
 })
 
 describe('time pricing → EUR', () => {
-  it.each(['SmallQwen', 'PrivateSystemOne'])(
-    'prices %s at €1.54/h and accepts an explicit rate',
+  it.each([
+    ['LargeQwen', 1.819],
+    ['LargeQwenThink', 1.819],
+    ['SmallQwen', 1.54],
+    ['PrivateSystemOne', 1.54],
+  ] as const)('prices %s at €%s/h and accepts an explicit rate', (client, rate) => {
+    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs: 2_000 })!
+    expect(est.basis).toBe('time')
+    expect(est.costEur).toBeCloseTo((rate * 2) / 3600, 12)
+    expect(est.timeRate).toEqual({ eurPerHour: rate, durationMs: 2_000 })
+    expect(est.noCacheEur).toBe(est.costEur)
+    expect(
+      estimateLlmCostEur(NO_TOKENS, client, {
+        durationMs: 2_000,
+        eurPerHour: 3,
+      })!.costEur,
+    ).toBeCloseTo((3 * 2) / 3600, 12)
+  })
+
+  it.each(['LargeQwen', 'LargeQwenThink', 'SmallQwen', 'PrivateSystemOne'])(
+    'leaves unmeasured %s cost unknown',
     (client) => {
-      expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
-      const est = estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs: 2_000 })!
-      expect(est.basis).toBe('time')
-      expect(est.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
-      expect(est.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
-      expect(est.noCacheEur).toBe(est.costEur)
-      expect(
-        estimateLlmCostEur(NO_TOKENS, client, {
-          durationMs: 2_000,
-          eurPerHour: 3,
-        })!.costEur,
-      ).toBeCloseTo((3 * 2) / 3600, 12)
+      for (const durationMs of [undefined, Number.NaN, -1])
+        expect(estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs })).toBeUndefined()
     },
   )
-
-  it.each(['SmallQwen', 'PrivateSystemOne'])('leaves unmeasured %s cost unknown', (client) => {
-    for (const durationMs of [undefined, Number.NaN, -1])
-      expect(estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs })).toBeUndefined()
-  })
 
   it('is €/h × wall-clock, and tokens do not enter it', () => {
     const oneHour = estimateLlmCostEur(NO_TOKENS, 'SmallQwen', {
@@ -253,15 +256,17 @@ describe('time pricing → EUR', () => {
     expect(est.timeRate).toEqual({ eurPerHour: DEFAULT_SMALL_LLM_EUR_PER_HOUR, durationMs: 4_100 })
   })
 
-  it('the 27B box rate stays exported for the INFRASTRUCTURE accounting, not for calls', () => {
-    // DEFAULT_LARGE_LLM_EUR_PER_HOUR no longer prices any CALL: the 27B leaves
-    // are provider-priced. It survives as the box's rate for the eval's
-    // infrastructure accounting (scenario wall-clock on the boxes) and the
-    // operator override that feeds it.
+  it('the 27B box rate prices the 27B calls again (2026-10-13 metered infrastructure)', () => {
+    // DEFAULT_LARGE_LLM_EUR_PER_HOUR prices the large GPU's calls' wall-clock
+    // once more: the owner's 2026-10-13 decision puts the box's clients back on
+    // the time basis. It never stopped feeding the eval's INFRASTRUCTURE
+    // accounting (scenario wall-clock on the boxes).
     expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
-    // No call on any client prices off it any more: the time set holds only
-    // the small box's clients, at the small rate.
-    for (const name of Object.keys(TIME_PRICED_CLIENTS))
+    // The 27B leaves are the entries on this rate; the small box's clients ride
+    // the small rate.
+    expect(TIME_PRICED_CLIENTS.LargeQwen).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    expect(TIME_PRICED_CLIENTS.LargeQwenThink).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
+    for (const name of ['SmallQwen', 'PrivateSystemOne'])
       expect(TIME_PRICED_CLIENTS[name]).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
   })
 
@@ -315,10 +320,10 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('a provider-priced client never gets wall-clock or token pricing', () => {
-    // The 27B eval's attribution rule with teeth: the provider reported the
-    // cost, so neither the box's €/h nor an invented per-MTok rate may price
-    // the call, however long it ran or however many tokens it moved.
-    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+    // The attribution rule with teeth: the provider reported the cost, so
+    // neither a €/h rate nor an invented per-MTok rate may price the call,
+    // however long it ran or however many tokens it moved.
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwenOR', {
       durationMs: 600_000,
       eurPerHour: 1_000_000,
       providerCostUsd: 0.01,
@@ -327,6 +332,19 @@ describe('attribution: the SELECTED client decides the model', () => {
     expect(est.timeRate).toBeUndefined()
     expect(est.rates).toBeUndefined()
     expect(est.costEur).toBeCloseTo(0.01 * DEFAULT_EUR_PER_USD, 12)
+  })
+
+  it('a time-priced 27B client never gets provider pricing, even if a cost rode along', () => {
+    // The 2026-10-13 decision's attribution rule: the metered box's bill is
+    // wall-clock, so a provider-reported figure on the response changes
+    // nothing about what the call costs.
+    const est = estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
+      durationMs: 6_000,
+      providerCostUsd: 0.01,
+    })!
+    expect(est.basis).toBe('time')
+    expect(est.timeRate).toEqual({ eurPerHour: 1.819, durationMs: 6_000 })
+    expect(est.costEur).toBeCloseTo((1.819 * 6) / 3600, 12)
   })
 
   it('a locally-served client is €0.00 on the local basis, never unknown', () => {
@@ -367,13 +385,8 @@ describe('attribution: the SELECTED client decides the model', () => {
     expect(estimateLlmCostEur(ONE_MTOK_EACH, 'PrivateSystemOne', { durationMs: 4000 })?.basis).toBe(
       'time',
     )
-    // The 27B leaves answer on the provider basis, not the box's wall-clock.
-    expect(
-      estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', {
-        durationMs: 4000,
-        providerCostUsd: 0.01,
-      })?.basis,
-    ).toBe('provider')
+    // The 27B leaves answer on the metered box's wall-clock (2026-10-13).
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'LargeQwen', { durationMs: 4000 })?.basis).toBe('time')
   })
 
   it('the local set and the two priced tables are disjoint', () => {
@@ -386,16 +399,14 @@ describe('attribution: the SELECTED client decides the model', () => {
   })
 
   it('the provider-cost set is the fourth basis and is disjoint from the other three (#418 T4)', () => {
-    // JevDecide was the first; the 27B leaves joined when the eval pointed
-    // LARGE_LLM_BASE_URL at OpenRouter and the box's wall-clock stopped being
-    // the right bill for their calls; the OpenRouter-route twins joined with
-    // the reasoning-config slice — same basis, the route changes the wire
-    // shape, never the pricing.
+    // JevDecide was the first; the OpenRouter-route twins joined with the
+    // reasoning-config slice — a per-token public API has no GPU-hour bill, so
+    // those calls price off the reported cost. The box twins LEFT with the
+    // 2026-10-13 metered-infrastructure decision: their endpoint is the metered
+    // large GPU, so their bill is wall-clock again (TIME_PRICED_CLIENTS).
     expect([...PROVIDER_COST_CLIENTS].sort()).toEqual([
       'JevDecide',
-      'LargeQwen',
       'LargeQwenOR',
-      'LargeQwenThink',
       'LargeQwenThinkOR',
     ])
     for (const name of PROVIDER_COST_CLIENTS) {
@@ -447,29 +458,35 @@ describe('persisted client names keep their pricing basis', () => {
   })
 
   it.each([
-    ['VerdaQwen', 'LargeQwen', 'provider'],
-    ['VerdaQwenThink', 'LargeQwenThink', 'provider'],
+    ['VerdaQwen', 'LargeQwen', 'time'],
+    ['VerdaQwenThink', 'LargeQwenThink', 'time'],
     ['LocalQwenSmall', 'SmallQwen', 'time'],
   ] as const)('a stored %s step prices exactly as %s does', (stored, current, basis) => {
-    // Under the provider basis (the 27B leaves since the OpenRouter eval), a
-    // stored 27B name prices from the provider-reported cost — the SAME
-    // statement the old test made on the time basis. The alias must not
-    // change what a stored step costs to read, only the name that gets there.
-    const opts =
-      basis === 'provider' ? { providerCostUsd: 0.01, durationMs: 4_000 } : { durationMs: 4_000 }
+    // On the time basis (the 27B leaves since the 2026-10-13 decision), a
+    // stored 27B name prices wall-clock — the SAME statement the pre-eval test
+    // made. The alias must not change what a stored step costs to read, only
+    // the name that gets there.
+    const opts = { durationMs: 4_000 }
     expect(estimateLlmCostEur(ONE_MTOK_EACH, stored, opts)).toEqual(
       estimateLlmCostEur(ONE_MTOK_EACH, current, opts),
     )
     expect(estimateLlmCostEur(ONE_MTOK_EACH, stored, opts)!.basis).toBe(basis)
   })
 
-  it('a stored 27B step without a reported provider cost reads unknown — the recorded consequence', () => {
-    // The 27B leaves left the time basis when the large endpoint moved to
-    // OpenRouter: a pre-switch VerdaQwen step was STAMPED time-priced at write
-    // time and renders its stored figure, but a fresh estimate of such a call
-    // without a provider cost is unknown, never the box's wall-clock floor.
+  it('a stored 27B step prices wall-clock again; without a duration it reads unknown', () => {
+    // The 27B leaves came back to the time basis with the 2026-10-13
+    // metered-infrastructure decision: a fresh estimate of a stored 27B step
+    // prices wall-clock. Without a measured duration it reads unknown — a time
+    // bill with no time is not a free call — never a confident figure from the
+    // wrong model.
     expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwen')).toBeUndefined()
     expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwenThink')).toBeUndefined()
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwen', { durationMs: 4_000 })!.basis).toBe(
+      'time',
+    )
+    expect(estimateLlmCostEur(ONE_MTOK_EACH, 'VerdaQwenThink', { durationMs: 4_000 })!.basis).toBe(
+      'time',
+    )
   })
 
   it('the local basis is LocalGLM alone and is untouched by the alias', () => {

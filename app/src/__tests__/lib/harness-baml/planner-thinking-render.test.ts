@@ -101,11 +101,13 @@ describe('dormant Planner thinking twin', () => {
     expect(source).toContain('PROVISIONAL / UNMEASURED')
     expect(CLIENT_MAX_OUTPUT_TOKENS.LargeQwenThink).toBe(cap)
     expect(MODEL_CONTEXT_WINDOWS.LargeQwenThink).toBe(MODEL_CONTEXT_WINDOWS.LargeQwen)
-    // The thinking twin follows its twin's PRICING basis: all four 27B leaves
-    // are provider-priced (see PROVIDER_COST_CLIENTS).
-    expect(PROVIDER_COST_CLIENTS.has('LargeQwenThink')).toBe(true)
+    // The thinking twin follows its twin's PRICING basis: the box twins are
+    // time-priced (2026-10-13 metered-infrastructure decision, TIME_PRICED_
+    // CLIENTS) and the OpenRouter-route twins are provider-priced (see
+    // PROVIDER_COST_CLIENTS).
+    expect(PROVIDER_COST_CLIENTS.has('LargeQwenThink')).toBe(false)
     expect(PROVIDER_COST_CLIENTS.has('LargeQwenThinkOR')).toBe(true)
-    expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwenThink')).toBe(false)
+    expect(Object.hasOwn(TIME_PRICED_CLIENTS, 'LargeQwenThink')).toBe(true)
     expect(PRIVATE_TIER_CLIENTS.has('LargeQwenThink')).toBe(true)
     expect(PRIVATE_TIER_CLIENTS.has('LargeQwenOR')).toBe(true)
     expect(PRIVATE_TIER_CLIENTS.has('LargeQwenThinkOR')).toBe(true)

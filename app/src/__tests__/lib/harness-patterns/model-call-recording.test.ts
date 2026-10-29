@@ -161,20 +161,21 @@ describe('screen call record', () => {
     expect(m.rates).toBeUndefined()
   })
 
-  it('on a 27B client is priced from the provider-reported usage.cost, never wall-clock', async () => {
-    // The OpenRouter eval's basis: the provider's own bill for the call. The
-    // same hour of measured duration prices as the reported figure — neither
-    // the box's €/h nor an Anthropic token table.
+  it('on a 27B client is priced on the metered box wall-clock, never from a provider figure', async () => {
+    // The 2026-10-13 metered-infrastructure decision: the large GPU's bill is
+    // wall-clock at LARGE_LLM_EUR_PER_HOUR, so an hour of measured duration
+    // prices as the box rate itself — a provider-reported cost riding the
+    // response changes nothing, and neither does an Anthropic token table.
     readings = collectorOn('LargeQwen', { durationMs: HOUR_MS, rawUsage: { cost: 0.05 } })
     const { createInjectionScreen } = await ops()
     await createInjectionScreen()({ tool: 't', namespace: 'web', content: 'c', onCall: sink })
 
     const m = records[0].metrics!
-    expect(m.basis).toBe('provider')
-    expect(m.timePricedAttempts).toBeUndefined()
+    expect(m.basis).toBe('time')
+    expect(m.timePricedAttempts).toBe(1)
+    expect(m.timeRate?.durationMs).toBe(HOUR_MS)
+    expect(m.costEur).toBeCloseTo(m.timeRate!.eurPerHour, 6)
     expect(m.rates).toBeUndefined()
-    expect(m.costEur).toBeGreaterThan(0)
-    expect(m.costEur!).toBeLessThan(0.05) // EUR, at a rate below 1 USD→EUR
   })
 
   it('on an Anthropic client is priced on tokens', async () => {

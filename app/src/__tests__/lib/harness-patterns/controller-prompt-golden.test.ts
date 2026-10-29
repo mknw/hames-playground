@@ -14,6 +14,12 @@
  * #507 cause A deletes only the Return sentence from the shared tool_args
  * description in all 28 loop/actor bodies, then restores that exact sentence
  * in the 12 loop volatile tails; the eight Planner bodies stay intact.
+ * #784 item 7 inserts one paragraph (an exact repeat of the previous call is
+ * not run again) after the is_final paragraph of the 16 ActorController bodies.
+ * Fix round 1 on the same paragraph (#784 item 7, review) rewrites the
+ * affordance sentence in those 16 bodies: the skip holds only while the critic
+ * has not yet given feedback on the held result, and a rejected result runs
+ * again — no other byte changes.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'

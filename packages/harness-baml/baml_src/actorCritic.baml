@@ -253,7 +253,9 @@ template_string ActorControllerBody(
     If the result of your previous attempt already completes the task, repeat
     that attempt's call exactly (same tool_name and tool_args) with
     is_final=true. An exact repeat of a single successful call is not run
-    again: the critic judges the result you already have.
+    again if the critic has not yet given feedback on it: the critic judges
+    the result you already have. If the critic has rejected it, the same call
+    runs again.
     {{ ActorMultiCalls(multi_call_mode, with_reasoning) }}
     {{ ActorFewShots(few_shots, with_reasoning) }}
 

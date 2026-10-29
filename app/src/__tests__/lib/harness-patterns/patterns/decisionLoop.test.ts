@@ -2695,8 +2695,13 @@ describe('decisionLoop — default extractors over real patterns', () => {
 
   // #784 item 7: the accepted attempt repeated the previous call exactly with
   // is_final, so it was not dispatched and has no tool_result of its own. The
-  // record is the repeated call's result — not "no attempt was accepted". At 3
-  // the critic also rejected a first repeat, so two attempts in a row ran nothing.
+  // record is the repeated call's result — not "no attempt was accepted".
+  // Fix round 1: attempt 1 is non-final at criticCadence 3 — an is_final
+  // attempt 1 would be judged, and its rejected result would clear the repeat
+  // memory, so the repeat would run. The skip now holds only while the critic
+  // has not yet given feedback on the held result: at 3 the critic rejected the
+  // FIRST repeat, so attempt 3 runs again (2 tool calls) instead of both
+  // repeats being skipped.
   it.each([2, 3])(
     'actorCritic: a repeat accepted at attempt %i carries the repeated call`s result',
     async (acceptAt) => {
@@ -2706,7 +2711,7 @@ describe('decisionLoop — default extractors over real patterns', () => {
           reasoning: `reasoning-${++attempt}`,
           tool_name: 'search',
           tool_args: '{}',
-          is_final: true,
+          is_final: attempt >= 2,
         } as ControllerAction,
       }))
       const critic = vi.fn(async () => ({
@@ -2715,6 +2720,7 @@ describe('decisionLoop — default extractors over real patterns', () => {
       const doc = actorCritic<Data>(actor as never, critic as never, ['search'], {
         patternId: 'doc',
         maxRetries: 3,
+        criticCadence: 3,
       })
       const { decide, states } = scriptedDecide(['doc', 'answer'])
       const ctx = await run([build({ doc: route(doc) }, decide)])
@@ -2725,8 +2731,10 @@ describe('decisionLoop — default extractors over real patterns', () => {
         eventsOf(ctx, 'orchestrator', 'controller_action')[0].data as { action: ControllerAction }
       ).action
       expect(action.reasoning).toBe(`reasoning-${acceptAt}\nCritic: verdict-${acceptAt}`)
+      // The repeat itself dispatches nothing, so the call count is the number
+      // of attempts that RAN: acceptAt - 1.
       expect(states[1]).toContain(
-        `1. doc — succeeded (actorCritic: ${acceptAt} of 3 attempts, 1 tool call`,
+        `1. doc — succeeded (actorCritic: ${acceptAt} of 3 attempts, ${acceptAt - 1} tool call`,
       )
     },
   )

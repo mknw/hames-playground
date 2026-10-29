@@ -153,7 +153,9 @@ export function actorCritic<T extends ActorCriticData>(
     // The last singular call that ran and succeeded, with the attempt that
     // recorded it. An `is_final` action repeating it exactly while that attempt
     // is still the newest is not run again (#784 item 7): see the repeat check
-    // below the args parse.
+    // below the args parse. The skip holds only while the critic has NOT yet
+    // judged that result — `runCadenceAndCritic` clears this on a rejection, so
+    // a rejected result is always re-dispatched (#784 item 7 fix round 1).
     let lastRun:
       { tool: string; args: string; data: unknown; attempt: ScriptExecutionEvent } | undefined
 
@@ -280,6 +282,16 @@ export function actorCritic<T extends ActorCriticData>(
       if (judged && evaluation.feedback) {
         judged.feedback = evaluation.feedback
       }
+
+      // The result the critic just judged can no longer stand in for a fresh
+      // dispatch: clear the repeat memory so the next `is_final` repeat of it
+      // RUNS (#784 item 7 fix round 1). At cadence 1 this makes the repeat skip
+      // unreachable, which is right — there the critic has judged every
+      // successful attempt, so the only repeat it could skip is one it has
+      // already rejected, and judging the identical output twice is the defect
+      // this clears. Two skipped repeats in a row are now impossible too: a
+      // skipped repeat is always `is_final`, so it is always critiqued.
+      lastRun = undefined
 
       // Update for next attempt
       scope.data = {
@@ -708,7 +720,10 @@ export function actorCritic<T extends ActorCriticData>(
         // what the critic judges. Scoped to the NEWEST attempt and to
         // `is_final` because the sandbox tools are stateful: after any other
         // call, or on a non-final turn (a poll), a repeat may legitimately
-        // return something new, so it runs.
+        // return something new, so it runs. It also holds only while the
+        // critic has not yet judged that result — a rejection clears `lastRun`
+        // (in `runCadenceAndCritic`), so the repeat runs and the critic is not
+        // asked to judge the identical output twice.
         const argsKey = JSON.stringify(args)
         if (
           action.is_final === true &&

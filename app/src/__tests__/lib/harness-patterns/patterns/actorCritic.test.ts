@@ -585,12 +585,13 @@ describe('actorCritic criticCadence', () => {
     mockActor: ActorFn,
     mockCritic: CriticFnWithLLMData,
     config: Record<string, unknown>,
+    tools: string[] = ['code-mode'],
   ) {
     const { actorCritic } = await import('@hames-ai/harness-patterns/patterns/actorCritic.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')
     const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
 
-    const pattern = actorCritic(mockActor, mockCritic, ['code-mode'], {
+    const pattern = actorCritic(mockActor, mockCritic, tools, {
       patternId: 'cadence',
       ...config,
     })
@@ -734,7 +735,9 @@ describe('actorCritic criticCadence', () => {
   // itself done by re-running the call it had just made, with identical args
   // and an identical result. That repeat is no longer dispatched. The other
   // cases characterise its scope: the sandbox tools are stateful, so anything
-  // but a final-marking repeat of the newest, successful call still runs.
+  // but a final-marking repeat of the newest, successful call still runs — and
+  // so does a repeat whose result the critic has already judged: the skip holds
+  // only while the critic has not yet given feedback on that result (fix round 1).
   describe('a final-marking repeat of the previous call (#784 item 7)', () => {
     const step = (args: string, is_final = false) => ({
       action: mockAction({ tool_name: 'code-mode', tool_args: args, is_final }),
@@ -765,6 +768,38 @@ describe('actorCritic criticCadence', () => {
       expect(judged[1].output).toBe(JSON.stringify({ files: ['a.docx'] }))
       expect(judged[1].error).toBeNull()
       expect(result.data.result).toEqual({ files: ['a.docx'] })
+    })
+
+    // Fix round 1: the skip must not fire after the critic has judged — and
+    // rejected — that result. Cadence 1 is the shape where it bit hardest: the
+    // critic judges every successful attempt, so the only repeat it could skip
+    // is one it has already rejected, and the loop burned attempts judging the
+    // identical output on stale state. Passes on main; MUTATION: delete the
+    // `lastRun = undefined` on the rejection branch of `runCadenceAndCritic`
+    // and this goes red (1 callTool call, the stale `{ status: 'running' }`).
+    it('runs a repeat the critic has already rejected (a poll that came back running)', async () => {
+      callToolMock
+        .mockResolvedValueOnce({ success: true, data: { status: 'running' } })
+        .mockResolvedValueOnce({ success: true, data: { status: 'done' } })
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"script":"poll"}'))
+        .mockResolvedValueOnce(step('{"script":"poll"}', true))
+      const mockCritic = vi
+        .fn()
+        .mockResolvedValueOnce({
+          result: mockCriticResult({ is_sufficient: false, explanation: 'poll again' }),
+          llmCall: undefined,
+        })
+        .mockResolvedValueOnce({
+          result: mockCriticResult({ is_sufficient: true }),
+          llmCall: undefined,
+        })
+
+      const result = await run(mockActor, mockCritic, { maxRetries: 6, criticCadence: 1 })
+
+      expect(callToolMock).toHaveBeenCalledTimes(2)
+      expect(result.data.result).toEqual({ status: 'done' })
     })
 
     it('runs when the args differ', async () => {
@@ -811,6 +846,32 @@ describe('actorCritic criticCadence', () => {
       await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 })
 
       expect(callToolMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('runs when the tool differs', async () => {
+      // Same args, a different allowed tool: the tool-name half of the match
+      // carries real weight — `read {"path":"x"}` then `delete {"path":"x"}`
+      // with is_final must not be skipped and judged on the read's result.
+      // MUTATION: `lastRun.tool === action.tool_name &&` → `true &&` leaves
+      // every other case green; this one goes red.
+      const mockActor = vi
+        .fn()
+        .mockResolvedValueOnce(step('{"path": "x"}'))
+        .mockResolvedValueOnce({
+          action: mockAction({
+            tool_name: 'file-delete',
+            tool_args: '{"path": "x"}',
+            is_final: true,
+          }),
+          llmCall: undefined,
+        })
+
+      await run(mockActor, accept(), { maxRetries: 6, criticCadence: 3 }, [
+        'code-mode',
+        'file-delete',
+      ])
+
+      expect(callToolMock).toHaveBeenCalledTimes(2)
     })
 
     it('runs when the previous call failed', async () => {

@@ -563,7 +563,7 @@ class Wiring(unittest.TestCase):
         self.assertIn("EXECUTED", output.stdout)
 
     def test_boot_inspects_deployed_network_before_health_wait(self):
-        output = self.shell('''DRY_RUN=0; touch "$ENV_FILE"; mkdir "$APP_DIR/configs";
+        output = self.shell('''DRY_RUN=0; printf 'ACME_EMAIL=ops@example.invalid\n' >"$ENV_FILE"; mkdir "$APP_DIR/configs";
         touch "$APP_DIR/configs/mcp-config.yaml";
         HOSTNAME_ARG=app.example.invalid ACME_EMAIL_ARG=ops@example.invalid;
         assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; };

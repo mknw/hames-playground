@@ -362,6 +362,7 @@ RELEASE_RUNTIME_ENV_FILE=$dir/release-runtime.env
 DEV_RUNTIME_ENV_FILE=$dir/dev-runtime.env
 RELEASE_DATABASE_URL=postgresql://release_app:release-synthetic@postgres:5432/app_release
 DEV_DATABASE_URL=postgresql://dev_app:dev-synthetic@postgres:5432/app_dev
+ACME_EMAIL=ops@example.invalid
 ENV
   # All unrelated boot gates are inert. dc, compose_files, clone_preflight,
   # validator, command selection, and health-service selection are real.
@@ -375,7 +376,11 @@ ENV
     [[ ${SHIM_NO_DEV:-0} == 0 ]] || rm "$CLONE_ALIVE"
     HOSTNAME_ARG=release.example.invalid ACME_EMAIL_ARG=ops@example.invalid
     assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; }
-    env_problems() { :; }; reserved_name() { return 1; }
+    env_problems() { :; }
+    # #664's gate stub: $SHIM_RESERVED names the ONE value reserved_name
+    # should refuse (default: none), so the .env-versus-argument distinction
+    # stays testable.
+    reserved_name() { [[ $1 == "${SHIM_RESERVED:-}" ]] && return 0 || return 1; }
     if [[ ${1:-boot} != owner ]]; then owner_missing() { :; }; fi
     escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; prepare_embedder() { echo PREPARE >>"$CLONE_LOG"; }
@@ -544,7 +549,7 @@ PY
   if ((rc == 0)); then pass "clones accepts services of the app profile"; else flunk "clones app profile (rc=$rc)" "$out"; fi
   # Compare every box-changing command byte-for-byte, excluding only the two
   # exact read-only commands added by the coordinator-approved box-state guard.
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot 2>&1); rc=$?
   cat >"$dir/default-expected" <<ENV
 PREPARE
@@ -666,6 +671,37 @@ ENV
   if ((rc != 0)) && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses inconclusive single-app box-state query'
   else flunk "clones ignored failed box-state query (rc=$rc)" "$out"; fi
+  # #664: the boot gate checks the ACME_EMAIL Caddy actually reads — the .env
+  # value, not this run's --acme-email argument — and stops for the owner when
+  # the two differ.
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\nACME_EMAIL=owner@example.com\n')
+PY
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the ACME_EMAIL in .env is a reserved placeholder"* ]] &&
+    [[ $out != *"--hostname is a reserved placeholder"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved ACME_EMAIL in .env even with a real --acme-email'
+  else flunk "clones boot accepted a reserved .env ACME_EMAIL (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\nACME_EMAIL=other@example.invalid\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 3)) && [[ $out == *"the ACME_EMAIL in .env differs from this run's --acme-email"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass "clones boot stops for the owner when .env ACME_EMAIL differs from --acme-email"
+  else flunk "clones boot accepted a differing .env ACME_EMAIL (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 1)) && [[ $out == *"ACME_EMAIL is not set in .env"* ]]; then
+    pass 'clones boot refuses an .env without ACME_EMAIL'
+  else flunk "clones boot accepted an .env without ACME_EMAIL (rc=$rc)" "$out"; fi
   for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     clone_reset
     python3 - "$dir/release/.env" "$key" <<'PY'
@@ -806,7 +842,7 @@ PY
   if ((rc != 0)) && grep -q 'lacks scripts/env-vm-guard.py' <<<"$out"; then
     pass 'clones a missing guard installer refuses instead of silently passing'
   else flunk "clones accepted a missing guard installer (rc=$rc)" "$out"; fi
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
 
@@ -1017,6 +1053,10 @@ mutants = [
      'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id") || return 1',
      'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id" 2>/dev/null) || return 0'),
     ('caddy-mounts-none-fail-open', '((found)) || return 1', '((found)) || return 0'),
+    # #664: the boot gate reads the .env ACME_EMAIL Caddy actually uses.
+    ('acme-gate-reads-argument', 'elif reserved_name "$env_acme"; then', 'elif reserved_name "$ACME_EMAIL_ARG"; then'),
+    ('acme-empty-accepted', 'if [[ -z $env_acme ]]; then', 'if false; then'),
+    ('acme-mismatch-accepted', '[[ $env_acme == "$ACME_EMAIL_ARG" ]] || owner_stop', '[[ $env_acme == "$ACME_EMAIL_ARG" ]] || :'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
@@ -1387,6 +1427,7 @@ DATA_ENCRYPTION_KEY='d'
 VITE_ALLOWED_EMAILS='a@contoso.com'
 ANTHROPIC_API_KEY='k'
 STASH_DIRECT_REDIS='1'
+ACME_EMAIL='ops@contoso.com'
 ENV
 probs=$(
   lib "$tmproot/c"

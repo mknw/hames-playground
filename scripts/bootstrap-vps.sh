@@ -1745,9 +1745,21 @@ stage_boot() {
   if [[ -n $problems ]]; then
     refuse ".env is not ready: $(tr '\n' ';' <<<"$problems")"
   else ok ".env passes the docs/PREVIEW.md §6 preflight"; fi
-  if reserved_name "$HOSTNAME_ARG" || reserved_name "$ACME_EMAIL_ARG"; then
-    refuse "--hostname/--acme-email are reserved placeholders; Let's Encrypt cannot issue for or mail them"
+  # #664: the gate Caddy makes real is the .env value, not this run's
+  # argument: configs/Caddyfile and docker-compose.prod.yaml substitute
+  # ACME_EMAIL from .env, so a placeholder an earlier hostname stage wrote
+  # would reach Caddy even with a real --acme-email here.
+  local env_acme
+  env_acme=$(env_get ACME_EMAIL)
+  if [[ -z $env_acme ]]; then
+    refuse "ACME_EMAIL is not set in .env; Caddy reads ACME_EMAIL from .env, not the --acme-email argument (the hostname stage writes it)"
+  elif reserved_name "$env_acme"; then
+    refuse "the ACME_EMAIL in .env is a reserved placeholder; Let's Encrypt cannot issue for or mail it (set the real address in .env; the hostname stage writes it)"
   fi
+  if reserved_name "$HOSTNAME_ARG"; then
+    refuse "--hostname is a reserved placeholder; Let's Encrypt cannot issue for it"
+  fi
+  [[ $env_acme == "$ACME_EMAIL_ARG" ]] || owner_stop "the ACME_EMAIL in .env differs from this run's --acme-email; Caddy reads ACME_EMAIL from .env: set the real address in .env (re-run the hostname stage) or re-run with the same --acme-email"
   [[ -n $missing ]] && owner_stop "fill the owner-supplied values in $ENV_FILE: $(tr '\n' ' ' <<<"$missing")"
   escrow_recorded || owner_stop "escrow the configured application keys off the box (both runtime files' six keys in clone mode; docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"
   dns_points_here "$HOSTNAME_ARG" || owner_stop "point DNS for $HOSTNAME_ARG at this box and wait for it to resolve (docs/PREVIEW.md §4)"

@@ -293,7 +293,7 @@ class Wiring(unittest.TestCase):
     def test_boot_prepares_before_compose_and_requires_embedder_health(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            (directory / ".env").touch()
+            (directory / ".env").write_text("ACME_EMAIL=ops@example.invalid\n")
             (directory / "configs").mkdir()
             (directory / "configs/mcp-config.yaml").touch()
             body = '''source "$1"; DRY_RUN=0 HOSTNAME_ARG=app.example.invalid ACME_EMAIL_ARG=ops@example.invalid;

@@ -38,6 +38,9 @@ const COMPLETE = {
   AZURE_CLIENT_SECRET: 'synthetic-secret',
   VITE_ALLOWED_EMAILS: 'tester@example.invalid',
   STASH_DIRECT_REDIS: '1',
+  // #664: boot's ACME gate reads this from .env — the value Caddy substitutes —
+  // and it must equal the fixture's --acme-email argument.
+  ACME_EMAIL: 'ops@example.invalid',
 }
 const dirs: string[] = []
 function fixture(values: Record<string, string>) {

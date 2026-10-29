@@ -121,10 +121,11 @@ describe('startTrailingRefresh', () => {
   it('applies the delta at the first tick and stops polling', async () => {
     vi.useFakeTimers()
     const local = [ev('a', 'user_message'), ev('t1', 'tool_result', { result: 'raw' })]
+    // The persisted context holds t1 once, enriched — never a duplicate id.
     const landed = [
-      ...local,
-      ev('mc1', 'model_call'),
+      ev('a', 'user_message'),
       ev('t1', 'tool_result', { result: 'raw', summary: 'summarised' }),
+      ev('mc1', 'model_call'),
     ]
     const h = makeHarness(local, async () => landed)
     startTrailingRefresh(h.hooks)
@@ -182,6 +183,31 @@ describe('startTrailingRefresh', () => {
     expect(h.appended).toHaveLength(0)
   })
 
+  // S1 (fix round 1): the clear landing INSIDE the fetch must win — the buffer
+  // is non-empty when the tick starts and empty when the fetch resolves, so
+  // applying the delta would resurrect exactly what the user cleared. Nothing
+  // may be appended or mapped; hydration owns the view from there.
+  it('does not apply a delta when the buffer went empty during the fetch', async () => {
+    vi.useFakeTimers()
+    const h = makeHarness([ev('a', 'user_message')], async () => {
+      h.buffer = [] // the user's Clear lands inside the round trip
+      return [ev('mc1', 'model_call')]
+    })
+    startTrailingRefresh(h.hooks)
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS)
+
+    expect(h.fetchCalls).toBe(1)
+    expect(h.appended).toHaveLength(0)
+    expect(h.mapped).toHaveLength(0)
+    expect(h.buffer).toHaveLength(0)
+    // And it stopped: the cleared view is not polled again. (The anchored delta
+    // would be null against an empty buffer anyway — no shared ids, no anchor —
+    // so this pin is about not spending another fetch on a dead view.)
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_INTERVAL_MS * 2)
+    expect(h.fetchCalls).toBe(1)
+  })
+
   it('stops when the fetch rejects (conversation gone)', async () => {
     vi.useFakeTimers()
     const local = [ev('a', 'user_message')]
@@ -205,13 +231,20 @@ describe('startTrailingRefresh', () => {
     const during = [ev('a', 'user_message')]
     const afterStream = [ev('a', 'user_message'), ev('mc1', 'model_call')]
     const fetched = [...before, ev('mc1', 'model_call'), ev('mc2', 'model_call')]
-    let localCall = 0
-    const h = makeHarness(before, async () => fetched)
-    // The tick reads the buffer three times before applying (pre-fetch check,
-    // post-fetch check, delta) and a fourth time inside applyDelta's re-check.
+    // Scripted by WHEN, not by absolute call count: before the fetch resolves
+    // the buffer is `before`; the first read after it (the delta) still misses
+    // mc1, and applyDelta's re-check sees the stream's copy already in. The
+    // number of reads before those two is an implementation detail.
+    let fetchedReturned = false
+    let postFetchReads = 0
+    const h = makeHarness(before, async () => {
+      fetchedReturned = true
+      return fetched
+    })
     h.hooks.local = () => {
-      localCall += 1
-      return localCall <= 3 ? during : afterStream
+      if (!fetchedReturned) return before
+      postFetchReads += 1
+      return postFetchReads === 1 ? during : afterStream
     }
     startTrailingRefresh(h.hooks)
 
@@ -221,6 +254,68 @@ describe('startTrailingRefresh', () => {
     expect(h.appended[0].map((e) => e.id)).toEqual(['mc2'])
   })
 
+  // B1 (fix round 1): the first delta must be the settled turn's trailing
+  // pass, not "whatever the buffer lacks". Probe: the user cleared the panel
+  // and sent another message, so the buffer holds only [u2, r2] while the
+  // persisted context holds the whole earlier history too. The unanchored
+  // delta re-added u1/r1 AFTER the current turn's events and stopped, and the
+  // pass never showed. The anchored delta refuses that fetch, keeps polling,
+  // and delivers exactly what followed this turn.
+  it('does not mistake pre-turn history for the pass (clear-then-send)', async () => {
+    vi.useFakeTimers()
+    const local = [ev('u2', 'user_message'), ev('r2', 'tool_result', { result: 'raw' })]
+    const history = [ev('u1', 'user_message'), ev('r1', 'tool_result'), ...local]
+    let calls = 0
+    const h = makeHarness(local, async () => {
+      calls += 1
+      if (calls === 1) return history
+      return [
+        ev('u1', 'user_message'),
+        ev('r1', 'tool_result'),
+        ev('u2', 'user_message'),
+        ev('r2', 'tool_result', { result: 'raw', summary: 'summarised' }),
+        ev('mc', 'model_call'),
+      ]
+    })
+    startTrailingRefresh(h.hooks)
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS)
+    // The anchored delta on the first fetch is null: history is never re-added,
+    // and the poll is still running.
+    expect(h.appended).toHaveLength(0)
+    expect(h.fetchCalls).toBe(1)
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_INTERVAL_MS)
+
+    expect(h.appended).toHaveLength(1)
+    expect(h.appended[0].map((e) => e.id)).toEqual(['mc'])
+    // Order preserved: the pass follows the current turn's own events.
+    expect(h.buffer.map((e) => e.id)).toEqual(['u2', 'r2', 'mc'])
+    expect(h.buffer.find((e) => e.id === 'r2')?.data).toMatchObject({ summary: 'summarised' })
+    expect(h.fetchCalls).toBe(2)
+  })
+
+  // Resume shape: core persists a `hitl_response` (with the earlier history)
+  // without emitting it live (`harness.server.ts` `recordAnswers`), so on a
+  // `resume` turn it sits BEFORE the anchor. It must not end the poll either.
+  it('does not stop on a persisted hitl_response the buffer never held (resume)', async () => {
+    vi.useFakeTimers()
+    const local = [ev('u2', 'user_message'), ev('r2', 'tool_result', { result: 'raw' })]
+    const before = [ev('u1', 'user_message'), ev('hr', 'hitl_response'), ...local]
+    let calls = 0
+    const h = makeHarness(local, async () => {
+      calls += 1
+      return calls === 1 ? before : [...before, ev('mc', 'model_call')]
+    })
+    startTrailingRefresh(h.hooks)
+
+    await vi.advanceTimersByTimeAsync(
+      TRAILING_REFRESH_FIRST_DELAY_MS + TRAILING_REFRESH_INTERVAL_MS,
+    )
+
+    expect(h.appended).toHaveLength(1)
+    expect(h.appended[0].map((e) => e.id)).toEqual(['mc'])
+    expect(h.buffer.map((e) => e.id)).toEqual(['u2', 'r2', 'mc'])
+  })
   it('writes a summary without clobbering the event data the user set', async () => {
     vi.useFakeTimers()
     const local = [ev('t1', 'tool_result', { result: 'raw', hidden: true })]

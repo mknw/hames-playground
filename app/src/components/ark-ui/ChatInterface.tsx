@@ -42,8 +42,9 @@ import {
 import { getSettings } from '~/lib/settings-store'
 import { runTurn, type TurnSink } from '~/lib/turn-stream'
 import { startTrailingRefresh } from '~/lib/trailing-refresh'
+import { warningBubble } from '@hames-ai/agents/replay'
 import type { GraphElement } from './SupportPanel'
-import type { UnifiedContext } from '@hames-ai/harness-patterns'
+import type { UnifiedContext, WarningEventData } from '@hames-ai/harness-patterns'
 import {
   capReachedMessage,
   isAtConcurrencyCap,
@@ -494,7 +495,20 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
               const loaded = await loadConversation(runSessionId)
               return (JSON.parse(loaded.serialized) as UnifiedContext).events ?? []
             },
-            append: (events) => registry.appendEvents(runSessionId, [...events]),
+            append: (events) => {
+              registry.appendEvents(runSessionId, [...events])
+              // A summarizer-failure `warning` reaches the transcript as the
+              // same amber bubble the live stream (`turn-stream.ts`) and replay
+              // (`replay.ts`) paint, so all three views agree without a reload.
+              for (const evt of events) {
+                if (evt.type !== 'warning') continue
+                registry.appendMessage(runSessionId, {
+                  id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                  timestamp: new Date(),
+                  ...warningBubble(evt.data as WarningEventData),
+                })
+              }
+            },
             map: (map) => registry.mapEvents(runSessionId, map),
           })
         }

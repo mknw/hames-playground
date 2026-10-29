@@ -13,9 +13,11 @@
  * The fix stays client-side and respects the detachment: after a watched turn
  * settles, a bounded poll re-reads the persisted context through the existing
  * `loadConversation` server action and merges what the trailing pass landed.
- * The trailing pass writes the row exactly once, so a poll either sees the
- * pre-pass context (nothing to merge yet) or the whole pass — never a part of
- * it — which is what makes "stop at first delta" correct.
+ * The delta is ANCHORED to the settled turn (`trailingDelta`): only events
+ * after the last one the buffer already holds count as additions, so the
+ * persisted history the buffer was never shown — a Clear the user ran, a
+ * resume's `hitl_response` core writes without emitting — cannot pass for
+ * the pass, and the poll keeps waiting for what actually followed this turn.
  *
  * Framework-free: no Solid, no DOM. The caller supplies narrow hooks over its
  * session state, so the delta and the merge are unit-testable without a
@@ -33,11 +35,17 @@ export const TRAILING_REFRESH_FIRST_DELAY_MS = 3_000
 /** Interval between re-reads while nothing has landed yet. */
 export const TRAILING_REFRESH_INTERVAL_MS = 3_000
 
-/** Hard cap on re-reads. The trailing pass is two describe-tier calls behind
- *  a box the turn itself already woke, so seconds on either tier; ten tries
- *  (~30s) over-provision it without spinning on a turn that had nothing to
- *  summarize. A call that fails is recorded as a persisted `warning` event —
- *  itself a delta — so the failure case lands through the same poll. */
+/** Hard cap on re-reads. The trailing pass is `settleMemory` — memory
+ *  extraction plus compaction — followed by `compactBulkData`, which makes one
+ *  describe-tier call per batch, so a turn with memory on pays a small series
+ *  of calls rather than two. The ten-try (~30s) bound is PROVISIONAL: it has
+ *  not been measured against a live pass, and a pass that runs longer leaves
+ *  the panel exactly as it is today (the data is there on the next reload)
+ *  rather than dropping anything. A call that fails is recorded as a persisted
+ *  `warning` event — itself a delta — so the failure case lands through the
+ *  same poll. A tool-less turn with memory off pays ten full
+ *  `loadConversation` reads for nothing; that is the cost of not holding the
+ *  stream open to await the pass instead. */
 export const TRAILING_REFRESH_MAX_ATTEMPTS = 10
 
 // ============================================================================
@@ -55,19 +63,37 @@ export interface TrailingDelta {
 }
 
 /**
- * Diff the session's event buffer against the conversation's persisted events.
+ * Diff the session's event buffer against the conversation's persisted events,
+ * anchored to this turn.
  *
- * Returns null when the persisted context holds nothing the buffer lacks —
- * either the trailing pass has not landed yet, or this turn had nothing
- * trailing at all. The caller keeps polling until null flips to a delta or the
- * attempt cap runs out.
+ * The anchor is the last event id the buffer and the persisted context share:
+ * only events AFTER it count as additions, and summaries count only on
+ * `tool_result` ids the buffer already holds. Persisted events the buffer was
+ * never shown — an earlier turn after a Clear, a resume's `hitl_response`
+ * (core writes those without emitting them), hydration a `hasLocalTurn` gate
+ * skipped — sit before the anchor and are never re-added, and they cannot end
+ * the poll before the trailing pass lands. Events after the anchor also keep
+ * their persisted order.
+ *
+ * Returns null when nothing past the anchor is new — the trailing pass has not
+ * landed yet, or this turn had nothing trailing at all. The caller keeps
+ * polling until null flips to a delta or the attempt cap runs out.
  */
 export function trailingDelta(
   local: readonly ContextEvent[],
   fetched: readonly ContextEvent[],
 ): TrailingDelta | null {
   const localById = new Map(local.filter((e) => e.id).map((e) => [e.id, e]))
-  const additions = fetched.filter((e) => e.id && !localById.has(e.id))
+  // Everything before the last shared id is history the buffer never held;
+  // only what follows it can be this turn's trailing pass. No shared id at all
+  // (the turn's own save has not landed yet, or the context was pruned) means
+  // nothing can be attributed to this turn: null, and the caller keeps polling.
+  let anchor = -1
+  for (let i = 0; i < fetched.length; i++) {
+    if (fetched[i].id !== undefined && localById.has(fetched[i].id)) anchor = i
+  }
+  const additions =
+    anchor < 0 ? [] : fetched.slice(anchor + 1).filter((e) => e.id && !localById.has(e.id))
   const summaries: Array<{ eventId: string; summary: string }> = []
   for (const event of fetched) {
     if (event.type !== 'tool_result' || !event.id) continue
@@ -106,9 +132,10 @@ export interface TrailingRefreshHooks {
 
 /**
  * Poll for the just-settled turn's trailing pass and merge it into the panel
- * buffers. Stops at the first landed delta, when the buffer is empty (cleared
- * by the user or pruned — hydration owns the view then), when the conversation
- * is gone, or at the attempt cap.
+ * buffers. Stops at the first delta that is the settled turn's (anchored — see
+ * `trailingDelta`), when the buffer is empty (cleared by the user or pruned —
+ * hydration owns the view then), when the conversation is gone, or at the
+ * attempt cap.
  */
 export function startTrailingRefresh(hooks: TrailingRefreshHooks): void {
   let attempts = 0

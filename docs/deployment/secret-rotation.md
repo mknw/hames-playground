@@ -35,9 +35,17 @@ or print rendered configuration; pipe it directly to the validator.
 
 ```bash
 set -o pipefail
-docker compose config --format json | node scripts/validate-clones.mjs &&
+docker compose config --format json |
+  docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint node \
+    -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
+    hames-app:local "$PWD/scripts/validate-clones.mjs" &&
   docker compose up -d --no-build --force-recreate app app-dev
 ```
+
+The validator runs inside the release app image: mount the §12 dev checkout
+path from `.env` at its own path as shown (and each `*_SANDBOX_DOCKER_TLS_*`
+file the same way when a VM overlay is selected); the host needs no Node
+(#681). A missing image refuses until `--only images` builds it.
 
 After recreation, bootstrap `--only smoke --no-seed` also compares both running
 clone environments with the validated config and checks their limited Postgres

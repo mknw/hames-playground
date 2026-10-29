@@ -422,18 +422,23 @@ describe('two built clones, one shared infrastructure (#432 row 8)', () => {
     ({ configExit, validateExit }) => {
       const preview = readFileSync(repoFile('docs/PREVIEW.md'), 'utf8')
       const snippet = preview.match(
-        /```bash\n((?:set[^\n]*\n)?docker compose config --format json \| node scripts\/validate-clones\.mjs[\s\S]*?)\n```/,
+        /```bash\n((?:set[^\n]*\n)?docker compose config --format json \|\n[\s\S]*?docker run --rm -i --network none[\s\S]*?)\n```/,
       )?.[1]
       expect(snippet).toBeDefined()
       // Execute the actual copyable block with shell functions replacing only
       // its external programs. No daemon, node process or provider is contacted.
+      // The validator is the block's `docker run`; the stub consumes the
+      // rendered config from stdin and returns its exit.
       const stubs = `docker() {
       if [ "$*" = 'compose config --format json' ]; then printf '{}'; return ${configExit}; fi
+      case "$*" in "run "*) cat >/dev/null; return ${validateExit} ;; esac
       printf STARTED
     }
-    node() { cat >/dev/null; return ${validateExit}; }
     `
-      const run = spawnSync('bash', ['-c', stubs + snippet], { encoding: 'utf8' })
+      const run = spawnSync('bash', ['-c', stubs + snippet], {
+        encoding: 'utf8',
+        env: { ...process.env, DEV_CLONE_PATH: '/synthetic/dev-checkout' },
+      })
       const succeeds = configExit === 0 && validateExit === 0
       expect(run.status === 0).toBe(succeeds)
       expect(run.stdout.includes('STARTED')).toBe(succeeds)

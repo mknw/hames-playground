@@ -21,7 +21,8 @@
 #
 # Add --dry-run first: every probe runs, every change is printed, none is made.
 # Two clones: the release checkout's root .env must persist §12's complete
-# COMPOSE_FILE and clone inputs. Node.js on the host runs the offline validator.
+# COMPOSE_FILE and clone inputs. The clone validator runs inside the release
+# app image; the host needs Docker only, never Node.
 #
 # IDEMPOTENT. Each stage checks before it changes, so re-running is how you
 # resume. The run STOPS (exit 3) at two points and expects a re-run:
@@ -554,9 +555,33 @@ sys.exit(0 if isinstance(probes, list) and probes else 1)' "$path" 2>/dev/null |
       return 1
     fi
   done
-  command -v node >/dev/null 2>&1 || { printf '%s\n' "Clone preflight requires Node.js on the host" >&2; return 1; }
+  # #681: the validator runs inside the release app image (the one the compose
+  # build produces) — the host never needs Node, and the code path is the one
+  # the operator has been running by hand. The rendered config reaches it over
+  # stdin, never a file; the checkouts and each TLS client-material path the
+  # render names are bind-mounted READ-ONLY at their own paths, so the
+  # validator's realpath/stat/read see exactly what it saw on the host;
+  # --network none keeps it offline. Secret-silent as before: the render is
+  # piped, never saved, and Compose's errors are discarded.
+  local image="hames-app:local" mounts=() tpath
+  mounts=(-v "$APP_DIR":"$APP_DIR":ro -v "$(env_get DEV_CLONE_PATH)":"$(env_get DEV_CLONE_PATH)":ro)
+  for key in RELEASE_SANDBOX_DOCKER_TLS_CA RELEASE_SANDBOX_DOCKER_TLS_CERT RELEASE_SANDBOX_DOCKER_TLS_KEY \
+    DEV_SANDBOX_DOCKER_TLS_CA DEV_SANDBOX_DOCKER_TLS_CERT DEV_SANDBOX_DOCKER_TLS_KEY; do
+    tpath=$(env_get "$key")
+    [[ -z $tpath ]] || mounts+=(-v "$tpath":"$tpath":ro)
+  done
+  if ! sudo docker image inspect --format '{{.Id}}' "$image" >/dev/null 2>&1; then
+    if ((DRY_RUN)); then
+      warn "(dry run: $image is not built yet, so the render was not validated; --only images builds it)"
+      return 0
+    fi
+    printf '%s\n' "Clone preflight runs its validator inside the $image image; build it first (--only images)" >&2
+    return 1
+  fi
   (set -o pipefail; cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose config --format json 2>/dev/null |
-    node scripts/validate-clones.mjs >/dev/null) || { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }
+    sudo docker run --rm -i --network none --read-only --cap-drop ALL --entrypoint node \
+      "${mounts[@]}" "$image" "$APP_DIR/scripts/validate-clones.mjs" >/dev/null) ||
+    { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }
 }
 
 dc() {
@@ -1656,6 +1681,13 @@ stage_images() {
     refuse "no $ENV_FILE yet (run the env stage)"
     return 0
   }
+  # #681: the clone preflight runs its validator inside the release app image,
+  # and dc build's preflight needs it: build that ONE image directly first,
+  # with the same Dockerfile and build contexts the compose build below uses.
+  if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&
+    ! sudo docker image inspect --format '{{.Id}}' hames-app:local >/dev/null 2>&1; then
+    run sudo docker build --build-context root="$APP_DIR" -f "$APP_DIR/app/Dockerfile" -t hames-app:local "$APP_DIR/app"
+  fi
   run dc build
   run dc pull --ignore-buildable --quiet
   # The gateway pulls its catalog servers itself, but a failed pull there is a

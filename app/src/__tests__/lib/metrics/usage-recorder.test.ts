@@ -209,6 +209,24 @@ describe('the small warm clock requires metrics', () => {
     recordSample({ functionName: 'DescribeToolResult', clientName: 'SmallQwen' }, Date.now())
     expect(vi.mocked(refreshSmallBoxGpuIfStale)).not.toHaveBeenCalled()
   })
+
+  it('a sample on any OTHER client kicks no GPU refresh, metrics or not (#848)', () => {
+    // The refresh is gated on the CLIENT, not on having metrics: only a call
+    // that just proved the SMALL box up may kick the `/status` read. A
+    // metrics-bearing sample from any other client — an Anthropic-tier call or
+    // the 27B — carries no evidence about that box, so the refresh must stay
+    // silent; otherwise every non-small call on a stale sample would fire a
+    // `/status` GET against the scaled-to-zero box and could wake and bill it.
+    recordSample(
+      { functionName: 'Synthesize', clientName: 'AnthropicSonnet5', metrics: metrics() },
+      Date.now(),
+    )
+    recordSample(
+      { functionName: 'LoopController', clientName: 'LargeQwen', metrics: metrics() },
+      Date.now(),
+    )
+    expect(vi.mocked(refreshSmallBoxGpuIfStale)).not.toHaveBeenCalled()
+  })
 })
 
 describe('recordSample', () => {

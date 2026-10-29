@@ -188,6 +188,45 @@ class SmallModelsBehaviour(unittest.TestCase):
         module = _load_modal_app("hames_small_models.py", HAMES_MODAL_SCALEDOWN_S="60")
         self.assertEqual(module.app.servers[0][1]["scaledown_window"], 60)
 
+    def test_compute_region_small_box_falls_back_to_shared_when_only_shared_is_set(self):
+        module = _load_modal_app("hames_small_models.py", HAMES_MODAL_COMPUTE_REGION="eu-test-region")
+        self.assertEqual(module.app.servers[0][1]["compute_region"], "eu-test-region")
+
+    def test_compute_region_small_box_takes_override_and_27b_takes_shared(self):
+        module = _load_modal_app("hames_small_models.py",
+                                 HAMES_MODAL_COMPUTE_REGION="shared-region",
+                                 HAMES_MODAL_SMALL_COMPUTE_REGION="small-region")
+        self.assertEqual(module.app.servers[0][1]["compute_region"], "small-region")
+        module_27b = _load_27b(
+            HAMES_MODAL_COMPUTE_REGION="shared-region", HAMES_MODAL_SMALL_COMPUTE_REGION="small-region")
+        self.assertEqual(module_27b.app.servers[0][1]["compute_region"], "shared-region")
+
+    def test_compute_region_both_unset_falls_back_to_stand_in(self):
+        module = _load_modal_app("hames_small_models.py")
+        # The fake SDK runs is_local() as False, so the in-container stand-in applies.
+        self.assertEqual(module.app.servers[0][1]["compute_region"], "unset-in-container")
+
+    def test_compute_region_local_deploy_refuses_without_a_region(self):
+        # The local refusal is reached only when is_local() is True, which the
+        # default fake never reports, so swap in one that does. ROUTING_REGION is
+        # set so the compute read's SystemExit is the one this test pins.
+        fake = _fake_modal()
+        fake.is_local = lambda: True
+        with mock.patch(f"{__name__}._fake_modal", lambda: fake):
+            for env in ({}, {"HAMES_MODAL_SMALL_COMPUTE_REGION": ""},
+                        {"HAMES_MODAL_SMALL_COMPUTE_REGION": "   "}):
+                with self.subTest(env=env), self.assertRaises(SystemExit) as caught:
+                    _load_modal_app("hames_small_models.py",
+                                    HAMES_MODAL_ROUTING_REGION="eu-test-region", **env)
+                self.assertIn("HAMES_MODAL_COMPUTE_REGION", str(caught.exception))
+
+    def test_compute_region_whitespace_override_falls_back_to_shared(self):
+        # A blank override is not a value: the shared region applies.
+        module = _load_modal_app("hames_small_models.py",
+                                 HAMES_MODAL_COMPUTE_REGION="eu-test-region",
+                                 HAMES_MODAL_SMALL_COMPUTE_REGION="   ")
+        self.assertEqual(module.app.servers[0][1]["compute_region"], "eu-test-region")
+
     def test_one_gpu_type_deploys_the_plain_string(self):
         for env, gpu in (({}, "L4"), ({"HAMES_MODAL_GPU": " A10 "}, "A10")):
             module = _load_modal_app("hames_small_models.py", **env)

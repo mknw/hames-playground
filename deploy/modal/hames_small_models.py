@@ -140,7 +140,7 @@ def _gpu_request(value: str) -> str | list[str]:
     return types[0] if len(types) == 1 else types
 
 
-COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION")
+COMPUTE_REGION = _env("HAMES_MODAL_COMPUTE_REGION", default=None)
 ROUTING_REGION = _env("HAMES_MODAL_ROUTING_REGION")
 APP_NAME = _env("HAMES_MODAL_APP_NAME", "hames-small-models")
 GPU = _gpu_request(_env("HAMES_MODAL_GPU", "L4"))

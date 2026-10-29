@@ -34,6 +34,10 @@ import {
 } from '@hames-ai/harness-patterns/llm-usage-observer.server'
 import type { DecisionSetSpec, DecisionSpec } from '@hames-ai/harness-patterns/types'
 import { DEFAULT_EUR_PER_USD } from '../../../lib/settings'
+import {
+  resetSmallGpuForTests,
+  seedSmallGpuForTests,
+} from '../../../lib/inference/small-gpu.server'
 
 useFlagDrivenDefaultTier()
 
@@ -130,6 +134,11 @@ beforeEach(() => {
   // fallback to it anywhere (success, error, retry) is a request carrying it.
   process.env.OPENROUTER_API_KEY = 'embedding-key'
   process.env.JEV_DECISIONS_URL = 'https://api.typesafe.ai/v1/systemone'
+  // The suite prices an L4-served box (the base rate, exactly): seeded, so the
+  // GPU-aware reader reads the base rather than the A10-derived fallback an
+  // unsampled GPU prices at — and kicks no background /status read into this
+  // suite's request capture.
+  seedSmallGpuForTests('L4')
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init: RequestInit) => {
@@ -139,6 +148,7 @@ beforeEach(() => {
   )
 })
 afterEach(async () => {
+  resetSmallGpuForTests()
   delete process.env.OPENROUTER_API_KEY
   for (const r of requests) expect(JSON.stringify(r.init.headers)).not.toContain('embedding-key')
   vi.unstubAllGlobals()

@@ -3,6 +3,12 @@
 // the same wiring a production turn takes.
 import '../../../lib/inference/config.server'
 import { LARGE_LLM_CLIENT_NAME } from '../../../lib/inference/large-activity.server'
+// These pins price through the REAL wiring, which since #848 reads the served
+// GPU's rate: without a sample the box prices at the HIGHEST known rate (the
+// A10-derived one), so the base-rate expectations below need the L4 sample —
+// far-future-stamped so no TTL refresh fires a stray fetch mid-suite.
+import { seedSmallGpuForTests } from '../../../lib/inference/small-gpu.server'
+seedSmallGpuForTests('L4', Number.MAX_SAFE_INTEGER)
 /**
  * Event-level token/cost accounting (#122).
  *

@@ -23,7 +23,8 @@
 import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { CLIENT_MAX_OUTPUT_TOKENS, MODEL_CONTEXT_WINDOWS, estimateLlmCostEur } from '../settings'
-import { eurPerUsdRate, largeEurPerHour, smallLlmEurPerHour } from '../cost-rates.server'
+import { eurPerUsdRate, largeEurPerHour } from '../cost-rates.server'
+import { smallGpuEurPerHour } from './small-gpu.server'
 import { privateInferenceOnly, assertPrivateTierConfigured } from './tier-config.server'
 export {
   privateInferenceOnly,
@@ -111,7 +112,10 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 // config beside the client-safe UI that renders it — SA-C2 family); the
 // package's `computeEventMetrics` calls it through the seam. The time-priced
 // client-to-rate mapping rides along: it is what makes a usage-less attempt on a
-// metered box price as a floor instead of being dropped. The 27B leaves are
+// metered box price as a floor instead of being dropped. Since #848 the small
+// clients read the GPU-AWARE rate — the GPU the box actually served (its
+// `/status` sample, `small-gpu.server.ts`), not one rate for the box, because
+// #782's fallback list can land the box on an A10. The 27B leaves are
 // deliberately ABSENT — they are provider-priced off `usage.cost` since the
 // OpenRouter eval (see PROVIDER_COST_CLIENTS in settings.ts), so a usage-less
 // attempt on them has no provider-reported cost to price and correctly reads
@@ -119,8 +123,8 @@ configureCostRates({ eurPerUsd: eurPerUsdRate, largeEurPerHour })
 configureCostPricing({
   estimate: estimateLlmCostEur,
   timePricedClients: {
-    SmallQwen: smallLlmEurPerHour,
-    PrivateSystemOne: smallLlmEurPerHour,
+    SmallQwen: smallGpuEurPerHour,
+    PrivateSystemOne: smallGpuEurPerHour,
   },
 })
 

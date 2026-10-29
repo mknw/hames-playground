@@ -39,6 +39,7 @@ vi.mock('../../../lib/inference/cold-start.server', () => ({
 const CLIENTS = '@hames-ai/harness-baml/clients.server'
 const CONFIG = '../../../lib/inference/config.server'
 const SETTINGS = '../../../lib/settings'
+const SMALL_GPU = '../../../lib/inference/small-gpu.server'
 
 const ENV_KEYS = [
   'USE_SELF_DEPLOYED_INFERENCE',
@@ -50,6 +51,7 @@ const ENV_KEYS = [
   'EUR_PER_USD',
   'LARGE_LLM_EUR_PER_HOUR',
   'SMALL_LLM_EUR_PER_HOUR',
+  'SMALL_LLM_EUR_PER_HOUR_A10',
 ] as const
 
 let saved: Record<string, string | undefined>
@@ -71,11 +73,16 @@ beforeEach(() => {
   noteBoxCallStarting.mockClear()
 })
 
-afterEach(() => {
+afterEach(async () => {
   for (const k of ENV_KEYS) {
     if (saved[k] === undefined) delete process.env[k]
     else process.env[k] = saved[k]
   }
+  // The GPU sample lives on a `globalThis` symbol that outlives
+  // `vi.resetModules()`: whatever a test seeded (or sampled) must not price
+  // the next test's expectations.
+  const gpu = await import(SMALL_GPU)
+  gpu.resetSmallGpuForTests()
 })
 
 /** The composition root, then the seam — the wiring every production path
@@ -208,6 +215,10 @@ describe('the configuration the host registers is the configuration the resoluti
         },
       ],
     })
+    // The suite prices an L4-served box: seeded, because an unsampled GPU
+    // prices at the HIGHEST known rate (the A10-derived one) by design.
+    const gpu = await import(SMALL_GPU)
+    gpu.seedSmallGpuForTests('L4')
     const measured = computeEventMetrics(collector(2_000) as never)!
     expect(measured.attempts).toBe(1)
     expect(measured.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
@@ -242,6 +253,7 @@ describe('the configuration the host registers is the configuration the resoluti
     // provider-reported cost, the metered 4B off wall-clock. Pricing either
     // by the other's model would bill one of the two wrong.
     await loadWired()
+    ;(await import(SMALL_GPU)).seedSmallGpuForTests('L4')
     const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
     const { DEFAULT_EUR_PER_USD } = await import(SETTINGS)
     const collector = {

@@ -1228,7 +1228,11 @@ request itself through `DecideInput.signal`, not only the wait for it. Each answ
 is a `decision_made` event keyed `guard.screen`, `shadow: true` whenever the
 answer is not obeyed, carrying the state's size and never its text (the call record
 is redacted as the screen's is); an unavailable answer, a state it could not render
-included, is an abstained one. So `guardGateSkipRate(events)` computes the skip
+included, is an abstained one. A shadow event also carries `wouldRun` — what the
+gate WOULD have decided at its own configured threshold — and it is stamped before
+the event is emitted, because the live timeline row reads it instead of the argmax
+`label`, which can disagree with the threshold rule (#784 item 10); a gated event
+carries no `wouldRun`. So `guardGateSkipRate(events)` computes the skip
 rate from any run's events (a custom gate that throws records nothing, so it is not
 counted): a gate that is wrong rather than down is caught by measurement, never by
 `onUnavailable`.

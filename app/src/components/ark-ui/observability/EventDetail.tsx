@@ -387,6 +387,13 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
   const pct = (p: number) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`
   const finiteMean = () => Number.isFinite(props.data.expected)
   const finitePTrue = () => Number.isFinite(props.data.pTrue)
+  // A shadow gate's detail reads what the gate WOULD have done (`wouldRun`),
+  // the same rule the timeline row applies — the argmax `label` can say
+  // 'false' for a gate that would have run the screen (#784 item 10).
+  const would = () =>
+    props.data.shadow && typeof props.data.wouldRun === 'boolean'
+      ? `would ${props.data.wouldRun ? 'screen' : 'skip'}`
+      : props.data.label
 
   return (
     <div flex="~ col" gap="3" data-role="decision-made">
@@ -399,7 +406,7 @@ const DecisionMadeDetail = (props: { data: DecisionMadeEventData }) => {
 
       <div flex="~ wrap" items="center" gap="2">
         <span text="sm ui-accent" font="mono" data-role="decision-verdict">
-          → {props.data.label}
+          → {would()}
         </span>
         <Show when={props.data.abstained}>
           <span

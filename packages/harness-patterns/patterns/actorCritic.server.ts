@@ -150,6 +150,14 @@ export function actorCritic<T extends ActorCriticData>(
     let successfulTurns = 0
     const previousAttempts: ScriptExecutionEvent[] = []
     let errorMessage: string | undefined
+    // The last singular call that ran and succeeded, with the attempt that
+    // recorded it. An `is_final` action repeating it exactly while that attempt
+    // is still the newest is not run again (#784 item 7): see the repeat check
+    // below the args parse. The skip holds only while the critic has NOT yet
+    // judged that result — `runCadenceAndCritic` clears this on a rejection, so
+    // a rejected result is always re-dispatched (#784 item 7 fix round 1).
+    let lastRun:
+      { tool: string; args: string; data: unknown; attempt: ScriptExecutionEvent } | undefined
 
     // The consecutive-recovery cap (#450 review §3), counted in attempts — see
     // `recoveryStreak`. The unusable answer that follows `maxConsecutiveRecoveries` recoveries in a row ends the loop with
@@ -274,6 +282,16 @@ export function actorCritic<T extends ActorCriticData>(
       if (judged && evaluation.feedback) {
         judged.feedback = evaluation.feedback
       }
+
+      // The result the critic just judged can no longer stand in for a fresh
+      // dispatch: clear the repeat memory so the next `is_final` repeat of it
+      // RUNS (#784 item 7 fix round 1). At cadence 1 this makes the repeat skip
+      // unreachable, which is right — there the critic has judged every
+      // successful attempt, so the only repeat it could skip is one it has
+      // already rejected, and judging the identical output twice is the defect
+      // this clears. Two skipped repeats in a row are now impossible too: a
+      // skipped repeat is always `is_final`, so it is always critiqued.
+      lastRun = undefined
 
       // Update for next attempt
       scope.data = {
@@ -693,6 +711,46 @@ export function actorCritic<T extends ActorCriticData>(
           continue
         }
 
+        // A final-marking repeat (#784 item 7): the actor has to name a tool on
+        // every attempt, so on the turn it believes it is done it repeats the
+        // call whose result it already holds. When that call is the newest
+        // attempt and succeeded, its result stands: nothing is dispatched (so
+        // no tool_call/tool_result events, and the streak is left alone), and
+        // the attempt log records the repeat with the same result, which is
+        // what the critic judges. Scoped to the NEWEST attempt and to
+        // `is_final` because the sandbox tools are stateful: after any other
+        // call, or on a non-final turn (a poll), a repeat may legitimately
+        // return something new, so it runs. It also holds only while the
+        // critic has not yet judged that result — a rejection clears `lastRun`
+        // (in `runCadenceAndCritic`), so the repeat runs and the critic is not
+        // asked to judge the identical output twice.
+        const argsKey = JSON.stringify(args)
+        if (
+          action.is_final === true &&
+          lastRun !== undefined &&
+          lastRun.attempt === previousAttempts[previousAttempts.length - 1] &&
+          lastRun.tool === action.tool_name &&
+          lastRun.args === argsKey
+        ) {
+          const repeat: ScriptExecutionEvent = {
+            toolName: lastRun.attempt.toolName,
+            script: lastRun.attempt.script,
+            output: lastRun.attempt.output,
+            error: null,
+          }
+          previousAttempts.push(repeat)
+          // `lastRun` is left pointing at the ORIGINAL attempt: after the
+          // repeat the only exits are the critic accepting (return) or
+          // rejecting (which clears `lastRun`), so its `attempt` is never
+          // re-consulted against the repeat.
+          if (
+            (await runCadenceAndCritic(scope, action, lastRun.data, attempt, intent)) === 'accepted'
+          ) {
+            return scope
+          }
+          continue
+        }
+
         // Generate correlation ID for this tool call/result pair
         const callId = generateId('tc')
 
@@ -737,12 +795,16 @@ export function actorCritic<T extends ActorCriticData>(
 
         // Track result
         const script = typeof args.script === 'string' ? args.script : JSON.stringify(args)
-        previousAttempts.push({
+        const ran: ScriptExecutionEvent = {
           toolName: action.tool_name,
           script,
           output: result.success ? JSON.stringify(result.data) : '',
           error: result.success ? null : (result.error ?? 'Execution failed'),
-        })
+        }
+        previousAttempts.push(ran)
+        lastRun = result.success
+          ? { tool: action.tool_name, args: argsKey, data: result.data, attempt: ran }
+          : undefined
 
         trackEvent(
           scope,

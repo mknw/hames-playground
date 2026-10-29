@@ -2,6 +2,10 @@
  * systemone adapter run; only inference and the gateway are scripted. */
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  resetSmallGpuForTests,
+  seedSmallGpuForTests,
+} from '../../../../lib/inference/small-gpu.server'
 import '../../../mocks/namespace-catalog'
 import { useFlagDrivenDefaultTier } from '../../../mocks/flag-default-tier'
 import { canonicalAgentId, DEFAULT_AGENT_ID } from '../../../../lib/harness-client/agent-ids'
@@ -302,6 +306,10 @@ beforeEach(() => {
     USE_SELF_DEPLOYED_INFERENCE: '0',
   }))
     vi.stubEnv(key, value)
+  // The small wake now samples the box's served GPU (#848); a fresh far-future
+  // sample keeps that fetch out of the request counts the pins below assert,
+  // and prices the L4 box this suite pretends to run on.
+  seedSmallGpuForTests('L4', Number.MAX_SAFE_INTEGER)
   requests = vi.fn(async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body))
     // Setup change 2 of the guard design: the gate's noul question gets its own branch.
@@ -351,6 +359,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+  resetSmallGpuForTests()
 })
 
 function walk(patterns: ConfiguredPattern<AgentData>[]): ConfiguredPattern<AgentData>[] {
@@ -2548,6 +2557,21 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
     })
     expect(gateway.calls).toEqual(expect.arrayContaining(['search', 'graph_mail_recent']))
     expect(mocks.screen).not.toHaveBeenCalled()
+  })
+})
+
+// #784 item 6. MUTATION: drop `sourceLinks` from the office guard, or hand it
+// a literal host list: red. The orchestrator and info guards declare none, so
+// a Graph link reaching them is scanned as before.
+describe("general-next: the office guard exempts the tenant's own document links", () => {
+  it('the guard declaring graph carries the host-configured hosts; no other guard has any', async () => {
+    const hosts = ['contoso.sharepoint.com', 'contoso-my.sharepoint.com']
+    await agent.createPatterns('s', { ...deps, guards: { ...deps.guards, documentHosts: hosts } })
+    const configs = composition.guardConfigs as { namespaces?: string[]; sourceLinks?: unknown }[]
+    const withLinks = configs.filter((c) => c.sourceLinks !== undefined)
+    expect(withLinks).toHaveLength(1)
+    expect(withLinks[0].namespaces).toEqual(['graph'])
+    expect(withLinks[0].sourceLinks).toEqual({ namespace: 'graph', field: 'webUrl', hosts })
   })
 })
 

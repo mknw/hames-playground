@@ -26,6 +26,7 @@ import { createSignal, createRoot, type JSX } from 'solid-js'
 import { installDomObservers } from '../../mocks/dom-observers'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import singleNodeFixture from '../../lib/harness-client/fixtures/cypher-single-node.json'
+import { TRAILING_REFRESH_FIRST_DELAY_MS } from '~/lib/trailing-refresh'
 
 beforeAll(() => {
   installDomObservers()
@@ -220,6 +221,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // The trailing-refresh pins run the poll on fake timers; every other test
+  // here assumes real ones.
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -599,6 +603,89 @@ describe('ChatInterface — sending a message', () => {
     expect(onRunSettled).toHaveBeenCalledWith('s1', 'error')
     // A stale/garbage response on an errored run is not shown as an answer.
     expect(transcript(container)).not.toContain('partial garbage')
+  })
+
+  // S2 (fix round 1): the trailing-refresh poll is wired only for a `done`
+  // turn and only against the session the RUN ran in — the hooks bind to
+  // `runSessionId`, not the displayed session, so a switch mid-poll cannot
+  // misfile the pass. (Mutations: drop the `outcome === 'done'` gate → the
+  // not-done test below fetches; bind the hooks to `props.sessionId` → this
+  // test sees the pass requested for, and filed under, the wrong thread.)
+  it('polls the trailing pass into the run\u2019s own session, even after a switch', async () => {
+    vi.useFakeTimers()
+    const r1 = { id: 'r1', type: 'tool_result', ts: 1, patternId: 'p', data: { result: 'raw' } }
+    fetchMock.mockResolvedValueOnce(sseResponse([{ event: 'message', data: r1 }, doneFrame()]))
+    const [sid, setSid] = createSignal('s1')
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId={sid()} />)
+    await vi.advanceTimersByTimeAsync(50) // mount + hydration (brand-new: rejects)
+    send(container, 'go')
+    await vi.advanceTimersByTimeAsync(100) // run streams, settles; poll scheduled
+
+    // The pass landed server-side; the user moved on to another thread.
+    loadConversation.mockImplementation(async (s: string) =>
+      s === 's1'
+        ? {
+            agentId: DEFAULT_AGENT_ID,
+            kind: 'conversation',
+            serialized: JSON.stringify({
+              events: [
+                { ...r1, data: { result: 'raw', summary: 'summarised' } },
+                { id: 'mc1', type: 'model_call', ts: 2, patternId: 'p', data: {} },
+                // N2 (fix round 1): a summarizer-failure warning lands as the
+                // same amber bubble the live stream and replay paint.
+                {
+                  id: 'w1',
+                  type: 'warning',
+                  ts: 3,
+                  patternId: 'p',
+                  data: { message: 'summarizer failed', fallback: 'kept the raw results' },
+                },
+              ],
+            }),
+            messages: [],
+          }
+        : Promise.reject(new Error('not found')),
+    )
+    setSid('s2')
+    await vi.advanceTimersByTimeAsync(20) // s2 hydration resolves (rejects)
+    const callsAtSwitch = loadConversation.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS)
+
+    // The poll read the run's own conversation, not the one now on screen.
+    expect(loadConversation.mock.calls.slice(callsAtSwitch)).toEqual([['s1']])
+    const s1Events = host.registry.events('s1')
+    expect(s1Events.map((e) => e.id)).toEqual(['r1', 'mc1', 'w1'])
+    expect(s1Events.find((e) => e.id === 'r1')?.data).toMatchObject({ summary: 'summarised' })
+    // The warning bubble reached THIS thread's transcript, as replay paints it.
+    const warn = host.registry.messages('s1').find((m) => m.id.startsWith('warn-'))
+    expect(warn).toMatchObject({ role: 'warning', content: 'summarizer failed' })
+    // Nothing leaked into the displayed thread.
+    expect(host.registry.events('s2')).toHaveLength(0)
+  })
+
+  // S2 (fix round 1): a turn that did not settle `done` starts no poll — a
+  // stopped or failed turn has no trailing pass to find, and the transcript
+  // for it is already on screen. (Mutation: remove the `outcome === 'done'`
+  // condition → the errored turn's buffer is non-empty, so the poll fetches
+  // and this goes red.)
+  it('never calls loadConversation after a turn that did not settle done', async () => {
+    vi.useFakeTimers()
+    const r1 = { id: 'r1', type: 'tool_result', ts: 1, patternId: 'p', data: { result: 'raw' } }
+    fetchMock.mockResolvedValueOnce(
+      sseResponse([{ event: 'message', data: r1 }, doneFrame({ status: 'error', response: 'x' })]),
+    )
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await vi.advanceTimersByTimeAsync(50)
+    send(container, 'go')
+    await vi.advanceTimersByTimeAsync(100)
+    const callsAtSettle = loadConversation.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(TRAILING_REFRESH_FIRST_DELAY_MS + 100)
+
+    expect(loadConversation.mock.calls.length).toBe(callsAtSettle)
   })
 
   it('surfaces a non-OK response as an error bubble', async () => {

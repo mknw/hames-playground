@@ -14,6 +14,7 @@
  *     it would turn a header click into a broken chat on the next message.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { resetSmallGpuForTests } from '../../../lib/inference/small-gpu.server'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -177,6 +178,7 @@ beforeEach(() => {
 let fetchMock: ReturnType<typeof vi.fn>
 
 afterEach(() => {
+  resetSmallGpuForTests()
   vi.unstubAllGlobals()
   resetLargeWake()
   resetSmallWake()
@@ -406,7 +408,10 @@ describe('igniteSelfDeployedBox', () => {
 
     const state = await igniteSelfDeployedBox()
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // Three, not two: the small wake's `onUp` (#848) reads `/status` to learn
+    // which GPU a cold start landed on — a landed wake is exactly when the box
+    // may have restarted on a different type.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
     // The ping stamps the warm clock, so the strip's next render has a number
     // to count down — which is the point of the button. `ready` is the display
     // state that completion evidence earns, whatever the probe said.
@@ -439,7 +444,9 @@ describe('igniteSelfDeployedBox', () => {
 
     releases.forEach((release) => release())
     await Promise.all(clicks)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The third is the small wake's `onUp` sampler (#848): one read, fired by
+    // the ONE wake all three clicks joined — not one per click.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   it('is a no-op on a box that is already up', async () => {
@@ -486,7 +493,9 @@ describe('igniteSelfDeployedBox', () => {
     )
 
     await expect(igniteSelfDeployedBox()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The small box answered (200), so its wake landed and its `onUp` sampler
+    // (#848) read `/status` — a third fetch beside the two wake polls.
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })
 

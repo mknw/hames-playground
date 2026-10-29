@@ -474,8 +474,10 @@ export default function Dashboard() {
                 <span>
                   A <span font="mono">≥</span> marks a figure that includes wall-clock-billed steps.
                   The self-hosted GPUs bill by the second they are awake (
-                  <span font="mono">LARGE_LLM_EUR_PER_HOUR</span> and{' '}
-                  <span font="mono">SMALL_LLM_EUR_PER_HOUR</span>) and their tokens are free, but
+                  <span font="mono">LARGE_LLM_EUR_PER_HOUR</span>, and
+                  <span font="mono"> SMALL_LLM_EUR_PER_HOUR</span> — the small box's L4 rate, with
+                  per-GPU overrides for the fallback types it can land on, and the highest known
+                  rate shown when the served GPU could not be read) and their tokens are free, but
                   the only seconds visible here are the durations of the calls themselves — not the
                   idle window the box stays warm for afterwards, nor the cold start before the first
                   call. Those figures are floors on the bill, not the bill.

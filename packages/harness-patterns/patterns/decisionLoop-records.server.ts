@@ -324,19 +324,28 @@ function workOutSavedLines(argsText: string, successfulBodies: readonly string[]
 function extractActorCritic(events: ContextEvent[], max: number): Extracted {
   let action: ControllerActionEventData['action'] | undefined
   let results: ToolResultEventData[] = []
+  // The results of the PREVIOUS attempt, carried one step. An attempt reaches
+  // the critic with none of its own only when it repeated the previous call
+  // and was not dispatched again (#784 item 7): what the critic judged is that
+  // call's result. Two result-less attempts in a row cannot happen — a skipped
+  // repeat is always `is_final`, so it is always critiqued and ends in
+  // acceptance or in the repeat memory being cleared.
+  let previous: ToolResultEventData[] = []
   let accepted:
     | { action: ControllerActionEventData['action']; results: ToolResultEventData[]; why: string }
     | undefined
   for (const e of events) {
     if (e.type === 'controller_action') {
       action = (e.data as ControllerActionEventData).action
+      previous = results
       results = []
     } else if (e.type === 'tool_result') {
       results.push(e.data as ToolResultEventData)
     } else if (e.type === 'critic_result') {
       const critic = (e.data as CriticResultEventData).result
       if (critic.is_sufficient && action) {
-        accepted = { action, results: [...results], why: critic.explanation ?? '' }
+        const judged = results.length > 0 ? results : previous
+        accepted = { action, results: [...judged], why: critic.explanation ?? '' }
       }
     }
   }

@@ -41,6 +41,7 @@ import {
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
 import { runTurn, type TurnSink } from '~/lib/turn-stream'
+import { startTrailingRefresh } from '~/lib/trailing-refresh'
 import type { GraphElement } from './SupportPanel'
 import type { UnifiedContext } from '@hames-ai/harness-patterns'
 import {
@@ -481,6 +482,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         })
       }
       if (!aborted) {
+        // The turn's trailing pass (the post-turn summaries) runs detached,
+        // after this stream closed, so its describe calls, memory writes and
+        // the summaries they leave behind reach the panels only through the
+        // persisted context (#784 item 12). Poll for it rather than holding
+        // the stream open — see `trailing-refresh.ts`.
+        if (outcome === 'done') {
+          startTrailingRefresh({
+            local: () => registry.events(runSessionId),
+            fetch: async () => {
+              const loaded = await loadConversation(runSessionId)
+              return (JSON.parse(loaded.serialized) as UnifiedContext).events ?? []
+            },
+            append: (events) => registry.appendEvents(runSessionId, [...events]),
+            map: (map) => registry.mapEvents(runSessionId, map),
+          })
+        }
         props.onRunSettled?.(runSessionId, outcome)
         if (runSessionId === props.sessionId) setSettledTick((n) => n + 1)
       }

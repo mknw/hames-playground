@@ -214,7 +214,7 @@ export interface CostRates {
 // clients-seam.test.ts — the same deliberate-copy-with-a-pin pattern as
 // TIME_PRICED_CLIENTS in settings.ts.
 const SEAM_DEFAULT_EUR_PER_USD = 0.86
-const SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
+const SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR = 4.598976592
 
 let costRates: CostRates = {
   eurPerUsd: () => SEAM_DEFAULT_EUR_PER_USD,
@@ -516,7 +516,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   //     `maxBatchItems()` returning 5 instead of 8, i.e. MORE describe calls per
   //     turn, each far cheaper and none of them on the queue in (1).
   //  4. COST is time-priced on metered infrastructure (owner decision
-  //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.54/h) times measured
+  //     2026-10-13): SMALL_LLM_EUR_PER_HOUR (default €1.07418/h) times measured
   //     per-attempt duration. Missing duration reads as unknown; measured
   //     calls carry the same floor marker as the larger GPU. Attribution
   //     follows SmallQwen, never the endpoint URL.

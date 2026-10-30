@@ -151,7 +151,7 @@ Scale to zero after the last request took about 2 minutes, as configured.
 
 ## Cost
 
-Billed while a container exists: boot, the snapshot creation, serving, and the scaledown window after the last request. Per Modal's list prices, an L4 with 2 cores and 24 GiB pinned to a narrow EU region is about $1.8 per active hour, $0 at zero containers. Set a workspace spend limit in Modal's dashboard before the first deploy; `HAMES_MODAL_MAX_CONTAINERS=1` caps the box at one replica.
+Billed while a container exists: boot, the snapshot creation, serving, and the scaledown window after the last request. At the configured broad `eu` compute region, Modal's 2026-10-30 list prices put an L4 with 2 cores and 24 GiB at $1.249/h (about €1.074/h with the app's 0.86 static conversion), $0 at zero containers. The A10 fallback is $1.594/h (about €1.371/h); the H100 27B box with 4 cores and 64 GiB is $5.348/h (about €4.599/h). These are configured-region estimates; the 27B's live compute placement has not had a paid validation. See [Modal pricing](https://modal.com/pricing), [region selection](https://modal.com/docs/guide/region-selection), and `app/src/lib/modal-pricing.ts`. Set a workspace spend limit in Modal's dashboard before the first deploy; `HAMES_MODAL_MAX_CONTAINERS=1` caps the box at one replica.
 
 ## The 27B (`hames_private_27b.py`)
 
@@ -172,7 +172,7 @@ Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LARGE_LLM_BASE_URL`          | `<27B URL>/v1`                                                                                                                                           |
 | `LARGE_LLM_API_KEY`           | the Proxy Token, `wk-….ws-…`                                                                                                                             |
-| `LARGE_LLM_EUR_PER_HOUR`      | this box's rate, not Verda's (an H100 below is ≈ 7.00)                                                                                                   |
+| `LARGE_LLM_EUR_PER_HOUR`      | this box's rate if its shape or compute region differs from the app's broad-`eu` H100 default (€4.599/h)                                                 |
 | `LARGE_LLM_SCALEDOWN_SECONDS` | `HAMES_MODAL_27B_SCALEDOWN_S`, 300 by default                                                                                                            |
 | `LARGE_LLM_WAKE_TIMEOUT_MS`   | `1200000` for as long as the endpoint points here: a full boot (next paragraph) takes 8–15 minutes, past the 600 s default, and one can come unannounced |
 
@@ -205,7 +205,7 @@ Then, from `app/`, the app's own checks against it: `smoke-self-deployed.ts` and
 
 Reference drift was 0.0 on every restore. The eight-in-flight p95 is two rounds of eight, so one slow round sets it.
 
-**Cost.** Per Modal's list prices with the narrow-region multiplier (1.75×): H100 + 4 cores + 64 GiB ≈ $8.14 per active hour (≈ €7.00 at the app's `EUR_PER_USD`), an RTX PRO 6000 in the same shape ≈ $6.53 (≈ €5.62); $0 at zero containers. A full boot is ≈ $1.1–2 of that.
+**Cost for the 2026-10-17 reference runs.** Those runs used narrow `eu-west` compute (1.75×): H100 + 4 cores + 64 GiB ≈ $8.14 per active hour (≈ €7.00 at the app's `EUR_PER_USD`), an RTX PRO 6000 in the same shape ≈ $6.53 (≈ €5.62); $0 at zero containers. A full boot at those rates was ≈ $1.1–2. The configured 2026-10-30 compute region is broad `eu` (1.15×), whose H100 default is ≈ €4.599/h as listed above; paid verification of live compute placement remains an owner decision.
 
 ## Before any real traffic reaches it
 

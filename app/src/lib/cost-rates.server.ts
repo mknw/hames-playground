@@ -5,8 +5,8 @@
  * `settings.ts` is imported by the client (`DEFAULT_SETTINGS` rides in the
  * settings payload), and `process` is not defined in a browser bundle, so a
  * `process.env` read there would throw at module load and take the whole
- * settings import with it. The defaults live there, next to the arithmetic that
- * uses them; the overrides live here.
+ * settings import with it. The Modal resource table lives in the client-safe
+ * `modal-pricing.ts`; this module applies per-call FX and hourly overrides.
  *
  * All are read PER CALL rather than captured at module load, so an operator can
  * change a rate on the host without a rebuild — the same rule
@@ -19,11 +19,8 @@
  */
 import { inferenceEnv } from '@hames-ai/harness-baml/inference-env.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
-import {
-  DEFAULT_EUR_PER_USD,
-  DEFAULT_LARGE_LLM_EUR_PER_HOUR,
-  DEFAULT_SMALL_LLM_EUR_PER_HOUR,
-} from './settings'
+import { DEFAULT_EUR_PER_USD } from './settings'
+import { modalDefaultUsdPerHour } from './modal-pricing'
 
 assertServerOnImport()
 
@@ -55,7 +52,7 @@ export function largeEurPerHour(): number {
   return positiveRate(
     'LARGE_LLM_EUR_PER_HOUR',
     inferenceEnv('LARGE_LLM_EUR_PER_HOUR'),
-    DEFAULT_LARGE_LLM_EUR_PER_HOUR,
+    modalDefaultUsdPerHour('large') * eurPerUsdRate(),
   )
 }
 
@@ -64,6 +61,6 @@ export function smallLlmEurPerHour(): number {
   return positiveRate(
     'SMALL_LLM_EUR_PER_HOUR',
     process.env.SMALL_LLM_EUR_PER_HOUR,
-    DEFAULT_SMALL_LLM_EUR_PER_HOUR,
+    modalDefaultUsdPerHour('smallL4') * eurPerUsdRate(),
   )
 }

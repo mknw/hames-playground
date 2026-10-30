@@ -106,7 +106,7 @@ import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
-// vitest runs from app/ (every pnpm command does — CLAUDE.md).
+// vitest runs from app/ (every pnpm command does — AGENTS.md).
 const APP = path.resolve(process.cwd())
 const SRC = path.join(APP, 'src')
 

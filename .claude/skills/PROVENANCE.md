@@ -60,23 +60,23 @@ The skill is ours (recipes measured from `app/uno.config.ts` and `app/src`);
 two files inside it are rewrites of `nextlevelbuilder/ui-ux-pro-max-skill`
 @ `a38d04c` material:
 
-| Our path                        | Upstream path                                                     | Notes                                                                                       |
-| ------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `kg-dtalk-ui/A11Y-CHECKLIST.md` | `.claude/skills/ui-ux-pro-max/references/quick-reference.md` §1–2 | Rule IDs + WCAG levels preserved verbatim; guidance rewritten for attributify/Ark UI        |
+| Our path                        | Upstream path                                                     | Notes                                                                                      |
+| ------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `kg-dtalk-ui/A11Y-CHECKLIST.md` | `.claude/skills/ui-ux-pro-max/references/quick-reference.md` §1–2 | Rule IDs + WCAG levels preserved verbatim; guidance rewritten for attributify/Ark UI       |
 | `kg-dtalk-ui/GRAPH-VIZ.md`      | `.claude/skills/ui-ux-pro-max/data/charts.csv` row 16             | Thresholds/colours/a11y fallbacks carried faithfully; mapped onto Cytoscape.js + this repo |
 
 Deliberately not vendored from that source (do not re-litigate): its search
 tool and `--stack uno` (there "uno" = .NET Uno Platform, not UnoCSS), and the
 `--design-system` palette generator (would fight `app/uno.config.ts`).
 
-## `CLAUDE.md` — Code minimalism section
+## `AGENTS.md` — Code minimalism section
 
 Adapted, in our own words, from `DietrichGebert/ponytail` @ `2ed6c52` (the
 minimalism ladder). Licence text in `NOTICE.md`.
 
 ## Docs outside `.claude/`
 
-| Our path                     | Upstream path                                                       | Adapted                                                                                                             |
-| ----------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `../../docs/adr/README.md`    | `mattpocock/skills` @ `068b6e0`, `skills/engineering/domain-modeling/ADR-FORMAT.md` (body format, gate) + `affaan-m/ECC` @ `50743ce`, `skills/architecture-decision-records/SKILL.md` (index table, lifecycle statuses) | Reconciled from both sources into one format |
-| `../../docs/agents/AGENT-BRIEF.md` | `mattpocock/skills` @ `068b6e0`, `skills/engineering/triage/AGENT-BRIEF.md` | Extended for this repo's dispatch/issue surfaces |
+| Our path                           | Upstream path                                                                                                                                                                                                           | Adapted                                          |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `../../docs/adr/README.md`         | `mattpocock/skills` @ `068b6e0`, `skills/engineering/domain-modeling/ADR-FORMAT.md` (body format, gate) + `affaan-m/ECC` @ `50743ce`, `skills/architecture-decision-records/SKILL.md` (index table, lifecycle statuses) | Reconciled from both sources into one format     |
+| `../../docs/agents/AGENT-BRIEF.md` | `mattpocock/skills` @ `068b6e0`, `skills/engineering/triage/AGENT-BRIEF.md`                                                                                                                                             | Extended for this repo's dispatch/issue surfaces |

@@ -48,4 +48,4 @@ whose Design Principles §1 "Server-Only Execution" states the suffix rule, the
 module)" choice; and commit `34b7b01` (same day), which landed
 `assert.server.ts`. The implementation is unchanged today at
 `app/src/lib/harness-patterns/assert.server.ts`. The standing disposition is the
-"Server/client boundary" bullet in `CLAUDE.md`.
+"Server/client boundary" bullet in `AGENTS.md`.

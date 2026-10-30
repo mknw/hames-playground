@@ -469,7 +469,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     leftover: a leading `<think>…</think>` was peeled off the
                     answer and shown as a collapsed reasoning block. The
                     Anthropic clients this app now routes through never expose
-                    their trace (empty string + signature, see CLAUDE.md), so
+                    their trace (empty string + signature, see AGENTS.md), so
                     the only strings that pattern can still match are answers
                     that legitimately open with those literal characters —
                     which it would silently hide. */}

@@ -458,7 +458,7 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   router: 'LargeQwen',
   // THE COMPOSITE CONSEQUENCE OF THIS ONE LINE, stated whole because each piece
   // is individually mild and the set is not. This is the authoritative
-  // statement; `CLAUDE.md`, `evals/client.ts` and `createPlannerAdapter` point
+  // statement; `AGENTS.md`, `evals/client.ts` and `createPlannerAdapter` point
   // here rather than restating it.
   //
   //  1. `PlannerAnthropic`'s documented justification is "thinking left ON —

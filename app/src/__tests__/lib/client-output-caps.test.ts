@@ -20,7 +20,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { CLIENT_MAX_OUTPUT_TOKENS } from '../../lib/settings'
 
-// vitest runs from app/ (every pnpm command does — CLAUDE.md). There is ONE
+// vitest runs from app/ (every pnpm command does — AGENTS.md). There is ONE
 // BAML corpus: `packages/harness-baml/baml_src`, which declares every function
 // and every client. The app's duplicate tree is gone, so this scan has one
 // root and `byName` below can no longer collapse two same-named declarations

@@ -69,7 +69,7 @@ How agents are briefed and what they are held to. Procedures themselves live in 
 
 ## Decision Records (`docs/adr/`)
 
-Irreversible one-liners with a why — too small for a `docs/plan/` doc, too durable for a PR body. The `docs/plan/` ⇄ PR-body ⇄ `CLAUDE.md` ⇄ `docs/adr/` division of labour is stated in the README below.
+Irreversible one-liners with a why — too small for a `docs/plan/` doc, too durable for a PR body. The `docs/plan/` ⇄ PR-body ⇄ `AGENTS.md` ⇄ `docs/adr/` division of labour is stated in the README below.
 
 | Document                       | Description                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

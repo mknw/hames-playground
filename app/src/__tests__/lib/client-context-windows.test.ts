@@ -21,7 +21,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { MODEL_CONTEXT_WINDOWS } from '../../lib/settings'
 
-// vitest runs from app/ (every pnpm command does — CLAUDE.md); the Makefile is
+// vitest runs from app/ (every pnpm command does — AGENTS.md); the Makefile is
 // at the repo root, one level up.
 const MAKEFILE = path.resolve(process.cwd(), '..', 'Makefile')
 

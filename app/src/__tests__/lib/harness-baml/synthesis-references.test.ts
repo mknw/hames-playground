@@ -456,13 +456,11 @@ describe('scripted synthesis replay through the real eval check', () => {
   })
 })
 
-it('keeps the documented optional slots and mirrored agent guidance current', () => {
-  const docs = ['AGENTS.md', 'CLAUDE.md'].map((file) => {
-    const text = readFileSync(resolve(process.cwd(), '..', file), 'utf8')
-    return text.split('**The memory functions and')[1]?.split('\n\n')[0]
-  })
-  expect(docs[0]).toBe(docs[1])
-  expect(docs[0]).toContain(
+it('keeps the documented optional slots and agent guidance current', () => {
+  const guidance = readFileSync(resolve(process.cwd(), '..', 'AGENTS.md'), 'utf8')
+    .split('**The memory functions and')[1]
+    ?.split('\n\n')[0]
+  expect(guidance).toContain(
     'Synthesize now takes optional `references` after `memory_context`; its options bag follows `references`.',
   )
   const spec = readFileSync(resolve(process.cwd(), '../packages/harness-patterns/SPEC.md'), 'utf8')

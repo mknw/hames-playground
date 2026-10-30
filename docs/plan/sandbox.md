@@ -10,7 +10,7 @@ This document is the infrastructure design — wrapper API, attachment model, MC
 - Rootfs flavor catalog beyond the v0 minimum (see #78 → "Rootfs flavors"; the first `image-processing` + `data` flavours are specced in [`sandbox-flavours.md`](../sandbox-flavours.md))
 - `backgroundSession` (a v2 primitive, orthogonal to `withSandbox`; outlined under "Deferred / v1+")
 
-> **Design-conversation note.** An earlier draft of this doc was scaffolded too early, before the load-bearing architectural choices were probed. The current shape was reached by sampling the option space first and converging with the user before writing. Keep that ordering. See CLAUDE.md → "Design Decisions" → "Probe before scaffolding."
+> **Design-conversation note.** An earlier draft of this doc was scaffolded too early, before the load-bearing architectural choices were probed. The current shape was reached by sampling the option space first and converging with the user before writing. Keep that ordering. See AGENTS.md → "Design Decisions" → "Probe before scaffolding."
 
 ---
 
@@ -118,8 +118,8 @@ So a pure outer wrapper **cannot** transparently make the inner loop call in-VM 
 **Chosen mechanism: request-scoped dispatch via AsyncLocalStorage.** The codebase already uses ALS request-scoping (`getRequestSettings()`). `withSandbox` acquires the sandbox and runs the wrapped pattern inside an ALS scope carrying the handle:
 
 ```typescript
-const sandbox = await acquireOrAttach(cfg);
-return sandboxScope.run(sandbox, () => inner.fn(scope, view));
+const sandbox = await acquireOrAttach(cfg)
+return sandboxScope.run(sandbox, () => inner.fn(scope, view))
 ```
 
 The two controllers, the `callTool` dispatch layer, and the BAML adapters are changed **once** to consult that scope:
@@ -146,11 +146,11 @@ Single backend trait; substrate choice is operational config, not application co
 
 ```typescript
 interface ComputeBackend {
-  boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle>;
-  destroy(vm: VMHandle): Promise<void>;
-  reset(vm: VMHandle): Promise<void>; // warm-pool recycle
-  connectMcp(vm: VMHandle): Promise<McpTransport>; // tunneled socket to in-VM MCP servers
-  health(vm: VMHandle): Promise<HealthStatus>;
+  boot(rootfs: RootfsId, runtime: RuntimeConfig): Promise<VMHandle>
+  destroy(vm: VMHandle): Promise<void>
+  reset(vm: VMHandle): Promise<void> // warm-pool recycle
+  connectMcp(vm: VMHandle): Promise<McpTransport> // tunneled socket to in-VM MCP servers
+  health(vm: VMHandle): Promise<HealthStatus>
 }
 ```
 
@@ -304,7 +304,7 @@ superviseGate(
       chain(actorCritic, compactExecution), // a full agentic loop per strategy
     ),
   ),
-);
+)
 ```
 
 Each strategy runs a full agentic loop in its own isolated sandbox — install different libs, take a different approach — and the user (or an LLM-as-judge via the untested `judge` pattern) selects the winner at the end. The user waits, by design: swarm mode trades compute for breadth.
@@ -352,18 +352,18 @@ Two caps prevent both global exhaustion and any single session starving the othe
 
 ```typescript
 class SandboxScheduler {
-  private readonly globalCap: number; // e.g. 16
-  private readonly perSessionCap: number; // e.g. 4
-  private readonly inflight = new Map<SessionId, Set<VMHandle>>();
-  private readonly queue: Pending[] = [];
+  private readonly globalCap: number // e.g. 16
+  private readonly perSessionCap: number // e.g. 4
+  private readonly inflight = new Map<SessionId, Set<VMHandle>>()
+  private readonly queue: Pending[] = []
 
   async allocate(req: AllocReq): Promise<VMHandle> {
     while (!this.canSchedule(req.sessionId)) {
-      await this.waitForSlot(req);
+      await this.waitForSlot(req)
     }
-    const vm = await this.pool.acquire(req.rootfs);
-    this.track(req.sessionId, vm);
-    return vm;
+    const vm = await this.pool.acquire(req.rootfs)
+    this.track(req.sessionId, vm)
+    return vm
   }
   // … release(), canSchedule() as before
 }
@@ -450,14 +450,14 @@ Each step de-risks the next.
 Orthogonal to `withSandbox`, not a variant. Runs a wrapped pattern asynchronously; the parent harness returns immediately. The inner pattern's prompt comes from the parent harness, not the user.
 
 ```typescript
-const vmAgent = harness(/* ... */);
+const vmAgent = harness(/* ... */)
 const assistant = harness(
   router(routesDescriptions),
   routes({
-    "simple-question": simpleRoute,
-    "coding-task": backgroundSession(vmAgent),
+    'simple-question': simpleRoute,
+    'coding-task': backgroundSession(vmAgent),
   }),
-);
+)
 ```
 
 Background sandbox work is the composition `backgroundSession(withSandbox(harness(...)))`. Each primitive does one thing; `backgroundSession` is independently useful for any long-running pattern (deep research, multi-document synthesis).

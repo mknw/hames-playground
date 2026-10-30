@@ -74,7 +74,7 @@ describe('eventIconClasses / eventColors', () => {
  */
 describe('event-styles.ts opts itself into UnoCSS extraction', () => {
   it('keeps the @unocss-include marker', () => {
-    // vitest runs from app/ (every pnpm command does — CLAUDE.md). This file
+    // vitest runs from app/ (every pnpm command does — AGENTS.md). This file
     // runs under jsdom, where `import.meta.url` is not a file: URL, so the
     // cwd-relative form is the one that works here.
     const source = readFileSync(

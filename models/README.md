@@ -58,7 +58,7 @@ pair for whichever you are moving (values go in `app/.env`, documented in
   the per-call override in `packages/harness-baml/clients.server.ts`; the
   Anthropic BAML chain declarations stay unchanged. The whole tier requires
   all five values listed in [`docs/PREVIEW.md` §6](../docs/PREVIEW.md#6-boot),
-  as specified in `CLAUDE.md`.
+  as specified in `AGENTS.md`.
 - **The embedding model must not change with the host.** Vectors are only
   comparable inside one model's space, so a remote embedder has to serve the
   _same_ Qwen3-Embedding-0.6B or the existing index is invalidated — see

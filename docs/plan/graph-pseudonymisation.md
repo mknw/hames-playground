@@ -155,7 +155,7 @@ passing test, so a future change that "fixes" one has to say so out loud.
 
 ## Open questions
 
-Per the "probe before scaffolding" rule in `CLAUDE.md`, these are **not decided
+Per the "probe before scaffolding" rule in `AGENTS.md`, these are **not decided
 here**. Each changes the shape of the implementation, and picking one silently
 inside this PR would lock in a default the reader would have redirected.
 

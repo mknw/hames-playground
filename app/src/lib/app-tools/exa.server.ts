@@ -3,8 +3,11 @@
  * before and after this transport. Never expose the credential in descriptors. */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ToolTransport } from '@hames-ai/harness-patterns/tool-transport.server'
 import type { MCPToolDescription, ToolCallResult } from '@hames-ai/harness-patterns/types'
+
+assertServerOnImport()
 
 const EXA_TOOLS = ['web_search_exa', 'web_fetch_exa'] as const
 type ExaTool = (typeof EXA_TOOLS)[number]

@@ -556,6 +556,15 @@ for v in c['services']['app-dev']['volumes']:
 render.write_text(json.dumps(c))
 PY
   }
+  clone_render_path_is_canonical() {
+    python3 - "$dir/validator-stdin" "$1" "$2" <<'PY'
+import json, os, pathlib, sys
+render = json.loads(pathlib.Path(sys.argv[1]).read_text())
+actual = (render['secrets']['side']['file'] if sys.argv[2] == 'secret'
+          else render['volumes']['side']['driver_opts']['device'])
+sys.exit(0 if actual == os.path.realpath(sys.argv[3]) else 1)
+PY
+  }
   clone_mount_cases() {
     local both="$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml" f ok
     # Both VM overlays, the keys mode 0600 and owned by the operator.
@@ -626,11 +635,17 @@ c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-networ
     secrets=[dict(source='side', target='/run/side-secret')])
 p.write_text(json.dumps(c))
 PY
+      : >"$dir/validator-stdin"
       if [[ $f == ordinary-file-link ]]; then
-        out=$(clone_boot dc 2>&1); rc=$?
+        out=$(SHIM_RUN_STDIN="$dir/validator-stdin" clone_boot dc 2>&1); rc=$?
         if ((rc == 0)); then pass 'clones preflight accepts a sidecar secret linked to a non-TLS file'
         else flunk "clones preflight sidecar secret control (rc=$rc)" "$out"; fi
-      else clone_refused 'a sidecar secret linked to the TLS key' dc; fi
+      else SHIM_RUN_STDIN="$dir/validator-stdin" clone_refused 'a sidecar secret linked to the TLS key' dc; fi
+      if [[ -z ${SHIM_REAL_DOCKER:-} ]]; then
+        if clone_render_path_is_canonical secret "$dir/$f"; then
+          pass "clones preflight hands the validator a canonical sidecar secret ($f)"
+        else flunk "clones preflight sidecar secret render is not canonical ($f)"; fi
+      fi
     done
     for f in ordinary-dir-link tls-link; do
       clone_reset
@@ -643,11 +658,17 @@ c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-networ
     volumes=[dict(type='volume', source='side', target='/srv')])
 p.write_text(json.dumps(c))
 PY
+      : >"$dir/validator-stdin"
       if [[ $f == ordinary-dir-link ]]; then
-        out=$(clone_boot dc 2>&1); rc=$?
+        out=$(SHIM_RUN_STDIN="$dir/validator-stdin" clone_boot dc 2>&1); rc=$?
         if ((rc == 0)); then pass 'clones preflight accepts a sidecar volume linked to a non-TLS directory'
         else flunk "clones preflight sidecar volume control (rc=$rc)" "$out"; fi
-      else clone_refused 'a sidecar volume device linked to the TLS directory' dc; fi
+      else SHIM_RUN_STDIN="$dir/validator-stdin" clone_refused 'a sidecar volume device linked to the TLS directory' dc; fi
+      if [[ -z ${SHIM_REAL_DOCKER:-} ]]; then
+        if clone_render_path_is_canonical device "$dir/$f"; then
+          pass "clones preflight hands the validator a canonical volume device ($f)"
+        else flunk "clones preflight volume device render is not canonical ($f)"; fi
+      fi
     done
     # The release checkout reached through a symlink is mounted, and its
     # validator run, at its realpath; its rendered build context follows the

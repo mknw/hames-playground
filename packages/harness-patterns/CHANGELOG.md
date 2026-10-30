@@ -1,5 +1,19 @@
 # @hames-ai/harness-patterns
 
+## 0.6.0
+
+### Minor Changes
+
+- ae863e8: The injection guard can exempt links a source writes itself from `exfil-data-url` (#784 item 6). `InjectionGuardOptions` gains `sourceLinks: { namespace, field, hosts }`: a string under that key, in a result from that namespace, whose whole value is one `https:` URL on exactly one of `hosts`, skips that rule and no other. `AgentGuards` gains `documentHosts`; `general-next`'s office guard and `microsoft-365`'s guard exempt the Graph tools' `webUrl` on them. The reference app reads them from `GRAPH_DOCUMENT_HOSTS` and refuses boot on an entry that is not a bare hostname.
+- 52aeb18: The guard thresholds and the egress tripwire's N are settings (#844). `AgentGuards` gains `gateThreshold` (τi), `egressThreshold` (τe) and `maxOutgoingRetriesPostTripwire` (N); `general-next` passes them to `createGuardGate` and `withEgressGate`, and keeps today's values (0.15, 0.3, 0) when they are absent. `@hames-ai/harness-patterns` exports `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` (0), the egress gate's default N. The reference app reads them from `GUARD_GATE_THRESHOLD`, `GUARD_EGRESS_THRESHOLD` and `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE`: an out-of-range value refuses boot, a looser one warns once.
+
+### Patch Changes
+
+- 594b81a: `actorCritic` no longer re-runs a tool call only to mark itself done (#784 item 7). An `is_final` action that exactly repeats the previous attempt's single successful call is not dispatched: the attempt log records the repeat with the result already held, and the critic judges that. The actor prompt now states this.
+- fc9fd44: A shadow guard gate's `decision_made` event gains `wouldRun`: what the gate WOULD have decided at its own configured threshold — run the screen or skip it (#784 item 10). The observability row for such an event reads `wouldRun` instead of the model's argmax `label`, which for a pTrue between the threshold and 0.5 read `false` while the gate would have run the screen.
+- b770f32: **The injection guard normalises a URL scheme before matching.** A URL scheme is case-insensitive (RFC 3986 §3.1), and `exfil-data-url` now matches it that way, as the guard's other URL rules already did. Nothing else in the pattern changes.
+- de554a1: **The retriever's ingest safety net respects the per-document "Index for search" choice (#836).** `ensureSessionIngested` indexed a sandbox output whose `ingestStatus` was absent — but a promotion from `/work/out` stores no status precisely because indexing it is the person's choice, so "absent" there means "not chosen", not "the gate never fired". A first search now leaves an unchosen sandbox output unindexed (the Data Stash button is what indexes a **text** output; a binary output is indexable by no path today, #853), while a chosen one — `pending`, `indexed`, or `failed` — is handled exactly as before (`failed` retried). Uploads without the sandbox provenance keep the net's original coverage.
+
 ## 0.5.0
 
 ### Minor Changes

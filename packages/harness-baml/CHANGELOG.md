@@ -1,5 +1,20 @@
 # @hames-ai/harness-baml
 
+## 0.6.0
+
+### Patch Changes
+
+- 594b81a: `actorCritic` no longer re-runs a tool call only to mark itself done (#784 item 7). An `is_final` action that exactly repeats the previous attempt's single successful call is not dispatched: the attempt log records the repeat with the result already held, and the critic judges that. The actor prompt now states this.
+- 8651e95: The legacy-name fold no longer tells an operator to remove the only copy of a value (#733). `inference-env.server.ts` records the canonical names its own fold wrote on a `globalThis` symbol (the one policy holder's pattern), so a second bundled copy of the module — whose `warned` set is fresh while the fold's copies are already in the environment — reports the legacy names as deprecated, not as `IGNORED because the new name is set; remove it`. A name the operator set before the fold is never recorded, so a genuine legacy-vs-new conflict still reports IGNORED. New export `__resetInferenceEnvFoldForTests` (test isolation for that record; no consumer code change).
+- 33bbc22: The 27B time-price default is derived from Modal's listed resources instead of a hand-set figure (#873). `SEAM_DEFAULT_LARGE_LLM_EUR_PER_HOUR` rises 1.819 → 4.598976592 — the documented H100 box (H100 GPU, 4 cores, 64 GiB, broad `eu` compute) priced from Modal's dated list table (`app/src/lib/modal-pricing.ts`, read 2026-10-30) and converted once at `EUR_PER_USD`. The `LARGE_LLM_EUR_PER_HOUR` override and the per-call `configureCostRates` seam are unchanged.
+- Updated dependencies [594b81a]
+- Updated dependencies [fc9fd44]
+- Updated dependencies [b770f32]
+- Updated dependencies [ae863e8]
+- Updated dependencies [52aeb18]
+- Updated dependencies [de554a1]
+  - @hames-ai/harness-patterns@0.6.0
+
 ## 0.5.0
 
 ### Patch Changes

@@ -290,8 +290,8 @@ fresh ID (on KVM, the instance's DMI product UUID), and
 does not use cloud-init's `--machine-id` flag, because in the appliance, where
 no systemd runs, that flag deletes the file. SSH host keys and Docker engine
 identity files are removed after daemon shutdown. The guest inventory records
-`machine_id_state` (`absent`, `empty`, `uninitialized`, `populated` or
-`symlink`), `dbus_machine_id` and `ssh_host_keys`. Assembly accepts only an
+`machine_id_state` (`absent`, `empty`, `uninitialized`, `populated`,
+`symlink` or `not-regular`), `dbus_machine_id` and `ssh_host_keys`. Assembly accepts only an
 empty machine-id, and only an absent `/var/lib/dbus/machine-id` or one linked
 to `/etc/machine-id`. systemd reads the D-Bus ID first, so a real file there
 would give every clone the same ID. Assembly also refuses any SSH host key.

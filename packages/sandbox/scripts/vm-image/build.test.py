@@ -371,7 +371,7 @@ class Pipeline(unittest.TestCase):
     def test_build_unclean_machine_id_refused(self):
         # 'absent' boots with no machine ID on a read-only root; only an empty file is safe.
         self.inventory_states_refused([lambda v, s=state: v.update(machine_id_state=s)
-                                       for state in ('absent', 'uninitialized', 'populated', 'symlink')],
+                                       for state in ('absent', 'uninitialized', 'populated', 'symlink', 'not-regular')],
                                       'machine identity')
 
     def test_build_dbus_machine_id_refused(self):
@@ -814,6 +814,10 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(inventory().get('machine_id_state'), 'absent')
             machine_id.symlink_to(elsewhere)
             self.assertEqual(inventory().get('machine_id_state'), 'symlink')
+            machine_id.unlink()
+            os.mkfifo(machine_id)
+            self.assertEqual(inventory().get('machine_id_state'), 'not-regular')
+            machine_id.unlink()
             dbus.unlink()
             self.assertEqual(inventory().get('dbus_machine_id'), 'absent')
             dbus.write_text('c' * 32)  # a real D-Bus ID every clone would inherit
@@ -1124,6 +1128,7 @@ def mutations():
         ("staged file world readable", '        path.chmod(0o600)\n        require(digest(path)', '        path.chmod(0o644)\n        require(digest(path)', "test_work_and_files_private_modes"),
         ("machine identity inventory ignored", 'inventory["machine_id_state"] == "empty"', 'True', "test_build_unclean_machine_id_refused"),
         ("absent machine-id admitted again", 'inventory["machine_id_state"] == "empty"', 'inventory["machine_id_state"] in ("empty", "absent")', "test_build_unclean_machine_id_refused"),
+        ("non-regular machine-id admitted", 'inventory["machine_id_state"] == "empty"', 'inventory["machine_id_state"] in ("empty", "not-regular")', "test_build_unclean_machine_id_refused"),
         ("D-Bus machine identity inventory ignored", 'inventory.get("dbus_machine_id") in ("absent", "link")', 'True', "test_build_dbus_machine_id_refused"),
         ("duplicate LXD agent mask unchecked", 'inventory.get("lxd_agent_masked") is True', 'True', "test_build_lxd_agent_unmasked_refused"),
         ("SSH identity inventory ignored", 'inventory["ssh_host_keys"] == []', 'True', "test_build_ssh_host_keys_refused"),
@@ -1199,6 +1204,7 @@ def mutations():
         ('guest enabled unit inventory omitted', "'enabled_units': units.read().splitlines()", "'enabled_units': []", 'test_all_images_loaded_from_archives_without_pull'),
         ("guest machine state inventory omitted", "if machine_id.is_symlink():\n    inventory['machine_id_state'] = 'symlink'", "if True:\n    pass", "test_guest_cleanup_and_clone_inventory"),
         ("guest absent machine-id recorded as empty", "elif not machine_id.exists():\n    inventory['machine_id_state'] = 'absent'", "elif not machine_id.exists():\n    inventory['machine_id_state'] = 'empty'", "test_guest_cleanup_and_clone_inventory"),
+        ("guest non-regular machine-id recorded as empty", "elif not machine_id.is_file():\n    inventory['machine_id_state'] = 'not-regular'\n", "", "test_guest_cleanup_and_clone_inventory"),
         ("guest populated machine-id recorded as empty", "elif machine_id.stat().st_size == 0:", "elif True:", "test_guest_cleanup_and_clone_inventory"),
         ("guest machine-id symlink recorded as its target", "if machine_id.is_symlink():", "if False:", "test_guest_cleanup_and_clone_inventory"),
         ("guest machine-id left absent", ": > /etc/machine-id\nchmod 444 /etc/machine-id\n", "", "test_guest_cleanup_and_clone_inventory"),

@@ -387,6 +387,42 @@ async function run(
 }
 
 describe('general-next composition', () => {
+  // #880 H2: these are the measured, synthetic-only labels on the actual
+  // systemone request. MUTATIONS: delete any Tools group or the instruction
+  // guide; either edit must turn this test red.
+  it('sends the measured short route criteria and guide through Decide', async () => {
+    choices = ['answer']
+    await run()
+    const { state, questions } = JSON.parse(String(requests.mock.calls[0][1].body))
+    const { criteria, instructions } = questions.next_step as {
+      criteria: Record<string, string>
+      instructions: string
+    }
+    expect(instructions).toBe(
+      'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools.',
+    )
+    expect(state).not.toContain('Choose the route whose own tools perform the next step')
+    expect(criteria['office-data']).toBe(
+      'Read this user’s Microsoft 365 mail, calendar and file metadata; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+        'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
+    )
+    expect(criteria['info-retrieval']).toBe(
+      'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
+        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
+    )
+    expect(criteria['read-documents']).toBe(
+      'Search this conversation’s uploaded and indexed documents and return cited excerpts.\n' +
+        'Tools: document retriever (Data Stash search, cited passages).',
+    )
+    expect(criteria.think).toBe(
+      'Decide and write the steps before acting, from the agent map and earlier results.\n' +
+        'Tools: none (planning only).',
+    )
+    for (const route of ['office-data', 'info-retrieval', 'read-documents', 'think']) {
+      expect(criteria[route].length, route).toBeLessThanOrEqual(450)
+    }
+  })
+
   it.each(['anthropic', 'self_deployed'])(
     'E2: sends uploaded-file computation only to the office-data Decide criterion (%s)',
     async (tier) => {
@@ -396,14 +432,10 @@ describe('general-next composition', () => {
       expect(requests).toHaveBeenCalledTimes(1)
       const body = JSON.parse(String(requests.mock.calls[0][1].body))
       const criteria = body.questions.next_step.criteria as Record<string, string>
-      expect(criteria['office-data']).toContain('run code over uploaded files')
-      expect(criteria['office-data']).toContain('spreadsheets, CSV, tables')
-      expect(criteria['office-data']).toContain('to compute or analyse them')
+      expect(criteria['office-data']).toContain('compute and save files in the office sandbox')
       expect(criteria['office-data']).toContain('save deliverables')
       expect(criteria['office-data']).toContain('graph_file_ingest')
-      expect(criteria['office-data']).toContain(
-        'find a OneDrive or SharePoint file and copy it into this conversation',
-      )
+      expect(criteria['office-data']).toContain('graph_file_ingest copies in')
       expect(criteria['office-data']).not.toContain('private-only')
       expect(composition.routes['office-data']).toMatchObject({
         capability: expect.stringContaining(
@@ -419,13 +451,10 @@ describe('general-next composition', () => {
             ),
           ),
       ).toEqual(['office-data'])
-      expect(criteria['read-documents']).toContain('Search uploaded and indexed documents')
+      expect(criteria['read-documents']).toContain('uploaded and indexed documents')
       expect(criteria['read-documents']).toContain('uploaded')
       expect(criteria['read-documents']).toContain('cited excerpts')
-      expect(criteria['read-documents']).toContain('Running code over a file is office-data')
-      expect(criteria['read-documents']).toContain(
-        'A OneDrive or SharePoint file not yet copied into this conversation is office-data.',
-      )
+      expect(criteria['read-documents']).toContain('Data Stash search, cited passages')
       expect(criteria['read-documents']).not.toMatch(/\bwhenever\b/)
       expect(criteria['info-retrieval']).toContain('Look things up')
     },
@@ -450,7 +479,7 @@ describe('general-next composition', () => {
       const body = JSON.parse(String(requests.mock.calls[0][1].body))
       const criteria = body.questions.next_step.criteria as Record<string, string>
       expect(criteria['office-data']).toContain(
-        "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
+        'exact calculation on numbers in the user’s message is run here as code',
       )
       expect(criteria.answer).toBe(P87_ANSWER)
       // Scoped to the latest message: unscoped "arithmetic" would route a follow-up such as
@@ -532,12 +561,9 @@ describe('general-next composition', () => {
   // two live passes produced (no trace was captured, so each is synthetic and
   // reconstructed from the final answers). The criteria are byte-identical to
   // scenario 12's, which routes to read-documents: only the STATE differs, and in
-  // 13 nothing in it says "uploaded", the one word 12's request gave the criterion
-  // to match. So the criterion itself has to carry the bridge from "an earlier lookup
-  // did not find the named file" to read-documents. This pins the delivery of
-  // that text and the premise; the decider is remote, so no offline pin can show
-  // which route it then picks. MUTATION: drop the "did not find" clause (or the
-  // others) in the read-documents description in general-next.server.ts: red.
+  // 13 nothing in it says "uploaded". H2's measured short criterion replaces
+  // the former named-file bridge; this pin keeps the state and the new route
+  // criterion on the same second decision without claiming model behavior.
   const SCENARIO_13_INFO_RETURNS = {
     'pass 3: notes unavailable':
       'The graph holds 42 Project nodes. The target count in lantern-notes.md is unavailable: a web search returned only a placeholder URL and the graph has no node for the notes.',
@@ -557,7 +583,7 @@ describe('general-next composition', () => {
           body,
         ): body is {
           state: string
-          questions: { next_step: { criteria: Record<string, string> } }
+          questions: { next_step: { criteria: Record<string, string>; instructions: string } }
         } =>
           // The guard gate's `guard.screen` question rides the same decide seam
           // whenever a tool result needs screening; only the loop's own
@@ -570,7 +596,7 @@ describe('general-next composition', () => {
       Object.entries(SCENARIO_13_INFO_RETURNS).map(([shape, ret]) => [tier, shape, ret]),
     ),
   )(
-    'E4: the second Decide of the two-source question sees a criterion for a named file an earlier lookup did not find (%s, %s)',
+    'E4: the second Decide of the two-source question sees the document route after an earlier lookup (%s, %s)',
     async (tier, _shape, ret) => {
       const question = scenarioQuestion('13-two-sources.ts')
       choices = ['info-retrieval', 'answer']
@@ -586,19 +612,10 @@ describe('general-next composition', () => {
       // The premise: nothing in this state says the file was uploaded.
       expect(second.state).not.toMatch(/\buploaded\b/i)
       const criteria = second.questions.next_step.criteria
-      expect(criteria['read-documents']).toContain(
-        'an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it;',
-      )
-      expect(criteria['read-documents']).toContain('the answer needs text quoted from such a file')
-      // The clause is scoped to uploaded files: a file at a web address stays with info-retrieval.
-      expect(criteria['read-documents']).toContain(
-        'also when an earlier knowledge-graph or web lookup did not find it',
-      )
-      expect(criteria['read-documents']).toContain(
-        'A file the user gives a web address for is info-retrieval',
-      )
+      expect(criteria['read-documents']).toContain('uploaded and indexed documents')
+      expect(criteria['read-documents']).toContain('Data Stash search, cited passages')
       expect(criteria['info-retrieval']).toContain(
-        'it cannot open files uploaded to this conversation (that is read-documents)',
+        'cannot open files uploaded to this conversation',
       )
     },
   )
@@ -674,14 +691,12 @@ describe('general-next composition', () => {
         // What was captured is what went on the wire, field for field.
         expect(d.state).toBe(sent[i].state)
         expect(d.criteria).toEqual(sent[i].questions.next_step.criteria)
-        expect(d.instructions).toBe('Which step should run next?')
+        expect(d.instructions).toBe(sent[i].questions.next_step.instructions)
         expect(d.rawOutput).toContain('"choice"')
       })
       expect(decisions[0].state).toContain(question)
       expect(decisions[1].state).toContain(ret)
-      expect(decisions[1].criteria['read-documents']).toContain(
-        'also when an earlier knowledge-graph or web lookup did not find it',
-      )
+      expect(decisions[1].criteria['read-documents']).toContain('Data Stash search, cited passages')
       expect(decisions[1].probs).toMatchObject({ answer: 1, 'read-documents': 0 })
     },
   )
@@ -899,7 +914,8 @@ describe('general-next composition', () => {
     expect(composition.routes['info-retrieval']).toMatchObject({ siblingResults: ['retriever'] })
     expect(composition.routes['info-retrieval']).toMatchObject({
       description:
-        'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
+        'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
+        'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
       capability:
         'Read the knowledge graph; search or fetch public web sources and library documentation.',
     })
@@ -1362,13 +1378,15 @@ describe('general-next composition', () => {
       const intent = mocks.critic.mock.calls[0][0]
       const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
       expect(request).toBe(message)
-      expect(scope).toMatch(/^- office-data: Read Microsoft 365 mail and file metadata; /)
+      expect(scope).toMatch(
+        /^- office-data: Read this user’s Microsoft 365 mail, calendar and file metadata; /,
+      )
       // #832 (owner, 2026-10-28): the office step saves the file and the user indexes it
       // from the Data Stash, so "index it for this chat" is answered by saying so, not
       // missing from the step's results. MUTATION: drop the sentence from the office-data
-      // description → red here.
+      // capability → red here.
       expect(scope).toContain(
-        "a file saved under /work/out is kept in this conversation's documents, and the user can index a text one for search from the Data Stash: a file saved under /work/out is never indexed by this route, so when asked to index one of those, save it and tell the user they can index it from the Data Stash; ",
+        "A file saved under /work/out is kept in this conversation's documents; this route never indexes a saved file. When asked to index one, save it and tell the user they can index a text file from the Data Stash.",
       )
       // This route's graph_file_ingest DOES index (deps here enable it, and the office
       // actor is told to finish once indexStatus is indexed), so the claim is scoped to
@@ -2212,7 +2230,7 @@ describe('general-next think route, in isolation', () => {
       'think',
       'answer',
     ])
-    expect(first.think).toBe('Decide the steps before acting')
+    expect(first.think).toContain('Decide and write the steps before acting')
     expect(
       Object.keys(first).filter((route) =>
         /\b(?:plan\w*|steps?|before acting)\b/i.test(first[route]),
@@ -2228,7 +2246,7 @@ describe('general-next think route, in isolation', () => {
     expect(message).toBe(QUESTION)
     expect(intent).toBe(QUESTION)
     expect(context).toContain('Agent map:')
-    expect(context).toContain('- think: Decide the steps before acting')
+    expect(context).toContain('- think: Decide and write the steps before acting')
     expect(context).not.toContain('Earlier step results')
 
     // No tool ran anywhere: no gateway call beyond the schema read at composition time, no
@@ -2482,8 +2500,11 @@ it.each([false, undefined])(
     expect(prefix).not.toContain('call graph_file_ingest')
     await harness(...patterns)('Read a file')
     const criteria = JSON.parse(String(requests.mock.calls[0][1].body)).questions.next_step.criteria
-    expect(criteria['office-data']).toContain('Graph file ingestion is unavailable.')
+    expect(criteria['office-data']).toContain('mail/calendar (graph_mail_recent')
+    expect(criteria['office-data']).toContain('files (graph_files_search')
+    expect(criteria['office-data']).toContain('file copying unavailable')
     expect(criteria['office-data']).not.toContain('graph_file_ingest')
+    expect(criteria['office-data'].length).toBeLessThanOrEqual(450)
     expect(composition.routes['office-data']).toMatchObject({
       capability: expect.stringContaining('Graph file ingestion is unavailable.'),
     })

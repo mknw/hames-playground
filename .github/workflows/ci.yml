@@ -662,8 +662,9 @@ jobs:
     needs: [clone-changes]
     if: always() && (github.event_name == 'push' || needs.clone-changes.result == 'failure' || needs.clone-changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
-    # #777 (release VM, 38 -> 45 bootstrap mutants) took 23m28s against the old 25.
-    timeout-minutes: 40
+    # #864: 48/63 bootstrap mutants took ~40m (~50s each); 15 bootstrap and
+    # 64 validator mutants remained. Allow 75m for the corpus and CI variance.
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: .

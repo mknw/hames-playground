@@ -26,9 +26,11 @@ neo4j_image=$(docker inspect --format '{{.Image}}' "$neo4j_id") || exit 1
 neo4j_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$neo4j_id") || exit 1
 test -n "$neo4j_image" && test -n "$neo4j_volume" || exit 1
 dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
-umask 077
-BACKUP_DIR="$dump_root/release" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
-  bash scripts/backup-preview.sh || exit 1
+(
+  umask 077
+  BACKUP_DIR="$dump_root/release" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
+    bash scripts/backup-preview.sh
+) || exit 1
 ```
 
 With two clones, also stop `app-dev` **before** the dump. Supply the actual
@@ -238,8 +240,62 @@ never drop columns/tables to make the old image fit. Review data semantics,
 encrypted-column inventories and dependencies too: the additive pin does not
 prove old code can read new data or ciphertext.
 
-For a compatible image-only rollback, return the checkout/configuration to its
-recorded good pin, tag `hames-app:rollback` back to `hames-app:local` (and
+For a compatible image-only rollback, use the deployment user's login shell,
+never `sudo git` or a root shell. The backup's `umask 077` is confined to its
+subshell above; keep 077 for dumps, env files and keys, but use 022 for Git
+checkout. Record the full last-good SHA privately, then run this gate **before**
+invoking the checkout stage or any boot script. It checks the current checkout
+first and the restored checkout again. The tracked MCP config is the sole
+intentional exception to the clean-tree check: bootstrap restores and re-applies
+it around checkout. Keep protected configuration, dumps, retained images and
+separate key escrow; never discard them to make this gate pass.
+
+```bash
+APP_DIR=/opt/hames
+GOOD_SHA='<recorded-full-40-character-good-sha>'
+test "$(id -u)" -ne 0 && test "${#GOOD_SHA}" -eq 40 || exit 1
+case "$GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+
+check_checkout_modes() {
+  local root=$1 path rel mode
+  test -d "$root/.git" && test ! -L "$root" || return 1
+  test "$(stat -c %u "$root")" = "$(id -u)" &&
+    test "$(stat -c %u "$root/.git")" = "$(id -u)" || return 1
+  for rel in .git/HEAD docker-compose.yaml docker-compose.prod.yaml \
+    docker-config.json scripts/bootstrap-vps.sh scripts/validate-clones.mjs \
+    scripts/check-vps.py; do
+    path="$root/$rel"
+    test -f "$path" && test ! -L "$path" && test -r "$path" &&
+      test "$(stat -c %u "$path")" = "$(id -u)" || return 1
+    mode=$(stat -c %a "$path") || return 1
+    case "$rel" in
+      scripts/bootstrap-vps.sh) test "$mode" = 755 || return 1 ;;
+      *) test "$mode" = 644 || return 1 ;;
+    esac
+  done
+  for path in "$root"/docker-compose*.yaml; do
+    test -f "$path" && test ! -L "$path" && test -r "$path" &&
+      test "$(stat -c %u "$path")" = "$(id -u)" &&
+      test "$(stat -c %a "$path")" = 644 || return 1
+  done
+}
+
+check_checkout_modes "$APP_DIR" || { echo 'Checkout ownership/modes need manual repair; stop.' >&2; exit 1; }
+( umask 022; bash "$APP_DIR/scripts/bootstrap-vps.sh" --hostname app.example.invalid \
+    --acme-email ops@example.invalid --ref "$GOOD_SHA" --only checkout --no-seed ) || exit 1
+check_checkout_modes "$APP_DIR" &&
+  test "$(git -C "$APP_DIR" rev-parse HEAD)" = "$GOOD_SHA" || exit 1
+dirty=$(git -C "$APP_DIR" status --porcelain --untracked-files=no) || exit 1
+test -z "$(printf '%s\n' "$dirty" | sed '/ configs\/mcp-config.yaml$/d')" || exit 1
+```
+
+Replace the example hostname and ACME email with the deployment's existing
+arguments; retain any other required bootstrap arguments. For two clones, run
+`check_checkout_modes "$DEV_CLONE_PATH"` before checkout and again afterwards,
+then verify its HEAD equals the recorded full dev SHA and its tracked tree is
+clean. Stop for targeted manual repair if any ownership, mode, pin or tree check
+fails; do not apply recursive `chown`/`chmod`. Only then tag
+`hames-app:rollback` back to `hames-app:local` (and
 `hames-app:dev-rollback` back to `hames-app:dev` for the other clone), then
 `docker compose up -d --no-build --force-recreate app` (also `app-dev` when
 enabled). For clones, use the following immediately before recreation, with the

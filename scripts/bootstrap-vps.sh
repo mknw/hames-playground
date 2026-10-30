@@ -21,7 +21,8 @@
 #
 # Add --dry-run first: every probe runs, every change is printed, none is made.
 # Two clones: the release checkout's root .env must persist §12's complete
-# COMPOSE_FILE and clone inputs. Node.js on the host runs the offline validator.
+# COMPOSE_FILE and clone inputs. The clone validator runs inside the release
+# app image; the host needs Docker only, never Node.
 #
 # IDEMPOTENT. Each stage checks before it changes, so re-running is how you
 # resume. The run STOPS (exit 3) at two points and expects a re-run:
@@ -554,9 +555,66 @@ sys.exit(0 if isinstance(probes, list) and probes else 1)' "$path" 2>/dev/null |
       return 1
     fi
   done
-  command -v node >/dev/null 2>&1 || { printf '%s\n' "Clone preflight requires Node.js on the host" >&2; return 1; }
+  # #681: the validator runs inside the release app image (the one the compose
+  # build produces) — the host never needs Node, and the code path is the one
+  # the operator has been running by hand. The rendered config reaches it over
+  # stdin, never a file; --network none keeps it offline, and --pull never
+  # keeps the image local. Secret-silent as before: the render is piped, never
+  # saved, and Compose's errors are discarded.
+  # Docker resolves a bind source's symlinks at the mount, so a container
+  # cannot see a link the host validator would have followed (into a checkout,
+  # or another service's mount of a TLS directory). Every host path is
+  # therefore canonicalised HERE, on the host, first: the render's build
+  # contexts, bind sources, secret and config files and volume devices are
+  # rewritten to their realpath on the way through, and the checkouts and each
+  # TLS client-material path are bind-mounted READ-ONLY at their host realpath,
+  # so the validator checks the same files at the same paths the host would.
+  # It runs as the operator, the identity the host node had: with every
+  # capability dropped, image root cannot read an operator-owned 0600 key.
+  local image="hames-app:local" mounts=() tpath app_real canonical='import json, os, sys
+real = os.path.realpath
+if len(sys.argv) > 1:
+    print(real(sys.argv[1]))
+    sys.exit(0)
+config = json.load(sys.stdin)
+def fix(entry, key):
+    if isinstance(entry, dict) and isinstance(entry.get(key), str):
+        entry[key] = real(entry[key])
+for service in (config.get("services") or {}).values():
+    if isinstance(service, dict):
+        fix(service.get("build"), "context")
+        for volume in service.get("volumes") or []:
+            if isinstance(volume, dict) and volume.get("type") == "bind":
+                fix(volume, "source")
+for key in ("secrets", "configs"):
+    for entry in (config.get(key) or {}).values():
+        fix(entry, "file")
+for volume in (config.get("volumes") or {}).values():
+    if isinstance(volume, dict):
+        fix(volume.get("driver_opts"), "device")
+json.dump(config, sys.stdout)'
+  app_real=$(sudo python3 -I -c "$canonical" "$APP_DIR") || return 1
+  mounts=(-v "$app_real":"$app_real":ro)
+  for key in DEV_CLONE_PATH RELEASE_SANDBOX_DOCKER_TLS_CA RELEASE_SANDBOX_DOCKER_TLS_CERT RELEASE_SANDBOX_DOCKER_TLS_KEY \
+    DEV_SANDBOX_DOCKER_TLS_CA DEV_SANDBOX_DOCKER_TLS_CERT DEV_SANDBOX_DOCKER_TLS_KEY; do
+    tpath=$(env_get "$key")
+    [[ -n $tpath ]] || continue
+    tpath=$(sudo python3 -I -c "$canonical" "$tpath") || return 1
+    mounts+=(-v "$tpath":"$tpath":ro)
+  done
+  if ! sudo docker image inspect --format '{{.Id}}' "$image" >/dev/null 2>&1; then
+    if ((DRY_RUN)); then
+      warn "(dry run: $image is not built yet, so the render was not validated; --only images builds it)"
+      return 0
+    fi
+    printf '%s\n' "Clone preflight runs its validator inside the $image image; build it first (--only images)" >&2
+    return 1
+  fi
   (set -o pipefail; cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose config --format json 2>/dev/null |
-    node scripts/validate-clones.mjs >/dev/null) || { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }
+    sudo python3 -I -c "$canonical" 2>/dev/null |
+    sudo docker run --rm -i --pull never --network none --read-only --cap-drop ALL --user "$(id -u):$(id -g)" --entrypoint node \
+      "${mounts[@]}" "$image" "$app_real/scripts/validate-clones.mjs" >/dev/null) ||
+    { printf '%s\n' "Clone preflight failed; no containers were changed" >&2; return 1; }
 }
 
 dc() {
@@ -1656,6 +1714,13 @@ stage_images() {
     refuse "no $ENV_FILE yet (run the env stage)"
     return 0
   }
+  # #681: the clone preflight runs its validator inside the release app image,
+  # and dc build's preflight needs it: build that ONE image directly first,
+  # with the same Dockerfile and build contexts the compose build below uses.
+  if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&
+    ! sudo docker image inspect --format '{{.Id}}' hames-app:local >/dev/null 2>&1; then
+    run sudo docker build --build-context root="$APP_DIR" -f "$APP_DIR/app/Dockerfile" -t hames-app:local "$APP_DIR/app"
+  fi
   run dc build
   run dc pull --ignore-buildable --quiet
   # The gateway pulls its catalog servers itself, but a failed pull there is a
@@ -2178,7 +2243,7 @@ usage() {
 Usage: bootstrap-vps.sh --hostname FQDN --acme-email ADDRESS [options]
 
 Two clones: persist §12's complete COMPOSE_FILE and inputs in the release root
-.env; host Node.js is required for the offline validator. No extra flag.
+.env; the offline validator runs inside the release app image. No extra flag.
 
   --hostname FQDN     public name Caddy gets a certificate for (REQUIRED)
   --acme-email ADDR   Let's Encrypt contact mailbox (REQUIRED)

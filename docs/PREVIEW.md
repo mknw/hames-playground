@@ -1246,7 +1246,11 @@ the inputs above:
 
 ```bash
 set -o pipefail
-docker compose config --format json | node scripts/validate-clones.mjs &&
+docker compose config --format json |
+  docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
+    --user "$(id -u):$(id -g)" --entrypoint node \
+    -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
+    hames-app:local "$PWD/scripts/validate-clones.mjs" &&
   docker compose up -d --build app app-dev
 ```
 
@@ -1259,8 +1263,15 @@ and refuses a dev command override, a shared canonical build path, shared config
 a dev socket without owner opt-in or a published dev port.
 Re-run it before every manual recreate. Bootstrap runs this same validator
 itself before clone Compose operations, including `images`, `boot`, and smoke
-probes. It requires Node.js on the host (use the supported Node 22 or newer);
-missing Node, a failed render, or failed validation prevents the operation.
+probes. The validator runs inside the release app image (`hames-app:local`,
+never pulled) as you, so the host needs no Node; export `DEV_CLONE_PATH` from
+the root `.env` (§12). The block above is for the socket shapes only, run from
+real (non-symlink) checkout paths: it mounts the two checkouts and nothing else.
+With a VM overlay selected, run bootstrap's own preflight instead
+(`--only boot --dry-run` changes nothing): it resolves every host path on the
+host, then mounts the checkouts and each `*_SANDBOX_DOCKER_TLS_*` file at its
+real path. A missing image, a failed render, or failed validation prevents the
+operation.
 Rendered configuration goes directly to the validator; it is never saved or
 printed. This is an operator preflight, not a runtime Docker authorization boundary.
 
@@ -1275,7 +1286,10 @@ Before that single-app command, a read-only project-scoped container query refus
 if an `app-dev` container still exists. Restore the clone file list rather than
 letting a single-app boot prune it. An unavailable query also refuses startup.
 
-Run `--only smoke --no-seed` afterwards. When clones are enabled, smoke also
+Run `--only smoke --no-seed` afterwards. When clones are enabled, smoke runs
+the same §12 preflight first, so the root `.env` must still hold the complete
+clone input set — `DEV_REF` among them (a non-secret §12 input only the
+bootstrap reads) — or smoke refuses before any probe. Smoke also
 compares both running apps' database URLs, keys, callbacks, auth bypass and sandbox
 namespaces/cache names with the validated configuration, and requires both apps
 to be healthy in one Compose project. It makes a read-only TCP database login
@@ -1613,9 +1627,10 @@ For §12's two-clone shape, bootstrap reads the complete ordered `COMPOSE_FILE`
 from the release checkout's root `.env`, validates both apps before Compose
 operations, and keeps `app-dev` in the same project through `images`, `boot` and
 smoke. Prepare both app-only env files, the separate checkout and limited database
-roles first; bootstrap does not provision databases or grants. Node.js on the
-host is required only for the clone validator. Omitting clone inputs keeps the
-single-app command path unchanged.
+roles first; bootstrap does not provision databases or grants. The clone
+validator runs inside the release app image, so the host needs Docker only,
+never Node (#681). Omitting clone inputs keeps the single-app command path
+unchanged.
 
 **Before the first run:**
 

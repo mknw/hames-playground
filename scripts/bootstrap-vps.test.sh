@@ -31,7 +31,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="${BOOTSTRAP_SCRIPT:-$ROOT/scripts/bootstrap-vps.sh}"
 
-if [[ ${1:-} != --clones-only && ${1:-} != --clone-mutations && "$(uname -s)" != Linux ]]; then
+if [[ ${1:-} != --clones-only && ${1:-} != --clone-mutations && ${1:-} != --clone-image* && "$(uname -s)" != Linux ]]; then
   echo "bootstrap-vps.test.sh needs Linux (GNU stat); CI runs it on ubuntu-latest" >&2
   exit 1
 fi
@@ -101,6 +101,30 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
   if [[ $args == *" exec "* && $args == *" cat "* ]]; then
     [[ -n ${CLONE_CADDY_SERVED:-} ]] && cat "$CLONE_CADDY_SERVED"
     exit 0
+  fi
+  # #681: the preflight validator's image ($CLONE_APP_IMAGE present: the
+  # release app image exists) and its container run ($SHIM_VALIDATOR_FAIL
+  # fails the validation, as a render or validator refusal does).
+  # --clone-image: the real daemon and the real app image run the validator,
+  # so mounts, user and capabilities are exercised rather than read as text.
+  if [[ -n ${SHIM_REAL_DOCKER:-} && ( $args == *" image inspect "* || $args == *" run "* ) ]]; then
+    exec "$SHIM_REAL_DOCKER" "$@"
+  fi
+  if [[ $args == *" image inspect "* ]]; then
+    if [[ -f $CLONE_APP_IMAGE ]]; then cat "$CLONE_APP_IMAGE"; else exit 1; fi
+    exit 0
+  fi
+  if [[ $args == *" run "* ]]; then
+    [[ ${SHIM_VALIDATOR_FAIL:-0} == 1 ]] && exit 1
+    # Run the pinned validator for real: its script path is the run's last
+    # argument, and the render arrives on stdin, so the fixture's real
+    # validator (and every render it refuses) is exercised as on the box.
+    # SHIM_RUN_STDIN keeps a copy of the (synthetic) render it was handed.
+    if [[ -n ${SHIM_RUN_STDIN:-} ]]; then
+      tee "$SHIM_RUN_STDIN" | node "${@: -1}"
+      exit "${PIPESTATUS[1]}"
+    fi
+    exec node "${@: -1}"
   fi
   if [[ $args == *" config "* ]]; then
     [[ ${SHIM_RENDER_FAIL:-0} == 0 ]] || { echo synthetic-secret >&2; exit 1; }
@@ -293,6 +317,9 @@ fi
 exec "$CLONE_PYTHON" "$@"
 SHIM
 chmod +x "$tmproot/bin/python3"
+# --clone-image hands the daemon's own client to the docker shim. Inherited
+# when set: a mutant's run starts with its parent's shims already on PATH.
+export REAL_DOCKER=${REAL_DOCKER:-$(command -v docker || true)}
 export PATH="$tmproot/bin:$PATH"
 
 # lib DIR — a subshell prelude: the script's functions, pointed at DIR. The
@@ -342,6 +369,8 @@ clone_tests() {
   # be able to stand in for the byte-for-byte cmp and read as fresh.
   printf 'limit 10\n' >"$dir/release/configs/Caddyfile"
   printf 'limit 10\n' >"$dir/caddy-served"
+  # #681 fixture: the release app image the preflight validator runs inside.
+  touch "$dir/app-image"
   # Release's record is read for structure: a guard smoke record whose
   # environments hold release's probes. The bad ones are each refused.
   printf '%s\n' '{"render_sha256": "synthetic", "environments": {"dev": [{"probe": "1"}], "release": [{"probe": "1"}]}}' >"$dir/release-evidence.json"
@@ -399,11 +428,12 @@ ENV
   # All unrelated boot gates are inert. dc, compose_files, clone_preflight,
   # validator, command selection, and health-service selection are real.
   clone_boot() (
-    lib "$dir/release"
+    lib "${CLONE_APP_DIR:-$dir/release}"
     DRY_RUN=${SHIM_DRY_RUN:-0}
     export SHIM_CLONES=1 CLONE_LOG="$dir/calls" CLONE_ALIVE="$dir/app-dev-alive"
     export SHIM_COMPOSE_JSON="$dir/render.json"
     export CLONE_CADDY="$dir/caddy-id" CLONE_CADDY_MOUNTS="$dir/caddy-mounts" CLONE_CADDY_SERVED="$dir/caddy-served"
+    export CLONE_APP_IMAGE="$dir/app-image"
     : >"$CLONE_LOG"
     touch "$CLONE_ALIVE"
     [[ ${SHIM_NO_DEV:-0} == 0 ]] || rm "$CLONE_ALIVE"
@@ -438,6 +468,9 @@ ENV
         stage_smoke
         ;;
       dc) dc exec -T app true ;;
+      # DRY_RUN cannot cross `lib` (the script resets it on source), so a
+      # case label carries it.
+      dry-dc) DRY_RUN=1; dc exec -T app true ;;
       images) stage_images ;;
       probe) vps_check --clones ;;
     esac
@@ -459,6 +492,7 @@ PY
     fi
     if [[ $1 == *:docker-compose.dev-sandbox-vm.yaml || $1 == *:docker-compose.dev-sandbox-vm.yaml:* ]]; then
       printf 'DEV_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${2-$dir/firewall-evidence.txt}" >>"$dir/release/.env"
+      printf 'DEV_SANDBOX_DOCKER_TLS_CA=%s/ca.pem\nDEV_SANDBOX_DOCKER_TLS_CERT=%s/cert.pem\nDEV_SANDBOX_DOCKER_TLS_KEY=%s/key.pem\n' "$dir/tls" "$dir/tls" "$dir/tls" >>"$dir/release/.env"
       python3 - "$dir/render.json" "$dir/tls" <<'PY'
 import json, pathlib, sys
 p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); dev=c['services']['app-dev']
@@ -472,6 +506,7 @@ PY
     fi
     if [[ $1 == *:docker-compose.release-sandbox-vm.yaml ]]; then
       printf 'RELEASE_SANDBOX_FIREWALL_EVIDENCE=%s\n' "${3-$dir/release-evidence.json}" >>"$dir/release/.env"
+      printf 'RELEASE_SANDBOX_DOCKER_TLS_CA=%s/ca.pem\nRELEASE_SANDBOX_DOCKER_TLS_CERT=%s/cert.pem\nRELEASE_SANDBOX_DOCKER_TLS_KEY=%s/key.pem\n' "$dir/tls-release" "$dir/tls-release" "$dir/tls-release" >>"$dir/release/.env"
       python3 - "$dir/render.json" "$dir/tls-release" <<'PY'
 import json, pathlib, sys
 p=pathlib.Path(sys.argv[1]); c=json.loads(p.read_text()); app=c['services']['app']
@@ -489,12 +524,172 @@ PY
   clone_refused() {
     local label=$1 result status
     result=$(clone_boot "${2:-boot}" 2>&1); status=$?
-    if ((status != 0)) && ! grep -Ev 'compose config --format json$' "$dir/calls" | grep -q . &&
+    if ((status != 0)) && ! grep -Ev 'compose config --format json$|image inspect|run --rm -i --pull never --network none' "$dir/calls" | grep -q . &&
       [[ -z ${3:-} || $result == *"$3"* ]]; then
       pass "clones refuses $label before changes"
     else flunk "clones accepted $label (rc=$status)" "$result"; fi
     [[ $result != *synthetic-secret* ]] || flunk "clones leaked renderer error"
   }
+  # #681 review: the validator's container sees the host only through its
+  # mounts, so these cases run unchanged against the real image (--clone-image)
+  # where a mount, user or symlink mistake is visible, not just its text.
+  # Symlinks: a link to tls/ outside both checkouts, and one to a copy of the
+  # same material inside the dev checkout (git-excluded, so dev stays clean).
+  rdir=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$dir")
+  ln -sfn "$dir/tls" "$dir/tls-link"
+  mkdir -p "$dir/dev/tls-in" && cp "$dir/tls/ca.pem" "$dir/tls/cert.pem" "$dir/tls/key.pem" "$dir/dev/tls-in/"
+  echo '/tls-in/' >>"$dir/dev/.git/info/exclude"
+  ln -sfn "$dir/dev/tls-in" "$dir/tls-into-dev"
+  ln -sfn "$dir/release" "$dir/release-link"
+  # Points dev's TLS inputs, in the root .env and in the render, at $1/*.pem.
+  clone_dev_tls() {
+    python3 - "$dir/release/.env" "$dir/render.json" "$1" <<'PY'
+import json, pathlib, sys
+env, render, tls = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+names = {'CA': 'ca.pem', 'CERT': 'cert.pem', 'KEY': 'key.pem'}
+env.write_text(''.join(line + '\n' for line in env.read_text().splitlines() if not line.startswith('DEV_SANDBOX_DOCKER_TLS_'))
+    + ''.join(f'DEV_SANDBOX_DOCKER_TLS_{key}={tls}/{name}\n' for key, name in names.items()))
+c = json.loads(render.read_text())
+for v in c['services']['app-dev']['volumes']:
+    if v['target'].startswith('/run/sandbox-tls/'):
+        v['source'] = tls + '/' + v['target'].rsplit('/', 1)[1]
+render.write_text(json.dumps(c))
+PY
+  }
+  clone_render_path_is_canonical() {
+    python3 - "$dir/validator-stdin" "$1" "$2" <<'PY'
+import json, os, pathlib, sys
+render = json.loads(pathlib.Path(sys.argv[1]).read_text())
+actual = (render['secrets']['side']['file'] if sys.argv[2] == 'secret'
+          else render['volumes']['side']['driver_opts']['device'])
+sys.exit(0 if actual == os.path.realpath(sys.argv[3]) else 1)
+PY
+  }
+  clone_mount_cases() {
+    local both="$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml" f ok
+    # Both VM overlays, the keys mode 0600 and owned by the operator.
+    clone_reset
+    clone_select "$both"
+    out=$(clone_boot dc 2>&1); rc=$?
+    if ((rc == 0)); then pass 'clones preflight validates both VM overlays with operator-owned 0600 keys'
+    else flunk "clones preflight both VM overlays (rc=$rc)" "$out"; fi
+    # A TLS path that is a symlink to material outside both checkouts.
+    clone_reset
+    clone_select "$both"
+    clone_dev_tls "$dir/tls-link"
+    : >"$dir/validator-stdin"
+    out=$(SHIM_RUN_STDIN="$dir/validator-stdin" clone_boot dc 2>&1); rc=$?
+    if ((rc == 0)); then pass 'clones preflight accepts a symlinked TLS path outside both checkouts'
+    else flunk "clones preflight symlinked TLS path (rc=$rc)" "$out"; fi
+    # The same render and mounts at the host realpath: the container validates
+    # what the host resolves, never a symlink Docker flattened at the mount.
+    if [[ -z ${SHIM_REAL_DOCKER:-} ]]; then
+      ok=1
+      for f in tls/ca.pem tls/cert.pem tls/key.pem; do
+        grep -Fq -- "-v $rdir/$f:$rdir/$f:ro" "$dir/calls" && grep -Fq "\"$rdir/$f\"" "$dir/validator-stdin" || ok=0
+      done
+      if ((ok)) && ! grep -q 'tls-link' "$dir/calls" "$dir/validator-stdin"; then
+        pass 'clones preflight hands the validator and its mounts the host realpath of each TLS file'
+      else flunk 'clones preflight TLS realpath' "$(cat "$dir/calls")"; fi
+    fi
+    # A TLS path outside both checkouts that links into the dev checkout: the
+    # host validator refuses it, so the containerised one must too. The same
+    # material behind the link above is accepted, so this refuses the location.
+    clone_reset
+    clone_select "$both"
+    clone_dev_tls "$dir/tls-into-dev"
+    clone_refused 'a TLS path that symlinks into the dev checkout' dc
+    # Another service mounting a symlink to the TLS directory reaches the VM;
+    # the same service mounting a symlink to another directory does not.
+    ln -sfn "$dir/release/configs" "$dir/configs-link"
+    for f in configs-link tls-link; do
+      clone_reset
+      clone_select "$both"
+      python3 - "$dir/render.json" "$dir/$f" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-network': None},
+    volumes=[dict(type='bind', source=sys.argv[2], target='/srv', read_only=True)])
+p.write_text(json.dumps(c))
+PY
+      if [[ $f == configs-link ]]; then
+        out=$(clone_boot dc 2>&1); rc=$?
+        if ((rc == 0)); then pass 'clones preflight accepts another service mounting a symlink to a non-TLS directory'
+        else flunk "clones preflight sidecar control (rc=$rc)" "$out"; fi
+      else clone_refused 'another service mounting a symlink to the TLS directory' dc; fi
+    done
+    # File-backed secrets and named-volume devices are also host mounts. Give
+    # each route a non-TLS control so the refusal pins the link destination.
+    mkdir -p "$dir/ordinary" && touch "$dir/ordinary/file"
+    ln -sfn "$dir/ordinary/file" "$dir/ordinary-file-link"
+    ln -sfn "$dir/tls/key.pem" "$dir/tls-key-link"
+    ln -sfn "$dir/ordinary" "$dir/ordinary-dir-link"
+    for f in ordinary-file-link tls-key-link; do
+      clone_reset
+      clone_select "$both"
+      python3 - "$dir/render.json" "$dir/$f" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['secrets'] = {'side': {'file': sys.argv[2]}}
+c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-network': None},
+    secrets=[dict(source='side', target='/run/side-secret')])
+p.write_text(json.dumps(c))
+PY
+      : >"$dir/validator-stdin"
+      if [[ $f == ordinary-file-link ]]; then
+        out=$(SHIM_RUN_STDIN="$dir/validator-stdin" clone_boot dc 2>&1); rc=$?
+        if ((rc == 0)); then pass 'clones preflight accepts a sidecar secret linked to a non-TLS file'
+        else flunk "clones preflight sidecar secret control (rc=$rc)" "$out"; fi
+      else SHIM_RUN_STDIN="$dir/validator-stdin" clone_refused 'a sidecar secret linked to the TLS key' dc; fi
+      if [[ -z ${SHIM_REAL_DOCKER:-} ]]; then
+        if clone_render_path_is_canonical secret "$dir/$f"; then
+          pass "clones preflight hands the validator a canonical sidecar secret ($f)"
+        else flunk "clones preflight sidecar secret render is not canonical ($f)"; fi
+      fi
+    done
+    for f in ordinary-dir-link tls-link; do
+      clone_reset
+      clone_select "$both"
+      python3 - "$dir/render.json" "$dir/$f" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['volumes'] = {'side': {'driver_opts': {'device': sys.argv[2]}}}
+c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-network': None},
+    volumes=[dict(type='volume', source='side', target='/srv')])
+p.write_text(json.dumps(c))
+PY
+      : >"$dir/validator-stdin"
+      if [[ $f == ordinary-dir-link ]]; then
+        out=$(SHIM_RUN_STDIN="$dir/validator-stdin" clone_boot dc 2>&1); rc=$?
+        if ((rc == 0)); then pass 'clones preflight accepts a sidecar volume linked to a non-TLS directory'
+        else flunk "clones preflight sidecar volume control (rc=$rc)" "$out"; fi
+      else SHIM_RUN_STDIN="$dir/validator-stdin" clone_refused 'a sidecar volume device linked to the TLS directory' dc; fi
+      if [[ -z ${SHIM_REAL_DOCKER:-} ]]; then
+        if clone_render_path_is_canonical device "$dir/$f"; then
+          pass "clones preflight hands the validator a canonical volume device ($f)"
+        else flunk "clones preflight volume device render is not canonical ($f)"; fi
+      fi
+    done
+    # The release checkout reached through a symlink is mounted, and its
+    # validator run, at its realpath; its rendered build context follows the
+    # same link, so the container must receive a canonical context as well.
+    clone_reset
+    python3 - "$dir/render.json" "$dir/release-link/app" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['services']['app']['build']['context'] = sys.argv[2]
+p.write_text(json.dumps(c))
+PY
+    out=$(CLONE_APP_DIR="$dir/release-link" clone_boot dc 2>&1); rc=$?
+    if ((rc == 0)) && { [[ -n ${SHIM_REAL_DOCKER:-} ]] ||
+      grep -Fq -- "-v $rdir/release:$rdir/release:ro -v $rdir/dev:$rdir/dev:ro hames-app:local $rdir/release/scripts/validate-clones.mjs" "$dir/calls"; }; then
+      pass 'clones preflight mounts a symlinked release checkout at its realpath'
+    else flunk "clones preflight symlinked release checkout (rc=$rc)" "$out$(cat "$dir/calls")"; fi
+  }
+  if [[ -n ${SHIM_REAL_DOCKER:-} ]]; then
+    clone_mount_cases
+    return
+  fi
   clone_reset
   out=$(clone_boot 2>&1); rc=$?
   if ((rc == 0)) && grep -Fxq "$clones|app|compose up -d" "$dir/calls" &&
@@ -806,6 +1001,53 @@ PY
     [[ $out != *"APP_DOMAIN"*"reserved placeholder"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones boot refuses a reserved --hostname even when the .env APP_DOMAIN is clean'
   else flunk "clones boot accepted a reserved --hostname (rc=$rc)" "$out"; fi
+  # #681: the preflight validator runs inside the release app image — no Node
+  # on the host — reading the rendered config from stdin with the checkouts
+  # and TLS material bind-mounted read-only at their own paths, offline; a
+  # missing image refuses, and a dry run warns and skips instead.
+  validator_run='||run --rm -i --pull never --network none --read-only --cap-drop ALL --user '"$(id -u):$(id -g)"' --entrypoint node -v '"$rdir/release"':'"$rdir/release"':ro -v '"$rdir/dev"':'"$rdir/dev"':ro hames-app:local '"$rdir/release"'/scripts/validate-clones.mjs'
+  clone_reset
+  out=$(clone_boot dc 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$validator_run" "$dir/calls"; then
+    pass 'clones preflight runs the validator inside the local app image, as the operator, read-only and offline'
+  else flunk "clones preflight validator run (rc=$rc)" "$(cat "$dir/calls")"; fi
+  clone_reset
+  clone_select "$clones:docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml"
+  out=$(clone_boot dc 2>&1); rc=$?
+  key=1
+  for file in tls/ca.pem tls/cert.pem tls/key.pem tls-release/ca.pem tls-release/cert.pem tls-release/key.pem; do
+    grep -Fq -- "-v $rdir/$file:$rdir/$file:ro" "$dir/calls" || key=0
+  done
+  if ((rc == 0 && key)); then
+    pass 'clones preflight mounts all six TLS client materials read-only at their realpath'
+  else flunk "clones preflight TLS mounts (rc=$rc)" "$(cat "$dir/calls")"; fi
+  clone_mount_cases
+  clone_reset
+  mv "$dir/app-image" "$dir/held-app-image"
+  clone_refused 'a missing app image (the validator cannot run)'
+  mv "$dir/held-app-image" "$dir/app-image"
+  clone_reset
+  mv "$dir/app-image" "$dir/held-app-image"
+  out=$(clone_boot dry-dc 2>&1); rc=$?
+  mv "$dir/held-app-image" "$dir/app-image"
+  if ((rc == 0)) && grep -q 'dry run: hames-app:local is not built yet' <<<"$out"; then
+    pass 'clones preflight warns and skips validation on a dry run without the image'
+  else flunk "clones dry run without the image (rc=$rc)" "$out"; fi
+  # The images stage builds that image directly first — the same Dockerfile
+  # and build contexts the compose build uses — when it is missing.
+  direct_build='||build --build-context root='"$dir/release"' -f '"$dir/release"'/app/Dockerfile -t hames-app:local '"$dir/release"'/app'
+  clone_reset
+  mv "$dir/app-image" "$dir/held-app-image"
+  out=$(clone_boot images 2>&1); rc=$?
+  mv "$dir/held-app-image" "$dir/app-image"
+  if grep -Fxq "$direct_build" "$dir/calls" && ! grep -q 'compose build' "$dir/calls"; then
+    pass 'clones images builds the release app image directly before the preflight needs it'
+  else flunk "clones images direct pre-build (rc=$rc)" "$(cat "$dir/calls")"; fi
+  clone_reset
+  out=$(clone_boot images 2>&1); rc=$?
+  if grep -Fxq "$clones|app|compose build" "$dir/calls" && ! grep -Fq "$direct_build" "$dir/calls"; then
+    pass 'clones images with the image present builds through compose only'
+  else flunk "clones images compose build (rc=$rc)" "$(cat "$dir/calls")"; fi
   for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     clone_reset
     python3 - "$dir/release/.env" "$key" <<'PY'
@@ -906,7 +1148,7 @@ PY
       esac
       # Images may inspect daemon availability, but cannot build or pull.
       out=$(SHIM_RENDER_FAIL=$([[ $problem == render ]] && echo 1 || echo 0) SHIM_HEALTH=1 clone_boot "$operation" 2>&1); rc=$?
-      if ((rc != 0)) && ! grep -Ev 'compose config --format json$|\|info$' "$dir/calls" | grep -q .; then
+      if ((rc != 0)) && ! grep -Ev 'compose config --format json$|\|info$|\|\|image inspect|\|\|run --rm -i --pull never --network none' "$dir/calls" | grep -q .; then
         pass "clones $operation refuses $problem before dispatch"
       else flunk "clones $operation dispatched after $problem (rc=$rc)" "$out $(cat "$dir/calls")"; fi
     done
@@ -1045,6 +1287,58 @@ PY
   ); rc=$?
   if ((rc == 0)); then pass 'clones escrow covers each runtime key and runtime owner values'; else flunk "clones runtime escrow/owner gate failed (rc=$rc)" "$out"; fi
 }
+# #681 review: the mount cases against the real daemon and the built release
+# app image (hames-app:local), where the shim's host node cannot stand in for
+# the container's view of the host: its mounts, its user and its capabilities.
+# CI's image job runs it, and --clone-image-mutations proves it can go red.
+if [[ ${1:-} == --clone-image ]]; then
+  [[ -n $REAL_DOCKER ]] || { echo '--clone-image needs a Docker client and hames-app:local' >&2; exit 1; }
+  export SHIM_REAL_DOCKER=$REAL_DOCKER
+  clone_tests
+  ((failures == 0)) || exit 1
+  echo 'all clone image checks passed'
+  exit 0
+fi
+if [[ ${1:-} == --clone-image-mutations ]]; then
+  python3 - "$SCRIPT" "$0" <<'PY'
+import os, pathlib, subprocess, sys, tempfile
+source, harness = map(pathlib.Path, sys.argv[1:])
+original = source.read_text()
+render = '    sudo python3 -I -c "$canonical" 2>/dev/null |\n'
+mount = '    tpath=$(sudo python3 -I -c "$canonical" "$tpath") || return 1\n'
+app = 'app_real=$(sudo python3 -I -c "$canonical" "$APP_DIR") || return 1'
+mutants = [
+    ('validator-root-user', [(' --user "$(id -u):$(id -g)"', '')]),
+    ('canonicalisation-dropped', [(render, ''), (mount, ''), (app, 'app_real=$APP_DIR')]),
+    ('render-not-canonical', [(render, '')]),
+    ('mounts-not-canonical', [(mount, '')]),
+    ('release-checkout-not-canonical', [(app, 'app_real=$APP_DIR')]),
+    ('secrets-configs-not-canonical', [('for key in ("secrets", "configs"):\n    for entry in (config.get(key) or {}).values():\n        fix(entry, "file")\n', '')]),
+    ('device-not-canonical', [('        fix(volume.get("driver_opts"), "device")\n', '        pass\n')]),
+    ('context-not-canonical', [('        fix(service.get("build"), "context")\n', '')]),
+    ('dev-key-not-mounted', [(' DEV_SANDBOX_DOCKER_TLS_KEY; do', '; do')]),
+    ('release-ca-not-mounted', [(' RELEASE_SANDBOX_DOCKER_TLS_CA RELEASE_SANDBOX_DOCKER_TLS_CERT', ' RELEASE_SANDBOX_DOCKER_TLS_CERT')]),
+]
+baseline = subprocess.run(['bash', str(harness), '--clone-image'], capture_output=True, text=True, timeout=300)
+if baseline.returncode:
+    sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
+with tempfile.TemporaryDirectory() as tmp:
+    for name, edits in mutants:
+        changed_text = original
+        for old, new in edits:
+            if original.count(old) != 1:
+                sys.exit('Mutation anchor must occur once: ' + name)
+            changed_text = changed_text.replace(old, new)
+        changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
+        changed.write_text(changed_text)
+        env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
+        result = subprocess.run(['bash', str(harness), '--clone-image'], env=env, capture_output=True, text=True, timeout=300)
+        if not result.returncode or 'FAIL clones' not in result.stdout:
+            sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
+        print('KILLED ' + name, flush=True)
+PY
+  exit $?
+fi
 if [[ ${1:-} == --clone-mutations ]]; then
   python3 - "$SCRIPT" "$0" <<'PY'
 import os, pathlib, subprocess, sys, tempfile
@@ -1053,7 +1347,8 @@ original = source.read_text()
 mutants = [
     ('overlay-not-applied', '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)',
      '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)'),
-    ('validator-skipped', 'node scripts/validate-clones.mjs >/dev/null', 'cat >/dev/null'),
+    # The whole container run replaced: the behavioural pins must see it.
+    ('validator-skipped', 'sudo docker run --rm -i --pull never --network none --read-only --cap-drop ALL --user "$(id -u):$(id -g)" --entrypoint node \\\n      "${mounts[@]}" "$image" "$app_real/scripts/validate-clones.mjs" >/dev/null) ||', 'cat >/dev/null) ||'),
     ('orphan-prune-clones', '    run dc up -d\n', '    run dc up -d --remove-orphans\n'),
     ('default-command-changed', '    run dc up -d --remove-orphans\n', '    run dc up -d\n'),
     ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse', 'FAIL clones pruned live app-dev under base:prod'),
@@ -1199,6 +1494,25 @@ compose_caddy_env_unused() {
     ('appdomain-reserved-accepted', 'elif reserved_name "$env_domain"; then', 'elif false; then'),
     ('appdomain-mismatch-accepted', '[[ $env_domain == "$HOSTNAME_ARG" ]] || owner_stop', '[[ $env_domain == "$HOSTNAME_ARG" ]] || :'),
     ('preview-domain-reserved-accepted', '[[ $files != "$COMPOSE_FILES" && -n $env_preview ]] && reserved_name "$env_preview"', 'false', 'FAIL clones boot accepted a reserved rendered preview domain'),
+    # #681: the preflight validator runs inside the app image; the images
+    # stage builds that image first when it is missing.
+    ('validator-host-node', 'sudo docker run --rm -i --pull never --network none --read-only --cap-drop ALL --user "$(id -u):$(id -g)" --entrypoint node', 'node'),
+    ('validator-network-open', ' --network none --read-only', ' --read-only'),
+    ('validator-pull-allowed', 'docker run --rm -i --pull never --network', 'docker run --rm -i --network'),
+    ('validator-root-user', ' --user "$(id -u):$(id -g)"', ''),
+    ('validator-checkout-mounts-missing', 'mounts=(-v "$app_real":"$app_real":ro)', 'mounts=()'),
+    ('validator-dev-checkout-mount-missing', '  for key in DEV_CLONE_PATH RELEASE_SANDBOX_DOCKER_TLS_CA', '  for key in RELEASE_SANDBOX_DOCKER_TLS_CA'),
+    ('validator-tls-mounts-missing', 'tpath=$(env_get "$key")', 'tpath=""'),
+    # #681 review S1: each TLS mount on its own, and the host canonicalisation.
+    ('dev-key-not-mounted', ' DEV_SANDBOX_DOCKER_TLS_KEY; do', '; do'),
+    ('release-ca-not-mounted', ' RELEASE_SANDBOX_DOCKER_TLS_CA RELEASE_SANDBOX_DOCKER_TLS_CERT', ' RELEASE_SANDBOX_DOCKER_TLS_CERT'),
+    ('render-not-canonical', '    sudo python3 -I -c "$canonical" 2>/dev/null |\n', ''),
+    ('mounts-not-canonical', '    tpath=$(sudo python3 -I -c "$canonical" "$tpath") || return 1\n', ''),
+    ('release-checkout-not-canonical', 'app_real=$(sudo python3 -I -c "$canonical" "$APP_DIR") || return 1', 'app_real=$APP_DIR'),
+    ('secrets-configs-not-canonical', 'for key in ("secrets", "configs"):\n    for entry in (config.get(key) or {}).values():\n        fix(entry, "file")\n', ''),
+    ('device-not-canonical', '        fix(volume.get("driver_opts"), "device")\n', '        pass\n'),
+    ('validator-image-missing-accepted', "if ! sudo docker image inspect --format '{{.Id}}' \"$image\" >/dev/null 2>&1; then", 'if false; then'),
+    ('images-prebuild-skipped', 'if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&', 'if false &&'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:

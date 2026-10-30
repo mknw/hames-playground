@@ -87,15 +87,19 @@ docker() {
     printf '%s' 'synthetic-rendered-secret'
     return ${renderExit}
   fi
+  case "$*" in "run "*) cat >/dev/null; return ${validatorExit} ;; esac
   printf 'START %s\\n' "$*"
 }
-node() { cat >/dev/null; return ${validatorExit}; }
 bash() { printf 'BOOT %s\\n' "$*"; }
 ${block}`,
             ],
             {
               encoding: 'utf8',
-              env: { PATH: process.env.PATH } as unknown as NodeJS.ProcessEnv,
+              // DEV_CLONE_PATH is the documented preflight's second mount.
+              env: {
+                PATH: process.env.PATH,
+                DEV_CLONE_PATH: '/synthetic/dev-checkout',
+              } as unknown as NodeJS.ProcessEnv,
             },
           )
           expect(run.error).toBeUndefined()

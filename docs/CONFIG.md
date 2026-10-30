@@ -148,11 +148,24 @@ other tier's endpoint.**
 Four bases, one currency (EUR), decided by the client the call ACTUALLY
 selected — never by the tier the run intended.
 
-| Variable                 | What it does                                                                                                                              | Default               | Applies to                      | Unset / wrong                                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `EUR_PER_USD`            | Static USD→EUR multiplier (`0.86`), set by hand. Deliberately NOT a live FX lookup: two page loads of one conversation must not disagree. | `DEFAULT_EUR_PER_USD` | every USD figure                | A non-positive or garbage value warns and falls back to the default — never renders as "free". |
-| `LARGE_LLM_EUR_PER_HOUR` | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `1.819`               | `LargeQwen`, `LargeQwenThink`   | Non-positive warns and falls back. Moves WITH the host (Modal's rate differs).                 |
-| `SMALL_LLM_EUR_PER_HOUR` | EUR/hour the small metered box is awake.                                                                                                  | `1.54`                | `SmallQwen`, `PrivateSystemOne` | Same rule.                                                                                     |
+| Variable                     | What it does                                                                                                                              | Default                                                                        | Applies to                      | Unset / wrong                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `EUR_PER_USD`                | Static USD→EUR multiplier (`0.86`), set by hand. Deliberately NOT a live FX lookup: two page loads of one conversation must not disagree. | `DEFAULT_EUR_PER_USD`                                                          | every USD figure                | A non-positive or garbage value warns and falls back to the default — never renders as "free". |
+| `LARGE_LLM_EUR_PER_HOUR`     | EUR/hour the 27B box is awake (time-priced clients).                                                                                      | `4.59898` (Modal H100, 4 cores, 64 GiB, broad `eu` compute)                    | `LargeQwen`, `LargeQwenThink`   | Non-positive warns and falls back. Set for a different host, shape or compute region.          |
+| `SMALL_LLM_EUR_PER_HOUR`     | EUR/hour the small L4 box is awake.                                                                                                       | `1.07418` (L4, 2 cores, 24 GiB, broad `eu` compute)                            | `SmallQwen`, `PrivateSystemOne` | Same rule.                                                                                     |
+| `SMALL_LLM_EUR_PER_HOUR_A10` | EUR/hour when the small box serves on A10.                                                                                                | `1.37088`, derived from the L4 rate using the full A10/L4 container cost ratio | `SmallQwen`, `PrivateSystemOne` | Explicit override wins; otherwise an L4 override moves this derived default proportionally.    |
+
+The Modal defaults come from the dated GPU, CPU, memory and compute-region table
+in `app/src/lib/modal-pricing.ts`: `(GPU USD/h + cores × CPU USD/core/s × 3600 +
+GiB × memory USD/GiB/s × 3600) × compute-region multiplier × EUR_PER_USD`.
+The full A10/L4 ratio includes CPU and memory; the GPU-only ratio 1.375 does not
+price a complete box. Both boxes are configured for broad `eu` compute (1.15×)
+as of 2026-10-30; the 27B routing region remains `eu-west` and does not set
+the compute price. Narrow `eu-west` compute costs 1.75×. Paid verification of
+the 27B live compute placement remains an owner decision. If a deployment
+changes its region or allocation, set the corresponding hourly override.
+Sources read 2026-10-30: [Modal pricing](https://modal.com/pricing) and
+[Modal region selection](https://modal.com/docs/guide/region-selection).
 
 The bases (pinned disjoint by `pricing-eur.test.ts`):
 

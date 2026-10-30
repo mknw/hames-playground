@@ -40,6 +40,9 @@ const CLIENTS = '@hames-ai/harness-baml/clients.server'
 const CONFIG = '../../../lib/inference/config.server'
 const SETTINGS = '../../../lib/settings'
 const SMALL_GPU = '../../../lib/inference/small-gpu.server'
+const SMALL_MODAL_EXPECTED = (0.8 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
+const A10_MODAL_EXPECTED = (1.1 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
+const LARGE_MODAL_EXPECTED = (3.95 + 4 * 0.0000131 * 3600 + 64 * 0.00000222 * 3600) * 1.15 * 0.86
 
 const ENV_KEYS = [
   'USE_SELF_DEPLOYED_INFERENCE',
@@ -221,9 +224,9 @@ describe('the configuration the host registers is the configuration the resoluti
     gpu.seedSmallGpuForTests('L4')
     const measured = computeEventMetrics(collector(2_000) as never)!
     expect(measured.attempts).toBe(1)
-    expect(measured.costEur).toBeCloseTo((1.54 * 2) / 3600, 12)
+    expect(measured.costEur).toBeCloseTo((SMALL_MODAL_EXPECTED * 2) / 3600, 12)
     expect(measured.basis).toBe('time')
-    expect(measured.timeRate).toEqual({ eurPerHour: 1.54, durationMs: 2_000 })
+    expect(measured.timeRate).toEqual({ eurPerHour: SMALL_MODAL_EXPECTED, durationMs: 2_000 })
     expect(measured.timePricedAttempts).toBe(1)
     expect(isTimePricedStep(measured)).toBe(true)
     expect(measured.inputUncachedTokens).toBe(0)
@@ -260,6 +263,32 @@ describe('the configuration the host registers is the configuration the resoluti
     expect(pricing.PrivateSystemOne!()).toBe(DEFAULT_SMALL_LLM_EUR_PER_HOUR)
   })
 
+  it('carries the resource-derived default through all four time-priced clients', async () => {
+    enable()
+    await loadWired()
+    const { computeEventMetrics } = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const gpu = await import(SMALL_GPU)
+    const price = (clientName: string) =>
+      computeEventMetrics({
+        logs: [{ calls: [{ clientName, timing: { durationMs: 3_600_000 } }] }],
+      } as never)!
+
+    gpu.seedSmallGpuForTests('L4')
+    for (const name of ['LargeQwen', 'LargeQwenThink']) {
+      const result = price(name)
+      expect(result.basis).toBe('time')
+      expect(result.costEur).toBeCloseTo(LARGE_MODAL_EXPECTED, 12)
+      expect(result.timeRate?.eurPerHour).toBeCloseTo(LARGE_MODAL_EXPECTED, 12)
+    }
+    for (const name of ['SmallQwen', 'PrivateSystemOne']) {
+      expect(price(name).costEur).toBeCloseTo(SMALL_MODAL_EXPECTED, 12)
+    }
+    gpu.seedSmallGpuForTests('A10')
+    for (const name of ['SmallQwen', 'PrivateSystemOne']) {
+      expect(price(name).costEur).toBeCloseTo(A10_MODAL_EXPECTED, 12)
+    }
+  })
+
   it('prices a step spanning the provider and time bases independently', async () => {
     // Each attempt under its OWN client's basis: the OpenRouter-route 27B twin
     // off the provider-reported cost, the metered 4B off wall-clock. Pricing
@@ -290,7 +319,10 @@ describe('the configuration the host registers is the configuration the resoluti
       ],
     }
     const measured = computeEventMetrics(collector as never)!
-    expect(measured.costEur).toBeCloseTo(0.02 * DEFAULT_EUR_PER_USD + (1.54 * 2) / 3600, 12)
+    expect(measured.costEur).toBeCloseTo(
+      0.02 * DEFAULT_EUR_PER_USD + (SMALL_MODAL_EXPECTED * 2) / 3600,
+      12,
+    )
     expect(measured.timePricedAttempts).toBe(1)
     expect(measured.timeRate?.durationMs).toBe(2_000)
   })
@@ -369,7 +401,7 @@ describe('unregistered — the package-side defaults are safe', () => {
     // The fallback exists so an unregistered consumer still prices sanely; the
     // equality pin is what keeps the two copies from drifting silently.
     expect(DEFAULT_EUR_PER_USD).toBe(0.86)
-    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
+    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(4.598976592)
   })
 
   it('a host that does register gets exactly what it hands over', async () => {

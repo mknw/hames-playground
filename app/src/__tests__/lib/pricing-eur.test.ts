@@ -35,6 +35,7 @@
  * every call as free.
  */
 import { readdirSync, readFileSync } from 'node:fs'
+import { modalBoxUsdPerHour } from '../../lib/modal-pricing'
 import { join } from 'node:path'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 
@@ -67,6 +68,24 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
+// Independent arithmetic: these literals are the listed 2026-10-30 Modal rates,
+// rather than the production table or helper. Mutation of a source rate goes red.
+const LARGE_MODAL_EXPECTED = (3.95 + 4 * 0.0000131 * 3600 + 64 * 0.00000222 * 3600) * 1.15 * 0.86
+const SMALL_MODAL_EXPECTED = (0.8 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
+const A10_MODAL_EXPECTED = (1.1 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
+
+describe('dated Modal resource defaults', () => {
+  it('uses full container resources and the COMPUTE region for broad and narrow EU', () => {
+    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBeCloseTo(LARGE_MODAL_EXPECTED, 12)
+    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBeCloseTo(SMALL_MODAL_EXPECTED, 12)
+    expect(modalBoxUsdPerHour('H100', 4, 64, 'eu-west') * 0.86).toBeCloseTo(
+      (3.95 + 4 * 0.0000131 * 3600 + 64 * 0.00000222 * 3600) * 1.75 * 0.86,
+      12,
+    )
+    expect(A10_MODAL_EXPECTED / SMALL_MODAL_EXPECTED).toBeLessThan(1.375)
+  })
+})
+
 const NO_TOKENS = {
   inputUncachedTokens: 0,
   inputCacheReadTokens: 0,
@@ -88,10 +107,10 @@ describe('the time-priced client mapping', () => {
     // metered-infrastructure decision: the 27B leaves at the large GPU's rate,
     // the 4B summarizer and the private systemone client at the small GPU's.
     expect(TIME_PRICED_CLIENTS).toEqual({
-      LargeQwen: 1.819,
-      LargeQwenThink: 1.819,
-      SmallQwen: 1.54,
-      PrivateSystemOne: 1.54,
+      LargeQwen: LARGE_MODAL_EXPECTED,
+      LargeQwenThink: LARGE_MODAL_EXPECTED,
+      SmallQwen: SMALL_MODAL_EXPECTED,
+      PrivateSystemOne: SMALL_MODAL_EXPECTED,
     })
   })
 
@@ -132,7 +151,10 @@ describe('provider pricing → EUR', () => {
     for (const name of ['JevDecide', 'LargeQwenOR', 'LargeQwenThinkOR']) {
       expect(estimateLlmCostEur(ONE_MTOK_EACH, name), name).toBeUndefined()
       expect(
-        estimateLlmCostEur(ONE_MTOK_EACH, name, { durationMs: 6_300, eurPerHour: 1.819 }),
+        estimateLlmCostEur(ONE_MTOK_EACH, name, {
+          durationMs: 6_300,
+          eurPerHour: LARGE_MODAL_EXPECTED,
+        }),
         name,
       ).toBeUndefined()
       for (const bad of [-1, Number.NaN])
@@ -207,12 +229,12 @@ describe('token pricing → EUR', () => {
 
 describe('time pricing → EUR', () => {
   it.each([
-    ['LargeQwen', 1.819],
-    ['LargeQwenThink', 1.819],
-    ['SmallQwen', 1.54],
-    ['PrivateSystemOne', 1.54],
+    ['LargeQwen', LARGE_MODAL_EXPECTED],
+    ['LargeQwenThink', LARGE_MODAL_EXPECTED],
+    ['SmallQwen', SMALL_MODAL_EXPECTED],
+    ['PrivateSystemOne', SMALL_MODAL_EXPECTED],
   ] as const)('prices %s at €%s/h and accepts an explicit rate', (client, rate) => {
-    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(1.54)
+    expect(DEFAULT_SMALL_LLM_EUR_PER_HOUR).toBe(SMALL_MODAL_EXPECTED)
     const est = estimateLlmCostEur(ONE_MTOK_EACH, client, { durationMs: 2_000 })!
     expect(est.basis).toBe('time')
     expect(est.costEur).toBeCloseTo((rate * 2) / 3600, 12)
@@ -237,15 +259,15 @@ describe('time pricing → EUR', () => {
   it('is €/h × wall-clock, and tokens do not enter it', () => {
     const oneHour = estimateLlmCostEur(NO_TOKENS, 'SmallQwen', {
       durationMs: 3_600_000,
-      eurPerHour: 1.54,
+      eurPerHour: SMALL_MODAL_EXPECTED,
     })!
     expect(oneHour.basis).toBe('time')
-    expect(oneHour.costEur).toBeCloseTo(1.54, 9)
+    expect(oneHour.costEur).toBeCloseTo(SMALL_MODAL_EXPECTED, 9)
 
     // Same duration, a huge token count: identical cost. Tokens are free.
     const withTokens = estimateLlmCostEur(ONE_MTOK_EACH, 'SmallQwen', {
       durationMs: 3_600_000,
-      eurPerHour: 1.54,
+      eurPerHour: SMALL_MODAL_EXPECTED,
     })!
     expect(withTokens.costEur).toBeCloseTo(oneHour.costEur, 12)
   })
@@ -262,7 +284,7 @@ describe('time pricing → EUR', () => {
     // once more: the owner's 2026-10-13 decision puts the box's clients back on
     // the time basis. It never stopped feeding the eval's INFRASTRUCTURE
     // accounting (scenario wall-clock on the boxes).
-    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(1.819)
+    expect(DEFAULT_LARGE_LLM_EUR_PER_HOUR).toBe(LARGE_MODAL_EXPECTED)
     // The 27B leaves are the entries on this rate; the small box's clients ride
     // the small rate.
     expect(TIME_PRICED_CLIENTS.LargeQwen).toBe(DEFAULT_LARGE_LLM_EUR_PER_HOUR)
@@ -344,8 +366,8 @@ describe('attribution: the SELECTED client decides the model', () => {
       providerCostUsd: 0.01,
     })!
     expect(est.basis).toBe('time')
-    expect(est.timeRate).toEqual({ eurPerHour: 1.819, durationMs: 6_000 })
-    expect(est.costEur).toBeCloseTo((1.819 * 6) / 3600, 12)
+    expect(est.timeRate).toEqual({ eurPerHour: LARGE_MODAL_EXPECTED, durationMs: 6_000 })
+    expect(est.costEur).toBeCloseTo((LARGE_MODAL_EXPECTED * 6) / 3600, 12)
   })
 
   it('a locally-served client is €0.00 on the local basis, never unknown', () => {
@@ -546,7 +568,7 @@ describe('the env overrides (cost-rates.server.ts)', () => {
     for (const raw of [undefined, '', '   ']) {
       if (raw === undefined) delete process.env.SMALL_LLM_EUR_PER_HOUR
       else process.env.SMALL_LLM_EUR_PER_HOUR = raw
-      expect(smallLlmEurPerHour()).toBe(1.54)
+      expect(smallLlmEurPerHour()).toBe(SMALL_MODAL_EXPECTED)
     }
     for (const raw of ['2.5', '3']) {
       process.env.SMALL_LLM_EUR_PER_HOUR = raw
@@ -554,7 +576,7 @@ describe('the env overrides (cost-rates.server.ts)', () => {
     }
     for (const raw of ['0', '-1', 'free', 'NaN', 'Infinity']) {
       process.env.SMALL_LLM_EUR_PER_HOUR = raw
-      expect(smallLlmEurPerHour(), raw).toBe(1.54)
+      expect(smallLlmEurPerHour(), raw).toBe(SMALL_MODAL_EXPECTED)
     }
     expect(warn).toHaveBeenCalledTimes(5)
   })
@@ -568,6 +590,19 @@ describe('the env overrides (cost-rates.server.ts)', () => {
     // Changed again without re-importing the module:
     process.env.LARGE_LLM_EUR_PER_HOUR = '3'
     expect(largeEurPerHour()).toBe(3)
+  })
+
+  it('converts each Modal default once at the configured FX rate, then honors hourly overrides', async () => {
+    const { largeEurPerHour, smallLlmEurPerHour } = await import('../../lib/cost-rates.server')
+    delete process.env.LARGE_LLM_EUR_PER_HOUR
+    delete process.env.SMALL_LLM_EUR_PER_HOUR
+    process.env.EUR_PER_USD = '0.9'
+    expect(largeEurPerHour()).toBeCloseTo(LARGE_MODAL_EXPECTED * (0.9 / 0.86), 12)
+    expect(smallLlmEurPerHour()).toBeCloseTo(SMALL_MODAL_EXPECTED * (0.9 / 0.86), 12)
+    process.env.LARGE_LLM_EUR_PER_HOUR = '7'
+    process.env.SMALL_LLM_EUR_PER_HOUR = '2'
+    expect(largeEurPerHour()).toBe(7)
+    expect(smallLlmEurPerHour()).toBe(2)
   })
 
   it('falls back to the defaults when unset or blank', async () => {

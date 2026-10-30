@@ -50,19 +50,17 @@
  *
  * ## The rates
  *
- * `SMALL_LLM_EUR_PER_HOUR` stays the L4 rate (default €1.54/h) — it is also the
- * base every other family's default is derived from, so an operator who moves
- * the base keeps the ratios. The A10 default is that base scaled by the GPU
- * list-price ratio from the owner's 2026-10-27 quote (L4 $0.80/h, A10 $1.10/h,
- * L40S $1.95/h): 1.10 / 0.80 = ×1.375, ≈ €2.12/h at today's base. The L40S
- * family is deliberately NOT in the table yet — no deployment lists it, and
- * adding it would raise the unknown-GPU fallback to its ×2.44 rate; add it with
- * `ratio: 1.95 / 0.80` the day a deploy lists it. A per-family override var
- * (`SMALL_LLM_EUR_PER_HOUR_A10`) wins over the derived figure, read per call in
- * the same rule as every rate in `cost-rates.server.ts`.
+ * `SMALL_LLM_EUR_PER_HOUR` stays the L4 rate and base for other families. The
+ * A10 default scales that base by the ratio of FULL Modal container costs
+ * (GPU + 2 cores + 24 GiB, broad eu), not the GPU-only 1.375 ratio. This
+ * preserves the existing rule that a changed L4 override moves the A10 default.
+ * The source prices and both box shapes live in `modal-pricing.ts`. L40S is
+ * deliberately absent until a deployment can serve it. A per-family override
+ * (`SMALL_LLM_EUR_PER_HOUR_A10`) wins over the derived figure, read per call.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { positiveRate, smallLlmEurPerHour } from '../cost-rates.server'
+import { modalDefaultUsdPerHour } from '../modal-pricing'
 
 assertServerOnImport()
 
@@ -73,18 +71,18 @@ assertServerOnImport()
 interface SmallGpuFamily {
   family: 'L4' | 'A10'
   match: RegExp
-  /** The family's list rate over the L4's, from the owner's 2026-10-27 quote. */
-  ratio: number
+  /** The family's full container rate over the L4's. */
+  box: 'smallL4' | 'smallA10'
   /** Per-family override var. L4 has none: `SMALL_LLM_EUR_PER_HOUR` IS its rate. */
   override?: string
 }
 
 const SMALL_GPU_FAMILIES: readonly SmallGpuFamily[] = [
-  { family: 'L4', match: /(?<![0-9A-Z])L4(?![0-9])/, ratio: 1 },
+  { family: 'L4', match: /(?<![0-9A-Z])L4(?![0-9])/, box: 'smallL4' },
   {
     family: 'A10',
     match: /(?<![0-9A-Z])A10(?![0-9])/,
-    ratio: 1.1 / 0.8,
+    box: 'smallA10',
     override: 'SMALL_LLM_EUR_PER_HOUR_A10',
   },
 ]
@@ -111,8 +109,9 @@ export function smallGpuFamily(report: string): 'L4' | 'A10' | undefined {
 
 function rateFor(entry: SmallGpuFamily): number {
   const base = smallLlmEurPerHour()
-  if (entry.override === undefined) return base * entry.ratio
-  return positiveRate(entry.override, process.env[entry.override], base * entry.ratio)
+  const derived = base * (modalDefaultUsdPerHour(entry.box) / modalDefaultUsdPerHour('smallL4'))
+  if (entry.override === undefined) return derived
+  return positiveRate(entry.override, process.env[entry.override], derived)
 }
 
 interface SmallGpuSample {

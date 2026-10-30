@@ -13,8 +13,9 @@ import {
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
-/** 1.54 (the L4 default) × the owner's 2026-10-27 quote ratio 1.10/0.80. */
-const A10_DERIVED = 1.54 * (1.1 / 0.8)
+/** Independent full-container arithmetic from the 2026-10-30 Modal list prices. */
+const L4_DERIVED = (0.8 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
+const A10_DERIVED = (1.1 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -61,12 +62,12 @@ describe('per-GPU rates (#848)', () => {
   it('an unknown GPU prices at the HIGHEST known rate, never the base', () => {
     // No sample yet: the floor must not understate a box that may be on A10.
     expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
-    expect(smallGpuEurPerHour()).toBeGreaterThan(1.54)
+    expect(smallGpuEurPerHour()).toBeGreaterThan(L4_DERIVED)
   })
 
   it('prices each sampled family at its own rate', async () => {
     await sampled('NVIDIA L4')
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    expect(smallGpuEurPerHour()).toBe(L4_DERIVED)
     resetSmallGpuForTests()
     await sampled('NVIDIA A10G')
     expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED, 12)
@@ -104,7 +105,17 @@ describe('per-GPU rates (#848)', () => {
     expect(smallGpuEurPerHour()).toBe(2)
     resetSmallGpuForTests()
     await sampled('NVIDIA A10G')
-    expect(smallGpuEurPerHour()).toBeCloseTo(2 * (1.1 / 0.8), 12)
+    expect(smallGpuEurPerHour()).toBeCloseTo(2 * (A10_DERIVED / L4_DERIVED), 12)
+  })
+
+  it('converts the A10 full-container default at the configured FX rate', async () => {
+    vi.stubEnv('EUR_PER_USD', '0.9')
+    await sampled('NVIDIA A10G')
+    expect(smallGpuEurPerHour()).toBeCloseTo(A10_DERIVED * (0.9 / 0.86), 12)
+    vi.stubEnv('SMALL_LLM_EUR_PER_HOUR', '2')
+    expect(smallGpuEurPerHour()).toBeCloseTo(2 * (A10_DERIVED / L4_DERIVED), 12)
+    vi.stubEnv('SMALL_LLM_EUR_PER_HOUR_A10', '3')
+    expect(smallGpuEurPerHour()).toBe(3)
   })
 })
 
@@ -148,10 +159,10 @@ describe('the /status sampler', () => {
 
   it('a fresh sample prices without re-reading; the read NEVER fires a fetch', async () => {
     await sampled('NVIDIA L4')
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    expect(smallGpuEurPerHour()).toBe(L4_DERIVED)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(SMALL_GPU_SAMPLE_TTL_MS - 1)
-    expect(smallGpuEurPerHour()).toBe(1.54)
+    expect(smallGpuEurPerHour()).toBe(L4_DERIVED)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     // Past the TTL the pricing read stays PURE — it prices at the HIGHEST
     // known rate (the box may have come back on the dearer family; a stale

@@ -19,6 +19,7 @@ import { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
 // is types + plain constants, so importing it here never drags the Docker
 // backend (or any `node:` module) into the browser bundle.
 import { DEFAULT_SANDBOX_SETTINGS, type SandboxSettings } from '@hames-ai/sandbox/settings'
+import { modalDefaultUsdPerHour } from './modal-pricing'
 
 // Re-exported so the app's settings API is unchanged: the loop-budget resolver
 // now lives in the library beside the config it clamps against.
@@ -355,18 +356,19 @@ export const CACHE_READ_MULT = 0.1
 export { DEFAULT_EUR_PER_USD } from '@hames-ai/harness-patterns/types'
 
 /**
- * EUR per hour the self-hosted GPU is awake — the owner's figure for the Verda
- * (DataCrunch) instance, 2026-08-26. Overridable at `LARGE_LLM_EUR_PER_HOUR`.
+ * EUR per hour for the documented Modal H100 box (4 cores, 64 GiB, broad eu
+ * compute). See `modal-pricing.ts` for the dated list prices. Overridable at
+ * `LARGE_LLM_EUR_PER_HOUR` when the host or compute region differs.
  *
  * The deployment scales to zero, so an idle box costs nothing and this rate is
  * only ever multiplied by time something was actually running.
  */
-export const DEFAULT_LARGE_LLM_EUR_PER_HOUR = 1.819
+export const DEFAULT_LARGE_LLM_EUR_PER_HOUR = modalDefaultUsdPerHour('large') * DEFAULT_EUR_PER_USD
 
-/** Metered small summarizer GPU rate — the L4 rate, and the base the other GPU
- *  families' defaults derive from (#848, `lib/inference/small-gpu.server.ts`);
- *  overridable at SMALL_LLM_EUR_PER_HOUR. */
-export const DEFAULT_SMALL_LLM_EUR_PER_HOUR = 1.54
+/** Documented Modal L4 box (2 cores, 24 GiB, broad eu compute). The A10
+ *  default uses the same resource formula; see `small-gpu.server.ts`. */
+export const DEFAULT_SMALL_LLM_EUR_PER_HOUR =
+  modalDefaultUsdPerHour('smallL4') * DEFAULT_EUR_PER_USD
 
 /** Default EUR/hour by selected client. Keys are pinned against the routing
  * vocabulary; server-side overrides are read per call in cost-rates.server.ts.

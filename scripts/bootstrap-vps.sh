@@ -1762,12 +1762,10 @@ stage_boot() {
     refuse ".env is not ready: $(tr '\n' ';' <<<"$problems")"
   else
     ok ".env passes the docs/PREVIEW.md §6 preflight"
-    # The clone preflight runs BEFORE the #664 gates below: the gates read the
-    # same render the preflight validates, so a render that fails must be
-    # refused by the preflight's own pipeline (its pipefail guard), not
-    # silently by a later reader.
-    clone_preflight "$files" || return 1
   fi
+  # The clone preflight and #664 gates read the same render. Keep clone
+  # refusals visible in dry runs even when .env has other reported problems.
+  [[ -z ${files:-} ]] || clone_preflight "$files" || return 1
   # #664: the gates Caddy makes real are the .env values, not this run's
   # arguments: configs/Caddyfile and docker-compose.prod.yaml substitute
   # ACME_EMAIL and APP_DOMAIN from .env, so a placeholder an earlier hostname
@@ -1778,6 +1776,8 @@ stage_boot() {
   if env_acme=$(compose_caddy_env ACME_EMAIL) && env_domain=$(compose_caddy_env APP_DOMAIN); then render_ok=1; fi
   ((render_ok)) || refuse "cannot render the Compose config, so the ACME_EMAIL/APP_DOMAIN Caddy gets are unreadable"
   if ((render_ok)); then
+    # Compose's :? interpolation refuses empty values before this branch;
+    # retain the checks for a malformed or stubbed config render.
     if [[ -z $env_acme ]]; then
       refuse "ACME_EMAIL is not set in .env; Caddy reads ACME_EMAIL from .env, not the --acme-email argument (the hostname stage writes it)"
     elif reserved_name "$env_acme"; then
@@ -1827,7 +1827,6 @@ stage_boot() {
   fi
 
   # A clone project owns app-dev too. Never orphan-prune during a clone boot.
-  files=$(compose_files) || return 1
   files=$(compose_files) || return 1
   prepare_embedder || return 1
   if [[ $files == "$COMPOSE_FILES" ]]; then

@@ -189,7 +189,7 @@ function boot(values: Record<string, string>) {
     reserved_name() { return 1; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; wait_state() { :; }
     prepare_embedder() { :; } # model preparation has daemon-free fixture tests
-    dc() { if [[ $1 == config ]]; then printf '{"name":"synthetic"}'; else printf 'COMPOSE_CALLED\\n'; fi; }
+    dc() { if [[ $1 == config ]]; then printf '{"name":"synthetic","services":{"caddy":{"environment":{"ACME_EMAIL":"ops@example.invalid","APP_DOMAIN":"staging.example.invalid"}}}}'; else printf 'COMPOSE_CALLED\\n'; fi; }
     sudo() { :; }
     stage_boot
   `,

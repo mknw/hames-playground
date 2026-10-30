@@ -138,6 +138,16 @@ describe('maskMailAddresses', () => {
     expect(maskMailAddresses('a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@example.com')).toBe('⟨address⟩')
   })
 
+  it('masks a quoted local part, including spaces and an escaped quote', () => {
+    expect(maskMailAddresses('"john doe"@example.com')).toBe('⟨address⟩')
+    expect(maskMailAddresses('"john\\"doe"@example.com')).toBe('⟨address⟩')
+    expect(maskMailAddresses('"john@doe"@example.com')).toBe('⟨address⟩')
+  })
+
+  it('keeps Unicode and plus-address masking', () => {
+    expect(maskMailAddresses('josé+notes@büro.example')).toBe('⟨address⟩')
+  })
+
   it('leaves a message with no address untouched', () => {
     expect(maskMailAddresses('could not read the database clock')).toBe(
       'could not read the database clock',
@@ -170,6 +180,13 @@ describe('maskError', () => {
       "'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d@example.com'"
     expect(maskError(message)).toContain('⟨address⟩')
     expect(maskError(message)).not.toContain('⟨id⟩')
+  })
+
+  it('masks a quoted GUID-shaped local part before the Graph id mask', () => {
+    const message =
+      'Node(123) already exists with property `mail` = ' +
+      '\'"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"@example.com\''
+    expect(maskError(message)).toBe("Node(123) already exists with property `mail` = '⟨address⟩'")
   })
 
   it('leaves an error message with no address or id untouched', () => {

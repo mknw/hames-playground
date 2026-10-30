@@ -21,6 +21,7 @@ const reserveBody =
     source,
   )?.[1]
 const mode = process.env.REVIEW_FIXED_L4
+const oldBasis = process.env.REVIEW_OLD_BASIS === '1'
 const L4_EUR = (0.8 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
 const A10_EUR = (1.1 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15 * 0.86
 const readRate = () =>
@@ -87,10 +88,11 @@ function reserveRunnerTail(budget: SpendBudget, now: number): void {
   )
 }
 
-function tickRunnerFloor(budget: SpendBudget): void {
+function tickRunnerFloor(budget: SpendBudget, omitBasis = false): void {
   expect(tickBody).toBeDefined()
   const active = { agent: 'general-next', scenario: 'count', tier: 'self_deployed' as const }
-  runInNewContext(`const tick = () => {${tickBody}}; tick()`, {
+  const body = omitBasis ? tickBody!.replace('small.basis,', '') : tickBody
+  runInNewContext(`const tick = () => {${body}}; tick()`, {
     active,
     live: true,
     budget,
@@ -138,6 +140,24 @@ it('reports each tail basis after an idle gap and retains the basis of the winni
       .infrastructureBasis,
   ).toBe(unknown.basis)
   expect(report.smallGpuFamily).toBe('L4')
+})
+
+it('reports the new family when a higher rate overtakes an accrued floor', () => {
+  const budget = new SpendBudget(20, 0.86)
+  seedSmallGpuForTests('L4')
+  const first = smallInfraRate()
+  tickRunnerFloor(budget)
+  expect(budget.rows[0].infrastructureBasis).toBe(first.basis)
+  seedSmallGpuForTests('A10')
+  const second = smallInfraRate()
+  tickRunnerFloor(budget, oldBasis)
+  const report = serializedReport(budget)
+  const spend = (
+    report.results as Array<{ spend: { infrastructureUsd: number; infrastructureBasis: string } }>
+  )[0].spend
+  expect(spend.infrastructureUsd).toBeCloseTo(((600 / 3600) * second.eurPerHour) / 0.86, 6)
+  expect(spend.infrastructureBasis).toBe(second.basis)
+  expect(report.smallGpuFamily).toBe('A10')
 })
 
 it('FX override changes EUR rate while the cap converts it back to the same USD reservation', () => {

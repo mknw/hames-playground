@@ -6,8 +6,12 @@ const mcp = vi.hoisted(() => ({
   url: '' as string,
   headers: undefined as HeadersInit | undefined,
   called: [] as string[],
+  calls: 0,
   list: [] as { name: string; description?: string; inputSchema?: Record<string, unknown> }[],
   failure: '' as string,
+  failureCode: undefined as number | undefined,
+  // Sentinels the SDK error shapes are stuffed with: every assertion that a
+  // fixed message is returned also asserts neither sentinel is echoed.
 }))
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
   StreamableHTTPClientTransport: class {
@@ -26,7 +30,12 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       return { tools: mcp.list }
     })
     callTool = vi.fn(async ({ name }: { name: string }) => {
-      if (mcp.failure) throw new Error(mcp.failure)
+      mcp.calls++
+      // Shape mirrors the SDK: a numeric `code` rides the error object
+      // (McpError.code for protocol errors, StreamableHTTPError.code for HTTP).
+      if (mcp.failureCode !== undefined || mcp.failure) {
+        throw Object.assign(new Error(mcp.failure), { code: mcp.failureCode })
+      }
       mcp.called.push(name)
       return { content: [{ type: 'text', text: 'provider result' }] }
     })
@@ -39,7 +48,9 @@ beforeEach(() => {
   mcp.url = ''
   mcp.headers = undefined
   mcp.called = []
+  mcp.calls = 0
   mcp.failure = ''
+  mcp.failureCode = undefined
   mcp.list = [
     { name: 'web_search_exa', inputSchema: { type: 'object' } },
     { name: 'web_fetch_exa', inputSchema: { type: 'object' } },
@@ -59,6 +70,9 @@ describe('hosted Exa selection and discovery', () => {
       'web_fetch_exa',
     ])
     expect(mcp.url).toBe('https://mcp.exa.ai/mcp?tools=web_search_exa%2Cweb_fetch_exa')
+    // The credential rides the x-api-key HEADER, never the URL: a query-param
+    // leak is its own failure mode, distinct from a missing header.
+    expect(mcp.url).not.toContain('server-only-test-key')
     expect(mcp.headers).toEqual({ 'x-api-key': 'server-only-test-key' })
     expect(JSON.stringify(await transport.listTools())).not.toContain('server-only-test-key')
     expect(transport.namespaceFor?.('web_fetch_exa')).toBe('web')
@@ -108,6 +122,52 @@ describe('hosted Exa selection and discovery', () => {
     await expect(transport.listTools()).rejects.toThrow('Exa hosted tool discovery unavailable')
     const result = await transport.callTool('web_search_exa', { query: 'public' })
     expect(result).toMatchObject({ success: false, error: 'Exa hosted request unavailable' })
+    expect(JSON.stringify(result)).not.toContain(key)
+  })
+})
+
+describe('hosted Exa failure classification (FRONT: named, non-retried, no SDK detail)', () => {
+  // A keyed call fails on the wire: each error is classified by shape into a
+  // fixed name, dispatched exactly once, and never echoes the SDK's message
+  // (which carries the provider's response text and request metadata).
+  const key = 'synthetic-secret-sentinel'
+  const transport = () => createExaTransport(selectedExaTools('both'), key)
+
+  it('names a 429 rate-limit refusal without SDK detail and without retrying', async () => {
+    mcp.failure = `Error POSTing to endpoint: {"error":"rate limited, ref ${key}"}`
+    mcp.failureCode = 429 // StreamableHTTPError.code is the HTTP status
+    const result = await transport().callTool('web_search_exa', { query: 'public' })
+    expect(result).toEqual({
+      success: false,
+      data: null,
+      error: 'Exa hosted rate limit reached (HTTP 429)',
+    })
+    expect(mcp.calls).toBe(1) // the failure is final: no second attempt
+    expect(JSON.stringify(result)).not.toContain(key)
+  })
+
+  it('names the bounded request timeout without SDK detail and without retrying', async () => {
+    mcp.failure = `Request timed out with metadata near ${key}`
+    mcp.failureCode = -32001 // ErrorCode.RequestTimeout, the SDK's fixed 60s bound
+    const result = await transport().callTool('web_fetch_exa', { url: 'https://example.test' })
+    expect(result).toEqual({
+      success: false,
+      data: null,
+      error: 'Exa hosted request timed out',
+    })
+    expect(mcp.calls).toBe(1)
+    expect(JSON.stringify(result)).not.toContain(key)
+  })
+
+  it('keeps the generic name for every other failure', async () => {
+    mcp.failure = `connection reset near ${key}`
+    const result = await transport().callTool('web_search_exa', { query: 'public' })
+    expect(result).toEqual({
+      success: false,
+      data: null,
+      error: 'Exa hosted request unavailable',
+    })
+    expect(mcp.calls).toBe(1)
     expect(JSON.stringify(result)).not.toContain(key)
   })
 })

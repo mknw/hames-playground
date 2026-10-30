@@ -59,7 +59,9 @@ the DuckDuckGo and fetch gateway switches stay independent. `EXA_API_KEY` is
 optional and read only by the app server from `app/.env` in development or the
 repo-root `.env` in production. When absent, the app logs keyless mode and Exa
 applies its [free rate limit](https://exa.ai/docs/get-started/exa-mcp). A failed
-Exa discovery is logged and leaves existing gateway tools available. Do not
+Exa discovery is logged and leaves existing gateway tools available. A
+rate-limited (HTTP 429) or timed-out Exa call fails with its own fixed message
+(never SDK detail) and is never retried. Do not
 put the key in `configs/mcp-config.yaml` or the Docker catalog snapshot.
 
 | Server                | Title           | Tools                                                                     | Auth                 | Backend                      |
@@ -117,7 +119,7 @@ mcp-gateway:
     - ./configs/catalog.yaml:/mcp/catalog.yaml:ro
     - ./docker-config.json:/root/.docker/config.json:ro
   ports:
-    - '8811:8811'
+    - "8811:8811"
   networks:
     - app-network
   depends_on:
@@ -402,7 +404,7 @@ registry:
       - name: tool_name
     env:
       - name: ENV_VAR
-        value: '{{server-name.config_key}}'
+        value: "{{server-name.config_key}}"
     secrets:
       - name: server-name.secret
         env: SECRET_ENV

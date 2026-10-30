@@ -3,6 +3,7 @@
  * before and after this transport. Never expose the credential in descriptors. */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { ErrorCode } from '@modelcontextprotocol/sdk/types.js'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ToolTransport } from '@hames-ai/harness-patterns/tool-transport.server'
 import type { MCPToolDescription, ToolCallResult } from '@hames-ai/harness-patterns/types'
@@ -11,6 +12,39 @@ assertServerOnImport()
 
 const EXA_TOOLS = ['web_search_exa', 'web_fetch_exa'] as const
 type ExaTool = (typeof EXA_TOOLS)[number]
+
+/** Fixed failure names, one per classified cause. See classifyExaFailure. */
+const EXA_FAILURES = {
+  timeout: 'Exa hosted request timed out',
+  rateLimit: 'Exa hosted rate limit reached (HTTP 429)',
+  unavailable: 'Exa hosted request unavailable',
+} as const
+
+/** Classify a failed hosted call into a fixed, safe name.
+ *
+ * FRONT: every failure must be NAMED and non-retried, and never expose SDK
+ * error detail. The SDK's thrown messages carry the provider's response
+ * text and request metadata from the authenticated connection, so this
+ * classifies by SHAPE only — the numeric `code` the two error classes use:
+ * `McpError.code` (the protocol layer) and the HTTP status the streamable
+ * transport reports as `StreamableHTTPError.code`. `ErrorCode.RequestTimeout`
+ * (-32001) is how the MCP SDK reports its bounded request timeout — every
+ * request is capped at 60s by the SDK's own DEFAULT_REQUEST_TIMEOUT_MSEC,
+ * and the transport's `finally { client.close() }` aborts what is in flight —
+ * so no extra timer is needed here. HTTP 429 is Exa's documented rate-limit
+ * refusal (the expected failure mode of the keyless tier). Failures are
+ * final: process transports are dispatched exactly once by the shared
+ * chokepoint (the gateway-only reconnect retry does not reach them) and this
+ * transport never re-sends. */
+function classifyExaFailure(err: unknown): string {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? (err as { code: unknown }).code
+      : undefined
+  if (code === ErrorCode.RequestTimeout) return EXA_FAILURES.timeout
+  if (code === 429) return EXA_FAILURES.rateLimit
+  return EXA_FAILURES.unavailable
+}
 
 /** Developer switch; invalid values fail at boot instead of silently widening access. */
 export function selectedExaTools(value = process.env.EXA_TOOLS): readonly ExaTool[] {
@@ -104,8 +138,8 @@ export function createExaTransport(
         return result.isError
           ? { success: false, data: null, error: String(data) }
           : { success: true, data }
-      } catch {
-        return { success: false, data: null, error: 'Exa hosted request unavailable' }
+      } catch (err) {
+        return { success: false, data: null, error: classifyExaFailure(err) }
       }
     },
   }

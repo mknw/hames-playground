@@ -662,9 +662,10 @@ jobs:
     needs: [clone-changes]
     if: always() && (github.event_name == 'push' || needs.clone-changes.result == 'failure' || needs.clone-changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
-    # #864: 48/63 bootstrap mutants took ~40m (~50s each); 15 bootstrap and
-    # 64 validator mutants remained. Allow 75m for the corpus and CI variance.
-    timeout-minutes: 75
+    # #864: run 41073223347 killed 71/79 bootstrap mutants before the 75m cap;
+    # #862 added the Caddy corpus after the 63-mutant estimate. Keep the full
+    # bootstrap and validator corpus, allowing 100m for completion and CI variance.
+    timeout-minutes: 100
     defaults:
       run:
         working-directory: .

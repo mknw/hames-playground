@@ -7,6 +7,7 @@ python3 scripts/check-vps.test.py [--mutations]
 import contextlib
 import copy
 import errno
+import gc
 import http.client
 import importlib.util
 import io
@@ -20,6 +21,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import warnings
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
 
@@ -346,6 +348,25 @@ class Probes(unittest.TestCase):
                 self.assertEqual(output.getvalue(), expected)
                 self.assertNotIn(secret, output.getvalue())
                 opener.open.assert_called_once()
+
+    def test_private_health_http_error_does_not_warn_with_sensitive_reason(self):
+        secret = "synthetic-secret-host-and-bearer"
+        body = io.BytesIO(b"synthetic-body")
+        error = HTTPError("https://" + secret + "/health", 401, secret, {}, body)
+        opener = MagicMock()
+        opener.open.side_effect = error
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with warnings.catch_warnings(), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            warnings.simplefilter("always", ResourceWarning)
+            with patch.dict(os.environ, {"SMALL_LLM_BASE_URL": "https://small.invalid/v1", "SMALL_LLM_API_KEY": "synthetic-key"}), patch.object(probe, "build_opener", return_value=opener), patch.object(sys, "argv", [str(SOURCE), "--private-health"]):
+                self.assertEqual(probe.main(), 1)
+            opener.open.assert_called_once()
+            self.assertTrue(body.closed)
+            opener.open.side_effect = None
+            del error
+            gc.collect()
+        self.assertEqual(stdout.getvalue(), "FAIL private health HTTP 401 (auth)\n")
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_private_health_invalid_and_non_success_status_labels(self):
         for status, expected in ((204, "private health HTTP 204"), (599, "private health HTTP 599"),
@@ -803,6 +824,7 @@ MUTATIONS = [
     ("runbook-instance-status", RUNBOOK, 'A failed upgrade means', 'Keep it off while the private deployments are paused.\n\nA failed upgrade means'),
     ("pinned-probe-present", BOOTSTRAP, '  [[ -f $APP_DIR/scripts/check-vps.py ]] || refuse', '  true || refuse'),
     ("tcp-remote-rst", SOURCE, 'r"Network is unreachable|', 'r"Connection refused|Network is unreachable|'),
+    ("health-http-error-close", SOURCE, '                error.close()', '                pass'),
 ]
 
 

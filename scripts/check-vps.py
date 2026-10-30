@@ -361,6 +361,11 @@ def main():
     except Exception as error:
         # Only our fixed labels are safe to print. Library errors may carry
         # a URL, bearer value or Docker-inspect content.
+        if args.private_health and isinstance(error, HTTPError):
+            try:
+                error.close()
+            except Exception:
+                pass
         label = private_health_failure(error) if args.private_health else (
             str(error) if isinstance(error, Refused) else "probe unavailable or inconclusive")
         print("FAIL " + label)

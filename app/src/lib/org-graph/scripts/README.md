@@ -58,20 +58,19 @@ env var) so it can never become a side effect of ordinary setup — re-read
 
 ## Output is redacted
 
-Every script prints counts, property names and reason codes only. Where an
+The scripts' success paths print counts, property names and reason codes. Where an
 identity has to be shown at all — `smoke-pseudonymise.ts` has to prove a
 _specific_ real name was replaced — it goes through `mask()` in `_redact.ts`,
 which replaces every alphanumeric run with a **fixed-width** `···`, so neither
 the initial nor the length of a name survives into a pasted transcript.
 Assertions run on the unmasked strings in memory. That is output hygiene, not a
-security control: it keeps a transcript pasteable, and the thing that makes it
-pasteable is that nothing in it identifies anybody.
+security control: it keeps that output pasteable without identifying anybody.
 
-One thing it does **not** cover: `ingest-roster.ts`'s error path prints
-`err.message`, and a Graph error carries the request path — which on the
-memberships loop contains a member's Entra object id. Still no display name and
-no address, but an opaque directory identifier is not nothing, so that path
-masks the id out before printing (see `maskGraphIds` in `_redact.ts`).
+The roster ingest's free-text error path passes messages through `maskError()`
+in `_redact.ts` before printing. It replaces whole mail addresses, including
+quoted local parts, then masks Entra object ids that a Graph request path can
+carry. The order keeps a GUID-shaped mail address from leaving its domain
+visible after the id mask.
 
 ## What "passing" looks like
 

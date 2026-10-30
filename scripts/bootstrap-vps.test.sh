@@ -609,9 +609,56 @@ PY
         else flunk "clones preflight sidecar control (rc=$rc)" "$out"; fi
       else clone_refused 'another service mounting a symlink to the TLS directory' dc; fi
     done
+    # File-backed secrets and named-volume devices are also host mounts. Give
+    # each route a non-TLS control so the refusal pins the link destination.
+    mkdir -p "$dir/ordinary" && touch "$dir/ordinary/file"
+    ln -sfn "$dir/ordinary/file" "$dir/ordinary-file-link"
+    ln -sfn "$dir/tls/key.pem" "$dir/tls-key-link"
+    ln -sfn "$dir/ordinary" "$dir/ordinary-dir-link"
+    for f in ordinary-file-link tls-key-link; do
+      clone_reset
+      clone_select "$both"
+      python3 - "$dir/render.json" "$dir/$f" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['secrets'] = {'side': {'file': sys.argv[2]}}
+c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-network': None},
+    secrets=[dict(source='side', target='/run/side-secret')])
+p.write_text(json.dumps(c))
+PY
+      if [[ $f == ordinary-file-link ]]; then
+        out=$(clone_boot dc 2>&1); rc=$?
+        if ((rc == 0)); then pass 'clones preflight accepts a sidecar secret linked to a non-TLS file'
+        else flunk "clones preflight sidecar secret control (rc=$rc)" "$out"; fi
+      else clone_refused 'a sidecar secret linked to the TLS key' dc; fi
+    done
+    for f in ordinary-dir-link tls-link; do
+      clone_reset
+      clone_select "$both"
+      python3 - "$dir/render.json" "$dir/$f" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['volumes'] = {'side': {'driver_opts': {'device': sys.argv[2]}}}
+c['services']['sidecar'] = dict(image='sidecar:synthetic', networks={'app-network': None},
+    volumes=[dict(type='volume', source='side', target='/srv')])
+p.write_text(json.dumps(c))
+PY
+      if [[ $f == ordinary-dir-link ]]; then
+        out=$(clone_boot dc 2>&1); rc=$?
+        if ((rc == 0)); then pass 'clones preflight accepts a sidecar volume linked to a non-TLS directory'
+        else flunk "clones preflight sidecar volume control (rc=$rc)" "$out"; fi
+      else clone_refused 'a sidecar volume device linked to the TLS directory' dc; fi
+    done
     # The release checkout reached through a symlink is mounted, and its
-    # validator run, at its realpath.
+    # validator run, at its realpath; its rendered build context follows the
+    # same link, so the container must receive a canonical context as well.
     clone_reset
+    python3 - "$dir/render.json" "$dir/release-link/app" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); c = json.loads(p.read_text())
+c['services']['app']['build']['context'] = sys.argv[2]
+p.write_text(json.dumps(c))
+PY
     out=$(CLONE_APP_DIR="$dir/release-link" clone_boot dc 2>&1); rc=$?
     if ((rc == 0)) && { [[ -n ${SHIM_REAL_DOCKER:-} ]] ||
       grep -Fq -- "-v $rdir/release:$rdir/release:ro -v $rdir/dev:$rdir/dev:ro hames-app:local $rdir/release/scripts/validate-clones.mjs" "$dir/calls"; }; then
@@ -1245,6 +1292,9 @@ mutants = [
     ('render-not-canonical', [(render, '')]),
     ('mounts-not-canonical', [(mount, '')]),
     ('release-checkout-not-canonical', [(app, 'app_real=$APP_DIR')]),
+    ('secrets-configs-not-canonical', [('for key in ("secrets", "configs"):\n    for entry in (config.get(key) or {}).values():\n        fix(entry, "file")\n', '')]),
+    ('device-not-canonical', [('        fix(volume.get("driver_opts"), "device")\n', '        pass\n')]),
+    ('context-not-canonical', [('        fix(service.get("build"), "context")\n', '')]),
     ('dev-key-not-mounted', [(' DEV_SANDBOX_DOCKER_TLS_KEY; do', '; do')]),
     ('release-ca-not-mounted', [(' RELEASE_SANDBOX_DOCKER_TLS_CA RELEASE_SANDBOX_DOCKER_TLS_CERT', ' RELEASE_SANDBOX_DOCKER_TLS_CERT')]),
 ]
@@ -1438,6 +1488,8 @@ compose_caddy_env_unused() {
     ('render-not-canonical', '    sudo python3 -I -c "$canonical" 2>/dev/null |\n', ''),
     ('mounts-not-canonical', '    tpath=$(sudo python3 -I -c "$canonical" "$tpath") || return 1\n', ''),
     ('release-checkout-not-canonical', 'app_real=$(sudo python3 -I -c "$canonical" "$APP_DIR") || return 1', 'app_real=$APP_DIR'),
+    ('secrets-configs-not-canonical', 'for key in ("secrets", "configs"):\n    for entry in (config.get(key) or {}).values():\n        fix(entry, "file")\n', ''),
+    ('device-not-canonical', '        fix(volume.get("driver_opts"), "device")\n', '        pass\n'),
     ('validator-image-missing-accepted', "if ! sudo docker image inspect --format '{{.Id}}' \"$image\" >/dev/null 2>&1; then", 'if false; then'),
     ('images-prebuild-skipped', 'if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&', 'if false &&'),
 ]

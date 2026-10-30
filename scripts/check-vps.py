@@ -309,6 +309,8 @@ def private_health_failure(error):
         return "private health TLS error"
     if isinstance(reason, ConnectionRefusedError):
         return "private health connection refused"
+    if isinstance(error, URLError) or isinstance(reason, OSError):
+        return "private health transport error"
     return "private health unavailable or inconclusive"
 
 

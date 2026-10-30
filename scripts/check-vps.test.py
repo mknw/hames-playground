@@ -6,6 +6,8 @@ python3 scripts/check-vps.test.py [--mutations]
 """
 import contextlib
 import copy
+import errno
+import http.client
 import importlib.util
 import io
 import json
@@ -329,6 +331,11 @@ class Probes(unittest.TestCase):
             (URLError(TimeoutError(secret)), "FAIL private health timeout\n"),
             (URLError(ssl.SSLError(secret)), "FAIL private health TLS error\n"),
             (URLError(ConnectionRefusedError(secret)), "FAIL private health connection refused\n"),
+            (URLError(ConnectionResetError(secret)), "FAIL private health transport error\n"),
+            (URLError(OSError(errno.ENETUNREACH, secret)), "FAIL private health transport error\n"),
+            (http.client.RemoteDisconnected(secret), "FAIL private health transport error\n"),
+            (OSError(errno.EHOSTUNREACH, secret), "FAIL private health transport error\n"),
+            (URLError(secret), "FAIL private health transport error\n"),
             (RuntimeError(secret), "FAIL private health unavailable or inconclusive\n"),
         )
         for error, expected in cases:
@@ -338,6 +345,20 @@ class Probes(unittest.TestCase):
                 self.assertEqual(probe.main(), 1)
                 self.assertEqual(output.getvalue(), expected)
                 self.assertNotIn(secret, output.getvalue())
+                opener.open.assert_called_once()
+
+    def test_private_health_invalid_and_non_success_status_labels(self):
+        for status, expected in ((204, "private health HTTP 204"), (599, "private health HTTP 599"),
+                                 (0, "private health unavailable or inconclusive"),
+                                 (600, "private health unavailable or inconclusive"),
+                                 (None, "private health unavailable or inconclusive"),
+                                 ("503", "private health unavailable or inconclusive"),
+                                 (True, "private health unavailable or inconclusive")):
+            opener = MagicMock()
+            opener.open.return_value.__enter__.return_value.status = status
+            with self.subTest(status=status), patch.dict(os.environ, {"SMALL_LLM_BASE_URL": "https://small.invalid/v1", "SMALL_LLM_API_KEY": "synthetic-secret"}), patch.object(probe, "build_opener", return_value=opener), patch.object(sys, "argv", [str(SOURCE), "--private-health"]), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), 1)
+                self.assertEqual(output.getvalue(), "FAIL " + expected + "\n")
                 opener.open.assert_called_once()
 
     def test_other_modes_keep_generic_library_error_label(self):

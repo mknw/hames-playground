@@ -1,7 +1,7 @@
 import { cleanup, render } from '@solidjs/testing-library'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ContextEvent, DecisionMadeEventData } from '@hames-ai/harness-patterns'
-import { EventDetailPanel } from '~/components/ark-ui/observability/EventDetail'
+import { EventDetailPanel, ToolPairDetail } from '~/components/ark-ui/observability/EventDetail'
 import { EventRow } from '~/components/ark-ui/observability/TimelineRows'
 import { createGenerator } from 'unocss'
 import config from '../../../../uno.config'
@@ -39,6 +39,55 @@ const detail = (over: Partial<DecisionMadeEventData> = {}) =>
   render(() => <EventDetailPanel event={event(over)} onClose={() => {}} />).container
 
 describe('EventDetail score/noul observability', () => {
+  it('uses the themed ground for ordinary events and merged tool pairs', () => {
+    const action = render(() => (
+      <EventDetailPanel
+        event={{
+          id: 'action',
+          ts: 1,
+          type: 'controller_action',
+          patternId: 'synthetic',
+          data: {
+            action: {
+              tool_name: 'synthetic_tool',
+              tool_args: '{}',
+              reasoning: 'synthetic reason',
+              is_final: false,
+              status: 'continue',
+              additional_calls: [{ tool_name: 'second_tool', tool_args: '{}' }],
+            },
+          },
+        }}
+        onClose={() => {}}
+      />
+    )).container
+    const call: ContextEvent = {
+      id: 'call',
+      ts: 2,
+      type: 'tool_call',
+      patternId: 'synthetic',
+      data: { callId: 'synthetic', tool: 'synthetic_tool', args: {} },
+    }
+    const result: ContextEvent = {
+      id: 'result',
+      ts: 3,
+      type: 'tool_result',
+      patternId: 'synthetic',
+      data: { callId: 'synthetic', tool: 'synthetic_tool', success: true, result: {} },
+    }
+    const pair = render(() => (
+      <ToolPairDetail call={call} result={result} onClose={() => {}} />
+    )).container
+
+    for (const panel of [action, pair]) {
+      expect((panel.firstElementChild as HTMLElement).style.backgroundColor).toBe(
+        'var(--ui-bg-secondary)',
+      )
+    }
+    expect(action.textContent).toContain('synthetic reason')
+    expect(action.textContent).toContain('Additional calls (same turn)')
+    expect(pair.textContent).toContain('Success')
+  })
   // Mutation: draw at the mode instead of expected.
   it('draws the score mean at expected, independently of the mode', () => {
     const panel = detail()

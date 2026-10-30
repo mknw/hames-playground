@@ -1,5 +1,17 @@
 # @hames-ai/connectors
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies [594b81a]
+- Updated dependencies [fc9fd44]
+- Updated dependencies [b770f32]
+- Updated dependencies [ae863e8]
+- Updated dependencies [52aeb18]
+- Updated dependencies [de554a1]
+  - @hames-ai/harness-patterns@0.6.0
+
 ## 0.5.0
 
 ### Patch Changes

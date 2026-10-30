@@ -1,5 +1,25 @@
 # @hames-ai/agents
 
+## 0.6.0
+
+### Minor Changes
+
+- ae863e8: The injection guard can exempt links a source writes itself from `exfil-data-url` (#784 item 6). `InjectionGuardOptions` gains `sourceLinks: { namespace, field, hosts }`: a string under that key, in a result from that namespace, whose whole value is one `https:` URL on exactly one of `hosts`, skips that rule and no other. `AgentGuards` gains `documentHosts`; `general-next`'s office guard and `microsoft-365`'s guard exempt the Graph tools' `webUrl` on them. The reference app reads them from `GRAPH_DOCUMENT_HOSTS` and refuses boot on an entry that is not a bare hostname.
+- 52aeb18: The guard thresholds and the egress tripwire's N are settings (#844). `AgentGuards` gains `gateThreshold` (τi), `egressThreshold` (τe) and `maxOutgoingRetriesPostTripwire` (N); `general-next` passes them to `createGuardGate` and `withEgressGate`, and keeps today's values (0.15, 0.3, 0) when they are absent. `@hames-ai/harness-patterns` exports `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` (0), the egress gate's default N. The reference app reads them from `GUARD_GATE_THRESHOLD`, `GUARD_EGRESS_THRESHOLD` and `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE`: an out-of-range value refuses boot, a looser one warns once.
+
+### Patch Changes
+
+- Updated dependencies [594b81a]
+- Updated dependencies [fc9fd44]
+- Updated dependencies [b770f32]
+- Updated dependencies [ae863e8]
+- Updated dependencies [52aeb18]
+- Updated dependencies [8651e95]
+- Updated dependencies [33bbc22]
+- Updated dependencies [de554a1]
+  - @hames-ai/harness-patterns@0.6.0
+  - @hames-ai/harness-baml@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes

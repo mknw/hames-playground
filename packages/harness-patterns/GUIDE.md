@@ -109,9 +109,11 @@ the whole loop a host writes.
 `routes` fixes the branch before anything runs. `decisionLoop` lets one turn
 move between groups of capabilities, choosing the next group after seeing what
 the last one produced: a loop over a route table in which the systemone `decide`
-seam answers one `choice` question — "Which step should run next?" — until it
-picks `answer` (which runs nothing; a `compactExecution` after the loop writes the
-reply) or `maxIterations` (default `DECISION_LOOP_MAX_ITERATIONS`, 6) is reached.
+seam answers one `choice` question until it picks `answer` (which runs nothing;
+a `compactExecution` after the loop writes the reply) or `maxIterations`
+(default `DECISION_LOOP_MAX_ITERATIONS`, 6) is reached. The question defaults to
+"Which step should run next?"; a consumer may override it with `question` in the
+`decisionLoop` config.
 
 ```typescript
 import {

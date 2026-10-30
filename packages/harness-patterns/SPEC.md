@@ -1979,6 +1979,7 @@ interface DecisionLoopConfig extends PatternConfig {
   decide: DecideFn // REQUIRED — the raw decision seam
   patternId: string // REQUIRED here (inherited as optional): matched across turns
   answer: string // the description of the `answer` option
+  question?: string // instructions for choosing the next route; default 'Which step should run next?' — consumers may override
   handoff?: { lastN?: number } // outputs shown in full, in ITERATIONS; default 2
   maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
   maxResultChars?: number // cap on a record's result and on its reasoning; default 2000

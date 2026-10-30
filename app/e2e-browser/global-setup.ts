@@ -251,6 +251,7 @@ export function browserServerEnv(
     USE_SELF_DEPLOYED_INFERENCE: undefined,
 
     BAML_LOG: process.env.BAML_LOG ?? 'warn',
+    EXA_TOOLS: 'off', // The browser suite is hermetic: no hosted MCP discovery.
   }
 }
 

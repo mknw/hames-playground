@@ -180,16 +180,22 @@ apply here.
 
 ### 3a. The agent-reachable tool surface
 
-Every agent takes a namespace slice of what the MCP gateway lists, so the
-gateway's enabled set bounds the preview's tool surface, and it has to be chosen
-rather than inherited. (Until 2026-10-21 the `general` agent passed `tools.all` —
+Every agent takes a namespace slice of its discovered tools. The gateway's
+enabled set bounds its portion of the preview surface; the app's hosted Exa
+transport independently adds only `web_search_exa` and `web_fetch_exa` under
+`web` by default. Set `EXA_TOOLS=search`, `fetch`, or `off` in the repo-root
+`.env` to narrow or disable Exa; an optional `EXA_API_KEY` belongs in that
+server-only file. With no key, boot logs keyless mode and Exa's free rate limit
+applies. The gateway set still has to be chosen rather than inherited.
+(Until 2026-10-21 the `general` agent passed `tools.all` —
 literally every listed tool — into one loop, so the enabled set WAS the surface;
 the agent was removed, and `agent-postgres-tools.test.ts` pins that no agent is
 handed the whole listing again.) An agent's declared `servers: [...]` array is
 display metadata for the agent picker (`AgentSelector.tsx:182,195`); **it filters
 nothing**.
 
-**Two things decide it, and only one of them is the control.**
+**The gateway allow-list controls the gateway portion; `EXA_TOOLS` controls
+the hosted Exa portion.**
 
 `docker-compose.prod.yaml` replaces the base file's `--enable-all-servers` with
 an explicit allow-list:

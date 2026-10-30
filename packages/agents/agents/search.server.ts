@@ -24,6 +24,7 @@ import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-bam
 import type { AgentData, AgentDefinition, AgentDeps } from '../types'
 
 import { getGraphSchema } from './graph-schema.server'
+import { webEgressGate } from './web-egress.server'
 import { NEO4J_FEW_SHOTS_DEFAULT, NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -64,6 +65,7 @@ async function createPatterns(
     liveEvents: true,
     rememberPriorTurns: false,
   })
+  const gateWeb = webEgressGate(webTools, tools.all, deps)
 
   const routerPattern = router<AgentData>(
     {
@@ -94,11 +96,13 @@ async function createPatterns(
         selector: baml.selector,
       }),
       web_search: withInjectionGuard({ namespaces: ['web'], catalog: tools.all })(
-        withReferences<AgentData>(webPattern, {
-          scope: 'global',
-          liveEvents: true,
-          selector: baml.selector,
-        }),
+        gateWeb(
+          withReferences<AgentData>(webPattern, {
+            scope: 'global',
+            liveEvents: true,
+            selector: baml.selector,
+          }),
+        ),
       ),
     },
     { liveEvents: true },

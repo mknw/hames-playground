@@ -14,6 +14,11 @@ import { resolveTestDatabase } from './test-database'
 // that works.
 process.env.DATA_ENCRYPTION_KEY ||= 'unit-test-data-encryption-key'
 
+// Unit tests must never discover or call the hosted Exa endpoint, even when a
+// developer's app/.env has a real key. The transport's own tests pass explicit
+// selections and mock the MCP client.
+process.env.EXA_TOOLS = 'off'
+
 // Never let a test run touch the dev database. Unconditional (not `||=`): the
 // point is that a developer's own DATABASE_URL cannot leak in, because
 // `initSchema()`'s encryption backfill would rewrite their real rows with the

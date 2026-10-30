@@ -214,6 +214,8 @@ export interface DecisionLoopConfig extends PatternConfig {
   readonly decide: DecideFn
   /** The description of the `answer` option — what the model reads for it. */
   readonly answer: string
+  /** Instructions for choosing the next route (default: the generic question). */
+  readonly question?: string
   /** `lastN` outputs shown in full to the decisions model AND handed to the next
    *  child, counted in ITERATIONS of this loop (default 2, N2). */
   readonly handoff?: { readonly lastN?: number }
@@ -301,6 +303,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   const {
     decide: decideFn,
     answer,
+    question = 'Which step should run next?',
     handoff,
     maxIterations: maxIterationsConfig,
     maxResultChars: maxResultCharsConfig,
@@ -750,7 +753,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         const optionIds = offered.map((l) => l.id)
         const spec: DecisionSpec = {
           key: DECISION_LOOP_KEY,
-          question: 'Which step should run next?',
+          question,
           labels: offered,
         }
 

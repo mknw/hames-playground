@@ -216,22 +216,22 @@ interface EgressGateConfig {
   /** Namespaces whose arguments reach only systems that already hold the
    *  deployment's data (its own services, its own tenant), never a third
    *  party that does not. Network locality is not the test. Every other call is egress. */
-  local: string[]
+  local: string[];
   /** Exact local tool names (e.g. the sandbox's in-VM tools on an `mcp-only` box).
    *  A name that is in `catalog` refuses construction. */
-  localTools?: string[]
+  localTools?: string[];
   /** Verified like the injection guard's namespaces (#242 item 4). */
-  catalog: string[]
+  catalog: string[];
   /** Host roster: directory + labelled identities seen this turn; deterministic. */
-  roster?: EgressRosterSource
+  roster?: EgressRosterSource;
   /** The Decide question. */
-  decide?: DecideFn
+  decide?: DecideFn;
   /** 'filter': Decide decides, a roster match is evidence (ruling A).
    *  'roster': the roster check vetoes on its own and no model is asked. */
-  mode?: ByTier<'filter' | 'roster'>
+  mode?: ByTier<"filter" | "roster">;
   /** Ask (unattended: refuse) when 1 − P(nothing_private) ≥ threshold. */
-  threshold?: number
-  timeoutMs?: number
+  threshold?: number;
+  timeoutMs?: number;
 }
 ```
 

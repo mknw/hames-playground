@@ -121,11 +121,11 @@ These MUST be flagged — they can cause real damage:
 
 ```typescript
 // BAD: SQL injection via string concatenation
-const query = `SELECT * FROM users WHERE id = ${userId}`
+const query = `SELECT * FROM users WHERE id = ${userId}`;
 
 // GOOD: Parameterized query
-const query = `SELECT * FROM users WHERE id = $1`
-const result = await db.query(query, [userId])
+const query = `SELECT * FROM users WHERE id = $1`;
+const result = await db.query(query, [userId]);
 ```
 
 ```typescript
@@ -154,21 +154,21 @@ function processUsers(users) {
     for (const user of users) {
       if (user.active) {
         if (user.email) {
-          user.verified = true // mutation!
-          results.push(user)
+          user.verified = true; // mutation!
+          results.push(user);
         }
       }
     }
   }
-  return results
+  return results;
 }
 
 // GOOD: Early returns + immutability + flat
 function processUsers(users) {
-  if (!users) return []
+  if (!users) return [];
   return users
     .filter((user) => user.active && user.email)
-    .map((user) => ({ ...user, verified: true }))
+    .map((user) => ({ ...user, verified: true }));
 }
 ```
 
@@ -186,9 +186,11 @@ When reviewing backend code:
 
 ```typescript
 // BAD: N+1 query pattern
-const users = await db.query('SELECT * FROM users')
+const users = await db.query("SELECT * FROM users");
 for (const user of users) {
-  user.posts = await db.query('SELECT * FROM posts WHERE user_id = $1', [user.id])
+  user.posts = await db.query("SELECT * FROM posts WHERE user_id = $1", [
+    user.id,
+  ]);
 }
 
 // GOOD: Single query with JOIN or batch
@@ -197,7 +199,7 @@ const usersWithPosts = await db.query(`
   FROM users u
   LEFT JOIN posts p ON p.user_id = u.id
   GROUP BY u.id
-`)
+`);
 ```
 
 ### Performance (MEDIUM)

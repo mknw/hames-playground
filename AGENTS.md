@@ -118,7 +118,7 @@ them — no copy step); relative links under `.agents/skills/` expose the three
 repo skills to fresh Codex sessions. Each carries the `kg-` prefix and encodes
 something only true of this repo. The **generic set** (bare names: `grilling`,
 `codebase-design`, …) was extracted to `~/Code/muster-skills` and is installed
-globally via `~/.claude/skills` symlinks, so it is available here and in every
+globally via its `scripts/install.sh`, so it is available here and in every
 other project without copies. `dispatching-work` lives in the same
 `~/Code/muster-skills` repo
 but was authored there directly — it was never extracted from this one. Model-
@@ -127,15 +127,16 @@ have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
 
 To obtain the generic set on a machine that does not have it yet — the repo is
 [github.com/mknw/muster-skills](https://github.com/mknw/muster-skills) (private;
-ask for access), and the symlinks are what make it global rather than per-project:
+ask for access). Run its installer from the main checkout to link skills into
+the agent-visible directories:
 
 ```bash
-gh repo clone mknw/muster-skills ~/Code/muster-skills && mkdir -p ~/.claude/skills \
-  && for d in ~/Code/muster-skills/*/; do ln -sfn "${d%/}" ~/.claude/skills/; done
+gh repo clone mknw/muster-skills ~/Code/muster-skills \
+  && (cd ~/Code/muster-skills && git switch main && ./scripts/install.sh)
 ```
 
-Each skill is a top-level directory in that repo, so the loop links the skills
-and skips its `README.md` / `LICENSE` / `NOTICE.md`. This repo's
+The installer links only top-level directories containing `SKILL.md`, skipping
+`README.md` / `LICENSE` / `NOTICE.md`. This repo's
 `.agents/skills/kg-*` links are tracked separately.
 
 - A `kg-*` skill may call a generic skill (global scope is visible in every

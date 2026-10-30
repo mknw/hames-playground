@@ -245,7 +245,12 @@ never `sudo git` or a root shell. The backup's `umask 077` is confined to its
 subshell above; keep 077 for dumps, env files and keys, but use 022 for Git
 checkout. Record the full last-good SHA privately, then run this gate **before**
 invoking the checkout stage or any boot script. It checks the current checkout
-first and the restored checkout again. The tracked MCP config is the sole
+first and the restored checkout again. For two clones, replace the dev SHA
+placeholder with the separately recorded full dev SHA, export the existing
+`DEV_CLONE_PATH`, and set the protected root `.env`'s `DEV_REF` to that same SHA;
+bootstrap refuses a dev HEAD that differs from `DEV_REF`. The same gate restores
+and checks that checkout before the release checkout.
+The tracked MCP config is the sole
 intentional exception to the clean-tree check: bootstrap restores and re-applies
 it around checkout. Keep protected configuration, dumps, retained images and
 separate key escrow; never discard them to make this gate pass.
@@ -253,6 +258,7 @@ separate key escrow; never discard them to make this gate pass.
 ```bash
 APP_DIR=/opt/hames
 GOOD_SHA='<recorded-full-40-character-good-sha>'
+DEV_GOOD_SHA='<recorded-full-40-character-dev-sha>' # used only with two clones
 test "$(id -u)" -ne 0 && test "${#GOOD_SHA}" -eq 40 || exit 1
 case "$GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
 
@@ -263,16 +269,24 @@ check_checkout_modes() {
     test "$(stat -c %u "$root/.git")" = "$(id -u)" || return 1
   for rel in .git/HEAD docker-compose.yaml docker-compose.prod.yaml \
     docker-config.json scripts/bootstrap-vps.sh scripts/validate-clones.mjs \
-    scripts/check-vps.py; do
+    scripts/check-vps.py scripts/render-mcp-config.sh configs/Caddyfile \
+    configs/catalog.yaml configs/custom-catalog.yaml configs/mcp-config.yaml; do
     path="$root/$rel"
     test -f "$path" && test ! -L "$path" && test -r "$path" &&
       test "$(stat -c %u "$path")" = "$(id -u)" || return 1
     mode=$(stat -c %a "$path") || return 1
     case "$rel" in
-      scripts/bootstrap-vps.sh) test "$mode" = 755 || return 1 ;;
+      .git/HEAD) (( (8#$mode & 022) == 0 )) || return 1 ;;
+      scripts/bootstrap-vps.sh|scripts/render-mcp-config.sh) test "$mode" = 755 || return 1 ;;
       *) test "$mode" = 644 || return 1 ;;
     esac
   done
+  if test "$root" = "$APP_DIR" && test -n "${DEV_CLONE_PATH:-}"; then
+    path="$root/configs/Caddyfile.dev"
+    test -f "$path" && test ! -L "$path" && test -r "$path" &&
+      test "$(stat -c %u "$path")" = "$(id -u)" &&
+      test "$(stat -c %a "$path")" = 644 || return 1
+  fi
   for path in "$root"/docker-compose*.yaml; do
     test -f "$path" && test ! -L "$path" && test -r "$path" &&
       test "$(stat -c %u "$path")" = "$(id -u)" &&
@@ -281,6 +295,20 @@ check_checkout_modes() {
 }
 
 check_checkout_modes "$APP_DIR" || { echo 'Checkout ownership/modes need manual repair; stop.' >&2; exit 1; }
+dirty=$(git -C "$APP_DIR" status --porcelain --untracked-files=no) || exit 1
+test -z "$(printf '%s\n' "$dirty" | sed '/ configs\/mcp-config.yaml$/d')" || exit 1
+if test -n "${DEV_CLONE_PATH:-}"; then
+  test -n "${DEV_GOOD_SHA:-}" && test "${#DEV_GOOD_SHA}" -eq 40 || exit 1
+  case "$DEV_GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+  check_checkout_modes "$DEV_CLONE_PATH" || exit 1
+  dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
+  test -z "$dirty" && git -C "$DEV_CLONE_PATH" cat-file -e "$DEV_GOOD_SHA^{commit}" || exit 1
+  ( umask 022; git -C "$DEV_CLONE_PATH" checkout --quiet --detach "$DEV_GOOD_SHA" ) || exit 1
+  check_checkout_modes "$DEV_CLONE_PATH" &&
+    test "$(git -C "$DEV_CLONE_PATH" rev-parse HEAD)" = "$DEV_GOOD_SHA" || exit 1
+  dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
+  test -z "$dirty" || exit 1
+fi
 ( umask 022; bash "$APP_DIR/scripts/bootstrap-vps.sh" --hostname app.example.invalid \
     --acme-email ops@example.invalid --ref "$GOOD_SHA" --only checkout --no-seed ) || exit 1
 check_checkout_modes "$APP_DIR" &&
@@ -290,10 +318,10 @@ test -z "$(printf '%s\n' "$dirty" | sed '/ configs\/mcp-config.yaml$/d')" || exi
 ```
 
 Replace the example hostname and ACME email with the deployment's existing
-arguments; retain any other required bootstrap arguments. For two clones, run
-`check_checkout_modes "$DEV_CLONE_PATH"` before checkout and again afterwards,
-then verify its HEAD equals the recorded full dev SHA and its tracked tree is
-clean. Stop for targeted manual repair if any ownership, mode, pin or tree check
+arguments; retain any other required bootstrap arguments. The dev checkout
+restoration leaves untracked runtime files untouched; keep its protected
+configuration and separate key escrow. Stop for targeted manual repair if any
+ownership, mode, pin or tree check
 fails; do not apply recursive `chown`/`chmod`. Only then tag
 `hames-app:rollback` back to `hames-app:local` (and
 `hames-app:dev-rollback` back to `hames-app:dev` for the other clone), then

@@ -68,7 +68,11 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
     ] as const) {
       const blocks = [...read(file).matchAll(/```bash\n([\s\S]*?)```/g)]
         .map(([, block]) => block)
-        .filter((block) => block.includes('scripts/validate-clones.mjs'))
+        .filter(
+          (block) =>
+            block.includes('scripts/validate-clones.mjs') &&
+            block.includes('docker compose config --format json'),
+        )
       expect(blocks, file).toHaveLength(count)
       for (const block of blocks) {
         for (const [renderExit, validatorExit] of [

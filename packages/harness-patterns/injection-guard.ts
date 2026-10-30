@@ -455,7 +455,7 @@ function isSourceLink(
   // One URL means one URL: `SINGLE_HTTPS_URL` admits `(`, `!`, `[` and `]`, and
   // `exfil-data-url`'s pattern is unanchored, so without this a second scheme
   // inside the token would ride along under the exemption.
-  if (/https?:\/\//i.test(value.slice('https://'.length))) return false
+  if (/(?:\bhttps?:\/{0,2}|(?<![\w:/])\/\/)/i.test(value.slice('https://'.length))) return false
   let url: URL
   try {
     url = new URL(value)
@@ -706,7 +706,7 @@ export const INJECTION_RULES: readonly InjectionRule[] = Object.freeze([
     // `i`: a URL scheme is case-insensitive (RFC 3986 §3.1), so the scheme is
     // normalised before matching, as in the other URL rules. The blob class
     // already names both cases, so the flag changes nothing else.
-    re: /https?:\/\/[^\s)<>"']{0,200}?[?&/][A-Za-z0-9+/=_-]{64,}/gi,
+    re: /(?:\bh[\t\n\r]{0,4}t[\t\n\r]{0,4}t[\t\n\r]{0,4}p[\t\n\r]{0,4}s?[\t\n\r]{0,4}:[\t\n\r]{0,4}[\/\\]{0,2}|(?<![\w:\/\\])[\/\\]{2})[^\s)<>"']{0,200}?[?&\/\\][A-Za-z0-9+\/=_-]{64,}/gi,
     action: 'defang' as const,
   },
 ])

@@ -201,6 +201,8 @@ if machine_id.is_symlink():
     inventory['machine_id_state'] = 'symlink'
 elif not machine_id.exists():
     inventory['machine_id_state'] = 'absent'
+elif not machine_id.is_file():
+    inventory['machine_id_state'] = 'not-regular'
 elif machine_id.stat().st_size == 0:
     inventory['machine_id_state'] = 'empty'
 else:

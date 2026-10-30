@@ -1,10 +1,11 @@
 /** The eval's stand-in for the in-VM sandbox: the production tool names, no execution.
  *
- * The transport is not the grader. A request is judged the way production would judge
- * it — a shell runs what it is given and says only what a shell says — and the scenario's
- * predicate (`valid` on the trace) is applied afterwards, to the command plus the scripts
- * it runs. So a refusal never carries the predicate's rule: a request that does not meet
- * it runs, exits 0 and leaves nothing behind, exactly as a script that never saves would.
+ * The fake cannot execute arbitrary code. It uses the scenario's predicate over a producing
+ * command and the scripts it runs to decide whether to return the captured output and record
+ * artifacts. A miss returns a diagnostic failure, so the critic does not mistake an empty
+ * fake result for completed work. This is a deliberate eval signal: a literal shell can exit
+ * 0 without writing a file. Ordinary inspection commands keep their modelled shell results;
+ * the scenario grader separately reads `valid` on the trace.
  *
  * The shell models the INTERFACE CONTRACT, not a command whitelist (owner ruling
  * 2026-10-25, after live run 3: the old bare-`head|cat|wc|ls` whitelist returned empty
@@ -18,9 +19,8 @@
  * redirect writes the file exactly as a `sandbox_write` would and is judged by the same
  * `judgeWrite`, so a transcription of a declared deliverable is credited from a shell
  * line too. Anything outside the modelled set — an interpreter, a quoted pipe the parser
- * cannot read — is still judged by the predicate, never failed: it runs, exits 0 and
- * leaves nothing behind, while the modelled parts of the same command line still print
- * what a shell would print.
+ * cannot read — is still judged by the predicate: an unproductive request fails, while
+ * modelled parts of the same command line still print what a shell would print.
  *
  * Production promotes any new or changed file under /work/out to an artifact at turn exit
  * (`promoteOutputs`, `packages/sandbox/work-artifacts.server.ts:164-197`, called from
@@ -192,6 +192,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     success: code === 0,
     data: { artifacts, stdout, stderr, exit_code: code, timed_out: false },
   })
+  const noOutput = 'sandbox_bash: no declared output was recorded.\n'
 
   // ==========================================================================
   // The modelled shell. One quote-aware tokenizer feeds segment → pipeline →
@@ -575,17 +576,20 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
    * failure). Two seams let `bash` judge while this stays a pure shell model:
    * `write` records a `>`/`>>` redirect the way `sandbox_write` does, and `produce`
    * answers an unmodelled (interpreter) stage with the transcription of what the
-   * scenario's real run prints — or '' when nothing is credited. */
+   * scenario's real run prints — or a failure when nothing is credited. */
   const runSegments = (
     segments: Segment[],
     cwd: string,
     write: (path: string, text: string) => boolean | undefined,
-    produce: (stage: Stage) => { stdout: string; missing?: string } | undefined,
+    produce: (stage: Stage) => { stdout: string; missing?: string; failure?: string } | undefined,
   ): { stdout: string; stderr: string; exit_code: number } | undefined => {
     let stdout = ''
     let stderr = ''
     let code = 0
     let stop = false
+    // An uncredited producing stage is a request-level diagnostic: a later
+    // successful inspection may print output but cannot clear the failure.
+    let diagnosticFailed = false
     for (const segment of segments) {
       if (!segment.stages.length) {
         if (segment.separator === '&&') return undefined
@@ -605,6 +609,11 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
           if (!made) return undefined
           if (made.missing) {
             failed = { err: made.missing, code: 2 }
+            break
+          }
+          if (made.failure) {
+            failed = { err: made.failure, code: 1 }
+            diagnosticFailed = true
             break
           }
           stageOut = made.stdout
@@ -641,7 +650,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
       stdout += stageOut && stdout && !stdout.endsWith('\n') ? `\n${stageOut}` : stageOut
       code = 0
     }
-    return { stdout, stderr, exit_code: code }
+    return { stdout, stderr, exit_code: diagnosticFailed ? 1 : code }
   }
 
   const record = (file: string, text: string) => {
@@ -695,15 +704,15 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
 
   /** The producing-request path, shared by heredoc lines and unparseable commands: the
    * scenario's captured run stands in for the interpreter, and the predicate over the
-   * command plus the scripts it runs decides. Returns the predicate's verdict too — a
-   * shell result is success:true either way, and the valid flag is the GRADE. */
+   * command plus the scripts it runs decides. Returns the predicate's verdict too. */
   const produceRequest = (
     args: Record<string, unknown>,
     scripts: string,
   ): { result: Result; valid: boolean } => {
     const scenario = state.scenario()
     const predicate = scenario.expectedArgs?.sandbox_bash as ArgsPredicate | undefined
-    if (!predicate?.(args, scripts, readThisTurn())) return { result: shell(''), valid: false }
+    if (!predicate?.(args, scripts, readThisTurn()))
+      return { result: shell('', 1, noOutput), valid: false }
     const made = scenario.sandboxRun?.files ?? {}
     for (const file of scenario.artifacts)
       record(file, made[file] ?? state.documents.get('lantern-notes.md') ?? '')
@@ -773,7 +782,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
         return judged
       },
       // An interpreter stage: the scenario's captured stdout stands in once the
-      // predicate over command + scripts passes; otherwise it ran and left nothing.
+      // predicate over command + scripts passes; otherwise the request fails visibly.
       (stage) => {
         const missing = missingScript(stage, files())
         if (missing) return { stdout: '', missing }
@@ -795,7 +804,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
               scenario.artifacts.map((n) => `Saved ${OUT}${n}`).join('\n'),
           }
         }
-        return { stdout: '' }
+        return { stdout: '', failure: noOutput }
       },
     )
     if (!evaluated) {

@@ -60,8 +60,8 @@ const heads = (command: string): string[] =>
  * An input may be credited by a READ instead of a name (R6DIAG row 14, run 6): an
  * executor that read the file with `sandbox_read` earlier in the same turn holds its
  * content, so a script that transcribes it is a computation, not a silent no-op — while
- * a script that neither names an input nor had it read would run, exit 0 and leave
- * nothing behind. The declared OUTPUT must still be NAMED by the command or a script it
+ * a script that neither names an input nor had it read cannot be credited by the fake.
+ * The declared OUTPUT must still be NAMED by the command or a script it
  * runs; a read can never credit a file nothing writes. Reads are bare names, as declared
  * here; the synthetic sandbox reduces the read paths to theirs. */
 export const sandboxArgs =

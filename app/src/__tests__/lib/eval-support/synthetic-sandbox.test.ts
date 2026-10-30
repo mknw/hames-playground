@@ -2,8 +2,8 @@
  * actorCritic is driven through the eval's synthetic sandbox with the request shapes the
  * live reports leave as the candidates for the rejections — the prompt's own
  * write-then-run batch, an exploratory read, and a command that only names the files.
- * The transport answers as a shell does and never states a scenario's rule; the critic
- * sees the stdout a real run prints. The live reports hold no events (checks and
+ * Modelled inspection answers as a shell does; an unproductive producing request instead
+ * gives the critic a diagnostic failure. The live reports hold no events (checks and
  * per-function call counts only), so the sequences are reconstructed, not recorded;
  * whether the 27B then converges, and why scenario 10 exhausted AFTER an accepted
  * request, is measured only by a live run. */
@@ -310,7 +310,7 @@ describe('scenario 17 as recorded: a computation that prints and saves nothing',
       act('sandbox_bash', { command: ANALYSIS_PY }, { is_final: true }),
     ])
     expect(flags(r.trace)).toEqual([
-      ['sandbox_bash', true, false],
+      ['sandbox_bash', false, false],
       ['sandbox_bash', true, true],
     ])
     expect(r.trace.artifacts).toEqual(['lantern-launch-analysis.md'])
@@ -325,6 +325,7 @@ describe('scenario 17 as recorded: a computation that prints and saves nothing',
     ])
     expect(r.trace.artifacts).toEqual([])
     expect(r.trace.indexed).toEqual([])
+    expect(r.trace.tools.at(-1)).toMatchObject({ success: false, valid: false })
   })
 })
 
@@ -357,6 +358,57 @@ describe('the synthetic sandbox as a transport', () => {
       },
     }
   }
+
+  it.each([
+    '',
+    "python3 - <<'PY'\nprint('no output file')\nPY",
+    'python3 -c "print(\'no output file\')"',
+    'ls /work/in &&',
+  ])('diagnoses an unproductive producing request: %s', async (command) => {
+    const { call, trace } = make()
+    const result = await call('sandbox_bash', { command })
+    expect(result.success).toBe(false)
+    expect(result.data).toMatchObject({
+      stdout: '',
+      exit_code: 1,
+      stderr: expect.stringContaining('declared output'),
+    })
+    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: false, valid: false })
+    expect(trace.artifacts).toEqual([])
+  })
+
+  it.each([
+    [';', true],
+    ['\n', true],
+    ['&&', false],
+  ])(
+    'keeps an uncredited interpreter request failed before %j inspection',
+    async (separator, inspectionRuns) => {
+      const { call, trace } = make()
+      const result = await call('sandbox_bash', {
+        command: `python3 -c "print(1)" ${separator} ls /work/in`,
+      })
+      expect(result.success).toBe(false)
+      expect(result.data).toMatchObject({
+        exit_code: 1,
+        stderr: expect.stringContaining('declared output'),
+        stdout: inspectionRuns ? expect.stringContaining('lantern-sales.csv') : '',
+      })
+      expect(trace.tools.at(-1)).toMatchObject({ success: false, valid: false })
+      expect(trace.artifacts).toEqual([])
+    },
+  )
+
+  it('credits a compound request with a later valid producing stage', async () => {
+    const { call, trace } = make()
+    const result = await call('sandbox_bash', {
+      command: `python3 -c "print(1)" ; python3 -c "print('${SALES}', '${TOTALS}')"`,
+    })
+    expect(result.success).toBe(true)
+    expect(result.data).toMatchObject({ exit_code: 0, stderr: '' })
+    expect(trace.tools.at(-1)).toMatchObject({ success: true, valid: true })
+    expect(trace.artifacts).toEqual(['lantern-totals.csv'])
+  })
 
   it('reads inputs and what was written, and fails on what does not exist', async () => {
     const { call } = make()
@@ -488,13 +540,15 @@ describe('the synthetic sandbox as a transport', () => {
 
   // MUTATION: allow every empty part, including an initial part or a missing && operand.
   it.each(['; ls /work/in', 'ls /work/in &&', 'ls /work/in && ; ls /work/in'])(
-    'leaves an incomplete inspection to the request path: %s',
+    'fails an incomplete inspection on the request path: %s',
     async (command) => {
       const { call, trace } = make()
-      expect((await call('sandbox_bash', { command })).data).toMatchObject({
+      const result = await call('sandbox_bash', { command })
+      expect(result.success).toBe(false)
+      expect(result.data).toMatchObject({
         stdout: '',
-        stderr: '',
-        exit_code: 0,
+        stderr: expect.stringContaining('declared output'),
+        exit_code: 1,
       })
       expect(trace.artifacts).toEqual([])
     },
@@ -549,8 +603,13 @@ describe('the synthetic sandbox as a transport', () => {
     const script =
       "rows = open('/work/in/lantern-sales.csv').read()\nopen('/work/out/lantern-launch-analysis.md', 'w').write(rows)\n"
     await call('sandbox_write', { path: '/work/run.py', content: script })
-    expect((await call('sandbox_bash', { command: 'python3 /work/run.py' })).success).toBe(true)
-    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: true, valid: false })
+    const result = await call('sandbox_bash', { command: 'python3 /work/run.py' })
+    expect(result.success).toBe(false)
+    expect(result.data).toMatchObject({
+      exit_code: 1,
+      stderr: expect.stringContaining('declared output'),
+    })
+    expect(trace.tools.at(-1)).toMatchObject({ name: 'sandbox_bash', success: false, valid: false })
     expect(trace.artifacts).toEqual([])
   })
 

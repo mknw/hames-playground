@@ -587,6 +587,9 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
     let stderr = ''
     let code = 0
     let stop = false
+    // An uncredited producing stage is a request-level diagnostic: a later
+    // successful inspection may print output but cannot clear the failure.
+    let diagnosticFailed = false
     for (const segment of segments) {
       if (!segment.stages.length) {
         if (segment.separator === '&&') return undefined
@@ -610,6 +613,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
           }
           if (made.failure) {
             failed = { err: made.failure, code: 1 }
+            diagnosticFailed = true
             break
           }
           stageOut = made.stdout
@@ -646,7 +650,7 @@ export function createSyntheticSandbox(state: SyntheticSandboxState): ToolTransp
       stdout += stageOut && stdout && !stdout.endsWith('\n') ? `\n${stageOut}` : stageOut
       code = 0
     }
-    return { stdout, stderr, exit_code: code }
+    return { stdout, stderr, exit_code: diagnosticFailed ? 1 : code }
   }
 
   const record = (file: string, text: string) => {

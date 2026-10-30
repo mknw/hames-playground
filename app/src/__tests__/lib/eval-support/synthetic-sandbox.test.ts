@@ -377,6 +377,39 @@ describe('the synthetic sandbox as a transport', () => {
     expect(trace.artifacts).toEqual([])
   })
 
+  it.each([
+    [';', true],
+    ['\n', true],
+    ['&&', false],
+  ])(
+    'keeps an uncredited interpreter request failed before %j inspection',
+    async (separator, inspectionRuns) => {
+      const { call, trace } = make()
+      const result = await call('sandbox_bash', {
+        command: `python3 -c "print(1)" ${separator} ls /work/in`,
+      })
+      expect(result.success).toBe(false)
+      expect(result.data).toMatchObject({
+        exit_code: 1,
+        stderr: expect.stringContaining('declared output'),
+        stdout: inspectionRuns ? expect.stringContaining('lantern-sales.csv') : '',
+      })
+      expect(trace.tools.at(-1)).toMatchObject({ success: false, valid: false })
+      expect(trace.artifacts).toEqual([])
+    },
+  )
+
+  it('credits a compound request with a later valid producing stage', async () => {
+    const { call, trace } = make()
+    const result = await call('sandbox_bash', {
+      command: `python3 -c "print(1)" ; python3 -c "print('${SALES}', '${TOTALS}')"`,
+    })
+    expect(result.success).toBe(true)
+    expect(result.data).toMatchObject({ exit_code: 0, stderr: '' })
+    expect(trace.tools.at(-1)).toMatchObject({ success: true, valid: true })
+    expect(trace.artifacts).toEqual(['lantern-totals.csv'])
+  })
+
   it('reads inputs and what was written, and fails on what does not exist', async () => {
     const { call } = make()
     expect((await call('sandbox_read', { path: SALES })).data).toContain('North,47')

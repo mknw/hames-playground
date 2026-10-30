@@ -7,8 +7,8 @@
  * and shapes; where an identity has to be shown at all — the pseudonymisation
  * demo has to prove a *specific* real name was replaced — it goes through
  * {@link mask}, which keeps enough structure to recognise a match and not
- * enough to name a person. Error paths additionally go through
- * {@link maskError}, which composes {@link maskGraphIds} (a Graph error
+ * enough to name a person. The roster ingest's error path additionally goes
+ * through {@link maskError}, which composes {@link maskGraphIds} (a Graph error
  * message quotes the request path, and that path can carry a directory id)
  * with {@link maskMailAddresses} (a Neo4j uniqueness-violation message quotes
  * the conflicting value, and one declared uniqueness constraint is on a mail
@@ -61,7 +61,8 @@ export function maskGraphIds(value: string): string {
 
 /**
  * Mail addresses out of a free-text string — `mail = 'someone@example.com'` →
- * `mail = '⟨address⟩'`.
+ * `mail = '⟨address⟩'`. Quoted local parts, including spaces and escaped
+ * quotes, are replaced with the same whole-address placeholder.
  *
  * For error paths. A Neo4j uniqueness-violation message quotes the conflicting
  * value, and the ontology declares a uniqueness constraint on `Member.mail`, so
@@ -71,14 +72,14 @@ export function maskGraphIds(value: string): string {
  */
 export function maskMailAddresses(value: string): string {
   return value.replace(
-    /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}]+(?:[.-][\p{L}\p{N}]+)*\.[\p{L}]{2,}/gu,
+    /(?:"(?:[^"\\\r\n]|\\[^\r\n])*"|[\p{L}\p{N}._%+-]+)@[\p{L}\p{N}]+(?:[.-][\p{L}\p{N}]+)*\.[\p{L}]{2,}/gu,
     '⟨address⟩',
   )
 }
 
 /**
- * The shared error-path mask — every free-text error message an org-graph
- * script might print goes through this before anything reaches the terminal.
+ * The roster ingest's shared error-path mask — its free-text error messages
+ * go through this before anything reaches the terminal.
  *
  * Mail addresses first, then Graph ids; the order is load-bearing. A mail
  * address whose local part happens to be GUID-shaped would otherwise be

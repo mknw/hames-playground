@@ -186,7 +186,7 @@ async function createPatterns(
   // Anthropic tier the screen runs on every external result and the gate is
   // never asked (it would send every body to that tier's decisions host); on
   // the self-deployed tier, and an absent or unknown one, the gate is asked in
-  // 'shadow' — recorded, never obeyed — until the eval bar for 'gated' is met.
+  // 'gated' mode and its answer controls whether the screen runs.
   // That tier map is also the composition root's GUARD_* switch (slice 6):
   // deps.guards.screenMode replaces it (GUARD_SCREEN, validated at boot
   // against these defaults, and GUARD_SCREEN_ANTHROPIC accepted there only as
@@ -195,7 +195,7 @@ async function createPatterns(
   // host's classifier marks the deployment's own content internal, which gets
   // the deterministic pass alone unless that pass finds something.
   const screenMode: ByTier<ScreenMode> =
-    deps.guards?.screenMode ?? ({ default: 'shadow', anthropic: 'always' } as const)
+    deps.guards?.screenMode ?? ({ default: 'gated', anthropic: 'always' } as const)
   // τi from the composition root's GUARD_GATE_THRESHOLD (#844), validated at
   // boot; absent, the gate's own default.
   const gate = createGuardGate(createDecideAdapter(), { threshold: deps.guards?.gateThreshold })

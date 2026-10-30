@@ -8,8 +8,8 @@
 //     the warnings and the values come from the one `readGuards()` pass and a
 //     pin elsewhere could drift from a re-shape of this module.
 //   - "GUARD_SCREEN=gated leaves the Anthropic tier at 'always';
-//     GUARD_SCREEN_ANTHROPIC=gated or shadow refuses boot; GUARD_SCREEN=gated
-//     while the self-deployed default is 'shadow' logs the weakening warning
+//     GUARD_SCREEN_ANTHROPIC=gated or shadow refuses boot; GUARD_SCREEN=off
+//     while the self-deployed default is 'gated' logs the weakening warning
 //     (security delta N5)" — `guardConfig()`'s map and the refusal, here; the
 //     Anthropic tier's 'always' reaching the guards is the agent-side pin
 //     (`general-next.test.ts`, "the operator switch ..."), whose own mutation
@@ -44,7 +44,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   // false`: red here, and in guard-switches.test.ts's composition chain.
   it('unset, every value is the declared default, per tier', () => {
     expect(guardConfig()).toEqual({
-      screenMode: { default: 'shadow', anthropic: 'always' },
+      screenMode: { default: 'gated', anthropic: 'always' },
       egressMode: 'filter',
       pseudonymise: true,
       // #844: today's numbers, as literals rather than the constants they come
@@ -74,9 +74,9 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
 
   it('GUARD_SCREEN_ANTHROPIC accepts only off and always, and sets that tier only', () => {
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
-    expect(guardConfig().screenMode).toEqual({ default: 'shadow', anthropic: 'off' })
+    expect(guardConfig().screenMode).toEqual({ default: 'gated', anthropic: 'off' })
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
-    expect(guardConfig().screenMode).toEqual({ default: 'shadow', anthropic: 'always' })
+    expect(guardConfig().screenMode).toEqual({ default: 'gated', anthropic: 'always' })
   })
 
   // Security delta N5: gated and shadow on the Anthropic tier would send every
@@ -134,23 +134,16 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   })
 
   // The boot warning for any value below a tier's default, in the order
-  // off < gated < shadow < always: GUARD_SCREEN=gated (below the self-deployed
-  // default 'shadow', until the eval bar moves it) and =off warn;
-  // GUARD_SCREEN=shadow or always (at or above) do not. MUTATION: warn only
-  // when the value is literally 'off' — the gated case here goes red.
+  // off < gated < shadow < always: only GUARD_SCREEN=off is below the
+  // self-deployed default 'gated'; shadow and always do not warn.
   it('a value below a tier default logs ONE warning naming the variable; at or above logs none', () => {
-    vi.stubEnv('GUARD_SCREEN', 'gated')
-    assertGuardsConfigured()
-    expect(warns).toHaveLength(1)
-    expect(warns[0]).toContain('GUARD_SCREEN')
-
-    warns = []
     vi.stubEnv('GUARD_SCREEN', 'off')
     assertGuardsConfigured()
     expect(warns).toHaveLength(1)
     expect(warns[0]).toContain('GUARD_SCREEN')
-
     warns = []
+    vi.stubEnv('GUARD_SCREEN', 'gated')
+    assertGuardsConfigured()
     vi.stubEnv('GUARD_SCREEN', 'shadow')
     assertGuardsConfigured()
     vi.stubEnv('GUARD_SCREEN', 'always')

@@ -688,8 +688,9 @@ if "--enable-all-servers" in cmd or not any(a.startswith("--servers=") for a in 
 
 # compose_caddy_env KEY — KEY's value in the rendered caddy service's
 # environment, i.e. by construction what Caddy substitutes at start
-# (docker-compose.prod.yaml's APP_DOMAIN/ACME_EMAIL, substituted into
-# configs/Caddyfile). Reading .env's own text is not enough: Compose's .env
+# (docker-compose.prod.yaml's APP_DOMAIN/ACME_EMAIL and the clone overlay's
+# DEV_APP_DOMAIN, substituted into the two Caddyfiles). Reading .env's own text
+# is not enough: Compose's .env
 # parser also reads spellings env_get cannot (`export KEY=…`, `KEY = …`, a
 # leading space; the last line wins) (#664 review). Empty when the key is
 # absent; the value itself is captured, never printed.
@@ -1767,13 +1768,14 @@ stage_boot() {
   # refusals visible in dry runs even when .env has other reported problems.
   [[ -z ${files:-} ]] || clone_preflight "$files" || return 1
   # #664: the gates Caddy makes real are the .env values, not this run's
-  # arguments: configs/Caddyfile and docker-compose.prod.yaml substitute
-  # ACME_EMAIL and APP_DOMAIN from .env, so a placeholder an earlier hostname
+  # arguments: the Caddyfiles and Compose overlays substitute the domains and
+  # ACME_EMAIL from .env, so a placeholder an earlier hostname
   # stage wrote would reach Caddy even with real arguments here. The values
   # are read from the RENDERED config (compose_caddy_env): Compose's .env
   # parser also reads spellings env_get cannot.
-  local env_acme="" env_domain="" render_ok=0
-  if env_acme=$(compose_caddy_env ACME_EMAIL) && env_domain=$(compose_caddy_env APP_DOMAIN); then render_ok=1; fi
+  local env_acme="" env_domain="" env_preview="" render_ok=0
+  if env_acme=$(compose_caddy_env ACME_EMAIL) && env_domain=$(compose_caddy_env APP_DOMAIN) &&
+    { [[ $files == "$COMPOSE_FILES" ]] || env_preview=$(compose_caddy_env DEV_APP_DOMAIN); }; then render_ok=1; fi
   ((render_ok)) || refuse "cannot render the Compose config, so the ACME_EMAIL/APP_DOMAIN Caddy gets are unreadable"
   if ((render_ok)); then
     # Compose's :? interpolation refuses empty values before this branch;
@@ -1795,6 +1797,9 @@ stage_boot() {
       refuse "the APP_DOMAIN in .env is a reserved placeholder; Let's Encrypt cannot issue for it"
     fi
     [[ $env_domain == "$HOSTNAME_ARG" ]] || owner_stop "the APP_DOMAIN in .env differs from this run's --hostname; Caddy serves {\$APP_DOMAIN} from .env: set the real hostname in .env (re-run the hostname stage) or re-run with the same --hostname"
+    if [[ $files != "$COMPOSE_FILES" && -n $env_preview ]] && reserved_name "$env_preview"; then
+      refuse "the DEV_APP_DOMAIN in the rendered Caddy config is a reserved placeholder; Let's Encrypt cannot issue for it"
+    fi
   fi
   [[ -n $missing ]] && owner_stop "fill the owner-supplied values in $ENV_FILE: $(tr '\n' ' ' <<<"$missing")"
   escrow_recorded || owner_stop "escrow the configured application keys off the box (both runtime files' six keys in clone mode; docs/PREVIEW.md §7), then re-run with --keys-escrowed (the env stage records it, on a run after the one that generated the keys)"

@@ -104,13 +104,14 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
   fi
   if [[ $args == *" config "* ]]; then
     [[ ${SHIM_RENDER_FAIL:-0} == 0 ]] || { echo synthetic-secret >&2; exit 1; }
-    # Compose renders the caddy service's ACME_EMAIL/APP_DOMAIN out of .env
-    # with its OWN parser: `export KEY=...`, spaces around `=`, a leading
-    # space, the last line winning. The shim mirrors that for these two keys,
+    # Compose renders the caddy service's ACME_EMAIL/APP_DOMAIN and, in clone
+    # mode, DEV_APP_DOMAIN out of .env with its OWN parser: `export KEY=...`,
+    # spaces around `=`, a leading
+    # space, the last line winning. The shim mirrors that for these keys,
     # so a gate reading .env's text (env_get) is distinguishable from one
     # reading the render (#664 review).
     python3 - "$SHIM_COMPOSE_JSON" "${HAMES_APP_DIR:-}" <<'PYS'
-import json, pathlib, re, sys
+import json, os, pathlib, re, sys
 cfg = json.loads(pathlib.Path(sys.argv[1]).read_text())
 env = {}
 dot_env = pathlib.Path(sys.argv[2], ".env") if sys.argv[2] else None
@@ -121,11 +122,14 @@ for line in (dot_env.read_text().splitlines() if dot_env and dot_env.is_file() e
         if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
             v = v[1:-1]
         env[m.group(1)] = v
-for key in ("ACME_EMAIL", "APP_DOMAIN"):
+keys = ["ACME_EMAIL", "APP_DOMAIN"]
+if "docker-compose.clones.yaml" in os.environ.get("COMPOSE_FILE", "").split(":"):
+    keys.append("DEV_APP_DOMAIN")
+for key in keys:
     if not env.get(key):
         sys.exit(1)  # Compose's ${KEY:?} refuses unset and empty values.
 svc = cfg.setdefault("services", {}).setdefault("caddy", {})
-svc["environment"] = {k: env[k] for k in ("ACME_EMAIL", "APP_DOMAIN") if k in env}
+svc["environment"] = {k: env[k] for k in keys}
 print(json.dumps(cfg))
 PYS
     # A render Compose abandons AFTER printing: stdout is a valid render, the
@@ -608,7 +612,8 @@ ENV
     pass "clones default boot box-changing transcript is byte-identical"
   else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
   out=$(clone_boot 2>&1); rc=$?
-  if ((rc != 0)) && [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
+  if ((rc != 0)) && [[ $out == *"app-dev exists in this project; restore the complete clone COMPOSE_FILE before boot"* ]] &&
+    [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses live app-dev under base:prod before orphan pruning'
   else flunk "clones pruned live app-dev under base:prod (rc=$rc)" "$out"; fi
   # #672: a running Caddy whose bind-mounted file no longer matches the
@@ -695,11 +700,28 @@ ENV
     pass 'clones smoke fails on a Caddy it cannot inspect'
   else flunk "clones smoke passed with an uninspectable Caddy (rc=$rc)" "$out"; fi
   # The tests below expect the default (single-app) shape again.
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\nAPP_DOMAIN=release.example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 SHIM_PS_FAIL=1 clone_boot 2>&1); rc=$?
-  if ((rc != 0)) && ! grep -q 'compose up ' "$dir/calls"; then
+  if ((rc != 0)) && [[ $out == *"cannot inspect app-dev before single-app orphan pruning"* ]] &&
+    grep -Fxq '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' "$dir/calls" &&
+    ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses inconclusive single-app box-state query'
   else flunk "clones ignored failed box-state query (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace('DEV_APP_DOMAIN=dev.example.invalid', 'DEV_APP_DOMAIN=owner@example.com'))
+PY
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the DEV_APP_DOMAIN in the rendered Caddy config is a reserved placeholder"* ]] &&
+    ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved rendered preview domain before compose up'
+  else flunk "clones boot accepted a reserved rendered preview domain (rc=$rc)" "$out"; fi
+  clone_reset
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones|app|compose up -d" "$dir/calls"; then
+    pass 'clones boot accepts a valid rendered preview domain'
+  else flunk "clones boot refused a valid rendered preview domain (rc=$rc)" "$out"; fi
   # #664: the boot gate checks the ACME_EMAIL Caddy actually reads — the .env
   # value, not this run's --acme-email argument — and stops for the owner when
   # the two differ.
@@ -1034,8 +1056,8 @@ mutants = [
     ('validator-skipped', 'node scripts/validate-clones.mjs >/dev/null', 'cat >/dev/null'),
     ('orphan-prune-clones', '    run dc up -d\n', '    run dc up -d --remove-orphans\n'),
     ('default-command-changed', '    run dc up -d --remove-orphans\n', '    run dc up -d\n'),
-    ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse'),
-    ('single-app-state-query-failure', '|| { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }', '|| existing_dev=""'),
+    ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse', 'FAIL clones pruned live app-dev under base:prod'),
+    ('single-app-state-query-failure', '|| { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }', '|| existing_dev=""', 'FAIL clones ignored failed box-state query'),
     ('half-config-falls-back', 'if [[ -n "$(env_get "$key")" ]]; then', 'if false; then'),
     ('required-inputs-skipped', 'for key in "${CLONE_INPUTS[@]}"; do\n    [[ -n', 'for key in; do\n    [[ -n'),
     ('missing-overlay-accepted', 'for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;',
@@ -1176,6 +1198,7 @@ compose_caddy_env_unused() {
     refuse "--hostname is a reserved placeholder'''),
     ('appdomain-reserved-accepted', 'elif reserved_name "$env_domain"; then', 'elif false; then'),
     ('appdomain-mismatch-accepted', '[[ $env_domain == "$HOSTNAME_ARG" ]] || owner_stop', '[[ $env_domain == "$HOSTNAME_ARG" ]] || :'),
+    ('preview-domain-reserved-accepted', '[[ $files != "$COMPOSE_FILES" && -n $env_preview ]] && reserved_name "$env_preview"', 'false', 'FAIL clones boot accepted a reserved rendered preview domain'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:

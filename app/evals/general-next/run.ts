@@ -231,6 +231,7 @@ async function main() {
         active,
         Date.now() - started,
         openRouterLarge ? small.eurPerHour : largeRate + small.eurPerHour,
+        small.basis,
       )
     }
   }
@@ -293,7 +294,12 @@ async function main() {
                       eurPerHour: largeRate,
                     },
                   ]),
-              { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: small.eurPerHour },
+              {
+                box: 'small',
+                seconds: smallScaledownSeconds(),
+                eurPerHour: small.eurPerHour,
+                basis: small.basis,
+              },
             ])
             if (budget.stopped) stop()
             const { ensurePrivateTierAwake } = await import('../../src/lib/inference/wake.server')

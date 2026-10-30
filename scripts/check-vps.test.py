@@ -563,14 +563,14 @@ class Wiring(unittest.TestCase):
         self.assertIn("EXECUTED", output.stdout)
 
     def test_boot_inspects_deployed_network_before_health_wait(self):
-        output = self.shell('''DRY_RUN=0; touch "$ENV_FILE"; mkdir "$APP_DIR/configs";
+        output = self.shell('''DRY_RUN=0; printf 'ACME_EMAIL=ops@example.invalid\n' >"$ENV_FILE"; mkdir "$APP_DIR/configs";
         touch "$APP_DIR/configs/mcp-config.yaml";
         HOSTNAME_ARG=app.example.invalid ACME_EMAIL_ARG=ops@example.invalid;
         assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; };
         env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; };
         escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
         rendered_exposure() { :; }; run() { echo "RUN $*"; }; sudo() { :; };
-        dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic"}'; else echo "DC $*"; fi; };
+        dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic","services":{"caddy":{"environment":{"ACME_EMAIL":"ops@example.invalid","APP_DOMAIN":"app.example.invalid"}}}}'; else echo "DC $*"; fi; };
         vps_check() { echo "$*"; return 1; }; wait_state() { echo WAIT; };
         stage_boot''')
         self.assertEqual(output.returncode, 1, output.stdout + output.stderr)

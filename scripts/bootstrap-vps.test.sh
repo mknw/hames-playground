@@ -104,7 +104,37 @@ if [[ ${SHIM_CLONES:-0} == 1 ]]; then
   fi
   if [[ $args == *" config "* ]]; then
     [[ ${SHIM_RENDER_FAIL:-0} == 0 ]] || { echo synthetic-secret >&2; exit 1; }
-    cat "$SHIM_COMPOSE_JSON"
+    # Compose renders the caddy service's ACME_EMAIL/APP_DOMAIN and, in clone
+    # mode, DEV_APP_DOMAIN out of .env with its OWN parser: `export KEY=...`,
+    # spaces around `=`, a leading
+    # space, the last line winning. The shim mirrors that for these keys,
+    # so a gate reading .env's text (env_get) is distinguishable from one
+    # reading the render (#664 review).
+    python3 - "$SHIM_COMPOSE_JSON" "${HAMES_APP_DIR:-}" <<'PYS'
+import json, os, pathlib, re, sys
+cfg = json.loads(pathlib.Path(sys.argv[1]).read_text())
+env = {}
+dot_env = pathlib.Path(sys.argv[2], ".env") if sys.argv[2] else None
+for line in (dot_env.read_text().splitlines() if dot_env and dot_env.is_file() else []):
+    m = re.match(r"[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(.*)$", line)
+    if m:
+        v = m.group(2).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        env[m.group(1)] = v
+keys = ["ACME_EMAIL", "APP_DOMAIN"]
+if "docker-compose.clones.yaml" in os.environ.get("COMPOSE_FILE", "").split(":"):
+    keys.append("DEV_APP_DOMAIN")
+for key in keys:
+    if not env.get(key):
+        sys.exit(1)  # Compose's ${KEY:?} refuses unset and empty values.
+svc = cfg.setdefault("services", {}).setdefault("caddy", {})
+svc["environment"] = {k: env[k] for k in keys}
+print(json.dumps(cfg))
+PYS
+    # A render Compose abandons AFTER printing: stdout is a valid render, the
+    # command still fails — the scenario the preflight's pipefail exists for.
+    [[ ${SHIM_RENDER_PARTIAL_FAIL:-0} == 0 ]] || exit 1
     exit 0
   fi
   if [[ $args == *" ps -aq "* ]]; then
@@ -358,15 +388,19 @@ COMPOSE_FILE=$clones
 DEV_CLONE_PATH=$dir/dev
 DEV_REF=$(git -C "$dir/dev" rev-parse HEAD)
 DEV_APP_DOMAIN=dev.example.invalid
+ACME_EMAIL=ops@example.invalid
+APP_DOMAIN=release.example.invalid
 RELEASE_RUNTIME_ENV_FILE=$dir/release-runtime.env
 DEV_RUNTIME_ENV_FILE=$dir/dev-runtime.env
 RELEASE_DATABASE_URL=postgresql://release_app:release-synthetic@postgres:5432/app_release
 DEV_DATABASE_URL=postgresql://dev_app:dev-synthetic@postgres:5432/app_dev
+ACME_EMAIL=ops@example.invalid
 ENV
   # All unrelated boot gates are inert. dc, compose_files, clone_preflight,
   # validator, command selection, and health-service selection are real.
   clone_boot() (
     lib "$dir/release"
+    DRY_RUN=${SHIM_DRY_RUN:-0}
     export SHIM_CLONES=1 CLONE_LOG="$dir/calls" CLONE_ALIVE="$dir/app-dev-alive"
     export SHIM_COMPOSE_JSON="$dir/render.json"
     export CLONE_CADDY="$dir/caddy-id" CLONE_CADDY_MOUNTS="$dir/caddy-mounts" CLONE_CADDY_SERVED="$dir/caddy-served"
@@ -375,7 +409,11 @@ ENV
     [[ ${SHIM_NO_DEV:-0} == 0 ]] || rm "$CLONE_ALIVE"
     HOSTNAME_ARG=release.example.invalid ACME_EMAIL_ARG=ops@example.invalid
     assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; }
-    env_problems() { :; }; reserved_name() { return 1; }
+    env_problems() { [[ ${SHIM_ENV_PROBLEM:-0} == 0 ]] || echo 'synthetic env problem'; }
+    # #664's gate stub: $SHIM_RESERVED names the ONE value reserved_name
+    # should refuse (default: none), so the .env-versus-argument distinction
+    # stays testable.
+    reserved_name() { [[ $1 == "${SHIM_RESERVED:-}" ]] && return 0 || return 1; }
     if [[ ${1:-boot} != owner ]]; then owner_missing() { :; }; fi
     escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; }
     rendered_exposure() { :; }; prepare_embedder() { echo PREPARE >>"$CLONE_LOG"; }
@@ -544,7 +582,7 @@ PY
   if ((rc == 0)); then pass "clones accepts services of the app profile"; else flunk "clones app profile (rc=$rc)" "$out"; fi
   # Compare every box-changing command byte-for-byte, excluding only the two
   # exact read-only commands added by the coordinator-approved box-state guard.
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\nAPP_DOMAIN=release.example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot 2>&1); rc=$?
   cat >"$dir/default-expected" <<ENV
 PREPARE
@@ -574,7 +612,8 @@ ENV
     pass "clones default boot box-changing transcript is byte-identical"
   else flunk "clones default command transcript changed (rc=$rc)" "$(cat "$dir/calls")"; fi
   out=$(clone_boot 2>&1); rc=$?
-  if ((rc != 0)) && [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
+  if ((rc != 0)) && [[ $out == *"app-dev exists in this project; restore the complete clone COMPOSE_FILE before boot"* ]] &&
+    [[ -f $dir/app-dev-alive ]] && ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses live app-dev under base:prod before orphan pruning'
   else flunk "clones pruned live app-dev under base:prod (rc=$rc)" "$out"; fi
   # #672: a running Caddy whose bind-mounted file no longer matches the
@@ -661,11 +700,112 @@ ENV
     pass 'clones smoke fails on a Caddy it cannot inspect'
   else flunk "clones smoke passed with an uninspectable Caddy (rc=$rc)" "$out"; fi
   # The tests below expect the default (single-app) shape again.
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\nAPP_DOMAIN=release.example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 SHIM_PS_FAIL=1 clone_boot 2>&1); rc=$?
-  if ((rc != 0)) && ! grep -q 'compose up ' "$dir/calls"; then
+  if ((rc != 0)) && [[ $out == *"cannot inspect app-dev before single-app orphan pruning"* ]] &&
+    grep -Fxq '||ps -aq --filter label=com.docker.compose.project=synthetic --filter label=com.docker.compose.service=app-dev' "$dir/calls" &&
+    ! grep -q 'compose up ' "$dir/calls"; then
     pass 'clones refuses inconclusive single-app box-state query'
   else flunk "clones ignored failed box-state query (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text(p.read_text().replace('DEV_APP_DOMAIN=dev.example.invalid', 'DEV_APP_DOMAIN=owner@example.com'))
+PY
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the DEV_APP_DOMAIN in the rendered Caddy config is a reserved placeholder"* ]] &&
+    ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved rendered preview domain before compose up'
+  else flunk "clones boot accepted a reserved rendered preview domain (rc=$rc)" "$out"; fi
+  clone_reset
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 0)) && grep -Fxq "$clones|app|compose up -d" "$dir/calls"; then
+    pass 'clones boot accepts a valid rendered preview domain'
+  else flunk "clones boot refused a valid rendered preview domain (rc=$rc)" "$out"; fi
+  # #664: the boot gate checks the ACME_EMAIL Caddy actually reads — the .env
+  # value, not this run's --acme-email argument — and stops for the owner when
+  # the two differ.
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\nACME_EMAIL=owner@example.com\n')
+PY
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the ACME_EMAIL in .env is a reserved placeholder"* ]] &&
+    [[ $out != *"--hostname is a reserved placeholder"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved ACME_EMAIL in .env even with a real --acme-email'
+  else flunk "clones boot accepted a reserved .env ACME_EMAIL (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\nACME_EMAIL=other@example.invalid\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 3)) && [[ $out == *"the ACME_EMAIL in .env differs from this run's --acme-email"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass "clones boot stops for the owner when .env ACME_EMAIL differs from --acme-email"
+  else flunk "clones boot accepted a differing .env ACME_EMAIL (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('ACME_EMAIL=')) + '\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 1)) && [[ $out == *"Clone preflight failed"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a Compose render without ACME_EMAIL'
+  else flunk "clones boot accepted a render without ACME_EMAIL (rc=$rc)" "$out"; fi
+  # #664 review: Compose's .env parser also reads `export ACME_EMAIL=...`
+  # (and `ACME_EMAIL = ...`, a leading space; the last line wins) — the shim's
+  # render mirrors that, so the gate must refuse the value COMPOSE renders,
+  # not the canonical line env_get reads.
+  clone_reset
+  printf 'export ACME_EMAIL=owner@example.com\n' >>"$dir/release/.env"
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the ACME_EMAIL in .env is a reserved placeholder"* ]] &&
+    ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses the ACME_EMAIL Compose renders (an export line wins over the canonical one)'
+  else flunk "clones boot read .env text Compose does not render (rc=$rc)" "$out"; fi
+  # The same three gates on APP_DOMAIN, which Caddy substitutes the same way.
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('APP_DOMAIN=')) + '\nAPP_DOMAIN=owner@example.com\n')
+PY
+  out=$(SHIM_RESERVED='owner@example.com' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"the APP_DOMAIN in .env is a reserved placeholder"* ]] &&
+    [[ $out != *"the ACME_EMAIL in .env is a reserved placeholder"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved APP_DOMAIN in .env even with a clean --hostname'
+  else flunk "clones boot accepted a reserved .env APP_DOMAIN (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('APP_DOMAIN=')) + '\nAPP_DOMAIN=other.example.invalid\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 3)) && [[ $out == *"the APP_DOMAIN in .env differs from this run's --hostname"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass "clones boot stops for the owner when .env APP_DOMAIN differs from --hostname"
+  else flunk "clones boot accepted a differing .env APP_DOMAIN (rc=$rc)" "$out"; fi
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('APP_DOMAIN=')) + '\n')
+PY
+  out=$(clone_boot 2>&1); rc=$?
+  if ((rc == 1)) && [[ $out == *"Clone preflight failed"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a Compose render without APP_DOMAIN'
+  else flunk "clones boot accepted a render without APP_DOMAIN (rc=$rc)" "$out"; fi
+  # #664 review: the --hostname reserved gate this PR rewrote has its own pin,
+  # distinguishable from the .env gates: the .env APP_DOMAIN is clean while the
+  # ARGUMENT is the reserved one.
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('APP_DOMAIN=')) + '\nAPP_DOMAIN=clean.example.invalid\n')
+PY
+  out=$(SHIM_RESERVED='release.example.invalid' clone_boot 2>&1); rc=$?
+  if ((rc != 0)) && [[ $out == *"--hostname is a reserved placeholder"* ]] &&
+    [[ $out != *"APP_DOMAIN"*"reserved placeholder"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones boot refuses a reserved --hostname even when the .env APP_DOMAIN is clean'
+  else flunk "clones boot accepted a reserved --hostname (rc=$rc)" "$out"; fi
   for key in DEV_CLONE_PATH DEV_REF DEV_APP_DOMAIN RELEASE_RUNTIME_ENV_FILE DEV_RUNTIME_ENV_FILE RELEASE_DATABASE_URL DEV_DATABASE_URL; do
     clone_reset
     python3 - "$dir/release/.env" "$key" <<'PY'
@@ -674,6 +814,16 @@ p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().s
 PY
     clone_refused "missing $key"
   done
+  clone_reset
+  python3 - "$dir/release/.env" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); p.write_text('\n'.join(s for s in p.read_text().splitlines() if not s.startswith('DEV_REF=')) + '\n')
+PY
+  out=$(SHIM_DRY_RUN=1 SHIM_ENV_PROBLEM=1 clone_boot 2>&1); rc=$?
+  if ((rc == 1)) && [[ $out == *"WOULD REFUSE: .env is not ready"* ]] &&
+    [[ $out == *"Clone configuration requires DEV_REF"* ]] && ! grep -q 'compose up ' "$dir/calls"; then
+    pass 'clones dry run shows preflight refusal alongside .env problems'
+  else flunk "clones dry run hid preflight refusal (rc=$rc)" "$out"; fi
   for file in docker-compose.clones.yaml scripts/validate-clones.mjs configs/Caddyfile.dev; do
     clone_reset
     mv "$dir/release/$file" "$dir/held"
@@ -689,6 +839,8 @@ PY
   cp "$dir/release/scripts/validate-clones.mjs" "$dir/real-validator"
   printf "process.stdin.resume(); process.stdin.on('end',()=>process.exit(0));\n" >"$dir/release/scripts/validate-clones.mjs"
   SHIM_RENDER_FAIL=1 clone_refused 'failed render (even if a downstream validator accepts empty input)'
+  clone_reset
+  SHIM_RENDER_PARTIAL_FAIL=1 clone_refused 'a render Compose abandons after printing (the preflight pipefail)' boot 'Clone preflight failed'
   mv "$dir/real-validator" "$dir/release/scripts/validate-clones.mjs"
   for key in DATA_ENCRYPTION_KEY AUTH_SESSION_SECRET TOKEN_ENCRYPTION_KEY DATABASE_URL role database administrator; do
     clone_reset
@@ -806,7 +958,7 @@ PY
   if ((rc != 0)) && grep -q 'lacks scripts/env-vm-guard.py' <<<"$out"; then
     pass 'clones a missing guard installer refuses instead of silently passing'
   else flunk "clones accepted a missing guard installer (rc=$rc)" "$out"; fi
-  printf 'COMPOSE_FILE=%s\n' "$base" >"$dir/release/.env"
+  printf 'COMPOSE_FILE=%s\nACME_EMAIL=ops@example.invalid\nAPP_DOMAIN=release.example.invalid\n' "$base" >"$dir/release/.env"
   out=$(SHIM_NO_DEV=1 clone_boot smoke 2>&1); rc=$?
   if ((rc == 0)) && grep -q '^HTTP ' "$dir/calls"; then pass 'clones default smoke still succeeds'; else flunk 'clones default smoke failed' "$out"; fi
 
@@ -904,8 +1056,8 @@ mutants = [
     ('validator-skipped', 'node scripts/validate-clones.mjs >/dev/null', 'cat >/dev/null'),
     ('orphan-prune-clones', '    run dc up -d\n', '    run dc up -d --remove-orphans\n'),
     ('default-command-changed', '    run dc up -d --remove-orphans\n', '    run dc up -d\n'),
-    ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse'),
-    ('single-app-state-query-failure', '|| { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }', '|| existing_dev=""'),
+    ('single-app-live-dev-guard', '[[ -z $existing_dev ]] || { refuse', 'true || { refuse', 'FAIL clones pruned live app-dev under base:prod'),
+    ('single-app-state-query-failure', '|| { refuse "cannot inspect app-dev before single-app orphan pruning"; return 1; }', '|| existing_dev=""', 'FAIL clones ignored failed box-state query'),
     ('half-config-falls-back', 'if [[ -n "$(env_get "$key")" ]]; then', 'if false; then'),
     ('required-inputs-skipped', 'for key in "${CLONE_INPUTS[@]}"; do\n    [[ -n', 'for key in; do\n    [[ -n'),
     ('missing-overlay-accepted', 'for path in "${parts[@]}" scripts/validate-clones.mjs configs/Caddyfile configs/Caddyfile.dev;',
@@ -917,7 +1069,9 @@ mutants = [
     ('dc-wrapper-preflight', 'if [[ ${1:-} != config ]]; then clone_preflight "$files" || return 1; fi', 'if [[ ${1:-} != config ]]; then :; fi'),
     ('vps-wrapper-preflight', '  clone_preflight "$files" || return 1\n  (cd "$APP_DIR"', '  :\n  (cd "$APP_DIR"'),
     ('vps-wrapper-compose-selection', 'COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py', 'COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" python3 scripts/check-vps.py'),
-    ('boot-stage-preflight-R1', '  clone_preflight "$files" || return 1\n  prepare_embedder', '  :\n  prepare_embedder'),
+    ('boot-stage-preflight-R1',
+     '  # refusals visible in dry runs even when .env has other reported problems.\n  [[ -z ${files:-} ]] || clone_preflight "$files" || return 1',
+     '  # refusals visible in dry runs even when .env has other reported problems.\n  :'),
     ('ambiguous-assignments', "  if grep -E '^[[:space:]]*(export", "  if false && grep -E '^[[:space:]]*(export"),
     ('runtime-file-R5', '[[ $path == /* && -r $path && -f $path ]]', 'true'),
     ('runtime-permissions', '(( (8#$mode & 077) != 0 ))', 'false'),
@@ -1017,10 +1171,42 @@ mutants = [
      'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id") || return 1',
      'mounts=$(sudo docker inspect -f \'{{range .Mounts}}{{printf "%s %s %s\\n" .Type .Source .Destination}}{{end}}\' "$id" 2>/dev/null) || return 0'),
     ('caddy-mounts-none-fail-open', '((found)) || return 1', '((found)) || return 0'),
+    # #664: the boot gate reads the .env ACME_EMAIL Caddy actually uses.
+    ('acme-gate-reads-argument', 'elif reserved_name "$env_acme"; then', 'elif reserved_name "$ACME_EMAIL_ARG"; then'),
+    ('render-failure-refusal-off', '((render_ok)) || refuse "cannot render the Compose config, so the ACME_EMAIL/APP_DOMAIN Caddy gets are unreadable"', '((render_ok)) || :'),
+    ('acme-mismatch-accepted', '[[ $env_acme == "$ACME_EMAIL_ARG" ]] || owner_stop', '[[ $env_acme == "$ACME_EMAIL_ARG" ]] || :'),
+    # #664 review: the gates read what Compose RENDERS, not .env's own text —
+    # env_get cannot see `export ACME_EMAIL=...` (nor spaces around `=`, nor a
+    # leading space; the last line wins), which is exactly the review's
+    # reproduction. The shim's render mirrors Compose's parser for these two
+    # keys, so this mutant (read .env text instead) is killed by the
+    # export-spelling pin.
+    ('acme-render-reads-env-text', '''compose_caddy_env() {
+  local key=$1 json
+  json=$(dc config --format json) || return 1''',
+     '''compose_caddy_env() {
+  env_get "$1" || return 1
+  return 0
+}
+compose_caddy_env_unused() {
+  local key=$1 json
+  json=$(dc config --format json) || return 1'''),
+    # The --hostname reserved gate this PR rewrote (the review's surviving
+    # mutant: `if false` survives everything but the pin below).
+    ('hostname-reserved-gate-off', '''if reserved_name "$HOSTNAME_ARG"; then
+    refuse "--hostname is a reserved placeholder''', '''if false; then
+    refuse "--hostname is a reserved placeholder'''),
+    ('appdomain-reserved-accepted', 'elif reserved_name "$env_domain"; then', 'elif false; then'),
+    ('appdomain-mismatch-accepted', '[[ $env_domain == "$HOSTNAME_ARG" ]] || owner_stop', '[[ $env_domain == "$HOSTNAME_ARG" ]] || :'),
+    ('preview-domain-reserved-accepted', '[[ $files != "$COMPOSE_FILES" && -n $env_preview ]] && reserved_name "$env_preview"', 'false', 'FAIL clones boot accepted a reserved rendered preview domain'),
 ]
 baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
 if baseline.returncode:
     sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
+render_test = ['python3', str(source.parent / 'prepare-embedder.test.py'), '-k', 'test_boot_refuses_failed_compose_render_before_prepare_or_up']
+baseline = subprocess.run(render_test, capture_output=True, text=True, timeout=10)
+if baseline.returncode:
+    sys.exit('Render-refusal baseline failed: ' + baseline.stdout + baseline.stderr)
 with tempfile.TemporaryDirectory() as tmp:
     validator = source.parent / 'validate-clones.mjs'
     policy = validator.read_text()
@@ -1030,8 +1216,10 @@ with tempfile.TemporaryDirectory() as tmp:
         changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
-        result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
-        if not result.returncode or (expected or ['FAIL clones'])[0] not in result.stdout:
+        command = render_test if name == 'render-failure-refusal-off' else ['bash', str(harness), '--clones-only']
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=90)
+        signal = 'FAIL: test_boot_refuses_failed_compose_render_before_prepare_or_up' if name == 'render-failure-refusal-off' else (expected or ['FAIL clones'])[0]
+        if not result.returncode or signal not in result.stdout + result.stderr:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
     # New validator pins run the actual unit fixtures against a temporary
@@ -1387,6 +1575,7 @@ DATA_ENCRYPTION_KEY='d'
 VITE_ALLOWED_EMAILS='a@contoso.com'
 ANTHROPIC_API_KEY='k'
 STASH_DIRECT_REDIS='1'
+ACME_EMAIL='ops@contoso.com'
 ENV
 probs=$(
   lib "$tmproot/c"

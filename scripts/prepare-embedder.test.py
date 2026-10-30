@@ -302,7 +302,7 @@ class Wiring(unittest.TestCase):
             escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
             rendered_exposure() { :; }; vps_check() { :; };
             python3() { if [[ $1 == *prepare-embedder.py ]]; then echo "PREPARE $*"; return "$PREPARE_STATUS"; else command python3 "$@"; fi; };
-            dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic"}'; else echo "COMPOSE $*"; fi; };
+            dc() { if [[ $1 == config ]]; then echo '{"name":"synthetic","services":{"caddy":{"environment":{"ACME_EMAIL":"ops@example.invalid","APP_DOMAIN":"app.example.invalid"}}}}'; else echo "COMPOSE $*"; fi; };
             sudo() { :; };
             wait_state() { echo "WAIT $*"; [[ $1 != embedder || $WAIT_STATUS == 0 ]]; };
             stage_boot'''
@@ -319,6 +319,35 @@ class Wiring(unittest.TestCase):
                     else:
                         self.assertLess(result.stdout.index("PREPARE"), result.stdout.index("COMPOSE up"))
                         self.assertIn("WAIT embedder healthy 600", result.stdout)
+
+    def test_boot_refuses_failed_compose_render_before_prepare_or_up(self):
+        # dc models Compose's ${KEY:?}: either an absent or empty value makes
+        # the entire config render fail, before any boot mutation is attempted.
+        for dot_env in ("APP_DOMAIN=app.example.invalid\n",
+                        "ACME_EMAIL=\nAPP_DOMAIN=app.example.invalid\n",
+                        "ACME_EMAIL=ops@example.invalid\nAPP_DOMAIN=\n"):
+            with self.subTest(dot_env=dot_env), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                (directory / ".env").write_text(dot_env)
+                (directory / "configs").mkdir()
+                (directory / "configs/mcp-config.yaml").touch()
+                body = '''source "$1"; DRY_RUN=0 HOSTNAME_ARG=app.example.invalid ACME_EMAIL_ARG=ops@example.invalid;
+                assert_engine_supported() { :; }; assert_daemon_isolation() { :; }; assert_gateway_pinned() { :; };
+                env_problems() { :; }; owner_missing() { :; }; reserved_name() { return 1; };
+                escrow_recorded() { :; }; dns_points_here() { :; }; assert_dynamic_tools_off() { :; };
+                dc() { if [[ $1 == config ]]; then
+                  [[ -n $(env_get ACME_EMAIL) && -n $(env_get APP_DOMAIN) ]] || return 1;
+                  echo '{"name":"synthetic"}';
+                else echo "COMPOSE $*"; fi; };
+                prepare_embedder() { echo PREPARE; }; stage_boot'''
+                env = {"PATH": os.environ["PATH"], "HAMES_BOOTSTRAP_SOURCED": "1", "HAMES_APP_DIR": tmp,
+                       "HAMES_STATE_DIR": tmp + "/state"}
+                result = subprocess.run(["bash", "-c", body, "_", str(FILES["BOOTSTRAP_SCRIPT"])],
+                                        env=env, text=True, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("cannot render the Compose config", result.stdout)
+                self.assertNotIn("PREPARE", result.stdout)
+                self.assertNotIn("COMPOSE up", result.stdout)
 
     def test_smoke_executes_inside_app_and_propagates_failure(self):
         with patch.object(probe, "command") as command:

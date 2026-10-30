@@ -1974,17 +1974,12 @@ stage_smoke() {
   # start; comparing Caddy's LOADED config is the follow-up.
   local caddy_id caddy_stale
   caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container for smoke check 1c (the Compose project lookup failed)"
-  caddy_stale=""
-  if [[ -n $caddy_id ]]; then
-    caddy_stale=$(caddy_stale_files "$caddy_id") || {
-      fail "1c could not inspect the running Caddy's mounts, so its config was not compared"
-      fails=$((fails + 1))
-      caddy_stale=""
-    }
-  fi
   if [[ -z $caddy_id ]]; then
     # Nothing to compare against; Caddy's own liveness is check 2's business.
     warn "1c no running Caddy container, so its config was not compared"
+  elif ! caddy_stale=$(caddy_stale_files "$caddy_id"); then
+    fail "1c could not inspect the running Caddy's mounts, so its config was not compared"
+    fails=$((fails + 1))
   elif [[ -n $caddy_stale ]]; then
     fail "1c the running Caddy serves a changed Caddyfile (recreate Caddy: docker compose up -d --no-deps --force-recreate caddy):"
     note "$caddy_stale"

@@ -656,7 +656,8 @@ ENV
   else flunk "clones boot ignored a failed Caddy inspect (rc=$rc)" "$out"; fi
   clone_reset
   out=$(CLONE_CADDY_INSPECT_FAIL=1 SHIM_SET_E=1 clone_boot smoke 2>&1); rc=$?
-  if ((rc != 0)) && grep -q '1c could not inspect the running Caddy' <<<"$out"; then
+  if ((rc != 0)) && grep -q '1c could not inspect the running Caddy' <<<"$out" &&
+    ! grep -q "1c the running Caddy serves the checkout's Caddyfile" <<<"$out"; then
     pass 'clones smoke fails on a Caddy it cannot inspect'
   else flunk "clones smoke passed with an uninspectable Caddy (rc=$rc)" "$out"; fi
   # The tests below expect the default (single-app) shape again.
@@ -975,16 +976,36 @@ mutants = [
     ('caddy-recreate-everything', 'run dc up -d --no-deps --force-recreate caddy', 'run dc up -d --no-deps --force-recreate'),
     ('caddy-always-stale', 'sudo docker exec "$id" cat "$tgt" 2>/dev/null | cmp -s - "$src" || printf', 'printf'),
     ('caddy-mounts-unfiltered', '[[ $mtype == bind && -f $src ]] || continue', ':'),
-    ('smoke-caddy-stale-ignored', '    caddy_stale=$(caddy_stale_files "$caddy_id") || {', '    caddy_stale="" || {'),
-    ('smoke-caddy-inspect-fail-swallowed', '    caddy_stale=$(caddy_stale_files "$caddy_id") || {', '    caddy_stale=$(caddy_stale_files "$caddy_id") && {'),
+    ('smoke-caddy-stale-ignored', '  elif [[ -n $caddy_stale ]]; then', '  elif false; then'),
+    ('smoke-caddy-inspect-fail-swallowed', '  elif ! caddy_stale=$(caddy_stale_files "$caddy_id"); then', '  elif caddy_stale=$(caddy_stale_files "$caddy_id"); then'),
     ('smoke-caddy-id-ignored',
-     'caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container for smoke check 1c (the Compose project lookup failed)"\n  caddy_stale=""',
-     'caddy_id=""\n  caddy_stale=""'),
+     'caddy_id=$(caddy_container_id) || refuse "cannot resolve the running Caddy container for smoke check 1c (the Compose project lookup failed)"',
+     'caddy_id=""'),
     # The review's BLOCKING reproduction, restored as a mutant: the stale
     # comparison runs unconditionally again, and under main's set -e the
     # no-Caddy smoke dies at `[[ -n $caddy_id ]] &&` before the later checks.
-    ('smoke-no-caddy-set-e-unhandled', '  caddy_stale=""\n  if [[ -n $caddy_id ]]; then',
-     '  caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")\n  if [[ -n $caddy_id ]]; then'),
+    ('smoke-no-caddy-set-e-unhandled', '  if [[ -z $caddy_id ]]; then',
+     '  caddy_stale=$([[ -n $caddy_id ]] && caddy_stale_files "$caddy_id")\n  if [[ -z $caddy_id ]]; then'),
+    # Restore the reviewed fall-through: inspect fails, FAIL is counted, then
+    # the empty stale string reaches the contradictory fresh-Caddy ok line.
+    ('smoke-caddy-inspect-fail-falls-through', '''  if [[ -z $caddy_id ]]; then
+    # Nothing to compare against; Caddy's own liveness is check 2's business.
+    warn "1c no running Caddy container, so its config was not compared"
+  elif ! caddy_stale=$(caddy_stale_files "$caddy_id"); then
+    fail "1c could not inspect the running Caddy's mounts, so its config was not compared"
+    fails=$((fails + 1))
+  elif [[ -n $caddy_stale ]]; then''', '''  caddy_stale=""
+  if [[ -n $caddy_id ]]; then
+    caddy_stale=$(caddy_stale_files "$caddy_id") || {
+      fail "1c could not inspect the running Caddy's mounts, so its config was not compared"
+      fails=$((fails + 1))
+      caddy_stale=""
+    }
+  fi
+  if [[ -z $caddy_id ]]; then
+    # Nothing to compare against; Caddy's own liveness is check 2's business.
+    warn "1c no running Caddy container, so its config was not compared"
+  elif [[ -n $caddy_stale ]]; then'''),
     # The review's surviving byte-count mutant: killed only once fresh and
     # stale served content are the same length as the checkout's file.
     ('caddy-stale-by-size',

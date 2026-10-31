@@ -720,6 +720,8 @@ function BlockingDialog(props: BlockingDialogProps) {
                           flex="~"
                           items="center"
                           gap="2"
+                          rounded="sm"
+                          ring="2 transparent focus-within:ui-accent/40"
                           data-testid={`hitl-batch-choice-${row.index}`}
                         >
                           <Checkbox.Control
@@ -730,7 +732,6 @@ function BlockingDialog(props: BlockingDialogProps) {
                             justify="center"
                             border="1 ui-border-primary"
                             rounded="sm"
-                            ring="2 transparent focus:ui-accent/40"
                           >
                             <Checkbox.Indicator>
                               <span aria-hidden="true">✓</span>

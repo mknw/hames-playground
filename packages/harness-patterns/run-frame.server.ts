@@ -130,6 +130,10 @@ export interface PreparedBatchEgress {
   readonly callKey: string
   readonly digest: string
   readonly route: string | null
+  /** Identity of the whole preflighted plan, including a zero-held plan. */
+  readonly batchPlanKey: string
+  /** Required for an accepted or refused held row; absent for a gate pass. */
+  readonly requestId?: string
   readonly decision: 'pass' | 'accept' | 'refuse'
   readonly auditByDecide?: boolean
   readonly cause?: 'decide' | 'unchecked'
@@ -248,6 +252,7 @@ export interface RunFrame {
   batch?: boolean
   /** N8: a batch checks every member before sending any member. */
   batchPhase?: 'preflight' | 'execute'
+  batchPlanKey?: string
   /** The exact preflight decision for this logical call, checked by the gate. */
   batchPrepared?: PreparedBatchEgress
   /** Installed by the egress wrapper when attended batches may use N8. */
@@ -307,6 +312,7 @@ export interface ActiveRunFrame {
   readonly continuationRoot?: string | null
   readonly batch?: boolean
   readonly batchPhase?: 'preflight' | 'execute'
+  readonly batchPlanKey?: string
   readonly batchPrepared?: PreparedBatchEgress
   readonly egressBatchEnabled?: boolean
   readonly toolSendClaims?: ToolSendClaims
@@ -458,6 +464,7 @@ function build(frame: RunFrame): ActiveRunFrame {
     continuationRoot: frame.continuationRoot,
     batch: frame.batch,
     batchPhase: frame.batchPhase,
+    batchPlanKey: frame.batchPlanKey,
     batchPrepared: frame.batchPrepared,
     egressBatchEnabled: frame.egressBatchEnabled,
     toolSendClaims: frame.toolSendClaims,
@@ -601,6 +608,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       partial.continuationRoot !== undefined ? partial.continuationRoot : open.continuationRoot,
     batch: partial.batch ?? open.batch,
     batchPhase: partial.batchPhase ?? open.batchPhase,
+    batchPlanKey: partial.batchPlanKey ?? open.batchPlanKey,
     batchPrepared: partial.batchPrepared ?? open.batchPrepared,
     egressBatchEnabled: partial.egressBatchEnabled ?? open.egressBatchEnabled,
     toolSendClaims: partial.toolSendClaims ?? open.toolSendClaims,

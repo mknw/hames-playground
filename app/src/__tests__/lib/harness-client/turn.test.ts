@@ -148,6 +148,7 @@ vi.mock('@hames-ai/harness-patterns', async () => {
         ingressFlagResolution,
       }))),
     EGRESS_RELEASE_KIND: 'egress-release',
+    EGRESS_BATCH_RELEASE_KIND: 'egress-batch-release',
   }
 })
 

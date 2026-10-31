@@ -98,6 +98,7 @@ import { isDegradedToolSurface } from '../gateway-health.server'
 import { emitLive } from '../live-event-context.server'
 import {
   askHumanHolding,
+  batchRowAcceptedInRun,
   canPauseHere,
   canonicalJson,
   held as held_,
@@ -804,7 +805,17 @@ export function withEgressGate(config: EgressGateConfig) {
               !prepared ||
               prepared.callKey !== frame.callKey ||
               prepared.digest !== digest ||
-              prepared.route !== route
+              prepared.route !== route ||
+              !prepared.batchPlanKey ||
+              prepared.batchPlanKey !== frame.batchPlanKey ||
+              (prepared.decision === 'accept' &&
+                (!prepared.requestId ||
+                  !batchRowAcceptedInRun(
+                    prepared.requestId,
+                    EGRESS_BATCH_RELEASE_KIND,
+                    prepared.callKey,
+                    prepared.batchPlanKey,
+                  )))
             )
               return EGRESS_BATCH_MISMATCH
             if (closures.turnClosed) return EGRESS_TEXTS.turnClosed

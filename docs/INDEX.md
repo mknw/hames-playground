@@ -103,7 +103,7 @@ Each layer's own README stays the authority on its coverage: [`app/e2e/README.md
 | [harness-patterns/parallel.md](harness-patterns/parallel.md)                               | Design notes on `parallel`: how it merges branches and handles failures, two options not built, and composing it with `judge`                                     |
 | [harness-patterns/prompt-caching.md](harness-patterns/prompt-caching.md)                   | Record of one 2026-07-26 run of the prompt-caching bench (#122): three `ActorController` variants, ~47% saved; where the cache markers live now                   |
 | [harness-patterns/with-references.md](harness-patterns/with-references.md)                 | Design record for `withReferences` and the `expandPreviousResult` tool (#30, #19), with what shipped differently                                                  |
-| [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Walkthrough in the hames app: search the web, attach the results on the next turn, write them to Neo4j                                                            |
+| [harness-patterns/withReferences-tutorial.md](harness-patterns/withReferences-tutorial.md) | Archived `search` agent walkthrough; its picker steps are no longer runnable                                                                                      |
 | [tutorials/own-provider-or-model.md](tutorials/own-provider-or-model.md)                   | Bring your own provider or model — define runtime clients, map roles, compose over the built-in tier (#374 D1)                                                    |
 
 Authoritative source-level docs (closer to the code):
@@ -278,7 +278,7 @@ hames-playground/
 │   ├── data-privacy/
 │   │   └── plan.md              # Data protection findings + plan
 │   ├── user-guides/
-│   │   └── microsoft-graph.md   # Microsoft 365 agent: what you can ask
+│   │   └── microsoft-graph.md   # Microsoft 365 questions for general-next
 │   ├── tutorials/               # Task-shaped pages for consumers of the `@hames-ai` packages
 │   │   └── README.md            # The index + the six tutorial pages
 │   └── harness-patterns/        # Harness patterns documentation
@@ -289,7 +289,7 @@ hames-playground/
 │       ├── parallel.md          # Parallel pattern design
 │       ├── prompt-caching.md    # Cache-breakpoint budget and placement (#122)
 │       ├── with-references.md   # withReferences meta-pattern design (#30)
-│       └── withReferences-tutorial.md  # withReferences walkthrough
+│       └── withReferences-tutorial.md  # Archived search-agent walkthrough
 ├── packages/                    # The `hames` library — five MIT workspace packages
 │   ├── harness-patterns/        # Pattern framework (README.md, GUIDE.md, SPEC.md)
 │   ├── harness-baml/            # BAML corpus + committed client, adapters, role→client map

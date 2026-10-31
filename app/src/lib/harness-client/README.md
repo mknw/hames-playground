@@ -11,7 +11,7 @@ harness-client/
 ├── registry.server.ts         # The composition-root overlay: registers general-next with this app's icon/accent, exports getAgentMetadata()
 ├── neo4j-enricher.server.ts   # `onToolResult` recipe — fetches 1-hop neighborhood for touched nodes
 ├── index.ts                   # Public exports (re-exports the client-safe @hames-ai/agents helpers)
-└── (moved to packages/agents, #225 PR-2: the 9 agent definitions, graph-extractor, reference-extractor, replay, types)
+└── (moved to packages/agents, #225 PR-2: agent definitions, graph-extractor, reference-extractor, replay, types)
 ```
 
 Persistence layer is in `../db/`:
@@ -33,9 +33,14 @@ Synchronous agent execution. Delegates to `processMessageWithAgent(sessionId, me
 Streaming variant — calls the harness with an `onEvent` callback that fires for each committed `ContextEvent`. Used by the SSE endpoint (`/api/events`).
 
 ```typescript
-const result = await processMessageStreaming(sessionId, message, 'search', (evt: ContextEvent) => {
-  controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
-})
+const result = await processMessageStreaming(
+  sessionId,
+  message,
+  'general-next',
+  (evt: ContextEvent) => {
+    controller.enqueue(encoder.encode(`data: ${JSON.stringify(evt)}\n\n`))
+  },
+)
 ```
 
 ### `getAgentMetadata()`

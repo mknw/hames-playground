@@ -1,23 +1,12 @@
-# Walkthrough: carrying data across turns with `withReferences`
+# Archived walkthrough: carrying data across turns with `withReferences`
 
-> **Status.** Historical walkthrough (the `search` agent was retired in #898); the current `general-next` composition differs. Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). On 2026-10-03 turn 2 changed from a write into Neo4j to a lookup in it, because agents became read-only against Neo4j ([#403](https://github.com/mknw/hames-playground/issues/403)). The new turn 2 has not yet been run end to end in the app.
+> **Archived example, not runnable in the current app.** This page records the retired `search` agent's two-turn `withReferences` flow. #898 removed that agent and its picker entry; the current `general-next` agent uses a different `decisionLoop` composition. The steps, timeline, prompts, and code excerpt below describe the former agent and should not be used as current setup instructions. The turn-2 graph lookup was never verified end to end after the 2026-10-03 read-only change.
 
-**What you will see:** the `search` agent fetching information about a topic on one
-turn, then looking that data up in Neo4j on the next, without fetching it again and
-without the model inventing the content. About five minutes.
+**Former example:** the `search` agent fetched information about a topic on one
+turn, then looked that data up in Neo4j on the next. The example was designed
+to take about five minutes.
 
-**Before you start.** This walkthrough runs in the hames app, this repository's
-reference host: a chat UI with an event timeline beside it. Follow the
-[Quickstart](../../README.md#quickstart) in the root README. It starts Neo4j and
-the MCP gateway (the Docker service that serves the web-search and Neo4j tools)
-with `docker compose up -d`, and needs an Anthropic API key in `app/.env`, which
-you get at [console.anthropic.com](https://console.anthropic.com). The hames app then
-serves on <http://localhost:3444>.
-
-Nothing here changes your graph: agents only read Neo4j
-([#403](https://github.com/mknw/hames-playground/issues/403)).
-
-This page is the hands-on counterpart to the design record,
+This page is the historical counterpart to the design record,
 [`with-references.md`](./with-references.md). Two terms it uses:
 
 - **`withReferences`** wraps a pattern (one step of an agent's composition). When
@@ -29,7 +18,7 @@ This page is the hands-on counterpart to the design record,
 
 ---
 
-## What you will do
+## Former two-turn example
 
 A two-turn conversation:
 
@@ -43,13 +32,11 @@ route starts with the turn-1 results attached.
 
 ---
 
-## Step 1: start a fresh chat
+## Former step 1: start a fresh chat
 
-Pick **Search Agent** in the agent selector and press **+ New Chat** in the sidebar.
+The former app offered **Search Agent** in the agent selector. That picker entry was removed in #898, so this step can no longer be performed.
 
-The side panel's **Context manager** tab holds the event timeline; it fills as
-the agent runs. The agent's composition, abridged from
-[`general-next.server.ts`](../../packages/agents/agents/general-next.server.ts):
+The former timeline appeared in the side panel’s **Context manager** tab. The retired `search` agent’s composition was:
 
 ```text
 router → routes({
@@ -64,9 +51,9 @@ that graph holds the hames app's own data.
 
 ---
 
-## Step 2: turn 1, the web search
+## Former step 2: turn 1, the web search
 
-Send:
+The example’s message was:
 
 > Search the web for TypeScript 5.7 release info. What are the 5 most important new features?
 
@@ -81,9 +68,9 @@ The timeline shows the router, the web route and its tool calls, then
 
 ---
 
-## Step 3: turn 2, look them up in the graph
+## Former step 3: turn 2, look them up in the graph
 
-Send:
+The example’s message was:
 
 > Which of these 5 features does the Neo4j graph already have a Concept node for?
 
@@ -95,11 +82,10 @@ model chooses the relevant ones, up to five. The attached summaries reach the
 
 ---
 
-## Step 4: inspect what the controller received
+## Former step 4: inspect what the controller received
 
-In the timeline, open the first `controller_action` event under `neo4j-query`,
-and in its **Prompt** tab expand the **Variables** section. It shows the
-arguments the loop passed to the BAML `LoopController` function. The attached
+In the former timeline, the first `controller_action` event under `neo4j-query`
+showed the arguments passed to the BAML `LoopController` function. The attached
 results are in `turns_previous_runs`:
 
 ```jsonc
@@ -137,26 +123,20 @@ from Anthropic's prompt cache.
 
 ---
 
-## Step 5: check what the controller looked up
+## Former step 5: check what the controller looked up
 
-Open the `tool_call` event under `neo4j-query`. Its Cypher should name the five
+The former `tool_call` event under `neo4j-query` was expected to name the five
 features from turn 1, either written into the query or its parameters, or as a
 `ref:<ref_id>` value the loop replaced with the full result before the query ran
 (the turn then records the expansion). Either way the names come from the
 attached results, not from the model's memory. The answer says which of the five
 the graph holds; on the demo graph that is probably none of them.
 
-To check the answer yourself, list the graph's concepts in the Neo4j Browser.
-
-> **Needs:** the Neo4j Browser at <http://localhost:7474> (user `neo4j`, password `password`), started by `docker compose up -d` in the [Quickstart](../../README.md#quickstart).
-
-```cypher
-MATCH (c:Concept) RETURN c.name ORDER BY c.name
-```
+The example compared the answer with `MATCH (c:Concept) RETURN c.name ORDER BY c.name` in Neo4j Browser.
 
 ---
 
-## What just happened
+## Recorded flow
 
 ```text
 Turn 1                                Turn 2
@@ -184,9 +164,10 @@ where both surface the same result it appears once.
 ## Recording the selector's decision (excerpt)
 
 The wrapper describes each decision in a `reference_attached` event: the
-candidates, the ones selected with a reason each, the selector's reasoning, and
-`skipped` when no model was called. `withReferences` has no default
-`trackHistory` entry, so the event is not committed unless you ask for it:
+candidates, the ones selected with a reason each, the selector’s reasoning, and
+`skipped` when no model was called. The former agent did not commit that event by
+default. This excerpt illustrates the optional `trackHistory` setting; it is not
+a runnable replacement for the removed agent:
 
 ```typescript
 import {
@@ -196,7 +177,7 @@ import {
 import { bamlPatterns } from "@hames-ai/harness-baml";
 import type { AgentData } from "@hames-ai/agents";
 
-// The Neo4j loop, built as in search.server.ts.
+// Former search-agent Neo4j loop; illustrative only.
 declare const neo4jPattern: ConfiguredPattern<AgentData>;
 
 const baml = bamlPatterns();
@@ -208,12 +189,12 @@ const neo4jRoute = withReferences<AgentData>(neo4jPattern, {
 });
 ```
 
-`trackHistory` also takes a list of event types. In the hames app the event then
-appears as its own row in the timeline, with a link icon.
+`trackHistory` also takes a list of event types. In that former app flow, the
+event appeared as its own row in the timeline, with a link icon.
 
 ---
 
-## Where to go next
+## Current references
 
 - **Reference:** the [`withReferences` section of SPEC.md](../../packages/harness-patterns/SPEC.md#withreferencespattern-config).
 - **Design record:** [`with-references.md`](./with-references.md), including [what shipped differently](./with-references.md#14-what-shipped-differently) from the design.

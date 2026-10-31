@@ -223,15 +223,15 @@ loosened (`app/src/lib/inference/guard-config.server.ts`). An unrecognised or
 out-of-range value refuses boot and never echoes the value; unset keeps the
 default.
 
-| Variable                                 | Values                       | Default                                                   | Failure mode                                                                             |
-| ---------------------------------------- | ---------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GUARD_SCREEN`                           | `off, shadow, gated, always` | `shadow` on the self-deployed tier, `always` on Anthropic | An unrecognised value refuses boot. Weakening logs at boot.                              |
-| `GUARD_SCREEN_ANTHROPIC`                 | `off, always`                | `always`                                                  | Same.                                                                                    |
-| `GUARD_EGRESS`                           | `filter, roster`             | `filter`                                                  | Same.                                                                                    |
-| `GUARD_PSEUDONYMISE`                     | `on, off`                    | `on`                                                      | `off` refuses nothing but logs that names are no longer substituted (SD-8/SD-9 posture). |
-| `GUARD_GATE_THRESHOLD`                   | a number from 0 to 1         | `0.15` (τi; obeyed only by a `gated` screen)              | Out of range refuses boot. Above the default logs that more content skips the screen.    |
-| `GUARD_EGRESS_THRESHOLD`                 | a number from 0 to 1         | `0.3` (τe, both tiers)                                    | Out of range refuses boot. Above the default logs that more requests go out unasked.     |
-| `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | a whole number, 0 or greater | `0` (the first refusal closes the route)                  | Out of range refuses boot. Above 0 logs that a refused request can be asked again.       |
+| Variable                                 | Values                       | Default                                                  | Failure mode                                                                             |
+| ---------------------------------------- | ---------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `GUARD_SCREEN`                           | `off, shadow, gated, always` | `gated` on the self-deployed tier, `always` on Anthropic | An unrecognised value refuses boot. Weakening logs at boot.                              |
+| `GUARD_SCREEN_ANTHROPIC`                 | `off, always`                | `always`                                                 | Same.                                                                                    |
+| `GUARD_EGRESS`                           | `filter, roster`             | `filter`                                                 | Same.                                                                                    |
+| `GUARD_PSEUDONYMISE`                     | `on, off`                    | `on`                                                     | `off` refuses nothing but logs that names are no longer substituted (SD-8/SD-9 posture). |
+| `GUARD_GATE_THRESHOLD`                   | a number from 0 to 1         | `0.15` (τi; obeyed only by a `gated` screen)             | Out of range refuses boot. Above the default logs that more content skips the screen.    |
+| `GUARD_EGRESS_THRESHOLD`                 | a number from 0 to 1         | `0.3` (τe, both tiers)                                   | Out of range refuses boot. Above the default logs that more requests go out unasked.     |
+| `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | a whole number, 0 or greater | `0` (the first refusal closes the route)                 | Out of range refuses boot. Above 0 logs that a refused request can be asked again.       |
 
 ## 12. Data services and documents
 

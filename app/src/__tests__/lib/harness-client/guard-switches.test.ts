@@ -86,7 +86,7 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
   it('unset, the bag carries the design defaults and the real web filter', () => {
     const { guards, egressRoster } = agentDeps()
     expect(guards).toMatchObject({
-      screenMode: { default: 'shadow', anthropic: 'always' },
+      screenMode: { default: 'gated', anthropic: 'always' },
       egressMode: 'filter',
       gateThreshold: 0.15,
       egressThreshold: 0.3,

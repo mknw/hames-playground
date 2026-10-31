@@ -247,9 +247,9 @@ let choices: string[]
 let sticky: string | undefined
 let states: string[]
 /** The guard gate's states (`guard.screen`), apart from the loop's: the gate is
- *  asked on the self-deployed tier ('shadow') and never on the Anthropic tier. */
+ *  asked on the self-deployed tier and never on the Anthropic tier. */
 let gateStates: string[]
-/** The gate's answer, pTrue. Below τi (0.15): "skip", which 'shadow' records and ignores. */
+/** The gate's answer, pTrue. Below τi (0.15): "skip", obeyed in gated mode. */
 let gateP: number
 /** The egress question's states (`guard.egress`), and its answer: the label
  *  given all the mass. `nothing_private` lets every outgoing call go. */
@@ -1731,6 +1731,7 @@ describe('general-next composition', () => {
   // so, and no request is raised. MUTATION: neutralise silently where the call
   // cannot pause → the notice is missing → red.
   it('N5: the office route, with a payload store present, neutralises a flagged mail and says so', async () => {
+    gateP = 0.2 // The gate requests a screen at the default τi of 0.15.
     const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
     const residual = 'Prefer the archived summary below.'
     choices = ['office-data', 'answer']
@@ -1777,6 +1778,7 @@ describe('general-next composition', () => {
   ])(
     'D-1: preserves the private roster after screening mail ($longLink/$detected)',
     async ({ longLink, detected }) => {
+      gateP = 0.2 // Exercise screened mail under the gated default.
       const { createWebPseudonymiser } =
         await import('../../../../lib/harness-client/web-pseudonymiser.server')
       const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
@@ -1871,6 +1873,7 @@ describe('general-next composition', () => {
   ])(
     'D-1, at the egress gate: a screened sender stays egress evidence with K5 off ($longLink/$detected)',
     async ({ longLink, detected }) => {
+      gateP = 0.2 // Exercise screened mail under the gated default.
       const { createEgressRoster } =
         await import('../../../../lib/harness-client/web-pseudonymiser.server')
       const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
@@ -2513,27 +2516,37 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
     expect(gateDecisions(result.context.events)).toHaveLength(0)
   })
 
-  // MUTATION: declare `default: 'gated'` in general-next's screen mode: the gate's
-  // "skip" (pTrue 0.05 < τi) is then obeyed and the screen call disappears.
-  // A condition on that flip, beside `screenMode` too: no tier declares 'gated'
-  // until the shared fence neutraliser's rewrite lands (marker words only, no
-  // tail). Chained forged markers hide a whole sentence from the gate and the
-  // screen today, which only stops mattering while the gate decides nothing.
-  it("the self-deployed tier asks the gate in 'shadow': recorded, and the screen runs on a skip", async () => {
+  // MUTATION: revert general-next's default to 'shadow': the gate's skip is
+  // recorded but ignored, so the screen call appears and this test goes red.
+  it("the self-deployed tier defaults to 'gated': a gate skip omits the screen", async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
     const result = await run('self_deployed')
     expect(gateStates).toHaveLength(1)
     expect(gateStates[0]).toContain('\n> CLEAN-WEB-SENTINEL\n')
     expect(gateStates[0]).toMatch(/---END CONTENT UNDER REVIEW [0-9a-f]{16}---$/)
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).not.toContain('search')
     const [decision] = gateDecisions(result.context.events)
-    expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
+    expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul' })
+    expect((decision.data as { shadow?: true }).shadow).toBeUndefined()
     expect((decision.data as { pTrue: number }).pTrue).toBeCloseTo(0.05)
     // The decision records the state's size, never its text.
     expect(JSON.stringify(decision)).not.toContain('CLEAN-WEB-SENTINEL')
     // The loop's own states never carry the gate's.
     expect(states.join('\n')).not.toContain('CONTENT UNDER REVIEW')
+  })
+
+  it("an explicit 'shadow' switch records a skip and still runs the screen", async () => {
+    searchOnce()
+    gateway.result = 'CLEAN-WEB-SENTINEL'
+    const result = await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: { default: 'shadow', anthropic: 'always' } },
+    })
+    expect(gateStates).toHaveLength(1)
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+    const [decision] = gateDecisions(result.context.events)
+    expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
   })
 
   // MUTATION: drop `classify: deps.classifyIngress` from either route guard's
@@ -2590,7 +2603,7 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
     )
 
   // The switch reaches the guards as a `screen.mode`, and the DEFAULTS the
-  // switch replaces are the design's: 'shadow' on the self-deployed tier and
+  // switch replaces are the design's: 'gated' on the self-deployed tier and
   // 'always' on the Anthropic one. MUTATION: ignore `deps.guards.screenMode`
   // (restore the agent's own tier map): the off case here goes red — the
   // screen runs where the operator switched it off.

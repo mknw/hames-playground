@@ -1,7 +1,7 @@
 /**
  * The MCP-gateway namespace catalog — the DATA half (#225 L5 / PR-C2).
  *
- * The 77-entry catalog moved here from core, and these cases moved with it:
+ * The catalog moved here from core, and these cases moved with it:
  * they assert THIS DEPLOYMENT's 5 namespaces and the grouping the catalog
  * produces when handed to `ToolsFrom`. The COMPOSITION half — the catalog
  * registered on core's resolver seam by the host's composition root, and the
@@ -21,10 +21,10 @@ import { ToolsFrom, registerToolNamespaces } from '@hames-ai/harness-patterns/to
 registerToolNamespaces(mcpNamespace)
 
 describe('the MCP namespace catalog', () => {
-  it('holds 77 distinct names across 5 namespaces', async () => {
+  it('holds 79 distinct names across 5 namespaces', async () => {
     const names = Object.keys(MCP_TOOL_CATALOG)
-    expect(names.length).toBe(77)
-    expect(new Set(names).size).toBe(77)
+    expect(names.length).toBe(79)
+    expect(new Set(names).size).toBe(79)
     expect(new Set(Object.values(MCP_TOOL_CATALOG))).toEqual(
       new Set(['neo4j', 'context7', 'web', 'redis', 'filesystem']),
     )
@@ -61,14 +61,18 @@ describe('ToolsFrom with the catalog (the moved grouping cases)', () => {
         { name: 'search', description: 'Search', inputSchema: {} },
         { name: 'fetch', description: 'Fetch', inputSchema: {} },
         { name: 'fetch_content', description: 'Fetch content', inputSchema: {} },
+        { name: 'web_search_exa', description: 'Exa search', inputSchema: {} },
+        { name: 'web_fetch_exa', description: 'Exa fetch', inputSchema: {} },
       ],
       { namespaces: mcpNamespace },
     )
 
-    expect(tools.web).toHaveLength(3)
+    expect(tools.web).toHaveLength(5)
     expect(tools.web).toContain('search')
     expect(tools.web).toContain('fetch')
     expect(tools.web).toContain('fetch_content')
+    expect(tools.web).toContain('web_search_exa')
+    expect(tools.web).toContain('web_fetch_exa')
   })
 
   it('groups neo4j tools under neo4j namespace (explicit mapping)', async () => {

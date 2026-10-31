@@ -92,7 +92,11 @@ docker compose up -d
 ./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher
 ```
 
-The web tools (`web_search`, `fetch`) need no key.
+The gateway's DuckDuckGo and fetch tools need no key. The reference app also
+offers Exa's hosted `web_search_exa` and `web_fetch_exa` by default through a
+server-side transport; an optional `EXA_API_KEY` gives it authenticated access.
+Without one, Exa's documented keyless free rate limit applies. `EXA_TOOLS=off`
+removes Exa only; see `app/.env.example`.
 
 ## Usage
 

@@ -638,12 +638,11 @@ jobs:
             echo "relevant=false" >>"$GITHUB_OUTPUT"
           fi
 
-  # The clone mutation corpus (bootstrap preflight and clone validator) on its
-  # own runner, beside the gate: with the dev environment VM corpus, the old single
-  # job's shell step went from 552s (main) to 1110s and the job past its cap. Each
-  # bootstrap mutant re-runs `bootstrap-vps.test.sh --clones-only` (bash,
-  # python3, openssl, git, node, all on ubuntu-latest); each validator mutant
-  # runs one vitest file from app/, hence the workspace install.
+  # The clone mutation corpus (bootstrap preflight and clone validator) is split
+  # across two runners. Each bootstrap mutant re-runs
+  # `bootstrap-vps.test.sh --clones-only` (bash, python3, openssl, git, node,
+  # all on ubuntu-latest); each validator mutant runs one vitest file from app/,
+  # hence the workspace install. Both shards are required for full coverage.
   #
   # NOT in the required gate (`check` does not need it), so it can afford to
   # skip on a PR whose paths cannot touch its subject (see clone-changes
@@ -655,13 +654,16 @@ jobs:
   # the changed-path job itself errors, the mutations run rather than
   # silently not.
   clone-mutations:
-    name: shell · clone mutations
+    name: shell · clone mutations (${{ matrix.shard }}/2)
     needs: [clone-changes]
     if: always() && (github.event_name == 'push' || needs.clone-changes.result == 'failure' || needs.clone-changes.outputs.relevant == 'true')
     runs-on: ubuntu-latest
-    # #864: run 41073223347 killed 71/79 bootstrap mutants before the 75m cap;
-    # #862 added the Caddy corpus after the 63-mutant estimate. Keep the full
-    # bootstrap and validator corpus, allowing 100m for completion and CI variance.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    # #904's 151-mutant job took 91m. The two shards keep all mutants and
+    # leave margin below this cap on bootstrap changes that trigger the job.
     timeout-minutes: 100
     defaults:
       run:
@@ -681,7 +683,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Clone mutations (bootstrap preflight + clone validator)
-        run: scripts/bootstrap-vps.test.sh --clone-mutations
+        run: scripts/bootstrap-vps.test.sh --clone-mutations "${{ matrix.shard }}"
 
   changeset:
     name: changeset · version intent

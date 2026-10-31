@@ -31,7 +31,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 SCRIPT="${BOOTSTRAP_SCRIPT:-$ROOT/scripts/bootstrap-vps.sh}"
 
-if [[ ${1:-} != --clones-only && ${1:-} != --clone-mutations && ${1:-} != --clone-image* && "$(uname -s)" != Linux ]]; then
+if [[ ${1:-} != --clones-only && ${1:-} != --clone-mutations* && ${1:-} != --clone-image* && "$(uname -s)" != Linux ]]; then
   echo "bootstrap-vps.test.sh needs Linux (GNU stat); CI runs it on ubuntu-latest" >&2
   exit 1
 fi
@@ -1339,10 +1339,13 @@ with tempfile.TemporaryDirectory() as tmp:
 PY
   exit $?
 fi
-if [[ ${1:-} == --clone-mutations ]]; then
-  python3 - "$SCRIPT" "$0" <<'PY'
+if [[ ${1:-} == --clone-mutations || ${1:-} == --clone-mutations-list ]]; then
+  python3 - "$SCRIPT" "$0" "${2:-all}" "${1:-}" <<'PY'
 import os, pathlib, subprocess, sys, tempfile
-source, harness = map(pathlib.Path, sys.argv[1:])
+source, harness = map(pathlib.Path, sys.argv[1:3])
+shard, list_only = sys.argv[3], sys.argv[4] == '--clone-mutations-list'
+if shard not in ('all', '1', '2'):
+    sys.exit('Clone mutation shard must be 1, 2, or all')
 original = source.read_text()
 mutants = [
     ('overlay-not-applied', '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)',
@@ -1514,19 +1517,26 @@ compose_caddy_env_unused() {
     ('validator-image-missing-accepted', "if ! sudo docker image inspect --format '{{.Id}}' \"$image\" >/dev/null 2>&1; then", 'if false; then'),
     ('images-prebuild-skipped', 'if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&', 'if false &&'),
 ]
-baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
-if baseline.returncode:
-    sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
+if not list_only:
+    baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
+    if baseline.returncode:
+        sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
 render_test = ['python3', str(source.parent / 'prepare-embedder.test.py'), '-k', 'test_boot_refuses_failed_compose_render_before_prepare_or_up']
-baseline = subprocess.run(render_test, capture_output=True, text=True, timeout=10)
-if baseline.returncode:
-    sys.exit('Render-refusal baseline failed: ' + baseline.stdout + baseline.stderr)
+if not list_only:
+    baseline = subprocess.run(render_test, capture_output=True, text=True, timeout=10)
+    if baseline.returncode:
+        sys.exit('Render-refusal baseline failed: ' + baseline.stdout + baseline.stderr)
 with tempfile.TemporaryDirectory() as tmp:
     validator = source.parent / 'validate-clones.mjs'
     policy = validator.read_text()
-    for name, old, new, *expected in mutants:
+    for index, (name, old, new, *expected) in enumerate(mutants):
+        if shard != 'all' and index % 2 != int(shard) - 1:
+            continue
         if original.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
+        if list_only:
+            print('LISTED ' + name)
+            continue
         changed = pathlib.Path(tmp) / 'bootstrap-vps.sh'
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
@@ -1538,7 +1548,7 @@ with tempfile.TemporaryDirectory() as tmp:
         print('KILLED ' + name, flush=True)
     # New validator pins run the actual unit fixtures against a temporary
     # module, including the review's six previously ACCEPTED renders.
-    for name, old, new in [
+    for index, (name, old, new) in enumerate([
         ('sibling-value-scan', 'ownSecrets.some((secret) => String(value).includes(secret))', 'false'),
         ('administrator-value-scan', '!administrator ||', 'true ||'),
         ('equal-role-passwords', 'passwords[0] !== passwords[1]', 'true'),
@@ -1607,9 +1617,14 @@ with tempfile.TemporaryDirectory() as tmp:
         ('vm-link-member-by-key', 'const named = (key) => config.networks?.[key]?.name ?? key;', 'const named = (key) => key;'),
         ('vm-link-per-clone', 'linkNetwork(config, apps[i], ["release", "dev"][i])', 'linkNetwork(config, apps[i], "dev")'),
         ('root-only-link-inputs', '(RELEASE|DEV)_SANDBOX_[A-Z_]+)$/', '(RELEASE|DEV)_SANDBOX_DOCKER_[A-Z_]+)$/'),
-    ]:
+    ]):
+        if shard != 'all' and index % 2 != int(shard) - 1:
+            continue
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
+        if list_only:
+            print('LISTED ' + name)
+            continue
         changed = pathlib.Path(tmp) / 'validate-clones.mjs'
         changed.write_text(policy.replace(old, new))
         result = subprocess.run(['corepack', 'pnpm', 'test:run', 'src/__tests__/lib/config/compose-clones.test.ts'],
@@ -1617,12 +1632,17 @@ with tempfile.TemporaryDirectory() as tmp:
         if not result.returncode or 'AssertionError' not in result.stdout + result.stderr:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
-    for name, old in [
+    for index, (name, old) in enumerate([
         ('separate-database-policy', 'decodeURIComponent(databases[0].pathname) !==\n      decodeURIComponent(databases[1].pathname)'),
         ('separate-role-policy', 'decodeURIComponent(databases[0].username) !==\n      decodeURIComponent(databases[1].username)'),
-    ]:
+    ]):
+        if shard != 'all' and index % 2 != int(shard) - 1:
+            continue
         if policy.count(old) != 1:
             sys.exit('Mutation anchor must occur once: ' + name)
+        if list_only:
+            print('LISTED ' + name)
+            continue
         changed = pathlib.Path(tmp) / 'validate-clones.mjs'
         changed.write_text(policy.replace(old, 'true'))
         env = {**os.environ, 'CLONE_VALIDATOR_SCRIPT': str(changed)}

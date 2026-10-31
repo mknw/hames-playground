@@ -290,9 +290,11 @@ services:
       - "8192"
     volumes:
       - ./models:/models:ro
-    # Placeholder, not a measurement: the GGUF is 639 MB and the RSS of
-    # llama-server on top of it is unmeasured (#419 spec §7).
-    mem_limit: 2g
+    # The 2 GiB cgroup OOM-killed during dev document ingest. This 3 GiB
+    # headroom cap applies to the shared service, including the production
+    # overlay; operators must check host capacity before deployment. The
+    # failed-ingest peak remains unmeasured.
+    mem_limit: 3g
     networks:
       - app-network
     healthcheck:

@@ -20,8 +20,10 @@ snapshot and passes it to the server. Host-side renames or writes cannot change
 the verified copy. Each restart replaces the previous snapshot; allow disk space
 for that additional GGUF copy. `boot` waits for embedder health and `smoke` makes one
 internal `/v1/embeddings` request and requires 1024 finite numbers. No model port
-is published. CPU RSS, latency, ingest time and the 2 GiB limit remain unmeasured;
-measure on the deployment before choosing capacity. Other GGUFs are supplied
+is published. The shared Compose cap is 3 GiB of headroom after a 2 GiB cgroup
+OOM during dev ingest, not a measured ingest requirement. The failed-ingest peak
+RSS, latency and ingest time remain unmeasured; measure on the deployment before
+choosing capacity. Other GGUFs are supplied
 manually; the `Makefile` targets at the repo root run them.
 
 | File                             | Served by                                                                                        | Port | Role                                                                                 |

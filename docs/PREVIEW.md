@@ -540,7 +540,7 @@ fallback and no summarizer fallback onto the 27B. The decisions URL is a
 **full URL ending in `/v1/systemone`**, rather than a base to which the app
 appends a path. Its bearer key, `SMALL_LLM_API_KEY`, is **required** and shared
 with the summarizer, even if a local llama-server accepts unauthenticated
-summarization. `CLAUDE.md`'s private-tier section is the routing contract.
+summarization. `AGENTS.md`'s private-tier section is the routing contract.
 
 P4 file ingestion (#717) is enabled only when INFERENCE_TIERS=self_deployed. Do not unset it on a deployment whose conversations hold ingested files: history is not screened on a tier flip until the release slice in #693 lands.
 

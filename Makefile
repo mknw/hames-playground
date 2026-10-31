@@ -69,7 +69,7 @@ embed:
 # it the model spends the ENTIRE completion budget in reasoning_content and
 # returns empty content at describe-sized caps (verified live 2026-08-25;
 # --reasoning-budget 0 does NOT prevent it). Same stance as the measured
-# no-thinking describe/controller finding in CLAUDE.md.
+# no-thinking describe/controller finding in AGENTS.md.
 llm-small:
 	$(call require_model,$(MODELS_DIR)/$(LLM_SMALL_MODEL))
 	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host $(LLM_SMALL_HOST) --port $(LLM_SMALL_PORT) --ctx-size 32768 --chat-template-kwargs '{"enable_thinking":false}'

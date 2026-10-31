@@ -11,7 +11,7 @@
  * index never mixes models (vectors from different models aren't comparable; see
  * `embeddings.server.ts`).
  *
- * Two gateway quirks are encapsulated here (see CLAUDE.md → Redis MCP quirks):
+ * Two gateway quirks are encapsulated here (see AGENTS.md → Redis MCP quirks):
  *   - payloads are base64-encoded before `hset` because the gateway auto-parses
  *     JSON-looking string args into objects (which `hset` then rejects);
  *   - `vector_search_hash` results may arrive as one text block per match —

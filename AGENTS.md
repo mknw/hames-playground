@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Project-level guidance for agents in this repository. Pi loads this file (AGENTS.md) INSTEAD of CLAUDE.md; Claude Code keeps loading CLAUDE.md. This file is a copy of CLAUDE.md plus the sections marked **AGENTS.md-only** — when CLAUDE.md changes, mirror the change here.
+Project-level guidance for Claude Code, Codex and Pi in this repository.
 
-**AGENTS.md-only — MCP gateway tools are for debugging, disabled by default.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which floods every agent session with ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). These are kept FOR DEBUGGING PURPOSES ONLY and are disabled by default via `disabledMcpjsonServers` in `~/.claude/settings.json`. Normal work uses native tools + `gh` + `orca`. To debug gateway/tool behavior: Claude sessions run `claude --mcp-config .mcp.json --strict-mcp-config` (full gateway) or pass a minimal JSON for a single server; pi sessions have no per-invocation MCP flag — temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
+**MCP gateway tools are for debugging.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which adds ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). Claude sessions disable these tools by default through `disabledMcpjsonServers` in `~/.claude/settings.json`; normal work uses native tools + `gh` + `orca`. To debug gateway/tool behavior, run `claude --mcp-config .mcp.json --strict-mcp-config` for the full gateway or pass a minimal JSON for one server. Pi has no per-invocation MCP flag: temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
 
 ## Commands
 
@@ -86,23 +86,24 @@ Ark UI is the chosen primitive layer; never replace Ark components with native e
 
 ## Agent skills
 
-**AGENTS.md-only — how skills load in pi, and the mandate.** In pi sessions the
+**Skill loading.** In Pi sessions the
 skill catalog is NOT in the system prompt: the `@arhen/pi-core-skill-tool`
 package (installed 2026-08-29) strips it and exposes one lazy `skill` tool whose
 description carries the catalog. Loading a skill therefore means CALLING THE
 `skill` TOOL — `skill("name")` — which returns that skill's SKILL.md body. Do
 not approximate a skill from memory, from a handoff brief's summary, or by
 `read`-ing the file directly unless the `skill` tool is unavailable — and say so
-when it is. If a skill's body directs further loading (e.g. the orchestration
-stub's version-matched guide), that fetch is PART of calling the skill, not an
-extra step. The mandate: before work that touches a skill's scope — any `orca`
+when it is. In Codex, repo skills are linked under `.agents/skills/`. If a skill's
+body directs further loading (e.g. the orchestration stub's version-matched
+guide), that fetch is PART of calling the skill, not an extra step. Before work
+that touches a skill's scope — any `orca`
 command or dispatch (`orchestration`, `kg-lane-dispatch`, `dispatching-work`),
 test work (`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
 FIRST, then act. Relevance is judged by the work's scope, never its size: a
 task that "seems simple" is not an exemption.
 
-**AGENTS.md-only — model tiers for pi sessions (additive to the Fable/Opus
-rule).** When selecting models or dispatching from inside pi: **GLM 5.3**
+**Model tiers for Pi sessions (additive to the Fable/Opus rule).** When selecting
+models or dispatching from inside Pi: **GLM 5.3**
 (`z-ai/glm-5.3`) for security/critical workloads (auth, routing, secrets,
 tests-as-evidence); **GLM 5.3 Flash** (`z-ai/glm-5.3-flash`) for complex tasks
 (reviews, fix rounds bound to written terms, coordination); **deepseek-v4-flash
@@ -113,26 +114,30 @@ governing Claude sessions; pi ignores frontmatter aimed at Claude's Agent tool.
 Both mappings coexist so pi and Claude can be used together or swapped.
 
 Project skills live in `.claude/skills/` (tracked in git, so worktrees inherit
-them — no copy step); each carries the `kg-` prefix and encodes something only
-true of this repo. The **generic set** (bare names: `grilling`, `codebase-design`, …)
-was extracted to `~/Code/muster-skills` and is installed globally via
-`~/.claude/skills` symlinks, so it is available here and in every other project
-without copies. `dispatching-work` lives in the same `~/Code/muster-skills` repo
+them — no copy step); relative links under `.agents/skills/` expose the three
+repo skills to fresh Codex sessions. Each carries the `kg-` prefix and encodes
+something only true of this repo. The **generic set** (bare names: `grilling`,
+`codebase-design`, …) was extracted to `~/Code/muster-skills` and is installed
+globally via its `scripts/install.sh`, so it is available here and in every
+other project without copies. `dispatching-work` lives in the same
+`~/Code/muster-skills` repo
 but was authored there directly — it was never extracted from this one. Model-
 invoked skills announce themselves through their own descriptions; the ones you
 have to ask for by name are `/grill-me` and `/improve-codebase-architecture`.
 
 To obtain the generic set on a machine that does not have it yet — the repo is
 [github.com/mknw/muster-skills](https://github.com/mknw/muster-skills) (private;
-ask for access), and the symlinks are what make it global rather than per-project:
+ask for access). Run its installer from the main checkout to link skills into
+the agent-visible directories:
 
 ```bash
-gh repo clone mknw/muster-skills ~/Code/muster-skills && mkdir -p ~/.claude/skills \
-  && for d in ~/Code/muster-skills/*/; do ln -sfn "${d%/}" ~/.claude/skills/; done
+gh repo clone mknw/muster-skills ~/Code/muster-skills \
+  && (cd ~/Code/muster-skills && git switch main && ./scripts/install.sh)
 ```
 
-Each skill is a top-level directory in that repo, so the loop links the skills
-and skips its `README.md` / `LICENSE` / `NOTICE.md`.
+The installer links only top-level directories containing `SKILL.md`, skipping
+`README.md` / `LICENSE` / `NOTICE.md`. This repo's
+`.agents/skills/kg-*` links are tracked separately.
 
 - A `kg-*` skill may call a generic skill (global scope is visible in every
   project). A generic skill must never call a `kg-*` skill — that invariant is
@@ -326,7 +331,7 @@ Four further consequences are code rather than folklore:
 
 ## MCP Gateway
 
-Docker-based gateway on port 8811. Its MCP tool surface is disabled by default in agent sessions (see the AGENTS.md-only note at the top); the gateway itself stays up — the app's own agents (`tools.server.ts`) connect to it server-side, independent of this setting. It serves 9 servers: `context7`, `neo4j-cypher`, `memory`, `redis`, `playwright`, `rust-mcp-filesystem`, `fetch`, `web_search`, `database-server`.
+Docker-based gateway on port 8811. Its MCP tool surface is disabled by default in Claude sessions (see the note at the top); the gateway itself stays up — the app's own agents (`tools.server.ts`) connect to it server-side, independent of this setting. It serves 9 servers: `context7`, `neo4j-cypher`, `memory`, `redis`, `playwright`, `rust-mcp-filesystem`, `fetch`, `web_search`, `database-server`.
 
 - `configs/custom-catalog.yaml` — available MCP servers (Docker image-based)
 - `configs/mcp-config.yaml` — enable/disable and connection params per server

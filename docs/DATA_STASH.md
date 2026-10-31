@@ -197,7 +197,7 @@ Start the local embedder with `make embed` from the repo root (separate from `pn
 
 - **redis-stack** (not plain `redis`): the pipeline needs **RedisJSON** (`json_*`) and **RediSearch** (`create_vector_index_hash` / `vector_search_hash`). The compose `redis` service uses `redis/redis-stack` (merged in #91).
 - **Apple-Silicon / colima:** redis-stack's arm64 `redisearch.so` SIGILL-crashes on the colima VM during vector ops. Run the redis service as `platform: linux/amd64` (emulated) — see the git-ignored `docker-compose.override.yml`. Long-term: colima CPU passthrough (`--vm-type vz`). Store/RedisJSON is unaffected; only vector search needs this.
-- **Gateway argument/result quirks** (see [CLAUDE.md → Redis MCP Tool Parameters](../CLAUDE.md)): the MCP gateway runs the redis server over serial stdio (so ingest is sequential and minimal-call), returns multi-value results as one text block per element (handled by `callTool` aggregation), and auto-parses JSON-looking string args into objects (so chunk `meta` is base64-encoded).
+- **Gateway argument/result quirks** (see [AGENTS.md → Redis MCP Tool Parameters](../AGENTS.md)): the MCP gateway runs the redis server over serial stdio (so ingest is sequential and minimal-call), returns multi-value results as one text block per element (handled by `callTool` aggregation), and auto-parses JSON-looking string args into objects (so chunk `meta` is base64-encoded).
 - **`doc-convert` sidecar** (only when `STASH_CONVERT_DOCS=1`): the `doc-convert` compose service must be up (`docker compose up -d doc-convert`) and reachable at `DOC_CONVERT_URL`. If it's down, convertible uploads are marked `failed` rather than crashing the upload. See [Document conversion](#document-conversion).
 
 ## Relationships

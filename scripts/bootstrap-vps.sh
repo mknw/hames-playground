@@ -343,7 +343,7 @@ readonly OWNER_REQUIRED=(
   "ANTHROPIC_API_KEY|Anthropic API key|1"
   "VITE_ALLOWED_EMAILS|this deployment's allow-list: comma-separated, *@domain wildcards|0"
 )
-# The private tier: all five or none (CLAUDE.md, docs/PREVIEW.md §6).
+# The private tier: all five or none (AGENTS.md, docs/PREVIEW.md §6).
 readonly PRIVATE_TIER_REQUIRED=(LARGE_LLM_BASE_URL LARGE_LLM_API_KEY SMALL_LLM_BASE_URL SMALL_LLM_DECISIONS_URL SMALL_LLM_API_KEY)
 
 # owner_missing — print each owner-required key that is empty or a placeholder.

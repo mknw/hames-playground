@@ -50,5 +50,5 @@ Back-filled. Rationale mined from issue **#139** (the problem statement, the
 unexposed-trace JSON, and the replay-harness methodology) and commit `f19e9eb`
 (2026-07-29, `feat(harness): disable extended thinking on the simpleLoop
 controller (#139)`), which carries the measurement table, the scoping rationale
-and the settings-map note. The condensed version lives in `CLAUDE.md` under
+and the settings-map note. The condensed version lives in `AGENTS.md` under
 **Extended thinking (#139)**.

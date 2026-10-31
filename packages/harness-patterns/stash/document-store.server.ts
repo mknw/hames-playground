@@ -20,7 +20,7 @@
  * write so a fully-expired session leaves no dangling index.
  *
  * Redis is reached through the MCP Gateway's `callTool`. The MCP tool param
- * quirks (see CLAUDE.md → "Redis MCP Tool Parameters") are encapsulated here:
+ * quirks (see AGENTS.md → "Redis MCP Tool Parameters") are encapsulated here:
  *   - json_set / json_get: `name` is the Redis key, `path` the JSON path
  *   - expire:              `name` + `expire_seconds`
  *   - sadd / smembers / srem: `name` is the SET key
@@ -704,7 +704,7 @@ export async function deleteDocument(
   docId: string,
   callTool: CallTool = resolveStashCallTool(),
 ): Promise<void> {
-  // `delete` uses `key` (not `name`) — see CLAUDE.md Redis quirks.
+  // `delete` uses `key` (not `name`) — see AGENTS.md Redis quirks.
   // Both writes are attempted even if the first fails, so a retry of a
   // half-completed delete still converges (the operation stays idempotent);
   // the list cache is invalidated either way, because a *partial* delete is

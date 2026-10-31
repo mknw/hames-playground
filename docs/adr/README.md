@@ -16,13 +16,13 @@ smallest of this repo's decision-record surfaces:
 | --------------- | -------------------------------------------------------------------------------- | -------------------------------------------- |
 | `docs/plan/`    | Converged **shapes** — multi-page designs with alternatives, diagrams, deferrals | `plan/sandbox.md`, `plan/ROADMAP.md`         |
 | PR bodies       | The **narrative** of one change: what moved and why, review discussion           | PR #106, PR #117                             |
-| `CLAUDE.md`     | Standing **dispositions** an agent must hold every turn                          | "never edit `baml_client/`"                  |
+| `AGENTS.md`     | Standing **dispositions** an agent must hold every turn                          | "never edit `baml_client/`"                  |
 | **`docs/adr/`** | Irreversible **one-liners with a why**                                           | "the controller uses the `*NoThink` clients" |
 
-The division of labour that makes this worth having: `CLAUDE.md` states the
+The division of labour that makes this worth having: `AGENTS.md` states the
 _what_ under permanent context load, and the _why_ moves here. A one-line
 disposition plus an ADR is a net context saving over a paragraph of prose in
-`CLAUDE.md`.
+`AGENTS.md`.
 
 ## Index
 

@@ -74,7 +74,7 @@ client<llm> SynthesizerAnthropic {
 }
 
 // The cheap tier — and THE canonical list of what rides it. Every other
-// mention (local-client.baml, clients.server.ts, CLAUDE.md, models/README.md)
+// mention (local-client.baml, clients.server.ts, AGENTS.md, models/README.md)
 // points here instead of repeating a subset that goes stale; three of them
 // already had three different incomplete subsets.
 //

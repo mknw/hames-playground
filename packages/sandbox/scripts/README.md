@@ -58,7 +58,7 @@ pnpm dlx tsx --env-file=app/.env packages/sandbox/scripts/smoke-llm.ts
 ```
 
 `smoke-llm.ts` needs `ANTHROPIC_API_KEY` — the only provider key the app needs
-(see `CLAUDE.md` → "Client routing"). The `--env-file` flag lets the script pick
+(see `AGENTS.md` → "Client routing"). The `--env-file` flag lets the script pick
 up the app's `.env` without a separate `dotenv` import.
 
 These scripts are dev tooling for THIS repo, not package surface: they build

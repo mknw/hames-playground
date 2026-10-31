@@ -154,7 +154,7 @@ function processUsers(users) {
     for (const user of users) {
       if (user.active) {
         if (user.email) {
-          user.verified = true;  // mutation!
+          user.verified = true; // mutation!
           results.push(user);
         }
       }
@@ -167,8 +167,8 @@ function processUsers(users) {
 function processUsers(users) {
   if (!users) return [];
   return users
-    .filter(user => user.active && user.email)
-    .map(user => ({ ...user, verified: true }));
+    .filter((user) => user.active && user.email)
+    .map((user) => ({ ...user, verified: true }));
 }
 ```
 
@@ -186,9 +186,11 @@ When reviewing backend code:
 
 ```typescript
 // BAD: N+1 query pattern
-const users = await db.query('SELECT * FROM users');
+const users = await db.query("SELECT * FROM users");
 for (const user of users) {
-  user.posts = await db.query('SELECT * FROM posts WHERE user_id = $1', [user.id]);
+  user.posts = await db.query("SELECT * FROM posts WHERE user_id = $1", [
+    user.id,
+  ]);
 }
 
 // GOOD: Single query with JOIN or batch
@@ -259,7 +261,7 @@ Do not withhold approval to appear rigorous. If the diff is clean, approve it.
 
 ## Project-Specific Guidelines
 
-When available, also check project-specific conventions from `CLAUDE.md` or project rules:
+When available, also check project-specific conventions from `AGENTS.md` or project rules:
 
 - File size limits (e.g., 200-400 lines typical, 800 max)
 - Emoji policy (many projects prohibit emojis in code)

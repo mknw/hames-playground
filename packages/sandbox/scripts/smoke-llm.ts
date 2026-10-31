@@ -3,7 +3,7 @@
  *
  * Same chain as `smoke-scripted.ts`, but the actor + critic are the real
  * BAML adapters (`createActorControllerAdapter` / `createCriticAdapter`)
- * driven by Anthropic (the default chain — see CLAUDE.md → "Client routing").
+ * driven by Anthropic (the default chain — see AGENTS.md → "Client routing").
  * The actor's decisions are not fixed: it sees the `sandbox_*` tool surface
  * in its prompt (prepended by the adapter from the active ALS scope) and
  * picks how to satisfy the user's task.

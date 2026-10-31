@@ -45,4 +45,4 @@ secret`), which names the missing RedisJSON/RediSearch modules and the AUTH
 misconfiguration. The `linux/amd64` half was documented one day later in commit
 `0bad350` (2026-06-22) and survives at `docs/DATA_STASH.md` line 139, which
 carries the SIGILL diagnosis, the override-file mechanism and the `--vm-type vz`
-exit. The standing disposition is the "Redis MCP quirks" bullet in `CLAUDE.md`.
+exit. The standing disposition is the "Redis MCP quirks" bullet in `AGENTS.md`.

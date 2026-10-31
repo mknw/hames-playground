@@ -9,7 +9,7 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
 ## Conventions (the Standards axis)
 
 - **Hard rules** — a breach is a violation, not a judgement call:
-  [`CLAUDE.md`](../CLAUDE.md), whole file; the reviewer-critical ones live under
+  [`AGENTS.md`](../AGENTS.md), whole file; the reviewer-critical ones live under
   _Commands_ (pnpm-only from `app/`; the one BAML corpus is
   `packages/harness-baml/baml_src/` and its `baml_client/` is committed, so a
   `.baml` edit ships with its regenerated client), _Design Decisions_
@@ -34,7 +34,7 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
   house recipes, role→colour mapping, a11y + graph checklists). This map
   pointing a generic skill at a `kg-*` one is repo-local config, not the
   generic skill itself calling it — that indirection is what keeps the
-  generic set portable (see `CLAUDE.md`'s Agent skills section).
+  generic set portable (see `AGENTS.md`'s Agent skills section).
 - **Tests** — the `kg-test-pyramid` skill: the four layers and which one a
   given test belongs to, the `*-not-in-ci.test.ts` pins, hermetic-is-the-gate,
   and no-retries. Reach for it when a change adds or moves a test, or when a

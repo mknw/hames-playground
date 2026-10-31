@@ -9,39 +9,118 @@ for those. Never use `down -v`, reset data volumes or prune retained images.
 
 ## 1. Stop writers and take local dumps before changing the checkout
 
-Stop ingress, both app containers if enabled, gateway clients and any external
-writer. Stop routines by stopping their apps. Keep Postgres/Redis/Neo4j running
-for capture. Confirm that the matching application keys are escrowed **off the
+Hold public ingress for **both hostnames** at the operator's external maintenance
+control and drain in-flight requests and background ingest. Stop external
+writers. Stop only the release `app`; this stops its routine scheduler. In a
+two-clone project, leave `app-dev` running with its ID and `StartedAt` unchanged:
+disable its enabled routines across **all users** with the DEV database procedure
+below, retain the exact enabled IDs privately for restoration afterward, and require zero
+active dev turns before backup and again before boot. If any dev writer cannot
+be drained, stop the release. Keep Caddy, the gateway and every other
+long-running service running. Verify the maintenance hold before the dump and
+keep it until the postboot checks pass. Keep
+Postgres/Redis/Neo4j running for capture. Confirm that the matching application keys are escrowed **off the
 host and separately from dumps** (SD-17). PREVIEW §12 records the approved two-clone
 policy: dev has its own database and limited role, separate from release. Confirm
 that both databases and their grants are provisioned before upgrading.
 
-The following is the **single-app** shape, run as the deployment's Docker user:
+For two clones, export the existing `DEV_CLONE_PATH` and supply the actual
+release and dev database names privately as `RELEASE_DB` and `DEV_DB`.
+Use the Postgres administrator only through the local Compose service; the app
+API is user-scoped and cannot drain other users' routines. The DEV database is
+separate from release. After holding ingress and draining in-flight turns,
+run this in the deployment user's shell from the release checkout root. The
+private JSON file contains **only routine IDs**, including every user's enabled
+routine; neither encrypted `input` nor `label` is read. Keep the directory
+and file under `0700`/`0600`, outside the rotated backups tree, and do not print
+or commit them. The lock and exact-set comparison refuse a changed enabled set
+before the update; any failure is a stop. Do not restart `app-dev`.
+
+```bash
+dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
+( umask 077; mkdir -p -- "$PWD/upgrade-dumps" &&
+  test ! -L "$PWD/upgrade-dumps" && chmod 700 -- "$PWD/upgrade-dumps" &&
+  mkdir -m 700 -- "$dump_root" ) || exit 1
+dev_psql() {
+  docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+    -d "$DEV_DB" -X -v ON_ERROR_STOP=1 -qAt "$@"
+}
+if test -n "${DEV_CLONE_PATH:-}"; then
+  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" || exit 1
+  dev_enabled_ids="$dump_root/dev-enabled-ids.json"
+  ( umask 077; dev_psql -c "SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled" > "$dev_enabled_ids" ) || exit 1
+  test -s "$dev_enabled_ids" || exit 1
+  dev_psql -v ids_json="$(cat "$dev_enabled_ids")" <<'SQL' || exit 1
+BEGIN;
+LOCK TABLE routines IN SHARE ROW EXCLUSIVE MODE;
+CREATE TEMP TABLE saved_ids (id text PRIMARY KEY) ON COMMIT DROP;
+INSERT INTO saved_ids SELECT jsonb_array_elements_text(:'ids_json'::jsonb);
+DO $$ BEGIN
+  IF (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled)
+     <> (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM saved_ids)
+  THEN RAISE EXCEPTION 'DEV enabled routine set changed during drain'; END IF;
+END $$;
+UPDATE routines SET enabled = FALSE, updated_at = NOW() WHERE id IN (SELECT id FROM saved_ids);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM routines WHERE enabled)
+  THEN RAISE EXCEPTION 'DEV routines remain enabled'; END IF;
+END $$;
+COMMIT;
+SQL
+fi
+```
+
+With ingress still held, this read-only check must return
+`0:0`; repeat it immediately before §3's preboot gate. An enabled routine or
+running conversation is a stop, not a reason to stop/restart DEV:
+
+```bash
+check_dev_writers() {
+  test -n "${DEV_CLONE_PATH:-}" || return 0
+  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" && test -s "${dev_enabled_ids:-}" || return 1
+  dev_writers=$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+    -d "$DEV_DB" -X -Atqc "SELECT (SELECT count(*) FROM routines WHERE enabled) || ':' || (SELECT count(*) FROM conversations WHERE status = 'running')") || return 1
+  test "$dev_writers" = '0:0'
+}
+check_dev_writers || exit 1
+```
+
+Run the following from the release checkout root as the deployment's Docker
+user for either shape. Capture the §3 baseline **after** the dump, because the
+backup script restarts Neo4j:
 
 ```sh
-docker compose stop caddy app mcp-gateway || exit 1
+docker compose stop app || exit 1
 neo4j_id=$(docker compose ps -q neo4j) || exit 1
 test -n "$neo4j_id" || exit 1
 neo4j_image=$(docker inspect --format '{{.Image}}' "$neo4j_id") || exit 1
 neo4j_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$neo4j_id") || exit 1
 test -n "$neo4j_image" && test -n "$neo4j_volume" || exit 1
-dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 (
   umask 077
-  BACKUP_DIR="$dump_root/release" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
+  BACKUP_DIR="$dump_root/release" POSTGRES_DB="${RELEASE_DB:-hames}" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
     bash scripts/backup-preview.sh
 ) || exit 1
 ```
 
-With two clones, also stop `app-dev` **before** the dump. Supply the actual
-release database name via `POSTGRES_DB` to that command (the default is the
-single-app database). Then run the same backup command with `--no-neo4j`,
-`BACKUP_DIR` set to `"$dump_root/dev"` and `POSTGRES_DB` set to the separate dev
-database. The default `POSTGRES_USER` is the local administrator; keep database
+For two clones, capture the dev database without stopping its container:
+
+```bash
+if test -n "${DEV_CLONE_PATH:-}"; then
+  ( umask 077; BACKUP_DIR="$dump_root/dev" POSTGRES_DB="$DEV_DB" \
+      bash scripts/backup-preview.sh --no-neo4j ) || exit 1
+fi
+```
+
+Keep §1 through §3 in the same operator shell so `dump_root` and
+`check_dev_writers` remain available. The older generic backup/restore path may stop `caddy`, `mcp-gateway` and
+`app-dev`. That state is **ineligible** for §3's full-boot gate: restarting
+those services would change `StartedAt`. Do not combine the old stop sequence
+with this procedure. The default `POSTGRES_USER` is the local administrator; keep database
 names and dump records private. Do not assume a dump of one database covers the
 other. Both dumps must succeed before either clone upgrades. The first capture
 already covers shared Neo4j and Redis; repeating Redis capture is harmless while
-all writers remain stopped. Take the matching role/grant inventory privately
+all writers remain quiescent. Take the matching role/grant inventory privately
 too: `pg_dump` does not dump server roles.
 
 **Stop on any failure.** For every database, retain its nonempty `postgres.dump`,
@@ -60,7 +139,7 @@ a bad migration, not host/disk loss.
 
 ## 2. Retain the actual last-good images
 
-The apps are stopped, so use `ps -aq`, not the running-only selector. Record
+The release app is stopped, so use `ps -aq`, not the running-only selector. Record
 the current commit and image IDs privately, then tag each actual container image
 before any build can replace its mutable tag:
 
@@ -71,31 +150,94 @@ app_image=$(docker inspect --format '{{.Image}}' "$app_id") || exit 1
 docker image tag "$app_image" hames-app:rollback || exit 1
 ```
 
-When enabled, repeat for `app-dev` using `hames-app:dev-rollback`. Do not overwrite
+With two clones, record `app-dev`'s current image ID privately but do not
+rebuild or retag it in this release-app upgrade. Do not overwrite
 an unresolved previous rollback point; choose an additional unique tag privately
 and retain its matching dumps/configuration. A tag without its matching key set
 and compatible data is insufficient. Never publish inspect output or env files.
 
 ## 3. Move the pin, build and verify before reopening ingress
 
-Review the target's bootstrap arguments and release notes. Use bootstrap with
-the existing hostname/ACME/operator arguments and the new **full** `--ref` SHA,
-selecting `--only checkout,env,images,boot --no-seed` for a **single app**.
-For clones, the same bootstrap stages preserve §12's complete ordered
-`COMPOSE_FILE` in the release checkout's root `.env`, including the optional dev
-socket overlay. Set `DEV_REF` to the reviewed full SHA before `images`;
-bootstrap refuses a different dev HEAD or a dirty dev checkout and does not
-update that branch. Both app-only runtime files (mode 0600, outside both
-canonical checkout paths) and limited
-role/database URLs must be in place. Bootstrap now runs `validate-clones.mjs`
-itself before clone Compose operations, including `boot`, and refuses a failed
-render or validation without starting containers. It boots both apps in one
-project without orphan pruning and waits for both apps' health.
+Review the target's bootstrap arguments and release notes. This staged path
+covers both a single app and two clones. Use the same existing hostname, ACME
+and other operator arguments on each bootstrap invocation, and the reviewed
+full release SHA on checkout. For clones, keep the dev checkout at its
+separately reviewed full SHA, verify `DEV_REF` in the protected root `.env`
+already equals that SHA before baseline capture, and keep its image/container unchanged. Bootstrap
+refuses a dirty or mismatched dev checkout during clone operations. Never
+select `--only checkout,env,images,boot` in one call: the comparisons occur
+between those stages.
 
-The explicit external preflight below is also useful before boot. Replace the
-example hostname, ACME email and full target SHA with the deployment's existing
-arguments and retain other required operator arguments. Never print or save the
-rendered configuration; a failed render or validator must prevent boot.
+From the current release checkout root, after §1 and §2, capture the baseline
+**before checkout**. Keep the gate script and JSON private in the retained dump
+directory. Fetch the reviewed target under `022` without moving the checkout,
+then copy the reviewed gate script from that SHA. A missing script or baseline
+stops the release. Set `TARGET_SHA` to the reviewed full commit and replace the
+example hostname and email below with the existing real values. Preserve any
+other required bootstrap arguments on **every** call:
+
+```bash
+TARGET_SHA='<reviewed-full-40-character-target-sha>'
+test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
+case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+umask 022
+( umask 022; git fetch --quiet --prune --tags origin ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" ||
+  ( umask 022; git fetch --quiet origin "$TARGET_SHA" ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" || exit 1
+gate_copy="$dump_root/app-upgrade-gate.py"
+( umask 077; git show "$TARGET_SHA:scripts/app-upgrade-gate.py" > "$gate_copy" ) || exit 1
+baseline="$dump_root/preboot-baseline.json"
+python3 "$gate_copy" capture "$baseline" || exit 1
+bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only checkout --no-seed || exit 1
+bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only env --no-seed || exit 1
+bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only images --release-image-only --no-seed || exit 1
+check_dev_writers || exit 1
+python3 "$gate_copy" preboot "$baseline" || exit 1
+bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only boot --no-seed || exit 1
+python3 "$gate_copy" postboot "$baseline" || exit 1
+```
+
+The release-only images option builds `app` without rebuilding Neo4j or
+`app-dev`; the clone preflight still runs before the build. The gate records
+every existing service's container ID, `StartedAt`, Compose
+config-hash label, mounted volume names/identities and
+`docker compose config --hash '*'` with the same
+complete Compose files and `app` profile before checkout and at the target. Stop if
+any shared service other than `embedder` has a changed target hash. The one
+permitted shared change is `embedder`'s hash for the durable Compose 3 GiB
+`mem_limit`: only its container may be recreated. With ingress still held, the
+gate runs `docker compose --dry-run --progress json up -d` from the target
+checkout using the same Compose files and profile as bootstrap, adding
+`--remove-orphans` only for a single-app project. Any `app-dev` entry in the
+clone prediction must be a non-mutating observation, with no start or
+recreation.
+It parses and lists every predicted create, recreate and start;
+proceed only if they are the release app, that intended `embedder` recreation,
+or the one-shot `mcp-config` rerun. Any other prediction or an unavailable dry
+run is a stop. After boot, every other long-running shared container must keep
+its ID and `StartedAt`, and every mounted volume identity/name must match the
+preboot record. The gate also compares the running Caddy's actual bind-mounted
+regular files with the target checkout **before boot**; unequal content stops
+the release even if Compose hashes match. Verify `embedder` healthy, its cgroup limit at 3 GiB from
+Compose without a temporary runtime override, and one successful embedding
+request; retire the temporary override record only then.
+
+The gate records the preboot `mcp-config` ID and exit status. That one-shot may
+rerun only if its ID stays the same, it exits 0, and its actual rendered volume
+file hash matches after boot; the gateway must keep its ID/`StartedAt`. A
+missing baseline or unreadable rendered file stops the release. The script
+hashes the file through `docker cp` and never prints or saves its contents.
+
+For clones, bootstrap's own clone preflight validates the full Compose render
+before images and boot, including the dev checkout
+and both runtime files. It does not replace the baseline, Caddy comparison or
+complete action prediction above. Never print or save the rendered
+configuration; a failed render or validator must prevent boot.
 
 ```bash
 set -o pipefail
@@ -103,9 +245,7 @@ docker compose config --format json |
   docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
     --user "$(id -u):$(id -g)" --entrypoint node \
     -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
-    hames-app:local "$PWD/scripts/validate-clones.mjs" &&
-  bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
-    --acme-email ops@example.invalid --ref '<full-target-sha>' --only boot --no-seed
+    hames-app:local "$PWD/scripts/validate-clones.mjs"
 ```
 
 The validator runs inside the release app image, as you, so the host needs no
@@ -114,11 +254,10 @@ socket shapes only, run from real (non-symlink) checkout paths: it mounts the
 two checkouts and nothing else. With a VM overlay selected, run bootstrap's own
 preflight instead (`--only boot --dry-run` changes nothing), which resolves
 every host path on the host before it mounts the checkouts and each TLS file.
-A missing image refuses until `--only images` builds it.
+A missing image refuses until the release-only images stage builds it.
 
-If Caddyfile contents or imported sites changed, recreate only Caddy with
-`docker compose up -d --no-deps --force-recreate caddy` under the full deployment
-Compose list; keep `caddy_data` and its certificates. Boot does this itself now
+If Caddyfile contents or imported sites changed, stop this restricted upgrade
+and review a separate Caddy maintenance window. Generic bootstrap does this itself now
 (#672): it compares the running Caddy's bind-mounted regular files against the
 checkout and recreates only Caddy when one differs, and the smoke fails (check
 1c) when the running Caddy still serves a file the checkout no longer holds.
@@ -127,7 +266,7 @@ of a mounted file (same inode, e.g. `cat >`) is NOT detected — the bind mount
 shows the new content, so the comparison reads fresh, while Caddy keeps the
 config it parsed at start. Comparing Caddy's loaded config is a follow-up.
 
-No automatic update of the dev branch is implied. Boot can start
+No automatic update of the dev branch is implied. Generic boot can start
 Caddy; keep ingress blocked by the operator's maintenance control until the
 checks pass. Never run the seed stage as an upgrade mechanism. Build only after
 checking measured capacity for the serving data tier plus embedder/build peak.
@@ -227,8 +366,56 @@ change runs none of those live checks.
 
 Reopen ingress only after all required checks pass; preserve the previous
 image, protected configuration, dumps and separate key escrow until the rollback
-window closes. If a gate fails, stop ingress and both writers, keep evidence
+window closes. If a gate fails, keep ingress held and both writers quiescent, keep evidence
 privately and follow the decision below. No automated rollback is shipped.
+For clones, restore exactly the privately recorded dev routine enabled-set
+after smoke and postboot identity checks pass, before reopening either hostname:
+
+```bash
+restore_dev_routines() {
+  test -n "${DEV_CLONE_PATH:-}" || return 0
+  test -s "${dev_enabled_ids:-}" || return 1
+  dev_psql -v ids_json="$(cat "$dev_enabled_ids")" <<'SQL'
+BEGIN;
+LOCK TABLE routines IN SHARE ROW EXCLUSIVE MODE;
+CREATE TEMP TABLE saved_ids (id text PRIMARY KEY) ON COMMIT DROP;
+INSERT INTO saved_ids SELECT jsonb_array_elements_text(:'ids_json'::jsonb);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM routines WHERE enabled)
+     OR (SELECT count(*) FROM saved_ids) <> (SELECT count(*) FROM routines JOIN saved_ids USING (id))
+  THEN RAISE EXCEPTION 'DEV restore precondition failed'; END IF;
+END $$;
+UPDATE routines SET enabled = TRUE, updated_at = NOW() WHERE id IN (SELECT id FROM saved_ids);
+DO $$ BEGIN
+  IF (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled)
+     <> (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM saved_ids)
+  THEN RAISE EXCEPTION 'DEV enabled routine restore differs from saved set'; END IF;
+END $$;
+COMMIT;
+SQL
+}
+restore_dev_routines || exit 1
+```
+
+If any stage fails or the window is aborted, keep both hostnames held and
+`app-dev` running. Preserve the private file. If the disable transaction failed,
+it rolled back; compare a fresh all-user enabled-ID query with the saved JSON
+before deciding that the original set needs no restoration:
+
+```bash
+# shellcheck disable=SC2154 # set in the earlier drain step
+( set -o pipefail; dev_psql -c "SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled" |
+    cmp - "$dev_enabled_ids" ) || exit 1
+```
+
+An unequal set requires manual reconciliation. After a successful drain, fix the failure,
+verify zero DEV enabled routines and running conversations with
+`check_dev_writers`, then run the same
+`restore_dev_routines` function before reopening DEV. If the shell was lost,
+set `DEV_DB`, `DEV_CLONE_PATH` and `dev_enabled_ids` to the recorded values and
+redefine `dev_psql` and `restore_dev_routines` from this section. An absent or
+unreadable file, missing saved ID or unexpected enabled routine is a stop for
+manual reconciliation; never enable all routines as recovery.
 
 ## 4. Schema rollback decision
 
@@ -248,19 +435,33 @@ invoking the checkout stage or any boot script. It checks the current checkout
 first and the restored checkout again. For two clones, replace the dev SHA
 placeholder with the separately recorded full dev SHA, export the existing
 `DEV_CLONE_PATH`, and set the protected root `.env`'s `DEV_REF` to that same SHA;
-bootstrap refuses a dev HEAD that differs from `DEV_REF`. The same gate restores
-and checks that checkout before the release checkout.
+bootstrap refuses a dev HEAD that differs from `DEV_REF`. The checkout-mode gate
+checks that DEV remains at this SHA before the release checkout moves.
 The tracked MCP config is the sole
 intentional exception to the clean-tree check: bootstrap restores and re-applies
 it around checkout. Keep protected configuration, dumps, retained images and
 separate key escrow; never discard them to make this gate pass.
 
+For either shape, repeat §1's external ingress hold, release-app stop,
+dev-writer check when applicable, and fresh backups, then capture a **new**
+baseline from the current checkout before moving the release pin. Use the gate
+script retained with the upgrade dumps; a missing script, baseline or 3 GiB
+target cap stops this path. The dev checkout and image stay at their recorded
+pin during a two-clone rollback; changing DEV requires a separate coordinated
+release, not this app rollback.
+
 ```bash
 APP_DIR=/opt/hames
 GOOD_SHA='<recorded-full-40-character-good-sha>'
 DEV_GOOD_SHA='<recorded-full-40-character-dev-sha>' # used only with two clones
+gate_copy='<absolute-path-to-retained-app-upgrade-gate.py>'
+rollback_baseline="$dump_root/rollback-preboot-baseline.json"
 test "$(id -u)" -ne 0 && test "${#GOOD_SHA}" -eq 40 || exit 1
+umask 022
 case "$GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+test -f "$gate_copy" || exit 1
+check_dev_writers || exit 1
+python3 "$gate_copy" capture "$rollback_baseline" || exit 1
 
 check_checkout_modes() {
   local root=$1 path rel mode
@@ -303,7 +504,6 @@ if test -n "${DEV_CLONE_PATH:-}"; then
   check_checkout_modes "$DEV_CLONE_PATH" || exit 1
   dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
   test -z "$dirty" && git -C "$DEV_CLONE_PATH" cat-file -e "$DEV_GOOD_SHA^{commit}" || exit 1
-  ( umask 022; git -C "$DEV_CLONE_PATH" checkout --quiet --detach "$DEV_GOOD_SHA" ) || exit 1
   check_checkout_modes "$DEV_CLONE_PATH" &&
     test "$(git -C "$DEV_CLONE_PATH" rev-parse HEAD)" = "$DEV_GOOD_SHA" || exit 1
   dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
@@ -318,38 +518,26 @@ test -z "$(printf '%s\n' "$dirty" | sed '/ configs\/mcp-config.yaml$/d')" || exi
 ```
 
 Replace the example hostname and ACME email with the deployment's existing
-arguments; retain any other required bootstrap arguments. The dev checkout
-restoration leaves untracked runtime files untouched; keep its protected
+arguments; retain any other required bootstrap arguments. The unchanged dev
+checkout retains untracked runtime files; keep its protected
 configuration and separate key escrow. Stop for targeted manual repair if any
 ownership, mode, pin or tree check
 fails; do not apply recursive `chown`/`chmod`. Only then tag
-`hames-app:rollback` back to `hames-app:local` (and
-`hames-app:dev-rollback` back to `hames-app:dev` for the other clone), then
-`docker compose up -d --no-build --force-recreate app` (also `app-dev` when
-enabled). For clones, use the following immediately before recreation, with the
-deployment's production/clone Compose files and profile; failed validation must
-prevent startup. Never print or save the rendered configuration:
+`hames-app:rollback` back to `hames-app:local`, leaving the dev image alone.
+Perform the full preboot gate, boot and postboot gate in that order for either
+shape; do not rebuild over the retained image:
 
 ```bash
-set -o pipefail
-docker compose config --format json |
-  docker run --rm -i --pull never --network none --read-only --cap-drop ALL \
-    --user "$(id -u):$(id -g)" --entrypoint node \
-    -v "$PWD":"$PWD":ro -v "$DEV_CLONE_PATH":"$DEV_CLONE_PATH":ro \
-    hames-app:local "$PWD/scripts/validate-clones.mjs" &&
-  docker compose up -d --no-build --force-recreate app app-dev
+check_dev_writers || exit 1
+python3 "$gate_copy" preboot "$rollback_baseline" || exit 1
+bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
+  --acme-email ops@example.invalid --ref "$GOOD_SHA" --only boot --no-seed || exit 1
+python3 "$gate_copy" postboot "$rollback_baseline" || exit 1
 ```
 
-The validator runs inside the release app image, as you, so the host needs no
-Node (#681); export the §12 `DEV_CLONE_PATH` from `.env`. The block is for the
-socket shapes only, run from real (non-symlink) checkout paths: it mounts the
-two checkouts and nothing else. With a VM overlay selected, run bootstrap's own
-preflight instead (`--only boot --dry-run` changes nothing), which resolves
-every host path on the host before it mounts the checkouts and each TLS file.
-A missing image refuses until `--only images` builds it.
-
-The single-app command above is unchanged. Do not rebuild over the retained
-image. Repeat the full smoke before reopening ingress; do not roll back a leaked
+Replace the example hostname and email with the deployment's existing values
+and retain other required operator arguments. Repeat the full smoke before
+reopening ingress; do not roll back a leaked
 credential.
 
 If compatibility is uncertain, keep writers stopped. Restore the pre-upgrade

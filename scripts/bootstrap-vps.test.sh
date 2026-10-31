@@ -1634,6 +1634,41 @@ PY
   exit $?
 fi
 clone_tests
+# The restricted clone upgrade builds release's image without replacing the
+# image tag of the still-running dev container.
+image_build_probe() { # 0|1
+  (
+    lib "$tmproot/upgrade-image"
+    RELEASE_IMAGE_ONLY=$1
+    SANDBOX_FLAVOURS=0
+    assert_engine_supported() { :; }
+    assert_daemon_isolation() { :; }
+    assert_gateway_pinned() { :; }
+    sudo() { :; }
+    compose_files() { printf '%s' "$CLONE_COMPOSE_FILES"; }
+    catalog_image() { printf '%s' 'example/image:tag'; }
+    banner() { :; }
+    note() { :; }
+    run() { printf 'RUN %s\n' "$*"; }
+    stage_images
+  )
+}
+mkdir -p "$tmproot/upgrade-image"
+: >"$tmproot/upgrade-image/.env"
+out=$(image_build_probe 0)
+if [[ $out == *'RUN dc build'* && $out != *'RUN dc build app'* ]]; then
+  pass 'clones images: normal build includes all buildable services'
+else flunk 'clones images: normal build changed' "$out"; fi
+out=$(image_build_probe 1)
+if [[ $out == *'RUN dc build app'* && $out != *'RUN dc build app-dev'* ]]; then
+  pass 'clones images: release-only build does not build app-dev'
+else flunk 'clones images: release-only build reached app-dev' "$out"; fi
+out=$(bash "$SCRIPT" --hostname staging.example.invalid --acme-email ops@example.invalid \
+  --only boot --release-image-only --dry-run 2>&1)
+rc=$?
+if ((rc == 2)) && [[ $out == *'--release-image-only requires --only images'* ]]; then
+  pass 'clones images: release-only flag is confined to images stage'
+else flunk "clones images: release-only flag escaped images stage (rc=$rc)" "$out"; fi
 # 2b. Never `producer | grep -q` under pipefail: grep -q exits at its first match,
 # the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
 # match is reported as absent. That shipped once here (the sshd -T check
@@ -2132,6 +2167,43 @@ out=$(HAMES_APP_DIR="$tmproot/c1" HAMES_STATE_DIR="$tmproot/c1s" bash "$SCRIPT" 
   --acme-email ops@example.invalid --ref "$sha40" --only checkout --dry-run 2>&1)
 rc=$?
 if ((rc == 0)) && [[ $out == *"at $sha40"* ]]; then pass "9 C1: a full SHA is accepted (exit 0)"; else flunk "9 C1: full SHA (rc=$rc)" "$out"; fi
+
+# The checkout stage is callable without preflight. Fake Git records the mask
+# at the actual clone call, and a fake uid=0 must stop before any Git write.
+checkout_probe() { # root|user DIR
+  (
+    set -e
+    local probe_dir=$2
+    lib "$2"
+    REF=$sha40
+    umask 0002
+    sudo() { mkdir -p "${@: -1}"; }
+    git() {
+      umask >"$probe_dir/git-umask"
+      : >"$probe_dir/git-created"
+      exit 91
+    }
+    if [[ $1 == root ]]; then
+      id() {
+        if [[ $1 == -u ]]; then printf '0\n'; else command id "$@"; fi
+      }
+    fi
+    stage_checkout
+  ) 2>&1
+}
+mkdir -p "$tmproot/checkout-root" "$tmproot/checkout-user"
+out=$(checkout_probe root "$tmproot/checkout-root")
+rc=$?
+if ((rc == 1)) && [[ $out == *"checkout must run as the deployment user"* ]] &&
+  [[ ! -e $tmproot/checkout-root/git-umask ]]; then
+  pass "9 checkout: --only stage refuses root before Git"
+else flunk "9 checkout: root reached Git or was accepted (rc=$rc)" "$out"; fi
+out=$(checkout_probe user "$tmproot/checkout-user")
+rc=$?
+if ((rc == 91)) && [[ $(cat "$tmproot/checkout-user/git-umask" 2>/dev/null) == 0022 ]] &&
+  [[ $(stat -c %a "$tmproot/checkout-user/git-created" 2>/dev/null) == 644 ]]; then
+  pass "9 checkout: clone runs with 022 under inherited 0002"
+else flunk "9 checkout: clone inherited an unsafe mask (rc=$rc)" "$out"; fi
 
 # C2: exactly ONE primary key, and it is Docker's.
 docker_pub='pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::scESA::::::23::0:

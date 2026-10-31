@@ -123,16 +123,15 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker "$USER"     # then log out and back in
 docker compose version              # must be >= 2.24
 
-sudo git clone https://github.com/mknw/hames-playground /opt/hames
-sudo chown -R "$USER":"$USER" /opt/hames      # NOT optional — see below
+test "$(id -u)" -ne 0 || exit 1
+sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 0755 /opt/hames
+( umask 022; git clone https://github.com/mknw/hames-playground /opt/hames )
 cd /opt/hames
 ```
 
-**The `chown` is load-bearing.** `sudo git clone` leaves the tree `root:root`,
-and everything after this point runs as you: writing `.env`, `mkdir -p backups`
-inside `scripts/backup-preview.sh` (§9, and its cron entry, which is installed
-as your user), and `git checkout <good-sha>` in the rollback (§10). Skip it and
-those fail with a permission error at the worst possible moment rather than here.
+The deployment user owns the checkout from its first Git write. Run Git as that
+user with `umask 022`; `sudo git` creates root-owned tracked files. The same
+user later writes `.env`, backups and rollback checkouts.
 
 Keep the repo layout intact: `app/` and `configs/` must stay siblings.
 
@@ -980,15 +979,11 @@ post-upgrade smoke including the embedder and explicitly authorized private-tier
 checks. Same-disk dumps are required for this change window even while scheduled
 off-box backups are deferred. That runbook also covers additive schema rollback.
 
-**A bad app release** — the data tier is untouched, so this is a rebuild:
-
-```bash
-cd /opt/hames
-git log --oneline -5                      # find the last good commit
-git checkout <good-sha>
-docker compose up -d --build app          # Caddy and the data tier keep running
-docker compose logs -f app
-```
+**A bad app release:** use [application upgrade §4's gated rollback](deployment/app-upgrade.md#4-schema-rollback-decision).
+It checks checkout ownership and modes, captures a fresh shared-service baseline,
+predicts the complete Compose boot, and compares identities and the rendered
+gateway file after boot. A targeted `docker compose up -d --build app` is not a
+data-tier isolation guarantee: Compose follows service dependencies.
 
 > **This is only data-safe on the near side of #260, and that is now behind
 > you.** The app tier is stateless with respect to the database, so checking
@@ -1010,26 +1005,24 @@ docker compose logs -f app
 > ([`azure-vm.md` §9](deployment/azure-vm.md) has the `pg_dump` to have taken);
 > there is no down-migration and no decrypt-back script.
 
-Faster, if the previous image is still on the box: `docker images hames-app`,
-then `docker tag <old-id> hames-app:local && docker compose up -d app` — no
-build. Tag a known-good image (`docker tag hames-app:local hames-app:rollback`)
-right after a successful deploy and this stays available.
+For an image-only rollback, retain the actual last-good image as
+`hames-app:rollback` before the release, then follow [application upgrade §4's
+gated rollback](deployment/app-upgrade.md#4-schema-rollback-decision) with a
+fresh baseline, full preboot prediction and postboot comparison.
 
-**A bad configuration** — `.env` edits need only a recreate:
-`docker compose up -d --force-recreate app caddy`.
+**A bad configuration** — review the affected service and use its maintenance
+procedure. A Caddy change is outside the restricted app release gate; do not
+recreate Caddy as part of an app rollback.
 
-**Bad data** — only an option if you took a backup, which §9 says is optional
-for this alpha. If you did: stop the app first, restore per §9, then start it.
+**Bad data** — restore only from a verified matching backup with the matching
+keys and schema plan; [application upgrade §4](deployment/app-upgrade.md#4-schema-rollback-decision)
+sets the decision and writer hold. A data restore is a separate maintenance
+operation, followed by a fresh baseline before any restricted app release.
 
-```bash
-docker compose stop app
-# …restore…
-docker compose start app
-```
-
-**Full stop** — `docker compose down` keeps every named volume (that is the
-default; `-v` is what destroys them, and it destroys Caddy's certificates too).
-`docker compose up -d` brings it all back.
+**Full stop for an incident outside this release path** — `docker compose down`
+keeps every named volume (that is the default; `-v` destroys them, including
+Caddy's certificates). Bringing the stack back is incident recovery, followed
+by a fresh baseline before any restricted app release.
 
 **Emergency lockout** — to cut off access without losing anything, stop Caddy:
 `docker compose stop caddy`. The app keeps running on `127.0.0.1:3444` for

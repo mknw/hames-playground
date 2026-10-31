@@ -115,7 +115,9 @@ sudo apt-get install -y caddy
 ## 3. Code + configs
 
 ```bash
-sudo git clone <repo> /opt/hames && cd /opt/hames
+test "$(id -u)" -ne 0 || exit 1
+sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 0755 /opt/hames
+( umask 022; git clone <repo> /opt/hames ) && cd /opt/hames
 ```
 
 Keep the repo layout intact — **`app/` and `configs/` must stay siblings**: the
@@ -131,7 +133,7 @@ Create the config files with **real** values (`app/.env` is git-ignored;
   keep Git from committing or overwriting your edit:
 
   ```bash
-  git update-index --skip-worktree configs/mcp-config.yaml
+  ( umask 022; git update-index --skip-worktree configs/mcp-config.yaml )
   # before pulling config updates: --no-skip-worktree, move your values aside,
   # pull, re-apply them, re-run the command above
   ```
@@ -178,16 +180,16 @@ published port to loopback, and change the default passwords:
 # /opt/hames/docker-compose.override.yml  (production)
 services:
   postgres:
-    ports: ['127.0.0.1:5432:5432']
-    environment: ['POSTGRES_PASSWORD=<STRONG_PW>']
+    ports: ["127.0.0.1:5432:5432"]
+    environment: ["POSTGRES_PASSWORD=<STRONG_PW>"]
   neo4j:
-    environment: ['NEO4J_AUTH=neo4j/<STRONG_PW>']
+    environment: ["NEO4J_AUTH=neo4j/<STRONG_PW>"]
   neo4j-relay:
-    ports: ['127.0.0.1:7474:7474', '127.0.0.1:7687:7687']
+    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]
   redis:
-    ports: ['127.0.0.1:6379:6379']
+    ports: ["127.0.0.1:6379:6379"]
   mcp-gateway:
-    ports: ['127.0.0.1:8811:8811']
+    ports: ["127.0.0.1:8811:8811"]
   # (drop the arm64 `platform: linux/amd64` override — you're on x86 now)
 ```
 
@@ -375,10 +377,12 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 **Update / redeploy:**
 
 ```bash
-cd /opt/hames && git pull
-cd app && pnpm install --frozen-lockfile && pnpm build
+test "$(id -u)" -ne 0 || exit 1
+cd /opt/hames && ( umask 022; git pull )
+( cd /opt/hames && pnpm install --frozen-lockfile )
+( cd /opt/hames/app && pnpm build )
 sudo systemctl restart hames-app
-docker compose pull && docker compose up -d   # only if the gateway image moved
+( cd /opt/hames && docker compose pull && docker compose up -d )   # only if the gateway image moved
 ```
 
 **Logs:** `journalctl -u hames-app` (UI) · `docker compose logs -f mcp-gateway` (gateway).

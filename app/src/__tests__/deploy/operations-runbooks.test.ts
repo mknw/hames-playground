@@ -1,7 +1,8 @@
 // @vitest-environment node
 /** Layer 1: runbook drift and the external probe. No live calls or Docker. */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -19,15 +20,89 @@ const declarations = [
   read('scripts/backup-preview.sh'),
 ].join('\n')
 const known = new Set(declarations.match(/\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/g))
+// These are supplied privately by the operator, not read by the application.
+const operatorInputs = new Set(['RELEASE_DB', 'DEV_DB'])
+const bashBlocks = (doc: string) =>
+  [...doc.matchAll(/```(?:bash|sh)\n([\s\S]*?)```/g)].map(([, block]) => block)
 function missingReferences(doc: string): string[] {
   const scripts = [...doc.matchAll(/\bscripts\/[\w./-]+\.(?:py|sh|mjs|ts)\b/g)].map(
     ([file]) => file,
   )
   const env = [...doc.matchAll(/`([A-Z][A-Z0-9]*_[A-Z0-9_]+)`/g)].map(([, name]) => name)
+  const localAssignments = new Set(
+    bashBlocks(doc).flatMap((block) =>
+      [...block.matchAll(/^([A-Z][A-Z0-9]*_[A-Z0-9_]+)=/gm)].map(([, name]) => name),
+    ),
+  )
   return [
     ...scripts.filter((file) => !existsSync(path.join(root, file))),
-    ...env.filter((name) => name !== 'SCHEMA_SQL' && !known.has(name)),
+    ...env.filter(
+      (name) =>
+        name !== 'SCHEMA_SQL' &&
+        !known.has(name) &&
+        !operatorInputs.has(name) &&
+        !localAssignments.has(name),
+    ),
   ]
+}
+
+function expectOrder(text: string, markers: string[]) {
+  let previous = -1
+  for (const marker of markers) {
+    const position = text.indexOf(marker, previous + 1)
+    expect(position, `missing or out of order: ${marker}`).toBeGreaterThan(previous)
+    previous = position
+  }
+}
+
+function traceStage(block: string, failingStage = '') {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'runbook-stage-'))
+  try {
+    const run = spawnSync(
+      'bash',
+      [
+        '-c',
+        `
+id() { printf '1000'; }
+git() { if [ "$1" = show ]; then printf 'gate'; fi; }
+check_dev_writers() { :; }
+python3() {
+  printf 'GATE %s\\n' "$2" >> "$TRACE"
+  [ "$2" != "$FAIL_STAGE" ]
+}
+bash() {
+  local previous='' stage='' release_only=0
+  for arg in "$@"; do
+    if [ "$previous" = --only ]; then stage="$arg"; fi
+    if [ "$arg" = --release-image-only ]; then release_only=1; fi
+    previous="$arg"
+  done
+  printf 'BOOTSTRAP %s %s\\n' "$stage" "$release_only" >> "$TRACE"
+}
+${block.replace('<reviewed-full-40-character-target-sha>', 'a'.repeat(40))}`,
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH,
+          TRACE: path.join(directory, 'trace'),
+          FAIL_STAGE: failingStage,
+          dump_root: directory,
+          gate_copy: path.join(directory, 'gate.py'),
+          rollback_baseline: path.join(directory, 'rollback.json'),
+          GOOD_SHA: 'a'.repeat(40),
+        } as unknown as NodeJS.ProcessEnv,
+      },
+    )
+    return {
+      ...run,
+      trace: existsSync(path.join(directory, 'trace'))
+        ? readFileSync(path.join(directory, 'trace'), 'utf8')
+        : '',
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
@@ -46,6 +121,14 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
     expect(
       missingReferences(doc.replaceAll('`TOKEN_ENCRYPTION_KEY`', '`MISSING_ROTATION_KEY`')),
     ).toContain('MISSING_ROTATION_KEY')
+    expect(missingReferences(`${doc}\n\`MISSING_APPLICATION_CONFIG\``)).toContain(
+      'MISSING_APPLICATION_CONFIG',
+    )
+    expect(
+      missingReferences(
+        read(runbooks[2]).replace("TARGET_SHA='<reviewed-full-40-character-target-sha>'", ''),
+      ),
+    ).toContain('TARGET_SHA')
   })
 
   it('keeps retained upgrade dumps gitignored', () => {
@@ -64,15 +147,13 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
   it('preflights every documented clone recreate and bootstrap boot without printing config', () => {
     for (const [file, count] of [
       ['docs/deployment/secret-rotation.md', 1],
-      ['docs/deployment/app-upgrade.md', 2],
+      ['docs/deployment/app-upgrade.md', 1],
     ] as const) {
-      const blocks = [...read(file).matchAll(/```bash\n([\s\S]*?)```/g)]
-        .map(([, block]) => block)
-        .filter(
-          (block) =>
-            block.includes('scripts/validate-clones.mjs') &&
-            block.includes('docker compose config --format json'),
-        )
+      const blocks = bashBlocks(read(file)).filter(
+        (block) =>
+          block.includes('scripts/validate-clones.mjs') &&
+          block.includes('docker compose config --format json'),
+      )
       expect(blocks, file).toHaveLength(count)
       for (const block of blocks) {
         for (const [renderExit, validatorExit] of [
@@ -116,12 +197,100 @@ ${block}`,
             expect(run.stdout).toBe('')
           } else {
             expect(run.status).toBe(0)
-            expect(run.stdout).toMatch(
-              /^(START compose up -d --no-build --force-recreate app app-dev|BOOT scripts\/bootstrap-vps.sh .*--only boot --no-seed)\n$/,
-            )
+            if (block.includes('docker compose up -d')) {
+              expect(run.stdout).toBe(
+                'START compose up -d --no-build --force-recreate app app-dev\n',
+              )
+            } else {
+              expect(run.stdout).toBe('')
+            }
           }
         }
       }
+    }
+
+    const bootstrap = read('scripts/bootstrap-vps.sh')
+    const boot = bootstrap.slice(
+      bootstrap.indexOf('stage_boot() {'),
+      bootstrap.indexOf('\nstage_seed() {'),
+    )
+    expect(boot).toContain('clone_preflight "$files" || return 1')
+    expectOrder(boot, ['clone_preflight "$files" || return 1', 'run dc up -d'])
+    const preflight = bootstrap.slice(
+      bootstrap.indexOf('clone_preflight() {'),
+      bootstrap.indexOf('\ndc() {'),
+    )
+    expect(preflight).toMatch(
+      /set -o pipefail;[\s\S]*docker compose config --format json 2>\/dev\/null \|[\s\S]*scripts\/validate-clones\.mjs" >\/dev\/null\) \|\|/,
+    )
+    expect(preflight).toContain('return 1; }')
+  })
+
+  it('orders staged upgrade and rollback gates and stops before boot on preboot failure', () => {
+    const doc = read('docs/deployment/app-upgrade.md')
+    const upgrade = doc.slice(
+      doc.indexOf('## 3. Move the pin'),
+      doc.indexOf('### Metadata policy upgrade'),
+    )
+    expectOrder(upgrade, [
+      '"$gate_copy" capture "$baseline"',
+      '--only checkout --no-seed',
+      '--only env --no-seed',
+      '--only images --release-image-only --no-seed',
+      '"$gate_copy" preboot "$baseline"',
+      '--only boot --no-seed',
+      '"$gate_copy" postboot "$baseline"',
+    ])
+    const rollback = doc.slice(doc.indexOf('APP_DIR=/opt/hames'))
+    expectOrder(rollback, [
+      '"$gate_copy" capture "$rollback_baseline"',
+      '--only checkout --no-seed',
+      '"$gate_copy" preboot "$rollback_baseline"',
+      '--only boot --no-seed',
+      '"$gate_copy" postboot "$rollback_baseline"',
+    ])
+    const upgradeBlock = bashBlocks(upgrade).find((block) =>
+      block.includes('"$gate_copy" capture'),
+    )!
+    const rollbackBlock = bashBlocks(rollback).find((block) =>
+      block.includes('"$gate_copy" preboot'),
+    )!
+    const rollbackMove = bashBlocks(doc).find((block) =>
+      block.includes('"$gate_copy" capture "$rollback_baseline"'),
+    )!
+    const capture = rollbackMove.match(/^.*"\$gate_copy" capture "\$rollback_baseline".*$/m)?.[0]
+    const checkoutStart = rollbackMove.indexOf(
+      '( umask 022; bash "$APP_DIR/scripts/bootstrap-vps.sh"',
+    )
+    const checkoutEnd = rollbackMove.indexOf(') || exit 1', checkoutStart)
+    expect(capture).toBeDefined()
+    expect(checkoutStart).toBeGreaterThan(-1)
+    expect(checkoutEnd).toBeGreaterThan(checkoutStart)
+    const checkoutLineStart = rollbackMove.lastIndexOf('\n', checkoutStart) + 1
+    const move = `${capture}\n${rollbackMove.slice(checkoutLineStart, checkoutEnd + ') || exit 1'.length)}`
+    const moved = traceStage(move)
+    expect(moved.status).toBe(0)
+    expect(moved.stdout).toBe('')
+    expect(moved.trace).toBe('GATE capture\nBOOTSTRAP checkout 0\n')
+    const captureFailure = traceStage(move, 'capture')
+    expect(captureFailure.status).not.toBe(0)
+    expect(captureFailure.stdout).toBe('')
+    expect(captureFailure.trace).toBe('GATE capture\n')
+    for (const [block, expected] of [
+      [
+        upgradeBlock,
+        'GATE capture\nBOOTSTRAP checkout 0\nBOOTSTRAP env 0\nBOOTSTRAP images 1\nGATE preboot\nBOOTSTRAP boot 0\nGATE postboot\n',
+      ],
+      [rollbackBlock, 'GATE preboot\nBOOTSTRAP boot 0\nGATE postboot\n'],
+    ]) {
+      const success = traceStage(block)
+      expect(success.status).toBe(0)
+      expect(success.stdout).toBe('')
+      expect(success.trace).toBe(expected)
+      const prebootFailure = traceStage(block, 'preboot')
+      expect(prebootFailure.status).not.toBe(0)
+      expect(prebootFailure.stdout).toBe('')
+      expect(prebootFailure.trace).toBe(expected.slice(0, expected.indexOf('BOOTSTRAP boot')))
     }
   })
 

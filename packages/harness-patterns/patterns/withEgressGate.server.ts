@@ -73,6 +73,7 @@
  * the feedback never quotes the request.
  */
 import { assertServerOnImport } from '../assert.server'
+import { createHash } from 'node:crypto'
 import { createEvent, redactCall } from '../context.server'
 import {
   addressesIn,
@@ -95,7 +96,13 @@ import {
 } from '../egress-gate.server'
 import { isDegradedToolSurface } from '../gateway-health.server'
 import { emitLive } from '../live-event-context.server'
-import { askHumanHolding, canPauseHere, held as held_, recordedHolding } from '../hitl.server'
+import {
+  askHumanHolding,
+  canPauseHere,
+  canonicalJson,
+  held as held_,
+  recordedHolding,
+} from '../hitl.server'
 import {
   amendRunFrame,
   currentRunFrame,
@@ -210,6 +217,7 @@ export interface EgressGateConfig {
 
 /** The request kind of the egress prompt. */
 export const EGRESS_RELEASE_KIND = 'egress-release'
+export const EGRESS_BATCH_RELEASE_KIND = 'egress-batch-release'
 
 /** The egress prompt's four buttons, in the owner's order (ruling M). Only
  *  Refuse may be picked unattended (ruling T), and it is the default (ruling X);
@@ -224,6 +232,10 @@ export const EGRESS_RELEASE_OPTIONS = [
 /** What the controller reads while the call waits for the person. */
 export const EGRESS_HELD_NOTE =
   "This request is waiting for the user's decision before it is sent. Do not retry it; stop."
+
+/** A prepared batch member whose identity changed is never rechecked as a fresh call. */
+export const EGRESS_BATCH_MISMATCH =
+  'Refused: the saved batch decision no longer matches this request. Nothing was sent.'
 
 /** The state's nonce source under the test runner; never a config field, so a
  *  library caller cannot ship a fence whose code it chose. */
@@ -536,6 +548,15 @@ export function withEgressGate(config: EgressGateConfig) {
       const resultEvents = ctx.events.filter((e) => e.type === 'tool_result')
       const results = resultEvents.map((e) => e.data)
       const closures = egressClosures(ctx.events)
+      const batchRefuseAll = (): void => {
+        closures.turnClosed = true
+        record('egress_refused', {
+          tool: 'batch',
+          route: NO_ROUTE,
+          cause: 'unchecked',
+          closes: 'turn',
+        } satisfies EgressRefusedEventData)
+      }
       // The addresses the controller was given (O21), each as `addressesIn`
       // finds it: the user's latest message and the data of every
       // `addressSources` result in the context, extended by this invocation's.
@@ -609,7 +630,11 @@ export function withEgressGate(config: EgressGateConfig) {
               state,
               signal: abort.signal,
             })
-            record('decision_made', evaluated.event, evaluated.llmCall)
+            record(
+              'decision_made',
+              evaluated.event,
+              currentRunFrame()?.batchPhase === 'preflight' ? undefined : evaluated.llmCall,
+            )
             if (!evaluated.decision.abstained) {
               const p = evaluated.decision.probs as Partial<Record<string, number>>
               return {
@@ -699,9 +724,20 @@ export function withEgressGate(config: EgressGateConfig) {
         /** A cell that names the person: ask, where the call can pause and is
          *  not one of a batch (O16); anywhere else, refuse. */
         const person = async (held: Held): Promise<EgressVerdict> => {
-          if (!config.askPerson || currentRunFrame()?.batch || !canPauseHere()) {
+          if (!config.askPerson || !canPauseHere()) {
             return tripwire(held.cause, held.category)
           }
+          if (currentRunFrame()?.batchPhase === 'preflight') {
+            return {
+              batchHeld: {
+                cause: held.cause,
+                ...(held.category && { category: held.category }),
+                route,
+                payload: held.payload,
+              },
+            }
+          }
+          if (currentRunFrame()?.batch) return tripwire(held.cause, held.category)
           const outcome = await askHumanHolding(
             {
               kind: EGRESS_RELEASE_KIND,
@@ -758,6 +794,40 @@ export function withEgressGate(config: EgressGateConfig) {
         }
 
         const decideOne = async (): Promise<EgressVerdict> => {
+          const frame = currentRunFrame()
+          if (frame?.batchPhase === 'execute') {
+            const prepared = frame.batchPrepared
+            const digest = createHash('sha256')
+              .update(canonicalJson({ tool: call.name, args: call.args }))
+              .digest('hex')
+            if (
+              !prepared ||
+              prepared.callKey !== frame.callKey ||
+              prepared.digest !== digest ||
+              prepared.route !== route
+            )
+              return EGRESS_BATCH_MISMATCH
+            if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
+            if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
+            if (prepared.decision === 'refuse')
+              return tripwire(prepared.cause ?? 'unchecked', prepared.category)
+            if (
+              prepared.decision === 'accept' ||
+              (prepared.decision === 'pass' && prepared.auditByDecide)
+            ) {
+              const allowedBy = prepared.decision === 'accept' ? 'person' : 'decide'
+              return {
+                batchAudit: () =>
+                  record('egress_audit', {
+                    tool,
+                    hosts: [],
+                    spans: [],
+                    allowedBy,
+                  } satisfies EgressAuditEventData),
+              }
+            }
+            return undefined
+          }
           if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
           if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
           if (damaged) return EGRESS_TEXTS.damagedRoster
@@ -792,7 +862,7 @@ export function withEgressGate(config: EgressGateConfig) {
             spans: spans.map((s) => s.slice(0, EGRESS_SPAN_CAP)),
           }
           const unchecked: Held = { cause: 'unchecked', payload, spans }
-          if (config.askPerson) {
+          if (config.askPerson && currentRunFrame()?.batchPhase !== 'preflight') {
             // Re-entered on a call a person decided: their answer, not Decide's.
             const prior = recordedHolding(
               EGRESS_RELEASE_KIND,
@@ -847,6 +917,9 @@ export function withEgressGate(config: EgressGateConfig) {
               spans,
             })
           }
+          if (spans.length && currentRunFrame()?.batchPhase === 'preflight') {
+            return { batchPassed: true }
+          }
           if (spans.length) {
             record('egress_audit', {
               tool,
@@ -894,8 +967,14 @@ export function withEgressGate(config: EgressGateConfig) {
       }
 
       try {
-        return await amendRunFrame({ egressChecks: [egressCheck], afterToolCall: [observe] }, () =>
-          pattern.fn(scope, view),
+        return await amendRunFrame(
+          {
+            egressChecks: [egressCheck],
+            afterToolCall: [observe],
+            egressBatchEnabled: config.askPerson === true,
+            batchRefuseAll,
+          },
+          () => pattern.fn(scope, view),
         )
       } finally {
         if (degraded.timeouts + degraded.failures > 0) warn('checkDegraded', { ...degraded })

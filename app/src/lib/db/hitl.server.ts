@@ -20,6 +20,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { canonicalJson } from '@hames-ai/harness-patterns/hitl.server'
+import type { ToolCallResult } from '@hames-ai/harness-patterns'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { decryptFieldOrNull, encryptFieldOrNull } from './crypto.server'
 import { query, withTransaction, type TxQuery } from './client.server'
@@ -517,6 +518,10 @@ export async function deleteHitlRowsForConversations(
     userId,
     [...conversationIds],
   ])
+  await tx.query(`DELETE FROM tool_send_claims WHERE user_id = $1 AND session_id = ANY($2)`, [
+    userId,
+    [...conversationIds],
+  ])
 }
 
 /**
@@ -686,6 +691,74 @@ export async function holdHitlPayload(input: {
   }
   const stored = decryptFieldOrNull(rows[0].payload, 'hitl_payloads.payload')
   return stored === json ? { payloadRef: rows[0].payload_ref, inserted: false } : { rebound: true }
+}
+
+/** Insert-only send claim, committed before N8 opens a transport. The host
+ * supplies owner and conversation; a collision never sends again. */
+export async function claimToolSend(input: {
+  userId: string
+  sessionId: string
+  runId: string
+  callKey: string
+  digest: string
+}): Promise<
+  { status: 'new' | 'unknown' | 'mismatch' } | { status: 'finished'; result: ToolCallResult }
+> {
+  const { rowCount } = await query(
+    `INSERT INTO tool_send_claims
+       (claim_id, user_id, session_id, run_id, call_key, status, digest)
+     VALUES ($1, $2, $3, $4, $5, 'started', $6)
+     ON CONFLICT (user_id, session_id, run_id, call_key) DO NOTHING`,
+    [
+      randomUUID(),
+      input.userId,
+      input.sessionId,
+      input.runId,
+      input.callKey,
+      encryptFieldOrNull(input.digest),
+    ],
+  )
+  if ((rowCount ?? 0) > 0) return { status: 'new' }
+  const { rows } = await query<{ status: string; digest: string; result: string | null }>(
+    `SELECT status, digest, result FROM tool_send_claims
+      WHERE user_id = $1 AND session_id = $2 AND run_id = $3 AND call_key = $4`,
+    [input.userId, input.sessionId, input.runId, input.callKey],
+  )
+  const row = rows[0]
+  if (!row) return { status: 'unknown' }
+  if (decryptFieldOrNull(row.digest, 'tool_send_claims.digest') !== input.digest)
+    return { status: 'mismatch' }
+  if (row.status !== 'finished' || row.result === null) return { status: 'unknown' }
+  const result = decryptJson(row.result, 'tool_send_claims.result')
+  return result && typeof result === 'object' && 'success' in result
+    ? { status: 'finished', result: result as ToolCallResult }
+    : { status: 'unknown' }
+}
+
+/** Store the complete guarded outcome. A failed finish leaves 'started', so
+ * replay reports outcome unknown rather than risking a second send. */
+export async function finishToolSend(input: {
+  userId: string
+  sessionId: string
+  runId: string
+  callKey: string
+  digest: string
+  result: ToolCallResult
+}): Promise<void> {
+  const { rows } = await query<{ digest: string; status: string }>(
+    `SELECT digest, status FROM tool_send_claims
+      WHERE user_id = $1 AND session_id = $2 AND run_id = $3 AND call_key = $4`,
+    [input.userId, input.sessionId, input.runId, input.callKey],
+  )
+  if (!rows[0] || decryptFieldOrNull(rows[0].digest, 'tool_send_claims.digest') !== input.digest)
+    throw new Error('[hitl] send claim identity changed')
+  if (rows[0].status !== 'started') throw new Error('[hitl] send claim already finished')
+  const { rowCount } = await query(
+    `UPDATE tool_send_claims SET status = 'finished', result = $5
+      WHERE user_id = $1 AND session_id = $2 AND run_id = $3 AND call_key = $4 AND status = 'started'`,
+    [input.userId, input.sessionId, input.runId, input.callKey, encryptJson(input.result)],
+  )
+  if ((rowCount ?? 0) !== 1) throw new Error('[hitl] send claim could not finish')
 }
 
 /** One held payload of the caller's, not past its expiry, or null (unknown,

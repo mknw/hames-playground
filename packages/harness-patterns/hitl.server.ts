@@ -119,7 +119,9 @@ export interface HitlState {
 export function hitlReplayKey(
   request: Pick<HitlRequestEventData, 'kind' | 'key' | 'options'>,
 ): string {
-  const ids = [...new Set(request.options.map((o) => o.id))].sort()
+  const ids = request.options
+    .map((o) => [o.id, [...new Set((o.flags ?? []).map((f) => f.id))].sort()] as const)
+    .sort(([a], [b]) => a.localeCompare(b))
   return JSON.stringify([request.kind, request.key, ids])
 }
 
@@ -165,7 +167,15 @@ export function readHitl(ctx: Pick<UnifiedContext, 'events'>): HitlState {
     const request = requests.get(answer.requestId)
     if (!request?.blocking) continue
     if (answer.kind !== request.kind || answer.key !== request.key) continue
-    if (!request.options.some((o) => o.id === answer.choice && !o.unavailable)) continue
+    const option = request.options.find((o) => o.id === answer.choice && !o.unavailable)
+    if (!option) continue
+    const allowedFlags = new Set((option.flags ?? []).map((f) => f.id))
+    if (
+      Object.entries(answer.flags ?? {}).some(
+        ([id, value]) => !allowedFlags.has(id) || typeof value !== 'boolean',
+      )
+    )
+      continue
     answers.set(hitlReplayKey(request), answer)
   }
 
@@ -550,6 +560,7 @@ export function recordedHolding(
   | {
       readonly choice: string
       readonly requestId: string
+      readonly flags: Readonly<Record<string, boolean>>
       readonly summary: Readonly<Record<string, string | number | boolean | null>>
     }
   | undefined {
@@ -568,8 +579,21 @@ export function recordedHolding(
   return {
     choice: answer.choice as string,
     requestId: answer.requestId,
+    flags: answer.flags ?? {},
     summary: request?.data.summary ?? {},
   }
+}
+
+/** Read one request from the owning run's unfiltered event journal. A pattern
+ * replay contains only its own bracket, while the HITL request belongs to the
+ * harness; N8 needs its original payloadRef before it may read an answer. */
+export function holdingRequestInRun(requestId: string): HitlRequestEventData | undefined {
+  const run = hitlRunStore.getStore()
+  if (!run) return undefined
+  const event = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)].find(
+    (e) => e.type === 'hitl_request' && isRequest(e) && e.data.requestId === requestId,
+  )
+  return event && isRequest(event) ? event.data : undefined
 }
 
 /** Is there an attended HITL run here, someone a request can reach? False

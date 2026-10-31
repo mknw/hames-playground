@@ -86,3 +86,80 @@ for (const theme of ['dark', 'light'] as const) {
     expect(await answerCount(request)).toBe(0)
   })
 }
+
+// N8-09. MUTATIONS: truncate a row, default Accept, or put the actions inside
+// the scroller → the last marker, initial state, or keyboard path turns red.
+test('a long N8 checklist stays readable and keyboard-operable', async ({ page, appUrl }) => {
+  const request = '5d2e7b0a-1c3f-4e5a-8b9c-0d1e2f3a4b59'
+  const id = 'e2e-n8-long-checklist'
+  const rows = Array.from({ length: 24 }, (_, index) => ({
+    index,
+    callKey: `synthetic-key-${index}`,
+    digest: `digest-${index}`,
+    tool: 'synthetic_search',
+    args: { query: `${'x'.repeat(2000)}LAST-${index}` },
+    hosts: ['example.test'],
+    lines: [`query ${index}`],
+    spans: [],
+  }))
+  const options = [
+    {
+      id: 'continue',
+      label: 'Continue with selected requests',
+      unattended: true,
+      flags: rows.map((r) => ({
+        id: `accept:${r.callKey}`,
+        label: `Request ${r.index + 1}`,
+        default: false,
+      })),
+    },
+    { id: 'refuse-all', label: 'Refuse all similar actions' },
+    { id: 'interrupt', label: 'Interrupt', stopsRun: true },
+  ]
+  await open(page, appUrl, { theme: 'dark' })
+  await seedPaused(
+    id,
+    request,
+    { v: 1, mode: 'parallel', members: rows, rows },
+    'Synthetic long checklist',
+    {
+      kind: 'egress-batch-release',
+      question: 'Review requests to outside services',
+      options,
+      defaultOption: 'continue',
+      summary: { count: rows.length },
+    },
+  )
+  await page.goto(`${appUrl}/?c=${id}`)
+  await page
+    .getByRole('region', { name: 'Waiting for your decision' })
+    .getByRole('button', { name: 'Review' })
+    .click()
+  const dialog = page.getByRole('dialog', { name: 'Review requests to outside services' })
+  await expect(dialog).toBeVisible()
+  await expect(
+    dialog.getByRole('button', { name: 'Continue with selected requests' }),
+  ).toBeFocused()
+  await expect(dialog.locator('[data-testid^="hitl-batch-row-"]')).toHaveCount(24)
+  await expect(dialog.getByTestId('hitl-batch-args-23')).toContainText('LAST-23')
+  await expect(dialog.getByTestId('hitl-batch-row-23')).toContainText('Refuse')
+  await dialog.getByRole('button', { name: 'Request 24' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(dialog.getByTestId('hitl-batch-row-23')).toBeFocused()
+  expect(await dialog.getByTestId('hitl-batch-row-23').ariaSnapshot()).toContain(
+    'Request 24: synthetic_search',
+  )
+  const lastChoice = dialog.getByTestId('hitl-batch-choice-23').getByRole('checkbox')
+  await expect(lastChoice).not.toBeChecked()
+  await page.keyboard.press('Tab')
+  await expect(dialog.getByText('Decoded and normalized view').last()).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(lastChoice).toBeFocused()
+  await page.keyboard.press('Space')
+  await expect(dialog.getByTestId('hitl-batch-row-23')).toContainText('Accept')
+  await expect(dialog.getByTestId('hitl-batch-row-0')).toContainText('Refuse')
+  expect(serious(await new AxeBuilder({ page }).include('[role="dialog"]').analyze())).toEqual([])
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  expect(await answerCount(request)).toBe(0)
+})

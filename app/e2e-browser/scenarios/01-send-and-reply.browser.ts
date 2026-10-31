@@ -40,8 +40,7 @@ test('a sent message gets an assistant reply on screen, and the sidebar picks th
   // would pass on a sidebar that renders nothing at all.
   await expect(page.getByText('No conversations yet. Send a message to start.')).toBeVisible()
 
-  // The flip made `general-next` the default; this scenario asserts `search`'s Router chain
-  // below, so it says so. Picked AFTER the empty-state check: choosing an agent adds a
+  // Select the registered agent explicitly. Picked AFTER the empty-state check: choosing it adds a
   // placeholder row to the sidebar.
   await chooseAgent(page, 'General Agent · Next')
   await send(page, QUESTION)
@@ -63,10 +62,10 @@ test('a sent message gets an assistant reply on screen, and the sidebar picks th
   await expect(threadRow(page, FAKE_TITLE)).toBeVisible()
 
   // Evidence, not inputs: the turn really ran a chain through the fake rather
-  // than short-circuiting somewhere. `Router` is the first call every turn
-  // makes, and `Synthesize` is the one whose text became the bubble above.
+  // than short-circuiting somewhere. `LoopController` starts the agent's loop,
+  // and `Synthesize` is the one whose text became the bubble above.
   const served = await backend.calls()
-  expect(served.map((call) => call.fn)).toContain('Router')
+  expect(served.map((call) => call.fn)).toContain('LoopController')
   expect(served.map((call) => call.fn)).toContain('Synthesize')
 
   // And the tool half actually ran: the fake gateway saw the loop's call.

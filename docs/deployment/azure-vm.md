@@ -379,9 +379,10 @@ hames-app` therefore says `active` on a deploy that serves nothing: verify by
 ```bash
 test "$(id -u)" -ne 0 || exit 1
 cd /opt/hames && ( umask 022; git pull )
-cd app && pnpm install --frozen-lockfile && pnpm build
+( cd /opt/hames && pnpm install --frozen-lockfile )
+( cd /opt/hames/app && pnpm build )
 sudo systemctl restart hames-app
-docker compose pull && docker compose up -d   # only if the gateway image moved
+( cd /opt/hames && docker compose pull && docker compose up -d )   # only if the gateway image moved
 ```
 
 **Logs:** `journalctl -u hames-app` (UI) · `docker compose logs -f mcp-gateway` (gateway).

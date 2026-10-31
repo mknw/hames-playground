@@ -979,17 +979,11 @@ post-upgrade smoke including the embedder and explicitly authorized private-tier
 checks. Same-disk dumps are required for this change window even while scheduled
 off-box backups are deferred. That runbook also covers additive schema rollback.
 
-**A bad app release** — the data tier is untouched, so this is a rebuild:
-
-```bash
-cd /opt/hames
-test "$(id -u)" -ne 0 || exit 1
-umask 022
-git log --oneline -5                      # find the last good commit
-( umask 022; git checkout <good-sha> )
-docker compose up -d --build app          # Caddy and the data tier keep running
-docker compose logs -f app
-```
+**A bad app release:** use [application upgrade §4's gated rollback](deployment/app-upgrade.md#4-schema-rollback-decision).
+It checks checkout ownership and modes, captures a fresh shared-service baseline,
+predicts the complete Compose boot, and compares identities and the rendered
+gateway file after boot. A targeted `docker compose up -d --build app` is not a
+data-tier isolation guarantee: Compose follows service dependencies.
 
 > **This is only data-safe on the near side of #260, and that is now behind
 > you.** The app tier is stateless with respect to the database, so checking

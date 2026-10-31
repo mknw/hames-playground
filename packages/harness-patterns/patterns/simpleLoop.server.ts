@@ -268,6 +268,28 @@ function batchEventAction(action: ControllerAction): ControllerAction {
   }
 }
 
+/** N8 errors may contain outgoing args (including repair and transport errors).
+ * Only known fixed messages may enter an event or turn log. */
+const SAFE_BATCH_ERRORS = new Set([
+  ...Object.values(EGRESS_TEXTS),
+  EGRESS_BATCH_MISMATCH,
+  // The mcp-client constant is mirrored here so host tests that mock the
+  // transport module do not need to supply an unrelated export at import time.
+  'This request may have been sent, but its outcome was not recorded. It was not retried.',
+  'skipped: an earlier call in this batch did not run',
+])
+
+function batchEventOutcome(
+  outcome: SubCallOutcome,
+  refusal: (tool: string) => string,
+): SubCallOutcome {
+  return outcome.error &&
+    !SAFE_BATCH_ERRORS.has(outcome.error) &&
+    outcome.error !== refusal(outcome.tool)
+    ? { ...outcome, error: `Batch call ${outcome.index} failed; see encrypted plan.` }
+    : outcome
+}
+
 const truncateTo = (s: string, max: number): string =>
   s.length > max ? s.slice(0, max) + '…[truncated]' : s
 
@@ -731,6 +753,7 @@ export function simpleLoop<T extends SimpleLoopData>(
       callId: string | undefined,
       args: Record<string, unknown>,
       turn: number,
+      batchEventSafe = false,
     ): Promise<void> => {
       if (!config?.onToolResult || isHeldResult(result.data)) return
       try {
@@ -742,7 +765,9 @@ export function simpleLoop<T extends SimpleLoopData>(
           scope,
           'error',
           {
-            error: `onToolResult hook failed for ${tool}: ${message}`,
+            error: batchEventSafe
+              ? `onToolResult hook failed for batch call; see encrypted plan.`
+              : `onToolResult hook failed for ${tool}: ${message}`,
             severity: 'recoverable',
             turn,
           } as ErrorEventData,
@@ -1082,7 +1107,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                 },
                 () => callTool(member.tool, member.args),
               )
-              await hookResult(member.tool, result, call.callId, member.args, againBatch.n)
+              await hookResult(member.tool, result, call.callId, member.args, againBatch.n, true)
               return {
                 success: result.success,
                 result: result.data,
@@ -1102,16 +1127,19 @@ export function simpleLoop<T extends SimpleLoopData>(
                 error: EGRESS_TEXTS.turnClosed,
               }))
             : await runBatch(allCalls, plan.mode)
-        const resultData = outcomes.map((o, i): ToolResultEventData => ({
-          callId: plan.callIds[i],
-          batchId: againBatch.calls[i].call.batchId,
-          tool: o.tool,
-          result: o.result ?? null,
-          success: o.success,
-          error: o.error,
-          ...(o.sanitized ? { sanitized: o.sanitized } : {}),
-          ...(o.skipped ? { skipped: true } : {}),
-        }))
+        const resultData = outcomes.map((raw, i): ToolResultEventData => {
+          const o = batchEventOutcome(raw, refusal)
+          return {
+            callId: plan.callIds[i],
+            batchId: againBatch.calls[i].call.batchId,
+            tool: o.tool,
+            result: o.result ?? null,
+            success: o.success,
+            error: o.error,
+            ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+            ...(o.skipped ? { skipped: true } : {}),
+          }
+        })
         for (const data of resultData) trackEvent(scope, 'tool_result', data, resolved.trackHistory)
         turns.push(
           projectRound(
@@ -1408,7 +1436,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               run: async () => {
                 const result = await dispatch(c.tool_name, resolvedArgs, callKeys[position], true)
                 // onToolResult hook per sub-call — same contract as the singular path.
-                await hookResult(c.tool_name, result, callId, resolvedArgs, turn)
+                await hookResult(c.tool_name, result, callId, resolvedArgs, turn, !!plan)
                 return {
                   success: result.success,
                   result: result.data,
@@ -1581,7 +1609,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           const dispatched = subCalls.some((sc, i) => sc.run && !outcomes[i].skipped)
           if (dispatched) streak.dispatched()
 
-          const resultData = outcomes.map((o, i): ToolResultEventData => ({
+          const eventOutcomes = plan ? outcomes.map((o) => batchEventOutcome(o, refusal)) : outcomes
+          const resultData = eventOutcomes.map((o, i): ToolResultEventData => ({
             callId: callIds[i],
             batchId,
             tool: o.tool,
@@ -1610,7 +1639,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           )!
           turns.push(entry)
           const anySucceeded = outcomes.some((o) => o.success)
-          const errors = combineOutcomes(outcomes).errors
+          const errors = combineOutcomes(eventOutcomes).errors
 
           // Partial failure → continue (the controller sees per-call __error
           // entries and can retry just those). ALL failed → the same, since
@@ -1628,7 +1657,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             hasError = true
             errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
             errorTurn = turn
-            if (controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
+            if (!plan && controllerLlmCall?.hitOutputCap) errorLlmCall = controllerLlmCall
             break
           }
           if (!anySucceeded) {
@@ -1638,7 +1667,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               hasError = true
               errorMessage = `All ${allCalls.length} calls of the multi-call turn failed: ${errors.join('; ')}`
               errorTurn = turn
-              errorLlmCall = controllerLlmCall
+              errorLlmCall = plan ? undefined : controllerLlmCall
               recoveryCapHit = true
               break
             }
@@ -1654,7 +1683,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               // is an LLM-output failure, not a tool failure: carry the
               // response so the panel can show what was actually generated.
               // Tool-level failures keep no llmCall — the model's output was fine.
-              controllerLlmCall?.hitOutputCap ? controllerLlmCall : undefined,
+              !plan && controllerLlmCall?.hitOutputCap ? controllerLlmCall : undefined,
             )
             continue
           }

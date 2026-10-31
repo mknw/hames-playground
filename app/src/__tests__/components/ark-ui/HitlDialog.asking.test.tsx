@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 
 const { installDomObservers } = await import('../../mocks/dom-observers')
-const { render } = await import('@solidjs/testing-library')
+const { render, fireEvent } = await import('@solidjs/testing-library')
 const { HitlDialog } = await import('../../../components/ark-ui/HitlDialog')
 type Props = Parameters<typeof HitlDialog>[0] & { kind: 'blocking' }
 type View = NonNullable<Extract<Props, { kind: 'blocking' }>['request']>
@@ -221,5 +221,64 @@ describe('the ingress-flag body', () => {
     expect(dialog.textContent).not.toContain('safe to use unchanged')
     expect(document.activeElement).toBe(q('hitl-blocking-option-leave-out'))
     expect(ids()).toEqual(['leave-out', 'use-sanitized', 'use-unchanged'])
+  })
+})
+
+describe('N8 checklist body', () => {
+  const request = (count = 12): View => ({
+    requestId: 'req-batch',
+    kind: 'egress-batch-release',
+    question: 'Review requests to outside services',
+    options: [
+      { id: 'continue', label: 'Continue with selected requests' },
+      { id: 'refuse-all', label: 'Refuse all similar actions' },
+      { id: 'interrupt', label: 'Interrupt' },
+    ],
+    defaultOption: 'continue',
+    summary: { count },
+    expiresAt: null,
+    recorded: null,
+    payload: {
+      v: 1,
+      rows: Array.from({ length: count }, (_, index) => ({
+        index,
+        tool: 'synthetic_search',
+        callKey: `key-${index}`,
+        args: {
+          q: `${'x'.repeat(3000)}END-${index}`,
+          nested: { url: `https://example.test/${index}` },
+        },
+        hosts: ['example.test'],
+        lines: [`q: ${index}`],
+      })),
+    },
+  })
+
+  // N8-09. MUTATIONS: default a row to Accept, truncate args, or omit a later
+  // row → the status, final marker, or row count assertions turn red.
+  it('starts every long-list row at Refuse and renders every exact argument', async () => {
+    mount(request())
+    await tick(80)
+    expect(document.activeElement).toBe(q('hitl-blocking-option-continue'))
+    expect(document.querySelectorAll('[data-testid^="hitl-batch-row-"]')).toHaveLength(12)
+    expect(q('hitl-batch-row-11')?.textContent).toContain('Refuse')
+    expect(q('hitl-batch-args-11')?.textContent).toContain('END-11')
+    expect(q('hitl-batch-args-11')?.textContent).toContain('https://example.test/11')
+  })
+
+  // N8-04. MUTATION: attach current row flags to a prompt-wide choice → red.
+  it('submits only selected flags on Continue and none on prompt-wide choices', async () => {
+    const first = mount(request(2))
+    await tick(80)
+    await fireEvent.click(q('hitl-batch-choice-1')!)
+    await fireEvent.click(q('hitl-blocking-option-continue')!)
+    expect(first.onChoose).toHaveBeenCalledWith('continue', { 'accept:key-1': true })
+  })
+
+  it('disables submission when the held payload cannot be loaded', async () => {
+    mount({ ...request(2), payload: null })
+    await tick()
+    expect((q('hitl-blocking-option-continue') as HTMLButtonElement).disabled).toBe(true)
+    expect((q('hitl-blocking-option-refuse-all') as HTMLButtonElement).disabled).toBe(true)
   })
 })

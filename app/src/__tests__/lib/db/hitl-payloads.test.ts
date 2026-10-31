@@ -21,13 +21,16 @@ import {
   deleteHitlPayloads,
   getHitlPayload,
   holdHitlPayload,
+  claimToolSend,
+  finishToolSend,
   stopHitlSweepTimer,
   sweepExpiredHitl,
 } from '../../../lib/db/hitl.server'
 import { closePool, query } from '../../../lib/db/client.server'
 import { looksEncrypted } from '../../../lib/db/crypto.server'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 import {
   createHitlPayloadStore,
   purgeClosedPayloads,
@@ -51,9 +54,104 @@ beforeAll(async () => {
   stopHitlSweepTimer()
 })
 
+describe('N8 durable tool sends', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  // N8-03/08. MUTATION: remove the unique claim or digest comparison → the
+  // second attempt becomes new, or a changed payload reuses a prior claim.
+  it('commits a started claim before transport and never reclaims it', async () => {
+    const key = { userId: 'alice', sessionId: sid('claim'), runId: 'run-1', callKey: 'call-1' }
+    expect(await claimToolSend({ ...key, digest: 'digest-a' })).toEqual({ status: 'new' })
+    expect(await claimToolSend({ ...key, digest: 'digest-a' })).toEqual({ status: 'unknown' })
+    expect(await claimToolSend({ ...key, digest: 'digest-b' })).toEqual({ status: 'mismatch' })
+    const { rows } = await query<{ digest: string; result: string | null }>(
+      'SELECT digest, result FROM tool_send_claims WHERE session_id = $1',
+      [key.sessionId],
+    )
+    expect(looksEncrypted(rows[0].digest)).toBe(true)
+    expect(rows[0].result).toBeNull()
+  })
+
+  // N8-03. MUTATION: omit the finished result read → a replay sees unknown.
+  it('returns an encrypted finished result without a second send claim', async () => {
+    const key = {
+      userId: 'alice',
+      sessionId: sid('finished'),
+      runId: 'run-1',
+      callKey: 'call-1',
+      digest: 'digest-a',
+    }
+    await claimToolSend(key)
+    const result = { success: true, data: { synthetic: 'private-result' } }
+    await finishToolSend({ ...key, result })
+    expect(await claimToolSend(key)).toEqual({ status: 'finished', result })
+    const { rows } = await query<{ result: string }>(
+      'SELECT result FROM tool_send_claims WHERE session_id = $1',
+      [key.sessionId],
+    )
+    expect(looksEncrypted(rows[0].result)).toBe(true)
+    expect(rows[0].result).not.toContain('private-result')
+  })
+
+  // N8-03. MUTATION: keep the started claim in process memory instead of the
+  // database → a second Node process reports new and could send twice.
+  it('a fresh process sees the committed started claim as outcome unknown', async () => {
+    const key = {
+      userId: 'alice',
+      sessionId: sid('fresh-process'),
+      runId: 'run-1',
+      callKey: 'call-1',
+      digest: 'digest-a',
+    }
+    expect(await claimToolSend(key)).toEqual({ status: 'new' })
+    const probe = `import { claimToolSend, stopHitlSweepTimer } from './src/lib/db/hitl.server.ts';
+      import { closePool } from './src/lib/db/client.server.ts';
+      (async () => { const result = await claimToolSend(JSON.parse(process.env.N8_CLAIM_KEY!));
+        process.stdout.write('N8_PROBE:' + JSON.stringify(result) + '\\n'); stopHitlSweepTimer(); await closePool(); })().catch((e) => {
+          process.stderr.write(String(e)); process.exitCode = 1; });`
+    const modules = path.resolve(process.cwd(), '../node_modules/.pnpm')
+    const tsx = readdirSync(modules).find((name) => name.startsWith('tsx@'))!
+    const cli = path.join(modules, tsx, 'node_modules/tsx/dist/cli.mjs')
+    const output = execFileSync(process.execPath, [cli, '-e', probe], {
+      cwd: process.cwd(),
+      env: { ...process.env, N8_CLAIM_KEY: JSON.stringify(key) },
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+    expect(JSON.parse(output.split('N8_PROBE:')[1].split('\n')[0])).toEqual({ status: 'unknown' })
+  }, 30_000)
+})
+
+describe('N8 owner-scoped batch plans', () => {
+  beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
+
+  // N8-08. MUTATION: omit either owner or session from the store read → a
+  // different user or conversation can consume another checklist's payload.
+  it('loads the encrypted plan only for its owner and conversation', async () => {
+    const sessionId = sid('batch-owner')
+    const payload = { v: 1, rows: [{ index: 0, args: { query: 'synthetic-private' } }] }
+    const held = await holdHitlPayload({
+      userId: 'alice',
+      sessionId,
+      callKey: 'batch-key',
+      kind: 'egress-batch-release',
+      expiresAt: soon(),
+      payload,
+    })
+    const ref = (held as { payloadRef: string }).payloadRef
+    expect(await createHitlPayloadStore('alice', sessionId).load!(ref)).toEqual({
+      kind: 'egress-batch-release',
+      payload,
+    })
+    expect(await createHitlPayloadStore('mallory', sessionId).load!(ref)).toBeNull()
+    expect(await createHitlPayloadStore('alice', sid('other-session')).load!(ref)).toBeNull()
+  })
+})
+
 afterAll(async () => {
   if (!dbAvailable) return
   await query('DELETE FROM hitl_payloads WHERE session_id LIKE $1', [`test-held-%-${SUFFIX}`])
+  await query('DELETE FROM tool_send_claims WHERE session_id LIKE $1', [`test-held-%-${SUFFIX}`])
   await closePool()
 })
 

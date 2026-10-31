@@ -386,12 +386,14 @@ describe('runBatch executor', () => {
 
     let active = 0
     let peak = 0
+    const completed: number[] = []
     const calls = Array.from({ length: 7 }, (_, i) => ({
       tool: `t${i}`,
       run: async () => {
         active++
         peak = Math.max(peak, active)
-        await new Promise((r) => setTimeout(r, 15))
+        await new Promise((r) => setTimeout(r, i === 0 ? 30 : 1))
+        completed.push(i)
         active--
         return { success: true, result: i }
       },
@@ -400,6 +402,7 @@ describe('runBatch executor', () => {
     const outcomes = await runBatch(calls, 'parallel')
     expect(peak).toBeLessThanOrEqual(MAX_PARALLEL_TOOL_CALLS)
     expect(peak).toBeGreaterThan(1)
+    expect(completed.indexOf(1)).toBeLessThan(completed.indexOf(0))
     expect(outcomes.map((o) => o.index)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(outcomes.map((o) => o.result)).toEqual([0, 1, 2, 3, 4, 5, 6])
   })

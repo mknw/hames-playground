@@ -80,6 +80,7 @@ export {
   withEgressGate,
   egressClosures,
   EGRESS_RELEASE_KIND,
+  EGRESS_BATCH_RELEASE_KIND,
   EGRESS_RELEASE_OPTIONS,
   EGRESS_HELD_NOTE,
   type EgressClosures,

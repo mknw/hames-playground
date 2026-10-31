@@ -12,8 +12,11 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
+import ssl
 import subprocess
 import sys
+from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from urllib.parse import unquote, urlsplit
 
@@ -285,6 +288,32 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def private_health_http_status(status):
+    if type(status) is not int or not 100 <= status <= 599:
+        return "private health unavailable or inconclusive"
+    return "private health HTTP " + str(status) + (" (auth)" if status in (401, 403) else "")
+
+
+def private_health_failure(error):
+    # Never format a library exception: it may include the URL or bearer.
+    if isinstance(error, Refused):
+        return str(error)
+    if isinstance(error, HTTPError):
+        return private_health_http_status(error.code)
+    reason = error.reason if isinstance(error, URLError) else error
+    if isinstance(reason, socket.gaierror):
+        return "private health DNS error"
+    if isinstance(reason, TimeoutError):
+        return "private health timeout"
+    if isinstance(reason, ssl.SSLError):
+        return "private health TLS error"
+    if isinstance(reason, ConnectionRefusedError):
+        return "private health connection refused"
+    if isinstance(error, URLError) or isinstance(reason, OSError):
+        return "private health transport error"
+    return "private health unavailable or inconclusive"
+
+
 def private_health():
     # Off by default in both CLIs. A GET can itself cause a scale-from-zero;
     # this explicit operation is one read, never a completion or retry loop.
@@ -303,7 +332,7 @@ def private_health():
     request = Request(base[:-3] + "/health", headers={"Authorization": "Bearer " + key}, method="GET")
     # Ignore proxy env and refuse redirects, so the bearer has one destination.
     with build_opener(NoRedirect(), ProxyHandler({})).open(request, timeout=10) as response:
-        require(response.status == 200, "private health did not return 200")
+        require(response.status == 200, private_health_http_status(response.status))
 
 
 def main():
@@ -332,7 +361,14 @@ def main():
     except Exception as error:
         # Only our fixed labels are safe to print. Library errors may carry
         # a URL, bearer value or Docker-inspect content.
-        print("FAIL " + (str(error) if isinstance(error, Refused) else "probe unavailable or inconclusive"))
+        if args.private_health and isinstance(error, HTTPError):
+            try:
+                error.close()
+            except Exception:
+                pass
+        label = private_health_failure(error) if args.private_health else (
+            str(error) if isinstance(error, Refused) else "probe unavailable or inconclusive")
+        print("FAIL " + label)
         return 1
     print("PASS requested deployment check")
     return 0

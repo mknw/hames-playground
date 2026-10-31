@@ -6,18 +6,24 @@ python3 scripts/check-vps.test.py [--mutations]
 """
 import contextlib
 import copy
+import errno
+import gc
+import http.client
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import warnings
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = Path(os.environ.get("CHECK_VPS_SCRIPT", ROOT / "scripts/check-vps.py"))
@@ -293,6 +299,9 @@ class Probes(unittest.TestCase):
             opener.open.return_value.__enter__.return_value.status = 503
             with self.assertRaises(probe.Refused):
                 probe.private_health()
+            with patch.object(sys, "argv", [str(SOURCE), "--private-health"]), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), 1)
+            self.assertEqual(output.getvalue(), "FAIL private health HTTP 503\n")
             opener.open.side_effect = OSError("synthetic-key")
             with patch.object(sys, "argv", [str(SOURCE), "--private-health"]), contextlib.redirect_stdout(io.StringIO()) as output:
                 self.assertEqual(probe.main(), 1)
@@ -313,6 +322,70 @@ class Probes(unittest.TestCase):
                 build.assert_not_called()
                 request.assert_not_called()
                 opener.open.assert_not_called()
+
+    def test_private_health_failure_classes_do_not_echo_exception_data(self):
+        secret = "synthetic-secret-host-and-bearer"
+        cases = (
+            (HTTPError("https://" + secret + "/health", 401, secret, {}, io.BytesIO(secret.encode())), "FAIL private health HTTP 401 (auth)\n"),
+            (HTTPError("https://" + secret + "/health", 403, secret, {}, io.BytesIO(secret.encode())), "FAIL private health HTTP 403 (auth)\n"),
+            (HTTPError("https://" + secret + "/health", 503, secret, {}, io.BytesIO(secret.encode())), "FAIL private health HTTP 503\n"),
+            (URLError(socket.gaierror(-2, secret)), "FAIL private health DNS error\n"),
+            (URLError(TimeoutError(secret)), "FAIL private health timeout\n"),
+            (URLError(ssl.SSLError(secret)), "FAIL private health TLS error\n"),
+            (URLError(ConnectionRefusedError(secret)), "FAIL private health connection refused\n"),
+            (URLError(ConnectionResetError(secret)), "FAIL private health transport error\n"),
+            (URLError(OSError(errno.ENETUNREACH, secret)), "FAIL private health transport error\n"),
+            (http.client.RemoteDisconnected(secret), "FAIL private health transport error\n"),
+            (OSError(errno.EHOSTUNREACH, secret), "FAIL private health transport error\n"),
+            (URLError(secret), "FAIL private health transport error\n"),
+            (RuntimeError(secret), "FAIL private health unavailable or inconclusive\n"),
+        )
+        for error, expected in cases:
+            opener = MagicMock()
+            opener.open.side_effect = error
+            with self.subTest(error=type(error).__name__, expected=expected), patch.dict(os.environ, {"SMALL_LLM_BASE_URL": "https://" + secret + "/v1", "SMALL_LLM_API_KEY": secret}), patch.object(probe, "build_opener", return_value=opener), patch.object(sys, "argv", [str(SOURCE), "--private-health"]), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), 1)
+                self.assertEqual(output.getvalue(), expected)
+                self.assertNotIn(secret, output.getvalue())
+                opener.open.assert_called_once()
+
+    def test_private_health_http_error_does_not_warn_with_sensitive_reason(self):
+        secret = "synthetic-secret-host-and-bearer"
+        body = io.BytesIO(b"synthetic-body")
+        error = HTTPError("https://" + secret + "/health", 401, secret, {}, body)
+        opener = MagicMock()
+        opener.open.side_effect = error
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with warnings.catch_warnings(), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            warnings.simplefilter("always", ResourceWarning)
+            with patch.dict(os.environ, {"SMALL_LLM_BASE_URL": "https://small.invalid/v1", "SMALL_LLM_API_KEY": "synthetic-key"}), patch.object(probe, "build_opener", return_value=opener), patch.object(sys, "argv", [str(SOURCE), "--private-health"]):
+                self.assertEqual(probe.main(), 1)
+            opener.open.assert_called_once()
+            self.assertTrue(body.closed)
+            opener.open.side_effect = None
+            del error
+            gc.collect()
+        self.assertEqual(stdout.getvalue(), "FAIL private health HTTP 401 (auth)\n")
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_private_health_invalid_and_non_success_status_labels(self):
+        for status, expected in ((204, "private health HTTP 204"), (599, "private health HTTP 599"),
+                                 (0, "private health unavailable or inconclusive"),
+                                 (600, "private health unavailable or inconclusive"),
+                                 (None, "private health unavailable or inconclusive"),
+                                 ("503", "private health unavailable or inconclusive"),
+                                 (True, "private health unavailable or inconclusive")):
+            opener = MagicMock()
+            opener.open.return_value.__enter__.return_value.status = status
+            with self.subTest(status=status), patch.dict(os.environ, {"SMALL_LLM_BASE_URL": "https://small.invalid/v1", "SMALL_LLM_API_KEY": "synthetic-secret"}), patch.object(probe, "build_opener", return_value=opener), patch.object(sys, "argv", [str(SOURCE), "--private-health"]), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(probe.main(), 1)
+                self.assertEqual(output.getvalue(), "FAIL " + expected + "\n")
+                opener.open.assert_called_once()
+
+    def test_other_modes_keep_generic_library_error_label(self):
+        with patch.object(probe, "daemon", side_effect=RuntimeError("synthetic-secret")), patch.object(sys, "argv", [str(SOURCE), "--daemon"]), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(probe.main(), 1)
+        self.assertEqual(output.getvalue(), "FAIL probe unavailable or inconclusive\n")
 
 
 class CloneProbes(unittest.TestCase):
@@ -751,6 +824,7 @@ MUTATIONS = [
     ("runbook-instance-status", RUNBOOK, 'A failed upgrade means', 'Keep it off while the private deployments are paused.\n\nA failed upgrade means'),
     ("pinned-probe-present", BOOTSTRAP, '  [[ -f $APP_DIR/scripts/check-vps.py ]] || refuse', '  true || refuse'),
     ("tcp-remote-rst", SOURCE, 'r"Network is unreachable|', 'r"Connection refused|Network is unreachable|'),
+    ("health-http-error-close", SOURCE, '                error.close()', '                pass'),
 ]
 
 

@@ -242,6 +242,7 @@ test, both in `global-setup.ts`:
 | `10-pinned-conversations.browser.ts` | Pinning a conversation moves its row to the top of the sidebar — proved by which conversation the top row OPENS, not by an index — and the pinned state is legible with the cursor off the list. That last half is the reason this is a browser scenario: the pin is a hover-revealed control, so a pinned row whose glyph only appears under the cursor is present, labelled, `aria-pressed="true"` and invisible, which every layer below reads as a pass.                                                                                                                                                                                                                                                                                                                         |
 | `10-share-link.browser.ts`           | A conversation acquires a URL, survives a reload of it, and is turned into a share link that a SECOND browser context opens: the transcript is painted, the read-only banner names it, and the composer / New Chat / share / agent picker / dashboard link are ABSENT rather than disabled. Then the revocation half — the same link renders the not-found page and says nothing that admits a conversation is behind it. The one claim it cannot make (this suite runs with the dev bypass, so no context is truly anonymous) is named in the file, with the two layer-1 pins that make it instead.                                                                                                                                                                                 |
 | `14-wake-failure-bubble.browser.ts`  | A wake the box refuses ends the turn with an error bubble AND leaves it in the persisted transcript: still there once the notice is gone, and rebuilt after a reload (both themes). The refusal is a 400 aimed at the wake ping, so the poll ends at once and no wake budget is spent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `17-event-detail-theme.browser.ts`   | Synthetic context events open the observability event detail in light and dark themes. Checks the ordinary event and merged tool-pair surfaces, readable detail text, usage card, accordion and Close control.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ### What is NOT covered
 
@@ -260,14 +261,16 @@ to be complete. Add to it when you add a scenario that leaves something out.
   `E2E_LIVE=self_deployed` own those.
 - **Concurrency.** One worker, one user, one conversation at a time.
   `e2e/scenarios/03-concurrent-cold` owns overlapping turns, at the app layer.
-- **Every panel that is not the chat column.** The graph canvas, the Data Stash,
-  the terminal, the observability panel and the dashboard are all unvisited.
-  Scenarios 6–8 are what look at pixels: three surfaces (`lib/surfaces.ts`) plus
-  scenario 6's three individual elements. The observability panel is left out of
-  the screenshot comparison for a concrete reason rather than a budget one —
-  every pattern instance carries a random id suffix (`router-pab3iw`), so a
-  baseline of it needs a stable identifier for a pattern instance first, and
-  masking it would leave a screenshot of magenta rectangles asserting nothing.
+- **Panels outside the chat column.** The graph canvas, the Data Stash, the
+  terminal and the dashboard are unvisited. Scenario 17 opens the observability
+  event detail, but other observability flows remain unvisited. Scenarios 6–8
+  look at pixels on three surfaces (`lib/surfaces.ts`) plus scenario 6's three
+  individual elements; scenario 17 does not add screenshot comparison or axe
+  coverage for the observability panel. The panel is left out of screenshot
+  comparison for a concrete reason rather than a budget one — every pattern
+  instance carries a random id suffix (`router-pab3iw`), so a baseline of it
+  needs a stable identifier for a pattern instance first, and masking it would
+  leave a screenshot of magenta rectangles asserting nothing.
 - **The accessibility debt scenario 8 RECORDS rather than fixes.** Its
   `KNOWN_OPEN` list is the app's existing serious/critical violations, each with
   why it has not had a change of its own yet — `button-name` (icon-only buttons),

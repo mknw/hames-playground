@@ -20,6 +20,19 @@ import { eventColors, eventIconClasses } from '~/lib/observability/event-styles'
 import { LLMCallTabs } from './LLMCallTabs'
 import { SanitizedChip } from '../SanitizedChip'
 
+// Both detail overlays cover the same timeline surface. Keep their ground in
+// one place so ordinary labels and cards inherit the active theme together.
+const detailSurfaceStyle = {
+  position: 'absolute',
+  inset: '0',
+  'background-color': 'var(--ui-bg-secondary)',
+  'backdrop-filter': 'blur(4px)',
+  'z-index': '50',
+  display: 'flex',
+  'flex-direction': 'column',
+  overflow: 'hidden',
+} as const
+
 // ============================================================================
 // Event Detail Components
 // ============================================================================
@@ -595,18 +608,7 @@ export const ToolPairDetail = (props: {
   const resultData = () => props.result.data as ToolResultEventData
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: '0',
-        'background-color': 'rgba(13, 17, 23, 0.95)',
-        'backdrop-filter': 'blur(4px)',
-        'z-index': '50',
-        display: 'flex',
-        'flex-direction': 'column',
-        overflow: 'hidden',
-      }}
-    >
+    <div data-testid="event-detail-surface" style={detailSurfaceStyle}>
       {/* Header */}
       <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">
@@ -744,22 +746,7 @@ export const EventDetailPanel = (props: {
   }
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: '0',
-        'background-color':
-          type === 'decision_made' &&
-          ['score', 'noul'].includes((data as DecisionMadeEventData).type ?? '')
-            ? 'var(--ui-bg-secondary)'
-            : 'rgba(13, 17, 23, 0.95)',
-        'backdrop-filter': 'blur(4px)',
-        'z-index': '50',
-        display: 'flex',
-        'flex-direction': 'column',
-        overflow: 'hidden',
-      }}
-    >
+    <div data-testid="event-detail-surface" style={detailSurfaceStyle}>
       {/* Header */}
       <div flex="~" items="center" justify="between" p="4" border="b ui-border-primary">
         <div flex="~ col" gap="1">

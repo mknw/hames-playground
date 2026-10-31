@@ -255,6 +255,27 @@ ${block}`,
     const rollbackBlock = bashBlocks(rollback).find((block) =>
       block.includes('"$gate_copy" preboot'),
     )!
+    const rollbackMove = bashBlocks(doc).find((block) =>
+      block.includes('"$gate_copy" capture "$rollback_baseline"'),
+    )!
+    const capture = rollbackMove.match(/^.*"\$gate_copy" capture "\$rollback_baseline".*$/m)?.[0]
+    const checkoutStart = rollbackMove.indexOf(
+      '( umask 022; bash "$APP_DIR/scripts/bootstrap-vps.sh"',
+    )
+    const checkoutEnd = rollbackMove.indexOf(') || exit 1', checkoutStart)
+    expect(capture).toBeDefined()
+    expect(checkoutStart).toBeGreaterThan(-1)
+    expect(checkoutEnd).toBeGreaterThan(checkoutStart)
+    const checkoutLineStart = rollbackMove.lastIndexOf('\n', checkoutStart) + 1
+    const move = `${capture}\n${rollbackMove.slice(checkoutLineStart, checkoutEnd + ') || exit 1'.length)}`
+    const moved = traceStage(move)
+    expect(moved.status).toBe(0)
+    expect(moved.stdout).toBe('')
+    expect(moved.trace).toBe('GATE capture\nBOOTSTRAP checkout 0\n')
+    const captureFailure = traceStage(move, 'capture')
+    expect(captureFailure.status).not.toBe(0)
+    expect(captureFailure.stdout).toBe('')
+    expect(captureFailure.trace).toBe('GATE capture\n')
     for (const [block, expected] of [
       [
         upgradeBlock,

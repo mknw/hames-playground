@@ -1,5 +1,11 @@
 # @hames-ai/harness-baml
 
+## 0.7.0
+
+### Patch Changes
+
+- @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

@@ -132,23 +132,39 @@ const state = ((globalThis as typeof globalThis & { [KEY]?: SmallGpuState })[KEY
   refreshing: undefined,
 } as SmallGpuState)
 
-/** EUR/hour the small box's time-priced calls bill at: the rate of the GPU the
- *  box actually served, from the cached `/status` sample. Synchronous by seam
- *  AND pure by threat model — the cost pricing readers are sync and this read
- *  runs on EVERY tier's step, so it must never start a network call that
- *  could wake the box (`refreshSmallBoxGpuIfStale` is the only TTL-bounded
- *  kick, and only from a site that has just proven the box up). A missing,
- *  stale or unreadable sample prices at the HIGHEST known rate — never the
- *  previous container's family, never the base: the rendered figure is a
- *  floor (`≥`) and a floor must not understate (module docstring). */
-export function smallGpuEurPerHour(): number {
+/** The served GPU family and its EUR/hour in ONE synchronous read of the cached
+ * sample — a report can then state the basis of the very figure the pricing
+ * read returned, without two reads straddling a TTL expiry. Synchronous by
+ * seam AND pure by threat model — the cost pricing readers are sync and this
+ * read runs on EVERY tier's step, so it must never start a network call that
+ * could wake the box (`refreshSmallBoxGpuIfStale` is the only TTL-bounded
+ * kick, and only from a site that has just proven the box up). A missing,
+ * stale or unreadable sample prices at the HIGHEST known rate and names NO
+ * family — never the previous container's family, never the base: the
+ * rendered figure is a floor (`≥`) and a floor must not understate
+ * (module docstring). */
+export interface SmallGpuServed {
+  family: 'L4' | 'A10' | undefined
+  eurPerHour: number
+}
+
+export function smallGpuServed(): SmallGpuServed {
   const highest = () => Math.max(...SMALL_GPU_FAMILIES.map(rateFor))
   const sample = state.sample
   if (sample === undefined || Date.now() - sample.sampledAt >= SMALL_GPU_SAMPLE_TTL_MS) {
-    return highest()
+    return { family: undefined, eurPerHour: highest() }
   }
   const entry = SMALL_GPU_FAMILIES.find((candidate) => candidate.family === sample.family)
-  return entry ? rateFor(entry) : highest()
+  return entry
+    ? { family: entry.family, eurPerHour: rateFor(entry) }
+    : { family: undefined, eurPerHour: highest() }
+}
+
+/** EUR/hour the small box's time-priced calls bill at: the rate of the GPU the
+ * box actually served, from the cached `/status` sample — `smallGpuServed()`
+ * without the family half. */
+export function smallGpuEurPerHour(): number {
+  return smallGpuServed().eurPerHour
 }
 
 /** Read `/status` once and cache which GPU it names. Deduped (concurrent

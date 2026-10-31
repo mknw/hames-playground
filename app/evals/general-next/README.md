@@ -53,8 +53,14 @@ the number the guard redesign exists to move.
 The observer prices completed calls, so the final in-flight call can overshoot the
 80% threshold and even the configured cap. The report adds a separate conservative
 private-infrastructure line: elapsed scenario seconds (including setup and endpoint
-wake waits) × (`LARGE_LLM_EUR_PER_HOUR` + `SMALL_LLM_EUR_PER_HOUR`), converted to USD at
-the same static `EUR_PER_USD` used by the observer, refused outside 0.75–0.95. Each hourly rate is floored at its committed default. Observer call-time cost is also
+wake waits) × (`LARGE_LLM_EUR_PER_HOUR` + the small box's served-family rate), converted to USD at
+the same static `EUR_PER_USD` used by the observer, refused outside 0.75–0.95. Each hourly rate is
+floored at its committed default. The small box's rate follows the GPU family its status
+sample reported — `SMALL_LLM_EUR_PER_HOUR` for the L4, its derived ratio (or
+`SMALL_LLM_EUR_PER_HOUR_A10`) for the A10, and the highest supported-family rate until a
+family is observed — and the report records the observed family, the pricing basis, and the
+conservative reservation; a family change mid-run can raise the floor, never lower it.
+Observer call-time cost is also
 counted, deliberately overcounting overlap. Infrastructure remains a floor because
 provider rounding and unobserved infrastructure are not measured; configured scale-down tails are reserved once per run and after idle gaps longer than each box’s window;
 this is not an invoice ceiling. Both cap and stop threshold appear in every report.

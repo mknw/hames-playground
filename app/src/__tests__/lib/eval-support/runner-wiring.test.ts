@@ -3,8 +3,15 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseEnv } from 'node:util'
 import { runInNewContext } from 'node:vm'
-import { it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { assertLivePreconditions } from '../../../lib/eval-support/live-preconditions'
+import { smallInfraRate } from '../../../lib/eval-support/small-infra.server'
+import {
+  resetSmallGpuForTests,
+  seedSmallGpuForTests,
+} from '../../../lib/inference/small-gpu.server'
+
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 const read = (file: string) => readFileSync(resolve(file), 'utf8')
 const run = () => read('evals/general-next/run.ts')
 it.each([
@@ -227,12 +234,18 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
   // sends the 27B roles to OpenRouter — there is no GPU to bill.
   expect(s).toContain('seconds: largeScaledownSeconds()')
   expect(s).toContain('seconds: smallScaledownSeconds()')
-  expect(s).toContain('openRouterLarge ? smallRate : largeRate + smallRate')
+  expect(s).toContain('openRouterLarge ? small.eurPerHour : largeRate + small.eurPerHour')
   expect(s).toContain('...(openRouterLarge')
   expect(s).toMatch(
     /floorHourlyRate\(\s*rates\.largeEurPerHour\(\),\s*DEFAULT_LARGE_LLM_EUR_PER_HOUR,?\s*\)/,
   )
-  expect(s).toContain('floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)')
+  // #882: the small box's rate is read per charge from the GPU-aware seam
+  // (family-priced, conservative while unobserved), never captured once at
+  // the L4 base — and the report states the observed family and its basis.
+  expect(s).toContain('const small = smallInfraRate()')
+  expect(s).not.toContain('smallRate')
+  expect(s).toContain('smallGpuFamily: small.family')
+  expect(s).toContain('smallGpuBasis: small.basis')
   // The route switch is read at the seam, before the budget exists.
   expect(s.indexOf('largeOnOpenRouter()')).toBeGreaterThan(s.indexOf('clients.assertInferenceTier'))
   expect(s.indexOf('largeOnOpenRouter()')).toBeLessThan(s.indexOf('new SpendBudget('))
@@ -332,4 +345,124 @@ it('every runnable scenario with an indexed deliverable names the Data Stash on 
   ])
   for (const [, source] of runnable)
     expect(source).toMatch(/\n {2}turnAnswerIncludes: \[\['Data Stash'\]/)
+})
+
+// #882: the runner's small-box charges must follow the served GPU family.
+// These execute the runner's REAL tick and reservation blocks (extracted from
+// its source, so nothing under src/ imports evals/) with the production seam
+// seeded per family — the recorded charge is the family's rate, and the
+// OpenRouter switch still drops only the large half.
+describe('the small box charges through the served-family seam (#882)', () => {
+  /** Independent full-container arithmetic from the 2026-10-30 Modal list
+   * prices — the derivation `modal-pricing.ts` encodes, not its output. */
+  const L4_USD = (0.8 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15
+  const A10_USD = (1.1 + 2 * 0.0000131 * 3600 + 24 * 0.00000222 * 3600) * 1.15
+  const L4_EUR = L4_USD * 0.86
+  const A10_EUR = A10_USD * 0.86
+  const active = { agent: 'general-next', scenario: 'count', tier: 'self_deployed' }
+
+  beforeEach(() => {
+    resetSmallGpuForTests()
+    vi.stubEnv('SMALL_LLM_EUR_PER_HOUR', undefined as unknown as string)
+    vi.stubEnv('SMALL_LLM_EUR_PER_HOUR_A10', undefined as unknown as string)
+    vi.stubEnv('EUR_PER_USD', undefined as unknown as string)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    resetSmallGpuForTests()
+  })
+
+  // MUTATION: restore the pre-fix captured rate in run.ts (`const smallRate =
+  // floorHourlyRate(rates.smallLlmEurPerHour(), ...)` and `smallRate` in the
+  // tick/begin/report sites) → the A10 rows below redden on the recorded
+  // value: the context still provides `smallRate` (the L4 figure the old
+  // code captured) precisely so the reverted block RUNS and fails the
+  // assertion, instead of dying on a ReferenceError that proves nothing.
+  it.each([
+    ['L4', L4_EUR],
+    ['A10', A10_EUR],
+    [undefined, A10_EUR], // no sample: unknown prices at the highest supported family
+  ] as const)(
+    'tick charges elapsed time at the %s family rate, dropping the large half on OpenRouter',
+    (family, expectedSmall) => {
+      if (family !== undefined) seedSmallGpuForTests(family)
+      const block = /const tick = \(\) => \{([\s\S]*?)\n {2}\}\n {2}const stop/.exec(run())?.[1]
+      expect(block).toBeDefined()
+      const charge = (openRouterLarge: boolean) => {
+        const charged: number[] = []
+        runInNewContext(`(() => {${block}})()`, {
+          active,
+          live: true,
+          budget: {
+            infrastructure: (_key: unknown, _ms: number, rate: number) => charged.push(rate),
+          },
+          started: Date.now() - 60_000,
+          openRouterLarge,
+          largeRate: 4,
+          smallInfraRate,
+          smallRate: L4_EUR,
+          Date,
+        })
+        return charged
+      }
+      expect(charge(false), `${family}: both boxes charge`).toEqual([4 + expectedSmall])
+      expect(charge(true), `${family}: OpenRouter drops only the large half`).toEqual([
+        expectedSmall,
+      ])
+    },
+  )
+
+  it.each([
+    ['L4', L4_EUR],
+    ['A10', A10_EUR],
+    [undefined, A10_EUR],
+  ] as const)(
+    'the tail reservation prices the %s family, before the wake, and keeps the large tail off OpenRouter',
+    (family, expectedSmall) => {
+      if (family !== undefined) seedSmallGpuForTests(family)
+      const inner =
+        /const small = smallInfraRate\(\)\s*budget\.beginInfrastructure\(active, started, \[([\s\S]*?)\]\)\n {12}if \(budget\.stopped\)/.exec(
+          run(),
+        )?.[1]
+      expect(inner).toBeDefined()
+      const reserve = (openRouterLarge: boolean) => {
+        let boxes: Array<{ box: string; seconds: number; eurPerHour: number }> = []
+        // The seam statement is part of the runner's block, so the VM — not
+        // this test — evaluates it, exactly as the live runner does per charge.
+        runInNewContext(
+          'const small = smallInfraRate(); budget.beginInfrastructure(active, started, [' +
+            inner +
+            '])',
+          {
+            budget: {
+              beginInfrastructure: (
+                _key: unknown,
+                _now: number,
+                reserved: Array<{ box: string; seconds: number; eurPerHour: number }>,
+              ) => {
+                boxes = reserved
+              },
+            },
+            active,
+            started: 0,
+            openRouterLarge,
+            largeScaledownSeconds: () => 300,
+            smallScaledownSeconds: () => 600,
+            largeRate: 4,
+            smallInfraRate,
+            smallRate: L4_EUR,
+          },
+        )
+        return boxes
+      }
+      for (const openRouterLarge of [false, true]) {
+        const boxes = reserve(openRouterLarge)
+        expect(boxes.map((b) => b.box)).toEqual(
+          openRouterLarge ? ['small'] : ['self_deployed', 'small'],
+        )
+        expect(boxes.find((b) => b.box === 'small')!.eurPerHour).toBeCloseTo(expectedSmall, 6)
+        if (!openRouterLarge) expect(boxes[0].eurPerHour).toBe(4)
+      }
+    },
+  )
 })

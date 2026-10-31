@@ -32,6 +32,8 @@ export interface SpendRow extends SpendKey {
   functions: Record<string, FunctionSpend>
   observerUsd: number
   infrastructureUsd: number
+  /** Pricing basis of the infrastructure amount retained by the running maximum. */
+  infrastructureBasis?: string
   tailUsd: number
   calls: number
   unknownCost: boolean
@@ -49,7 +51,7 @@ export class SpendBudget {
   readonly capUsd: number
   readonly stopUsd: number
   readonly rows: SpendRow[] = []
-  readonly tailLines: Array<SpendKey & { box: string; usd: number }> = []
+  readonly tailLines: Array<SpendKey & { box: string; usd: number; basis?: string }> = []
   private lastInfrastructureEnd?: number
   reason?: string
 
@@ -116,7 +118,7 @@ export class SpendBudget {
 
   /** Cumulative private scenario time, including setup/wake, charged ADDITIONALLY
    * to observer cost. Never subtract call-time pricing: this is conservative. */
-  infrastructure(key: SpendKey, elapsedMs: number, eurPerHour: number): void {
+  infrastructure(key: SpendKey, elapsedMs: number, eurPerHour: number, basis?: string): void {
     if (
       !Number.isFinite(elapsedMs) ||
       elapsedMs < 0 ||
@@ -127,10 +129,11 @@ export class SpendBudget {
       return
     }
     const row = this.row(key)
-    row.infrastructureUsd = Math.max(
-      row.infrastructureUsd,
-      ((elapsedMs / 3_600_000) * eurPerHour) / this.eurPerUsd,
-    )
+    const usd = ((elapsedMs / 3_600_000) * eurPerHour) / this.eurPerUsd
+    if (usd > row.infrastructureUsd) {
+      row.infrastructureUsd = usd
+      row.infrastructureBasis = basis
+    }
     this.check()
   }
 
@@ -139,9 +142,9 @@ export class SpendBudget {
   beginInfrastructure(
     key: SpendKey,
     now: number,
-    boxes: Array<{ box: string; seconds: number; eurPerHour: number }>,
+    boxes: Array<{ box: string; seconds: number; eurPerHour: number; basis?: string }>,
   ): void {
-    for (const { box, seconds, eurPerHour } of boxes) {
+    for (const { box, seconds, eurPerHour, basis } of boxes) {
       if (!Number.isFinite(seconds) || seconds <= 0) {
         this.reason = 'Unknown scale-down tail; refusing further calls'
         return
@@ -156,7 +159,7 @@ export class SpendBudget {
           return
         }
         this.row(key).tailUsd += usd
-        this.tailLines.push({ ...key, box, usd })
+        this.tailLines.push({ ...key, box, usd, basis })
         this.check()
       }
     }

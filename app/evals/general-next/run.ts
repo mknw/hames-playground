@@ -23,10 +23,7 @@ import {
   proxyEnvironment,
   assertEgressSelfTest,
 } from '../../src/lib/eval-support/hermetic-egress'
-import {
-  DEFAULT_LARGE_LLM_EUR_PER_HOUR,
-  DEFAULT_SMALL_LLM_EUR_PER_HOUR,
-} from '../../src/lib/settings'
+import { DEFAULT_LARGE_LLM_EUR_PER_HOUR } from '../../src/lib/settings'
 import {
   assertLivePreconditions,
   poisonPublicProviders,
@@ -116,7 +113,11 @@ async function main() {
   process.env.MCP_GATEWAY_URL = gateway.url
   const rates = await import('../../src/lib/cost-rates.server')
   const largeRate = floorHourlyRate(rates.largeEurPerHour(), DEFAULT_LARGE_LLM_EUR_PER_HOUR)
-  const smallRate = floorHourlyRate(rates.smallLlmEurPerHour(), DEFAULT_SMALL_LLM_EUR_PER_HOUR)
+  // #882: the small box's rate is NEVER captured — it is read per charge
+  // through the GPU-aware seam below, so an A10 tail or elapsed second is
+  // never priced at the L4 base and a pre-wake reservation takes the
+  // highest supported-family rate rather than an optimistic assumption.
+  const { smallInfraRate } = await import('../../src/lib/eval-support/small-infra.server')
   const { largeScaledownSeconds } = await import('../../src/lib/inference/large-activity.server')
   const { smallScaledownSeconds } = await import('../../src/lib/inference/cold-start.server')
   await import('../../src/lib/inference/config.server')
@@ -153,6 +154,7 @@ async function main() {
   let started = 0
   let driver: ConversationDriver | undefined
   const write = () => {
+    const small = smallInfraRate()
     // Every attempt of a re-run scenario is its own row (#842); a scenario with no
     // graded attempt yet falls back to the not-run/gated row.
     const rows = jobs.flatMap(({ key }): ConversationResult[] => {
@@ -196,10 +198,12 @@ async function main() {
           stopDetail: wakeDetail,
           eurPerUsd: budget.eurPerUsd,
           largeEurPerHour: largeRate,
-          smallEurPerHour: smallRate,
+          smallEurPerHour: small.eurPerHour,
+          smallGpuFamily: small.family,
+          smallGpuBasis: small.basis,
           captureFile: capture ? captureFile : undefined,
           limitation:
-            'The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times both GPU hourly rates; observer call-time cost is also counted. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.',
+            "The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times the large GPU hourly rate plus the small box's served-family rate — the highest supported-family rate until the box's GPU is observed, and charges take the running maximum, so a mid-run family change can raise the floor but never lower it. Tails reserved before the family was observed keep that conservative rate; observer call-time cost is also counted, deliberately overcounting overlap. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.",
           results: rows.map((r) => {
             const spend = budget.row(r)
             return { ...r, spend, screen: screenShare(spend) }
@@ -212,17 +216,24 @@ async function main() {
     if (capture) writeFileSync(captureFile, JSON.stringify(capture, null, 2) + '\n')
   }
   const tick = () => {
-    if (active && live)
+    if (active && live) {
       // The large box's wall-clock is charged only while the large endpoint is
       // the box: under the OpenRouter switch there is no GPU to bill and the
       // provider-reported call costs carry the 27B spend (observed above), so
       // charging its hourly rate here would manufacture a floor for a box that
-      // is not running and eat the cap with it.
+      // is not running and eat the cap with it. The small box's rate is re-read
+      // per tick through the same GPU-aware seam the observer prices calls
+      // with: before the wake's sample lands it is the highest
+      // supported-family rate (conservative), and after it the served
+      // family's rate (#882).
+      const small = smallInfraRate()
       budget.infrastructure(
         active,
         Date.now() - started,
-        openRouterLarge ? smallRate : largeRate + smallRate,
+        openRouterLarge ? small.eurPerHour : largeRate + small.eurPerHour,
+        small.basis,
       )
+    }
   }
   const stop = () => {
     write()
@@ -266,6 +277,13 @@ async function main() {
       } else {
         try {
           if (live) {
+            // Reserved BEFORE the wake, so a tail alone can stop the run — and
+            // therefore before the served GPU can be observed: the seam prices
+            // an unknown family at the highest supported-family rate, which is
+            // the conservative reservation #882 requires, and a fresh sample
+            // from an earlier scenario in this process names the family and
+            // prices the tail at it.
+            const small = smallInfraRate()
             budget.beginInfrastructure(active, started, [
               ...(openRouterLarge
                 ? []
@@ -276,7 +294,12 @@ async function main() {
                       eurPerHour: largeRate,
                     },
                   ]),
-              { box: 'small', seconds: smallScaledownSeconds(), eurPerHour: smallRate },
+              {
+                box: 'small',
+                seconds: smallScaledownSeconds(),
+                eurPerHour: small.eurPerHour,
+                basis: small.basis,
+              },
             ])
             if (budget.stopped) stop()
             const { ensurePrivateTierAwake } = await import('../../src/lib/inference/wake.server')

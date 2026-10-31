@@ -148,10 +148,9 @@ a green CI run does not make for you.
   an answer about a tree that no longer exists; re-basing after the green
   invalidates the very run you merged on. "CI green" is all checks green with
   one exception: `shell · clone mutations` (`.github/workflows/ci.yml`'s
-  `clone-mutations`) may be **skipped** — skipped, never failed — when the
-  PR does not touch the job's subject, which is `scripts/**` or `deploy/**`,
-  the job's own definition, or its test files (`scripts/bootstrap-vps.test.sh`,
-  `app/src/__tests__/lib/config/compose-clones.test.ts`). It is slow (~23m)
+  `clone-mutations`) may be **skipped** only when the PR's changed paths are
+  irrelevant under that workflow's `clone-changes` filter; a failed job never
+  qualifies. It is slow (~23m)
   and deliberately NOT in the required gate (`check.needs`), so a skip is not
   a red; main's own run after each merge is the backstop. Owner ruling
   (2026-10-27, ~23:40 CET): "You may follow recommendations on the checks".

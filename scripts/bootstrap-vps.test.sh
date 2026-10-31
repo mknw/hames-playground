@@ -2133,6 +2133,43 @@ out=$(HAMES_APP_DIR="$tmproot/c1" HAMES_STATE_DIR="$tmproot/c1s" bash "$SCRIPT" 
 rc=$?
 if ((rc == 0)) && [[ $out == *"at $sha40"* ]]; then pass "9 C1: a full SHA is accepted (exit 0)"; else flunk "9 C1: full SHA (rc=$rc)" "$out"; fi
 
+# The checkout stage is callable without preflight. Fake Git records the mask
+# at the actual clone call, and a fake uid=0 must stop before any Git write.
+checkout_probe() { # root|user DIR
+  (
+    set -e
+    local probe_dir=$2
+    lib "$2"
+    REF=$sha40
+    umask 0002
+    sudo() { mkdir -p "${@: -1}"; }
+    git() {
+      umask >"$probe_dir/git-umask"
+      : >"$probe_dir/git-created"
+      exit 91
+    }
+    if [[ $1 == root ]]; then
+      id() {
+        if [[ $1 == -u ]]; then printf '0\n'; else command id "$@"; fi
+      }
+    fi
+    stage_checkout
+  ) 2>&1
+}
+mkdir -p "$tmproot/checkout-root" "$tmproot/checkout-user"
+out=$(checkout_probe root "$tmproot/checkout-root")
+rc=$?
+if ((rc == 1)) && [[ $out == *"checkout must run as the deployment user"* ]] &&
+  [[ ! -e $tmproot/checkout-root/git-umask ]]; then
+  pass "9 checkout: --only stage refuses root before Git"
+else flunk "9 checkout: root reached Git or was accepted (rc=$rc)" "$out"; fi
+out=$(checkout_probe user "$tmproot/checkout-user")
+rc=$?
+if ((rc == 91)) && [[ $(cat "$tmproot/checkout-user/git-umask" 2>/dev/null) == 0022 ]] &&
+  [[ $(stat -c %a "$tmproot/checkout-user/git-created" 2>/dev/null) == 644 ]]; then
+  pass "9 checkout: clone runs with 022 under inherited 0002"
+else flunk "9 checkout: clone inherited an unsafe mask (rc=$rc)" "$out"; fi
+
 # C2: exactly ONE primary key, and it is Docker's.
 docker_pub='pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::scESA::::::23::0:
 fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:

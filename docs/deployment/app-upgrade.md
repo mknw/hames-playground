@@ -92,6 +92,43 @@ itself before clone Compose operations, including `boot`, and refuses a failed
 render or validation without starting containers. It boots both apps in one
 project without orphan pruning and waits for both apps' health.
 
+**Before any blessed full boot**, record privately every existing shared
+service's container ID, `StartedAt`, Compose config-hash label and mounted volume
+names/identities; record `docker compose config --hash` with the same complete
+Compose files and `app` profile both before checkout and at the target. Stop if
+any shared service other than `embedder` has a changed target hash. The one
+permitted shared change is `embedder`'s hash for the durable Compose 3 GiB
+`mem_limit`: only its container may be recreated. With ingress still held, run
+`docker compose --dry-run up -d` from the target checkout using the **same**
+Compose files, profile and flags as bootstrap's boot (`--remove-orphans` for a
+single app; none for clones). List every predicted create, recreate and start;
+proceed only if they are the release app, that intended `embedder` recreation,
+or the one-shot `mcp-config` rerun. Any other prediction or an unavailable dry
+run is a stop. After boot, every other long-running shared container must keep
+its ID and `StartedAt`, and every mounted volume identity/name must match the
+preboot record. Verify `embedder` healthy, its cgroup limit at 3 GiB from
+Compose without a temporary runtime override, and one successful embedding
+request; retire the temporary override record only then.
+
+Record the preboot `mcp-config` ID and exit status. That one-shot may rerun only
+if its ID stays the same, it exits 0, its rendered output hash matches, and the
+long-running gateway keeps its ID/`StartedAt`. Capture the hash of the _actual rendered volume file_, not the
+tracked input, before boot while the gateway container is still inspectable:
+
+```bash
+set -o pipefail
+gateway_id=$(docker compose ps -aq mcp-gateway) || exit 1
+test -n "$gateway_id" || exit 1
+mcp_before=$(docker cp "$gateway_id:/mcp/rendered/config.yaml" - |
+  tar -xO | sha256sum | awk '{print $1}') || exit 1
+test -n "$mcp_before" || exit 1
+```
+
+Repeat that pipeline after boot into `mcp_after` using the same gateway ID and
+require `test "$mcp_after" = "$mcp_before"`; an unavailable or unequal hash
+stops the release. Record hashes privately; never print or save the rendered
+config. If the preboot hash was missed, a postboot hash cannot reconstruct it.
+
 The explicit external preflight below is also useful before boot. Replace the
 example hostname, ACME email and full target SHA with the deployment's existing
 arguments and retain other required operator arguments. Never print or save the
@@ -260,6 +297,7 @@ APP_DIR=/opt/hames
 GOOD_SHA='<recorded-full-40-character-good-sha>'
 DEV_GOOD_SHA='<recorded-full-40-character-dev-sha>' # used only with two clones
 test "$(id -u)" -ne 0 && test "${#GOOD_SHA}" -eq 40 || exit 1
+umask 022
 case "$GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
 
 check_checkout_modes() {

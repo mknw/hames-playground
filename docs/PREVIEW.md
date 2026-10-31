@@ -123,16 +123,15 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker "$USER"     # then log out and back in
 docker compose version              # must be >= 2.24
 
-sudo git clone https://github.com/mknw/hames-playground /opt/hames
-sudo chown -R "$USER":"$USER" /opt/hames      # NOT optional — see below
+test "$(id -u)" -ne 0 || exit 1
+sudo install -d -o "$(id -un)" -g "$(id -gn)" -m 0755 /opt/hames
+( umask 022; git clone https://github.com/mknw/hames-playground /opt/hames )
 cd /opt/hames
 ```
 
-**The `chown` is load-bearing.** `sudo git clone` leaves the tree `root:root`,
-and everything after this point runs as you: writing `.env`, `mkdir -p backups`
-inside `scripts/backup-preview.sh` (§9, and its cron entry, which is installed
-as your user), and `git checkout <good-sha>` in the rollback (§10). Skip it and
-those fail with a permission error at the worst possible moment rather than here.
+The deployment user owns the checkout from its first Git write. Run Git as that
+user with `umask 022`; `sudo git` creates root-owned tracked files. The same
+user later writes `.env`, backups and rollback checkouts.
 
 Keep the repo layout intact: `app/` and `configs/` must stay siblings.
 
@@ -984,8 +983,10 @@ off-box backups are deferred. That runbook also covers additive schema rollback.
 
 ```bash
 cd /opt/hames
+test "$(id -u)" -ne 0 || exit 1
+umask 022
 git log --oneline -5                      # find the last good commit
-git checkout <good-sha>
+( umask 022; git checkout <good-sha> )
 docker compose up -d --build app          # Caddy and the data tier keep running
 docker compose logs -f app
 ```

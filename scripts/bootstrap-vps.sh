@@ -1391,6 +1391,12 @@ EOF
 # never collides with it.
 stage_checkout() {
   banner "7/13 checkout — $REPO_URL at ${REF:-<no --ref>} -> $APP_DIR"
+  # --only checkout skips preflight; enforce both guards at the Git write site.
+  if [[ $(id -u) == 0 ]]; then
+    refuse "checkout must run as the deployment user, not root"
+    return 0
+  fi
+  umask 022
   local user
   user=$(id -un)
   if [[ ! -d $APP_DIR/.git ]]; then

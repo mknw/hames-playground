@@ -61,7 +61,8 @@ fails when they part). Do not edit one without the other.
 # 0. Get the commit that carries the script and the new compose file. The old
 #    postgres container keeps running on the old volume: git does not touch it.
 #    DO NOT `docker compose up` anything until step 4.
-git pull
+test "$(id -u)" -ne 0 || exit 1
+( umask 022; git pull )
 
 # 1. Stop writers. The dump is a moment in time; the script re-counts after it
 #    and refuses a dump taken while rows were changing.
@@ -107,9 +108,10 @@ database would be a dump of nothing. To get back to a state `dump` accepts:
 
 ```bash
 docker compose stop
-git checkout <the commit before this change>     # old compose file: old image, old volume
+test "$(id -u)" -ne 0 || exit 1
+( umask 022; git checkout <the commit before this change> ) # old compose file: old image, old volume
 docker compose up -d postgres
-git checkout -                                   # back to this commit — do NOT `up`
+( umask 022; git checkout - )                    # back to this commit — do NOT `up`
 ./scripts/migrate-postgres-pgvector.sh dump      # continue the sequence above
 ```
 

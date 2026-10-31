@@ -59,10 +59,13 @@ x86/amd64.**
 - **16 GiB is not generous.** Neo4j (+apoc+n10s), redis-stack, Postgres, the
   Node server, Caddy, the CPU embedder and _N concurrent sandbox containers_
   share it. Budget separately for a second app container if deployed on the
-  same host (§12). The embedder's 2 GiB
-  compose limit is a placeholder, not measured RSS or a capacity guarantee.
-  Measure peak RSS and ingestion latency alongside serving and builds before
-  choosing a host size. The container build alone peaks near 2.3 GB RSS.
+  same host (§12). The shared embedder's 3 GiB Compose cap gives headroom after
+  a 2 GiB cgroup OOM during dev ingest. That cap is a
+  placeholder, not measured RSS or a capacity guarantee; the failed-ingest
+  peak remains unmeasured.
+  Measure peak RSS and ingestion latency alongside serving and
+  builds before choosing a host size. The container build alone peaks near
+  2.3 GB RSS.
 - **64 GiB disk.** Docker images dominate: redis-stack is ~2.7 GB and neo4j
   ~840 MB before any data.
 - One instance, no HA. The app holds per-session run state, the sandbox

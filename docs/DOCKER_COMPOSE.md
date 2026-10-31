@@ -81,7 +81,9 @@ before the first `docker compose up` on a machine that already has the stack.
   `make embed` and never needs this service.
 - **Weights**: `./models` mounted **read-only**; the GGUF is gitignored
   ([`models/README.md`](../models/README.md)) and the container exits at start
-  without it. `mem_limit: 2g` is a placeholder, not a measurement.
+  without it. `mem_limit: 3g` gives the shared service headroom after a 2 GiB
+  cgroup OOM during dev ingest; the failed-ingest peak remains unmeasured.
+  Check host capacity before deploying this cap elsewhere.
 - **Healthcheck**: `GET /health` (503 while loading, 200 once loaded). Ordering
   only. The app does not wait on it (`service_started`): the joint memory wake
   probes `POST $EMBEDDINGS_LOCAL_URL/embeddings` — a real forward pass — and

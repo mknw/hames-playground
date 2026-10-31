@@ -283,10 +283,18 @@ async function withReconnect<T>(
         // ToolCallResult the controller can see and decide about — including
         // "check whether it went through" — which is the only safe answer when
         // the operation may or may not have executed.
+        const frame = currentRunFrame()
+        // A gateway error can quote outgoing arguments before N8 projects events.
+        const detail =
+          frame?.batchPhase === 'execute' && frame.batchPlanKey
+            ? 'transport error details withheld for executing batch'
+            : err instanceof Error
+              ? err.message
+              : String(err)
         console.warn(
           `[mcp-client] transport error on ${label ?? 'operation'} — not retried ` +
             `(it may already have executed on the server): ` +
-            `${err instanceof Error ? err.message : String(err)}`,
+            detail,
         )
         throw err
       }

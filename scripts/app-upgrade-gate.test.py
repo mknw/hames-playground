@@ -4,6 +4,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import stat
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -19,6 +22,11 @@ SPEC.loader.exec_module(gate)
 
 class UpgradeGateTest(unittest.TestCase):
     def setUp(self):
+        rendered = {"name": "hames", "services": {name: {} for name in (
+            "app", "app-dev", "caddy", "mcp-gateway", "embedder", "mcp-config", "postgres")}}
+        compose_mock = patch.object(gate, "compose", return_value=json.dumps(rendered).encode())
+        compose_mock.start()
+        self.addCleanup(compose_mock.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.baseline_path = Path(self.tmp.name) / "baseline.json"
@@ -176,6 +184,88 @@ class UpgradeGateTest(unittest.TestCase):
         with patch.object(gate.subprocess, "run", return_value=result):
             with self.assertRaisesRegex(SystemExit, "protected service is predicted exited: app-dev"):
                 gate.check_prediction("hames", False, clones=True)
+
+    def test_configured_clone_dev_start_and_recreate_are_refused(self):
+        rendered = {"name": "hames", "services": {
+            "app": {"container_name": "hames-app"},
+            "app-dev": {"container_name": "hames-app-dev"}}}
+        for status in ("Starting", "Recreating"):
+            with self.subTest(status=status):
+                events = [
+                    {"dry-run": True, "id": "Container hames-app-dev", "status": status},
+                    {"dry-run": True, "id": "Container hames-app", "status": "Starting"},
+                ]
+                result = SimpleNamespace(returncode=0, stderr="\n".join(map(json.dumps, events)).encode())
+                with patch.object(gate, "compose", return_value=json.dumps(rendered).encode()), \
+                     patch.object(gate.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(SystemExit, f"forbidden predicted {status} for app-dev"):
+                        gate.check_prediction("hames", False, clones=True)
+
+    def test_configured_release_app_start_is_allowed(self):
+        rendered = {"name": "hames", "services": {
+            "app": {"container_name": "hames-app"},
+            "app-dev": {"container_name": "hames-app-dev"}}}
+        event = {"dry-run": True, "id": "Container hames-app", "status": "Starting"}
+        result = SimpleNamespace(returncode=0, stderr=json.dumps(event).encode())
+        with patch.object(gate, "compose", return_value=json.dumps(rendered).encode()), \
+             patch.object(gate.subprocess, "run", return_value=result):
+            gate.check_prediction("hames", False, clones=True)
+
+    def test_preboot_refuses_configured_dev_recreate_before_boot(self):
+        self.baseline["files"] = gate.CLONE_FILES
+        self.baseline["hashes"]["app-dev"] = "d"
+        self.baseline_path.write_text(json.dumps(self.baseline))
+        rendered = {"name": "hames", "services": {
+            "app": {"container_name": "hames-app"},
+            "app-dev": {"container_name": "hames-app-dev"}}}
+        events = [
+            {"dry-run": True, "id": "Container hames-app-dev", "status": "Recreating"},
+            {"dry-run": True, "id": "Container hames-app", "status": "Starting"},
+        ]
+        result = SimpleNamespace(returncode=0, stderr="\n".join(map(json.dumps, events)).encode())
+        with patch.object(gate, "verify_state", return_value=self.baseline["hashes"]), \
+             patch.object(gate, "check_caddy"), \
+             patch.object(gate, "compose", return_value=json.dumps(rendered).encode()), \
+             patch.object(gate.subprocess, "run", return_value=result) as run, \
+             patch.object(gate.sys, "argv", ["gate", "preboot", str(self.baseline_path)]):
+            with self.assertRaisesRegex(SystemExit, "forbidden predicted Recreating for app-dev"):
+                gate.main()
+            self.assertEqual(run.call_args.args[0],
+                             ["docker", "compose", "--dry-run", "--progress", "json", "up", "-d"])
+
+    def test_dev_drain_runbook_keeps_exact_ids_private_in_offline_shell(self):
+        runbook = Path(os.environ.get("APP_UPGRADE_RUNBOOK_PATH",
+                                      Path(__file__).parents[1] / "docs/deployment/app-upgrade.md"))
+        blocks = re.findall(r"```bash\n(.*?)\n```", runbook.read_text(), re.S)
+        drain = next(block for block in blocks if 'dev_enabled_ids="$dump_root/' in block)
+        restore = next(block for block in blocks if "restore_dev_routines()" in block)
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir()
+        docker = bin_dir / "docker"
+        docker.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TRACE\"\n"
+                          "case \"$*\" in *' -c SELECT '*) printf '[\"a\",\"b\"]\\n';; esac\n"
+                          "cat >> \"$SQL_TRACE\"\n")
+        docker.chmod(0o700)
+        env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+               "TRACE": str(Path(self.tmp.name) / "trace"),
+               "SQL_TRACE": str(Path(self.tmp.name) / "sql"),
+               "DEV_CLONE_PATH": "/dev/clone", "DEV_DB": "dev_db", "RELEASE_DB": "release_db"}
+        result = subprocess.run(["bash", "-c", drain + "\n" + restore], cwd=self.tmp.name,
+                                env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = list(Path(self.tmp.name).glob("upgrade-dumps/*/dev-enabled-ids.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].read_text(), '["a","b"]\n')
+        self.assertEqual(stat.S_IMODE(saved[0].parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(saved[0].stat().st_mode), 0o600)
+        trace = Path(env["TRACE"]).read_text()
+        self.assertEqual(trace.count(" -d dev_db "), 3)
+        self.assertEqual(trace.count('ids_json=["a","b"]'), 2)
+        sql = Path(env["SQL_TRACE"]).read_text()
+        self.assertNotIn("user_id", trace + sql)
+        self.assertIn("LOCK TABLE routines IN SHARE ROW EXCLUSIVE MODE", sql)
+        self.assertIn("UPDATE routines SET enabled = FALSE", sql)
+        self.assertIn("UPDATE routines SET enabled = TRUE", sql)
 
 
 if __name__ == "__main__":

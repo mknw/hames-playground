@@ -176,6 +176,16 @@ def check_caddy():
 
 
 def check_prediction(project, embedder_changed, clones=False):
+    rendered = json.loads(compose("config", "--format", "json"))
+    if rendered.get("name") != project:
+        stop("Compose project changed before prediction")
+    targets = {}
+    for service, spec in rendered["services"].items():
+        name = spec.get("container_name") or f"{project}-{service}-1"
+        target = f"Container {name}"
+        if target in targets:
+            stop("ambiguous rendered Compose container name")
+        targets[target] = service
     args = ["--dry-run", "--progress", "json", "up", "-d"]
     if not clones:
         args.append("--remove-orphans")
@@ -201,14 +211,13 @@ def check_prediction(project, embedder_changed, clones=False):
                           "Stopping", "Stopped", "Removing", "Removed", "Waiting", "Running", "Healthy", "Exited"}:
             stop("unexpected Compose dry-run event")
         identifier = event.get("id", "")
-        prefix = f"Container {project}-"
         if status in {"Waiting", "Running", "Healthy"}:
             # Compose reports existing dependencies as Running/Healthy too.
             # They are observations, not starts or recreations.
             continue
-        if not identifier.startswith(prefix):
+        if identifier not in targets:
             stop(f"unexpected Compose target: {identifier}")
-        service = identifier[len(prefix):].rsplit("-", 1)[0]
+        service = targets[identifier]
         if status == "Exited":
             if service == "mcp-config":
                 continue  # the baseline one-shot is expected to be exited

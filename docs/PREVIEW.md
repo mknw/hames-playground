@@ -1005,26 +1005,24 @@ data-tier isolation guarantee: Compose follows service dependencies.
 > ([`azure-vm.md` §9](deployment/azure-vm.md) has the `pg_dump` to have taken);
 > there is no down-migration and no decrypt-back script.
 
-Faster, if the previous image is still on the box: `docker images hames-app`,
-then `docker tag <old-id> hames-app:local && docker compose up -d app` — no
-build. Tag a known-good image (`docker tag hames-app:local hames-app:rollback`)
-right after a successful deploy and this stays available.
+For an image-only rollback, retain the actual last-good image as
+`hames-app:rollback` before the release, then follow [application upgrade §4's
+gated rollback](deployment/app-upgrade.md#4-schema-rollback-decision) with a
+fresh baseline, full preboot prediction and postboot comparison.
 
-**A bad configuration** — `.env` edits need only a recreate:
-`docker compose up -d --force-recreate app caddy`.
+**A bad configuration** — review the affected service and use its maintenance
+procedure. A Caddy change is outside the restricted app release gate; do not
+recreate Caddy as part of an app rollback.
 
-**Bad data** — only an option if you took a backup, which §9 says is optional
-for this alpha. If you did: stop the app first, restore per §9, then start it.
+**Bad data** — restore only from a verified matching backup with the matching
+keys and schema plan; [application upgrade §4](deployment/app-upgrade.md#4-schema-rollback-decision)
+sets the decision and writer hold. A data restore is a separate maintenance
+operation, followed by a fresh baseline before any restricted app release.
 
-```bash
-docker compose stop app
-# …restore…
-docker compose start app
-```
-
-**Full stop** — `docker compose down` keeps every named volume (that is the
-default; `-v` is what destroys them, and it destroys Caddy's certificates too).
-`docker compose up -d` brings it all back.
+**Full stop for an incident outside this release path** — `docker compose down`
+keeps every named volume (that is the default; `-v` destroys them, including
+Caddy's certificates). Bringing the stack back is incident recovery, followed
+by a fresh baseline before any restricted app release.
 
 **Emergency lockout** — to cut off access without losing anything, stop Caddy:
 `docker compose stop caddy`. The app keeps running on `127.0.0.1:3444` for

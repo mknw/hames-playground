@@ -13,8 +13,8 @@ Hold public ingress for **both hostnames** at the operator's external maintenanc
 control and drain in-flight requests and background ingest. Stop external
 writers. Stop only the release `app`; this stops its routine scheduler. In a
 two-clone project, leave `app-dev` running with its ID and `StartedAt` unchanged:
-disable its enabled routines through the app before the window, retain the
-previous enabled-set privately for restoration afterward, and require zero
+disable its enabled routines across **all users** with the DEV database procedure
+below, retain the exact enabled IDs privately for restoration afterward, and require zero
 active dev turns before backup and again before boot. If any dev writer cannot
 be drained, stop the release. Keep Caddy, the gateway and every other
 long-running service running. Verify the maintenance hold before the dump and
@@ -25,15 +25,59 @@ policy: dev has its own database and limited role, separate from release. Confir
 that both databases and their grants are provisioned before upgrading.
 
 For two clones, export the existing `DEV_CLONE_PATH` and supply the actual
-release and dev database names privately as `RELEASE_DB` and `DEV_DB`. With
-ingress held and in-flight work drained, this read-only check must return
+release and dev database names privately as `RELEASE_DB` and `DEV_DB`.
+Use the Postgres administrator only through the local Compose service; the app
+API is user-scoped and cannot drain other users' routines. The DEV database is
+separate from release. After holding ingress and draining in-flight turns,
+run this in the deployment user's shell from the release checkout root. The
+private JSON file contains **only routine IDs**, including every user's enabled
+routine; neither encrypted `input` nor `label` is read. Keep the directory
+and file under `0700`/`0600`, outside the rotated backups tree, and do not print
+or commit them. The lock and exact-set comparison refuse a changed enabled set
+before the update; any failure is a stop. Do not restart `app-dev`.
+
+```bash
+dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
+( umask 077; mkdir -p -- "$PWD/upgrade-dumps" &&
+  test ! -L "$PWD/upgrade-dumps" && chmod 700 -- "$PWD/upgrade-dumps" &&
+  mkdir -m 700 -- "$dump_root" ) || exit 1
+dev_psql() {
+  docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+    -d "$DEV_DB" -X -v ON_ERROR_STOP=1 -qAt "$@"
+}
+if test -n "${DEV_CLONE_PATH:-}"; then
+  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" || exit 1
+  dev_enabled_ids="$dump_root/dev-enabled-ids.json"
+  ( umask 077; dev_psql -c "SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled" > "$dev_enabled_ids" ) || exit 1
+  test -s "$dev_enabled_ids" || exit 1
+  dev_psql -v ids_json="$(cat "$dev_enabled_ids")" <<'SQL' || exit 1
+BEGIN;
+LOCK TABLE routines IN SHARE ROW EXCLUSIVE MODE;
+CREATE TEMP TABLE saved_ids (id text PRIMARY KEY) ON COMMIT DROP;
+INSERT INTO saved_ids SELECT jsonb_array_elements_text(:'ids_json'::jsonb);
+DO $$ BEGIN
+  IF (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled)
+     <> (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM saved_ids)
+  THEN RAISE EXCEPTION 'DEV enabled routine set changed during drain'; END IF;
+END $$;
+UPDATE routines SET enabled = FALSE, updated_at = NOW() WHERE id IN (SELECT id FROM saved_ids);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM routines WHERE enabled)
+  THEN RAISE EXCEPTION 'DEV routines remain enabled'; END IF;
+END $$;
+COMMIT;
+SQL
+fi
+```
+
+With ingress still held, this read-only check must return
 `0:0`; repeat it immediately before §3's preboot gate. An enabled routine or
 running conversation is a stop, not a reason to stop/restart DEV:
 
 ```bash
 check_dev_writers() {
   test -n "${DEV_CLONE_PATH:-}" || return 0
-  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" || return 1
+  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" && test -s "${dev_enabled_ids:-}" || return 1
   dev_writers=$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
     -d "$DEV_DB" -X -Atqc "SELECT (SELECT count(*) FROM routines WHERE enabled) || ':' || (SELECT count(*) FROM conversations WHERE status = 'running')") || return 1
   test "$dev_writers" = '0:0'
@@ -52,7 +96,6 @@ test -n "$neo4j_id" || exit 1
 neo4j_image=$(docker inspect --format '{{.Image}}' "$neo4j_id") || exit 1
 neo4j_volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$neo4j_id") || exit 1
 test -n "$neo4j_image" && test -n "$neo4j_volume" || exit 1
-dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 (
   umask 077
   BACKUP_DIR="$dump_root/release" POSTGRES_DB="${RELEASE_DB:-hames}" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
@@ -326,8 +369,53 @@ image, protected configuration, dumps and separate key escrow until the rollback
 window closes. If a gate fails, keep ingress held and both writers quiescent, keep evidence
 privately and follow the decision below. No automated rollback is shipped.
 For clones, restore exactly the privately recorded dev routine enabled-set
-through the app only after smoke and postboot identity checks pass; verify the
-restoration before reopening either hostname.
+after smoke and postboot identity checks pass, before reopening either hostname:
+
+```bash
+restore_dev_routines() {
+  test -n "${DEV_CLONE_PATH:-}" || return 0
+  test -s "${dev_enabled_ids:-}" || return 1
+  dev_psql -v ids_json="$(cat "$dev_enabled_ids")" <<'SQL'
+BEGIN;
+LOCK TABLE routines IN SHARE ROW EXCLUSIVE MODE;
+CREATE TEMP TABLE saved_ids (id text PRIMARY KEY) ON COMMIT DROP;
+INSERT INTO saved_ids SELECT jsonb_array_elements_text(:'ids_json'::jsonb);
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM routines WHERE enabled)
+     OR (SELECT count(*) FROM saved_ids) <> (SELECT count(*) FROM routines JOIN saved_ids USING (id))
+  THEN RAISE EXCEPTION 'DEV restore precondition failed'; END IF;
+END $$;
+UPDATE routines SET enabled = TRUE, updated_at = NOW() WHERE id IN (SELECT id FROM saved_ids);
+DO $$ BEGIN
+  IF (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled)
+     <> (SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM saved_ids)
+  THEN RAISE EXCEPTION 'DEV enabled routine restore differs from saved set'; END IF;
+END $$;
+COMMIT;
+SQL
+}
+restore_dev_routines || exit 1
+```
+
+If any stage fails or the window is aborted, keep both hostnames held and
+`app-dev` running. Preserve the private file. If the disable transaction failed,
+it rolled back; compare a fresh all-user enabled-ID query with the saved JSON
+before deciding that the original set needs no restoration:
+
+```bash
+# shellcheck disable=SC2154 # set in the earlier drain step
+( set -o pipefail; dev_psql -c "SELECT coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb) FROM routines WHERE enabled" |
+    cmp - "$dev_enabled_ids" ) || exit 1
+```
+
+An unequal set requires manual reconciliation. After a successful drain, fix the failure,
+verify zero DEV enabled routines and running conversations with
+`check_dev_writers`, then run the same
+`restore_dev_routines` function before reopening DEV. If the shell was lost,
+set `DEV_DB`, `DEV_CLONE_PATH` and `dev_enabled_ids` to the recorded values and
+redefine `dev_psql` and `restore_dev_routines` from this section. An absent or
+unreadable file, missing saved ID or unexpected enabled routine is a stop for
+manual reconciliation; never enable all routines as recovery.
 
 ## 4. Schema rollback decision
 

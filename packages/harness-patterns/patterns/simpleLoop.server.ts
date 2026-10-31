@@ -253,6 +253,21 @@ const batchOptions = (rows: readonly BatchRow[]): readonly HitlOption[] => [
   { id: 'interrupt', label: 'Interrupt', stopsRun: true },
 ]
 
+/** N8 events carry only call shape; the exact action stays in the encrypted plan. */
+function batchEventAction(action: ControllerAction): ControllerAction {
+  return {
+    reasoning: '',
+    tool_name: action.tool_name,
+    tool_args: '[batch arguments withheld]',
+    status: 'Reviewing outgoing batch',
+    is_final: false,
+    additional_calls: action.additional_calls?.map((call) => ({
+      tool_name: call.tool_name,
+      tool_args: '[batch arguments withheld]',
+    })),
+  }
+}
+
 const truncateTo = (s: string, max: number): string =>
   s.length > max ? s.slice(0, max) + '…[truncated]' : s
 
@@ -1042,6 +1057,8 @@ export function simpleLoop<T extends SimpleLoopData>(
             callKey: member.callKey,
             digest: member.digest,
             route: member.route,
+            batchPlanKey: plan.batchKey,
+            ...(member.verdict === 'held' ? { requestId: answer.requestId } : {}),
             decision:
               member.verdict === 'pass'
                 ? ('pass' as const)
@@ -1060,6 +1077,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                   callKey: member.callKey,
                   batch: true,
                   batchPhase: 'execute',
+                  batchPlanKey: plan.batchKey,
                   batchPrepared: prepared,
                 },
                 () => callTool(member.tool, member.args),
@@ -1106,7 +1124,11 @@ export function simpleLoop<T extends SimpleLoopData>(
           )!,
         )
         if (outcomes.some((o) => o.success))
-          scope.data = { ...scope.data, turn: againBatch.n, lastAction: plan.action }
+          scope.data = {
+            ...scope.data,
+            turn: againBatch.n,
+            lastAction: batchEventAction(plan.action),
+          }
       }
 
       for (let turn = firstTurn; turn < maxTurns; turn++) {
@@ -1475,15 +1497,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                   batchAuthorization(preparedPlan),
                 ),
               )
-              const redacted = {
-                ...action,
-                tool_args: '[held for review]',
-                additional_calls: action.additional_calls?.map((c) => ({
-                  ...c,
-                  tool_args: '[held for review]',
-                })),
-              }
-              trackAction(redacted, false)
+              trackAction(batchEventAction(action), false)
               const safeCalls = subCalls.map((sc, i): ToolCallEventData => ({
                 callId: callIds[i],
                 batchId,
@@ -1516,7 +1530,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             }
           }
 
-          trackAction()
+          trackAction(plan ? batchEventAction(action) : action, !plan)
 
           if (plan) {
             for (const member of plan.members) {
@@ -1530,10 +1544,12 @@ export function simpleLoop<T extends SimpleLoopData>(
                   amendRunFrame(
                     {
                       batchPhase: 'execute',
+                      batchPlanKey: plan.batchKey,
                       batchPrepared: {
                         callKey: member.callKey,
                         digest: member.digest,
                         route: member.route,
+                        batchPlanKey: plan.batchKey,
                         decision: 'pass',
                         ...(member.auditByDecide && { auditByDecide: true }),
                       },
@@ -1550,8 +1566,8 @@ export function simpleLoop<T extends SimpleLoopData>(
             callId: callIds[i],
             batchId,
             tool: sc.tool,
-            args: trackedArgs[i],
-            ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
+            args: plan ? null : trackedArgs[i],
+            ...(!plan && trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
             ...(sc.run && callKeys[i] !== undefined ? { callKey: callKeys[i] } : {}),
           }))
           for (const data of callData) trackEvent(scope, 'tool_call', data, resolved.trackHistory)
@@ -1643,7 +1659,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             continue
           }
 
-          scope.data = { ...scope.data, turn, lastAction: action }
+          scope.data = { ...scope.data, turn, lastAction: plan ? batchEventAction(action) : action }
           continue
         }
 

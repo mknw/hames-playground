@@ -596,6 +596,36 @@ export function holdingRequestInRun(requestId: string): HitlRequestEventData | u
   return event && isRequest(event) ? event.data : undefined
 }
 
+/** The accepted row of an answered N8 checklist, read from this run's journal. */
+export function batchRowAcceptedInRun(
+  requestId: string,
+  kind: string,
+  callKey: string,
+  batchPlanKey: string,
+): boolean {
+  const run = hitlRunStore.getStore()
+  if (!run) return false
+  const events = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)]
+  const request = events.find(
+    (event): event is ContextEvent & { data: HitlRequestEventData } =>
+      event.type === 'hitl_request' && isRequest(event) && event.data.requestId === requestId,
+  )?.data
+  if (!request || request.kind !== kind || !request.key.endsWith(`:${batchPlanKey}`)) return false
+  const flag = `accept:${callKey}`
+  if (
+    !request.options.find((option) => option.id === 'continue')?.flags?.some((f) => f.id === flag)
+  )
+    return false
+  const answer = readHitl({ events }).answers.get(hitlReplayKey(request))
+  return !!(
+    answer &&
+    answer.requestId === requestId &&
+    answer.by === 'person' &&
+    answer.choice === 'continue' &&
+    answer.flags?.[flag] === true
+  )
+}
+
 /** Is there an attended HITL run here, someone a request can reach? False
  *  outside one and in an unattended one. */
 export function hitlRunAttended(): boolean {

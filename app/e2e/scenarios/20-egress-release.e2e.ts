@@ -25,9 +25,9 @@ import { SEND_OUTCOME_UNKNOWN } from '@hames-ai/harness-patterns/mcp-client.serv
 import type { SessionData } from '../../src/lib/harness-client/session.server'
 import { bootApp, eventsOfType, newSessionId, type AppHandles } from '../lib/app'
 import { IS_HERMETIC } from '../lib/mode'
+import { BATCH_AGENT, registerBatchAgent } from '../lib/egress-batch-agent'
 
 const AGENT = 'e2e-egress-release'
-const BATCH_AGENT = 'e2e-egress-batch'
 let app: AppHandles
 let actions: typeof import('../../src/lib/harness-client/actions.server')
 let hitlActions: typeof import('../../src/lib/hitl/actions.server')
@@ -128,71 +128,7 @@ beforeAll(async () => {
     ],
   })
 
-  registerAgent({
-    id: BATCH_AGENT,
-    name: 'Synthetic egress batch',
-    description: 'Two synthetic outside calls held together',
-    welcome: 'Synthetic egress batch',
-    servers: [],
-    icon: 'i-material-symbols-rule',
-    accent: 'indigo',
-    createPatterns: async () => [
-      withOutside(
-        withEgressGate({
-          local: [],
-          catalog: ['synthetic_search'],
-          decide: adapters.createDecideAdapter(),
-          askPerson: true,
-        })(
-          decisionLoop<SessionData>(
-            {
-              work: {
-                pattern: simpleLoop<SessionData>(
-                  async ({ turn }) => ({
-                    action:
-                      turn === 0
-                        ? {
-                            reasoning: 'synthetic batch',
-                            tool_name: 'synthetic_search',
-                            tool_args: JSON.stringify({ query: 'synthetic-first' }),
-                            additional_calls: [
-                              {
-                                tool_name: 'synthetic_search',
-                                tool_args: JSON.stringify({ query: 'synthetic-second' }),
-                              },
-                            ],
-                            status: 'running',
-                            is_final: false,
-                          }
-                        : {
-                            reasoning: 'done',
-                            tool_name: 'Return',
-                            tool_args: 'done',
-                            status: 'done',
-                            is_final: true,
-                          },
-                  }),
-                  ['synthetic_search'],
-                  { patternId: 'work-batch', maxTurns: 3, multiToolCalls: 'parallel' },
-                ),
-                description: 'Search synthetic outside service twice',
-              },
-            },
-            {
-              decide: adapters.createDecideAdapter(),
-              answer: 'Answer now',
-              patternId: 'orchestrator-batch',
-              maxIterations: 1,
-            },
-          ),
-        ),
-      ),
-      core.compactExecution<SessionData>({
-        mode: 'message',
-        synthesize: bamlPatterns().synthesize,
-      }),
-    ],
-  })
+  await registerBatchAgent(outside)
 })
 
 afterAll(async () => {
@@ -343,4 +279,58 @@ describe.runIf(IS_HERMETIC)('N8 held outgoing batch', () => {
       ),
     ).toBe(true)
   })
+
+  // Process A owns the pause, answer and durable claim. Process B boots its own
+  // host, registry, agent and transport before it resumes this same DB row.
+  it.each(['started', 'finished'] as const)(
+    'a fresh host process replays a %s send claim without dispatch',
+    async (claimState) => {
+      app.fakeLlm.reset()
+      sent.length = 0
+      await app.setTier('anthropic')
+      const sessionId = newSessionId(`egress-batch-fresh-${claimState}`)
+      const first = await app.runTurnOverSse({
+        sessionId,
+        agentId: BATCH_AGENT,
+        message: 'Search it',
+      })
+      expect(first.frames.find((f) => f.event === 'done')?.data.status).toBe('paused')
+      const paused = await actions.loadConversation(sessionId)
+      const [request] = core.readHitl(core.deserializeContext(paused.serialized)).pending
+      const held = await payloads.getHitlPayload(request.payloadRef!, app.userId)
+      const plan = held!.payload as { members: { callKey: string; digest: string }[] }
+      const flag = request.options[0].flags![0].id
+      expect(
+        await hitlActions.answerHitl(sessionId, {
+          [request.requestId]: { choice: 'continue', flags: { [flag]: true } },
+        }),
+      ).toEqual([{ requestId: request.requestId, outcome: 'answered' }])
+      const claim = {
+        userId: app.userId,
+        sessionId,
+        runId: request.runId,
+        callKey: plan.members[0].callKey,
+        digest: plan.members[0].digest,
+      }
+      expect(await payloads.claimToolSend(claim)).toEqual({ status: 'new' })
+      if (claimState === 'finished') {
+        await payloads.finishToolSend({
+          ...claim,
+          result: { success: true, data: { hits: ['durable-result-from-A'] } },
+        })
+      }
+      expect(sent).toEqual([])
+      execFileSync('pnpm', ['test:e2e', 'e2e/scenarios/21-egress-batch-resume-child.e2e.ts'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          E2E_N8_CHILD_SESSION: sessionId,
+          E2E_N8_CHILD_EXPECTED: claimState,
+        },
+        encoding: 'utf8',
+        timeout: 120_000,
+        stdio: 'pipe',
+      })
+    },
+  )
 })

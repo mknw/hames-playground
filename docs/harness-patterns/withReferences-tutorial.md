@@ -1,6 +1,6 @@
 # Walkthrough: carrying data across turns with `withReferences`
 
-> **Status.** Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). On 2026-10-03 turn 2 changed from a write into Neo4j to a lookup in it, because agents became read-only against Neo4j ([#403](https://github.com/mknw/hames-playground/issues/403)). The new turn 2 has not yet been run end to end in the app.
+> **Status.** Historical walkthrough (the `search` agent was retired in #898); the current `general-next` composition differs. Hands-on walkthrough in the hames app, first written with the `withReferences` design (2026-04-30) and brought up to date 2026-09-24; the wrapper and the agent it uses live in [`packages/`](../../packages/). On 2026-10-03 turn 2 changed from a write into Neo4j to a lookup in it, because agents became read-only against Neo4j ([#403](https://github.com/mknw/hames-playground/issues/403)). The new turn 2 has not yet been run end to end in the app.
 
 **What you will see:** the `search` agent fetching information about a topic on one
 turn, then looking that data up in Neo4j on the next, without fetching it again and
@@ -49,7 +49,7 @@ Pick **Search Agent** in the agent selector and press **+ New Chat** in the side
 
 The side panel's **Context manager** tab holds the event timeline; it fills as
 the agent runs. The agent's composition, abridged from
-[`search.server.ts`](../../packages/agents/agents/search.server.ts):
+[`general-next.server.ts`](../../packages/agents/agents/general-next.server.ts):
 
 ```text
 router → routes({
@@ -189,20 +189,23 @@ candidates, the ones selected with a reason each, the selector's reasoning, and
 `trackHistory` entry, so the event is not committed unless you ask for it:
 
 ```typescript
-import { withReferences, type ConfiguredPattern } from '@hames-ai/harness-patterns'
-import { bamlPatterns } from '@hames-ai/harness-baml'
-import type { AgentData } from '@hames-ai/agents'
+import {
+  withReferences,
+  type ConfiguredPattern,
+} from "@hames-ai/harness-patterns";
+import { bamlPatterns } from "@hames-ai/harness-baml";
+import type { AgentData } from "@hames-ai/agents";
 
 // The Neo4j loop, built as in search.server.ts.
-declare const neo4jPattern: ConfiguredPattern<AgentData>
+declare const neo4jPattern: ConfiguredPattern<AgentData>;
 
-const baml = bamlPatterns()
+const baml = bamlPatterns();
 const neo4jRoute = withReferences<AgentData>(neo4jPattern, {
-  scope: 'global',
+  scope: "global",
   selector: baml.selector,
   // Commit the selector's decision to the event log.
-  trackHistory: 'reference_attached',
-})
+  trackHistory: "reference_attached",
+});
 ```
 
 `trackHistory` also takes a list of event types. In the hames app the event then

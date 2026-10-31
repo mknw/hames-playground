@@ -256,11 +256,9 @@ describe('no shipped agent hands a Postgres tool to any pattern', () => {
   it('builds every agent against the regressed gateway and checks each tool list it hands out', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const agents = await shippedAgents()
-    // The five registered today. A new agent lands in this list by export,
+    // The sole registered agent. A new agent lands in this list by export,
     // without an edit here.
-    expect(agents.map((a) => a.id).sort()).toEqual(
-      expect.arrayContaining(['general-next', 'microsoft-365', 'retriever', 'sandbox', 'search']),
-    )
+    expect(agents.map((a) => a.id).sort()).toEqual(['general-next'])
 
     for (const agent of agents) {
       const before = handed.length

@@ -1,8 +1,7 @@
 /**
  * The shipped injection-guard coverage, as an inventory rather than a sample.
  *
- * `injection-guard-wiring.test.ts` asserts that the three guarded agents are
- * guarded. This file asks the complementary question — **what is NOT** — and
+ * `general-next.test.ts` asserts the active agent is guarded. This file asks the complementary question — **what is NOT** — and
  * pins the answer for every agent in the repo, guarded or not, registered or
  * not. It is deliberately a snapshot-shaped test: any change to the wiring fails
  * it, so a guard added, a guard dropped, a route moved out from under a guard,
@@ -123,22 +122,12 @@ function inventory(patterns: Pattern[]): string[] {
 const AGENTS_DIR = join(process.cwd(), '../packages/agents/agents')
 
 /** Every agent module and the `AgentDefinition` it exports. */
-const AGENT_MODULES = [
-  { file: 'search.server.ts', exportName: 'searchAgent' },
-  { file: 'general-next.server.ts', exportName: 'generalNextAgent' },
-  { file: 'sandbox.server.ts', exportName: 'sandboxAgent' },
-  { file: 'retriever-agent.server.ts', exportName: 'retrieverAgent' },
-  { file: 'microsoft-365.server.ts', exportName: 'microsoft365Agent' },
-] as const
+const AGENT_MODULES = [{ file: 'general-next.server.ts', exportName: 'generalNextAgent' }] as const
 
 /** Static import map — `import()` of a template literal cannot be analysed by
  *  Vite, so the modules are named explicitly. */
 const LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {
-  'search.server.ts': () => import('@hames-ai/agents/agents/search.server'),
   'general-next.server.ts': () => import('@hames-ai/agents/agents/general-next.server'),
-  'sandbox.server.ts': () => import('@hames-ai/agents/agents/sandbox.server'),
-  'retriever-agent.server.ts': () => import('@hames-ai/agents/agents/retriever-agent.server'),
-  'microsoft-365.server.ts': () => import('@hames-ai/agents/agents/microsoft-365.server'),
 }
 
 async function patternsOf(file: string, exportName: string): Promise<Pattern[]> {
@@ -197,15 +186,7 @@ describe('the inventory is complete', () => {
       'utf8',
     )
     const registered = [...registry.matchAll(/overlay\((\w+),/g)].map((m) => m[1]).sort()
-    expect(registered).toEqual(
-      [
-        'searchAgent',
-        'generalNextAgent',
-        'sandboxAgent',
-        'retrieverAgent',
-        'microsoft365Agent',
-      ].sort(),
-    )
+    expect(registered).toEqual(['generalNextAgent'])
     // Every module in `agents/` is now registered: the last unregistered one
     // (`multi-source-research`) was deleted with the GitHub MCP server it was
     // the final consumer of (owner decision 2026-08-25). An agent that ships on
@@ -219,107 +200,10 @@ describe('the inventory is complete', () => {
 // The pinned inventory
 // ============================================================================
 
-describe('per-agent guard coverage (pinned — a wiring change must update this)', () => {
-  it('search — the web route is guarded; the neo4j route is our own graph', async () => {
-    expect(inventory(await patternsOf('search.server.ts', 'searchAgent'))).toEqual([
-      'router-* [router] UNGUARDED',
-      'routes-* [routes] UNGUARDED',
-      // The neo4j route: deliberately trusted, it reads the graph we wrote.
-      'withReferences-* [withReferences] UNGUARDED',
-      'neo4j-query [simpleLoop] UNGUARDED',
-      // The web route, and everything under it.
-      'withReferences-* [withEgressGate] guarded:web',
-      'withReferences-* [withReferences] guarded:web',
-      'web-search [simpleLoop] guarded:web',
-      'response-synth [compactExecution] UNGUARDED',
-    ])
-  })
-
-  it('microsoft-365 — the whole graph loop is guarded', async () => {
-    expect(inventory(await patternsOf('microsoft-365.server.ts', 'microsoft365Agent'))).toEqual([
-      'microsoft-365 [simpleLoop] guarded:graph',
-      'response-synth [compactExecution] UNGUARDED',
-    ])
-  })
-
-  it('retriever — one guard over all three routes, covering web by namespace and the stash by exact name', async () => {
-    expect(inventory(await patternsOf('retriever-agent.server.ts', 'retrieverAgent'))).toEqual([
-      'router-* [router] UNGUARDED',
-      // `retriever` rides the guard as `tool:retriever` (#242 item 4): it is
-      // the retriever pattern's own sanitize key, never a namespace any tool
-      // name infers to, so a namespace declaration for it is unverifiable and
-      // the guard refuses it. Exact-name entries match by literal membership.
-      'routes-* [routes] guarded:web+tool:retriever',
-      'retriever [retriever] guarded:web+tool:retriever',
-      'withReferences-* [withReferences] guarded:web+tool:retriever',
-      // Inside the guard's SCOPE, but `neo4j` is not one of its declared
-      // namespaces, so `isUntrusted('read_neo4j_cypher')` is false and nothing
-      // is sanitized on this route. "Inside the scope" and "protected" are
-      // different properties — this row is the one place that distinction is
-      // visible, so read `guarded:` as the declared coverage list, not as a
-      // promise about every tool underneath.
-      'neo4j-query [simpleLoop] guarded:web+tool:retriever',
-      'withReferences-* [withEgressGate] guarded:web+tool:retriever',
-      'withReferences-* [withReferences] guarded:web+tool:retriever',
-      'web-search [simpleLoop] guarded:web+tool:retriever',
-      'response-synth [compactExecution] UNGUARDED',
-    ])
-  })
-})
-
-describe('agents with NO guard anywhere (pinned gaps)', () => {
-  it('documents current behavior: the sandbox agent has no guard on any of its three routes', async () => {
-    // The SPEC states the chokepoint covers "all three transports (gateway,
-    // app-side, sandbox in-VM)". So a sandbox turn that fetches a page and
-    // prints it returns attacker-authored text through `callTool` — the guard
-    // WOULD see it — but this agent declares no namespaces, so nothing is
-    // sanitized. Sandbox network egress is listed out of scope (#116); the
-    // content coming BACK from the sandbox into the actor's turn log is not
-    // covered by that exemption, and is not covered by a guard either.
-    const rows = inventory(await patternsOf('sandbox.server.ts', 'sandboxAgent'))
-    expect(rows).toEqual([
-      'router-* [router] UNGUARDED',
-      'routes-* [routes] UNGUARDED',
-      // `withSandbox` and the `actorCritic` it wraps share a patternId, so both
-      // appear — the wrapper row is what a `withInjectionGuard` row would sit
-      // next to if one were ever added here.
-      'flavour-basic-loop [withSandbox] UNGUARDED',
-      'flavour-basic-loop [actorCritic] UNGUARDED',
-      'flavour-data-loop [withSandbox] UNGUARDED',
-      'flavour-data-loop [actorCritic] UNGUARDED',
-      'flavour-office-loop [withSandbox] UNGUARDED',
-      'flavour-office-loop [actorCritic] UNGUARDED',
-      'flavoured-sandbox-synth [compactExecution] UNGUARDED',
-    ])
-    // The `office` and `data` flavours exist to PARSE user-supplied documents
-    // (#78) — the delivery vehicle the guard's own threat model names first.
-    expect(rows.filter((r) => r.includes('[actorCritic]'))).toHaveLength(3)
-  })
-})
-
-// ============================================================================
-// Roll-up
-// ============================================================================
-
 describe('roll-up across every agent', () => {
-  it('pins the guarded / unguarded split (4 of 5 agents carry a guard)', async () => {
-    const guarded: string[] = []
-    const unguarded: string[] = []
-    for (const { file, exportName } of AGENT_MODULES) {
-      const rows = inventory(await patternsOf(file, exportName))
-      ;(rows.some((r) => r.includes('guarded:')) ? guarded : unguarded).push(file)
-    }
-    expect(guarded.sort()).toEqual(
-      [
-        'search.server.ts',
-        'general-next.server.ts',
-        'retriever-agent.server.ts',
-        'microsoft-365.server.ts',
-      ].sort(),
-    )
-    // The unguarded `general` agent (planner → loop over `tools.all`) was
-    // removed 2026-10-21; the sandbox agent is the one gap left, pinned above.
-    expect(unguarded).toEqual(['sandbox.server.ts'])
+  it('the only exported agent has guard coverage', async () => {
+    const rows = inventory(await patternsOf('general-next.server.ts', 'generalNextAgent'))
+    expect(rows.some((row) => row.includes('guarded:'))).toBe(true)
   })
 
   it('only general-next enables the optional LLM screen', async () => {

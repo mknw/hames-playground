@@ -6,23 +6,13 @@ published as `@hames-ai/agents`. The catalog, the definition an agent exports an
 how a host registers it are now in the package's README:
 [`packages/agents/README.md`](../../packages/agents/README.md).
 
-## Which agent to read for which pattern
+## Which source to read
 
-Each agent is one source file, and each is a working composition of the patterns in
-`@hames-ai/harness-patterns`. To see a pattern used in context, open the agent that
-uses it:
-
-| To see                                                                             | Read                                                                                                     |
-| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `router` and `routes`, `withReferences`, `withInjectionGuard`                      | [`search.server.ts`](../../packages/agents/agents/search.server.ts), agent `search`                      |
-| `retriever` routed beside tool loops                                               | [`retriever-agent.server.ts`](../../packages/agents/agents/retriever-agent.server.ts), agent `retriever` |
-| `planner` as a route inside a decision loop                                        | [`general-next.server.ts`](../../packages/agents/agents/general-next.server.ts), agent `general-next`    |
-| A loop over an explicit tool list, fully guarded                                   | [`microsoft-365.server.ts`](../../packages/agents/agents/microsoft-365.server.ts), agent `microsoft-365` |
-| `router` choosing between sandbox flavours, each an `actorCritic` inside a sandbox | [`sandbox.server.ts`](../../packages/agents/agents/sandbox.server.ts), agent `sandbox`                   |
-
-Every one of them ends with `compactExecution`, the pattern that writes the answer
-the user sees. None composes `parallel` or `judge`; [`parallel.md`](./parallel.md)
-shows those two together.
+`general-next` is the sole shipped agent definition. Its
+[`general-next.server.ts`](../../packages/agents/agents/general-next.server.ts)
+composition shows a decision loop, office `actorCritic`, Neo4j and web loops,
+document retrieval, planning, route guards and final `compactExecution`.
+For standalone `parallel` and `judge` examples, see [`parallel.md`](./parallel.md).
 
 Two things this page taught have changed. A new agent exports an `AgentDefinition`
 (id, name, description, welcome text, servers and a `createPatterns(sessionId, deps)`

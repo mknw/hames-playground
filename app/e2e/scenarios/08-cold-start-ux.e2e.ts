@@ -82,9 +82,9 @@ function firstLargeAnswer(frames: SseFrame[]): number {
   })
 }
 
-/** Requests the fake served as wake pings, oldest first. */
+/** Requests the fake served as large-model wake pings, oldest first. */
 function wakePings(app: AppHandles): readonly { at: number; delayedMs: number }[] {
-  return app.fakeLlm.calls.filter((c) => c.outcome === 'wake')
+  return app.fakeLlm.calls.filter((c) => c.outcome === 'wake' && c.model === LARGE_LLM_MODEL)
 }
 
 /**
@@ -120,7 +120,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
     expect(status).toBe(200)
 
@@ -206,14 +206,14 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     expect(message).toContain('nothing was sent to any other provider')
   }
 
-  /** The two BAML functions that would prove the harness ran anyway. Named
-   *  FUNCTIONS rather than "no BAML call at all": an earlier test's post-turn
+  /** The BAML controller that would prove the harness ran anyway. Named as a
+   *  FUNCTION rather than "no BAML call at all": an earlier test's post-turn
    *  summarization is detached by design (`compactAndSave`), so its
    *  `ResultDescribe` can land in this test's window after `reset()` and has
-   *  nothing to do with this turn. `Router` is the first call any turn makes and
-   *  `LoopController` is the first one inside the loop. */
+   *  nothing to do with this turn. `LoopController` is general-next's first
+   *  info-route call. */
   function harnessCalls(app: AppHandles): readonly unknown[] {
-    return app.fakeLlm.calls.filter((c) => c.fn === 'Router' || c.fn === 'LoopController')
+    return app.fakeLlm.calls.filter((c) => c.fn === 'LoopController')
   }
 
   it('ends the turn as a visible error when the deployment REFUSES the wake', async () => {
@@ -242,7 +242,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
 
     expect(status).toBe(200)
@@ -280,7 +280,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
         app.runTurnOverSse({
           sessionId,
           message: 'How many nodes are in the graph?',
-          agentId: 'search',
+          agentId: 'general-next',
         }),
     )
 
@@ -321,7 +321,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
         app.runTurnOverSse({
           sessionId,
           message: 'How many nodes are in the graph?',
-          agentId: 'search',
+          agentId: 'general-next',
         }),
     )
     const elapsed = Date.now() - started
@@ -368,7 +368,7 @@ describe.runIf(IS_HERMETIC)('the cold-start notice', () => {
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
 
     expect(status).toBe(200)

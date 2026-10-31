@@ -53,7 +53,7 @@ async function seedConversation(id: string): Promise<void> {
     const context = { sessionId: id, status: 'done', input: '', data: {}, createdAt: 1, events }
     await client.query(
       `INSERT INTO conversations (id, user_id, agent_id, context, title, status)
-       VALUES ($1, $2, 'search', $3::jsonb, NULL, 'done')`,
+       VALUES ($1, $2, 'general-next', $3::jsonb, NULL, 'done')`,
       [id, BYPASS_USER_ID, JSON.stringify(context)],
     )
   } finally {

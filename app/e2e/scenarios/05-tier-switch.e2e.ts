@@ -127,7 +127,7 @@ describe('switching tier between turns', () => {
       await settleSummaries(app, sessionId)
     }
 
-    // Both of the search agent's switched roles, not just the loud one.
+    // Both the info route's controller and the final answer writer switch tiers.
     // `controller` is `LoopController`; `compactExecution` is `Synthesize`, and
     // it is in `SELF_DEPLOYED_CLIENT_BY_ROLE` too — a call site that forgot to spread
     // `clientOverrideFor('compactExecution')` would leave the answer-writing
@@ -154,7 +154,7 @@ describe('switching tier between turns', () => {
     await app.setTier('self_deployed')
     await app.runTurn(sessionId, 'How many nodes are in the graph?')
 
-    // `Router` runs before the loop and the title is awaited inside the turn,
+    // The title is awaited inside the turn,
     // so both have landed by now. The describe-of-tool-results does NOT: the
     // turn runner starts it detached, after the answer has reached the caller
     // (`compactAndSave`). Waiting for the summaries to be PERSISTED is what
@@ -167,13 +167,13 @@ describe('switching tier between turns', () => {
     const describe = describeFnUsed(app)
 
     // The routing table this scenario exists to prove, per FUNCTION rather than
-    // per tier, because the tier is two models. `Router` is a heavy role on the
+    // per tier, because the tier is two models. `LoopController` runs on the
     // 27B; the title and the tool-result summary are describe functions on the
     // 4B — and the title is the interesting one, because it is a describe
     // function that does NOT carry a tool result, so getting it wrong would look
     // harmless and would still be a role split down the middle.
     const expected: Record<string, string> = {
-      Router: LARGE_LLM_MODEL,
+      LoopController: LARGE_LLM_MODEL,
       GenerateConversationTitle: SMALL_MODEL,
       [describe]: SMALL_MODEL,
     }
@@ -202,10 +202,10 @@ describe('switching tier between turns', () => {
     await settleSummaries(app, sessionId)
     const describe = describeFnUsed(app)
 
-    for (const fn of ['Router', 'GenerateConversationTitle', describe]) {
+    for (const fn of ['LoopController', 'GenerateConversationTitle', describe]) {
       const calls = app.fakeLlm.calls.filter((c) => c.fn === fn)
       // Same vacuity guard as the self_deployed leg above, which this test was missing:
-      // `describeFnUsed` only covers the describe leg (it throws), so `Router`
+      // `describeFnUsed` only covers the describe leg (it throws), so the controller
       // and the title could both go silently uncalled and this loop would
       // iterate nothing and pass.
       expect(calls.length, `no ${fn} call was made, so this asserts nothing`).toBeGreaterThan(0)

@@ -2175,7 +2175,7 @@ describe('general-next composition', () => {
     expect(registry).toContain("overlay(generalNextAgent, 'i-material-symbols-route', 'indigo')")
     expect(canonicalAgentId('general')).toBe('general-next')
     expect(canonicalAgentId('general-next')).toBe('general-next')
-    expect(canonicalAgentId('search')).toBe('search')
+    expect(canonicalAgentId('search')).toBe('general-next')
     expect(DEFAULT_AGENT_ID).toBe('general-next')
     // Every site that names no agent reads the one constant and spells no literal id.
     for (const file of [

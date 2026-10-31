@@ -49,11 +49,11 @@ async function persistTurn(sessionId: string, serialized: string): Promise<void>
     (await createConversation({
       id: sessionId,
       userId: TEST_USER,
-      agentId: 'search',
+      agentId: 'general-next',
       title: null,
       serializedContext: serialized,
     }))
-  await saveSession(sessionId, TEST_USER, 'search', serialized, { version })
+  await saveSession(sessionId, TEST_USER, 'general-next', serialized, { version })
 }
 
 let dbAvailable = true
@@ -154,6 +154,28 @@ function makeConvoWithWebSearch(sessionId: string) {
 describe('cross-turn persistence after conversation switch', () => {
   beforeEach((ctx) => skipWithoutDatabase(ctx, dbAvailable))
 
+  it.each(['search', 'retriever', 'sandbox', 'microsoft-365'])(
+    'opens a saved %s conversation as general-next without rewriting its row',
+    async (legacy) => {
+      const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
+      await createConversation({
+        id: sessionId,
+        userId: TEST_USER,
+        agentId: legacy,
+        title: null,
+        serializedContext: serializeContext(makeConvoWithWebSearch(sessionId)),
+      })
+
+      const loaded = await loadSession(sessionId, TEST_USER)
+      expect(loaded?.agentId).toBe('general-next')
+      const raw = await query<{ agent_id: string }>(
+        'SELECT agent_id FROM conversations WHERE id = $1 AND user_id = $2',
+        [sessionId, TEST_USER],
+      )
+      expect(raw.rows[0]?.agent_id).toBe(legacy)
+    },
+  )
+
   it('tool_result events round-trip byte-identical (event ids, callIds, payloads)', async () => {
     const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
     const ctx = makeConvoWithWebSearch(sessionId)
@@ -162,7 +184,7 @@ describe('cross-turn persistence after conversation switch', () => {
     await persistTurn(sessionId, serializeContext(ctx))
     const loaded = await loadSession(sessionId, TEST_USER)
     expect(loaded).not.toBeNull()
-    expect(loaded!.agentId).toBe('search')
+    expect(loaded!.agentId).toBe('general-next')
 
     const restored = deserializeContext(loaded!.serializedContext)
     // Every event survives identically — this is what `ref:<id>` expansion,
@@ -225,19 +247,6 @@ describe('cross-turn persistence after conversation switch', () => {
     // (this is what `withReferences` reads on entry to the neo4j route).
     const priorResults = view.fromAll().ofType('tool_result').get()
     expect(priorResults.map((e) => e.id)).toEqual(['ev-search-result'])
-  })
-
-  it('agent mismatch on resume falls through to a fresh start (no cross-agent leak)', async () => {
-    // Stored as search; if a request comes in claiming agentId="retriever",
-    // runTurn ignores the loaded context. We assert the persistence layer
-    // surfaces the stored agentId so the dispatch decision is unambiguous.
-    const sessionId = `xt-${Math.random().toString(36).slice(2, 10)}`
-    const ctx = makeConvoWithWebSearch(sessionId)
-    await persistTurn(sessionId, serializeContext(ctx))
-    const loaded = await loadSession(sessionId, TEST_USER)
-    expect(loaded!.agentId).toBe('search')
-    // runTurn's dispatch: if request.agentId !== loaded.agentId → fresh harness.
-    // (Captured here so a future refactor can't silently flip the contract.)
   })
 
   it('saving twice keeps the same row (no duplicate conversations on resume)', async () => {

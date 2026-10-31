@@ -13,25 +13,16 @@
 
 ## What this is
 
-Five ready-made AI agents to register in your own application: search over the
-web and a Neo4j knowledge graph, question-answering over documents you have
-uploaded, a Microsoft 365 assistant, the general-purpose decision-loop agent
-`general-next`,
-and one that runs code in a container, picking a plain, data or office
-container for each message. Each one is built from
+One ready-made agent definition, `general-next`, for a host application. It
+chooses among Microsoft 365 work, Neo4j and web lookup, document retrieval,
+planning, and an office sandbox. It is built from
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
 and makes its model calls through
 [`@hames-ai/harness-baml`](https://github.com/mknw/hames-playground/tree/main/packages/harness-baml#readme).
-An agent here is a plain definition — an id, a name, a greeting, the tool
-servers it needs and a function that builds it — and whatever it needs from
-your application (a tool catalog, a document store, a sandbox) you hand it in
-one object, `AgentDeps`. The package also ships browser-safe helpers that turn
-a run's history into graph elements, citations and a chat transcript.
-
-> **Note:** These packages are at 0.4.0: pre-1.0 and still
-> stabilising. The guardrails shipped so far are described in each README;
-> further guardrails are in active development ([tracking issue](https://github.com/mknw/hames-playground/issues/391)), so run
-> them against data you can afford to lose ([details](https://github.com/mknw/hames-playground/tree/main/packages/agents#agent-catalog)).
+The host supplies a tool catalog, document store, sandbox and guards through
+`AgentDeps`. The package also ships browser-safe graph, citation and transcript
+helpers. Earlier agent exports were retired in #898; saved ids in the reference
+app resolve to `general-next`.
 
 ## Which package do you need?
 
@@ -49,7 +40,7 @@ for what they do.
 ## See it running
 
 The [hames app](https://github.com/mknw/hames-playground) is the reference
-host for all five packages: a self-hosted agent workspace whose agents are
+host for all five packages: a self-hosted agent workspace whose agent is
 built from them, with every step of every run visible in its UI. Its
 [Quickstart](https://github.com/mknw/hames-playground#quickstart) runs it
 locally with Docker and pnpm.
@@ -100,48 +91,20 @@ removes Exa only; see `app/.env.example`.
 
 ## Usage
 
-### Quick start: run the search agent once
+### Quick start: inspect the shipped agent
 
-Build a shipped agent's patterns, compose them into a harness, and ask one
-question. It runs `search`, one of the three agents the
-[Warning under Agent catalog](#agent-catalog) is about: it runs model-written
-Cypher against the Neo4j you give it. It only reads; no shipped agent can write
-to Neo4j.
-
-> **Needs:** an Anthropic API key in `ANTHROPIC_API_KEY` (get one at [console.anthropic.com](https://console.anthropic.com/)), and the MCP server and seeded Neo4j from the [three commands under Install](#install).
+The reference app wires the required sandbox, document backend and guards before
+running a turn. This snippet shows the server-only definition and its metadata;
+see [the app composition root](https://github.com/mknw/hames-playground/blob/main/app/src/lib/harness-client/registry.server.ts)
+for the complete host wiring.
 
 ```typescript
-import { harness } from '@hames-ai/harness-patterns'
-import { registerToolNamespaces } from '@hames-ai/harness-patterns/tools.server'
-import type { AgentData, AgentDeps } from '@hames-ai/agents'
-import { searchAgent } from '@hames-ai/agents/agents/search.server'
-import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
 
-// Which group ("namespace") each MCP tool belongs to, such as `web` or `neo4j`.
-// The map is used twice, for two different readers. Registered here, it is what
-// the agent's injection guard (which neutralizes instructions hidden in web
-// content) uses to find the `web` tools; without it the guard refuses to build.
-registerToolNamespaces(mcpNamespace)
-
-// In AgentDeps it is what the agent's own `Tools()` call uses to sort its tools
-// into `tools.web` and `tools.neo4j`. It is the one required field of AgentDeps.
-const deps: AgentDeps = { toolNamespaces: mcpNamespace }
-
-const sessionId = 'session-1'
-const patterns = await searchAgent.createPatterns(sessionId, deps)
-const result = await harness<AgentData>(...patterns)(
-  'Which technologies in the knowledge graph are frameworks?',
-  sessionId,
-)
-console.log(result.response)
+console.log(generalNextAgent.id, generalNextAgent.name)
 ```
 
-The MCP server has to run the MCP servers the agent lists in `servers`
-(`neo4j-cypher`, `web_search`, `fetch`); the one this repository ships does, as
-configured in
-[configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml).
-
-### How the shipped agents are composed
+### How general-next is composed
 
 `general-next` is the decision-loop agent, and the reference app's default: a new chat
 opens on it. It replaced `general`, which was removed (see
@@ -229,7 +192,7 @@ drift from the real signatures.
 ```typescript
 // The agent's tools, grouped by namespace. You pass the grouping in: the
 // package cannot guess which of your MCP tools are web tools. From
-// `search.server.ts`:
+// an illustrative composition:
 import { Tools } from '@hames-ai/harness-patterns/tools.server'
 import type { AgentDeps } from '@hames-ai/agents'
 
@@ -242,7 +205,7 @@ const toolSet = await Tools({ namespaces: deps.toolNamespaces })
 // optional `enrichNeo4jResult` post-processes each result. The context prefix
 // tells the controller the graph is read-only and what to answer instead of a
 // write; the loop shows it only the few-shots whose tool it holds, so the
-// set's write example never reaches it. From `search.server.ts`:
+// set's write example never reaches it. Illustrative composition:
 import { simpleLoop, type ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { bamlPatterns, createLoopControllerAdapter } from '@hames-ai/harness-baml'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
@@ -275,7 +238,7 @@ function buildNeo4jRoute(
 // injection guard: the agent itself declares which of its sources it does
 // not trust. `withReferences` hands each route relevant results from earlier
 // turns; `scope: 'global'` lets it pick them from any route, not only its own.
-// From `search.server.ts`:
+// Illustrative composition:
 import {
   routes,
   withReferences,
@@ -326,54 +289,10 @@ function buildRoutes(tools: ToolSet): ConfiguredPattern<AgentData> {
 > patterns, and the guard does not read it.
 > An agent with no untrusted namespaces writes `namespaces: []` explicitly.
 
-```typescript
-// A code-running loop kept in one container for the whole conversation. The
-// sandbox wrapper comes from your application (built on @hames-ai/sandbox),
-// so you decide how the container is isolated. From the `basic` route of
-// `sandbox.server.ts`:
-import type { AgentData, AgentDeps } from '@hames-ai/agents'
-import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
-
-declare const loop: ConfiguredPattern<AgentData>
-
-function sandboxIt(deps: AgentDeps, sessionId: string): ConfiguredPattern<AgentData> {
-  // This agent cannot run without a sandbox, so it fails loudly rather than
-  // run agent-written code on your machine:
-  const wrap = deps.withSandbox
-  if (!wrap) throw new Error('requires deps.withSandbox (AgentDeps)')
-  return wrap({
-    id: sessionId,
-    sessionId,
-    rootfs: 'base',
-    egress: 'mcp-only',
-    syncWorkspace: true,
-  })(loop)
-}
-```
-
-```typescript
-// A route that searches your uploaded documents (the retrieval backend you pass
-// as `createRedisBackend`). From `retriever-agent.server.ts`:
-import {
-  retriever,
-  type ConfiguredPattern,
-  type RetrieverBackend,
-} from '@hames-ai/harness-patterns'
-import type { AgentData } from '@hames-ai/agents'
-import { bamlPatterns } from '@hames-ai/harness-baml'
-
-function buildRetrieverRoute(redisBackend: RetrieverBackend): ConfiguredPattern<AgentData> {
-  const baml = bamlPatterns()
-  return retriever<AgentData>({
-    patternId: 'retriever',
-    backends: [redisBackend],
-    k: 5,
-    generateQuery: true,
-    rewrite: baml.retrieveQuery,
-    liveEvents: true,
-  })
-}
-```
+The office route runs through the host's `withSandbox` wrapper and uses a
+workspace shared with document retrieval. The document route uses the backend
+provided as `createRedisBackend`. See `general-next.server.ts` for the exact
+composition and guard placement.
 
 ### Registering agents in your application
 
@@ -386,7 +305,7 @@ its [harness-client README](https://github.com/mknw/hames-playground/blob/main/a
 // `agentDeps` and `registerAgent` are the app's own functions; you write yours.
 // The definition is spread in, and an icon and accent colour are added on top:
 import type { AgentDefinition } from '@hames-ai/agents'
-import { searchAgent } from '@hames-ai/agents/agents/search.server'
+import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
 
 declare function agentDeps(): import('@hames-ai/agents').AgentDeps
 declare function registerAgent(config: AgentDefinition & { icon: string; accent: string }): void
@@ -400,7 +319,7 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent) {
     createPatterns: (sessionId: string) => def.createPatterns(sessionId, agentDeps()),
   }
 }
-registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
+registerAgent(overlay(generalNextAgent, 'i-material-symbols-route', 'indigo'))
 ```
 
 To present agents differently, add your own fields the same way; the
@@ -415,76 +334,19 @@ order under **Composition**; each name is a pattern documented in the
 which neutralizes instructions hidden in untrusted content (a web page, an
 email) before a model reads it.
 
-| Agent           | Composition                                                      | Tools                                                         | Injection guard                                                                                                                            |
-| --------------- | ---------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `search`        | router → routes(neo4j loop, web loop) → compactExecution         | neo4j-cypher, web_search, fetch                               | web route guarded; neo4j route not guarded (see the Warning below)                                                                         |
-| `retriever`     | router → routes(retriever, neo4j, web) → compactExecution        | neo4j-cypher, web_search, fetch                               | web namespace + retriever exact-name guarded together (ingested documents are untrusted)                                                   |
-| `microsoft-365` | allowlist loop over the Microsoft Graph tools → compactExecution | Microsoft Graph (the Microsoft 365 API), per-user token       | whole Microsoft Graph loop guarded (mail and files can be written by anyone)                                                               |
-| `general-next`  | decisionLoop(office, info, retriever, think) → compactExecution  | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
-| `sandbox`       | router → routes(basic, data, office) → compactExecution          | in-container `sandbox_*`                                      | not on tool results yet, on any route; shell commands are screened (below)                                                                 |
+| Agent          | Composition                                                     | Tools                                                         | Injection guard                                                                                                                            |
+| -------------- | --------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `general-next` | decisionLoop(office, info, retriever, think) → compactExecution | Microsoft 365, office sandbox, Neo4j/web/context7, Data Stash | per-route guards with their own fence and screen, and quoted tool bodies that keep their ingress fence; private web input pseudonymisation |
 
 In the `general-next` row, `context7` is the MCP server that answers questions
 about software libraries; _Data Stash_ is the uploaded-document store behind
 `createRedisBackend`, described in the repository's
 [Data Stash doc](https://github.com/mknw/hames-playground/blob/main/docs/DATA_STASH.md).
 
-**Guardrail status.** Two guards ship today. The injection guard covers the
-tool results marked in the table above, and the sandbox agent also gets
-`@hames-ai/sandbox`'s shell-command screen, which checks every `sandbox_bash`
-command against a denylist before it runs. Guardrails beyond these two are in
-active development; the Warning below has the status and what to do meanwhile.
-
-> **Warning:** Guardrails for these routes are in active development, and a
-> release is coming ([tracking issue](https://github.com/mknw/hames-playground/issues/391)). Until it ships, `search`
-> and `retriever` are not meant for production use. What keeps your
-> data safe while you try them:
->
-> - **Use throwaway data.** Point them at a fresh Neo4j loaded with the demo graph
->   (`./scripts/import-neo4j.sh neo4j_dumps/seed-data.cypher`, as under
->   [Install](#install)), not at data you need.
-> - **Writes are off, in two places.** Agents are read-only against Neo4j
->   ([#403](https://github.com/mknw/hames-playground/issues/403)). The
->   repository ships `read_only: true` for `neo4j-cypher` in
->   [configs/mcp-config.yaml](https://github.com/mknw/hames-playground/blob/main/configs/mcp-config.yaml); the pinned server, `mcp-neo4j-cypher` 0.5.0, reads it as
->   `NEO4J_READ_ONLY` and then does not register its write tool,
->   `write_neo4j_cypher`. Any value other than `true` or `false` stops it from
->   starting. Separately, `@hames-ai/harness-patterns` leaves `write_neo4j_cypher`
->   out of the tool catalog every agent's tool list is built from, and every
->   loop refuses it even when its allowlist names it, so a server that does
->   offer it still offers it to no agent, and each agent's controller
->   is told to answer a request to change the graph by saying it can only read
->   it. After editing the config, re-render it and recreate the gateway:
->   `docker compose run --rm mcp-config && docker compose up -d --no-deps --force-recreate mcp-gateway`
->   (a restart or a plain `up -d` leaves the gateway on the config it read at
->   start).
->
-> Both protect the graph, not the network. A query can still make the database
-> fetch URLs through APOC's load procedures: the server's read tool refuses only
-> queries that look like writes, and `CALL apoc.load.json('http://…')` does not.
-> To close that too, run them against a Neo4j on an internal bridge with IPv4 gateway mode `isolated`, as in this
-> repository's compose stack (#241 G13). Removing APOC alone is insufficient:
-> Cypher's `LOAD CSV` can still fetch URLs. The demo graph needs no APOC
-> (`neo4j_dumps/seed-data.cypher` is plain Cypher), but these agents read the
-> schema through the MCP server's `get_neo4j_schema` tool, which runs
-> `CALL apoc.meta.schema(...)` and fails on a Neo4j without APOC. The agents then
-> log `graph schema unavailable` and run without the schema
-> ([graph-schema.server.ts](https://github.com/mknw/hames-playground/blob/main/packages/agents/agents/graph-schema.server.ts)). The repository compose stack closes this network path (#241 G13): Neo4j
-> sits only on an internal network with a fixed HTTP/Bolt relay; it cannot
-> reach the MCP server, Postgres, Redis or public URLs. Other deployments must
-> provide equivalent isolation.
->
-> Why: these two agents let the model write Cypher and run it through the MCP
-> server's `read_neo4j_cypher` tool, and neither guards its Neo4j
-> route. No agent holds `write_neo4j_cypher`, and the read tool refuses queries
-> that look like writes. But what these agents
-> read, whether a person types it or the web route fetches it, can
-> still try to make the database fetch URLs: the Neo4j this
-> repository ships installs APOC (baked into `docker/neo4j/Dockerfile`, used by [docker-compose.yaml](https://github.com/mknw/hames-playground/blob/main/docker-compose.yaml)),
-> and with APOC's load procedures enabled (the default once APOC is installed) a
-> query such as `CALL apoc.load.json('http://…')` makes the database fetch that
-> URL. See also [#241](https://github.com/mknw/hames-playground/issues/241) and the Warning on
-> [running your own Cypher query](https://github.com/mknw/hames-playground/tree/main/packages/connectors#run-your-own-cypher-query)
-> in `@hames-ai/connectors`.
+**Guardrail status.** `general-next` guards external tool results by route,
+including Microsoft Graph, web and retrieved documents. The host's sandbox
+wrapper also screens shell commands. Read the [general-next design](https://github.com/mknw/hames-playground/blob/main/docs/plan/decision-loop-agent.md)
+for the route-specific policies.
 
 ## Configuration
 
@@ -581,6 +443,6 @@ front-end code can import it without pulling in anything server-side:
 | `AgentDefinition`, `AgentData`, `AgentDeps`                         | the definition types (see Configuration)                        |
 
 The definitions entry point (`import from '@hames-ai/agents/agents'`) is
-**server-only** — five registered agents plus three shared helpers
+**server-only** — `generalNextAgent` plus three shared helpers
 (`getGraphSchema`, the Neo4j few-shots, the title generator). Every module
 calls core's `assertServerOnImport()` at load.

@@ -43,7 +43,7 @@ test('a sent message gets an assistant reply on screen, and the sidebar picks th
   // The flip made `general-next` the default; this scenario asserts `search`'s Router chain
   // below, so it says so. Picked AFTER the empty-state check: choosing an agent adds a
   // placeholder row to the sidebar.
-  await chooseAgent(page, 'Search Agent')
+  await chooseAgent(page, 'General Agent · Next')
   await send(page, QUESTION)
 
   // What the user typed is echoed as their own turn.

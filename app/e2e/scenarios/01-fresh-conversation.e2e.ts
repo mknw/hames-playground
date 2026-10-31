@@ -10,8 +10,8 @@
  *
  * WHAT IT PINS THAT A UNIT TEST DOES NOT. Every layer is the real one:
  * `runTurnAndPersist` resolves the tier from the stored preference, opens the
- * three AsyncLocalStorage scopes, builds the search agent's patterns against a
- * live tool catalog, runs router → route → simpleLoop → compactExecution, and
+ * three AsyncLocalStorage scopes, builds general-next's patterns against a
+ * live tool catalog, runs decision loop → info route → synthesis, and
  * writes the whole event stream to Postgres. The only substitutions are the
  * inference endpoint and the MCP gateway. A client swap that breaks any of
  * that shows up here as a failed turn, which is the gap the preview found the
@@ -69,7 +69,7 @@ describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
     //    harness's never-flipped 'running' to 'done'; anything still saying
     //    'running' here is a row that will spin in the sidebar forever.
     expect(row!.status).toBe('done')
-    expect(row!.agentId).toBe('search')
+    expect(row!.agentId).toBe('general-next')
     expect(row!.title, 'the first turn should have named the conversation').toBeTruthy()
 
     // 4. The turn really ran the loop: a tool was called and its result came
@@ -94,14 +94,9 @@ describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
       const expected = tier === 'self_deployed' ? LARGE_LLM_MODEL : FAKE_ANTHROPIC_TIER_MODEL
       for (const call of controller) expect(call.model).toBe(expected)
 
-      // The router is in `SELF_DEPLOYED_CLIENT_BY_ROLE` as of 2026-08-26 — it is handed
-      // the user's raw message, so the private tier keeps it — and therefore
-      // takes the same tier as the controller. This is the app-level
-      // counterpart of `clients-self-deployed.test.ts`: that file pins the map, this
-      // pins that a real turn honours it.
-      const router = byFn('Router')
-      expect(router.length, 'the router never ran').toBeGreaterThan(0)
-      for (const call of router) expect(call.model).toBe(expected)
+      const synth = byFn('Synthesize')
+      expect(synth.length, 'the answer writer never ran').toBeGreaterThan(0)
+      for (const call of synth) expect(call.model).toBe(expected)
     },
   )
 
@@ -112,7 +107,7 @@ describe.each(TIERS)('a fresh conversation on the %s tier', (tier) => {
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
 
     expect(status).toBe(200)

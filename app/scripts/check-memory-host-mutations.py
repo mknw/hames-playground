@@ -72,7 +72,7 @@ cases += [
     ('delete-refusal-failed', '../packages/harness-patterns/memory-store.server.ts', 'failed++', 'duplicates++', 'src/__tests__/lib/memory/settle.test.ts', 'delete refusal'),
     ('wake-skips-store', '../packages/harness-patterns/memory-store.server.ts', "if (outcome !== 'awake') return stop('waking')", 'void outcome', 'src/__tests__/lib/memory/settle.test.ts', 'rejected or skipped'),
     ('boot-content-free', B, '// No exception text: drivers can quote data or credentials.', "console.info('secret content')", boot, 'does not fail boot'),
-    ('shipped-opt-in', '../packages/agents/agents/search.server.ts', 'import ', "import { withMemory } from '@hames-ai/harness-patterns'\nconst _memoryOptIn = () => withMemory({} as never)\nimport ", config, 'shipped agent'),
+    ('shipped-opt-in', '../packages/agents/agents/general-next.server.ts', 'import ', "import { withMemory } from '@hames-ai/harness-patterns'\nconst _memoryOptIn = () => withMemory({} as never)\nimport ", config, 'shipped agent'),
 ]
 cases += [
     ('wake-target-tier', 'src/lib/inference/memory-wake.server.ts', "if (activeInferenceTier() === 'self_deployed') targets.push(SUMMARIZER)", 'targets.push(SUMMARIZER)', 'src/__tests__/lib/inference/memory-wake.test.ts', 'requested target set'),

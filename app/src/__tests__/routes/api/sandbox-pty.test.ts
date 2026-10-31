@@ -260,13 +260,13 @@ describe('POST /api/sandbox/pty/stream — open the terminal', () => {
     expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false, tenantId: 'user-1' })
 
     agentUsesSyncWorkspace.mockResolvedValue(true)
-    await open('s1', { agentId: 'sandbox' })
+    await open('s1', { agentId: 'general-next' })
     expect(ensure).toHaveBeenLastCalledWith('s1', { syncWorkspace: true, tenantId: 'user-1' })
   })
 
   it('still opens the terminal when the capability lookup fails', async () => {
     agentUsesSyncWorkspace.mockRejectedValue(new Error('registry hiccup'))
-    await open('s1', { agentId: 'sandbox' })
+    await open('s1', { agentId: 'general-next' })
     expect(ensure).toHaveBeenCalledWith('s1', { syncWorkspace: false, tenantId: 'user-1' })
   })
 

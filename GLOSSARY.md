@@ -130,9 +130,10 @@ used to hand a pattern a scoped tool set: `neo4j`, `web`, `context7`,
 `database` namespace: no agent reaches Postgres (#412). Namespaces are a grouping over the tools a single MCP gateway
 exposes, not a security boundary.
 
-**general-next** — the general agent that chooses successive groups of
-capabilities within a turn. It replaces the removed `general` agent (stored
-`general` ids resolve to it) and is the default agent: a new chat opens on it. See
+**general-next** — the sole registered agent, choosing successive groups of
+capabilities within a turn. Saved `general`, `search`, `retriever`, `sandbox`,
+and `microsoft-365` ids (plus earlier aliases) resolve to it without a row
+migration. A new chat opens on it by default. See
 [`packages/agents/README.md`](packages/agents/README.md).
 
 ## Storage and runtime

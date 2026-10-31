@@ -31,13 +31,25 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
 import { withInfoDocumentReferences } from './info-document-references.server'
-import { MICROSOFT_365_TOOLS } from './microsoft-365.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
 import { ENVELOPE_NEGATIVE_SHOT } from './fewshot-negative.server'
 import type { FewShot } from '@hames-ai/harness-patterns/types'
 
 assertServerOnImport()
+
+/** Graph reads available to the office route, in the order advertised to its actor.
+ * File ingestion is added separately when the host enables it. */
+export const OFFICE_GRAPH_READ_TOOLS = [
+  'graph_me',
+  'graph_calendar_today',
+  'graph_mail_recent',
+  'graph_mail_attachments',
+  'graph_files_search',
+  'graph_files_list',
+  'graph_files_recent',
+  'graph_files_shared',
+] as const
 
 // Synthetic office examples use the same JSON envelope as the actor's output
 // format. ActorMultiCalls supplies the mode-gated write-then-run batch beside
@@ -123,11 +135,11 @@ async function createPatterns(
   const schema = await getGraphSchema('general-next', sessionId, deps)
   const baml = bamlPatterns()
 
-  // P4: ingest is local to this office route; the shared Microsoft 365 list
-  // stays metadata-only. The tool executor enforces the private-only policy.
+  // P4: ingest is local to this office route. The tool executor enforces the
+  // private-only policy.
   const available = new Set(tools.graph ?? [])
   const officeTools: string[] = [
-    ...MICROSOFT_365_TOOLS,
+    ...OFFICE_GRAPH_READ_TOOLS,
     ...(deps.graphFileIngest === true ? ['graph_file_ingest'] : []),
   ].filter((name) => available.has(name))
   const docTools = tools.context7 ?? []

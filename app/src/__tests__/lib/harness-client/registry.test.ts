@@ -32,7 +32,7 @@ vi.mock('../../../lib/harness-client/session.server', () => ({
   agentDeps: () => ({}),
 }))
 
-// The module registers the five agents on import; each one pulls in the whole
+// The module registers the agent on import; it pulls in the whole
 // pattern/tool graph, so stub them down to bare configs.
 function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
   return {
@@ -47,20 +47,8 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     ...extra,
   }
 }
-vi.mock('@hames-ai/agents/agents/search.server', () => ({
-  searchAgent: stubAgent('search'),
-}))
 vi.mock('@hames-ai/agents/agents/general-next.server', () => ({
   generalNextAgent: stubAgent('general-next', { usesSandbox: true }),
-}))
-vi.mock('@hames-ai/agents/agents/sandbox.server', () => ({
-  sandboxAgent: stubAgent('sandbox', { usesSandbox: true }),
-}))
-vi.mock('@hames-ai/agents/agents/retriever-agent.server', () => ({
-  retrieverAgent: stubAgent('retriever'),
-}))
-vi.mock('@hames-ai/agents/agents/microsoft-365.server', () => ({
-  microsoft365Agent: stubAgent('microsoft-365'),
 }))
 
 const {
@@ -101,88 +89,48 @@ beforeEach(() => {
 })
 
 describe('registration + lookup', () => {
-  it('registers the bundled agents on import', () => {
-    expect(getAllAgents().map((a) => a.id)).toEqual(
-      expect.arrayContaining(['search', 'general-next', 'sandbox', 'retriever', 'microsoft-365']),
-    )
-  })
-
-  // Owner decision 2026-10-03: one sandbox agent. The two it replaced are gone
-  // from the picker, and their ids still resolve — `conversations.agent_id`
-  // and `routines.agent_id` hold them for every row written before.
-  it('registers exactly one sandbox agent, and neither of the two it replaced', () => {
-    const ids = getAllAgents().map((a) => a.id)
-    expect(ids.filter((id) => id.includes('sandbox'))).toEqual(['sandbox'])
+  it('registers general-next alone', () => {
+    expect(getAllAgents().map((a) => a.id)).toEqual(['general-next'])
   })
 
   it('returns undefined for an unknown id rather than throwing', () => {
     expect(getAgent('no-such-agent')).toBeUndefined()
   })
 
-  // PR #234 renamed 'default' → 'search'. `conversations.agent_id` still holds
-  // 'default' for every row written before it, and getOrBuildPatterns throws on
-  // an unknown id — so without this mapping those threads stop opening.
-  describe('renamed agent ids stay resolvable', () => {
-    it("maps the legacy 'default' id to the search agent", () => {
-      expect(canonicalAgentId('default')).toBe('search')
-      expect(getAgent('default')?.id).toBe('search')
+  describe('retired ids stay resolvable', () => {
+    it.each([
+      'search',
+      'retriever',
+      'sandbox',
+      'microsoft-365',
+      'default',
+      'sandbox-session',
+      'flavoured-sandbox',
+      'general',
+    ])('maps %s to general-next without listing it', (legacy) => {
+      expect(canonicalAgentId(legacy)).toBe('general-next')
+      expect(getAgent(legacy)?.id).toBe('general-next')
+      expect(getAllAgents().map((a) => a.id)).not.toContain(legacy)
+      expect(unattendedIdAccepted(legacy)).toBe(true)
     })
 
-    it.each(['sandbox-session', 'flavoured-sandbox'])(
-      "maps the consolidated '%s' id to the one sandbox agent",
-      (legacy) => {
-        expect(canonicalAgentId(legacy)).toBe('sandbox')
-        expect(getAgent(legacy)?.id).toBe('sandbox')
-      },
-    )
-
-    // 2026-10-21: `general` was REMOVED (not renamed), so unlike the ids above
-    // its successor is a different agent. Every stored reference still opens:
-    // `conversations.agent_id` and `routines.agent_id` rows, a stale tab's request,
-    // a device's `/api/agents/general` URL — all resolve here, none throws
-    // `Unknown agent`.
-    //
-    // MUTATION: delete the `general: 'general-next'` entry in agent-ids.ts and
-    // both assertions redden.
-    it("folds the removed 'general' id into general-next", () => {
-      expect(canonicalAgentId('general')).toBe('general-next')
-      expect(getAgent('general')?.id).toBe('general-next')
-    })
-
-    // Unattended entry points (a routine firing, `POST /api/agents/:id`) decide
-    // through ONE function, so refusing legacy ids there later is one line.
-    // Today the owner's answer is pending and the id folds, as above.
-    //
-    // MUTATION: flip FOLD_LEGACY_IDS_UNATTENDED to `false` in agent-ids.ts and the
-    // first assertion reddens (that is the switch to fail-closed, and this pin then
-    // changes with it); drop the call from either entry point and the source pin does.
-    it('lets unattended entry points fold a legacy id, deciding through one function', () => {
-      expect(unattendedIdAccepted('general')).toBe(true)
-      expect(unattendedIdAccepted('search')).toBe(true)
+    it('keeps the unattended policy at both entry points', () => {
       for (const file of ['src/lib/routines/dispatch.server.ts', 'src/routes/api/agents/[id].ts'])
         expect(readFileSync(file, 'utf8'), file).toContain('!unattendedIdAccepted(')
     })
 
-    it('passes an id it does not know through unchanged', () => {
-      expect(canonicalAgentId('retriever')).toBe('retriever')
+    it('passes unknown ids through unchanged', () => {
       expect(canonicalAgentId('no-such-agent')).toBe('no-such-agent')
-    })
-
-    it('does not resurrect the old id in the listing', () => {
-      const ids = getAllAgents().map((a) => a.id)
-      expect(ids).not.toContain('default')
-      expect(ids).not.toContain('sandbox-session')
-      expect(ids).not.toContain('flavoured-sandbox')
-      // No agent is registered under the removed id: it resolves, it is not listed.
-      expect(ids).not.toContain('general')
     })
   })
 
   it('replaces an agent registered twice under the same id', () => {
     const before = getAllAgents().length
-    registerAgent({ ...stubAgent('search'), name: 'Renamed' })
-    expect(getAgent('search')?.name).toBe('Renamed')
+    const original = getAgent('general-next')!
+    registerAgent({ ...original, name: 'Renamed' })
+    expect(getAgent('general-next')?.name).toBe('Renamed')
     expect(getAllAgents()).toHaveLength(before)
+    registerAgent(original)
   })
 
   it('exposes metadata without the non-serializable pattern factory', () => {
@@ -209,8 +157,7 @@ describe('registration + lookup', () => {
   // declaration, not the agent's id or name.
   it('carries each agent’s sandbox declaration to the client', () => {
     const meta = getAgentMetadata()
-    expect(meta.find((m) => m.id === 'sandbox')?.usesSandbox).toBe(true)
-    expect(meta.find((m) => m.id === 'search')?.usesSandbox).toBe(false)
+    expect(meta.find((m) => m.id === 'general-next')?.usesSandbox).toBe(true)
 
     registerAgent({ ...stubAgent('renamed-box', { usesSandbox: true }) })
     expect(getAgentMetadata().find((m) => m.id === 'renamed-box')?.usesSandbox).toBe(true)

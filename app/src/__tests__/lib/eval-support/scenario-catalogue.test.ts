@@ -26,7 +26,7 @@ function sourceTools(): string[] {
     return [...body.matchAll(/'([a-z_-]+)'/g)].map((m) => m[1])
   }
   return [
-    ...list('../packages/agents/agents/microsoft-365.server.ts', 'MICROSOFT_365_TOOLS'),
+    ...list('../packages/agents/agents/general-next.server.ts', 'OFFICE_GRAPH_READ_TOOLS'),
     ...[
       ...read('src/lib/eval-support/synthetic-sandbox.ts').matchAll(/name: '(sandbox_[a-z]+)'/g),
     ].map((m) => m[1]),

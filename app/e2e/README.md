@@ -14,13 +14,13 @@ Everything between the browser and the model is the real thing. The suite calls
 `processMessageWithAgent` (the server action the chat form calls) and
 `POST /api/events` (the route the streaming UI posts to); those call
 `runTurnAndPersist`, which resolves the user's inference tier, opens the request
-/ settings / tier scopes, builds the agent's patterns, runs
-router → route → simpleLoop → compactExecution, and writes the whole event
+/ settings / tier scopes, builds `general-next`'s patterns, runs its
+decision loop and final synthesis, and writes the whole event
 stream to Postgres. Only the external services are substituted: the inference
 endpoint, the MCP gateway, the document converter, and (for the scenarios that
 install it) Microsoft Graph.
 
-Scenario 12 runs the registered `general-next` candidate against W4's runnable
+Scenario 12 runs the registered `general-next` agent against W4's runnable
 graph-count case: two systemone choices, the actual guarded info route, one
 synthesis, SSE and persistence. It also pins the visible error when the private
 decisions shim is unconfigured. This scenario uses the explicit Anthropic tier
@@ -95,13 +95,10 @@ and a fourth is installed by the scenarios that need it:
 - **`lib/fake-graph.ts`** — a Microsoft Graph fixture router at the `graphFetch`
   seam, answering from `fixtures/graph/` (a home tenancy on `contoso.com`, an
   outside one on `fabrikam.com`, OneDrive and SharePoint items with their
-  content, and inbox mail with attachments). It is not on by default: the app's
-  own Graph tools are composed in `src/lib/app-tools/index.server.ts`, which
-  only `src/middleware.ts` imports and this suite never loads, so no scenario
-  has Graph tools until it calls
-  `app.installGraphTools()`, which puts the REAL `@hames-ai/connectors` tools,
-  composed over the router, behind the real `callTool`, and returns the
-  function that takes them away.
+  content, and inbox mail with attachments). The suite installs the real
+  `@hames-ai/connectors` Graph tools over this fake at boot, so the sole agent's
+  office route has its declared namespace. `app.installGraphTools()` temporarily
+  replaces that transport when a scenario needs a custom Data Stash bridge.
 
 Both new fakes FAIL CLOSED (#433 S9): a request no fixture models is an error
 that names what was refused, never an empty answer, and it is recorded. A
@@ -142,11 +139,8 @@ than one per file.
 roles in `SELF_DEPLOYED_CLIENT_BY_ROLE`, which after the two 2026-08-26 owner decisions
 is every role — the injection screen included. So a live run in the self-hosted
 position bills Anthropic nothing, which is a smaller claim than it sounds: no
-scenario triggers a screen call anyway, because no agent in this repo enables
-the opt-in LLM screen. The bill moved rather than shrank: `router`, `planner`, the title and
-every describe call now land on the single-replica self-hosted box, which is
-more traffic through it than the pre-widening shape and the reason the burst
-discipline above matters more than it did. What _is_ avoidable is running each
+scenario may exercise screening on external results. The private tier sends
+`describe` calls to the separate small summarizer. What _is_ avoidable is running each
 scenario a second time with the switch in the anthropic position, which would
 put all of that on the metered API for no live-route information. So the
 per-tier legs of scenarios 1, 2 and 7 collapse to the self-hosted tier here,

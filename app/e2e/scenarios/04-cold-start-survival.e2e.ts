@@ -155,7 +155,7 @@ describe(`a ${Math.round(COLD_START_MS / 1000)}s self-hosted call the app must w
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
     const elapsed = Date.now() - started
 

@@ -212,7 +212,7 @@ async function probeTurn(backend: Backend, appUrl: string, label: string): Promi
     body: JSON.stringify({
       sessionId: `e2e-browser-preflight-${label}-${Date.now()}`,
       message: 'preflight',
-      agentId: 'search',
+      agentId: 'general-next',
     }),
   })
   // Drain the stream; the turn itself is not what is being asserted.

@@ -95,18 +95,10 @@ export interface AppHandles {
    */
   goToSleep(): Promise<void>
   /**
-   * Put the real Microsoft Graph tools, composed over {@link fakeGraph}, behind
-   * the real `callTool`, and return the function that takes them away.
-   *
-   * OPT-IN, unlike the other fakes, because it changes what a turn can do. The
-   * app's own composition root (`src/lib/app-tools/index.server.ts`) is
-   * imported only by `src/middleware.ts`, which this suite never loads, so since
-   * #225 L3 moved that import there no scenario here has had Graph tools, and an
-   * agent offered `tools.all` would start seeing them. A scenario that needs
-   * them installs them in `beforeAll` and calls the returned function in
-   * `afterAll`. The tools resolve the caller the way the production composition
-   * does (`request-user.server.ts`), and they register as a PROCESS transport,
-   * the same position the app's own tools take.
+   * Replace the suite's default fake Graph transport with one using a custom
+   * Data Stash bridge. Restore the default transport with the returned function.
+   * `general-next` needs the Graph namespace even on an info-only turn, so the
+   * default transport is installed when the suite boots.
    *
    * `stash` is the Data Stash bridge `graph_file_ingest` stores through. This
    * suite has no stash backend, so it defaults to one that refuses by name.
@@ -116,7 +108,7 @@ export interface AppHandles {
   readonly userId: string
   readonly fakeLlm: FakeLlm
   readonly fakeGateway: FakeGateway
-  /** The Graph fixture router behind {@link installGraphTools}. */
+  /** The Graph fixture router behind the default and custom transports. */
   readonly fakeGraph: FakeGraph
   /** The converter `DOC_CONVERT_URL` points at, in both modes. */
   readonly fakeConverter: FakeConverter
@@ -295,9 +287,29 @@ async function boot(): Promise<AppHandles> {
   }
 
   const userId = BYPASS_USER.id
-  /** One install at a time: dispatch takes the FIRST transport that owns a
-   *  tool, so a second install would sit behind a leaked first one, and with
-   *  `isolate: false` a leaked one outlives its file. */
+  const [requestUser, transports, adapters] = await Promise.all([
+    import('../../src/lib/harness-client/request-user.server'),
+    import('@hames-ai/harness-patterns/tool-transport.server'),
+    import('@hames-ai/harness-baml/baml-adapters.server'),
+  ])
+  const graphContext = {
+    userId: requestUser.getRequestUserId,
+    sessionId: requestUser.getRequestSessionId,
+  }
+  const defaultGraph = await composeGraphTools(fakeGraph, { resolveContext: graphContext })
+  const registerGraph = (registry: typeof defaultGraph) => {
+    const unregister = transports.registerTransport({
+      id: 'e2e-fake-graph',
+      ownsTool: (name) => registry.hasAppTool(name),
+      callTool: (name, args) => registry.runAppTool(name, args),
+      listTools: async () => registry.appToolDescriptions(),
+      namespaceFor: (name) => registry.appToolNamespace(name) ?? undefined,
+    })
+    adapters.invalidateToolDescriptions()
+    return unregister
+  }
+  let unregisterDefaultGraph = registerGraph(defaultGraph)
+  /** One custom install at a time, replacing the default transport. */
   let graphInstalled = false
 
   return {
@@ -314,49 +326,24 @@ async function boot(): Promise<AppHandles> {
             'returned before installing again.',
         )
       }
+      const registry = await composeGraphTools(fakeGraph, {
+        resolveContext: graphContext,
+        stash: opts.stash,
+      })
+      unregisterDefaultGraph()
+      const unregister = registerGraph(registry)
       graphInstalled = true
-      const compose = async () => {
-        const [requestUser, transports, adapters] = await Promise.all([
-          import('../../src/lib/harness-client/request-user.server'),
-          import('@hames-ai/harness-patterns/tool-transport.server'),
-          import('@hames-ai/harness-baml/baml-adapters.server'),
-        ])
-        const registry = await composeGraphTools(fakeGraph, {
-          resolveContext: {
-            userId: requestUser.getRequestUserId,
-            sessionId: requestUser.getRequestSessionId,
-          },
-          stash: opts.stash,
-        })
-        return { registry, transports, adapters }
-      }
-      const { registry, transports, adapters } = await compose().catch((err: unknown) => {
-        graphInstalled = false
-        throw err
-      })
-      const { registerTransport } = transports
-      const { invalidateToolDescriptions } = adapters
-      const unregister = registerTransport({
-        id: 'e2e-fake-graph',
-        ownsTool: (name) => registry.hasAppTool(name),
-        callTool: (name, args) => registry.runAppTool(name, args),
-        listTools: async () => registry.appToolDescriptions(),
-        namespaceFor: (name) => registry.appToolNamespace(name) ?? undefined,
-      })
-      // The adapters cache the catalog for the life of the process; without
-      // this, a controller built after the install would not be shown the tools.
-      invalidateToolDescriptions()
       let uninstalled = false
       return () => {
         if (uninstalled) return
         uninstalled = true
         unregister()
-        invalidateToolDescriptions()
+        unregisterDefaultGraph = registerGraph(defaultGraph)
         graphInstalled = false
       }
     },
 
-    async runTurn(sessionId, message, agentId = 'search') {
+    async runTurn(sessionId, message, agentId = 'general-next') {
       return withTimeout(
         actions.processMessageWithAgent(sessionId, message, agentId) as Promise<TurnResult>,
         `runTurn(${sessionId})`,

@@ -297,18 +297,18 @@ async function boot(): Promise<AppHandles> {
     sessionId: requestUser.getRequestSessionId,
   }
   const defaultGraph = await composeGraphTools(fakeGraph, { resolveContext: graphContext })
-  const registerGraph = (registry: typeof defaultGraph) => {
-    const unregister = transports.registerTransport({
-      id: 'e2e-fake-graph',
-      ownsTool: (name) => registry.hasAppTool(name),
-      callTool: (name, args) => registry.runAppTool(name, args),
-      listTools: async () => registry.appToolDescriptions(),
-      namespaceFor: (name) => registry.appToolNamespace(name) ?? undefined,
-    })
-    adapters.invalidateToolDescriptions()
-    return unregister
-  }
-  let unregisterDefaultGraph = registerGraph(defaultGraph)
+  // This transport stays ahead of app transports registered by later scenarios.
+  // Re-registering on each custom install moves it to the end of the process
+  // list, where the real app Graph transport would take precedence.
+  let graphRegistry = defaultGraph
+  transports.registerTransport({
+    id: 'e2e-fake-graph',
+    ownsTool: (name) => graphRegistry.hasAppTool(name),
+    callTool: (name, args) => graphRegistry.runAppTool(name, args),
+    listTools: async () => graphRegistry.appToolDescriptions(),
+    namespaceFor: (name) => graphRegistry.appToolNamespace(name) ?? undefined,
+  })
+  adapters.invalidateToolDescriptions()
   /** One custom install at a time, replacing the default transport. */
   let graphInstalled = false
 
@@ -330,15 +330,15 @@ async function boot(): Promise<AppHandles> {
         resolveContext: graphContext,
         stash: opts.stash,
       })
-      unregisterDefaultGraph()
-      const unregister = registerGraph(registry)
+      graphRegistry = registry
+      adapters.invalidateToolDescriptions()
       graphInstalled = true
       let uninstalled = false
       return () => {
         if (uninstalled) return
         uninstalled = true
-        unregister()
-        unregisterDefaultGraph = registerGraph(defaultGraph)
+        graphRegistry = defaultGraph
+        adapters.invalidateToolDescriptions()
         graphInstalled = false
       }
     },

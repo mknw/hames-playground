@@ -87,6 +87,8 @@ const INFO = [
   'search',
   'fetch',
   'fetch_content',
+  'web_search_exa',
+  'web_fetch_exa',
   ...CONTEXT7,
 ]
 // Explicit names are P1's reviewed ungated surface. A registry addition must
@@ -927,7 +929,7 @@ describe('general-next composition', () => {
     expect(composition.egress).toMatchObject({
       local: ['neo4j', 'graph'],
       localTools: SANDBOX,
-      fetchTools: ['fetch', 'fetch_content'],
+      fetchTools: ['fetch', 'fetch_content', 'web_fetch_exa'],
       addressSources: ['web', 'context7', 'graph'],
       mode: 'filter',
       maxOutgoingRetriesPostTripwire: 0,

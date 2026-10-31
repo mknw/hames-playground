@@ -51,6 +51,19 @@ its repositories, never through the gateway.
 
 ### Registered Servers
 
+Exa's hosted MCP is an app-side process transport, not a Docker gateway server.
+The app discovers only `web_search_exa` and `web_fetch_exa` from
+`https://mcp.exa.ai/mcp?tools=…` and groups them with the existing `web` tools.
+`EXA_TOOLS=both` (default), `search`, `fetch`, or `off` selects the Exa surface;
+the DuckDuckGo and fetch gateway switches stay independent. `EXA_API_KEY` is
+optional and read only by the app server from `app/.env` in development or the
+repo-root `.env` in production. When absent, the app logs keyless mode and Exa
+applies its [free rate limit](https://exa.ai/docs/get-started/exa-mcp). A failed
+Exa discovery is logged and leaves existing gateway tools available. A
+rate-limited (HTTP 429) or timed-out Exa call fails with its own fixed message
+(never SDK detail) and is never retried. Do not
+put the key in `configs/mcp-config.yaml` or the Docker catalog snapshot.
+
 | Server                | Title           | Tools                                                                     | Auth                 | Backend                      |
 | --------------------- | --------------- | ------------------------------------------------------------------------- | -------------------- | ---------------------------- |
 | `neo4j-cypher`        | Neo4j Cypher    | `get_neo4j_schema`, `read_neo4j_cypher` (writes off, see below)           | Password (hardcoded) | neo4j-relay → isolated neo4j |

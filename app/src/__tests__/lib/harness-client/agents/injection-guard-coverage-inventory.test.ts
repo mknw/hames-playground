@@ -86,6 +86,8 @@ function stableId(p: Pattern): string {
   const id = p.config?.patternId
   if (!id) return `(${p.name})`
   const auto = new RegExp(`^${kind(p)}-[a-z0-9]{6}$`)
+  if (kind(p) === 'withEgressGate' && /^withReferences-[a-z0-9]{6}$/.test(id))
+    return 'withReferences-*'
   return auto.test(id) ? `${kind(p)}-*` : id
 }
 
@@ -226,6 +228,7 @@ describe('per-agent guard coverage (pinned — a wiring change must update this)
       'withReferences-* [withReferences] UNGUARDED',
       'neo4j-query [simpleLoop] UNGUARDED',
       // The web route, and everything under it.
+      'withReferences-* [withEgressGate] guarded:web',
       'withReferences-* [withReferences] guarded:web',
       'web-search [simpleLoop] guarded:web',
       'response-synth [compactExecution] UNGUARDED',
@@ -256,6 +259,7 @@ describe('per-agent guard coverage (pinned — a wiring change must update this)
       // visible, so read `guarded:` as the declared coverage list, not as a
       // promise about every tool underneath.
       'neo4j-query [simpleLoop] guarded:web+tool:retriever',
+      'withReferences-* [withEgressGate] guarded:web+tool:retriever',
       'withReferences-* [withReferences] guarded:web+tool:retriever',
       'web-search [simpleLoop] guarded:web+tool:retriever',
       'response-synth [compactExecution] UNGUARDED',

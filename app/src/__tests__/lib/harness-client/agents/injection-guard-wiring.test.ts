@@ -18,7 +18,7 @@ import { mockCallTool, mockListTools } from '../../../mocks/mcp'
 
 const toolSets = {
   neo4j: ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'],
-  web: ['search', 'fetch', 'fetch_content'],
+  web: ['search', 'fetch', 'fetch_content', 'web_search_exa', 'web_fetch_exa'],
   context7: ['resolve-library-id', 'get-library-docs'],
   all: [] as string[],
 }
@@ -46,6 +46,7 @@ interface Pattern {
   name: string
   config: { patternId?: string }
   children?: Pattern[]
+  capabilities?: { tools?: readonly string[] }
   injectionGuard?: { namespaces: string[]; tools: string[] }
 }
 
@@ -64,6 +65,26 @@ function allGuards(patterns: Pattern[]): Pattern[] {
 beforeEach(() => vi.clearAllMocks())
 
 describe('agents that consume untrusted content are guarded', () => {
+  it.each(['search', 'retriever'] as const)(
+    '%s: both Exa tools share the screened, egress-gated web route',
+    async (id) => {
+      const agent =
+        id === 'search'
+          ? (await import('@hames-ai/agents/agents/search.server')).searchAgent
+          : (await import('@hames-ai/agents/agents/retriever-agent.server')).retrieverAgent
+      const patterns = (await agent.createPatterns('s', testAgentDeps)) as Pattern[]
+      const walk = (p: Pattern): Pattern[] => [p, ...(p.children ?? []).flatMap(walk)]
+      const all = patterns.flatMap(walk)
+      const gate = all.find((p) => p.name.startsWith('withEgressGate('))
+      expect(gate, 'web route must install the outbound check').toBeDefined()
+      expect(all.some((p) => p.injectionGuard?.namespaces.includes('web'))).toBe(true)
+      expect(gate?.children?.[0].name).toContain('withReferences')
+      const webLoop = all.find(
+        (p) => p.name === 'simpleLoop' && p.config.patternId === 'web-search',
+      )
+      expect(webLoop?.capabilities?.tools).toEqual(toolSets.web)
+    },
+  )
   it('search: the web route is guarded, the neo4j route is not', async () => {
     const { searchAgent } = await import('@hames-ai/agents/agents/search.server')
     const patterns = (await searchAgent.createPatterns('s', testAgentDeps)) as Pattern[]

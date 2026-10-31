@@ -20,7 +20,7 @@
  * names this registration. Skipping it is a build-time error, not a silent
  * pass-through.
  *
- * 77 distinct names across 5 namespaces. The app-side per-user tools are NOT
+ * 79 distinct names across 5 namespaces. The app-side per-user tools are NOT
  * here — they declare their own namespaces (`registry.server.ts`), which ride
  * `inferServer` through the app transport's `namespaceFor`.
  */
@@ -40,8 +40,9 @@ for (const t of ['read_neo4j_cypher', 'write_neo4j_cypher', 'get_neo4j_schema'])
 // Context7 documentation server
 for (const t of ['resolve-library-id', 'get-library-docs']) MCP_TOOL_CATALOG[t] = 'context7'
 
-// Web search / fetch server
-for (const t of ['search', 'fetch', 'fetch_content']) MCP_TOOL_CATALOG[t] = 'web'
+// Gateway web search/fetch plus the app-side hosted Exa transport.
+for (const t of ['search', 'fetch', 'fetch_content', 'web_search_exa', 'web_fetch_exa'])
+  MCP_TOOL_CATALOG[t] = 'web'
 
 // Redis server
 for (const t of [

@@ -98,6 +98,7 @@ export default defineConfig({
       // no longer forced — but a second key would mean a second thing to know
       // when reading a row by hand, and nothing here tests key handling.
       DATA_ENCRYPTION_KEY: 'unit-test-data-encryption-key',
+      EXA_TOOLS: 'off', // Hermetic run: never discover the hosted Exa server.
       // This suite's identity, not the shared literal. `lib/auth/dev-bypass.ts`
       // reads it through `import.meta.env`, which vitest populates from here, so
       // one line moves every turn this suite runs.

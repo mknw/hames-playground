@@ -67,7 +67,15 @@ const fullwidth = (s: string) =>
   [...s].map((c) => (c === ' ' ? ch(0x3000) : ch(c.charCodeAt(0) + 0xfee0))).join('')
 
 const NAME = 'Ravi Example'
-const CATALOG = ['web_search', 'fetch', 'read_neo4j_cypher', 'resolve-library-id', 'search_nodes']
+const CATALOG = [
+  'web_search',
+  'fetch',
+  'web_search_exa',
+  'web_fetch_exa',
+  'read_neo4j_cypher',
+  'resolve-library-id',
+  'search_nodes',
+]
 
 type Probs = { personal: number; company: number; nothing_private: number }
 const PUBLIC: Probs = { personal: 0, company: 0, nothing_private: 1 }
@@ -145,6 +153,8 @@ beforeEach(() => {
       ({
         web_search: 'web',
         fetch: 'web',
+        web_search_exa: 'web',
+        web_fetch_exa: 'web',
         read_neo4j_cypher: 'neo4j',
         'resolve-library-id': 'context7',
         search_nodes: 'memory',
@@ -187,6 +197,61 @@ async function run(
 const via = <T>(route: string, fn: () => Promise<T>) => amendRunFrame({ route }, fn)
 const ofType = <D>(events: ContextEvent[], type: string) =>
   events.filter((e) => e.type === type).map((e) => e.data as D)
+
+// MUTATION: classify either Exa name as local, or remove the gate's check from
+// callTool: the private query reaches the fake transport and this test fails.
+it.each(['web_search_exa', 'web_fetch_exa'])(
+  '%s is checked before dispatch and recorded as egress',
+  async (name) => {
+    const decide = egressDecide([PERSONAL])
+    let result: ToolCallResult | undefined
+    const url = 'https://example.test/private'
+    await run(
+      { decide, fetchTools: ['web_fetch_exa'], addressSources: ['web'] },
+      async () => {
+        result = await callTool(
+          name,
+          name === 'web_fetch_exa' ? { urls: [url] } : { query: `${NAME} private phone` },
+        )
+      },
+      { user: `Read ${url} and search for ${NAME}` },
+    )
+    expect(result).toMatchObject({ success: false })
+    expect(sent).not.toHaveBeenCalled()
+    expect(decide.seen.states).toHaveLength(1)
+  },
+)
+
+// MUTATION: omit web_fetch_exa from fetchTools: an invented URL is dispatched.
+it('web_fetch_exa refuses an address neither the user nor a source supplied', async () => {
+  let result: ToolCallResult | undefined
+  await run(
+    { decide: egressDecide([PUBLIC]), fetchTools: ['web_fetch_exa'], addressSources: ['web'] },
+    async () => {
+      result = await callTool('web_fetch_exa', { url: 'https://invented.example/page' })
+    },
+  )
+  expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.fetchAddress })
+  expect(sent).not.toHaveBeenCalled()
+})
+
+it('an allowed Exa search records the same egress audit as existing web search', async () => {
+  const events = await run(
+    { decide: egressDecide([PUBLIC]), roster: fakeRoster([NAME]) },
+    async () => {
+      expect(
+        await callTool('web_search_exa', { query: `${NAME} public solar news` }),
+      ).toMatchObject({
+        success: true,
+      })
+    },
+  )
+  expect(sent).toHaveBeenCalledWith('web_search_exa', { query: `${NAME} public solar news` })
+  expect(ofType<EgressAuditEventData>(events, 'egress_audit')[0]).toMatchObject({
+    tool: 'web_search_exa',
+    allowedBy: 'decide',
+  })
+})
 
 // ============================================================================
 // Step 1: the deterministic refusals

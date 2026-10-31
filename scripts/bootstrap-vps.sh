@@ -114,6 +114,7 @@ fail() { printf '  FAIL    %s\n' "$*"; }
 banner() { printf '\n== %s ==\n' "$*"; }
 
 DRY_RUN=0
+RELEASE_IMAGE_ONLY=0
 WOULD_STOP=() # dry-run: the gates a real run would have stopped at
 
 # refuse MSG — a precondition failed and going on is unsafe. Exits 1; in a dry
@@ -1727,7 +1728,13 @@ stage_images() {
     ! sudo docker image inspect --format '{{.Id}}' hames-app:local >/dev/null 2>&1; then
     run sudo docker build --build-context root="$APP_DIR" -f "$APP_DIR/app/Dockerfile" -t hames-app:local "$APP_DIR/app"
   fi
-  run dc build
+  # A gated clone upgrade preserves the live dev image/container. Building it
+  # here can change its image digest and make the later full `up` recreate it.
+  if ((RELEASE_IMAGE_ONLY)); then
+    run dc build app
+  else
+    run dc build
+  fi
   run dc pull --ignore-buildable --quiet
   # The gateway pulls its catalog servers itself, but a failed pull there is a
   # warning and the server just contributes 0 tools (#412). Pulling the four
@@ -2263,6 +2270,8 @@ Two clones: persist §12's complete COMPOSE_FILE and inputs in the release root
                       (ignored on the run that generates them)
   --seed-file PATH    Cypher file for an EMPTY graph (default: neo4j_dumps/seed-data.cypher)
   --no-seed           leave the graph alone
+  --release-image-only
+                      with --only images, build release app but not app-dev
   --probe-private-health
                       OPT-IN: one GET small-model /health; may wake a box.
                       Off by default, even with private endpoints configured
@@ -2284,7 +2293,7 @@ main() {
   set -euo pipefail
   umask 022
   HOSTNAME_ARG="" ACME_EMAIL_ARG="" REF="" ONLY="" KEYS_ESCROWED=0 F2B_IGNORE=""
-  SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0
+  SEED_FILE="neo4j_dumps/seed-data.cypher" NO_SEED=0 SANDBOX_FLAVOURS=0 NO_PROMPT=0 RELEASE_IMAGE_ONLY=0
   LOCKOUT_CHANGED=0 SSH_PORT=22 SSH_PORT_VERIFIED=0
   PROBE_PRIVATE_HEALTH=0
   while (($#)); do
@@ -2297,6 +2306,7 @@ main() {
       --dry-run) DRY_RUN=1 ;;
       --keys-escrowed) KEYS_ESCROWED=1 ;;
       --no-seed) NO_SEED=1 ;;
+      --release-image-only) RELEASE_IMAGE_ONLY=1 ;;
       --probe-private-health) PROBE_PRIVATE_HEALTH=1 ;;
       --sandbox-flavours) SANDBOX_FLAVOURS=1 ;;
       --no-prompt) NO_PROMPT=1 ;;
@@ -2377,6 +2387,10 @@ main() {
   for s in "${STAGES[@]}"; do
     [[ " ${selected[*]} " == *" $s "* ]] && run_list+=("$s")
   done
+  if ((RELEASE_IMAGE_ONLY)) && [[ ${run_list[*]} != images ]]; then
+    printf '%s\n' '--release-image-only requires --only images'
+    exit 2
+  fi
   # Every real run deploys the reviewed commit, never whatever main is at
   # that moment — three runs could otherwise ship three commits.
   if [[ -z $REF && " ${run_list[*]} " == *" checkout "* ]] && ((!DRY_RUN)); then

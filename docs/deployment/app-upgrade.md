@@ -9,19 +9,41 @@ for those. Never use `down -v`, reset data volumes or prune retained images.
 
 ## 1. Stop writers and take local dumps before changing the checkout
 
-Hold public ingress at the operator's external maintenance control and drain
-in-flight requests. Stop external writers. For the **restricted single-app boot
-in §3**, stop only `app`; this stops its routine scheduler too. Keep Caddy,
-the gateway and every other long-running service running. Verify the maintenance
-hold before the dump and keep it until the postboot checks pass. Keep
+Hold public ingress for **both hostnames** at the operator's external maintenance
+control and drain in-flight requests and background ingest. Stop external
+writers. Stop only the release `app`; this stops its routine scheduler. In a
+two-clone project, leave `app-dev` running with its ID and `StartedAt` unchanged:
+disable its enabled routines through the app before the window, retain the
+previous enabled-set privately for restoration afterward, and require zero
+active dev turns before backup and again before boot. If any dev writer cannot
+be drained, stop the release. Keep Caddy, the gateway and every other
+long-running service running. Verify the maintenance hold before the dump and
+keep it until the postboot checks pass. Keep
 Postgres/Redis/Neo4j running for capture. Confirm that the matching application keys are escrowed **off the
 host and separately from dumps** (SD-17). PREVIEW §12 records the approved two-clone
 policy: dev has its own database and limited role, separate from release. Confirm
 that both databases and their grants are provisioned before upgrading.
 
-The following is the **restricted single-app** shape, run as the deployment's
-Docker user from the release checkout root. Capture the §3 baseline **after**
-the dump, because the backup script restarts Neo4j:
+For two clones, export the existing `DEV_CLONE_PATH` and supply the actual
+release and dev database names privately as `RELEASE_DB` and `DEV_DB`. With
+ingress held and in-flight work drained, this read-only check must return
+`0:0`; repeat it immediately before §3's preboot gate. An enabled routine or
+running conversation is a stop, not a reason to stop/restart DEV:
+
+```bash
+check_dev_writers() {
+  test -n "${DEV_CLONE_PATH:-}" || return 0
+  test -n "${RELEASE_DB:-}" && test -n "${DEV_DB:-}" || return 1
+  dev_writers=$(docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
+    -d "$DEV_DB" -X -Atqc "SELECT (SELECT count(*) FROM routines WHERE enabled) || ':' || (SELECT count(*) FROM conversations WHERE status = 'running')") || return 1
+  test "$dev_writers" = '0:0'
+}
+check_dev_writers || exit 1
+```
+
+Run the following from the release checkout root as the deployment's Docker
+user for either shape. Capture the §3 baseline **after** the dump, because the
+backup script restarts Neo4j:
 
 ```sh
 docker compose stop app || exit 1
@@ -33,27 +55,29 @@ test -n "$neo4j_image" && test -n "$neo4j_volume" || exit 1
 dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 (
   umask 077
-  BACKUP_DIR="$dump_root/release" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
+  BACKUP_DIR="$dump_root/release" POSTGRES_DB="${RELEASE_DB:-hames}" NEO4J_IMAGE="$neo4j_image" NEO4J_DATA_VOLUME="$neo4j_volume" \
     bash scripts/backup-preview.sh
 ) || exit 1
 ```
 
-The older **generic backup/restore path** may stop `caddy`, `mcp-gateway` and
-`app-dev` to quiesce writers. That state is **ineligible** for §3's restricted
-full boot: restarting those services would change their `StartedAt`. Do not
-combine that stop sequence with the gate below. A two-clone full boot is held
-until a separately reviewed procedure can quiesce the running dev app's
-request and routine writers without stopping or recreating `app-dev`; its
-baseline and complete dry run must then pass the same gate. For a generic
-two-clone backup, stop `app-dev` **before** the dump. Supply the actual
-release database name via `POSTGRES_DB` to that command (the default is the
-single-app database). Then run the same backup command with `--no-neo4j`,
-`BACKUP_DIR` set to `"$dump_root/dev"` and `POSTGRES_DB` set to the separate dev
-database. The default `POSTGRES_USER` is the local administrator; keep database
+For two clones, capture the dev database without stopping its container:
+
+```bash
+if test -n "${DEV_CLONE_PATH:-}"; then
+  ( umask 077; BACKUP_DIR="$dump_root/dev" POSTGRES_DB="$DEV_DB" \
+      bash scripts/backup-preview.sh --no-neo4j ) || exit 1
+fi
+```
+
+Keep §1 through §3 in the same operator shell so `dump_root` and
+`check_dev_writers` remain available. The older generic backup/restore path may stop `caddy`, `mcp-gateway` and
+`app-dev`. That state is **ineligible** for §3's full-boot gate: restarting
+those services would change `StartedAt`. Do not combine the old stop sequence
+with this procedure. The default `POSTGRES_USER` is the local administrator; keep database
 names and dump records private. Do not assume a dump of one database covers the
 other. Both dumps must succeed before either clone upgrades. The first capture
 already covers shared Neo4j and Redis; repeating Redis capture is harmless while
-all writers remain stopped. Take the matching role/grant inventory privately
+all writers remain quiescent. Take the matching role/grant inventory privately
 too: `pg_dump` does not dump server roles.
 
 **Stop on any failure.** For every database, retain its nonempty `postgres.dump`,
@@ -72,7 +96,7 @@ a bad migration, not host/disk loss.
 
 ## 2. Retain the actual last-good images
 
-The apps are stopped, so use `ps -aq`, not the running-only selector. Record
+The release app is stopped, so use `ps -aq`, not the running-only selector. Record
 the current commit and image IDs privately, then tag each actual container image
 before any build can replace its mutable tag:
 
@@ -83,19 +107,23 @@ app_image=$(docker inspect --format '{{.Image}}' "$app_id") || exit 1
 docker image tag "$app_image" hames-app:rollback || exit 1
 ```
 
-When enabled, repeat for `app-dev` using `hames-app:dev-rollback`. Do not overwrite
+With two clones, record `app-dev`'s current image ID privately but do not
+rebuild or retag it in this release-app upgrade. Do not overwrite
 an unresolved previous rollback point; choose an additional unique tag privately
 and retain its matching dumps/configuration. A tag without its matching key set
 and compatible data is insufficient. Never publish inspect output or env files.
 
 ## 3. Move the pin, build and verify before reopening ingress
 
-Review the target's bootstrap arguments and release notes. This is the
-**restricted single-app path**. Use the same existing hostname, ACME and other
-operator arguments on each bootstrap invocation, and the reviewed full SHA on
-checkout. Never select `--only checkout,env,images,boot` in one call: the
-comparisons occur between those stages. A clone deployment cannot use this
-path while its dev app is stopped; see §1.
+Review the target's bootstrap arguments and release notes. This staged path
+covers both a single app and two clones. Use the same existing hostname, ACME
+and other operator arguments on each bootstrap invocation, and the reviewed
+full release SHA on checkout. For clones, keep the dev checkout at its
+separately reviewed full SHA, verify `DEV_REF` in the protected root `.env`
+already equals that SHA before baseline capture, and keep its image/container unchanged. Bootstrap
+refuses a dirty or mismatched dev checkout during clone operations. Never
+select `--only checkout,env,images,boot` in one call: the comparisons occur
+between those stages.
 
 From the current release checkout root, after §1 and §2, capture the baseline
 **before checkout**. Keep the gate script and JSON private in the retained dump
@@ -123,22 +151,28 @@ bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
   --acme-email ops@example.invalid --ref "$TARGET_SHA" --only env --no-seed || exit 1
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
-  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only images --no-seed || exit 1
+  --acme-email ops@example.invalid --ref "$TARGET_SHA" --only images --release-image-only --no-seed || exit 1
+check_dev_writers || exit 1
 python3 "$gate_copy" preboot "$baseline" || exit 1
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
   --acme-email ops@example.invalid --ref "$TARGET_SHA" --only boot --no-seed || exit 1
 python3 "$gate_copy" postboot "$baseline" || exit 1
 ```
 
-The gate records every existing service's container ID, `StartedAt`, Compose
+The release-only images option builds `app` without rebuilding Neo4j or
+`app-dev`; the clone preflight still runs before the build. The gate records
+every existing service's container ID, `StartedAt`, Compose
 config-hash label, mounted volume names/identities and
 `docker compose config --hash '*'` with the same
 complete Compose files and `app` profile before checkout and at the target. Stop if
 any shared service other than `embedder` has a changed target hash. The one
 permitted shared change is `embedder`'s hash for the durable Compose 3 GiB
 `mem_limit`: only its container may be recreated. With ingress still held, the
-gate runs `docker compose --dry-run --progress json up -d --remove-orphans`
-from the target checkout using the same Compose files and profile as bootstrap.
+gate runs `docker compose --dry-run --progress json up -d` from the target
+checkout using the same Compose files and profile as bootstrap, adding
+`--remove-orphans` only for a single-app project. Any `app-dev` entry in the
+clone prediction must be a non-mutating observation, with no start or
+recreation.
 It parses and lists every predicted create, recreate and start;
 proceed only if they are the release app, that intended `embedder` recreation,
 or the one-shot `mcp-config` rerun. Any other prediction or an unavailable dry
@@ -156,8 +190,8 @@ file hash matches after boot; the gateway must keep its ID/`StartedAt`. A
 missing baseline or unreadable rendered file stops the release. The script
 hashes the file through `docker cp` and never prints or saves its contents.
 
-For a separately reviewed clone procedure, bootstrap's own clone preflight
-still validates the full Compose render before boot, including the dev checkout
+For clones, bootstrap's own clone preflight validates the full Compose render
+before images and boot, including the dev checkout
 and both runtime files. It does not replace the baseline, Caddy comparison or
 complete action prediction above. Never print or save the rendered
 configuration; a failed render or validator must prevent boot.
@@ -177,7 +211,7 @@ socket shapes only, run from real (non-symlink) checkout paths: it mounts the
 two checkouts and nothing else. With a VM overlay selected, run bootstrap's own
 preflight instead (`--only boot --dry-run` changes nothing), which resolves
 every host path on the host before it mounts the checkouts and each TLS file.
-A missing image refuses until `--only images` builds it.
+A missing image refuses until the release-only images stage builds it.
 
 If Caddyfile contents or imported sites changed, stop this restricted upgrade
 and review a separate Caddy maintenance window. Generic bootstrap does this itself now
@@ -289,8 +323,11 @@ change runs none of those live checks.
 
 Reopen ingress only after all required checks pass; preserve the previous
 image, protected configuration, dumps and separate key escrow until the rollback
-window closes. If a gate fails, stop ingress and both writers, keep evidence
+window closes. If a gate fails, keep ingress held and both writers quiescent, keep evidence
 privately and follow the decision below. No automated rollback is shipped.
+For clones, restore exactly the privately recorded dev routine enabled-set
+through the app only after smoke and postboot identity checks pass; verify the
+restoration before reopening either hostname.
 
 ## 4. Schema rollback decision
 
@@ -310,20 +347,20 @@ invoking the checkout stage or any boot script. It checks the current checkout
 first and the restored checkout again. For two clones, replace the dev SHA
 placeholder with the separately recorded full dev SHA, export the existing
 `DEV_CLONE_PATH`, and set the protected root `.env`'s `DEV_REF` to that same SHA;
-bootstrap refuses a dev HEAD that differs from `DEV_REF`. The same gate restores
-and checks that checkout before the release checkout.
+bootstrap refuses a dev HEAD that differs from `DEV_REF`. The checkout-mode gate
+checks that DEV remains at this SHA before the release checkout moves.
 The tracked MCP config is the sole
 intentional exception to the clean-tree check: bootstrap restores and re-applies
 it around checkout. Keep protected configuration, dumps, retained images and
 separate key escrow; never discard them to make this gate pass.
 
-For the restricted single-app rollback, repeat §1's external ingress hold,
-release-app stop and fresh backups, then capture a **new** baseline from the
-current checkout before the code block below. Use the gate script retained
-with the upgrade dumps; a missing script, baseline or 3 GiB target cap stops
-this path. A two-clone generic restore may use the checkout-mode checks below,
-but its later full boot remains held under §1; the old direct recreation of
-`app-dev` is not compatible with the restricted gate.
+For either shape, repeat §1's external ingress hold, release-app stop,
+dev-writer check when applicable, and fresh backups, then capture a **new**
+baseline from the current checkout before moving the release pin. Use the gate
+script retained with the upgrade dumps; a missing script, baseline or 3 GiB
+target cap stops this path. The dev checkout and image stay at their recorded
+pin during a two-clone rollback; changing DEV requires a separate coordinated
+release, not this app rollback.
 
 ```bash
 APP_DIR=/opt/hames
@@ -334,10 +371,9 @@ rollback_baseline="$dump_root/rollback-preboot-baseline.json"
 test "$(id -u)" -ne 0 && test "${#GOOD_SHA}" -eq 40 || exit 1
 umask 022
 case "$GOOD_SHA" in *[!0-9a-f]*) exit 1 ;; esac
-if test -z "${DEV_CLONE_PATH:-}"; then
-  test -f "$gate_copy" || exit 1
-  python3 "$gate_copy" capture "$rollback_baseline" || exit 1
-fi
+test -f "$gate_copy" || exit 1
+check_dev_writers || exit 1
+python3 "$gate_copy" capture "$rollback_baseline" || exit 1
 
 check_checkout_modes() {
   local root=$1 path rel mode
@@ -380,7 +416,6 @@ if test -n "${DEV_CLONE_PATH:-}"; then
   check_checkout_modes "$DEV_CLONE_PATH" || exit 1
   dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
   test -z "$dirty" && git -C "$DEV_CLONE_PATH" cat-file -e "$DEV_GOOD_SHA^{commit}" || exit 1
-  ( umask 022; git -C "$DEV_CLONE_PATH" checkout --quiet --detach "$DEV_GOOD_SHA" ) || exit 1
   check_checkout_modes "$DEV_CLONE_PATH" &&
     test "$(git -C "$DEV_CLONE_PATH" rev-parse HEAD)" = "$DEV_GOOD_SHA" || exit 1
   dirty=$(git -C "$DEV_CLONE_PATH" status --porcelain --untracked-files=no) || exit 1
@@ -395,19 +430,17 @@ test -z "$(printf '%s\n' "$dirty" | sed '/ configs\/mcp-config.yaml$/d')" || exi
 ```
 
 Replace the example hostname and ACME email with the deployment's existing
-arguments; retain any other required bootstrap arguments. The dev checkout
-restoration leaves untracked runtime files untouched; keep its protected
+arguments; retain any other required bootstrap arguments. The unchanged dev
+checkout retains untracked runtime files; keep its protected
 configuration and separate key escrow. Stop for targeted manual repair if any
 ownership, mode, pin or tree check
-fails; do not apply recursive `chown`/`chmod`. In clone mode, stop after the
-checkout checks: the §1 writer-quiescence and full-boot gate are still owed.
-For the restricted single-app path, only then tag
-`hames-app:rollback` back to `hames-app:local` (and
-`hames-app:dev-rollback` back to `hames-app:dev` for a separately reviewed clone
-procedure). For the restricted single-app path, perform the full preboot gate,
-boot and postboot gate in that order; do not rebuild over the retained image:
+fails; do not apply recursive `chown`/`chmod`. Only then tag
+`hames-app:rollback` back to `hames-app:local`, leaving the dev image alone.
+Perform the full preboot gate, boot and postboot gate in that order for either
+shape; do not rebuild over the retained image:
 
 ```bash
+check_dev_writers || exit 1
 python3 "$gate_copy" preboot "$rollback_baseline" || exit 1
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \
   --acme-email ops@example.invalid --ref "$GOOD_SHA" --only boot --no-seed || exit 1

@@ -44,7 +44,7 @@ class UpgradeGateTest(unittest.TestCase):
 
         def record(service):
             return {"Id": "config-id" if service == "mcp-config" else "caddy-id",
-                    "State": {"StartedAt": "old", "ExitCode": 0, "Running": False},
+                    "State": {"StartedAt": "old", "ExitCode": 0, "Running": service != "app"},
                     "Mounts": [] if service == "mcp-config" else mount,
                     "Config": {"Labels": {"com.docker.compose.config-hash": "c"}}}
 
@@ -89,6 +89,16 @@ class UpgradeGateTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "durable 3 GiB Compose cap"):
                 gate.configuration(require_cap=True)
 
+    def test_both_compose_shapes_are_accepted(self):
+        previous = Path.cwd()
+        try:
+            os.chdir(self.tmp.name)
+            for files in (gate.SINGLE_FILES, gate.CLONE_FILES):
+                Path(".env").write_text(f"COMPOSE_FILE={files}\nCOMPOSE_PROFILES=app\n")
+                self.assertEqual(gate.compose_files(), files)
+        finally:
+            os.chdir(previous)
+
     def test_postboot_started_at_drift_is_refused(self):
         record = {"Id": "caddy-id", "State": {"StartedAt": "new", "ExitCode": 0, "Running": True},
                   "Mounts": [], "Config": {"Labels": {"com.docker.compose.config-hash": "c"}}}
@@ -107,6 +117,21 @@ class UpgradeGateTest(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "rendered gateway file hash changed"):
                 gate.verify_state(self.baseline, after=True)
 
+    def test_clone_dev_started_at_drift_is_refused(self):
+        baseline = {**self.baseline,
+                    "files": gate.CLONE_FILES,
+                    "hashes": {**self.baseline["hashes"], "app-dev": "d"},
+                    "containers": {**self.baseline["containers"],
+                                   "app-dev": {"id": "dev-id", "started": "old", "config_hash": "d", "mounts": []}}}
+        caddy = {"Id": "caddy-id", "State": {"StartedAt": "old", "ExitCode": 0, "Running": True},
+                 "Mounts": [], "Config": {"Labels": {"com.docker.compose.config-hash": "c"}}}
+        dev = {**caddy, "Id": "dev-id", "State": {**caddy["State"], "StartedAt": "new"},
+               "Config": {"Labels": {"com.docker.compose.config-hash": "d"}}}
+        with patch.object(gate, "configuration", return_value=(gate.CLONE_FILES, "hames", baseline["hashes"])), \
+             patch.object(gate, "container", side_effect=lambda service: dev if service == "app-dev" else caddy):
+            with self.assertRaisesRegex(SystemExit, "forbidden container identity or mount change: app-dev"):
+                gate.verify_state(baseline, after=True)
+
     def test_only_allowed_dry_run_actions_pass(self):
         events = [
             {"dry-run": True, "id": "Container hames-postgres-1", "status": "Waiting"},
@@ -120,6 +145,37 @@ class UpgradeGateTest(unittest.TestCase):
             gate.check_prediction("hames", True)
             self.assertEqual(run.call_args.args[0],
                              ["docker", "compose", "--dry-run", "--progress", "json", "up", "-d", "--remove-orphans"])
+
+    def test_clone_dry_run_preserves_dev_and_omits_orphan_prune(self):
+        events = [
+            {"dry-run": True, "id": "Container hames-app-dev-1", "status": "Running"},
+            {"dry-run": True, "id": "Container hames-app-1", "status": "Starting"},
+        ]
+        result = SimpleNamespace(returncode=0, stderr="\n".join(map(json.dumps, events)).encode())
+        with patch.object(gate.subprocess, "run", return_value=result) as run:
+            gate.check_prediction("hames", False, clones=True)
+            self.assertEqual(run.call_args.args[0],
+                             ["docker", "compose", "--dry-run", "--progress", "json", "up", "-d"])
+
+    def test_clone_dry_run_rejects_dev_start(self):
+        events = [
+            {"dry-run": True, "id": "Container hames-app-dev-1", "status": "Starting"},
+            {"dry-run": True, "id": "Container hames-app-1", "status": "Starting"},
+        ]
+        result = SimpleNamespace(returncode=0, stderr="\n".join(map(json.dumps, events)).encode())
+        with patch.object(gate.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(SystemExit, "forbidden predicted Starting for app-dev"):
+                gate.check_prediction("hames", False, clones=True)
+
+    def test_clone_dry_run_rejects_exited_dev(self):
+        events = [
+            {"dry-run": True, "id": "Container hames-app-dev-1", "status": "Exited"},
+            {"dry-run": True, "id": "Container hames-app-1", "status": "Starting"},
+        ]
+        result = SimpleNamespace(returncode=0, stderr="\n".join(map(json.dumps, events)).encode())
+        with patch.object(gate.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(SystemExit, "protected service is predicted exited: app-dev"):
+                gate.check_prediction("hames", False, clones=True)
 
 
 if __name__ == "__main__":

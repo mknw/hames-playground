@@ -1634,6 +1634,41 @@ PY
   exit $?
 fi
 clone_tests
+# The restricted clone upgrade builds release's image without replacing the
+# image tag of the still-running dev container.
+image_build_probe() { # 0|1
+  (
+    lib "$tmproot/upgrade-image"
+    RELEASE_IMAGE_ONLY=$1
+    SANDBOX_FLAVOURS=0
+    assert_engine_supported() { :; }
+    assert_daemon_isolation() { :; }
+    assert_gateway_pinned() { :; }
+    sudo() { :; }
+    compose_files() { printf '%s' "$CLONE_COMPOSE_FILES"; }
+    catalog_image() { printf '%s' 'example/image:tag'; }
+    banner() { :; }
+    note() { :; }
+    run() { printf 'RUN %s\n' "$*"; }
+    stage_images
+  )
+}
+mkdir -p "$tmproot/upgrade-image"
+: >"$tmproot/upgrade-image/.env"
+out=$(image_build_probe 0)
+if [[ $out == *'RUN dc build'* && $out != *'RUN dc build app'* ]]; then
+  pass 'clones images: normal build includes all buildable services'
+else flunk 'clones images: normal build changed' "$out"; fi
+out=$(image_build_probe 1)
+if [[ $out == *'RUN dc build app'* && $out != *'RUN dc build app-dev'* ]]; then
+  pass 'clones images: release-only build does not build app-dev'
+else flunk 'clones images: release-only build reached app-dev' "$out"; fi
+out=$(bash "$SCRIPT" --hostname staging.example.invalid --acme-email ops@example.invalid \
+  --only boot --release-image-only --dry-run 2>&1)
+rc=$?
+if ((rc == 2)) && [[ $out == *'--release-image-only requires --only images'* ]]; then
+  pass 'clones images: release-only flag is confined to images stage'
+else flunk "clones images: release-only flag escaped images stage (rc=$rc)" "$out"; fi
 # 2b. Never `producer | grep -q` under pipefail: grep -q exits at its first match,
 # the producer dies of SIGPIPE and the pipeline reads as failed, i.e. a FOUND
 # match is reported as absent. That shipped once here (the sshd -T check

@@ -15,6 +15,16 @@ import subprocess
 import sys
 import tarfile
 
+SINGLE_FILES = "docker-compose.yaml:docker-compose.prod.yaml"
+CLONE_FILES = SINGLE_FILES + ":docker-compose.clones.yaml"
+ALLOWED_FILES = {
+    SINGLE_FILES,
+    CLONE_FILES,
+    CLONE_FILES + ":docker-compose.dev-sandbox.yaml",
+    CLONE_FILES + ":docker-compose.dev-sandbox-vm.yaml",
+    CLONE_FILES + ":docker-compose.dev-sandbox-vm.yaml:docker-compose.release-sandbox-vm.yaml",
+}
+
 
 def stop(message):
     raise SystemExit(f"upgrade gate: {message}; stop before boot")
@@ -40,8 +50,8 @@ def compose_files():
     if len(values) != 1:
         stop("exactly one literal COMPOSE_FILE is required")
     files = values[0]
-    if files != "docker-compose.yaml:docker-compose.prod.yaml":
-        stop("restricted boot requires the single-app production Compose list")
+    if files not in ALLOWED_FILES:
+        stop("restricted boot requires the supported production Compose file order")
     profiles = re.findall(r"^COMPOSE_PROFILES=([^\r\n]+)$", contents, re.M)
     if profiles != ["app"]:
         stop("restricted boot requires the app profile")
@@ -64,7 +74,10 @@ def configuration(require_cap=False):
         if service in hashes or not re.fullmatch(r"[0-9a-f]{64}", digest):
             stop("invalid Compose hash output")
         hashes[service] = digest
-    if not {"app", "caddy", "mcp-gateway", "embedder", "mcp-config"} <= hashes.keys():
+    required = {"app", "caddy", "mcp-gateway", "embedder", "mcp-config"}
+    if files != SINGLE_FILES:
+        required.add("app-dev")
+    if not required <= hashes.keys() or (files == SINGLE_FILES and "app-dev" in hashes):
         stop("required services missing from Compose hashes")
     return files, project, hashes
 
@@ -103,8 +116,6 @@ def rendered_hash(gateway):
 
 def snapshot():
     files, project, hashes = configuration()
-    if "app-dev" in hashes:
-        stop("clone boot needs a separate writer-quiescence plan")
     records = {service: container(service) for service in hashes if service != "mcp-config"}
     if records["app"]["State"]["Running"]:
         stop("release app must be stopped before baseline capture")
@@ -132,6 +143,8 @@ def verify_state(baseline, after=False):
         record = container(service)
         if service == "app" and not after and record["State"]["Running"]:
             stop("release app restarted before the preboot gate")
+        if service not in {"app", "embedder"} and not record["State"]["Running"]:
+            stop(f"protected service is not running: {service}")
         current = identity(record)
         if service not in {"app", "embedder"} and current != old:
             stop(f"forbidden container identity or mount change: {service}")
@@ -162,8 +175,10 @@ def check_caddy():
         stop("no regular Caddy bind mount could be compared")
 
 
-def check_prediction(project, embedder_changed):
-    args = ["--dry-run", "--progress", "json", "up", "-d", "--remove-orphans"]
+def check_prediction(project, embedder_changed, clones=False):
+    args = ["--dry-run", "--progress", "json", "up", "-d"]
+    if not clones:
+        args.append("--remove-orphans")
     result = subprocess.run(["docker", "compose", *args], capture_output=True, check=False)
     if result.returncode:
         stop("Compose dry run failed")
@@ -186,14 +201,18 @@ def check_prediction(project, embedder_changed):
                           "Stopping", "Stopped", "Removing", "Removed", "Waiting", "Running", "Healthy", "Exited"}:
             stop("unexpected Compose dry-run event")
         identifier = event.get("id", "")
-        if status in {"Waiting", "Running", "Healthy", "Exited"}:
+        prefix = f"Container {project}-"
+        if status in {"Waiting", "Running", "Healthy"}:
             # Compose reports existing dependencies as Running/Healthy too.
             # They are observations, not starts or recreations.
             continue
-        prefix = f"Container {project}-"
         if not identifier.startswith(prefix):
             stop(f"unexpected Compose target: {identifier}")
         service = identifier[len(prefix):].rsplit("-", 1)[0]
+        if status == "Exited":
+            if service == "mcp-config":
+                continue  # the baseline one-shot is expected to be exited
+            stop(f"protected service is predicted exited: {service}")
         if service == "app":
             app_start |= status in {"Creating", "Recreating", "Starting"}
         elif service == "embedder" and embedder_changed and status in {
@@ -230,7 +249,8 @@ def main():
     hashes = verify_state(baseline, after=action == "postboot")
     if action == "preboot":
         check_caddy()
-        check_prediction(baseline["project"], hashes["embedder"] != baseline["hashes"]["embedder"])
+        check_prediction(baseline["project"], hashes["embedder"] != baseline["hashes"]["embedder"],
+                         baseline["files"] != SINGLE_FILES)
     print(f"{action} gate passed")
 
 

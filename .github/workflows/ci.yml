@@ -632,7 +632,7 @@ jobs:
           # A job-level `if` cannot diff, so clone-mutations reads this output.
           set -euo pipefail
           changed="$(git diff --name-only "$BASE_SHA" HEAD)"
-          if printf '%s\n' "$changed" | grep -qE '^(scripts/(bootstrap-vps(\.test)?\.sh|validate-clones\.mjs|prepare-embedder\.test\.py)|app/src/__tests__/lib/config/compose-clones\.test\.ts|docker-compose\.(yaml|prod\.yaml|clones\.yaml|dev-sandbox\.yaml|dev-sandbox-vm\.yaml|release-sandbox-vm\.yaml)|app/\.env\.example|docs/(CONFIG|PREVIEW)\.md|\.github/workflows/ci\.yml)$'; then
+          if printf '%s\n' "$changed" | grep -E '^(scripts/(bootstrap-vps(\.test)?\.sh|validate-clones\.mjs|prepare-embedder\.test\.py)|app/src/__tests__/lib/config/compose-clones\.test\.ts|docker-compose\.(yaml|prod\.yaml|clones\.yaml|dev-sandbox\.yaml|dev-sandbox-vm\.yaml|release-sandbox-vm\.yaml)|app/\.env\.example|docs/(CONFIG|PREVIEW)\.md|\.github/workflows/ci\.yml)$' >/dev/null; then
             echo "relevant=true" >>"$GITHUB_OUTPUT"
           else
             echo "relevant=false" >>"$GITHUB_OUTPUT"

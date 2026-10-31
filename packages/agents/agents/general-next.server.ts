@@ -338,24 +338,23 @@ async function createPatterns(
           'office-data': {
             pattern: doc,
             description:
-              'Read Microsoft 365 mail and file metadata; ' +
+              'Read this user’s Microsoft 365 mail, calendar and file metadata; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
               (deps.graphFileIngest === true
-                ? 'find a OneDrive or SharePoint file and copy it into this conversation to read or analyse it with graph_file_ingest; '
-                : 'Graph file ingestion is unavailable. ') +
-              'run code over uploaded files (spreadsheets, CSV, tables) to compute or analyse them, and save deliverables in the office sandbox; ' +
-              "a file saved under /work/out is kept in this conversation's documents, and the user can index a text one for search from the Data Stash: a file saved under /work/out is never indexed by this route, so when asked to index one of those, save it and tell the user they can index it from the Data Stash; " +
-              "exact calculation on numbers in the user's latest message (arithmetic, percentages, averages, sums) is also run here as code",
+                ? 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).'
+                : 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared; file copying unavailable), sandbox (run code, save deliverables), profile (graph_me).'),
             capability:
               'Read Microsoft 365 mail and file metadata; ' +
               (deps.graphFileIngest === true
                 ? 'copy found OneDrive or SharePoint files into the Data Stash and /work/in with graph_file_ingest; '
                 : 'Graph file ingestion is unavailable. ') +
-              'compute and create files in the office sandbox.',
+              'compute and create files in the office sandbox. ' +
+              "A file saved under /work/out is kept in this conversation's documents; this route never indexes a saved file. When asked to index one, save it and tell the user they can index a text file from the Data Stash.",
           },
           'info-retrieval': {
             pattern: info,
             description:
-              'Look things up in the knowledge graph, on the web (including a file at a web address), and in library docs; it cannot open files uploaded to this conversation (that is read-documents)',
+              'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
+              'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
             capability:
               'Read the knowledge graph; search or fetch public web sources and library documentation.',
             siblingResults: ['retriever'],
@@ -363,17 +362,22 @@ async function createPatterns(
           'read-documents': {
             pattern: retrieve,
             description:
-              'Search uploaded and indexed documents in this conversation and return cited excerpts, including an uploaded file the user names without saying "uploaded" (for example report.pdf), also when an earlier knowledge-graph or web lookup did not find it; use it when the answer needs text quoted from such a file. A OneDrive or SharePoint file not yet copied into this conversation is office-data. A file the user gives a web address for is info-retrieval. Running code over a file is office-data',
+              'Search this conversation’s uploaded and indexed documents and return cited excerpts.\n' +
+              'Tools: document retriever (Data Stash search, cited passages).',
             capability: 'Search this conversation’s Data Stash and return cited excerpts.',
           },
           think: {
             pattern: think,
-            description: 'Decide the steps before acting',
+            description:
+              'Decide and write the steps before acting, from the agent map and earlier results.\n' +
+              'Tools: none (planning only).',
             capability: 'Write a plan using the agent map and earlier step results.',
           },
         },
         {
           decide: createDecideAdapter(),
+          question:
+            'Which step should run next? Choose the route whose own tools perform the next step; a person’s mail, calendar and file metadata belong to Microsoft 365 tools.',
           answer:
             "Generate the answer for the user now, from the conversation and any results so far. If a route this turn already ran and its result reports the lookup could not be done (an error, not merely nothing found), choose this and answer with that reported failure instead of dispatching the route again. If the user's latest message asks for a calculation on numbers it gives, choose this only once an office-data result this turn shows the computed number: the answer is that number",
           handoff: { lastN: 2 },

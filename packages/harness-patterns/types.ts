@@ -1756,6 +1756,8 @@ export interface HitlPayloadStore {
   /** Drop a row a call inserted when no request was left waiting on it (the
    *  unattended rule decided at once). Idempotent. */
   drop(payloadRef: string): Promise<void>
+  /** Read one still-live row for this run's owner and conversation. */
+  load?(payloadRef: string): Promise<{ readonly kind: string; readonly payload: unknown } | null>
 }
 
 /** What {@link askHumanHolding} answers: a decision, or a refusal to rebind a

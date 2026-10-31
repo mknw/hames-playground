@@ -12,7 +12,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { continueSession, harness, resumeHarness } from '../harness.server'
-import { askHuman, held, readHitl, resolveUnattended } from '../hitl.server'
+import { askHuman, held, readHitl, resolveUnattended, HitlAnswerError } from '../hitl.server'
+import { SEND_OUTCOME_UNKNOWN } from '../mcp-client.server'
 import {
   INGRESS_FLAG_KIND,
   INGRESS_TEXTS,
@@ -24,6 +25,7 @@ import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.ser
 import { simpleLoop } from '../patterns/simpleLoop.server'
 import {
   EGRESS_HELD_NOTE,
+  EGRESS_BATCH_MISMATCH,
   EGRESS_RELEASE_KIND,
   EGRESS_RELEASE_OPTIONS,
   withEgressGate,
@@ -44,6 +46,7 @@ import type {
   DecideFn,
   EgressAuditEventData,
   EgressRefusedEventData,
+  ErrorEventData,
   HitlOption,
   HitlPayloadStore,
   HitlRequestEventData,
@@ -120,6 +123,10 @@ function memoryStore() {
     },
     drop: async (ref) => {
       for (const [key, row] of rows) if (row.ref === ref) rows.delete(key)
+    },
+    load: async (ref) => {
+      const row = [...rows.values()].find((r) => r.ref === ref)
+      return row ? { kind: row.kind, payload: JSON.parse(row.json) } : null
     },
   }
   const read = (ref: string) => {
@@ -218,7 +225,27 @@ function agent(
 }
 
 function frameOf(log: Log, store: HitlPayloadStore, over: Partial<RunFrame> = {}): RunFrame {
-  return { transports: [transport(log)], hitlPayloads: store, ...over }
+  const claims = new Map<string, { digest: string; result?: import('../types').ToolCallResult }>()
+  return {
+    transports: [transport(log)],
+    hitlPayloads: store,
+    toolSendClaims: {
+      claim: async ({ runId, callKey, digest }) => {
+        const key = `${runId}:${callKey}`
+        const old = claims.get(key)
+        if (!old) {
+          claims.set(key, { digest })
+          return { status: 'new' }
+        }
+        if (old.digest !== digest) return { status: 'mismatch' }
+        return old.result ? { status: 'finished', result: old.result } : { status: 'unknown' }
+      },
+      finish: async ({ runId, callKey, digest, result }) => {
+        claims.set(`${runId}:${callKey}`, { digest, result })
+      },
+    },
+    ...over,
+  }
 }
 
 const eventsOf = <D>(events: readonly ContextEvent[], type: string) =>
@@ -526,9 +553,9 @@ describe('where nobody can be asked', () => {
     )
   })
 
-  // O16. MUTATION: drop the batch condition from the gate's person cell → a
-  // batched call is held and the batch cannot be resumed → red.
-  it('inside a batch, a refusal takes Refuse with its category text and raises no request', async () => {
+  // N8-01. MUTATION: remove the preflight barrier → the passed second call
+  // leaves before the one checklist is answered → red.
+  it('an attended batch holds one checklist before any outgoing send', async () => {
     const log: Log = []
     const { store } = memoryStore()
     const web = scripted([
@@ -544,11 +571,12 @@ describe('where nobody can be asked', () => {
         decide: egressDecide([PERSONAL, PUBLIC]),
       }),
     )('find it', 's', undefined, undefined, frameOf(log, store))
-    expect(result.status).not.toBe('paused')
-    expect(eventsOf(result.context.events, 'hitl_request')).toEqual([])
-    expect(resultsOf(result.context.events, 'web_search')[0].error).toBe(
-      EGRESS_TEXTS.personalClosing,
-    )
+    expect(result.status).toBe('paused')
+    const pending = readHitl(result.context).pending
+    expect(pending).toHaveLength(1)
+    expect(pending[0].kind).toBe('egress-batch-release')
+    expect(pending[0].options[0].flags).toHaveLength(1)
+    expect(log).toEqual([])
   })
 
   // MUTATION: drop the child-chain check from canPauseHere → a call under a
@@ -589,6 +617,531 @@ describe('where nobody can be asked', () => {
       ])
     expect(() => harness<Data>(...offering(['web_search']))).toThrow(/web_search.*not resumable/)
     expect(() => harness<Data>(...offering(['read_neo4j_cypher']))).not.toThrow()
+  })
+})
+
+describe('N8 batch checklist', () => {
+  const batch = () =>
+    scripted([
+      act(
+        'web_search',
+        { query: 'synthetic-one' },
+        {
+          additional_calls: [{ tool_name: 'web_search', tool_args: '{"query":"synthetic-two"}' }],
+        },
+      ),
+      done,
+    ])
+  const setup = (mode: 'parallel' | 'sequential' | 'off' = 'parallel') => {
+    const log: Log = []
+    const { store, rows } = memoryStore()
+    const web = batch()
+    const patterns = agent(
+      {
+        web: simpleLoop<Data>(web.fn, ['web_search'], {
+          patternId: 'web',
+          maxTurns: 6,
+          multiToolCalls: mode,
+        }),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL, PERSONAL]) },
+    )
+    const frame = frameOf(log, store)
+    return { log, rows, web, patterns, frame }
+  }
+
+  // N8-01/02. MUTATIONS: remove the barrier; ignore a row flag or call key.
+  it('shows two held rows, sends none before answer, and sends only its accepted call', async () => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    expect(s.log).toEqual([])
+    expect(request.kind).toBe('egress-batch-release')
+    expect(request.options[0].flags).toHaveLength(2)
+    const plan = s.rows.values().next().value
+    expect(plan && JSON.parse(plan.json).rows.map((r: { index: number }) => r.index)).toEqual([
+      0, 1,
+    ])
+    const firstFlag = request.options[0].flags![0].id
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [firstFlag]: true } } },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([{ name: 'web_search', args: { query: 'synthetic-one' } }])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(
+      EGRESS_TEXTS.personalClosing,
+    )
+  })
+
+  // N8-09. MUTATION: record the preflight pass audit before dispatch, or drop
+  // its marker → the paused or resumed audit assertion turns red.
+  it('audits a roster-matched pass only after that member dispatches, without spans', async () => {
+    const s = setup()
+    const web = batch()
+    const patterns = agent(
+      { web: simpleLoop<Data>(web.fn, ['web_search'], { patternId: 'web', maxTurns: 6 }) },
+      ['web', DECISION_LOOP_ANSWER],
+      {
+        decide: egressDecide([PERSONAL, PUBLIC]),
+        roster: async () => ({
+          directory: 'loaded',
+          roster: {
+            match: (texts) =>
+              texts.some((text) => text.includes('synthetic-two')) ? ['synthetic-two'] : [],
+            observe: () => undefined,
+          },
+        }),
+      },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    expect(eventsOf(paused.context.events, 'egress_audit')).toEqual([])
+    expect(request.options[0].flags).toHaveLength(1)
+    const first = request.options[0].flags![0].id
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [first]: true } } },
+      { frame: s.frame },
+    )
+    expect(s.log).toHaveLength(2)
+    const audits = eventsOf<EgressAuditEventData>(resumed.context.events, 'egress_audit')
+    expect(audits.map((a) => a.allowedBy).sort()).toEqual(['decide', 'person'])
+    expect(audits.every((a) => a.spans.length === 0 && a.hosts.length === 0)).toBe(true)
+  })
+
+  it('a sequentially skipped pass emits no allowed audit', async () => {
+    const s = setup('sequential')
+    const web = batch()
+    const patterns = agent(
+      {
+        web: simpleLoop<Data>(web.fn, ['web_search'], {
+          patternId: 'web',
+          maxTurns: 6,
+          multiToolCalls: 'sequential',
+        }),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+      {
+        decide: egressDecide([PERSONAL, PUBLIC]),
+        roster: async () => ({
+          directory: 'loaded',
+          roster: {
+            match: (texts) =>
+              texts.some((text) => text.includes('synthetic-two')) ? ['synthetic-two'] : [],
+            observe: () => undefined,
+          },
+        }),
+      },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    expect(request.options[0].flags).toHaveLength(1)
+    expect(eventsOf(paused.context.events, 'egress_audit')).toEqual([])
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'continue' },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.skipped).toBe(true)
+    expect(eventsOf(resumed.context.events, 'egress_audit')).toEqual([])
+  })
+
+  // N8-03. MUTATION: bypass the finished claim reuse → the second resume sends again.
+  it('all accepted calls send once and a finished claim returns its result without transport', async () => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const flags = Object.fromEntries(request.options[0].flags!.map((f) => [f.id, true]))
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: { choice: 'continue', flags } },
+      { frame: s.frame },
+    )
+    expect(s.log.map((x) => x.args.query)).toEqual(['synthetic-one', 'synthetic-two'])
+    const before = s.log.length
+    await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: { choice: 'continue', flags } },
+      { frame: s.frame },
+    )
+    expect(s.log).toHaveLength(before)
+    expect(resumed.status).not.toBe('paused')
+  })
+
+  it('all default-Refuse flags send no held call', async () => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: 'continue' },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([])
+  })
+
+  // MUTATION: replace the saved precheck error with generic skipped feedback.
+  it('preserves a precheck failure at its original parallel position after review', async () => {
+    const s = setup()
+    const web = scripted([
+      act(
+        'web_search',
+        { query: 'synthetic-one' },
+        {
+          additional_calls: [{ tool_name: 'mystery_tool', tool_args: '{}' }],
+        },
+      ),
+      done,
+    ])
+    const patterns = agent(
+      { web: simpleLoop<Data>(web.fn, ['web_search'], { patternId: 'web', maxTurns: 6 }) },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL]) },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    expect(request.options[0].flags).toHaveLength(1)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'continue' },
+      { frame: s.frame },
+    )
+    const failed = resultsOf(resumed.context.events, 'mystery_tool').at(-1)
+    expect(failed?.error).toContain('Tool not allowed: mystery_tool')
+    expect(failed?.skipped).not.toBe(true)
+    expect(s.log).toEqual([])
+  })
+
+  // N8-06. MUTATION: count deterministic denial as a held row or tripwire.
+  it('keeps a deterministic veto out of the checklist and tripwire count', async () => {
+    const s = setup()
+    const controller = scripted([
+      act(
+        'web_search',
+        { query: 'PERSON_3' },
+        {
+          additional_calls: [{ tool_name: 'web_search', tool_args: '{"query":"synthetic-safe"}' }],
+        },
+      ),
+      done,
+    ])
+    const patterns = agent(
+      { web: simpleLoop<Data>(controller.fn, ['web_search'], { patternId: 'web', maxTurns: 6 }) },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL]) },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    expect(request.options[0].flags).toHaveLength(1)
+    expect(eventsOf(paused.context.events, 'egress_refused')).toEqual([])
+    expect(s.log).toEqual([])
+  })
+
+  // N8-06. MUTATION: ignore a refused row's route closure at execute.
+  it('a Refuse closes its route before a later Accept, while another route can be asked', async () => {
+    const s = setup()
+    const one = batch()
+    const two = scripted([act('fetch', { url: 'https://example.org/' }), done])
+    const patterns = agent(
+      {
+        one: simpleLoop<Data>(one.fn, ['web_search'], { patternId: 'one', maxTurns: 6 }),
+        two: simpleLoop<Data>(two.fn, ['fetch'], { patternId: 'two', maxTurns: 6 }),
+      },
+      ['one', 'two', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL, PERSONAL, PERSONAL]) },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    const later = request.options[0].flags![1].id
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [later]: true } } },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(
+      EGRESS_TEXTS.routeClosed,
+    )
+    expect(readHitl(resumed.context).pending).toHaveLength(1)
+    expect(readHitl(resumed.context).pending[0].kind).toBe('egress-release')
+  })
+
+  // N8-02. MUTATION: bind acceptance by digest without per-position call key
+  // → identical second call is sent under the first row's bit.
+  it('does not let one Accept authorize an identical call at another position', async () => {
+    const s = setup()
+    const controller = scripted([
+      act(
+        'web_search',
+        { query: 'same' },
+        {
+          additional_calls: [{ tool_name: 'web_search', tool_args: '{"query":"same"}' }],
+        },
+      ),
+      done,
+    ])
+    const patterns = agent(
+      { web: simpleLoop<Data>(controller.fn, ['web_search'], { patternId: 'web', maxTurns: 6 }) },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL, PERSONAL]) },
+    )
+    const { paused, request } = await toPause(patterns, s.frame)
+    const first = request.options[0].flags![0].id
+    await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [first]: true } } },
+      { frame: s.frame },
+    )
+    expect(s.log).toHaveLength(1)
+    expect(s.log[0].args).toEqual({ query: 'same' })
+  })
+
+  // N8-03. MUTATION: treat a started claim as new → the transport sends after
+  // a crash in the claim-to-result window.
+  it('reports outcome unknown without retry after a durable started claim', async () => {
+    const s = setup('sequential')
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const frame: RunFrame = {
+      ...s.frame,
+      toolSendClaims: {
+        claim: async () => ({ status: 'unknown' }),
+        finish: async () => undefined,
+      },
+    }
+    const flags = Object.fromEntries(request.options[0].flags!.map((f) => [f.id, true]))
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: { choice: 'continue', flags } },
+      { frame },
+    )
+    expect(s.log).toEqual([])
+    expect(
+      resultsOf(resumed.context.events, 'web_search').some((r) => r.error === SEND_OUTCOME_UNKNOWN),
+    ).toBe(true)
+    expect(eventsOf(resumed.context.events, 'egress_audit')).toEqual([])
+  })
+
+  // N8-08. MUTATIONS: omit owner-scoped load or full-plan digest → these
+  // missing and modified rows would release the old Accept.
+  it.each(['missing', 'changed', 'changed-action', 'missing-row'] as const)(
+    '%s held payload sends nothing',
+    async (change) => {
+      const s = setup()
+      const { paused, request } = await toPause(s.patterns, s.frame)
+      const [key, row] = [...s.rows][0]
+      if (change === 'missing') s.rows.delete(key)
+      else {
+        const plan = JSON.parse(row.json)
+        if (change === 'changed') plan.members[0].args.query = 'changed'
+        else if (change === 'changed-action') plan.action.tool_args = '{"query":"changed"}'
+        else plan.rows.pop()
+        row.json = JSON.stringify(plan)
+      }
+      const flags = Object.fromEntries(request.options[0].flags!.map((f) => [f.id, true]))
+      const resumed = await resumeHarness<Data>(
+        paused.serialized,
+        s.patterns,
+        { [request.requestId]: { choice: 'continue', flags } },
+        { frame: s.frame },
+      )
+      expect(s.log).toEqual([])
+      expect(
+        eventsOf<ErrorEventData>(resumed.context.events, 'error').some(
+          (e) => e.error === EGRESS_BATCH_MISMATCH,
+        ),
+      ).toBe(true)
+    },
+  )
+
+  // N8-04/08. MUTATION: allow undeclared flags on a prompt-wide option → red.
+  it('rejects forged row flags on Refuse all before re-entry', async () => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    let code = 'accepted'
+    try {
+      await resumeHarness<Data>(
+        paused.serialized,
+        s.patterns,
+        {
+          [request.requestId]: {
+            choice: 'refuse-all',
+            flags: { [request.options[0].flags![0].id]: true },
+          },
+        },
+        { frame: s.frame },
+      )
+    } catch (error) {
+      if (error instanceof HitlAnswerError) code = error.code
+      else throw error
+    }
+    expect(code).toBe('invalid-flag')
+    expect(s.log).toEqual([])
+  })
+
+  // N8-08. MUTATION: skip all-or-nothing pending-request validation before
+  // replay → an absent or invented answer could release a held call.
+  it.each(['missing', 'forged'] as const)('%s batch answer dispatches nothing', async (kind) => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const answers: Record<string, { choice: string; flags: Record<string, boolean> }> =
+      kind === 'missing'
+        ? {}
+        : {
+            ['forged-request']: {
+              choice: 'continue',
+              flags: {
+                [request.options[0].flags![0].id]: true,
+              },
+            },
+          }
+    await expect(
+      resumeHarness<Data>(paused.serialized, s.patterns, answers, { frame: s.frame }),
+    ).rejects.toMatchObject({
+      code: kind === 'missing' ? 'missing-answer' : 'unknown-request',
+    })
+    expect(s.log).toEqual([])
+  })
+
+  // N8-09. MUTATIONS: put trackedArgs back on N8 tool_call or log the
+  // matched span in egress_audit → the sentinel leaks into the event JSON.
+  it('keeps exact outgoing arguments in the encrypted plan, off the event stream', async () => {
+    const s = setup()
+    const quiet: ToolTransport = {
+      id: 'quiet-fake',
+      ownsTool: (name) => name === 'web_search',
+      callTool: async (name, args) => {
+        s.log.push({ name, args })
+        return { success: true, data: { hits: ['safe-result'] } }
+      },
+      listTools: async () => [],
+    }
+    const frame = { ...s.frame, transports: [quiet] }
+    const logs: string[] = []
+    const log = vi
+      .spyOn(console, 'log')
+      .mockImplementation((...parts) => logs.push(parts.join(' ')))
+    const warn = vi
+      .spyOn(console, 'warn')
+      .mockImplementation((...parts) => logs.push(parts.join(' ')))
+    const error = vi
+      .spyOn(console, 'error')
+      .mockImplementation((...parts) => logs.push(parts.join(' ')))
+    let events = ''
+    try {
+      const { paused, request } = await toPause(s.patterns, frame)
+      const flags = Object.fromEntries(request.options[0].flags!.map((f) => [f.id, true]))
+      const resumed = await resumeHarness<Data>(
+        paused.serialized,
+        s.patterns,
+        { [request.requestId]: { choice: 'continue', flags } },
+        { frame },
+      )
+      events = JSON.stringify(resumed.context.events)
+    } finally {
+      log.mockRestore()
+      warn.mockRestore()
+      error.mockRestore()
+    }
+    for (const output of [events, logs.join('\n')]) {
+      expect(output).not.toContain('synthetic-one')
+      expect(output).not.toContain('synthetic-two')
+    }
+    expect(JSON.stringify([...s.rows.values()])).toContain('synthetic-one')
+  })
+
+  // N8-07. MUTATION: remove the attendance/canPauseHere branch before
+  // preflight → either path raises an unusable checklist.
+  it.each(['unattended', 'non-pausable'] as const)('%s batch keeps O16 refusal', async (path) => {
+    const s = setup()
+    const fetch = scripted([
+      act(
+        'fetch',
+        { url: 'https://example.org/' },
+        {
+          additional_calls: [{ tool_name: 'fetch', tool_args: '{"url":"https://example.net/"}' }],
+        },
+      ),
+      done,
+    ])
+    // A transport offers fetch dynamically, so construction cannot see the
+    // gated name; the runtime still has to refuse when the path cannot pause.
+    const inner = simpleLoop<Data>(fetch.fn, [], { patternId: 'web', maxTurns: 6 })
+    const opaque: ConfiguredPattern<Data> = {
+      ...inner,
+      name: `opaque(${inner.name})`,
+      children: [inner],
+      fn: (scope, view) => inner.fn(scope, view),
+    }
+    const patterns =
+      path === 'unattended'
+        ? s.patterns
+        : agent({ web: opaque }, ['web', DECISION_LOOP_ANSWER], {
+            decide: egressDecide([PERSONAL, PERSONAL]),
+          })
+    const frame = path === 'unattended' ? { ...s.frame, hitl: { attended: false } } : s.frame
+    const result = await harness<Data>(...patterns)(
+      path === 'unattended' ? 'find it' : 'look at https://example.org/ and https://example.net/',
+      'sess-n8-o16',
+      undefined,
+      undefined,
+      frame,
+    )
+    expect(readHitl(result.context).pending).toEqual([])
+    expect(eventsOf(result.context.events, 'hitl_request')).toEqual([])
+    expect(
+      resultsOf(result.context.events, path === 'unattended' ? 'web_search' : 'fetch')[0].error,
+    ).toBe(EGRESS_TEXTS.personalClosing)
+    expect(eventsOf(result.context.events, 'egress_refused')).not.toEqual([])
+    expect(s.log).toEqual([])
+  })
+
+  // N8-05. MUTATION: remove runBatch's stop-on-first-failure → the second
+  // accepted conditional row dispatches after an earlier refusal.
+  it.each(['sequential', 'off'] as const)('%s skips a later Accept after Refuse', async (mode) => {
+    const s = setup(mode)
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    expect(request.options[0].flags).toHaveLength(2)
+    const later = request.options[0].flags![1].id
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [later]: true } } },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.skipped).toBe(true)
+  })
+
+  // N8-04. MUTATION: pass flags with a prompt-wide choice or run a row despite
+  // the turn closure → either the core rejects or this zero-send pin reds.
+  it.each(['refuse-all', 'interrupt'] as const)('%s overrides every row', async (choice) => {
+    const s = setup()
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: choice },
+      { frame: s.frame },
+    )
+    expect(s.log).toEqual([])
+    expect(resumed.status).not.toBe('paused')
+    if (choice === 'refuse-all') {
+      expect(
+        resultsOf(resumed.context.events, 'web_search')
+          .slice(-2)
+          .every((r) => r.error === EGRESS_TEXTS.turnClosed),
+      ).toBe(true)
+      expect(
+        eventsOf<EgressRefusedEventData>(resumed.context.events, 'egress_refused').some(
+          (r) => r.closes === 'turn',
+        ),
+      ).toBe(true)
+    }
   })
 })
 

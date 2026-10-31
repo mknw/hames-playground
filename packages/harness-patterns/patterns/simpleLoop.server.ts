@@ -6,7 +6,7 @@
  */
 
 import { assertServerOnImport } from '../assert.server'
-import { callTool } from '../mcp-client.server'
+import { callTool, preflightTool } from '../mcp-client.server'
 import { isAgentWithheldTool } from '../agent-withheld-tools'
 import {
   repairJson,
@@ -28,6 +28,8 @@ import type {
   ToolCallResult,
   ToolResultEventData,
   ControllerActionEventData,
+  HitlOption,
+  HitlRequestEventData,
 } from '../types'
 import { EXPAND_TOOL_NAME } from '../types'
 
@@ -37,7 +39,16 @@ import type { SubCall, SubCallOutcome } from '../parallel-tools.server'
 import { getErrorHint, budgetHint } from '../error-hints'
 import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.server'
 import { createHash } from 'node:crypto'
-import { currentRunId, hitlPending, isHeldResult } from '../hitl.server'
+import {
+  askHumanHolding,
+  canPauseHere,
+  canonicalJson,
+  currentRunId,
+  hitlPending,
+  holdingRequestInRun,
+  isHeldResult,
+  recordedHolding,
+} from '../hitl.server'
 import { omitResultFields } from '../content-transforms'
 import { resolveTurnBudget, runtimeConfig } from '../runtime-config.server'
 import { activeTransports } from '../tool-transport.server'
@@ -58,6 +69,8 @@ import type { ControllerFn } from '../types'
 import type { LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
+import { EGRESS_BATCH_RELEASE_KIND, EGRESS_BATCH_MISMATCH } from './withEgressGate.server'
+import { EGRESS_TEXTS } from '../egress-gate.server'
 
 assertServerOnImport()
 
@@ -182,6 +195,77 @@ interface Projection {
   readonly excluded: ReadonlySet<string>
   readonly maxResultChars: number
   readonly resultOmit: SimpleLoopConfig['resultOmit']
+}
+
+type BatchMember = {
+  readonly index: number
+  readonly callKey: string
+  readonly digest: string
+  readonly tool: string
+  readonly args: Record<string, unknown>
+  readonly verdict: 'pass' | 'held' | 'veto' | 'skipped'
+  readonly auditByDecide?: boolean
+  readonly route: string | null
+  readonly cause?: 'decide' | 'unchecked'
+  readonly category?: 'personal' | 'company'
+  readonly denial?: string
+}
+
+type BatchRow = BatchMember & {
+  readonly lines: readonly string[]
+  readonly hosts: readonly string[]
+  readonly spans: readonly string[]
+}
+
+interface EgressBatchPlan {
+  readonly v: 1
+  readonly mode: MultiCallMode
+  readonly batchKey: string
+  readonly action: ControllerAction
+  readonly callIds: readonly string[]
+  readonly errors: readonly (string | null)[]
+  readonly members: readonly BatchMember[]
+  readonly rows: readonly BatchRow[]
+}
+
+const batchDigest = (tool: string, args: Record<string, unknown>): string =>
+  createHash('sha256').update(canonicalJson({ tool, args })).digest('hex')
+
+const batchAuthorization = (plan: EgressBatchPlan) => ({
+  batchKey: plan.batchKey,
+  mode: plan.mode,
+  members: plan.members.map(({ index, callKey, digest }) => [index, callKey, digest]),
+  payloadDigest: createHash('sha256').update(canonicalJson(plan)).digest('hex'),
+})
+
+const batchOptions = (rows: readonly BatchRow[]): readonly HitlOption[] => [
+  {
+    id: 'continue',
+    label: 'Continue with selected requests',
+    unattended: true,
+    flags: rows.map((r) => ({
+      id: `accept:${r.callKey}`,
+      label: `Request ${r.index + 1}`,
+      default: false,
+    })),
+  },
+  { id: 'refuse-all', label: 'Refuse all similar actions' },
+  { id: 'interrupt', label: 'Interrupt', stopsRun: true },
+]
+
+/** N8 events carry only call shape; the exact action stays in the encrypted plan. */
+function batchEventAction(action: ControllerAction): ControllerAction {
+  return {
+    reasoning: '',
+    tool_name: action.tool_name,
+    tool_args: '[batch arguments withheld]',
+    status: 'Reviewing outgoing batch',
+    is_final: false,
+    additional_calls: action.additional_calls?.map((call) => ({
+      tool_name: call.tool_name,
+      tool_args: '[batch arguments withheld]',
+    })),
+  }
 }
 
 const truncateTo = (s: string, max: number): string =>
@@ -615,9 +699,16 @@ export function simpleLoop<T extends SimpleLoopData>(
         : createHash('sha256')
             .update(JSON.stringify([runId, currentRunFrame()?.continuation ?? [], turn, position]))
             .digest('hex')
-    /** Dispatch under the call's key, so an executor that holds a payload for
-     *  a person (`askHumanHolding`) binds it to this call, and says whether it
-     *  is one of a batch, which cannot pause part way (slice 10). */
+    const batchKeyOf = (turn: number): string | undefined =>
+      runId === undefined
+        ? undefined
+        : createHash('sha256')
+            .update(
+              JSON.stringify([runId, currentRunFrame()?.continuation ?? [], turn, 'egress-batch']),
+            )
+            .digest('hex')
+    /** Dispatch under the call's key so a single held request binds to that
+     * call. Batch calls use preflight and one batch key for their checklist. */
     const dispatch = (
       name: string,
       args: Record<string, unknown>,
@@ -782,8 +873,8 @@ export function simpleLoop<T extends SimpleLoopData>(
     const rounds = roundsOf(replay ?? [], resolved.patternId)
     // Slice 10: a held call whose request asked for it (an outgoing request a
     // person decided) runs AGAIN on re-entry, under its own callId and callKey,
-    // and its result is the round's. Only ever a singular call: a batch call is
-    // never held for that (O16).
+    // and its result is the round's. A held batch is handled by againBatch
+    // below; non-pausable and unattended batches still follow O16.
     const last = rounds[rounds.length - 1]
     const again =
       last?.action && !last.action.additional_calls?.length && last.calls.length === 1
@@ -791,14 +882,19 @@ export function simpleLoop<T extends SimpleLoopData>(
           ? last
           : undefined
         : undefined
+    const againBatch =
+      last?.action?.additional_calls?.length && last.calls.some((c) => c.result?.redispatch)
+        ? last
+        : undefined
     for (const round of rounds) {
       const entry = projectRound(round, projection)
-      if (entry && round !== again) turns.push(entry)
+      if (entry && round !== again && round !== againBatch) turns.push(entry)
       const effect = roundEffect(round)
       if (effect === 'dispatched') streak.dispatched()
       else if (effect === 'unusable') streak.unusableAnswer()
       if (
         round !== again &&
+        round !== againBatch &&
         round.action &&
         entry &&
         (round.action.tool_name === EXPAND_TOOL_NAME || entry.tool_result?.success)
@@ -848,6 +944,191 @@ export function simpleLoop<T extends SimpleLoopData>(
         } else {
           scope.data = { ...scope.data, turn: again.n, lastAction: again.action }
         }
+      }
+
+      if (againBatch?.action) {
+        const heldBy = againBatch.calls.find((c) => c.result?.redispatch)?.result?.heldBy
+        const request = heldBy ? holdingRequestInRun(heldBy) : undefined
+        const payload =
+          request?.payloadRef && currentRunFrame()?.hitlPayloads?.load
+            ? await currentRunFrame()!.hitlPayloads!.load!(request.payloadRef)
+            : null
+        const plan =
+          payload?.kind === EGRESS_BATCH_RELEASE_KIND
+            ? (payload.payload as EgressBatchPlan)
+            : undefined
+        let valid = !!(
+          request &&
+          plan &&
+          plan.v === 1 &&
+          (plan.mode === 'parallel' || plan.mode === 'sequential' || plan.mode === 'off') &&
+          plan.mode === multiMode &&
+          plan.batchKey === batchKeyOf(againBatch.n) &&
+          Array.isArray(plan.members) &&
+          Array.isArray(plan.rows) &&
+          Array.isArray(plan.callIds) &&
+          Array.isArray(plan.errors) &&
+          plan.callIds.length === againBatch.calls.length &&
+          plan.errors.length === againBatch.calls.length &&
+          plan.callIds.every((id, i) => id === againBatch.calls[i].call.callId) &&
+          request.defaultOption === 'continue' &&
+          canonicalJson(request.options) === canonicalJson(batchOptions(plan.rows)) &&
+          plan.action?.additional_calls?.length === againBatch.calls.length - 1
+        )
+        if (valid && plan) {
+          const names = [
+            plan.action.tool_name,
+            ...(plan.action.additional_calls ?? []).map((c) => c.tool_name),
+          ]
+          valid = names.every((name, i) => name === againBatch.calls[i].call.tool)
+          const seen = new Set<number>()
+          for (const member of plan.members) {
+            if (
+              !Number.isInteger(member.index) ||
+              member.index < 0 ||
+              member.index >= names.length ||
+              seen.has(member.index) ||
+              member.tool !== names[member.index] ||
+              member.callKey !== callKeyOf(againBatch.n, member.index) ||
+              !member.args ||
+              typeof member.args !== 'object' ||
+              Array.isArray(member.args) ||
+              member.digest !== batchDigest(member.tool, member.args)
+            )
+              valid = false
+            seen.add(member.index)
+          }
+          const held = plan.members.filter((m) => m.verdict === 'held')
+          if (
+            held.length !== plan.rows.length ||
+            plan.rows.some((row) => {
+              const member = held.find((m) => m.index === row.index)
+              return (
+                !member ||
+                row.callKey !== member.callKey ||
+                row.digest !== member.digest ||
+                row.tool !== member.tool ||
+                canonicalJson(row.args) !== canonicalJson(member.args)
+              )
+            })
+          )
+            valid = false
+        }
+        const answer =
+          valid && plan
+            ? await amendRunFrame({ callKey: plan.batchKey, batch: true }, async () =>
+                recordedHolding(
+                  EGRESS_BATCH_RELEASE_KIND,
+                  batchOptions(plan.rows),
+                  batchAuthorization(plan),
+                ),
+              )
+            : undefined
+        if (!answer || answer.requestId !== request?.requestId || !plan) {
+          trackEvent(
+            scope,
+            'error',
+            {
+              error: EGRESS_BATCH_MISMATCH,
+              severity: 'recoverable',
+              turn: againBatch.n,
+            } satisfies ErrorEventData,
+            true,
+          )
+          return scope
+        }
+        if (answer.choice === 'interrupt') return scope
+        const members = new Map(plan.members.map((m) => [m.index, m]))
+        const allCalls: SubCall[] = againBatch.calls.map(({ call }, index) => {
+          const member = members.get(index)
+          if (answer.choice === 'refuse-all')
+            return { tool: call.tool, precheckError: EGRESS_BATCH_MISMATCH }
+          if (!member || member.verdict === 'skipped')
+            return {
+              tool: call.tool,
+              precheckError:
+                plan.errors[index] ?? 'skipped: an earlier call in this batch did not run',
+            }
+          if (member.verdict === 'veto')
+            return { tool: call.tool, precheckError: member.denial ?? EGRESS_BATCH_MISMATCH }
+          const accepted =
+            member.verdict === 'held' && answer.flags[`accept:${member.callKey}`] === true
+          const prepared = {
+            callKey: member.callKey,
+            digest: member.digest,
+            route: member.route,
+            batchPlanKey: plan.batchKey,
+            ...(member.verdict === 'held' ? { requestId: answer.requestId } : {}),
+            decision:
+              member.verdict === 'pass'
+                ? ('pass' as const)
+                : accepted
+                  ? ('accept' as const)
+                  : ('refuse' as const),
+            ...(member.cause && { cause: member.cause }),
+            ...(member.category && { category: member.category }),
+            ...(member.auditByDecide && { auditByDecide: true }),
+          }
+          return {
+            tool: member.tool,
+            run: async () => {
+              const result = await amendRunFrame(
+                {
+                  callKey: member.callKey,
+                  batch: true,
+                  batchPhase: 'execute',
+                  batchPlanKey: plan.batchKey,
+                  batchPrepared: prepared,
+                },
+                () => callTool(member.tool, member.args),
+              )
+              await hookResult(member.tool, result, call.callId, member.args, againBatch.n)
+              return {
+                success: result.success,
+                result: result.data,
+                error: result.error,
+                ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+              }
+            },
+          }
+        })
+        if (answer.choice === 'refuse-all') currentRunFrame()?.batchRefuseAll?.()
+        const outcomes =
+          answer.choice === 'refuse-all'
+            ? allCalls.map((c, i): SubCallOutcome => ({
+                index: i + 1,
+                tool: c.tool,
+                success: false,
+                error: EGRESS_TEXTS.turnClosed,
+              }))
+            : await runBatch(allCalls, plan.mode)
+        const resultData = outcomes.map((o, i): ToolResultEventData => ({
+          callId: plan.callIds[i],
+          batchId: againBatch.calls[i].call.batchId,
+          tool: o.tool,
+          result: o.result ?? null,
+          success: o.success,
+          error: o.error,
+          ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+          ...(o.skipped ? { skipped: true } : {}),
+        }))
+        for (const data of resultData) trackEvent(scope, 'tool_result', data, resolved.trackHistory)
+        turns.push(
+          projectRound(
+            {
+              n: againBatch.n,
+              action: plan.action,
+              calls: againBatch.calls.map(({ call }, i) => ({ call, result: resultData[i] })),
+            },
+            projection,
+          )!,
+        )
+        if (outcomes.some((o) => o.success))
+          scope.data = {
+            ...scope.data,
+            turn: againBatch.n,
+            lastAction: batchEventAction(plan.action),
+          }
       }
 
       for (let turn = firstTurn; turn < maxTurns; turn++) {
@@ -913,13 +1194,8 @@ export function simpleLoop<T extends SimpleLoopData>(
           // `turn` and `maxTurns` are surfaced so live consumers can size
           // their progress indicators without reading the pattern config
           // (which doesn't capture settings.maxToolTurns).
-          trackEvent(
-            scope,
-            'controller_action',
-            { action, turn, maxTurns } as ControllerActionEventData,
-            resolved.trackHistory,
-            controllerResult.llmCall,
-          )
+          // A held N8 batch is recorded only after its encrypted plan exists:
+          // the action and LLM output can contain the exact outgoing arguments.
         } catch (controllerError) {
           // The model answered and its answer would not parse (#437 slice 1):
           // tell it so as this round's result and spend the next round on a
@@ -962,8 +1238,18 @@ export function simpleLoop<T extends SimpleLoopData>(
           break
         }
 
+        const trackAction = (stored: ControllerAction = action, includeCall = true) =>
+          trackEvent(
+            scope,
+            'controller_action',
+            { action: stored, turn, maxTurns } as ControllerActionEventData,
+            resolved.trackHistory,
+            includeCall ? controllerLlmCall : undefined,
+          )
+
         // Check if done (is_final flag OR tool_name === 'Return')
         if (action.is_final || action.tool_name === 'Return') {
+          trackAction()
           scope.data = {
             ...scope.data,
             lastAction: action,
@@ -989,6 +1275,7 @@ export function simpleLoop<T extends SimpleLoopData>(
         // through to the batch path below, where it gets a per-call error
         // (control-flow tools cannot be batched).
         if (action.tool_name === EXPAND_TOOL_NAME && !action.additional_calls?.length) {
+          trackAction()
           const callId = generateId('tc')
           const expanded = expandRound(action, projection)
           const call: ToolCallEventData = {
@@ -1036,6 +1323,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           // reconstructed batch member is as visible as a reconstructed
           // singular one (#217b).
           const trackedRepairs: (JsonRepairNote | undefined)[] = []
+          const resolvedArgsByPosition: (Record<string, unknown> | undefined)[] = []
           // Two arrays read POSITIONALLY at the tool_call emit below, so they
           // must grow together. Review F1: three of the five branches that
           // recorded args forgot the note, and a precheck-declined sub-call
@@ -1048,15 +1336,15 @@ export function simpleLoop<T extends SimpleLoopData>(
             trackedRepairs.push(repair)
           }
           const subCalls: SubCall[] = []
-          // A gated name waits for a person, and a batch cannot be paused part
-          // way (slice 6): an action holding one together with any other call
-          // is refused whole, before any of its calls is dispatched — under
-          // every `multiToolCalls` mode, since 'off' still runs a batch.
+          // A separately gated write name cannot share a batch with another
+          // call. Refuse it before any dispatch in every mode; N8 does not
+          // change the write-name precheck.
           const gated = new Set(currentRunFrame()?.gatedTools ?? [])
           const gatedCall = allCalls.find((c) => gated.has(c.tool_name))?.tool_name
 
           const callKeys = allCalls.map((_, position) => callKeyOf(turn, position))
           for (const [position, c] of allCalls.entries()) {
+            resolvedArgsByPosition.push(undefined)
             const callId = generateId('tc')
             callIds.push(callId)
             if (gatedCall !== undefined) {
@@ -1113,6 +1401,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               MAX_RESULT_CHARS,
               excluded,
             )
+            resolvedArgsByPosition[position] = resolvedArgs
             track(callArgs, callRepair)
             subCalls.push({
               tool: c.tool_name,
@@ -1130,14 +1419,155 @@ export function simpleLoop<T extends SimpleLoopData>(
             })
           }
 
+          const batchKey = batchKeyOf(turn)
+          const useChecklist =
+            currentRunFrame()?.egressBatchEnabled === true &&
+            batchKey !== undefined &&
+            callKeys.every((key) => key !== undefined) &&
+            (await amendRunFrame({ callKey: batchKey, batch: true }, async () => canPauseHere()))
+          let plan: EgressBatchPlan | undefined
+          if (useChecklist && batchKey) {
+            const members: BatchMember[] = []
+            const rows: BatchRow[] = []
+            const errors = subCalls.map((sc) => sc.precheckError ?? null)
+            let stopped = false
+            for (const [index, sc] of subCalls.entries()) {
+              const args = resolvedArgsByPosition[index]
+              if (multiMode !== 'parallel' && (stopped || errors[index])) {
+                stopped = true
+                continue
+              }
+              if (!args || !sc.run) continue
+              const callKey = callKeys[index]!
+              const digest = batchDigest(sc.tool, args)
+              const checked = await amendRunFrame(
+                { callKey, batch: true, batchPhase: 'preflight' },
+                () => preflightTool(sc.tool, args),
+              )
+              const base = {
+                index,
+                callKey,
+                digest,
+                tool: sc.tool,
+                args,
+                route: checked.held?.route ?? currentRunFrame()?.route ?? null,
+              }
+              if (checked.denial) {
+                members.push({ ...base, verdict: 'veto', denial: checked.denial })
+                if (multiMode !== 'parallel') stopped = true
+              } else if (checked.held) {
+                const member: BatchMember = {
+                  ...base,
+                  verdict: 'held',
+                  cause: checked.held.cause,
+                  ...(checked.held.category && { category: checked.held.category }),
+                }
+                members.push(member)
+                rows.push({ ...member, ...checked.held.payload })
+              } else {
+                members.push({
+                  ...base,
+                  verdict: 'pass',
+                  ...(checked.auditByDecide && { auditByDecide: true }),
+                })
+              }
+            }
+            const preparedPlan: EgressBatchPlan = {
+              v: 1,
+              mode: multiMode,
+              batchKey,
+              action,
+              callIds,
+              errors,
+              members,
+              rows,
+            }
+            plan = preparedPlan
+            if (rows.length > 0) {
+              const request = await amendRunFrame({ callKey: batchKey, batch: true }, () =>
+                askHumanHolding(
+                  {
+                    kind: EGRESS_BATCH_RELEASE_KIND,
+                    question: 'Review requests to outside services',
+                    options: batchOptions(rows),
+                    defaultOption: 'continue',
+                    summary: { count: rows.length },
+                  },
+                  preparedPlan,
+                  batchAuthorization(preparedPlan),
+                ),
+              )
+              trackAction(batchEventAction(action), false)
+              const safeCalls = subCalls.map((sc, i): ToolCallEventData => ({
+                callId: callIds[i],
+                batchId,
+                tool: sc.tool,
+                args: null,
+                ...(callKeys[i] ? { callKey: callKeys[i] } : {}),
+              }))
+              for (const data of safeCalls)
+                trackEvent(scope, 'tool_call', data, resolved.trackHistory)
+              const pending = request.status === 'pending'
+              for (const [i, sc] of subCalls.entries()) {
+                const data: ToolResultEventData = {
+                  callId: callIds[i],
+                  batchId,
+                  tool: sc.tool,
+                  result: pending
+                    ? {
+                        held: true,
+                        requestId: request.requestId,
+                        note: 'Batch review is pending.',
+                        redispatch: true,
+                      }
+                    : null,
+                  success: pending,
+                  ...(!pending ? { error: EGRESS_BATCH_MISMATCH } : {}),
+                }
+                trackEvent(scope, 'tool_result', data, resolved.trackHistory)
+              }
+              return scope
+            }
+          }
+
+          trackAction(plan ? batchEventAction(action) : action, !plan)
+
+          if (plan) {
+            for (const member of plan.members) {
+              const sc = subCalls[member.index]
+              if (member.verdict === 'veto') {
+                sc.precheckError = member.denial ?? EGRESS_BATCH_MISMATCH
+                sc.run = undefined
+              } else if (sc.run) {
+                const run = sc.run
+                sc.run = () =>
+                  amendRunFrame(
+                    {
+                      batchPhase: 'execute',
+                      batchPlanKey: plan.batchKey,
+                      batchPrepared: {
+                        callKey: member.callKey,
+                        digest: member.digest,
+                        route: member.route,
+                        batchPlanKey: plan.batchKey,
+                        decision: 'pass',
+                        ...(member.auditByDecide && { auditByDecide: true }),
+                      },
+                    },
+                    run,
+                  )
+              }
+            }
+          }
+
           // All tool_call events land before dispatch — the panel pairs
           // call/result by callId, so completion order doesn't matter.
           const callData = subCalls.map((sc, i): ToolCallEventData => ({
             callId: callIds[i],
             batchId,
             tool: sc.tool,
-            args: trackedArgs[i],
-            ...(trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
+            args: plan ? null : trackedArgs[i],
+            ...(!plan && trackedRepairs[i] ? { repaired: trackedRepairs[i] } : {}),
             ...(sc.run && callKeys[i] !== undefined ? { callKey: callKeys[i] } : {}),
           }))
           for (const data of callData) trackEvent(scope, 'tool_call', data, resolved.trackHistory)
@@ -1229,11 +1659,12 @@ export function simpleLoop<T extends SimpleLoopData>(
             continue
           }
 
-          scope.data = { ...scope.data, turn, lastAction: action }
+          scope.data = { ...scope.data, turn, lastAction: plan ? batchEventAction(action) : action }
           continue
         }
 
         // Validate tool against the allowlist (`isAllowedTool`, above), which
+        trackAction()
         // refuses a tool withheld from every agent (#403) whatever `tools` says.
         if (!isAllowedTool(action.tool_name)) {
           // Nothing ran: record the refusal as the round's result so the next

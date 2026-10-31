@@ -291,6 +291,22 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS hitl_payloads_expires_idx
     ON hitl_payloads (expires_at);
+
+  -- N8: an insert commits before transport. A started claim with no result is
+  -- outcome-unknown after a crash, never permission to send again. Both the
+  -- authorization digest and final result are encrypted content columns.
+  CREATE TABLE IF NOT EXISTS tool_send_claims (
+    claim_id   TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    run_id     TEXT NOT NULL,
+    call_key   TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    result     TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, session_id, run_id, call_key)
+  );
 `
 
 /**

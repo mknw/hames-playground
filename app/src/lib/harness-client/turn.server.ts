@@ -120,6 +120,7 @@ import {
 import { closeHitlRows, loadHitlAnswerRows, type HitlAnswerValue } from '../db/hitl.server'
 import {
   createHitlPayloadStore,
+  createToolSendClaims,
   purgeClosedPayloads,
   resolveHitlAnswer,
 } from '../hitl/payloads.server'
@@ -657,6 +658,7 @@ async function runAndSave(
         // Where a blocking request's payload is held (slice 8): bound to this
         // turn's owner and conversation, so core never names either.
         hitlPayloads: createHitlPayloadStore(userId, sessionId),
+        toolSendClaims: createToolSendClaims(userId, sessionId),
       },
       () => run(patterns),
     )
@@ -1025,6 +1027,7 @@ async function runResumeAndSave(
         live: req.onEvent,
         hitl: { attended: isAttendedRequest() },
         hitlPayloads: createHitlPayloadStore(userId, sessionId),
+        toolSendClaims: createToolSendClaims(userId, sessionId),
       },
       () =>
         resumeHarness(loaded.serializedContext, patterns, plan.answers, {

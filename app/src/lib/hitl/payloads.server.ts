@@ -14,6 +14,7 @@
  */
 import {
   EGRESS_RELEASE_KIND,
+  EGRESS_BATCH_RELEASE_KIND,
   INGRESS_FLAG_KIND,
   ingressFlagResolution,
   readHitl,
@@ -25,6 +26,8 @@ import {
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   deleteHitlPayloads,
+  claimToolSend,
+  finishToolSend,
   deleteQuarantine,
   getHitlPayload,
   holdHitlPayload,
@@ -48,6 +51,24 @@ export function createHitlPayloadStore(userId: string, sessionId: string): HitlP
     drop: async (payloadRef) => {
       await deleteHitlPayloads([payloadRef], userId, sessionId)
     },
+    load: async (payloadRef) => {
+      const row = await getHitlPayload(payloadRef, userId)
+      return row?.sessionId === sessionId ? { kind: row.kind, payload: row.payload } : null
+    },
+  }
+}
+
+/** Every N8 transport claim is bound to this owner and conversation. */
+export function createToolSendClaims(userId: string, sessionId: string) {
+  return {
+    claim: (input: { runId: string; callKey: string; digest: string }) =>
+      claimToolSend({ ...input, userId, sessionId }),
+    finish: (input: {
+      runId: string
+      callKey: string
+      digest: string
+      result: import('@hames-ai/harness-patterns').ToolCallResult
+    }) => finishToolSend({ ...input, userId, sessionId }),
   }
 }
 
@@ -110,6 +131,7 @@ const RESOLVERS: ReadonlyMap<string, Resolver> = new Map([
   ['provenance', dropQuarantine],
   [INGRESS_FLAG_KIND, releaseFlaggedResult],
   [EGRESS_RELEASE_KIND, noSideEffect],
+  [EGRESS_BATCH_RELEASE_KIND, noSideEffect],
 ])
 
 /** The host's `resolve` for one owner's resume: the request's kind picks it. */

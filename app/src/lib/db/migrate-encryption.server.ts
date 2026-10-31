@@ -138,6 +138,12 @@ export const ENCRYPTED_TABLES: readonly TableSpec[] = [
     jsonbColumns: [],
   },
   {
+    table: 'tool_send_claims',
+    pk: 'claim_id',
+    textColumns: ['digest', 'result'],
+    jsonbColumns: [],
+  },
+  {
     // Memory (#419 M4). `content` and `evidence` are the personal text the
     // store pipeline writes; `embedding` is the owner's declared plaintext
     // exception (D2 — embeddings are NOT encrypted), so it is absent here by

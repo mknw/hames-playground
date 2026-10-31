@@ -28,7 +28,7 @@
 import { Checkbox } from '@ark-ui/solid/checkbox'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { createEffect, createUniqueId, For, on, Show, type JSX } from 'solid-js'
+import { createEffect, createSignal, createUniqueId, For, on, Show, type JSX } from 'solid-js'
 import type { MemoryProposalView } from '~/lib/memory/proposals.server'
 import { visibleFormatChars, type BlockingRequestView } from '~/lib/hitl/blocking-view'
 
@@ -73,7 +73,7 @@ export interface BlockingDialogProps {
   position?: { readonly index: number; readonly count: number }
   /** The band's text: a kind with a warning supplies it. */
   warning?: string
-  onChoose: (optionId: string) => void
+  onChoose: (optionId: string, flags?: Record<string, boolean>) => void
   onRetry: () => void
 }
 
@@ -503,15 +503,57 @@ const STATE_COPY: Record<Exclude<BlockingDialogState, 'ready'>, string> = {
 
 function BlockingDialog(props: BlockingDialogProps) {
   let safe: HTMLButtonElement | undefined
+  const [accepted, setAccepted] = createSignal<Record<string, boolean>>({})
   const reasons = createUniqueId()
   const reasonId = (optionId: string) => `${reasons}-${optionId}`
   /** The second press of a double-click is the same gesture as the first:
    *  after a step it would land on the next request's button unread. */
-  const choose = (e: MouseEvent, optionId: string) => {
+  const choose = (e: MouseEvent, optionId: string, flags?: Record<string, boolean>) => {
     if (e.detail > 1) return
-    props.onChoose(optionId)
+    props.onChoose(optionId, flags)
   }
   const r = () => props.request
+  createEffect(
+    on(
+      () => props.request?.requestId,
+      () => setAccepted({}),
+      { defer: true },
+    ),
+  )
+  const batchRows = () => {
+    const req = r()
+    if (
+      req?.kind !== 'egress-batch-release' ||
+      req.payload === null ||
+      typeof req.payload !== 'object' ||
+      !req.payload
+    )
+      return undefined
+    const value = req.payload as { v?: unknown; rows?: unknown }
+    if (value.v !== 1 || !Array.isArray(value.rows) || value.rows.length === 0) return undefined
+    if (
+      !value.rows.every(
+        (row) =>
+          row &&
+          typeof row === 'object' &&
+          typeof row.index === 'number' &&
+          typeof row.tool === 'string' &&
+          typeof row.callKey === 'string' &&
+          row.args &&
+          typeof row.args === 'object' &&
+          Array.isArray(row.hosts),
+      )
+    )
+      return undefined
+    return value.rows as readonly {
+      index: number
+      tool: string
+      callKey: string
+      args: Record<string, unknown>
+      hosts: readonly string[]
+      lines: readonly string[]
+    }[]
+  }
   const closedOnly = () => props.state === 'expired' || props.state === 'superseded'
   const copy = () => {
     const req = r()
@@ -571,6 +613,145 @@ function BlockingDialog(props: BlockingDialogProps) {
               {STATE_COPY[props.state as Exclude<BlockingDialogState, 'ready'>]}
             </p>
           </Show>
+          <Show when={r()?.kind === 'egress-batch-release'}>
+            <Show
+              when={batchRows()}
+              fallback={
+                <p role="alert" text="xs ui-danger">
+                  The held requests could not be loaded. No answer can be submitted.
+                </p>
+              }
+            >
+              {(rows) => (
+                <div flex="~ col" gap="4">
+                  <p text="xs ui-text-secondary" m="0">
+                    {rows().length} requests. Every row starts at Refuse. A later row in a
+                    sequential batch is conditional on earlier requests succeeding.
+                  </p>
+                  <nav
+                    aria-label="Jump to a request"
+                    flex="~"
+                    gap="2"
+                    style={{ 'flex-wrap': 'wrap' }}
+                  >
+                    <For each={rows()}>
+                      {(row) => (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const target = document.getElementById(`hitl-batch-row-${row.index}`)
+                            target?.scrollIntoView({ block: 'nearest' })
+                            target?.focus()
+                          }}
+                          p="x-2 y-1"
+                          text="xs ui-text-secondary"
+                          bg="transparent hover:ui-bg-hover"
+                          border="1 ui-border-secondary"
+                          rounded="md"
+                          ring="2 transparent focus:ui-accent/40"
+                        >
+                          Request {row.index + 1}
+                        </button>
+                      )}
+                    </For>
+                  </nav>
+                  <For each={rows()}>
+                    {(row) => (
+                      <section
+                        id={`hitl-batch-row-${row.index}`}
+                        aria-labelledby={`hitl-batch-heading-${row.index}`}
+                        tabIndex={-1}
+                        data-testid={`hitl-batch-row-${row.index}`}
+                        border="1 ui-border-primary"
+                        rounded="md"
+                        p="3"
+                        flex="~ col"
+                        gap="2"
+                      >
+                        <h3 id={`hitl-batch-heading-${row.index}`} text="sm ui-text-primary" m="0">
+                          Request {row.index + 1}: {visibleFormatChars(row.tool)}
+                        </h3>
+                        <p text="xs ui-text-secondary" m="0">
+                          Destinations:{' '}
+                          {row.hosts.length
+                            ? row.hosts.map(visibleFormatChars).join(', ')
+                            : 'none identified'}
+                        </p>
+                        <span text="xs ui-text-secondary">Exact arguments to be sent:</span>
+                        <pre
+                          data-testid={`hitl-batch-args-${row.index}`}
+                          font="mono"
+                          text="xs ui-text-primary"
+                          p="3"
+                          rounded="md"
+                          border="1 ui-border-secondary"
+                          style={{
+                            background: 'var(--ui-code-bg)',
+                            'white-space': 'pre-wrap',
+                            'overflow-wrap': 'anywhere',
+                            margin: 0,
+                          }}
+                        >
+                          {visibleFormatChars(JSON.stringify(row.args, null, 2))}
+                        </pre>
+                        <Show when={row.lines?.length}>
+                          <details>
+                            <summary text="xs ui-text-secondary">
+                              Decoded and normalized view
+                            </summary>
+                            <pre
+                              font="mono"
+                              text="xs ui-text-primary"
+                              style={{ 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}
+                            >
+                              {row.lines.map(visibleFormatChars).join('\n')}
+                            </pre>
+                          </details>
+                        </Show>
+                        <Checkbox.Root
+                          checked={accepted()[row.callKey] === true}
+                          onCheckedChange={(d) =>
+                            setAccepted((before) => ({
+                              ...before,
+                              [row.callKey]: d.checked === true,
+                            }))
+                          }
+                          disabled={props.busy}
+                          flex="~"
+                          items="center"
+                          gap="2"
+                          rounded="sm"
+                          ring="2 transparent focus-within:ui-accent/40"
+                          data-testid={`hitl-batch-choice-${row.index}`}
+                        >
+                          <Checkbox.Control
+                            w="5"
+                            h="5"
+                            flex="~"
+                            items="center"
+                            justify="center"
+                            border="1 ui-border-primary"
+                            rounded="sm"
+                          >
+                            <Checkbox.Indicator>
+                              <span aria-hidden="true">✓</span>
+                            </Checkbox.Indicator>
+                          </Checkbox.Control>
+                          <Checkbox.Label text="xs ui-text-primary">
+                            Accept request {row.index + 1} ({visibleFormatChars(row.tool)})
+                          </Checkbox.Label>
+                          <Checkbox.HiddenInput />
+                        </Checkbox.Root>
+                        <span text="xs ui-text-secondary" aria-live="polite">
+                          Request {row.index + 1}: {accepted()[row.callKey] ? 'Accept' : 'Refuse'}
+                        </span>
+                      </section>
+                    )}
+                  </For>
+                </div>
+              )}
+            </Show>
+          </Show>
           <Show when={copy()}>
             {(own) => (
               <div flex="~ col" gap="3">
@@ -624,7 +805,9 @@ function BlockingDialog(props: BlockingDialogProps) {
               </div>
             )}
           </Show>
-          <Show when={props.state === 'ready' && !copy() && r()}>
+          <Show
+            when={props.state === 'ready' && !copy() && r()?.kind !== 'egress-batch-release' && r()}
+          >
             {(req) => (
               <div flex="~ col" gap="3">
                 <Show when={Object.keys(req().summary).length > 0}>
@@ -718,7 +901,12 @@ function BlockingDialog(props: BlockingDialogProps) {
           }
         >
           {(req) => (
-            <Show when={copy()} fallback={<GenericOptions />}>
+            <Show
+              when={copy()}
+              fallback={
+                r()?.kind === 'egress-batch-release' ? <BatchOptions /> : <GenericOptions />
+              }
+            >
               {(own) => (
                 <ul
                   data-testid="hitl-blocking-options"
@@ -814,6 +1002,66 @@ function BlockingDialog(props: BlockingDialogProps) {
       }
     />
   )
+
+  function BatchOptions() {
+    const ready = () => props.state === 'ready' && !!batchRows() && !props.busy
+    return (
+      <div flex="~" justify="end" gap="2" w="full" style={{ 'flex-wrap': 'wrap' }}>
+        <button
+          type="button"
+          data-testid="hitl-blocking-option-continue"
+          data-default=""
+          ref={(el) => (safe = el)}
+          cyber-button=""
+          disabled={!ready()}
+          onClick={(e) =>
+            choose(
+              e,
+              'continue',
+              Object.fromEntries(
+                (batchRows() ?? [])
+                  .filter((row) => accepted()[row.callKey])
+                  .map((row) => [`accept:${row.callKey}`, true]),
+              ),
+            )
+          }
+          p="x-3 y-1.5"
+          text="xs"
+          ring="2 transparent focus:ui-accent/40"
+        >
+          Continue with selected requests
+        </button>
+        <button
+          type="button"
+          data-testid="hitl-blocking-option-refuse-all"
+          disabled={!ready()}
+          onClick={(e) => choose(e, 'refuse-all')}
+          p="x-3 y-1.5"
+          text="xs ui-text-secondary"
+          bg="transparent hover:ui-bg-hover"
+          border="1 ui-border-secondary"
+          rounded="md"
+          ring="2 transparent focus:ui-accent/40"
+        >
+          Refuse all similar actions
+        </button>
+        <button
+          type="button"
+          data-testid="hitl-blocking-option-interrupt"
+          disabled={!ready()}
+          onClick={(e) => choose(e, 'interrupt')}
+          p="x-3 y-1.5"
+          text="xs ui-danger"
+          bg="ui-danger/10 hover:ui-danger/20"
+          border="1 ui-danger"
+          rounded="md"
+          ring="2 transparent focus:ui-accent/40"
+        >
+          Interrupt
+        </button>
+      </div>
+    )
+  }
 
   /** Any other kind: the options in one row, the default prominent, and why
    *  an option cannot be chosen in a line under it. */

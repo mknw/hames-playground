@@ -314,18 +314,19 @@ for (const fn of ['extractGraphElements', 'extractGraphFromResult', 'isEdgeEleme
   assert.equal(typeof (root as Record<string, unknown>)[fn], 'function', `${fn} missing from the root barrel`)
 }
 
-// 2. the definitions barrel evaluates — the five definition modules, through
+// 2. the definitions barrel evaluates — the sole definition module, through
 //    the tarball (which transitively loads the two overridden dependency
 //    tarballs and @boundaryml/baml)
 const agents = await import('@hames-ai/agents/agents')
-for (const name of ['searchAgent', 'generalNextAgent', 'sandboxAgent',
-  'retrieverAgent', 'microsoft365Agent']) {
+for (const name of ['generalNextAgent']) {
   const def = (agents as Record<string, { id?: string }>)[name]
   assert.equal(typeof def?.id, 'string', `${name} missing from the agents barrel`)
   assert.equal(typeof def.createPatterns, 'function', `${name}.createPatterns missing`)
 }
-// the removed `general` agent must not ship in the tarball
-assert.equal((agents as Record<string, unknown>).generalAgent, undefined, 'generalAgent is back in the agents barrel')
+// retired definitions must not ship in the tarball
+for (const name of ['generalAgent', 'searchAgent', 'sandboxAgent', 'retrieverAgent', 'microsoft365Agent']) {
+  assert.equal((agents as Record<string, unknown>)[name], undefined, `${name} is back in the agents barrel`)
+}
 for (const name of ['getGraphSchema', 'NEO4J_FEW_SHOTS', 'NEO4J_FEW_SHOTS_DEFAULT',
   'NEO4J_READ_ONLY_CONTEXT', 'createTitleAgent', 'sanitizeTitle', 'runFirstTurnTitleGen', 'runRegenerateTitle']) {
   assert.notEqual((agents as Record<string, unknown>)[name], undefined, `${name} missing from the agents barrel`)

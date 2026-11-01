@@ -255,14 +255,16 @@ export async function letTheBoxGoCold(page: Page): Promise<void> {
 /**
  * Pick an agent through the picker, as a user does, and wait until the trigger names it.
  *
- * Needed since the #507 flip made `general-next` the default: scenarios written against the
- * Router → Synthesize chain of the `search` agent say so explicitly instead of inheriting
- * whichever agent a new chat opens with.
+ * Scenarios select the agent explicitly so they exercise the picker as well as
+ * the turn, even when the chosen agent is already the default.
  */
 export async function chooseAgent(page: Page, name: string): Promise<void> {
   const trigger = page.getByTestId('agent-selector-trigger')
   await trigger.click()
-  await page.getByRole('button', { name: new RegExp(`^${name}`) }).click()
+  await page
+    .getByTestId('agent-selector-menu')
+    .getByRole('button', { name: new RegExp(`^${name}`) })
+    .click()
   await expect(trigger).toContainText(name)
 }
 

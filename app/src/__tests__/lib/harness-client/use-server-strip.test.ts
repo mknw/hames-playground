@@ -43,18 +43,8 @@ const APP_ROOT = resolve(process.cwd())
 const AGENTS_PKG = resolve(APP_ROOT, '../packages/agents')
 const AGENTS_DIR = resolve(AGENTS_PKG, 'agents')
 
-/** The files that carried the directive before the move (the two
- *  exceptions — title-generator and graph-schema — deliberately never did;
- *  title-generator's comment records why). There were seven; the two sandbox
- *  agents among them became one, `sandbox.server.ts`, on 2026-10-03, and
- *  `general.server.ts` was removed on 2026-10-21. */
-const STRIPPED = [
-  'search.server.ts',
-  'microsoft-365.server.ts',
-  'neo4j-fewshots.server.ts',
-  'retriever-agent.server.ts',
-  'sandbox.server.ts',
-]
+/** Surviving modules from the original directive strip. */
+const STRIPPED = ['neo4j-fewshots.server.ts']
 
 /** A top-of-module directive, in either quote style. */
 const DIRECTIVE = /^\s*['"]use server['"];?\s*(?:;)?\s*$/m

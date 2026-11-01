@@ -72,43 +72,25 @@ describe('getGraphSchema', () => {
   })
 })
 
-// The two agents that used to swallow it. Both are asserted through their real
-// `createPatterns`, because the bug was not in a helper — it was in what the
-// agent did with the result.
-describe.each([
-  ['search', () => import('@hames-ai/agents/agents/search.server')],
-  ['retriever-agent', () => import('@hames-ai/agents/agents/retriever-agent.server')],
-])('%s agent — schema failure', (label, importAgent) => {
+// The remaining agent uses the shared helper and must not cache a schema-blind build.
+describe('general-next agent — schema failure', () => {
   async function build(sessionId: string): Promise<{ name: string }[]> {
-    const mod = (await importAgent()) as Record<
-      string,
-      { createPatterns: (s: string, deps: unknown) => Promise<unknown> }
-    >
-    const agent = Object.values(mod).find((v) => typeof v?.createPatterns === 'function')!
-    return (await agent.createPatterns(sessionId, degradedDeps)) as { name: string }[]
+    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
+    return (await generalNextAgent.createPatterns(sessionId, degradedDeps)) as { name: string }[]
   }
 
-  it('still builds a usable chain', async () => {
+  it('builds a usable chain and refuses the pattern cache on schema failure', async () => {
     currentCallTool.fn = schemaFails
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const patterns = await build(`degraded-${label}`)
+    const patterns = await build('degraded-general-next')
     expect(patterns.length).toBeGreaterThan(0)
-    warn.mockRestore()
-  })
-
-  it('warns and refuses the pattern cache instead of freezing a blind build in', async () => {
-    currentCallTool.fn = schemaFails
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    await build(`degraded-${label}`)
-
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('graph schema unavailable'))
-    expect(mockDoNotCachePatterns).toHaveBeenCalledWith(`degraded-${label}`)
+    expect(mockDoNotCachePatterns).toHaveBeenCalledWith('degraded-general-next')
     warn.mockRestore()
   })
 
   it('caches normally when the schema resolves', async () => {
-    await build(`healthy-${label}`)
+    await build('healthy-general-next')
     expect(mockDoNotCachePatterns).not.toHaveBeenCalled()
   })
 })

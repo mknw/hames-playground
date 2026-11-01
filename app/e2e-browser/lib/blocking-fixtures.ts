@@ -82,7 +82,7 @@ export async function seedPausedMany(
     const context = { sessionId: id, status: 'paused', input: '', data: {}, createdAt: 1, events }
     await client.query(
       `INSERT INTO conversations (id, user_id, agent_id, context, title, status)
-       VALUES ($1, $2, 'search', $3::jsonb, $4, 'paused')`,
+       VALUES ($1, $2, 'general-next', $3::jsonb, $4, 'paused')`,
       [id, BYPASS_USER_ID, JSON.stringify(context), title],
     )
     for (const { requestId, payload, request = GRAPH_WRITE } of requests) {

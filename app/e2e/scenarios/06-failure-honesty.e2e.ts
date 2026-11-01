@@ -171,7 +171,7 @@ describe.runIf(IS_HERMETIC)('a failing endpoint is surfaced, never swallowed', (
     const { status, frames } = await app.runTurnOverSse({
       sessionId,
       message: 'How many nodes are in the graph?',
-      agentId: 'search',
+      agentId: 'general-next',
     })
 
     expect(status).toBe(200) // the stream opens; the failure rides inside it

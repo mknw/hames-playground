@@ -7,7 +7,7 @@
  * "the composition root's wiring reaches the factory" was true BY CONSTRUCTION
  * and needed no test. The move makes it true by RESOLUTION instead — the app
  * builds ONE `AgentDeps` bag (`agentDeps()` in `session.server.ts`), the
- * overlay in `registry.server.ts` wraps each moved definition's
+ * overlay in `registry.server.ts` wraps the remaining definition's
  * `(sessionId, deps)` factory to supply it, and the package factory reads only
  * what it is handed. Those are the same values only as long as the overlay
  * passes THE composition root's bag; if a refactor ever makes the overlay
@@ -88,8 +88,8 @@ vi.mock('../../../lib/db/conversations.server', () => ({
 // it — the app's catalog FUNCTION IDENTITY, not just some resolver.
 const toolsSpy = vi.spyOn(await import('@hames-ai/harness-patterns/tools.server'), 'Tools')
 
-// The real overlay path: registry.server.ts registers the moved definitions,
-// each wrapped to supply `agentDeps()`.
+// The real overlay path: registry.server.ts registers the remaining definition,
+// wrapped to supply `agentDeps()`.
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
 const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
@@ -118,7 +118,7 @@ beforeEach(() => {
 
 describe('the bag the composition root supplies is the bag the moved factories read', () => {
   it('the app catalog reaches Tools() by identity, through the overlay', async () => {
-    const agent = getAgent('retriever')
+    const agent = getAgent('general-next')
     expect(agent).toBeDefined()
     await agent!.createPatterns('seam-sess')
 
@@ -128,11 +128,11 @@ describe('the bag the composition root supplies is the bag the moved factories r
   })
 
   it('the app suppliers reach the factory — the registered wrapper closes over agentDeps()', async () => {
-    const agent = getAgent('retriever')
+    const agent = getAgent('general-next')
     const patterns = (await agent!.createPatterns('seam-sess-2')) as unknown as Pattern[]
 
-    // The backend in the built retriever pattern is the one the APP-side
-    // factory produced — the whole reason the bag exists. The retriever
+    // The backend in general-next's retriever pattern is the one the APP-side
+    // factory produced — the whole reason the bag exists. The pattern
     // pattern declares the backends' names (not the objects) as a typed
     // capability for introspection, so the readout is the name list; the call
     // assertion above is the identity check.

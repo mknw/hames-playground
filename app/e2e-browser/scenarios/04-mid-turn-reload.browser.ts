@@ -50,7 +50,7 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   appUrl,
   backend,
 }) => {
-  await open(page, appUrl, { agent: 'Search Agent' })
+  await open(page, appUrl, { agent: 'General Agent · Next' })
 
   // ---- Turn 1: something to lose ----------------------------------------
   await send(page, 'first question')
@@ -61,7 +61,7 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   // The turn's first self-hosted BAML call is PARKED, and that is the #280 fix
   // for this file. It used to be a `cold-start` DURATION, which made every
   // assertion after the reload a race: the fake records a call only once it has
-  // ANSWERED it, so the `Router` record the reload waited for appeared exactly
+  // ANSWERED it, so the first controller record the reload waited for appeared exactly
   // when its delay had elapsed, and the rest of turn 2 then ran against a
   // reload-plus-hydrate whose cost is a property of the machine. A parked request
   // has no such window — the turn cannot get past it until this test says so.
@@ -83,14 +83,14 @@ test('a reload mid-turn keeps the conversation, its history, and the run that wa
   // passed because the row was already `done` from turn 1. A PARKED request is
   // strictly better evidence than a recorded one: it says the turn reached this
   // call AND has not got past it, so the turn is running now rather than having
-  // been running at some point. `Router` is the first call every turn makes, and
+  // been running at some point. `LoopController` is the first call every turn makes, and
   // the backend was reset a moment ago, so it can only be turn 2's.
   const pinned = await expectHeld(
     backend,
     (held) => held.length === 1,
     'the server never started turn 2, so there was nothing to reload through',
   )
-  expect(pinned[0].fn, "the parked call is not the turn's first one").toBe('Router')
+  expect(pinned[0].fn, "the parked call is not the turn's first one").toBe('LoopController')
 
   await page.reload()
 

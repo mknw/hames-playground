@@ -116,7 +116,10 @@ export const AgentSelector = (props: AgentSelectorProps) => {
 
       {/* Dropdown Menu */}
       <Show when={isOpen()}>
-        <div class="mt-1 border border-ui-border-primary rounded-lg bg-ui-bg-tertiary max-h-80 w-full shadow-lg left-0 top-full absolute z-50 overflow-auto">
+        <div
+          data-testid="agent-selector-menu"
+          class="mt-1 border border-ui-border-primary rounded-lg bg-ui-bg-tertiary max-h-80 w-full shadow-lg left-0 top-full absolute z-50 overflow-auto"
+        >
           <Show when={agents.loading}>
             <div p="4" text="center ui-text-secondary">
               Loading...

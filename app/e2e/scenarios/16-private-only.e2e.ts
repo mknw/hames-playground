@@ -45,7 +45,7 @@ describe('private-only deployment', () => {
       await settleSummaries(app, session)
       await actions.regenerateConversationTitle(session)
       const calls = app.fakeLlm.calls.filter((call) => call.fn !== null)
-      for (const fn of ['Router', 'LoopController', 'Synthesize', 'GenerateConversationTitle']) {
+      for (const fn of ['LoopController', 'Synthesize', 'GenerateConversationTitle']) {
         expect(
           calls.some((call) => call.fn === fn),
           `missing ${fn}`,

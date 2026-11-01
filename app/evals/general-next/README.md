@@ -19,7 +19,6 @@ ruling (2026-10-27), not on a passed flip gate.
 corepack pnpm eval:general-next --list
 # Free: scripted inference and synthetic tools against the real agent. No .env is loaded.
 corepack pnpm eval:general-next
-EVAL_GENERAL_AGENT=general corepack pnpm eval:general-next
 # ONLY after the coordinator's actual “S3 merged: go” message:
 EVAL_GENERAL_GO='S3 merged: go' corepack pnpm eval:general-next --live
 ```

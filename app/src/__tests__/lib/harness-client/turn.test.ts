@@ -385,7 +385,7 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 /** A stored, resumable row for (`sess`, agent `search`). */
 const STORED: Loaded = {
   serializedContext: 'ctx-a',
-  agentId: 'search',
+  agentId: 'general-next',
   kind: 'conversation',
   status: 'done',
   version: 'v-claim',
@@ -444,7 +444,7 @@ function interactive(over: Record<string, unknown> = {}) {
     mode: 'interactive' as const,
     sessionId: 'sess-1',
     userId: 'user-1',
-    agentId: 'search',
+    agentId: 'general-next',
     message: 'hello world, this is long',
     ...over,
   }
@@ -459,7 +459,7 @@ describe('interactive turns', () => {
     expect(seeded).toMatchObject({
       id: 'sess-1',
       userId: 'user-1',
-      agentId: 'search',
+      agentId: 'general-next',
       status: 'running',
       title: 'hello worl',
       // The row it creates RECORDS the tier this turn resolved. For a brand-new
@@ -474,11 +474,17 @@ describe('interactive turns', () => {
 
     expect(continueSession).not.toHaveBeenCalled()
     expect(result.response).toBe('fresh:hello world, this is long')
-    expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', 'serialized:sess-1', {
-      version: 'v-seed',
-      inferenceTier: 'anthropic',
-      memoryRunOrigin: 'interactive',
-    })
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-1',
+      'user-1',
+      'general-next',
+      'serialized:sess-1',
+      {
+        version: 'v-seed',
+        inferenceTier: 'anthropic',
+        memoryRunOrigin: 'interactive',
+      },
+    )
   })
 
   it('continues a stored context instead of re-running it fresh', async () => {
@@ -493,56 +499,39 @@ describe('interactive turns', () => {
     // Three arguments, no listener: #374 moved the live listener into the run
     // frame this runner opens, and a nested entry that brought a slot of its
     // own would be refused.
-    expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:search'], 'follow up')
+    expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:general-next'], 'follow up')
     expect(result.response).toBe('continued:follow up')
-    expect(saveSession).toHaveBeenCalledWith('sess-2', 'user-1', 'search', 'ctx-a+follow up', {
-      version: 'v-claim',
-      inferenceTier: 'anthropic',
-      memoryRunOrigin: 'interactive',
-    })
-  })
-
-  it('starts fresh when the agent changed under an existing sessionId', async () => {
-    claimSession.mockResolvedValue(STORED)
-
-    const result = await runTurnAndPersist(
-      interactive({ sessionId: 'sess-3', agentId: 'retriever', message: 'hi' }),
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-2',
+      'user-1',
+      'general-next',
+      'ctx-a+follow up',
+      {
+        version: 'v-claim',
+        inferenceTier: 'anthropic',
+        memoryRunOrigin: 'interactive',
+      },
     )
-
-    expect(continueSession).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-3', 'retriever')
-    expect(result.response).toBe('fresh:hi')
-    expect(saveSession).toHaveBeenCalledWith('sess-3', 'user-1', 'retriever', 'serialized:sess-3', {
-      version: 'v-claim',
-      inferenceTier: 'anthropic',
-      memoryRunOrigin: 'interactive',
-    })
   })
 
-  // 2026-10-03: the two sandbox agents became one, and the claim's load maps a
-  // stored legacy id forward. A tab loaded before that deploy still SENDS the
-  // old id, so the requested id has to be mapped the same way: compared raw,
-  // 'sandbox-session' !== 'sandbox' reads as an agent switch, the turn starts
-  // fresh, and its save replaces the conversation with this one message.
-  //
-  // MUTATION: drop `canonicalAgentId` from `planTurn` → `harness` runs fresh
-  // and every assertion below reddens.
-  it('continues a stored conversation when the request names its agent by a legacy id', async () => {
-    claimSession.mockResolvedValue({ ...STORED, agentId: 'sandbox' })
-
-    const result = await runTurnAndPersist(
-      interactive({ sessionId: 'sess-legacy', agentId: 'sandbox-session', message: 'and now?' }),
-    )
-
-    expect(harness).not.toHaveBeenCalled()
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-legacy', 'sandbox')
-    expect(result.response).toBe('continued:and now?')
-    expect(saveSession).toHaveBeenCalledWith('sess-legacy', 'user-1', 'sandbox', 'ctx-a+and now?', {
-      version: 'v-claim',
-      inferenceTier: 'anthropic',
-      memoryRunOrigin: 'interactive',
-    })
-  })
+  it.each(['search', 'retriever', 'sandbox', 'microsoft-365'])(
+    'continues a saved %s conversation under general-next',
+    async (legacy) => {
+      claimSession.mockResolvedValue({ ...STORED, agentId: 'general-next' })
+      await runTurnAndPersist(
+        interactive({ sessionId: 'sess-legacy', agentId: legacy, message: 'and now?' }),
+      )
+      expect(continueSession).toHaveBeenCalledWith('ctx-a', ['patterns:general-next'], 'and now?')
+      expect(getOrBuildPatterns).toHaveBeenCalledWith('sess-legacy', 'general-next')
+      expect(saveSession).toHaveBeenCalledWith(
+        'sess-legacy',
+        'user-1',
+        'general-next',
+        'ctx-a+and now?',
+        expect.any(Object),
+      )
+    },
+  )
 
   // 2026-10-21: `general` was removed and its id folds into `general-next`. A
   // stored conversation resumes there (the claim's load maps the row's id), and a
@@ -883,7 +872,7 @@ describe('interactive turns', () => {
       1,
       'sess-1',
       'user-1',
-      'search',
+      'general-next',
       'serialized:sess-1',
       { version: 'v-seed', inferenceTier: 'anthropic', memoryRunOrigin: 'interactive' },
     )
@@ -968,7 +957,7 @@ describe('triggered turns', () => {
       mode: 'triggered' as const,
       sessionId: 'run-1',
       userId: 'user-1',
-      agentId: 'search',
+      agentId: 'general-next',
       message: 'do the thing',
       data: { trigger: TRIGGER },
       claimVersion: 'v-trig',
@@ -985,35 +974,35 @@ describe('triggered turns', () => {
     expect(claimSession).not.toHaveBeenCalled()
     expect(continueSession).not.toHaveBeenCalled()
     expect(dbCreateConversation).not.toHaveBeenCalled() // the caller already seeded it
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'search')
-    expect(harness).toHaveBeenCalledWith('patterns:search')
+    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'general-next')
+    expect(harness).toHaveBeenCalledWith('patterns:general-next')
     expect(runFresh).toHaveBeenCalledWith('do the thing', 'run-1', { trigger: TRIGGER })
     expect(seenScopes).toEqual([{ userId: 'user-1', sessionId: 'run-1' }])
     expect(saveSession).toHaveBeenNthCalledWith(
       1,
       'run-1',
       'user-1',
-      'search',
+      'general-next',
       'serialized:run-1',
       { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
     )
   })
 
-  // A routine stores the agent id it was created with, and so does a client
-  // POSTing to `/api/agents/:id` — both may still name a consolidated agent.
-  it('runs and persists a routine that names a legacy agent id under the current one', async () => {
-    await runTurnAndPersist(triggered({ agentId: 'flavoured-sandbox' }))
-
-    expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'sandbox')
-    expect(saveSession).toHaveBeenNthCalledWith(
-      1,
-      'run-1',
-      'user-1',
-      'sandbox',
-      'serialized:run-1',
-      { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
-    )
-  })
+  it.each(['search', 'retriever', 'sandbox', 'microsoft-365', 'flavoured-sandbox'])(
+    'runs a routine saved with %s under general-next',
+    async (legacy) => {
+      await runTurnAndPersist(triggered({ agentId: legacy }))
+      expect(getOrBuildPatterns).toHaveBeenCalledWith('run-1', 'general-next')
+      expect(saveSession).toHaveBeenNthCalledWith(
+        1,
+        'run-1',
+        'user-1',
+        'general-next',
+        'serialized:run-1',
+        { version: 'v-trig', inferenceTier: 'anthropic', memoryRunOrigin: 'triggered' },
+      )
+    },
+  )
 
   // The removed `general` agent: a routine row or a device URL written before
   // 2026-10-21 still names it, and runs under its successor rather than failing.
@@ -1132,7 +1121,7 @@ describe("the run frame's inference slot — the per-conversation switch, plumbe
       mode: 'triggered',
       sessionId: 'sess-t',
       userId: 'user-1',
-      agentId: 'search',
+      agentId: 'general-next',
       message: 'go',
       claimVersion: 'v-trig',
     })
@@ -1228,7 +1217,7 @@ describe('what the header learns from a turn', () => {
     })
     getOrBuildPatterns.mockImplementation(async () => {
       order.push('patterns')
-      return ['patterns:search']
+      return ['patterns:general-next']
     })
 
     await runTurnAndPersist(interactive())
@@ -1266,7 +1255,7 @@ describe('what the header learns from a turn', () => {
     })
     getOrBuildPatterns.mockImplementation(async (sessionId: string) => {
       overrides[sessionId] = clientOverrideFor('controller')
-      return ['patterns:search']
+      return ['patterns:general-next']
     })
 
     resolveConversationTier.mockResolvedValue('self_deployed')
@@ -1356,7 +1345,7 @@ describe('what the header learns from a turn', () => {
         mode: 'triggered' as const,
         sessionId: 'run-wake',
         userId: 'user-1',
-        agentId: 'search',
+        agentId: 'general-next',
         message: 'do the thing',
         data: { trigger: TRIGGER },
         claimVersion: 'v-trig',
@@ -1411,10 +1400,16 @@ describe('what the header learns from a turn', () => {
 
       await expect(runTurnAndPersist(interactive())).rejects.toThrow(WAKE_MSG)
 
-      expect(saveSession).toHaveBeenCalledWith('sess-1', 'user-1', 'search', expect.any(String), {
-        version: 'v-seed',
-        inferenceTier: 'self_deployed',
-      })
+      expect(saveSession).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        'general-next',
+        expect.any(String),
+        {
+          version: 'v-seed',
+          inferenceTier: 'self_deployed',
+        },
+      )
       expect(JSON.parse(savedBlob()).status).toBe('error')
       expect(replayMessages(savedBlob())).toMatchObject([
         { role: 'user', content: 'first question' },
@@ -1453,17 +1448,23 @@ describe('what the header learns from a turn', () => {
           mode: 'triggered' as const,
           sessionId: 'run-wake',
           userId: 'user-1',
-          agentId: 'search',
+          agentId: 'general-next',
           message: 'do it',
           data: { trigger: TRIGGER },
           claimVersion: 'v-claim',
         }),
       ).rejects.toThrow(WAKE_MSG)
 
-      expect(saveSession).toHaveBeenCalledWith('run-wake', 'user-1', 'search', expect.any(String), {
-        version: 'v-claim',
-        inferenceTier: 'self_deployed',
-      })
+      expect(saveSession).toHaveBeenCalledWith(
+        'run-wake',
+        'user-1',
+        'general-next',
+        expect.any(String),
+        {
+          version: 'v-claim',
+          inferenceTier: 'self_deployed',
+        },
+      )
       expect(JSON.parse(savedBlob()).status).toBe('error')
       expect(replayMessages(savedBlob())).toMatchObject([
         { role: 'user', content: 'do it' },
@@ -1580,17 +1581,23 @@ describe('one turn per conversation (#458)', () => {
       mode: 'triggered',
       sessionId: 'run-c',
       userId: 'user-1',
-      agentId: 'search',
+      agentId: 'general-next',
       message: 'go',
       claimVersion: 'v-trig',
     })
 
     expect(claimSession).not.toHaveBeenCalled()
-    expect(saveSession).toHaveBeenCalledWith('run-c', 'user-1', 'search', 'serialized:run-c', {
-      version: 'v-trig',
-      inferenceTier: 'anthropic',
-      memoryRunOrigin: 'triggered',
-    })
+    expect(saveSession).toHaveBeenCalledWith(
+      'run-c',
+      'user-1',
+      'general-next',
+      'serialized:run-c',
+      {
+        version: 'v-trig',
+        inferenceTier: 'anthropic',
+        memoryRunOrigin: 'triggered',
+      },
+    )
   })
 
   describe('the lease', () => {
@@ -1601,7 +1608,7 @@ describe('one turn per conversation (#458)', () => {
     function parkedTurn(sessionId: string) {
       let release!: () => void
       getOrBuildPatterns.mockImplementationOnce(
-        () => new Promise((resolve) => (release = () => resolve(['patterns:search']))),
+        () => new Promise((resolve) => (release = () => resolve(['patterns:general-next']))),
       )
       claimSession.mockResolvedValue(STORED)
       const turn = runTurnAndPersist(interactive({ sessionId }))
@@ -1943,7 +1950,7 @@ function resume(over: Record<string, unknown> = {}) {
 function claimedPaused(blob: string, status = 'paused'): NonNullable<Loaded> {
   return {
     serializedContext: blob,
-    agentId: 'search',
+    agentId: 'general-next',
     kind: 'conversation',
     status,
     version: 'v-claim',
@@ -1982,14 +1989,14 @@ describe('resume turns (#433 S7)', () => {
     expect(resumeHarness).toHaveBeenCalledTimes(1)
     const [blob, patterns, answers, opts] = resumeHarness.mock.calls[0]
     expect(blob).toBe(pausedBlob())
-    expect(patterns).toEqual(['patterns:search'])
+    expect(patterns).toEqual(['patterns:general-next'])
     expect(answers).toEqual({ 'req-uuid-1': { choice: 'approve' } })
     expect((opts as { principal: string }).principal).toBe('user-1')
     // Saved at the version the claim holds (F1), and the spent rows closed.
     expect(saveSession).toHaveBeenCalledWith(
       'sess-r',
       'user-1',
-      'search',
+      'general-next',
       `${pausedBlob()}+resumed`,
       {
         version: 'v-claim',
@@ -2083,10 +2090,16 @@ describe('resume turns (#433 S7)', () => {
     await expect(runTurnAndPersist(resume())).rejects.toThrow(wakeFailed)
 
     expect(saveSession).toHaveBeenCalledTimes(1)
-    expect(saveSession).toHaveBeenCalledWith('sess-r', 'user-1', 'search', expect.any(String), {
-      version: 'v-claim',
-      inferenceTier: 'self_deployed',
-    })
+    expect(saveSession).toHaveBeenCalledWith(
+      'sess-r',
+      'user-1',
+      'general-next',
+      expect.any(String),
+      {
+        version: 'v-claim',
+        inferenceTier: 'self_deployed',
+      },
+    )
     const saved = saveSession.mock.calls[0][3] as string
     const ctx = deserializeContext(saved)
     expect(ctx.status).toBe('paused')
@@ -2297,7 +2310,7 @@ describe('resume turns (#433 S7)', () => {
     // The closed blob is saved at the claimed version, and it carries the
     // expiry's closing response — the answer's rows close against it.
     const [id, user, agent, written, held] = saveSession.mock.calls[0]
-    expect([id, user, agent]).toEqual(['sess-r', 'user-1', 'search'])
+    expect([id, user, agent]).toEqual(['sess-r', 'user-1', 'general-next'])
     expect(held).toEqual({ version: 'v-claim', inferenceTier: 'self_deployed' })
     const closed = JSON.parse(written as string) as {
       status: string
@@ -2402,7 +2415,7 @@ describe('the trailing pass after a resume (A3/Δ2)', () => {
     expect(saveSession).toHaveBeenCalledWith(
       'sess-a3',
       'user-1',
-      'search',
+      'general-next',
       pausedSerialized,
       expect.objectContaining({ inferenceTier: 'anthropic' }),
     )
@@ -2621,7 +2634,7 @@ describe('memory host turns (G9)', () => {
     const row = {
       serializedContext: serializeContext(next),
       version: 'newer-claim',
-      agentId: 'search',
+      agentId: 'general-next',
       kind: 'conversation',
       status: 'running',
       memoryRunOrigin: 'interactive',
@@ -2690,7 +2703,7 @@ describe('memory host turns (G9)', () => {
       mode: 'triggered',
       sessionId: 'run-trigger',
       userId: 'user-1',
-      agentId: 'search',
+      agentId: 'general-next',
       message: 'synthetic',
       claimVersion: 'seed-version',
     })
@@ -2768,7 +2781,7 @@ describe('session ownership on the turn path', () => {
         mode: 'triggered' as const,
         sessionId: 'sess-o',
         userId,
-        agentId: 'search',
+        agentId: 'general-next',
         message: 'do the thing',
         data: { trigger: TRIGGER },
         claimVersion: 'v-trig',

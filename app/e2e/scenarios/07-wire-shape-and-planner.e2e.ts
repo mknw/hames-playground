@@ -23,10 +23,10 @@
  *
  * ## The second agent shape
  *
- * Everything else in this suite drives `search` (router → routes → simpleLoop →
- * compactExecution). The `Planner` role belongs to a different chain — planner →
- * simpleLoop → compactExecution — that no registered agent is still built as
- * (the `general` agent that was, was removed 2026-10-21; `general-next` runs its
+ * The conversation scenarios drive `general-next`, usually its info route.
+ * The `Planner` role belongs to a different chain — planner → simpleLoop →
+ * compactExecution — that no registered agent is still built as
+ * (`general-next` runs its
  * planner as a `think` route the fake decisions endpoint never picks). So the
  * chain is registered here, under a test-only id, from the same public patterns:
  * a turn through it is the witness that the planner follows the tier switch.
@@ -34,7 +34,7 @@
  * ## Known gap, stated rather than papered over
  *
  * `ActorController` and `Critic` are NOT exercised anywhere in this suite. The
- * only agent that uses `actorCritic` is the sandbox agent, which needs a
+ * office route of `general-next` uses `actorCritic`, which needs a
  * container runtime — so the pattern whose retry path #263 actually broke is
  * still only covered by the template audit and the evals. Closing that needs a
  * sandbox fake, which is a larger piece of work than this suite.
@@ -118,9 +118,8 @@ describe.runIf(IS_HERMETIC)('every request the self-hosted route receives is leg
     // …and it means much more since the 2026-08-26 widening, because the
     // ordering rule is now enforced over templates that had never met a vLLM
     // server. `prompt-role-order.test.ts` audits all thirteen offline; this is
-    // the running-turn half, and `Router` is named explicitly so the widening
-    // cannot silently stop being covered here.
-    expect(selfDeployedCalls.map((c) => c.fn)).toContain('Router')
+    // the running-turn half, and general-next's `LoopController` must reach it.
+    expect(selfDeployedCalls.map((c) => c.fn)).toContain('LoopController')
   })
 })
 

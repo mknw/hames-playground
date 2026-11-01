@@ -658,14 +658,14 @@ describe('the wiring bootApp does', () => {
     expect(process.env.DOC_CONVERT_URL).toBe(app.fakeConverter.url)
   })
 
-  it('installGraphTools puts the router behind the real callTool, and its return value takes it away', async () => {
+  it('keeps the fake Graph router behind the real callTool across a custom install', async () => {
     // Reached only now, after the boot: `mcp-client.server.ts` freezes the
     // gateway URL at first import (see lib/app.ts).
     const { callTool, listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
     const { runWithRequestContext } =
       await import('../../src/lib/harness-client/request-user.server')
     const names = async () => (await listTools()).map((t) => t.name)
-    expect(await names()).not.toContain('graph_me')
+    expect(await names()).toContain('graph_me')
 
     const uninstall = await app.installGraphTools()
     try {
@@ -696,7 +696,7 @@ describe('the wiring bootApp does', () => {
     } finally {
       uninstall()
     }
-    expect(await names()).not.toContain('graph_me')
+    expect(await names()).toContain('graph_me')
   })
 
   it('refuses a second installGraphTools while one is installed', async () => {

@@ -14,13 +14,13 @@ Everything between the browser and the model is the real thing. The suite calls
 `processMessageWithAgent` (the server action the chat form calls) and
 `POST /api/events` (the route the streaming UI posts to); those call
 `runTurnAndPersist`, which resolves the user's inference tier, opens the request
-/ settings / tier scopes, builds the agent's patterns, runs
-router → route → simpleLoop → compactExecution, and writes the whole event
+/ settings / tier scopes, builds `general-next`'s patterns, runs its
+decision loop and final synthesis, and writes the whole event
 stream to Postgres. Only the external services are substituted: the inference
 endpoint, the MCP gateway, the document converter, and (for the scenarios that
 install it) Microsoft Graph.
 
-Scenario 12 runs the registered `general-next` candidate against W4's runnable
+Scenario 12 runs the registered `general-next` agent against W4's runnable
 graph-count case: two systemone choices, the actual guarded info route, one
 synthesis, SSE and persistence. It also pins the visible error when the private
 decisions shim is unconfigured. This scenario uses the explicit Anthropic tier
@@ -95,13 +95,10 @@ and a fourth is installed by the scenarios that need it:
 - **`lib/fake-graph.ts`** — a Microsoft Graph fixture router at the `graphFetch`
   seam, answering from `fixtures/graph/` (a home tenancy on `contoso.com`, an
   outside one on `fabrikam.com`, OneDrive and SharePoint items with their
-  content, and inbox mail with attachments). It is not on by default: the app's
-  own Graph tools are composed in `src/lib/app-tools/index.server.ts`, which
-  only `src/middleware.ts` imports and this suite never loads, so no scenario
-  has Graph tools until it calls
-  `app.installGraphTools()`, which puts the REAL `@hames-ai/connectors` tools,
-  composed over the router, behind the real `callTool`, and returns the
-  function that takes them away.
+  content, and inbox mail with attachments). The suite installs the real
+  `@hames-ai/connectors` Graph tools over this fake at boot, so the sole agent's
+  office route has its declared namespace. `app.installGraphTools()` temporarily
+  replaces that transport when a scenario needs a custom Data Stash bridge.
 
 Both new fakes FAIL CLOSED (#433 S9): a request no fixture models is an error
 that names what was refused, never an empty answer, and it is recorded. A
@@ -142,11 +139,8 @@ than one per file.
 roles in `SELF_DEPLOYED_CLIENT_BY_ROLE`, which after the two 2026-08-26 owner decisions
 is every role — the injection screen included. So a live run in the self-hosted
 position bills Anthropic nothing, which is a smaller claim than it sounds: no
-scenario triggers a screen call anyway, because no agent in this repo enables
-the opt-in LLM screen. The bill moved rather than shrank: `router`, `planner`, the title and
-every describe call now land on the single-replica self-hosted box, which is
-more traffic through it than the pre-widening shape and the reason the burst
-discipline above matters more than it did. What _is_ avoidable is running each
+current app-path scenario exercises screening on external results. The private tier sends
+`describe` calls to the separate small summarizer. What _is_ avoidable is running each
 scenario a second time with the switch in the anthropic position, which would
 put all of that on the metered API for no live-route information. So the
 per-tier legs of scenarios 1, 2 and 7 collapse to the self-hosted tier here,
@@ -226,11 +220,11 @@ fake recorded it.
 | `02-multi-turn.e2e.ts`             | Turns 2 and 3 take the `continueSession` branch. All three user messages in one blob; turn 3's prompt still contains turn 1.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `03-concurrent-cold.e2e.ts`        | Two conversations overlapping on a cold endpoint. Both complete, neither picks up the other's message, and each keeps the tier its turn started under.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `04-cold-start-survival.e2e.ts`    | A 90-second withheld self-hosted BAML response does not kill the turn — through the server action and through the SSE route, which holds a stream open across the whole wait. The delay is aimed PAST the wake ping (`wake: false`), so what it exercises is `LargeQwen`'s own `request_timeout_ms` (180s) rather than the wake's bound; `E2E_COLD_START_MS` must therefore stay under 180 000.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `05-tier-switch.e2e.ts`            | Flipping a conversation's switch between turns moves both switched roles this chain uses (`LoopController` **and** `Synthesize`) and does not fork the conversation; and the cheap side-roles (`Router`, the title, the post-turn describe) follow the switch in BOTH directions, which is the only check that would catch a missing spread at one of the six describe call sites. `screen` is pinned by source scan instead — no agent enables the LLM screen, so no turn here makes one (`SA-M5` / `SD-4`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `05-tier-switch.e2e.ts`            | Flipping a conversation’s tier between turns moves the current `general-next` info route’s `LoopController` and final `Synthesize` call without forking the conversation. Its title and post-turn describe calls also follow the tier in both positions; the private tier sends those describe calls to the small model. This scenario does not exercise the screen role.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `06-failure-honesty.e2e.ts`        | A 400, a refused connection and a mid-stream drop each end the turn **visibly** — never a `done` row with a fabricated answer, never a row stuck at `running`, never a silent close. Plus the other mechanism: a turn that **throws** (a pattern build that fails) sends an SSE `error` frame and flips its row out of `running`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `07-wire-shape-and-planner.e2e.ts` | What a three-turn conversation actually puts on the wire is legal for vLLM (the #263 shape, checked at runtime rather than at template-render time), plus a second agent chain — a test-only planner → simpleLoop → compactExecution registered by the file itself (the `general` agent that was built this way was removed 2026-10-21) — and the planner FOLLOWING the tier in both switch positions (it joined `SELF_DEPLOYED_CLIENT_BY_ROLE` on 2026-08-26; this row said the opposite until the screen change swept it).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `08-cold-start-ux.e2e.ts`          | The cold-start notice (D-c) reaches the user **during** the wait rather than alongside the answer, carries a positive estimate that says where it came from, precedes anything the self-hosted model said, and is absent on the anthropic tier. Uses `frame.at`, which is why `readSse` stamps arrival times. Hermetic only — by the time it runs, a live box has been warm for several files.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `09-gateway-degrade.e2e.ts`        | A dead MCP **gateway** — the tool half, not the endpoint, so every LLM call still succeeds and nothing throws. The turn must admit the tools were unavailable instead of answering around them: an `irrecoverable` error in the transcript, a row that is not `done`, no fabricated answer, and the SSE client told. Driven on `search`, whose `tools.neo4j ?? []` is empty under an outage (#278 F1). A second case drove the `general` agent's `tools.all`; no registered agent takes the whole surface since it was removed (2026-10-21), so it went with it. The AMPUTATED shape, `tools.all` reduced to the app-side `graph_*` tools, is the one a length check missed, and it is pinned in layer 1 (`gateway-degrade.test.ts`). Its last case is the control — the same question answers normally once the gateway is listening again, which is also what caught the tool-description cache outliving the outage. Hermetic only (an injected fault).                                                                                                                               |
+| `09-gateway-degrade.e2e.ts`        | **Skipped wholesale pending [#899](https://github.com/mknw/hames-playground/issues/899).** The retained `general-next` case describes a gateway outage before a turn and a recovery control after the gateway returns, but neither assertion currently runs. Layer 1 pins the reduced tool-catalog shape (`gateway-degrade.test.ts`); the app-path refusal and recovery behavior remain unverified here. Hermetic only (injected fault).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `10-fixture-router.e2e.ts`         | The converter and Graph fakes, as fakes. They fail closed: an unknown path, an unknown id, an unmodelled query option, a non-Graph host, a write, a request header, a GET body, the wrong body encoding, a fault inside the fake, the link a `$top`-shortened list carries, unknown bytes, the wrong type, an unknown converter config field or a known one with another value, an extra form field, a query string or another route — each is refused by name and recorded. Through the REAL Graph tools, an unmodelled call comes back as a failed tool result, never as an empty day. The fixtures answer what the real code reads: mail from inside and outside the home tenancy with its attachments, OneDrive, external and SharePoint files with their bytes, a modelled 403, an oversized file refused before download, and the identity fields a provenance check reads under a widened `$select`. The converter is driven through the production client, the committed binaries are pinned to their generator, and a second `installGraphTools` is refused. Needs no Postgres. |
 
 ### What is NOT covered
@@ -247,20 +241,16 @@ to be complete. Add to it when you add a scenario that leaves something out.
   `triggered`; only `interactive` runs here. So the triggered runner's
   pre-seeded-row path (`POST /api/agents/:id`, a routine) is untraversed. A
   paused run's resume has no turn mode yet (#433 S7), so it is untraversed too.
-- **Injection-screen quality.** Scenario 12 runs `general-next`'s screen against
-  the fake's clean verdict and pins that the calls occur. It does not grade
-  classification. The fake router in the older scenarios
-  also deliberately picks `neo4j`, so the search agent's guarded `web` route is
-  never taken; a conversation scenario should not double as an injection-guard
-  scenario. The gap did not close when `screen` joined the tier on 2026-08-26 —
-  it just changed which claim is unobserved here, from "the screen stays on
-  Anthropic" to "the screen follows the switch". Both are pinned hermetically
-  instead: `clients-self-deployed.test.ts` now requires the map entry AND the override
-  spread on the screen's own call expression (balanced-paren extraction, not a
-  grep, after a decoy defeated the grep). Whether that client is any good AS a
-  screener is the eval suite's `screen-on-the-tier` scenario, which needs a live
-  endpoint. What the guard does when it fires is `withInjectionGuard`'s own
-  tests' job.
+- **Screen behavior and quality.** The tier-switch scenario 05 makes no screen call.
+  Scenario 12 exercises `general-next` on the internal Neo4j result and asserts
+  that its classifier leaves screening off for that result. The route does
+  declare a screen for eligible external results, but no app-path scenario
+  verifies its call or verdict. `clients-self-deployed.test.ts` pins the
+  screen client override; the live `screen-on-the-tier` eval grades quality.
+- **Gateway outage and recovery in an app turn.** Scenario 09 is skipped
+  wholesale pending #899. Layer 1 checks the reduced catalog; this layer
+  currently proves neither visible refusal on `general-next` nor recovery
+  after the gateway returns.
 - **Multi-call batches.** The fake never returns `additional_calls`, so
   `multiToolCalls: 'parallel'` — the default for both loop patterns — is never
   demonstrated end to end.
@@ -281,9 +271,8 @@ to be complete. Add to it when you add a scenario that leaves something out.
   from a tenant, and nothing here can tell when the real service drifts. That
   check belongs to a live smoke against a seeded tenant (#425), not to this
   layer.
-- **A gateway that dies MID-turn.** Scenario 9 takes it down before the turn, so
-  the fault lands at pattern-build time (`Tools()`), which is where the collapsed
-  tool surface is detectable. A gateway that dies after the patterns are built
+- **A gateway that dies MID-turn.** The skipped scenario 09 injects an outage
+  before the turn, at pattern-build time (`Tools()`). A gateway that dies after the patterns are built
   fails inside `callTool` instead, and that is the path the loop is _supposed_ to
   survive — the controller sees the tool error and carries on (scenario 6's
   control case). The seam between the two is deliberate and is documented on
@@ -298,14 +287,15 @@ consequences of running under vitest rather than a server:
   (`startRoutineScheduler`, `installUsageRecorder`) does not happen — which is
   why `recordTurn()`'s counters see nothing here.
 
-One non-gap worth writing down, because it looks like one: **a dead MCP gateway
-is not a failure path.** Measured — a turn with the gateway refusing connections
-completes `done`, because every gateway read degrades on purpose (`listTools`
-logs and returns the app-side tools; `getGraphSchema` warns and refuses the
-pattern cache). Scenario 6's throw path therefore uses a failing pattern build
-instead; see its header.
+**Historical observation, not current coverage:** an earlier dead-gateway turn
+completed `done` because gateway reads degraded. Scenario 09's current
+`general-next` assertions are skipped pending #899; scenario 06's throw path
+uses a failing pattern build instead.
 
 ## Results (2026-08-26, hermetic, against `main` @ 4ff54b3)
+
+This is a dated run record. Its counts and mutation results are not a claim
+about the current suite; scenario 09 is skipped pending #899.
 
 **43 tests across 8 files, all green.** 187 s wall clock, of which ~180 s is
 scenario 4 sitting through two ninety-second cold starts by design. (The first
@@ -319,25 +309,25 @@ Whatever is failing on the live self-hosted route is therefore not one of these
 shapes; it is something the fake does not reproduce (real model output, real
 latency, credentials, or the actorCritic path above).
 
-Checks verified **by mutation**, not by reading:
+Checks recorded **by mutation** in that historical run, with current gaps noted below:
 
-| Mutation                                                                                                      | What went red                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `clientOverrideFor()` returns `undefined` unconditionally                                                     | scenario 5's per-turn tier assertions                                                                                                                                                                                                                                                                                                      |
-| a late `system` block added to `Synthesize` + `baml-generate`                                                 | scenario 7's wire-shape check, and the general-agent turn                                                                                                                                                                                                                                                                                  |
-| `pnpm test:e2e` added to `ci.yml`                                                                             | `e2e-not-in-ci.test.ts`                                                                                                                                                                                                                                                                                                                    |
-| an `import '../../e2e/lib/mode'` added under `src/`                                                           | `e2e-not-in-ci.test.ts`                                                                                                                                                                                                                                                                                                                    |
-| `events.ts`: the `catch`'s `error` frame deleted, stream closed silently                                      | 06's throw path — `the stream closed without an error frame; frames were []`                                                                                                                                                                                                                                                               |
-| `turn.server.ts`: `runAndSave` no longer flips the row to `error` before rethrowing                           | 06's throw path — `the row was left spinning at running`                                                                                                                                                                                                                                                                                   |
-| `compactExecution.server.ts`: `clientOverrideFor('compactExecution')` removed                                 | 05 — `Synthesize on turn 2 (self_deployed)` (the controller assertion stayed green)                                                                                                                                                                                                                                                        |
-| `baml-adapters.server.ts`: `clientOverrideFor('describe')` removed from the single-item `ResultDescribe` call | 05 — `moves the cheap side-roles too` — `ResultDescribe did not follow the tier switch`. The per-role grep in `clients-self-deployed.test.ts` stayed green, which is why this scenario exists                                                                                                                                              |
-| the same removal on `ResultDescribeBatch` instead                                                             | **nothing here** — a one-result turn takes the single-item path, so this suite cannot see the batch. Caught by `baml-adapters.test.ts` and the per-file scan in `clients-self-deployed.test.ts`                                                                                                                                            |
-| a `MARKERS` entry removed (stands in for a function added to `baml_src/`)                                     | 00's completeness pin, naming the missing function                                                                                                                                                                                                                                                                                         |
-| `simpleLoop.server.ts`: the `toolSurfaceOutage` refusal removed                                               | 09, on all cases — `the turn said nothing about the gateway. status=done, response="E2E-FAKE-ANSWER: the graph reports 42 nodes."`, which is verbatim the silent shape #276 was filed for                                                                                                                                                  |
-| `gateway-health.server.ts`: the guard opens with `tools.length > 0` again (its pre-#278 shape)                | **nothing here any more** — in layer 2 `search`'s namespace list is empty under an outage, so the old guard still refuses it. When this row was written the `general` agent (since removed) was handed nine surviving app-side tools and its two cases went red; that amputated shape is now pinned in layer 1 (`gateway-degrade.test.ts`) |
-| `baml-adapters.server.ts`: a degraded catalog is cached again (the `gatewayDegradation()` early return)       | 09's control case — the gateway comes back, the controller is still shown no tools, picks one it was never offered, and the allowlist rejects it. Found BY adding the `general` agent's cases (since removed)                                                                                                                              |
-| a function name in 05's anthropic-position loop pointed at a call the fake never makes                        | `no <fn> call was made, so this asserts nothing` — the vacuity guard added 2026-08-26. Before it, that leg iterated an empty filter and passed; its self_deployed twin always had the guard                                                                                                                                                |
-| `clientOverrideFor('screen')` removed from the screen call site                                               | **nothing here** — no agent enables the LLM screen, so no turn makes one. Caught by `clients-self-deployed.test.ts`'s balanced-paren pin on the call's own argument list                                                                                                                                                                   |
+| Mutation                                                                                                      | What went red                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `clientOverrideFor()` returns `undefined` unconditionally                                                     | scenario 5's per-turn tier assertions                                                                                                                                                           |
+| a late `system` block added to `Synthesize` + `baml-generate`                                                 | scenario 7's wire-shape check, and the general-agent turn                                                                                                                                       |
+| `pnpm test:e2e` added to `ci.yml`                                                                             | `e2e-not-in-ci.test.ts`                                                                                                                                                                         |
+| an `import '../../e2e/lib/mode'` added under `src/`                                                           | `e2e-not-in-ci.test.ts`                                                                                                                                                                         |
+| `events.ts`: the `catch`'s `error` frame deleted, stream closed silently                                      | 06's throw path — `the stream closed without an error frame; frames were []`                                                                                                                    |
+| `turn.server.ts`: `runAndSave` no longer flips the row to `error` before rethrowing                           | 06's throw path — `the row was left spinning at running`                                                                                                                                        |
+| `compactExecution.server.ts`: `clientOverrideFor('compactExecution')` removed                                 | 05 — `Synthesize on turn 2 (self_deployed)` (the controller assertion stayed green)                                                                                                             |
+| `baml-adapters.server.ts`: `clientOverrideFor('describe')` removed from the single-item `ResultDescribe` call | 05 — `moves the cheap side-roles too` — `ResultDescribe did not follow the tier switch`. The per-role grep in `clients-self-deployed.test.ts` stayed green, which is why this scenario exists   |
+| the same removal on `ResultDescribeBatch` instead                                                             | **nothing here** — a one-result turn takes the single-item path, so this suite cannot see the batch. Caught by `baml-adapters.test.ts` and the per-file scan in `clients-self-deployed.test.ts` |
+| a `MARKERS` entry removed (stands in for a function added to `baml_src/`)                                     | 00's completeness pin, naming the missing function                                                                                                                                              |
+| `simpleLoop.server.ts`: the `toolSurfaceOutage` refusal removed                                               | **No runnable app-path assertion:** scenario 09 is skipped pending #899. The former mutation result is historical.                                                                              |
+| `gateway-health.server.ts`: the guard opens with `tools.length > 0` again                                     | **No runnable app-path assertion:** scenario 09 is skipped pending #899. Layer 1 (`gateway-degrade.test.ts`) pins the reduced catalog shape.                                                    |
+| `baml-adapters.server.ts`: a degraded catalog is cached again                                                 | **No runnable app-path assertion:** scenario 09’s recovery control is skipped pending #899. The former mutation result is historical.                                                           |
+| a function name in 05's anthropic-position loop pointed at a call the fake never makes                        | `no <fn> call was made, so this asserts nothing` — the vacuity guard added 2026-08-26. Before it, that leg iterated an empty filter and passed; its self_deployed twin always had the guard     |
+| `clientOverrideFor('screen')` removed from the screen call site                                               | **No screen call in scenario 05;** scenario 12 asserts zero screen calls for its internal graph result. The override spread is pinned by `clients-self-deployed.test.ts`.                       |
 
 Two of those are worth their own line.
 

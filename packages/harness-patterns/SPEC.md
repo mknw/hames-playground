@@ -1608,7 +1608,7 @@ Each entry exit emits a `reference_attached` event with `{ candidates, selected,
 Either path records an `expansions[]` entry on the `LoopTurn`; the compact ref entry then renders `(expanded in turn N)` so the controller doesn't redundantly re-expand.
 
 ```typescript
-// Search agent migration (excerpt from agents/search.server.ts)
+// Historical search-agent migration (the agent module was retired in #898)
 const routesPattern = routes<SessionData>({
   neo4j: withReferences(neo4jPattern, { scope: 'global', selector: baml.selector }),
   web_search: withReferences(webPattern, { scope: 'global', selector: baml.selector }),
@@ -4149,7 +4149,7 @@ import {
 } from '../harness-patterns'
 // Patterns are data-type invariant: composing heterogeneous patterns under
 // `harness()` requires pinning the SAME data type on every pattern (the real
-// call sites all pin `SessionData` — see agents/search.server.ts).
+// call sites all pin `SessionData`; the former search agent did so too).
 import type { SessionData } from './session.server'
 
 async function getSchema(): Promise<string> {

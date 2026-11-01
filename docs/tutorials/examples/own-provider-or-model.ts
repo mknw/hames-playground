@@ -22,9 +22,10 @@ import {
   defineInferenceClients,
   activateConsumerClients,
 } from "@hames-ai/harness-baml/consumer-clients.server";
+// prettier-ignore
 import { bamlPatterns, createLoopControllerAdapter } from "@hames-ai/harness-baml";
 import { simpleLoop } from "@hames-ai/harness-patterns/patterns/simpleLoop.server";
-import { searchAgent } from "@hames-ai/agents/agents";
+import { generalNextAgent } from "@hames-ai/agents/agents";
 import type { AgentDeps } from "@hames-ai/agents/types";
 
 const plug = defineInferenceClients({
@@ -43,7 +44,6 @@ const plug = defineInferenceClients({
   // The critic is deliberately absent: critique stays on the built-in chain.
   byRole: {
     controller: "Llama27B",
-    router: "Llama27B",
     describe: "Llama27B",
   },
 });
@@ -55,6 +55,7 @@ const deps: AgentDeps = {
   clientOverride: plug,
 };
 
-// `searchAgent.createPatterns(sessionId, deps)` now builds a chain whose
-// controller, router and describe calls go to Llama27B — same prompts, same
-// adapters — while its critic runs on the declared Anthropic chain.
+// After the host supplies the required sandbox and document backend,
+// `generalNextAgent.createPatterns(sessionId, deps)` builds a chain whose
+// controller and describe calls go to Llama27B while its critic keeps
+// the declared Anthropic chain. Decisions use a separate systemone client.

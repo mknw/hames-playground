@@ -29,20 +29,15 @@ Nine registered `graph` tools. All of them only ever **read** from Microsoft 365
 | `graph_files_shared`     | what was shared _with_ the user, by whom and through which channel (insights) | `Sites.Read.All`                    |
 | `graph_file_ingest`      | one own OneDrive/SharePoint file → the Data Stash                             | `Files.Read.All`                    |
 
-Enough for "what does my day look like?" — the agent's loop calls several tools
-in one turn and the compactExecution writes the briefing — plus "find last quarter's
+Enough for "what does my day look like?" — `general-next`'s office route calls
+the relevant tools and its final synthesis writes the briefing — plus "find last quarter's
 budget in Finance", which is [file discovery](#finding-a-file), and "pull that
 spreadsheet in and chart it", which is [the file bridge](#files--the-data-stash).
 
-**The agent composes eight of the nine.** The **Microsoft 365** agent
-(`lib/harness-client/agents/microsoft-365.server.ts`) takes an explicit
-allowlist, `MICROSOFT_365_TOOLS`, and `graph_file_ingest` is deliberately not in
-it: ingestion puts a file's bytes in the Data Stash, which is reachable only
-through a **retriever pattern**, and that agent has none. Exposing it would
-advertise a capability whose payoff the agent can't deliver — the model would
-ingest a file, get a document id, and be unable to read a word of it. Search and
-browse are the half of the file story that works without a retriever. An agent
-that _does_ compose a retriever should compose the ingest tool too.
+**Composition is explicit.** `general-next` filters the Graph namespace through
+`OFFICE_GRAPH_READ_TOOLS` in `packages/agents/agents/general-next.server.ts`.
+It adds `graph_file_ingest` when the host enables that capability. The tool
+copies file bytes into the Data Stash for the same agent's document route.
 
 **Scopes and writes.** Sign-in requests the seven already-consented scopes:
 `User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
@@ -129,12 +124,10 @@ seam for that.
 
 - A newly registered graph tool appears in `tools.graph` for **every** consumer
   with no registry change — discovery is automatic.
-- **Composition is not.** The `microsoft-365` agent filters `tools.graph` through
-  `MICROSOFT_365_TOOLS`, so a new tool reaches _that_ agent only when its name is
-  added to that list. This was previously automatic, and stopped being so once a
-  registered tool existed that the agent shouldn't have (see above). The filter
-  runs allowlist-first (`MICROSOFT_365_TOOLS.filter(available)`), so a name that
-  isn't registered drops out instead of being handed to the loop.
+- **Composition is not.** `general-next` filters `tools.graph` through
+  `OFFICE_GRAPH_READ_TOOLS` and conditionally adds `graph_file_ingest`. A new
+  tool reaches its office route only when its name is added there. The filter
+  runs allowlist-first, so an unavailable name drops out.
 - App tools stay available when the **gateway is down** — they run in-process.
 
 ---
@@ -509,9 +502,9 @@ registerAppTool({
 });
 ```
 
-3. To let the **Microsoft 365 agent** use it, add the name to
-   `MICROSOFT_365_TOOLS` in `agents/microsoft-365.server.ts`. Registration alone
-   makes it discoverable everywhere, but that agent composes an allowlist.
+3. To let `general-next` use it, add the name to `OFFICE_GRAPH_READ_TOOLS` in
+   `packages/agents/agents/general-next.server.ts`. Registration alone makes
+   it discoverable, but the office route composes an allowlist.
 
 No auth or dispatch wiring to touch. Guidelines that keep turns small and safe:
 

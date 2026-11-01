@@ -449,24 +449,6 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
       expect(await stored()).toEqual([])
       expect(await app.readRow(id)).toBeNull()
     })
-    it('an agent without memory does not wake either memory box', async () => {
-      const wake = await import('../../src/lib/inference/memory-wake.server')
-      wake.resetMemoryWake()
-      await app.goToSleep()
-      const id = newSessionId('memory-nonopted')
-      await app.runTurn(id, MESSAGE, 'search')
-      // Search uses tools: its detached summaries must finish before the next reset.
-      await settleSummaries(app, id)
-      expect(await stored()).toEqual([])
-      expect(app.fakeLlm.calls.filter((call) => call.fn === 'ExtractMemory')).toEqual([])
-      expect(
-        app.fakeLlm.calls.filter(
-          (call) =>
-            call.model === 'Qwen3-Embedding-0.6B' ||
-            (call.outcome === 'wake' && call.model === SMALL_MODEL),
-        ),
-      ).toEqual([])
-    })
   })
 })
 

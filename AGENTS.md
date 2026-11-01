@@ -217,6 +217,10 @@ view.fromPatterns(['neo4j-query']).serialize()        // → XML for LLM
 
 ### Adding a New Agent
 
+`general-next` is currently the sole registered and exported definition. The
+retired ids resolve through `app/src/lib/harness-client/agent-ids.ts`; extend that
+one seam when retiring another id so saved conversations and routines still run.
+
 1. Create `packages/agents/agents/<name>.server.ts` — export an `AgentDefinition` (`packages/agents/types.ts`) with `id`, `name`, `description`, `welcome`, `servers[]`, `createPatterns(sessionId, deps)`. NOT an `AgentConfig`, and no `icon`/`accent`: presentation stays app-side (#225), so the package definition carries none.
 2. Register in `app/src/lib/harness-client/registry.server.ts` — `registerAgent(overlay(<name>Agent, 'i-material-symbols-…', '<accent>'))`. `overlay()` is what turns the package's `AgentDefinition` into the app's `AgentConfig`: it adds the icon + accent and closes over the composition root's `agentDeps()`, so callers keep the one-argument `createPatterns(sessionId)` shape. The icon literal has to live in THAT file — `uno.config.ts`'s `content.filesystem` names `src/lib/harness-client/registry.server.ts` and nothing else, and that file carries the load-bearing `@unocss-include` marker.
 

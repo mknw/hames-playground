@@ -237,11 +237,7 @@ export async function agentUsesSyncWorkspace(agentId: string, sessionId: string)
  * `content.filesystem` glob covers this file, so UnoCSS extracts them. The
  * marker is load-bearing (see the uno.config comment).
  */
-import { searchAgent } from '@hames-ai/agents/agents/search.server'
 import { generalNextAgent } from '@hames-ai/agents/agents/general-next.server'
-import { sandboxAgent } from '@hames-ai/agents/agents/sandbox.server'
-import { retrieverAgent } from '@hames-ai/agents/agents/retriever-agent.server'
-import { microsoft365Agent } from '@hames-ai/agents/agents/microsoft-365.server'
 import { agentDeps } from './session.server'
 
 /** Wrap a package definition with this app's presentation + deps supply. */
@@ -254,9 +250,5 @@ function overlay(def: AgentDefinition, icon: string, accent: AgentAccent): Agent
   }
 }
 
-// Register all agents — one overlay site per agent, beside the palette.
-registerAgent(overlay(searchAgent, 'i-material-symbols-search', 'indigo'))
+// Register the default agent beside the palette.
 registerAgent(overlay(generalNextAgent, 'i-material-symbols-route', 'indigo'))
-registerAgent(overlay(sandboxAgent, 'i-material-symbols-castle-outline', 'orange'))
-registerAgent(overlay(retrieverAgent, 'i-material-symbols-document-search-outline', 'violet'))
-registerAgent(overlay(microsoft365Agent, 'i-material-symbols-window-sharp', 'blue'))

@@ -1,6 +1,6 @@
-# Asking the Microsoft 365 agent — what works, what doesn't
+# Asking general-next about Microsoft 365 — what works, what doesn't
 
-A user-facing guide to the **Microsoft 365** agent: the questions it can answer,
+A user-facing guide to `general-next`'s Microsoft 365 route: the questions it can answer,
 the ones it can't, and why. Written in example phrasings rather than tool names —
 you talk to it in plain language, and it picks the tools itself.
 

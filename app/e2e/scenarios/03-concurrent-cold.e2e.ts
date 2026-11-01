@@ -111,8 +111,10 @@ describe('two conversations in flight together', () => {
       // would have QUEUED, so "both turns were in flight" would have cost the
       // second one a second cold start on the real box while looking parallel
       // here.
-      const pings = app.fakeLlm.calls.filter((c) => c.outcome === 'wake')
-      expect(pings, 'each turn sent its own wake ping').toHaveLength(1)
+      const pings = app.fakeLlm.calls.filter(
+        (c) => c.outcome === 'wake' && c.model === LARGE_LLM_MODEL,
+      )
+      expect(pings, 'each turn sent its own large-model wake ping').toHaveLength(1)
       expect(pings[0].delayedMs).toBe(COLD_MS)
     }
   })

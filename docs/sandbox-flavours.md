@@ -1,11 +1,9 @@
 # Sandbox flavours & runtime selection — design note
 
-> **Since 2026-10-03** the app ships ONE sandbox agent, `sandbox`
-> ([`agents/sandbox.server.ts`](../packages/agents/agents/sandbox.server.ts)): this
-> recipe with three routes — `basic`, `data`, `office` — whose `basic` route is
-> keyed on the bare session id, so it is the container the interactive Shell opens.
-> It replaced `sandbox-session` and `flavoured-sandbox`. The `image-processing`
-> image below is still built and still a valid `rootfs`; no agent selects it.
+> **Current status (#898):** the standalone sandbox agent was retired.
+> `general-next` uses the `office` rootfs through its office route
+> ([source](../packages/agents/agents/general-next.server.ts)). The recipes
+> below record the earlier flavour design; they are not registered agents.
 >
 > **Status (at #78):** the `image-processing` + `data` flavours and a router demonstrator
 > ship in this PR; the hardening/ergonomics items are tracked in
@@ -63,8 +61,7 @@ write engine for `pd.ExcelWriter` / `pl.DataFrame.write_excel`.
 
 - `routes(name→pattern)` compose them. A route can be a flavoured, sandboxed
   controller — so flavour selection lives entirely in the harness. The app's
-  sandbox agent ([`agents/sandbox.server.ts`](../packages/agents/agents/sandbox.server.ts))
-  is this recipe; the sketch below keeps the general shape it was introduced with:
+  retired sandbox agent used this recipe; the sketch below records its shape:
 
 ```ts
 // N flavour containers, ONE session workspace: every route is id-addressable

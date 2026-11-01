@@ -26,8 +26,8 @@
  * the tier switch moves exactly the roles in `SELF_DEPLOYED_CLIENT_BY_ROLE`, which is
  * now EVERY role — the injection screen included. So a live run in the
  * self-hosted position bills Anthropic nothing at all. That is a smaller claim
- * than it sounds, because no scenario here triggers a screen call anyway (no
- * agent enables the opt-in LLM screen).
+ * than it sounds: the app still needs its tool and decision endpoints, and
+ * `general-next` can screen external results.
  *
  * WHERE THE TRAFFIC GOES changed again with the describe flip, and it went the
  * helpful way: `router`, `planner` and the controller land on the self-hosted
@@ -35,7 +35,8 @@
  * tool result, i.e. the majority by count — lands on `SMALL_LLM_BASE_URL`
  * instead. A live run therefore puts LESS through the single-replica deployment
  * than the pre-flip shape did, though the burst discipline above still holds:
- * the calls that remain are the slow ones.
+ * the calls that remain are the slow ones. `general-next` may also screen
+ * external results on the configured tier; those calls use the same fake here.
  *
  * What is still avoidable is running each scenario a second time with the
  * switch in the anthropic position, which would put every one of those roles

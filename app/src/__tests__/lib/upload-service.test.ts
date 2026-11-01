@@ -22,11 +22,11 @@ const jsonReq = (body: unknown) =>
 describe('parseUploadRequest — agentId', () => {
   it('JSON: parses agentId alongside the doc input', async () => {
     const out = await parseUploadRequest(
-      jsonReq({ sessionId: 's1', filename: 'a.md', content: 'hi', agentId: 'retriever' }),
+      jsonReq({ sessionId: 's1', filename: 'a.md', content: 'hi', agentId: 'general-next' }),
     )
     expect(out.sessionId).toBe('s1')
     expect(out.content).toBe('hi')
-    expect(out.agentId).toBe('retriever')
+    expect(out.agentId).toBe('general-next')
   })
 
   it('JSON: omits agentId when absent or blank', async () => {
@@ -42,12 +42,12 @@ describe('parseUploadRequest — agentId', () => {
   it('multipart: parses agentId + file', async () => {
     const form = new FormData()
     form.set('sessionId', 's1')
-    form.set('agentId', 'retriever')
+    form.set('agentId', 'general-next')
     form.set('file', new Blob(['# Doc\n\nbody'], { type: 'text/markdown' }), 'a.md')
     const out = await parseUploadRequest(
       new Request('http://x/api/stash/upload', { method: 'POST', body: form }),
     )
-    expect(out.agentId).toBe('retriever')
+    expect(out.agentId).toBe('general-next')
     expect(out.sessionId).toBe('s1')
     expect(out.content).toContain('body')
   })

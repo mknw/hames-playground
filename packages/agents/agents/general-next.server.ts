@@ -43,6 +43,7 @@ assertServerOnImport()
 export const OFFICE_GRAPH_READ_TOOLS = [
   'graph_me',
   'graph_calendar_today',
+  'graph_calendar_range',
   'graph_mail_recent',
   'graph_mail_attachments',
   'graph_files_search',
@@ -55,6 +56,12 @@ export const OFFICE_GRAPH_READ_TOOLS = [
 // format. ActorMultiCalls supplies the mode-gated write-then-run batch beside
 // these single calls; completion belongs to the critic, so no example uses Return.
 const OFFICE_FEW_SHOTS: FewShot[] = [
+  {
+    user: 'List my calendar events last month (October 2026).',
+    reasoning: 'Read the requested calendar date range with the supplied Graph tool.',
+    tool: 'graph_calendar_range',
+    args: JSON.stringify({ start: '2026-10-01', end: '2026-10-31' }),
+  },
   {
     user: 'Show my three most recent unread inbox messages.',
     reasoning: 'Read the inbox previews with the supplied Graph tool.',
@@ -160,7 +167,7 @@ async function createPatterns(
           (s) => s.tool.startsWith('sandbox_') || officeTools.includes(s.tool),
         ),
         contextPrefix:
-          'Work on Microsoft 365 mail and files with the supplied Graph tools. ' +
+          'Work on Microsoft 365 mail, calendar and files with the supplied Graph tools. ' +
           'The office sandbox has Python, python-docx, openpyxl, xlsxwriter and PyMuPDF. ' +
           'Inspect uploaded inputs in /work/in; save deliverables in /work/out so they are kept. ' +
           'A requested file exists only once it has been saved under /work/out (by a command or with sandbox_write): ' +
@@ -350,10 +357,10 @@ async function createPatterns(
           'office-data': {
             pattern: doc,
             description:
-              'Read this user’s Microsoft 365 mail, calendar and file metadata; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+              'Read mail, calendar date ranges and files; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
               (deps.graphFileIngest === true
-                ? 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).'
-                : 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared; file copying unavailable), sandbox (run code, save deliverables), profile (graph_me).'),
+                ? 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).'
+                : 'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared; file copying unavailable), sandbox (run code, save deliverables), profile (graph_me).'),
             capability:
               'Read Microsoft 365 mail and file metadata; ' +
               (deps.graphFileIngest === true

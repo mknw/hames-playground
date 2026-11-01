@@ -10762,6 +10762,12 @@
         "namespace": "graph",
         "exposure": "offered"
       },
+      "graph_calendar_range": {
+        "namespace": "graph",
+        "exposure": "offered",
+        "positiveReason": "The date-range selection and wire contract are pinned by synthetic unit tests for #905; this catalogue's live model scenario is deferred.",
+        "negativeReason": "Invalid ranges, principal isolation, read-only transport and guarded routing are pinned by synthetic unit tests for #905."
+      },
       "graph_mail_recent": {
         "namespace": "graph",
         "exposure": "offered"

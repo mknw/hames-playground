@@ -15,7 +15,7 @@
 
 Connections from an agent built with
 [`@hames-ai/harness-patterns`](https://github.com/mknw/hames-playground/tree/main/packages/harness-patterns#readme)
-to outside systems: nine Microsoft Graph tools that let an agent read the
+to outside systems: ten Microsoft Graph tools that let an agent read the
 signed-in user's Microsoft 365 mail, calendar, files and profile; a client for
 the Neo4j graph database, with read queries and graph-editing operations; and a
 lookup table that sorts an MCP gateway's tool names into _namespaces_ — named
@@ -209,11 +209,18 @@ Graph (the Microsoft 365 API) permissions that issue the user's token.
 A _transport_ is where an agent's tools come from: an MCP server over HTTP, or an
 object you register in your own process with `registerTransport`; the last call below does the second.
 
-`registerGraphConnectorTools` adds nine tools an agent can call as the
-signed-in user: today's calendar, recent mail and attachments, the user's
+`registerGraphConnectorTools` adds ten tools an agent can call as the
+signed-in user: today's calendar, a calendar date range, recent mail and attachments, the user's
 profile, and searching, listing and importing OneDrive/SharePoint files. They
 live in a small in-process tool registry, which you then make visible to every
 pattern:
+
+`graph_calendar_range` takes inclusive `start` and `end` dates in `YYYY-MM-DD`
+form, up to 92 calendar days. It reads the signed-in user's calendar occurrences
+through `/me/calendarView`, using `GRAPH_TIMEZONE` when set or the server timezone.
+The result echoes that timezone and the separate local half-open query window,
+and includes at most 200 events, `count`, `truncated`, and a narrow-range hint
+when more events remain.
 
 ```typescript
 import { createAppToolRegistry } from '@hames-ai/connectors/app-tools/registry'
@@ -243,7 +250,7 @@ registerGraphConnectorTools({
   graphFetch,
   // 3 and 4 are used only by the file-import tool (`graph_file_ingest`), which
   // copies a file into your document store. With these stubs that one tool fails
-  // with a clear error, and the other eight work normally.
+  // with a clear error, and the other nine work normally.
   content: {
     conversionEnabled: () => false,
     isConvertible: () => false,
@@ -322,7 +329,7 @@ tools is `microsoft-365` in
 | `./document`                         | `ooxmlDisarm`: rebuilds an untrusted Office file (Word, Excel, PowerPoint) from an allowlist, so only what a person would see reaches the text extractor                |
 | `./app-tools/registry`               | `createAppToolRegistry({ resolveContext })` — a registry for tools that run inside your own process, beside the MCP gateway's                                           |
 | `./mcp-catalog`                      | `mcpNamespace`: a tool-name → namespace lookup for the MCP servers this repository's gateway runs (pure data)                                                           |
-| `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the nine Microsoft Graph tools                                                                                                    |
+| `./graph/graph-tools.server`         | `registerGraphConnectorTools(deps)` — the ten Microsoft Graph tools                                                                                                     |
 | `./graph/graph-auth`                 | `GraphAuthRequiredError`, owned by the package so `instanceof` works on both sides of it                                                                                |
 
 ## How this package is tested (contributors)

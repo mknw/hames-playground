@@ -83,9 +83,9 @@ describe('registerGraphConnectorTools refuses a non-function supplier at factory
     expect(() => registerGraphConnectorTools(rest as never)).toThrow(/"stash"/)
   })
 
-  it('a well-formed bag registers all nine tools', () => {
+  it('a well-formed bag registers all ten tools', () => {
     expect(() => registerGraphConnectorTools(goodDeps)).not.toThrow()
-    expect(registerAppTool).toHaveBeenCalledTimes(9)
+    expect(registerAppTool).toHaveBeenCalledTimes(10)
   })
 })
 

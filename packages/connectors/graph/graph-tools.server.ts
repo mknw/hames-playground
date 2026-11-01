@@ -237,6 +237,87 @@ export function localDayBounds(now: Date, dayOffset = 0): { start: string; end: 
   return { start: `${day}T00:00:00`, end: `${day}T23:59:59` }
 }
 
+/** Calendar dates, not instants: UTC arithmetic keeps local midnight stable over DST. */
+function calendarDate(value: unknown): Date | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const date = new Date(`${value}T00:00:00Z`)
+  return Number.isNaN(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== value ||
+    date.getUTCFullYear() < 1
+    ? null
+    : date
+}
+
+function rangeBounds(args: Record<string, unknown>): { start: string; end: string } {
+  const start = calendarDate(args.start)
+  const end = calendarDate(args.end)
+  if (!start || !end)
+    throw new Error('start and end are required valid calendar dates (YYYY-MM-DD).')
+  const days = (end.getTime() - start.getTime()) / 86_400_000 + 1
+  if (days < 1) throw new Error('end must be on or after start.')
+  if (days > 92)
+    throw new Error('Calendar range must be at most 92 inclusive days; narrow the range.')
+  end.setUTCDate(end.getUTCDate() + 1)
+  if (end.getUTCFullYear() > 9999) throw new Error('end must be before 9999-12-31.')
+  return { start: `${args.start}T00:00:00`, end: `${end.toISOString().slice(0, 10)}T00:00:00` }
+}
+
+/** Graph reads the offset on each query bound; Prefer only formats its response. */
+function graphLocalMidnight(local: string, timezone: string): string {
+  const [day] = local.split('T')
+  const utcMidnight = Date.parse(`${day}T00:00:00Z`)
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    timeZoneName: 'shortOffset',
+  })
+  const offsetAt = (instant: number): number => {
+    const name = formatter
+      .formatToParts(new Date(instant))
+      .find((part) => part.type === 'timeZoneName')?.value
+    const match = /^GMT(?:([+-])(\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?$/.exec(name ?? '')
+    if (!match) throw new Error(`Cannot resolve calendar timezone offset for ${timezone}.`)
+    return match[1]
+      ? (match[1] === '-' ? -1 : 1) *
+          (Number(match[2]) * 3600 + Number(match[3] ?? 0) * 60 + Number(match[4] ?? 0))
+      : 0
+  }
+  // A clock change can skip midnight or an entire date. Try the offsets
+  // surrounding this date, then keep the earliest instant on or after it.
+  const offsets = new Set([
+    offsetAt(utcMidnight - 86_400_000),
+    offsetAt(utcMidnight),
+    offsetAt(utcMidnight + 86_400_000),
+  ])
+  const first = [...offsets]
+    .map((offset) => utcMidnight - offset * 1000)
+    .filter((instant) => {
+      const localTime = new Date(instant + offsetAt(instant) * 1000).toISOString()
+      return localTime.slice(0, 10) >= day
+    })
+    .sort((a, b) => a - b)[0]
+  if (first === undefined)
+    throw new Error(`Cannot resolve calendar boundary for ${day} in ${timezone}.`)
+  const offset = offsetAt(first)
+  // ISO query bounds have minute-precision offsets. UTC preserves historical
+  // seconds-bearing offsets without changing the instant sent to Graph.
+  if (offset % 60 !== 0) return new Date(first).toISOString()
+  const sign = offset < 0 ? '-' : '+'
+  const absoluteMinutes = Math.abs(offset) / 60
+  const localTime = new Date(first + offset * 1000).toISOString().slice(0, 19)
+  return `${localTime}${sign}${String(Math.floor(absoluteMinutes / 60)).padStart(2, '0')}:${String(absoluteMinutes % 60).padStart(2, '0')}`
+}
+
+function calendarNextPath(raw: unknown): string | null {
+  if (raw == null) return null
+  if (typeof raw !== 'string')
+    throw new Error('Microsoft Graph returned an invalid calendar continuation.')
+  const url = new URL(raw)
+  if (url.origin !== 'https://graph.microsoft.com' || url.pathname !== '/v1.0/me/calendarView') {
+    throw new Error('Microsoft Graph returned an invalid calendar continuation.')
+  }
+  return `${url.pathname.slice('/v1.0'.length)}${url.search}`
+}
+
 export interface CalendarEvent {
   subject: string | null
   start: string | null
@@ -1516,6 +1597,87 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         recipientAddress(e.organizer),
       ])
       return stamp({ timeZone: tz, day: start.slice(0, 10), events }, resultProvenance(events))
+    },
+  })
+
+  registerAppTool({
+    name: 'graph_calendar_range',
+    namespace: 'graph',
+    description:
+      "List the signed-in user's own calendar occurrences in an inclusive start/end date range (YYYY-MM-DD, at most 92 days). " +
+      'Events overlapping either boundary are included by calendarView. Dates mean local midnight in ' +
+      `${graphTimeZone()} (GRAPH_TIMEZONE when set, otherwise the server timezone); ` +
+      'the response echoes the effective timezone and exclusive end. At most 200 events; truncated results ask for a narrower range.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        start: {
+          type: 'string',
+          pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+          description: 'Inclusive local calendar date YYYY-MM-DD.',
+        },
+        end: {
+          type: 'string',
+          pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+          description:
+            'Inclusive local calendar date YYYY-MM-DD; the first valid instant on or after the next local date is exclusive. Events overlapping either boundary are included.',
+        },
+      },
+      required: ['start', 'end'],
+      additionalProperties: false,
+    },
+    execute: async (args, { userId }) => {
+      const { start, end } = rangeBounds(args)
+      const timezone = graphTimeZone()
+      const startWithOffset = graphLocalMidnight(start, timezone)
+      const endWithOffset = graphLocalMidnight(end, timezone)
+      const events: CalendarEvent[] = []
+      let path: string | null =
+        Date.parse(startWithOffset) === Date.parse(endWithOffset)
+          ? null
+          : `/me/calendarView?startDateTime=${encodeURIComponent(startWithOffset)}&endDateTime=${encodeURIComponent(endWithOffset)}` +
+            '&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl' +
+            '&$orderby=start/dateTime&$top=50'
+      let truncated = false
+      for (let page = 0; page < 4 && path; page++) {
+        const raw: unknown = await graphFetch(userId, path, {
+          method: 'GET',
+          scopes: ['Calendars.ReadWrite'],
+          headers: { Prefer: `outlook.timezone="${timezone}"` },
+        })
+        const shaped = stampAll(shapeEvents(raw), rawItems(raw), (e) => [
+          recipientAddress(e.organizer),
+        ])
+        const remaining = 200 - events.length
+        events.push(...shaped.slice(0, remaining))
+        path = calendarNextPath((raw as Record<string, unknown> | null)?.['@odata.nextLink'])
+        if (events.length === 200 || page === 3 || shaped.length > remaining) {
+          truncated = Boolean(path || shaped.length > remaining)
+          break
+        }
+      }
+      return stamp(
+        {
+          start: args.start,
+          end: args.end,
+          timezone,
+          requestedDates: {
+            format: 'YYYY-MM-DD',
+            startInclusive: args.start,
+            endInclusive: args.end,
+          },
+          window: {
+            startInclusive: startWithOffset,
+            endExclusive: endWithOffset,
+            overlap: 'Events overlapping either boundary are included.',
+          },
+          events,
+          count: events.length,
+          truncated,
+          ...(truncated ? { hint: 'Narrow the date range to see all events.' } : {}),
+        },
+        resultProvenance(events),
+      )
     },
   })
 

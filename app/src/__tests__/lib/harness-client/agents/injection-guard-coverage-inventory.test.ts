@@ -35,7 +35,7 @@ const toolSets = {
   web: ['search', 'fetch', 'fetch_content'],
   context7: ['resolve-library-id', 'get-library-docs'],
   filesystem: ['read_text_file', 'write_file'],
-  graph: ['graph_me', 'graph_mail_recent'],
+  graph: ['graph_me', 'graph_mail_recent', 'graph_calendar_range'],
   all: [] as string[],
 }
 toolSets.all = [
@@ -204,6 +204,10 @@ describe('roll-up across every agent', () => {
   it('the only exported agent has guard coverage', async () => {
     const rows = inventory(await patternsOf('general-next.server.ts', 'generalNextAgent'))
     expect(rows.some((row) => row.includes('guarded:'))).toBe(true)
+    expect(toolSets.graph).toContain('graph_calendar_range')
+    expect(rows.some((row) => row.startsWith('doc [actorCritic]') && row.includes('graph'))).toBe(
+      true,
+    )
   })
 
   it('only general-next enables the optional LLM screen', async () => {

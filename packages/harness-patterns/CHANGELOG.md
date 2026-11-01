@@ -1,5 +1,17 @@
 # @hames-ai/harness-patterns
 
+## 0.7.0
+
+### Minor Changes
+
+- 439ea4f: Preserve an unavailable MCP gateway signal across decision-loop routes so a turn that needed gateway data reports the outage instead of synthesizing an unsupported answer. `ErrorEventData.kind` gains `gateway_unavailable`.
+- b8d2090: `decisionLoop` accepts an optional question for choosing the next route, while retaining its existing default. `general-next` uses that question and measured route descriptions to guide tool selection, including Microsoft 365 metadata, document search, and office sandbox work (#880).
+- fff6e16: Add one resumable checklist for held outgoing tool batches with per-call decisions and durable send claims.
+
+### Patch Changes
+
+- 91d3487: Record approved singular sends before transport and identify owner-refused calls in resumed turns.
+
 ## 0.6.0
 
 ### Minor Changes

@@ -1,5 +1,15 @@
 # @hames-ai/sandbox
 
+## 0.7.0
+
+### Patch Changes
+
+- Updated dependencies [439ea4f]
+- Updated dependencies [b8d2090]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

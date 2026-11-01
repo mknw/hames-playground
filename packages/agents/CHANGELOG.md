@@ -1,5 +1,24 @@
 # @hames-ai/agents
 
+## 0.7.0
+
+### Minor Changes
+
+- 4bad485: Add a bounded Microsoft Graph calendar date-range reader with local-time boundaries, and make it available in general-next's office route (#905).
+- 65f0c93: Expose Exa's hosted `web_search_exa` and `web_fetch_exa` tools through the existing `web` namespace (#874). Search and retrieval routes apply the shared web egress policy and untrusted-result screening, while the connector catalog names both tools for namespace routing.
+- b8d2090: `decisionLoop` accepts an optional question for choosing the next route, while retaining its existing default. `general-next` uses that question and measured route descriptions to guide tool selection, including Microsoft 365 metadata, document search, and office sandbox work (#880).
+- a3c0406: Retire the search, retriever, sandbox and microsoft-365 agent exports. `generalNextAgent` remains the sole agent definition, and its office route owns the Graph read-tool allowlist.
+
+### Patch Changes
+
+- d19e0f2: The general-next agent now uses `gated` as the self-deployed injection screen default. The gate's answer controls whether eligible content reaches the model screen; an explicit `shadow` mode still records the answer and runs the screen. The Anthropic default remains `always`.
+- Updated dependencies [439ea4f]
+- Updated dependencies [b8d2090]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+  - @hames-ai/harness-patterns@0.7.0
+  - @hames-ai/harness-baml@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes

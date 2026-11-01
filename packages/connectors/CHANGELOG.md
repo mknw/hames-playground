@@ -1,5 +1,20 @@
 # @hames-ai/connectors
 
+## 0.7.0
+
+### Minor Changes
+
+- 4bad485: Add a bounded Microsoft Graph calendar date-range reader with local-time boundaries, and make it available in general-next's office route (#905).
+- 65f0c93: Expose Exa's hosted `web_search_exa` and `web_fetch_exa` tools through the existing `web` namespace (#874). Search and retrieval routes apply the shared web egress policy and untrusted-result screening, while the connector catalog names both tools for namespace routing.
+
+### Patch Changes
+
+- Updated dependencies [439ea4f]
+- Updated dependencies [b8d2090]
+- Updated dependencies [fff6e16]
+- Updated dependencies [91d3487]
+  - @hames-ai/harness-patterns@0.7.0
+
 ## 0.6.0
 
 ### Patch Changes

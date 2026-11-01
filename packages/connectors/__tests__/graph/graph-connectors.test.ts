@@ -180,6 +180,64 @@ describe('graph_calendar_range', () => {
     },
   )
 
+  it('uses the first later local date when the exclusive date was skipped', async () => {
+    vi.stubEnv('GRAPH_TIMEZONE', 'Pacific/Apia')
+    const res = await runAppTool('graph_calendar_range', {
+      start: '2011-12-29',
+      end: '2011-12-29',
+    })
+    expect(res.success).toBe(true)
+    expect(graphFetch).toHaveBeenCalledTimes(1)
+    const query = new URL(lastCall()[1], 'https://graph.microsoft.com').searchParams
+    expect(query.get('startDateTime')).toBe('2011-12-29T00:00:00-10:00')
+    expect(query.get('endDateTime')).toBe('2011-12-31T00:00:00+14:00')
+    expect(new Date(query.get('endDateTime')!).toISOString()).toBe('2011-12-30T10:00:00.000Z')
+    expect(res.data).toMatchObject({
+      requestedDates: { startInclusive: '2011-12-29', endInclusive: '2011-12-29' },
+      window: { endExclusive: '2011-12-31T00:00:00+14:00' },
+    })
+  })
+
+  it('returns an empty window without calling Graph for a skipped requested date', async () => {
+    vi.stubEnv('GRAPH_TIMEZONE', 'Pacific/Apia')
+    const res = await runAppTool('graph_calendar_range', {
+      start: '2011-12-30',
+      end: '2011-12-30',
+    })
+    expect(res.success).toBe(true)
+    expect(graphFetch).not.toHaveBeenCalled()
+    expect(res.data).toMatchObject({
+      requestedDates: { startInclusive: '2011-12-30', endInclusive: '2011-12-30' },
+      window: {
+        startInclusive: '2011-12-31T00:00:00+14:00',
+        endExclusive: '2011-12-31T00:00:00+14:00',
+      },
+      events: [],
+      count: 0,
+      truncated: false,
+    })
+  })
+
+  it('keeps an exact historical seconds offset as a Graph-compatible UTC bound', async () => {
+    vi.stubEnv('GRAPH_TIMEZONE', 'Africa/Monrovia')
+    const res = await runAppTool('graph_calendar_range', {
+      start: '1972-01-07',
+      end: '1972-01-07',
+    })
+    expect(res.success).toBe(true)
+    const query = new URL(lastCall()[1], 'https://graph.microsoft.com').searchParams
+    expect(query.get('startDateTime')).toBe('1972-01-07T00:44:30+00:00')
+    expect(new Date(query.get('startDateTime')!).toISOString()).toBe('1972-01-07T00:44:30.000Z')
+    graphFetch.mockClear()
+    const prior = await runAppTool('graph_calendar_range', {
+      start: '1972-01-06',
+      end: '1972-01-06',
+    })
+    expect(prior.success).toBe(true)
+    const priorQuery = new URL(lastCall()[1], 'https://graph.microsoft.com').searchParams
+    expect(priorQuery.get('startDateTime')).toBe('1972-01-06T00:44:30.000Z')
+  })
+
   it('accepts exactly 92 inclusive calendar days', async () => {
     expect(
       (await runAppTool('graph_calendar_range', { start: '2026-09-01', end: '2026-12-01' }))

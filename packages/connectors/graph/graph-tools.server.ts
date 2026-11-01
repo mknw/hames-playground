@@ -274,32 +274,37 @@ function graphLocalMidnight(local: string, timezone: string): string {
     const name = formatter
       .formatToParts(new Date(instant))
       .find((part) => part.type === 'timeZoneName')?.value
-    const match = /^GMT(?:([+-])(\d{1,2})(?::(\d{2}))?)?$/.exec(name ?? '')
+    const match = /^GMT(?:([+-])(\d{1,2})(?::(\d{2})(?::(\d{2}))?)?)?$/.exec(name ?? '')
     if (!match) throw new Error(`Cannot resolve calendar timezone offset for ${timezone}.`)
     return match[1]
-      ? (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3] ?? 0))
+      ? (match[1] === '-' ? -1 : 1) *
+          (Number(match[2]) * 3600 + Number(match[3] ?? 0) * 60 + Number(match[4] ?? 0))
       : 0
   }
-  // An offset change at midnight can make 00:00 nonexistent. Try the offsets
-  // surrounding this date, then keep the earliest instant actually on it.
+  // A clock change can skip midnight or an entire date. Try the offsets
+  // surrounding this date, then keep the earliest instant on or after it.
   const offsets = new Set([
     offsetAt(utcMidnight - 86_400_000),
     offsetAt(utcMidnight),
     offsetAt(utcMidnight + 86_400_000),
   ])
   const first = [...offsets]
-    .map((offset) => utcMidnight - offset * 60_000)
+    .map((offset) => utcMidnight - offset * 1000)
     .filter((instant) => {
-      const localTime = new Date(instant + offsetAt(instant) * 60_000).toISOString()
-      return localTime.slice(0, 10) === day
+      const localTime = new Date(instant + offsetAt(instant) * 1000).toISOString()
+      return localTime.slice(0, 10) >= day
     })
     .sort((a, b) => a - b)[0]
-  if (first === undefined) throw new Error(`Calendar date ${day} does not exist in ${timezone}.`)
+  if (first === undefined)
+    throw new Error(`Cannot resolve calendar boundary for ${day} in ${timezone}.`)
   const offset = offsetAt(first)
+  // ISO query bounds have minute-precision offsets. UTC preserves historical
+  // seconds-bearing offsets without changing the instant sent to Graph.
+  if (offset % 60 !== 0) return new Date(first).toISOString()
   const sign = offset < 0 ? '-' : '+'
-  const absolute = Math.abs(offset)
-  const localTime = new Date(first + offset * 60_000).toISOString().slice(0, 19)
-  return `${localTime}${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`
+  const absoluteMinutes = Math.abs(offset) / 60
+  const localTime = new Date(first + offset * 1000).toISOString().slice(0, 19)
+  return `${localTime}${sign}${String(Math.floor(absoluteMinutes / 60)).padStart(2, '0')}:${String(absoluteMinutes % 60).padStart(2, '0')}`
 }
 
 function calendarNextPath(raw: unknown): string | null {
@@ -1615,7 +1620,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           type: 'string',
           pattern: '^\\d{4}-\\d{2}-\\d{2}$',
           description:
-            'Inclusive local calendar date YYYY-MM-DD; internally end + 1 day at 00:00 is exclusive. Events overlapping either boundary are included.',
+            'Inclusive local calendar date YYYY-MM-DD; the first valid instant on or after the next local date is exclusive. Events overlapping either boundary are included.',
         },
       },
       required: ['start', 'end'],
@@ -1628,9 +1633,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       const endWithOffset = graphLocalMidnight(end, timezone)
       const events: CalendarEvent[] = []
       let path: string | null =
-        `/me/calendarView?startDateTime=${encodeURIComponent(startWithOffset)}&endDateTime=${encodeURIComponent(endWithOffset)}` +
-        '&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl' +
-        '&$orderby=start/dateTime&$top=50'
+        Date.parse(startWithOffset) === Date.parse(endWithOffset)
+          ? null
+          : `/me/calendarView?startDateTime=${encodeURIComponent(startWithOffset)}&endDateTime=${encodeURIComponent(endWithOffset)}` +
+            '&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl' +
+            '&$orderby=start/dateTime&$top=50'
       let truncated = false
       for (let page = 0; page < 4 && path; page++) {
         const raw: unknown = await graphFetch(userId, path, {

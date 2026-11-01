@@ -529,10 +529,12 @@ into the day's occurrences.
 
 `graph_calendar_range` accepts required `start` and `end` calendar dates in
 `YYYY-MM-DD` form. Both requested dates are inclusive, with a limit of 92 days.
-It queries `/me/calendarView` from the start of the first date through the start
-of the next date after `end` (exclusive), using the effective `GRAPH_TIMEZONE` or
-server timezone and an explicit offset on each bound. If local midnight is
-skipped by a clock change, that bound is the first valid instant on the date.
+It queries `/me/calendarView` from the first valid instant on or after `start`
+through the first valid instant on or after the date following `end` (exclusive),
+using the effective `GRAPH_TIMEZONE` or server timezone and an explicit offset
+or UTC on each bound. A clock change can skip midnight or an entire local date.
+A range covering only a skipped date has an empty window; the connector returns
+zero events without querying Graph when both bounds meet.
 Occurrences overlapping either boundary are included. The response echoes the
 requested dates and their format/inclusivity, effective timezone, and separate
 half-open query window. It returns at most 200 events over four pages of 50,

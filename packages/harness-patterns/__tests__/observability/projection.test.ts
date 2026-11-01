@@ -292,6 +292,16 @@ describe('getEventPreview', () => {
     ).toBe('egress · fetch: refused (unchecked)')
   })
 
+  // REV5 pin 3. MUTATION: drop `egress_blocked` from `guardOf` or preview its
+  // raw payload: the Guardrails row disappears or reveals the sentinel.
+  it('projects a failed egress check into Guardrails with only fixed metadata', () => {
+    const data = { tool: 'web_search', route: 'info', rule: 'check-failed' }
+    expect(isGuardEvent('egress_blocked', data)).toBe(true)
+    expect(getEventPreview('egress_blocked', { ...data, args: 'PRIVATE-SENTINEL' })).toBe(
+      'egress · web_search: blocked (check-failed)',
+    )
+  })
+
   // Mutation: preview the K5 warning by its sentence alone → the row never says
   // why the privacy filter was unavailable.
   it("previews the privacy filter's warning by what it withheld and why", () => {
@@ -368,6 +378,7 @@ describe('isGuardEvent', () => {
       ['content_sanitized', { tool: 'fetch', findings: [] }],
       ['egress_audit', { tool: 'fetch', spans: [] }],
       ['egress_refused', { tool: 'fetch', cause: 'decide', closes: 'none' }],
+      ['egress_blocked', { tool: 'fetch', route: null, rule: 'check-failed' }],
       ['decision_made', { key: GUARD_SCREEN.key, label: 'true' }],
       ['decision_made', { key: GUARD_EGRESS.key, label: 'personal' }],
       ['model_call', { role: 'screen', source: 'web/fetch' }],

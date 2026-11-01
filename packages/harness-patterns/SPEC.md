@@ -1557,6 +1557,17 @@ routes and the turn-wide closure are derived from the turn's recorded
 checks run one at a time in arrival (batch) order, so a tripwire is seen by the
 next call of the same batch; calls that pass still run concurrently.
 
+Every deterministic refusal records exactly one `egress_blocked` event with
+`tool`, `route`, and a fixed `rule`: step-1 integrity, an ungiven fetch address,
+the current roster veto, a closed route or turn, a damaged roster, or a throwing
+check. This event carries no arguments, matched spans, exception text, or
+server-log copy. It is always committed and appears in the Guardrails timeline;
+model-facing event views render only `an outgoing request was blocked`.
+`egressClosures` counts only `egress_refused`, so deterministic blocks never
+spend the route's retry allowance. A throwing check still gives the controller
+`EGRESS_CHECK_FAILED`; recording its `check-failed` block does not change that
+feedback. The D5 Decide-unavailable directory matrix remains in force.
+
 A roster source that throws (a neutralised identity field) or a local result
 whose observation throws DAMAGES the gate: every later outgoing call is refused
 with the fixed damaged-roster text and the result is delivered, since the gate

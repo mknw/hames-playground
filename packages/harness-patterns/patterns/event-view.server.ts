@@ -660,6 +660,9 @@ function formatEventData(event: ContextEvent): string {
       // METADATA ONLY, and none of it: the controller already read the fixed
       // refusal text in its own turn log; a later prompt needs only that one was.
       return 'an outgoing request was refused'
+    case 'egress_blocked':
+      // The controller has the fixed feedback already. No event data enters a prompt.
+      return 'an outgoing request was blocked'
     case 'approval_request':
     case 'approval_response':
       // Legacy (#433, F9): superseded by hitl_*, and never read by readHitl.

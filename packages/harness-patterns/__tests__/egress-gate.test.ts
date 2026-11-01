@@ -51,6 +51,7 @@ import type {
   DecideFn,
   DecisionSpec,
   EgressAuditEventData,
+  EgressBlockedEventData,
   EgressRefusedEventData,
   ToolCallResult,
   WarningEventData,
@@ -330,7 +331,7 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
       const decide = egressDecide([PUBLIC])
       const roster = fakeRoster([NAME])
       let result: ToolCallResult | undefined
-      await run({ mode, decide, roster }, async () => {
+      const events = await run({ mode, decide, roster }, async () => {
         result = await callTool('web_search', args as Record<string, unknown>)
       })
       expect(result, JSON.stringify(args).slice(0, 60)).toMatchObject({
@@ -340,6 +341,16 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
       expect(decide.seen.states).toHaveLength(0)
       expect(roster.matched).toHaveLength(0)
       expect(sent).not.toHaveBeenCalled()
+      const rule = new Map([
+        [EGRESS_TEXTS.formatCharacter, 'format-character'],
+        [EGRESS_TEXTS.placeholder, 'placeholder'],
+        [EGRESS_TEXTS.undecodable, 'undecodable'],
+        [EGRESS_TEXTS.tooLong, 'too-long'],
+      ]).get(text)
+      expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+        { tool: 'web_search', route: null, rule },
+      ])
+      expect(ofType(events, 'egress_refused')).toEqual([])
     }
   })
 
@@ -378,6 +389,34 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
     expect(results[0]).toMatchObject({ error: EGRESS_TEXTS.formatCharacter })
     expect(results[1]).toMatchObject({ success: true })
   })
+
+  // REV5 pin 2. MUTATION: include `egress_blocked` in `egressClosures`'s
+  // refusal filter: the first Decide refusal closes this resumed route.
+  it('N = 1 ignores an earlier block when deriving the route tripwire', async () => {
+    const blocked = await run({ maxOutgoingRetriesPostTripwire: 1 }, async () => {
+      await via('info', () => callTool('web_search', { query: `a${ZWSP}b` }))
+    })
+    const results: ToolCallResult[] = []
+    const decided = await run(
+      { decide: egressDecide([PERSONAL]), maxOutgoingRetriesPostTripwire: 1 },
+      async () => {
+        results.push(await via('info', () => callTool('web_search', { query: 'first' })))
+        results.push(await via('info', () => callTool('web_search', { query: 'second' })))
+      },
+      { prior: blocked },
+    )
+    expect(results.map((r) => r.error)).toEqual([
+      EGRESS_TEXTS.personalOpen,
+      EGRESS_TEXTS.personalClosing,
+    ])
+    expect(ofType<EgressBlockedEventData>(blocked, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: 'info', rule: 'format-character' },
+    ])
+    expect(ofType<EgressRefusedEventData>(decided, 'egress_refused').map((e) => e.closes)).toEqual([
+      'none',
+      'route',
+    ])
+  })
 })
 
 describe('step 1: a fetch address nobody gave the controller (O21)', () => {
@@ -391,7 +430,7 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
   it('an address not in a result or the user message is refused before Decide', async () => {
     const decide = egressDecide([PUBLIC])
     const results: ToolCallResult[] = []
-    await run(
+    const events = await run(
       { decide, ...O21 },
       async () => {
         results.push(await callTool('fetch', { url: 'https://docs.example/other?d=Kestrel' }))
@@ -403,6 +442,10 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
     expect(results[0]).toMatchObject({ success: false, error: EGRESS_TEXTS.fetchAddress })
     expect(results[1]).toMatchObject({ success: false, error: EGRESS_TEXTS.fetchAddress })
     expect(results[2]).toMatchObject({ success: true })
+    expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+      { tool: 'fetch', route: null, rule: 'fetch-address' },
+      { tool: 'fetch', route: null, rule: 'fetch-address' },
+    ])
     expect(decide.seen.states).toHaveLength(1)
   })
 
@@ -862,6 +905,9 @@ describe("'roster' mode", () => {
     expect(results[1]).toMatchObject({ success: true })
     expect(decide.seen.states).toHaveLength(0)
     expect(ofType(events, 'egress_refused')).toEqual([])
+    expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: null, rule: 'name-match' },
+    ])
   })
 })
 
@@ -1408,10 +1454,19 @@ describe("Decide's failures", () => {
       },
     })
     let result: ToolCallResult | undefined
-    await run({ decide: egressDecide([PUBLIC]), roster }, async () => {
+    const events = await run({ decide: egressDecide([PUBLIC]), roster }, async () => {
       result = await callTool('web_search', { query: 'solar' })
     })
     expect(result).toMatchObject({ success: false, error: EGRESS_CHECK_FAILED })
+    expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: null, rule: 'check-failed' },
+    ])
+    expect(JSON.stringify(events)).not.toContain(`${NAME} is in the table`)
+    const ctx = createContext('task')
+    ctx.events.push(...events)
+    const view = createEventView(ctx).serialize()
+    expect(view).toContain('an outgoing request was blocked')
+    expect(view).not.toContain(NAME)
   })
 })
 
@@ -1436,6 +1491,9 @@ describe('a damaged roster', () => {
         },
       )
       expect(refused).toMatchObject({ error: EGRESS_TEXTS.damagedRoster })
+      expect(ofType<EgressBlockedEventData>(buildEvents, 'egress_blocked')).toEqual([
+        { tool: 'web_search', route: null, rule: 'damaged-roster' },
+      ])
       expect(atBuild.seen.states).toEqual([])
       // MUTATION: drop the cause from the warning, or keep the rejection's
       // message: the operator learns nothing, or learns the identity.
@@ -1544,6 +1602,9 @@ describe('the tripwire', () => {
     })
     expect(results.first).toMatchObject({ error: EGRESS_TEXTS.personalClosing })
     expect(results.second).toMatchObject({ error: EGRESS_TEXTS.routeClosed })
+    expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: 'info', rule: 'route-closed' },
+    ])
     expect(results.other).toMatchObject({ success: true })
     expect(decide.seen.states).toHaveLength(2)
     expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toEqual([
@@ -1651,7 +1712,7 @@ describe('the tripwire', () => {
     // A turn-wide closure ("Refuse all similar actions") holds on every route.
     const closedAll = egressDecide([PUBLIC])
     let any: ToolCallResult | undefined
-    await run(
+    const closedEvents = await run(
       { decide: closedAll },
       async () => {
         any = await via('office', () => callTool('web_search', { query: 'q' }))
@@ -1660,6 +1721,9 @@ describe('the tripwire', () => {
     )
     expect(any).toMatchObject({ error: EGRESS_TEXTS.turnClosed })
     expect(closedAll.seen.states).toEqual([])
+    expect(ofType<EgressBlockedEventData>(closedEvents, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: 'office', rule: 'turn-closed' },
+    ])
   })
 
   // MUTATION: drop `egress_refused` from the always-committed types (or hold
@@ -1687,6 +1751,24 @@ describe('the tripwire', () => {
     expect(second.seen.states).toEqual([])
     expect(sent).not.toHaveBeenCalled()
     expect(ofType(ctx.events, 'egress_refused')).toHaveLength(1)
+  })
+
+  it('commits a deterministic block even when its pattern keeps no ordinary history', async () => {
+    const gated = withEgressGate({ local: [], catalog: CATALOG })(
+      configurePattern(
+        'probe',
+        async (s) => {
+          await callTool('web_search', { query: 'PERSON_7' })
+          return s
+        },
+        { patternId: 'probe', commitStrategy: 'never' },
+      ),
+    )
+    const ctx = createContext('Research')
+    await withRunFrame({ transports: [transport] }, () => runChain(ctx, [gated]))
+    expect(ofType<EgressBlockedEventData>(ctx.events, 'egress_blocked')).toEqual([
+      { tool: 'web_search', route: null, rule: 'placeholder' },
+    ])
   })
 
   it('a call outside any route lands in one shared bucket', async () => {
@@ -1837,6 +1919,25 @@ describe('the egress_audit record', () => {
     expect(view).toContain('an outgoing request was refused')
     expect(view).not.toContain(NAME)
   })
+})
+
+// REV5 pin 1. MUTATION: drop `block('name-match', ...)`, or add `args` or
+// `spans` to the block record: this test loses the event or finds the sentinel.
+it('a blocked name is recorded once without request content or a server-log copy', async () => {
+  const sentinel = 'PRIVATE-NAME-SENTINEL'
+  const logged: string[] = []
+  for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const)
+    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '))
+    })
+  const events = await run({ mode: 'roster', roster: fakeRoster([sentinel]) }, async () => {
+    await callTool('web_search', { query: sentinel })
+  })
+  expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+    { tool: 'web_search', route: null, rule: 'name-match' },
+  ])
+  expect(JSON.stringify(events.filter((e) => e.type === 'egress_blocked'))).not.toContain(sentinel)
+  expect(logged.join('\n')).not.toContain(sentinel)
 })
 
 // ============================================================================

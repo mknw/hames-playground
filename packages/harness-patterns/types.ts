@@ -289,6 +289,8 @@ export type EventType =
    *  one: the record its tripwire count is derived from, so the count survives a
    *  pause. Metadata only. See `EgressRefusedEventData`. */
   | 'egress_refused'
+  /** A deterministic outgoing-call refusal. Metadata only; never a tripwire. */
+  | 'egress_blocked'
 
 /** Accounting record for one harness step (#122): token and cost totals
  *  summed across EVERY physical API call the step made — including truncation
@@ -2456,6 +2458,23 @@ export interface EgressRefusedEventData {
   readonly category?: 'personal' | 'company'
   /** What the refusal closed: nothing, this route, or every route for the turn. */
   readonly closes: 'none' | 'route' | 'turn'
+}
+
+/** One deterministic egress refusal. No argument, matched span or exception text. */
+export interface EgressBlockedEventData {
+  readonly tool: string
+  readonly route: string | null
+  readonly rule:
+    | 'placeholder'
+    | 'undecodable'
+    | 'too-long'
+    | 'format-character'
+    | 'fetch-address'
+    | 'name-match'
+    | 'route-closed'
+    | 'turn-closed'
+    | 'damaged-roster'
+    | 'check-failed'
 }
 
 // ============================================================================

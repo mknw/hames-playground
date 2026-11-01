@@ -14,6 +14,7 @@ import {
   held,
   HitlRequestError,
   HOLDING_EXPIRES_IN_MS,
+  recordedHolding,
   readHitl,
 } from '../hitl.server'
 import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.server'
@@ -203,6 +204,25 @@ describe('slice 8 · askHumanHolding', () => {
     expect(outcomes[0]).toMatchObject({ status: 'answered', choice: 'reject', by: 'unattended' })
     expect(dropped).toEqual(['ref-1'])
     expect(rows.size).toBe(0)
+  })
+
+  it('recordedHolding retains unattended answer provenance', async () => {
+    const { store } = memoryStore()
+    const seen: Array<string | undefined> = []
+    const gate = configurePattern<Data>('gate', async (scope) => {
+      await amendRunFrame({ callKey: 'held-call' }, async () => {
+        const payload = { title: 'synthetic' }
+        const outcome = await askHumanHolding(REQUEST, payload)
+        expect(outcome).toMatchObject({ status: 'answered', by: 'unattended' })
+        seen.push(recordedHolding(REQUEST.kind, OPTIONS, payload)?.by)
+      })
+      return scope
+    })
+    await harness<Data>(gate)('change it', 'sess-8', undefined, undefined, {
+      hitlPayloads: store,
+      hitl: { attended: false },
+    })
+    expect(seen).toEqual(['unattended'])
   })
 
   // MUTATION: key the request on the call alone (drop the digest) → with a

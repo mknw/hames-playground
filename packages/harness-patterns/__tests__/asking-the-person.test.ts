@@ -12,6 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import * as hitlModule from '../hitl.server'
 import { continueSession, harness, resumeHarness } from '../harness.server'
 import {
   askHuman,
@@ -36,6 +37,7 @@ import {
   EGRESS_OWNER_REFUSED,
   EGRESS_OWNER_REFUSED_ALL,
   EGRESS_BATCH_MISMATCH,
+  EGRESS_BATCH_RELEASE_KIND,
   EGRESS_RELEASE_KIND,
   EGRESS_RELEASE_OPTIONS,
   withEgressGate,
@@ -903,6 +905,37 @@ describe('N8 batch checklist', () => {
     expect(log).toHaveLength(1)
   })
 
+  it('keeps rows bare when the recorded batch answer provenance is unattended', async () => {
+    const s = setup('parallel', true)
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const recorded = hitlModule.recordedHolding
+    const spy = vi
+      .spyOn(hitlModule, 'recordedHolding')
+      .mockImplementation((kind, options, auth) => {
+        const answer = recorded(kind, options, auth)
+        return kind === EGRESS_BATCH_RELEASE_KIND && answer
+          ? { ...answer, by: 'unattended' }
+          : answer
+      })
+    try {
+      const resumed = await resumeHarness<Data>(
+        paused.serialized,
+        s.patterns,
+        { [request.requestId]: { choice: 'continue', flags: {} } },
+        { frame: s.frame },
+      )
+      const errors = resultsOf(resumed.context.events, 'web_search')
+        .slice(-2)
+        .map((r) => r.error)
+      expect(errors).toEqual([EGRESS_TEXTS.personalClosing, EGRESS_TEXTS.routeClosed])
+      expect(s.web.inputs.at(-1)?.turns.at(-1)?.tool_result?.error).not.toContain(
+        EGRESS_OWNER_REFUSED,
+      )
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('labels every person-refused batch member with the refuse-all wording', async () => {
     const s = setup('parallel', true)
     const { paused, request } = await toPause(s.patterns, s.frame)
@@ -1405,6 +1438,9 @@ describe('N8 batch checklist', () => {
     )
     expect(s.log).toEqual([])
     expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.skipped).toBe(true)
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(
+      'Batch call 2 failed; see encrypted plan.',
+    )
   })
 
   // N8-04. MUTATION: pass flags with a prompt-wide choice or run a row despite

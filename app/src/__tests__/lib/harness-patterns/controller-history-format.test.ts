@@ -295,6 +295,36 @@ describe('controller history renders as ControllerAction JSON', () => {
     expect(text).toContain(`Turn ${TURNS.length}. Decide the next action.`)
     expect(text).not.toContain(`Turn ${TURNS.length + 1}. Decide the next action.`)
   })
+
+  it('renders owner refusal labels and original arguments in the offline controller request', async () => {
+    const label = 'REFUSED by the owner. Refused: synthetic private request.'
+    const turns = [
+      {
+        n: 0,
+        tool_call: { tool: 'search', args: '{"query":"synthetic-one"}' },
+        additional_calls: [{ tool_name: 'search', tool_args: '{"query":"synthetic-two"}' }],
+        tool_result: {
+          tool: 'search',
+          success: true,
+          result: JSON.stringify({ '1': { result: 'ok' }, '2': { __error: label } }),
+          error: null,
+        },
+      },
+    ]
+    const request = await b.request.LoopController(
+      'x',
+      'x',
+      TOOLS,
+      turns as never,
+      null,
+      null,
+      null,
+    )
+    const rendered = textBlocks(request.body.json() as Body).join('\n')
+    expect(rendered).toContain(label)
+    expect(rendered).toContain('synthetic-one')
+    expect(rendered).toContain('synthetic-two')
+  })
 })
 
 /**

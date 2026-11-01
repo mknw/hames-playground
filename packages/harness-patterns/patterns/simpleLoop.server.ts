@@ -45,6 +45,7 @@ import {
   canonicalJson,
   currentRunId,
   hitlPending,
+  holdingAnswerInRun,
   holdingRequestInRun,
   isHeldResult,
   recordedHolding,
@@ -69,7 +70,13 @@ import type { ControllerFn } from '../types'
 import type { LLMCallRecord } from '../types'
 import { LLMCallError } from '../types'
 import { formatPlanContext, type PlannerData } from './planner.server'
-import { EGRESS_BATCH_RELEASE_KIND, EGRESS_BATCH_MISMATCH } from './withEgressGate.server'
+import {
+  EGRESS_BATCH_RELEASE_KIND,
+  EGRESS_BATCH_MISMATCH,
+  EGRESS_RELEASE_KIND,
+  EGRESS_OWNER_REFUSED,
+  EGRESS_OWNER_REFUSED_ALL,
+} from './withEgressGate.server'
 import { EGRESS_TEXTS } from '../egress-gate.server'
 
 assertServerOnImport()
@@ -272,6 +279,8 @@ function batchEventAction(action: ControllerAction): ControllerAction {
  * Only known fixed messages may enter an event or turn log. */
 const SAFE_BATCH_ERRORS = new Set([
   ...Object.values(EGRESS_TEXTS),
+  ...Object.values(EGRESS_TEXTS).map((error) => EGRESS_OWNER_REFUSED + error),
+  EGRESS_OWNER_REFUSED_ALL + EGRESS_TEXTS.turnClosed,
   EGRESS_BATCH_MISMATCH,
   // The mcp-client constant is mirrored here so host tests that mock the
   // transport module do not need to supply an unrelated export at import time.
@@ -945,7 +954,19 @@ export function simpleLoop<T extends SimpleLoopData>(
           excluded,
         )
         // The gate that held it answers from the recorded decision on the way.
-        const result = await dispatch(call.tool, resolvedArgs, call.callKey)
+        const heldBy = again.calls[0].result?.heldBy
+        const request = heldBy ? holdingRequestInRun(heldBy) : undefined
+        const answer = heldBy ? holdingAnswerInRun(heldBy) : undefined
+        const approvedByOwner =
+          request?.kind === EGRESS_RELEASE_KIND &&
+          answer?.requestId === heldBy &&
+          answer?.by === 'person' &&
+          answer.choice === 'accept'
+        const result = approvedByOwner
+          ? await amendRunFrame({ callKey: call.callKey, batch: false, approvedByOwner }, () =>
+              callTool(call.tool, resolvedArgs),
+            )
+          : await dispatch(call.tool, resolvedArgs, call.callKey)
         await hookResult(call.tool, result, call.callId, resolvedArgs, again.n)
         const resultData: ToolResultEventData = {
           callId: call.callId,
@@ -1098,6 +1119,9 @@ export function simpleLoop<T extends SimpleLoopData>(
             ...(member.cause && { cause: member.cause }),
             ...(member.category && { category: member.category }),
             ...(member.auditByDecide && { auditByDecide: true }),
+            ...(answer.by === 'person' && member.verdict === 'held' && !accepted
+              ? { byOwner: true }
+              : {}),
           }
           return {
             tool: member.tool,
@@ -1129,7 +1153,9 @@ export function simpleLoop<T extends SimpleLoopData>(
                 index: i + 1,
                 tool: c.tool,
                 success: false,
-                error: EGRESS_TEXTS.turnClosed,
+                error:
+                  (answer.by === 'person' ? EGRESS_OWNER_REFUSED_ALL : '') +
+                  EGRESS_TEXTS.turnClosed,
               }))
             : await runBatch(allCalls, plan.mode)
         const resultData = outcomes.map((raw, i): ToolResultEventData => {

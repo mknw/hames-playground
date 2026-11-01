@@ -434,7 +434,7 @@ export async function callTool(
       return changed ? applyGuard(name, result, id) : result
     })
   const frame = currentRunFrame()
-  if (frame?.batchPhase !== 'execute') return send()
+  if (frame?.batchPhase !== 'execute' && frame?.approvedByOwner !== true) return send()
   const runId = currentRunId()
   const callKey = frame.callKey
   const claims = frame.toolSendClaims

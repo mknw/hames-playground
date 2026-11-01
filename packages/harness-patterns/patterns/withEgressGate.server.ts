@@ -234,6 +234,9 @@ export const EGRESS_RELEASE_OPTIONS = [
 export const EGRESS_HELD_NOTE =
   "This request is waiting for the user's decision before it is sent. Do not retry it; stop."
 
+export const EGRESS_OWNER_REFUSED = 'REFUSED by the owner. '
+export const EGRESS_OWNER_REFUSED_ALL = 'REFUSED by the owner (all similar actions this turn). '
+
 /** A prepared batch member whose identity changed is never rechecked as a fresh call. */
 export const EGRESS_BATCH_MISMATCH =
   'Refused: the saved batch decision no longer matches this request. Nothing was sent.'
@@ -696,7 +699,7 @@ export function withEgressGate(config: EgressGateConfig) {
 
         /** The person's decision on this call: the button they pressed, or the
          *  unattended rule's pick, which is Refuse. */
-        const decided = (choice: string, held: Held): string | undefined => {
+        const decided = (choice: string, held: Held, byOwner = false): string | undefined => {
           if (choice === 'accept') {
             record('egress_audit', {
               tool,
@@ -716,10 +719,10 @@ export function withEgressGate(config: EgressGateConfig) {
               ...(held.category && { category: held.category }),
               closes: 'turn',
             } satisfies EgressRefusedEventData)
-            return EGRESS_TEXTS.turnClosed
+            return (byOwner ? EGRESS_OWNER_REFUSED_ALL : '') + EGRESS_TEXTS.turnClosed
           }
           // Refuse, and anything else: the tripwire this refusal would have been.
-          return tripwire(held.cause, held.category)
+          return (byOwner ? EGRESS_OWNER_REFUSED : '') + tripwire(held.cause, held.category)
         }
 
         /** A cell that names the person: ask, where the call can pause and is
@@ -759,7 +762,7 @@ export function withEgressGate(config: EgressGateConfig) {
             return { held: { ...held_(outcome, EGRESS_HELD_NOTE), redispatch: true } }
           }
           // No choice (an unattended rule that decided nothing) refuses.
-          return decided(outcome.choice ?? 'refuse', held)
+          return decided(outcome.choice ?? 'refuse', held, outcome.by === 'person')
         }
 
         /** Decide could not answer for this call: the directory matrix (D5). */
@@ -821,7 +824,10 @@ export function withEgressGate(config: EgressGateConfig) {
             if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
             if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
             if (prepared.decision === 'refuse')
-              return tripwire(prepared.cause ?? 'unchecked', prepared.category)
+              return (
+                (prepared.byOwner ? EGRESS_OWNER_REFUSED : '') +
+                tripwire(prepared.cause ?? 'unchecked', prepared.category)
+              )
             if (
               prepared.decision === 'accept' ||
               (prepared.decision === 'pass' && prepared.auditByDecide)
@@ -887,6 +893,7 @@ export function withEgressGate(config: EgressGateConfig) {
                 c === 'personal' || c === 'company'
                   ? { cause: 'decide', category: c, payload, spans }
                   : unchecked,
+                prior.by === 'person',
               )
             }
           }

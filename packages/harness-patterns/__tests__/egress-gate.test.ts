@@ -9,12 +9,15 @@
  * process. No live endpoint is called.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { canonicalJson } from '../hitl.server'
 import { createContext, createEvent, createScope } from '../context.server'
 import { configurePattern, runChain } from '../patterns/chain.server'
 import { createEventView } from '../patterns/event-view.server'
 import { decisionLoop } from '../patterns/decisionLoop.server'
 import {
   egressClosures,
+  EGRESS_OWNER_REFUSED,
   setEgressNonceSourceForTests,
   withEgressGate,
   type EgressDirectoryStatus,
@@ -197,6 +200,44 @@ async function run(
 const via = <T>(route: string, fn: () => Promise<T>) => amendRunFrame({ route }, fn)
 const ofType = <D>(events: ContextEvent[], type: string) =>
   events.filter((e) => e.type === type).map((e) => e.data as D)
+
+it('keeps an unattended prepared batch refusal unlabeled while a person refusal is labeled', async () => {
+  const args = { query: 'synthetic-private' }
+  const digest = createHash('sha256')
+    .update(canonicalJson({ tool: 'web_search', args }))
+    .digest('hex')
+  for (const byOwner of [false, true]) {
+    let result: ToolCallResult | undefined
+    await run(
+      { askPerson: true },
+      async () => {
+        result = await callTool('web_search', args)
+      },
+      {
+        frame: {
+          callKey: 'call-1',
+          batch: true,
+          batchPhase: 'execute',
+          batchPlanKey: 'plan-1',
+          batchPrepared: {
+            callKey: 'call-1',
+            digest,
+            route: null,
+            batchPlanKey: 'plan-1',
+            requestId: 'request-1',
+            decision: 'refuse',
+            cause: 'unchecked',
+            byOwner,
+          },
+        },
+      },
+    )
+    expect(result?.error).toBe(
+      (byOwner ? EGRESS_OWNER_REFUSED : '') + EGRESS_TEXTS.uncheckedClosing,
+    )
+  }
+  expect(sent).not.toHaveBeenCalled()
+})
 
 // MUTATION: classify either Exa name as local, or remove the gate's check from
 // callTool: the private query reaches the fake transport and this test fails.

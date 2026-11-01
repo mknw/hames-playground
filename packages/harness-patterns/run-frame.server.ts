@@ -138,6 +138,7 @@ export interface PreparedBatchEgress {
   readonly auditByDecide?: boolean
   readonly cause?: 'decide' | 'unchecked'
   readonly category?: 'personal' | 'company'
+  readonly byOwner?: boolean
 }
 
 /** The host binds this store to one owner and conversation. A started claim
@@ -252,6 +253,8 @@ export interface RunFrame {
   batch?: boolean
   /** N8: a batch checks every member before sending any member. */
   batchPhase?: 'preflight' | 'execute'
+  /** Set only when a held singular call re-enters after an owner's answer. */
+  approvedByOwner?: boolean
   batchPlanKey?: string
   /** The exact preflight decision for this logical call, checked by the gate. */
   batchPrepared?: PreparedBatchEgress
@@ -312,6 +315,7 @@ export interface ActiveRunFrame {
   readonly continuationRoot?: string | null
   readonly batch?: boolean
   readonly batchPhase?: 'preflight' | 'execute'
+  readonly approvedByOwner?: boolean
   readonly batchPlanKey?: string
   readonly batchPrepared?: PreparedBatchEgress
   readonly egressBatchEnabled?: boolean
@@ -464,6 +468,7 @@ function build(frame: RunFrame): ActiveRunFrame {
     continuationRoot: frame.continuationRoot,
     batch: frame.batch,
     batchPhase: frame.batchPhase,
+    approvedByOwner: frame.approvedByOwner,
     batchPlanKey: frame.batchPlanKey,
     batchPrepared: frame.batchPrepared,
     egressBatchEnabled: frame.egressBatchEnabled,
@@ -608,6 +613,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       partial.continuationRoot !== undefined ? partial.continuationRoot : open.continuationRoot,
     batch: partial.batch ?? open.batch,
     batchPhase: partial.batchPhase ?? open.batchPhase,
+    approvedByOwner: partial.approvedByOwner ?? open.approvedByOwner,
     batchPlanKey: partial.batchPlanKey ?? open.batchPlanKey,
     batchPrepared: partial.batchPrepared ?? open.batchPrepared,
     egressBatchEnabled: partial.egressBatchEnabled ?? open.egressBatchEnabled,

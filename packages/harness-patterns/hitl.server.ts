@@ -559,6 +559,7 @@ export function recordedHolding(
 ):
   | {
       readonly choice: string
+      readonly by: HitlDecidedBy
       readonly requestId: string
       readonly flags: Readonly<Record<string, boolean>>
       readonly summary: Readonly<Record<string, string | number | boolean | null>>
@@ -578,6 +579,7 @@ export function recordedHolding(
   )
   return {
     choice: answer.choice as string,
+    by: answer.by,
     requestId: answer.requestId,
     flags: answer.flags ?? {},
     summary: request?.data.summary ?? {},
@@ -594,6 +596,19 @@ export function holdingRequestInRun(requestId: string): HitlRequestEventData | u
     (e) => e.type === 'hitl_request' && isRequest(e) && e.data.requestId === requestId,
   )
   return event && isRequest(event) ? event.data : undefined
+}
+
+/** The recorded answer to one held request, from the owning run's journal. */
+export function holdingAnswerInRun(requestId: string): HitlResponseEventData | undefined {
+  const run = hitlRunStore.getStore()
+  if (!run) return undefined
+  const events = [...run.ownerEvents(), ...admitBuffered(run.buffer, run.attended)]
+  const request = events.find(
+    (e) => e.type === 'hitl_request' && isRequest(e) && e.data.requestId === requestId,
+  )
+  return request && isRequest(request)
+    ? readHitl({ events }).answers.get(hitlReplayKey(request.data))
+    : undefined
 }
 
 /** The accepted row of an answered N8 checklist, read from this run's journal. */

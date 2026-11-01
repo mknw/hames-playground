@@ -11,8 +11,16 @@
  * run.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { continueSession, harness, resumeHarness } from '../harness.server'
-import { askHuman, held, readHitl, resolveUnattended, HitlAnswerError } from '../hitl.server'
+import {
+  askHuman,
+  canonicalJson,
+  held,
+  readHitl,
+  resolveUnattended,
+  HitlAnswerError,
+} from '../hitl.server'
 import { SEND_OUTCOME_UNKNOWN } from '../mcp-client.server'
 import {
   INGRESS_FLAG_KIND,
@@ -25,6 +33,8 @@ import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.ser
 import { simpleLoop } from '../patterns/simpleLoop.server'
 import {
   EGRESS_HELD_NOTE,
+  EGRESS_OWNER_REFUSED,
+  EGRESS_OWNER_REFUSED_ALL,
   EGRESS_BATCH_MISMATCH,
   EGRESS_RELEASE_KIND,
   EGRESS_RELEASE_OPTIONS,
@@ -156,6 +166,20 @@ function scripted(script: ReturnType<typeof act>[]) {
     return script[Math.min(input.turn, script.length - 1)]
   })
   return { fn, inputs }
+}
+
+/** The fake model records the exact turns it received as its rendered input. */
+function observable(script: ReturnType<typeof act>[]) {
+  const base = scripted(script)
+  const fn = vi.fn<ControllerFn>(async (input) => ({
+    ...(await base.fn(input)),
+    llmCall: {
+      functionName: 'LoopController',
+      variables: {},
+      rawInput: JSON.stringify(input.turns),
+    },
+  }))
+  return { fn, inputs: base.inputs }
 }
 
 /** The decision loop's seam: a scripted label per call. */
@@ -328,6 +352,128 @@ describe('the egress-release request', () => {
 })
 
 describe('Accept', () => {
+  it('does not claim an unheld singular call that the gate passes', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = scripted([act('web_search', { query: 'synthetic-public' }), done])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER], {
+      decide: egressDecide([PUBLIC]),
+    })
+    const claim = vi.fn(async () => ({ status: 'new' as const }))
+    const frame = frameOf(log, store, { toolSendClaims: { claim, finish: vi.fn() } })
+    await harness<Data>(...patterns)('find it', 'singular-public', undefined, undefined, frame)
+    expect(log).toHaveLength(1)
+    expect(claim).not.toHaveBeenCalled()
+  })
+
+  it('claims a resumed singular approval before transport and finishes after it', async () => {
+    const order: string[] = []
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = scripted([act('web_search', { query: 'synthetic-approved' }), done])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER])
+    const sent = transport(log)
+    const claim = vi.fn(async () => {
+      order.push('claim')
+      return { status: 'new' as const }
+    })
+    const finish = vi.fn(async () => {
+      order.push('finish')
+    })
+    const frame = frameOf(log, store, {
+      transports: [
+        {
+          ...sent,
+          callTool: async (name, args) => {
+            order.push('send')
+            return sent.callTool(name, args)
+          },
+        },
+      ],
+      toolSendClaims: { claim, finish },
+    })
+    const { paused, request } = await toPause(patterns, frame)
+    expect(order).toEqual([])
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'accept' },
+      { frame },
+    )
+    expect(order).toEqual(['claim', 'send', 'finish'])
+    const digest = createHash('sha256')
+      .update(
+        canonicalJson({
+          tool: 'web_search',
+          args: { query: 'synthetic-approved' },
+        }),
+      )
+      .digest('hex')
+    expect(claim).toHaveBeenCalledExactlyOnceWith({
+      runId: request.runId,
+      callKey: expect.any(String),
+      digest,
+    })
+    expect(finish).toHaveBeenCalledWith({
+      runId: request.runId,
+      callKey: expect.any(String),
+      digest,
+      result: expect.objectContaining({ success: true }),
+    })
+    expect(eventsOf(resumed.context.events, 'hitl_response')).toContainEqual(
+      expect.objectContaining({ choice: 'accept', by: 'person' }),
+    )
+    expect(eventsOf<EgressAuditEventData>(resumed.context.events, 'egress_audit')).toContainEqual(
+      expect.objectContaining({ allowedBy: 'person' }),
+    )
+  })
+
+  it('returns a finished singular claim without opening transport again', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = scripted([act('web_search', { query: 'synthetic-finished' }), done])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER])
+    const claim = vi.fn(async () => ({
+      status: 'finished' as const,
+      result: { success: true, data: { hits: ['recorded'] } },
+    }))
+    const frame = frameOf(log, store, { toolSendClaims: { claim, finish: vi.fn() } })
+    const { paused, request } = await toPause(patterns, frame)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'accept' },
+      { frame },
+    )
+    expect(claim).toHaveBeenCalledOnce()
+    expect(log).toEqual([])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.result).toEqual({
+      hits: ['recorded'],
+    })
+  })
+
+  it('reports outcome unknown for a started singular claim without sending', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = scripted([act('web_search', { query: 'synthetic-started' }), done])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER])
+    const frame = frameOf(log, store, {
+      toolSendClaims: {
+        claim: vi.fn(async () => ({ status: 'unknown' as const })),
+        finish: vi.fn(),
+      },
+    })
+    const { paused, request } = await toPause(patterns, frame)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'accept' },
+      { frame },
+    )
+    expect(log).toEqual([])
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(SEND_OUTCOME_UNKNOWN)
+  })
+
   // Row 58. MUTATION: approve by tool name (the authorized value without the
   // arguments) → the tampered call below is sent on the recorded Accept → red.
   it('sends exactly the held call once, inside the route, with the ingress guard on its result', async () => {
@@ -385,6 +531,57 @@ describe('Accept', () => {
 })
 
 describe('Refuse, Refuse all similar actions and Interrupt (ruling M)', () => {
+  it('labels a person-refused singular result in the resumed turn and next model input without claiming', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = observable([act('web_search', { query: 'synthetic-refused' }), done])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER])
+    const claim = vi.fn(async () => ({ status: 'new' as const }))
+    const frame = frameOf(log, store, { toolSendClaims: { claim, finish: vi.fn() } })
+    const { paused, request } = await toPause(patterns, frame)
+    expect(resultsOf(paused.context.events, 'web_search').at(-1)?.result).toMatchObject({
+      note: EGRESS_HELD_NOTE,
+    })
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'refuse' },
+      { frame },
+    )
+    const error = EGRESS_OWNER_REFUSED + EGRESS_TEXTS.personalClosing
+    expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(error)
+    expect(web.inputs.at(-1)?.turns.at(-1)?.tool_result?.error).toBe(error)
+    const rawInput = (await web.fn.mock.results.at(-1)?.value)?.llmCall?.rawInput
+    expect(rawInput).toContain(error)
+    expect(log).toEqual([])
+    expect(claim).not.toHaveBeenCalled()
+  })
+
+  it('labels a person-refused singular refuse-all but leaves later turn closure bare', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = observable([
+      act('web_search', { query: 'first' }),
+      act('web_search', { query: 'later' }),
+      done,
+    ])
+    const patterns = agent({ web: loop(web.fn, ['web_search']) }, ['web', DECISION_LOOP_ANSWER])
+    const frame = frameOf(log, store)
+    const { paused, request } = await toPause(patterns, frame)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'refuse-all' },
+      { frame },
+    )
+    const results = resultsOf(resumed.context.events, 'web_search')
+    expect(results.at(-2)?.error).toBe(EGRESS_OWNER_REFUSED_ALL + EGRESS_TEXTS.turnClosed)
+    expect(results.at(-1)?.error).toBe(EGRESS_TEXTS.turnClosed)
+    expect(web.inputs.at(-1)?.turns[0]?.tool_result?.error).toBe(
+      EGRESS_OWNER_REFUSED_ALL + EGRESS_TEXTS.turnClosed,
+    )
+  })
+
   // Row 61. MUTATION: hold the count in the invocation's closure (start each
   // invocation from no refusals) → the third call is asked again → red.
   it('with N = 1, two refusals across pauses close the route; a third call is refused unasked', async () => {
@@ -621,8 +818,8 @@ describe('where nobody can be asked', () => {
 })
 
 describe('N8 batch checklist', () => {
-  const batch = () =>
-    scripted([
+  const batch = (record = false) =>
+    (record ? observable : scripted)([
       act(
         'web_search',
         { query: 'synthetic-one' },
@@ -632,10 +829,10 @@ describe('N8 batch checklist', () => {
       ),
       done,
     ])
-  const setup = (mode: 'parallel' | 'sequential' | 'off' = 'parallel') => {
+  const setup = (mode: 'parallel' | 'sequential' | 'off' = 'parallel', record = false) => {
     const log: Log = []
     const { store, rows } = memoryStore()
-    const web = batch()
+    const web = batch(record)
     const patterns = agent(
       {
         web: simpleLoop<Data>(web.fn, ['web_search'], {
@@ -650,6 +847,88 @@ describe('N8 batch checklist', () => {
     const frame = frameOf(log, store)
     return { log, rows, web, patterns, frame }
   }
+
+  it('labels only the unticked held row across events, turn log and model input', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = observable([
+      act(
+        'web_search',
+        { query: 'synthetic-one' },
+        {
+          additional_calls: [{ tool_name: 'web_search', tool_args: '{"query":"synthetic-two"}' }],
+        },
+      ),
+      done,
+    ])
+    const patterns = agent(
+      {
+        web: simpleLoop<Data>(web.fn, ['web_search'], {
+          patternId: 'web',
+          maxTurns: 6,
+          multiToolCalls: 'parallel',
+        }),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL, PERSONAL]) },
+    )
+    const base = frameOf(log, store)
+    const claim = vi.fn(base.toolSendClaims!.claim)
+    const frame = { ...base, toolSendClaims: { claim, finish: base.toolSendClaims!.finish } }
+    const { paused, request } = await toPause(patterns, frame)
+    const firstFlag = request.options[0].flags![0].id
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: { choice: 'continue', flags: { [firstFlag]: true } } },
+      { frame },
+    )
+    const events = resultsOf(resumed.context.events, 'web_search').slice(-2)
+    expect(events[0].success).toBe(true)
+    expect(events[0].error).toBeFalsy()
+    expect(events[1].error).toBe(EGRESS_OWNER_REFUSED + EGRESS_TEXTS.personalClosing)
+    const turn = web.inputs.at(-1)?.turns.at(-1)
+    expect(turn?.tool_result?.error).toBeNull()
+    const combined = JSON.parse(String(turn?.tool_result?.result))
+    expect(combined['1'].__error).toBeUndefined()
+    expect(combined['2'].__error).toBe(events[1].error)
+    expect(turn?.tool_call?.args).toContain('synthetic-one')
+    expect(turn?.additional_calls?.[0].tool_args).toContain('synthetic-two')
+    const rawInput = (await web.fn.mock.results.at(-1)?.value)?.llmCall?.rawInput ?? ''
+    expect(rawInput).toContain('synthetic-one')
+    expect(rawInput).toContain('synthetic-two')
+    expect(rawInput.split(EGRESS_OWNER_REFUSED).length - 1).toBe(1)
+    expect(rawInput).not.toContain('Batch call 2 failed; see encrypted plan.')
+    expect(claim).toHaveBeenCalledOnce()
+    expect(log).toHaveLength(1)
+  })
+
+  it('labels every person-refused batch member with the refuse-all wording', async () => {
+    const s = setup('parallel', true)
+    const { paused, request } = await toPause(s.patterns, s.frame)
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      s.patterns,
+      { [request.requestId]: 'refuse-all' },
+      { frame: s.frame },
+    )
+    const error = EGRESS_OWNER_REFUSED_ALL + EGRESS_TEXTS.turnClosed
+    const events = resultsOf(resumed.context.events, 'web_search').slice(-2)
+    expect(events.map((r) => r.error)).toEqual([error, error])
+    const turn = s.web.inputs.at(-1)?.turns.at(-1)
+    expect(turn?.tool_result?.error).toContain(`[1] web_search: ${error}`)
+    expect(turn?.tool_result?.error).toContain(`[2] web_search: ${error}`)
+    expect(turn?.tool_call?.args).toContain('synthetic-one')
+    expect(turn?.additional_calls?.[0].tool_args).toContain('synthetic-two')
+    expect(s.log).toEqual([])
+    const rawInput = (await s.web.fn.mock.results.at(-1)?.value)?.llmCall?.rawInput ?? ''
+    expect(rawInput.split(EGRESS_OWNER_REFUSED_ALL).length - 1).toBeGreaterThanOrEqual(2)
+    expect(rawInput).toContain('synthetic-one')
+    expect(rawInput).toContain('synthetic-two')
+    expect(
+      eventsOf<EgressRefusedEventData>(resumed.context.events, 'egress_refused'),
+    ).toContainEqual(expect.objectContaining({ closes: 'turn' }))
+  })
 
   // N8-01/02. MUTATIONS: remove the barrier; ignore a row flag or call key.
   it('shows two held rows, sends none before answer, and sends only its accepted call', async () => {
@@ -671,7 +950,7 @@ describe('N8 batch checklist', () => {
     )
     expect(s.log).toEqual([{ name: 'web_search', args: { query: 'synthetic-one' } }])
     expect(resultsOf(resumed.context.events, 'web_search').at(-1)?.error).toBe(
-      EGRESS_TEXTS.personalClosing,
+      EGRESS_OWNER_REFUSED + EGRESS_TEXTS.personalClosing,
     )
   })
 
@@ -838,6 +1117,17 @@ describe('N8 batch checklist', () => {
     expect(request.options[0].flags).toHaveLength(1)
     expect(eventsOf(paused.context.events, 'egress_refused')).toEqual([])
     expect(s.log).toEqual([])
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: 'continue' },
+      { frame: s.frame },
+    )
+    expect(
+      resultsOf(resumed.context.events, 'web_search').some(
+        (r) => r.error === EGRESS_TEXTS.placeholder,
+      ),
+    ).toBe(true)
   })
 
   // N8-06. MUTATION: ignore a refused row's route closure at execute.
@@ -1134,7 +1424,7 @@ describe('N8 batch checklist', () => {
       expect(
         resultsOf(resumed.context.events, 'web_search')
           .slice(-2)
-          .every((r) => r.error === EGRESS_TEXTS.turnClosed),
+          .every((r) => r.error === EGRESS_OWNER_REFUSED_ALL + EGRESS_TEXTS.turnClosed),
       ).toBe(true)
       expect(
         eventsOf<EgressRefusedEventData>(resumed.context.events, 'egress_refused').some(

@@ -2017,6 +2017,34 @@ describe('decisionLoop — route failure', () => {
     expect(rec.error).toContain('tools unavailable')
   })
 
+  it('keeps an unavailable gateway terminal across the route boundary', async () => {
+    const { decide } = scriptedDecide(['bad', 'answer'])
+    const bad = fake('simpleLoop', 'bad-p', (s) => {
+      trackEvent(
+        s,
+        'error',
+        {
+          error: 'Tools unavailable: the MCP gateway could not be reached',
+          severity: 'irrecoverable',
+          kind: 'gateway_unavailable',
+        } as ErrorEventData,
+        true,
+      )
+    })
+    const synthRan: string[] = []
+    const synth = fake('compactExecution', 'synth', () => void synthRan.push('ran'))
+    const ctx = await run([build({ bad: route(bad) }, decide), synth])
+
+    expect(ctx.status).toBe('error')
+    expect(ctx.error).toContain('Tools unavailable')
+    expect(ctx.data.response).toContain('Tools unavailable')
+    expect(synthRan).toEqual([])
+    expect(eventsOf(ctx, 'bad-p', 'error')[0].data).toMatchObject({
+      kind: 'gateway_unavailable',
+      severity: 'irrecoverable',
+    })
+  })
+
   it('a hitl-free child that yields no usable result fails for each kind', async () => {
     const { decide, states } = scriptedDecide(['sl', 'ac', 'rt', 'pl', 'answer'])
     const loop = build(

@@ -939,11 +939,24 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
       // handed it; use that.
       const childEvents = dropHitl(finished.events)
 
-      // Committed copy: the child's own `error` events stay inside its enter/exit
-      // but as `recoverable`, or `runChain` would end the turn on them.
+      // Ordinary child failures stay recoverable so another route can still
+      // answer. A route that needed an unavailable gateway cannot recover by
+      // deciding again: preserve its explicit terminal signal for runChain.
+      const unavailable = childEvents.find(
+        (e) => e.type === 'error' && (e.data as ErrorEventData).kind === 'gateway_unavailable',
+      )
       const committed = childEvents.map((e): ContextEvent =>
         e.type === 'error'
-          ? { ...e, data: { ...(e.data as ErrorEventData), severity: 'recoverable' } }
+          ? {
+              ...e,
+              data: {
+                ...(e.data as ErrorEventData),
+                severity:
+                  (e.data as ErrorEventData).kind === 'gateway_unavailable'
+                    ? 'irrecoverable'
+                    : 'recoverable',
+              },
+            }
           : e,
       )
       scope.events.push(...committed)
@@ -1008,6 +1021,16 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             },
         resolved.trackHistory,
       )
+      if (unavailable) {
+        // The final synthesizer must not turn missing gateway data into a
+        // plausible answer. The same message is the turn's visible response,
+        // while the committed error makes the outer chain terminal.
+        scope.data = {
+          ...scope.data,
+          response: (unavailable.data as ErrorEventData).error,
+        }
+        return scope
+      }
     }
 
     if (ended === 'bound') {

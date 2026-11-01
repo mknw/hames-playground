@@ -681,7 +681,12 @@ export function simpleLoop<T extends SimpleLoopData>(
     // not tool-less and the allowlist check further down already knows it.
     const outage = activeTransports().length > 0 ? null : toolSurfaceOutage(tools)
     if (outage) {
-      trackEvent(scope, 'error', { ...outage, severity: 'irrecoverable' } as ErrorEventData, true)
+      trackEvent(
+        scope,
+        'error',
+        { ...outage, severity: 'irrecoverable', kind: 'gateway_unavailable' } as ErrorEventData,
+        true,
+      )
       return scope
     }
 

@@ -8,11 +8,9 @@
  * purpose — `listTools` logs and returns the app-side tools, `getGraphSchema`
  * warns and returns `''`. Each of those is right on its own. Together they
  * produced the one outcome this suite calls dishonest: `Tools()` yields a
- * ToolSet with no `neo4j` and no `web` key, every agent turns that into
- * `tools.neo4j ?? []`, the `simpleLoop` runs with an empty allowlist and calls
- * nothing, and the `compactExecution` at the end of the chain composes a
- * confident answer out of an empty execution. A `done` row, an answer no tool
- * contributed to, and not a word about the gateway anywhere.
+ * ToolSet with no `neo4j` and no `web` key. The info route runs a `simpleLoop`
+ * with an empty allowlist; its unavailable signal must survive the enclosing
+ * decision loop so the final synthesis cannot compose an ordinary answer.
  *
  * So the assertion is not "the turn fails". It is: **whatever the turn does, the
  * user learns the tools were unavailable.** A refusal that names the outage is
@@ -24,13 +22,13 @@
  *   - it is the TOOL half that dies, not the inference endpoint, so every LLM
  *     call still succeeds and nothing in the chain throws;
  *   - the fault is at pattern-BUILD time (`Tools()`), not inside a turn, which
- *     is why a fresh conversation is needed per case — `getOrBuildPatterns`
- *     caches per session;
+ *     is why independent cases start fresh conversations — `getOrBuildPatterns`
+ *     caches per session. The recovery case deliberately reuses its session;
  *   - it has to come back. The last case is the control: the same question
  *     answers normally once the gateway is listening again, which is what
  *     separates "reports an outage" from "broke the agent".
  *
- * The remaining registered agent is `general-next`. The failure must be
+ * The registered agent is `general-next`. The failure must be
  * visible even when its info route cannot get gateway tools.
  *
  * HERMETIC ONLY. The gateway is faked in both modes, but taking it down is an
@@ -74,10 +72,7 @@ function admitsTheOutage(serializedContext: string, response: string | undefined
  */
 const AGENTS = [{ id: 'general-next', surface: 'the gateway-backed info route' }] as const
 
-// The exact f48 main general-next control reproduces 3/4 failures with its
-// fake Graph transport installed. Keep these assertions for the separate
-// guard fix: https://github.com/mknw/hames-playground/issues/899.
-describe.skip('the tool surface collapses', () => {
+describe('the tool surface collapses', () => {
   it.each(AGENTS)('$id does not answer as if the tools had been consulted', async (agent) => {
     await app.fakeGateway.goDown()
     const sessionId = newSessionId(`gateway-down-${agent.id}`)
@@ -100,6 +95,7 @@ describe.skip('the tool surface collapses', () => {
       `${agent.id} said nothing about the gateway, with ${agent.surface}. ` +
         `status=${row!.status}, response=${JSON.stringify(response)}`,
     ).toBe(true)
+    expect(response).toContain('Tools unavailable: the MCP gateway')
 
     // The specific dishonest outcome: the fake's canned answer, delivered as
     // though the graph had been queried. Before #276 the retired search agent returned this on a `done` row.
@@ -154,26 +150,44 @@ describe.skip('the tool surface collapses', () => {
       honest,
       `the stream reported a healthy turn; frames were [${frames.map((f) => f.event).join(', ')}]`,
     ).toBe(true)
+    expect(doneFrame?.data.status).toBe('error')
+    expect(doneFrame?.data.response).toContain('Tools unavailable: the MCP gateway')
+    expect(
+      frames.some(
+        (f) =>
+          f.event === 'message' &&
+          f.data.type === 'error' &&
+          /Tools unavailable: the MCP gateway/.test(
+            String((f.data.data as { error?: string } | undefined)?.error ?? ''),
+          ),
+      ),
+      'the streamed error did not explain that required gateway data was unavailable',
+    ).toBe(true)
   })
 
   it('answers normally again once the gateway is back', async () => {
-    // The control, and the reason the refusal is safe to ship: the health state
-    // is a record of the LAST gateway read, so one successful `listTools`
-    // clears it. Without this case, a permanently-broken agent would pass every
-    // assertion above.
+    // Reuse the affected session: a cached empty tool list would make this
+    // later turn fail even though the gateway is listening again.
     await app.fakeGateway.goDown()
-    await app
-      .runTurn(newSessionId('gateway-down-first'), 'How many nodes are in the graph?')
-      .catch(() => undefined)
+    const sessionId = newSessionId('gateway-recovery')
+    const question = 'How many Project nodes are in the knowledge graph?'
+    const first = await app.runTurn(sessionId, question)
+    expect(first.response).toContain('Tools unavailable: the MCP gateway')
+    expect((await app.readRow(sessionId))!.status).toBe('error')
 
     await app.fakeGateway.comeBack()
-    const sessionId = newSessionId('gateway-back')
-
-    const result = await app.runTurn(sessionId, 'How many nodes are in the graph?')
+    const result = await app.runTurn(sessionId, question)
 
     expect(result.response).toContain(FAKE_ANSWER_MARK)
     const row = await app.readRow(sessionId)
     expect(row!.status).toBe('done')
-    expect(eventsOfType(row!.serializedContext, 'tool_result').length).toBeGreaterThan(0)
+    const graphRead = eventsOfType(row!.serializedContext, 'tool_result').find(
+      (event) => event.tool === 'read_neo4j_cypher',
+    )
+    expect(graphRead?.success).toBe(true)
+    expect(JSON.stringify(graphRead?.result)).toContain('42')
+    expect(
+      app.fakeGateway.toolCalls.filter((call) => call.name === 'read_neo4j_cypher'),
+    ).toHaveLength(1)
   })
 })

@@ -434,12 +434,13 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
         continue
       }
       const options = Object.keys((q.criteria ?? {}) as Record<string, unknown>)
-      // S3's graph-count conversation: choose the knowledge route once, then
-      // answer from its record. Other decision scenarios retain their policy.
+      // S3's graph-count conversation: choose the knowledge route once per
+      // turn, then answer from its record. Earlier turns are in the state too.
+      const thisTurnState = String(body.state).split('This turn so far:')[1] ?? ''
       const chosen =
         name === 'next_step' && options.includes('info-retrieval')
           ? options.indexOf(
-              String(body.state).includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
+              thisTurnState.includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
             )
           : q.instructions?.includes('Should a person confirm')
             ? confirmIndex

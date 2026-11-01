@@ -57,8 +57,7 @@
  * anyway, so it is weaker than always but stronger than gated) and
  * `roster < filter` for egress. Every value below a tier's DECLARED default
  * warns — the declared defaults are `general-next`'s (the Settings table):
- * `'shadow'` on the self-deployed tier until the eval bar moves it to
- * `'gated'`, `'always'` on the Anthropic tier, `'filter'` for the egress gate,
+ * `'gated'` on the self-deployed tier, `'always'` on the Anthropic tier, `'filter'` for the egress gate,
  * on for the pseudonymiser. A value AT or above the default warns never. A
  * number warns when it is looser than its default (a threshold above it, an N
  * above 0); one at or stricter than it warns never.
@@ -83,9 +82,8 @@ import {
 assertServerOnImport()
 
 /** The declared per-tier defaults for the screen (general-next's, and the
- *  design's Settings table). The self-deployed value moves to `'gated'` when
- *  the eval bar is met (slice 7) — flip it here and in the agent together. */
-const SCREEN_DEFAULTS = { self_deployed: 'shadow', anthropic: 'always' } as const
+ *  design's Settings table). Keep both maps in agreement. */
+const SCREEN_DEFAULTS = { self_deployed: 'gated', anthropic: 'always' } as const
 /** The declared default for the egress gate's mode. */
 const EGRESS_DEFAULT = 'filter' as const
 /** The declared default for the input pseudonymiser. */

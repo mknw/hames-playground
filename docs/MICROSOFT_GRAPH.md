@@ -15,12 +15,13 @@ Pattern C of the identity model in #107; issue #110.
 
 ## What it can do today
 
-Nine registered `graph` tools. All of them only ever **read** from Microsoft 365:
+Ten registered `graph` tools. All of them only ever **read** from Microsoft 365:
 
 | Tool                     | Reads                                                                         | Scope used                          |
 | ------------------------ | ----------------------------------------------------------------------------- | ----------------------------------- |
 | `graph_me`               | own profile (name, UPN, job title, office)                                    | `User.Read`                         |
 | `graph_calendar_today`   | own calendar for a given day (`day_offset`)                                   | `Calendars.ReadWrite`               |
+| `graph_calendar_range`   | own calendar occurrences across inclusive `start`/`end` dates                 | `Calendars.ReadWrite`               |
 | `graph_mail_recent`      | own inbox, newest first, optional `unread_only`                               | `Mail.Read`                         |
 | `graph_mail_attachments` | own sent/received mail carrying attachments, by person/date                   | `Mail.Read`                         |
 | `graph_files_search`     | files across own OneDrive **and** every reachable SharePoint site             | `Files.Read.All` + `Sites.Read.All` |
@@ -42,7 +43,7 @@ copies file bytes into the Data Stash for the same agent's document route.
 **Scopes and writes.** Sign-in requests the seven already-consented scopes:
 `User.Read`, `email`, `Mail.Read`, `Mail.Send`, `Calendars.ReadWrite`,
 `Files.Read.All`, `Sites.Read.All`; MSAL adds `openid`/`profile`/`offline_access`.
-`graph_calendar_today` uses `Calendars.ReadWrite` for reads. The app requests
+Both calendar tools use `Calendars.ReadWrite` for reads. The app requests
 `Mail.Send` and `Calendars.ReadWrite` but ships no Graph write tool; requesting
 these scopes adds no write tool. HITL write gating stays Neo4j-only. The owner
 is no longer asked to remove those permissions or revoke their grants. The shared
@@ -521,7 +522,18 @@ No auth or dispatch wiring to touch. Guidelines that keep turns small and safe:
 
 Event times come back in the zone named by the `Prefer: outlook.timezone`
 header, defaulting to the server's own zone (override with `GRAPH_TIMEZONE`).
-Day windows are therefore built as **naive local** ISO strings: sending UTC
+`graph_calendar_today` builds a **naive local** ISO day window: sending UTC
 instants would shift the day boundary and silently drop early or late meetings.
-`graph_calendar_today` also uses `/me/calendarView` rather than `/me/events` so
-recurring series expand into the day's occurrences.
+It uses `/me/calendarView` rather than `/me/events` so recurring series expand
+into the day's occurrences.
+
+`graph_calendar_range` accepts required `start` and `end` calendar dates in
+`YYYY-MM-DD` form. Both requested dates are inclusive, with a limit of 92 days.
+It queries `/me/calendarView` from the start of the first date through the start
+of the next date after `end` (exclusive), using the effective `GRAPH_TIMEZONE` or
+server timezone and an explicit offset on each bound. If local midnight is
+skipped by a clock change, that bound is the first valid instant on the date.
+Occurrences overlapping either boundary are included. The response echoes the
+requested dates and their format/inclusivity, effective timezone, and separate
+half-open query window. It returns at most 200 events over four pages of 50,
+with `count`, `truncated`, and a narrow-range hint when results remain.

@@ -139,6 +139,11 @@ describe('graph_calendar_range', () => {
       start: dates.start,
       end: dates.end,
       timezone: 'Europe/Brussels',
+      requestedDates: {
+        format: 'YYYY-MM-DD',
+        startInclusive: dates.start,
+        endInclusive: dates.end,
+      },
       window: {
         startInclusive: '2026-10-24T00:00:00+02:00',
         endExclusive: '2026-10-27T00:00:00+01:00',
@@ -158,6 +163,22 @@ describe('graph_calendar_range', () => {
       `outlook.timezone="${Intl.DateTimeFormat().resolvedOptions().timeZone}"`,
     )
   })
+
+  it.each([
+    [{ start: '2026-09-05', end: '2026-09-05' }, 'endDateTime'],
+    [{ start: '2026-09-06', end: '2026-09-06' }, 'startDateTime'],
+  ] as const)(
+    'uses the first valid instant after a skipped local midnight',
+    async (dates, bound) => {
+      vi.stubEnv('GRAPH_TIMEZONE', 'America/Santiago')
+      const res = await runAppTool('graph_calendar_range', dates)
+      expect(res.success).toBe(true)
+      const query = new URL(lastCall()[1], 'https://graph.microsoft.com').searchParams
+      const value = query.get(bound)
+      expect(value).toBe('2026-09-06T01:00:00-03:00')
+      expect(new Date(value!).toISOString()).toBe('2026-09-06T04:00:00.000Z')
+    },
+  )
 
   it('accepts exactly 92 inclusive calendar days', async () => {
     expect(

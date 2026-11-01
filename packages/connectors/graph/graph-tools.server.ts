@@ -280,15 +280,26 @@ function graphLocalMidnight(local: string, timezone: string): string {
       ? (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3] ?? 0))
       : 0
   }
-  let offset = offsetAt(utcMidnight)
-  for (let i = 0; i < 3; i++) {
-    const next = offsetAt(utcMidnight - offset * 60_000)
-    if (next === offset) break
-    offset = next
-  }
+  // An offset change at midnight can make 00:00 nonexistent. Try the offsets
+  // surrounding this date, then keep the earliest instant actually on it.
+  const offsets = new Set([
+    offsetAt(utcMidnight - 86_400_000),
+    offsetAt(utcMidnight),
+    offsetAt(utcMidnight + 86_400_000),
+  ])
+  const first = [...offsets]
+    .map((offset) => utcMidnight - offset * 60_000)
+    .filter((instant) => {
+      const localTime = new Date(instant + offsetAt(instant) * 60_000).toISOString()
+      return localTime.slice(0, 10) === day
+    })
+    .sort((a, b) => a - b)[0]
+  if (first === undefined) throw new Error(`Calendar date ${day} does not exist in ${timezone}.`)
+  const offset = offsetAt(first)
   const sign = offset < 0 ? '-' : '+'
   const absolute = Math.abs(offset)
-  return `${local}${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`
+  const localTime = new Date(first + offset * 60_000).toISOString().slice(0, 19)
+  return `${localTime}${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`
 }
 
 function calendarNextPath(raw: unknown): string | null {
@@ -1643,6 +1654,11 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
           start: args.start,
           end: args.end,
           timezone,
+          requestedDates: {
+            format: 'YYYY-MM-DD',
+            startInclusive: args.start,
+            endInclusive: args.end,
+          },
           window: {
             startInclusive: startWithOffset,
             endExclusive: endWithOffset,

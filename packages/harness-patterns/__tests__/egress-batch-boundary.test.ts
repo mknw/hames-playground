@@ -354,6 +354,9 @@ describe('rv895 independent correctness probes', () => {
     )
     expect(log).toEqual([])
     expect(result.data.result).toMatchObject({ success: false, error: EGRESS_BATCH_MISMATCH })
+    expect(
+      result.context.events.filter((e) => e.type === 'egress_blocked').map((e) => e.data),
+    ).toEqual([{ tool: 'web_search', route: null, rule: 'check-failed' }])
     expect(result.context.events.filter((e) => e.type === 'hitl_request')).toEqual([])
   })
 })

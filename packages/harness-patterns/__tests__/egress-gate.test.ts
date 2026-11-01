@@ -37,6 +37,7 @@ import {
   renderEgressState,
 } from '../egress-gate.server'
 import { callTool, EGRESS_CHECK_FAILED } from '../mcp-client.server'
+import { setLivePatternEnabled } from '../live-event-context.server'
 import { neutralizeFenceMarkers } from '../injection-guard'
 import { renderGuardGateState } from '../guard-gate.server'
 import { registerToolNamespaces } from '../tools.server'
@@ -1938,6 +1939,32 @@ it('a blocked name is recorded once without request content or a server-log copy
   ])
   expect(JSON.stringify(events.filter((e) => e.type === 'egress_blocked'))).not.toContain(sentinel)
   expect(logged.join('\n')).not.toContain(sentinel)
+})
+
+it('a live listener failure cannot turn one step-1 refusal into two blocks', async () => {
+  const sentinel = 'PRIVATE-LIVE-SENTINEL'
+  let throws = 0
+  let result: ToolCallResult | undefined
+  const events = await run(
+    { decide: egressDecide([PUBLIC]) },
+    async () => {
+      setLivePatternEnabled(true)
+      result = await callTool('web_search', { query: `PERSON_3 ${sentinel}` })
+    },
+    {
+      frame: {
+        live: (event) => {
+          if (event.type === 'egress_blocked' && throws++ === 0) throw new Error(sentinel)
+        },
+      },
+    },
+  )
+  expect(result).toMatchObject({ success: false, error: EGRESS_CHECK_FAILED })
+  expect(sent).not.toHaveBeenCalled()
+  expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
+    { tool: 'web_search', route: null, rule: 'placeholder' },
+  ])
+  expect(JSON.stringify(events)).not.toContain(sentinel)
 })
 
 // ============================================================================

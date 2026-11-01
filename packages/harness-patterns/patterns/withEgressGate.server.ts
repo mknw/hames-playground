@@ -489,6 +489,13 @@ interface Degraded {
   refusedUnchecked: number
 }
 
+/** A recorded event whose live delivery failed; never retain the listener's error. */
+class EgressLiveEmissionError extends Error {
+  constructor(readonly eventType: EventType) {
+    super('egress live event listener failed')
+  }
+}
+
 /**
  * Wrap a pattern so every outgoing call inside it is judged before it leaves.
  *
@@ -535,7 +542,13 @@ export function withEgressGate(config: EgressGateConfig) {
       const record = (type: EventType, data: unknown, call?: Parameters<typeof redactCall>[0]) => {
         const event = createEvent(type, scope.id, data, redactCall(call))
         scope.events.push(event)
-        emitLive(event)
+        try {
+          emitLive(event)
+        } catch {
+          // The record exists even when its live listener fails. Keep the
+          // listener's exception (which may contain request data) out of view.
+          throw new EgressLiveEmissionError(type)
+        }
       }
       const warn = (
         key: keyof typeof EGRESS_WARNINGS,
@@ -986,12 +999,14 @@ export function withEgressGate(config: EgressGateConfig) {
         try {
           if (isLocal(call.name)) return undefined
           return await check(call)
-        } catch {
-          record('egress_blocked', {
-            tool: egressToolLabel(call.name),
-            route: currentRunFrame()?.route ?? NO_ROUTE,
-            rule: 'check-failed',
-          } satisfies EgressBlockedEventData)
+        } catch (error) {
+          if (!(error instanceof EgressLiveEmissionError && error.eventType === 'egress_blocked')) {
+            record('egress_blocked', {
+              tool: egressToolLabel(call.name),
+              route: currentRunFrame()?.route ?? NO_ROUTE,
+              rule: 'check-failed',
+            } satisfies EgressBlockedEventData)
+          }
           throw new Error('egress check failed')
         }
       }

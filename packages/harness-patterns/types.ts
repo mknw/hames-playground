@@ -1378,8 +1378,12 @@ export interface ErrorEventData {
    *  on that event rather than joining it. Read `maxConsecutiveRecoveries`
    *  beside it for the cap.
    *
-   *  Absent for non-LLM errors (MCP failures, tool errors, etc.). */
-  kind?: 'llm_call' | 'budget_exhausted' | 'recovery_exhausted'
+   *  `gateway_unavailable` means a route needed the MCP gateway's catalog,
+   *  but the catalog could not be read. The enclosing decision loop preserves
+   *  this terminal failure so a missing lookup cannot become an answer.
+   *
+   *  Absent for other non-LLM errors (tool errors, etc.). */
+  kind?: 'llm_call' | 'budget_exhausted' | 'recovery_exhausted' | 'gateway_unavailable'
 }
 
 /**

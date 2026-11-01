@@ -6,10 +6,11 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { currentRunFrame, withToolCallId } from './run-frame.server'
+import { createHash } from 'node:crypto'
+import { currentRunFrame, withToolCallId, type BatchEgressHeld } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
-import { isHeldResult } from './hitl.server'
+import { canonicalJson, currentRunId, isHeldResult } from './hitl.server'
 import type { HeldResult, ToolCallResult, MCPToolDescription } from './types'
 import { isAgentWithheldTool, withholdingFor, type Withholding } from './agent-withheld-tools'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -282,10 +283,18 @@ async function withReconnect<T>(
         // ToolCallResult the controller can see and decide about — including
         // "check whether it went through" — which is the only safe answer when
         // the operation may or may not have executed.
+        const frame = currentRunFrame()
+        // A gateway error can quote outgoing arguments before N8 projects events.
+        const detail =
+          frame?.batchPhase === 'execute' && frame.batchPlanKey
+            ? 'transport error details withheld for executing batch'
+            : err instanceof Error
+              ? err.message
+              : String(err)
         console.warn(
           `[mcp-client] transport error on ${label ?? 'operation'} — not retried ` +
             `(it may already have executed on the server): ` +
-            `${err instanceof Error ? err.message : String(err)}`,
+            detail,
         )
         throw err
       }
@@ -305,6 +314,40 @@ async function withReconnect<T>(
  *  was withholding. One of the egress gate's fixed texts (boundary guards). */
 export const EGRESS_CHECK_FAILED =
   'Refused: the check on outgoing requests failed, so this request was not sent. Answer from what you already have.'
+export const SEND_OUTCOME_UNKNOWN =
+  'This request may have been sent, but its outcome was not recorded. It was not retried.'
+
+/** Run every pre-dispatch check without opening any transport. The denial wins
+ * over a person cell, just as it does in callTool. Only a batch preflight may
+ * consume a batchHeld verdict. */
+export async function preflightTool(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ denial?: string; held?: BatchEgressHeld; auditByDecide?: boolean }> {
+  if (currentRunFrame()?.batchPhase !== 'preflight') return { denial: EGRESS_CHECK_FAILED }
+  let denial: string | undefined
+  let held: BatchEgressHeld | undefined
+  let auditByDecide = false
+  for (const check of currentRunFrame()?.egressChecks ?? []) {
+    try {
+      const verdict = await check({ name, args })
+      if (typeof verdict === 'string' && verdict) denial ??= verdict
+      else if (verdict && typeof verdict === 'object') {
+        if ('batchHeld' in verdict) held ??= verdict.batchHeld
+        else if ('batchPassed' in verdict) auditByDecide = true
+        else if ('batchAudit' in verdict) denial ??= EGRESS_CHECK_FAILED
+        else if ('held' in verdict) denial ??= EGRESS_CHECK_FAILED
+      }
+    } catch {
+      denial ??= EGRESS_CHECK_FAILED
+    }
+  }
+  return {
+    ...(denial && { denial }),
+    ...(!denial && held && { held }),
+    ...(!denial && !held && auditByDecide && { auditByDecide }),
+  }
+}
 
 /**
  * Execute a tool and — when a `withInjectionGuard` wrapper is active and the
@@ -334,12 +377,24 @@ export async function callTool(
 ): Promise<ToolCallResult> {
   let denial: string | undefined
   let hold: HeldResult | undefined
+  const audits: (() => void)[] = []
   for (const check of currentRunFrame()?.egressChecks ?? []) {
     try {
       const verdict = await check({ name, args })
       if (typeof verdict === 'string' && verdict) denial ??= verdict
-      else if (verdict && typeof verdict === 'object' && isHeldResult(verdict.held)) {
+      else if (
+        verdict &&
+        typeof verdict === 'object' &&
+        'held' in verdict &&
+        isHeldResult(verdict.held)
+      ) {
         hold ??= verdict.held
+      } else if (verdict && typeof verdict === 'object' && 'batchHeld' in verdict) {
+        denial ??= EGRESS_CHECK_FAILED
+      } else if (verdict && typeof verdict === 'object' && 'batchPassed' in verdict) {
+        denial ??= EGRESS_CHECK_FAILED
+      } else if (verdict && typeof verdict === 'object' && 'batchAudit' in verdict) {
+        audits.push(verdict.batchAudit)
       }
     } catch {
       // An unavailable check must not turn into an unchecked dispatch, and its
@@ -352,29 +407,60 @@ export async function callTool(
   // and the loop pauses on it (boundary guards slice 10).
   if (denial) return { success: false, data: null, error: denial }
   if (hold) return { success: true, data: hold }
-  return withToolCallId(async (id) => {
-    const guarded = await applyGuard(name, await dispatchTool(name, args), id)
-    // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
-    // result, and a replacement is new content the guard has not seen, so it is
-    // put through the same guard pass as a dispatched result. "Changed" is
-    // decided by CONTENT and never by object identity (#599 delta F1): each hook
-    // is handed a private deep copy, so nothing it does to what it was given can
-    // reach the guarded result, and every returned result is compared with the one
-    // the hook was given a copy of. A hook that returns nothing changes nothing;
-    // one that returns equal content, in whatever object, costs no second pass.
-    // Read softly like the guard — outside a run there are none.
-    let result = guarded
-    let changed = false
-    for (const hook of currentRunFrame()?.afterToolCall ?? []) {
-      const input = cloneResult(result)
-      const out = await hook({ id, name, args }, input)
-      if (out === undefined) continue
-      if (sameContent(out, result)) continue
-      result = out
-      changed = true
+  if (audits.length && currentRunFrame()?.batchPhase !== 'execute')
+    return { success: false, data: null, error: EGRESS_CHECK_FAILED }
+  const send = () =>
+    withToolCallId(async (id) => {
+      const guarded = await applyGuard(name, await dispatchTool(name, args), id)
+      // Scoped after-call hooks (#507 N4), innermost first. A hook may REPLACE the
+      // result, and a replacement is new content the guard has not seen, so it is
+      // put through the same guard pass as a dispatched result. "Changed" is
+      // decided by CONTENT and never by object identity (#599 delta F1): each hook
+      // is handed a private deep copy, so nothing it does to what it was given can
+      // reach the guarded result, and every returned result is compared with the one
+      // the hook was given a copy of. A hook that returns nothing changes nothing;
+      // one that returns equal content, in whatever object, costs no second pass.
+      // Read softly like the guard — outside a run there are none.
+      let result = guarded
+      let changed = false
+      for (const hook of currentRunFrame()?.afterToolCall ?? []) {
+        const input = cloneResult(result)
+        const out = await hook({ id, name, args }, input)
+        if (out === undefined) continue
+        if (sameContent(out, result)) continue
+        result = out
+        changed = true
+      }
+      return changed ? applyGuard(name, result, id) : result
+    })
+  const frame = currentRunFrame()
+  if (frame?.batchPhase !== 'execute') return send()
+  const runId = currentRunId()
+  const callKey = frame.callKey
+  const claims = frame.toolSendClaims
+  if (!runId || !callKey || !claims) {
+    return { success: false, data: null, error: EGRESS_CHECK_FAILED }
+  }
+  const digest = createHash('sha256')
+    .update(canonicalJson({ tool: name, args }))
+    .digest('hex')
+  try {
+    const claim = await claims.claim({ runId, callKey, digest })
+    if (claim.status === 'finished') {
+      for (const audit of audits) audit()
+      return claim.result
     }
-    return changed ? applyGuard(name, result, id) : result
-  })
+    if (claim.status === 'mismatch')
+      return { success: false, data: null, error: EGRESS_CHECK_FAILED }
+    if (claim.status === 'unknown')
+      return { success: false, data: null, error: SEND_OUTCOME_UNKNOWN }
+    const result = await send()
+    for (const audit of audits) audit()
+    await claims.finish({ runId, callKey, digest, result })
+    return result
+  } catch {
+    return { success: false, data: null, error: SEND_OUTCOME_UNKNOWN }
+  }
 }
 
 /** A private deep copy of a tool result for a hook. Tool results are JSON-shaped;

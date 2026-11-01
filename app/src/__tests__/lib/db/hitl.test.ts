@@ -311,10 +311,10 @@ describe('the expiry sweep', () => {
       answer: { choice: 'approve' },
     })
 
-    const swept = await sweepExpiredHitl()
-
-    expect(swept.quarantine).toBe(1)
-    expect(swept.payloads).toBe(1)
+    // Schema boot in another Vitest worker can start its own immediate sweep
+    // between these inserts and this call. Assert the persisted outcome rather
+    // than which process won the global DELETE/UPDATE race.
+    await sweepExpiredHitl()
     expect(await getQuarantine(rid('swept'), 'alice')).toBeNull()
     expect(await getQuarantine(rid('kept'), 'alice')).not.toBeNull()
     const { rows } = await query<{ request_id: string; status: string; payload: string | null }>(

@@ -50,7 +50,7 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
   const [closedAs, setClosedAs] = createSignal<'expired' | 'superseded' | null>(null)
   const [announced, setAnnounced] = createSignal('')
   /** The person's choices so far, by request id; sent together after the last. */
-  let answers: Record<string, string> = {}
+  let answers: Record<string, string | { choice: string; flags: Record<string, boolean> }> = {}
   /** When the dialog last stepped to the next request: a press inside
    *  {@link STEP_GUARD_MS} of it (a double-click, a held key) is the same
    *  gesture as the one before, never an answer to a request nobody read. */
@@ -151,10 +151,10 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
     return 'ready'
   }
 
-  const choose = async (optionId: string) => {
+  const choose = async (optionId: string, flags?: Record<string, boolean>) => {
     const r = current()
     if (!r || submitting() || Date.now() - steppedAt < STEP_GUARD_MS) return
-    answers[r.requestId] = optionId
+    answers[r.requestId] = flags ? { choice: optionId, flags } : optionId
     if (index() + 1 < unanswered().length) {
       steppedAt = Date.now()
       setIndex(index() + 1)
@@ -303,7 +303,7 @@ export function BlockingRequestPrompt(props: BlockingRequestPromptProps) {
         busy={submitting()}
         notice={notice()}
         position={{ index: index(), count: unanswered().length }}
-        onChoose={(id) => void choose(id)}
+        onChoose={(id, flags) => void choose(id, flags)}
         onRetry={() => void refresh(props.sessionId)}
       />
     </>

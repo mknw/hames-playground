@@ -523,6 +523,7 @@ describe('inventory', () => {
       'memories',
       'routines',
       'skills',
+      'tool_send_claims',
       'users',
     ])
   })

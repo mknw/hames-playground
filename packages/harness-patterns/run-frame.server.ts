@@ -113,7 +113,59 @@ export type EgressCheck = (call: {
 /** A denial (its feedback), nothing (the call goes), or the call HELD for a
  *  person (boundary guards slice 10): `callTool` returns the placeholder as
  *  the call's result, dispatches nothing, and the loop pauses on it. */
-export type EgressVerdict = string | void | { readonly held: HeldResult }
+export interface BatchEgressHeld {
+  readonly cause: 'decide' | 'unchecked'
+  readonly category?: 'personal' | 'company'
+  readonly route: string | null
+  readonly payload: {
+    readonly tool: string
+    readonly args: Readonly<Record<string, unknown>>
+    readonly lines: readonly string[]
+    readonly hosts: readonly string[]
+    readonly spans: readonly string[]
+  }
+}
+
+export interface PreparedBatchEgress {
+  readonly callKey: string
+  readonly digest: string
+  readonly route: string | null
+  /** Identity of the whole preflighted plan, including a zero-held plan. */
+  readonly batchPlanKey: string
+  /** Required for an accepted or refused held row; absent for a gate pass. */
+  readonly requestId?: string
+  readonly decision: 'pass' | 'accept' | 'refuse'
+  readonly auditByDecide?: boolean
+  readonly cause?: 'decide' | 'unchecked'
+  readonly category?: 'personal' | 'company'
+}
+
+/** The host binds this store to one owner and conversation. A started claim
+ * survives a crash and is never treated as permission to retry. */
+export interface ToolSendClaims {
+  claim(input: {
+    readonly runId: string
+    readonly callKey: string
+    readonly digest: string
+  }): Promise<
+    | { readonly status: 'new' | 'unknown' | 'mismatch' }
+    | { readonly status: 'finished'; readonly result: ToolCallResult }
+  >
+  finish(input: {
+    readonly runId: string
+    readonly callKey: string
+    readonly digest: string
+    readonly result: ToolCallResult
+  }): Promise<void>
+}
+
+export type EgressVerdict =
+  | string
+  | void
+  | { readonly held: HeldResult }
+  | { readonly batchHeld: BatchEgressHeld }
+  | { readonly batchPassed: true }
+  | { readonly batchAudit: () => void }
 
 /** One stash document write, as an observer sees it: which conversation's stash
  *  and which document. Never the content. */
@@ -198,6 +250,15 @@ export interface RunFrame {
   /** The call this code runs inside is one of a multi-call turn, which cannot
    *  pause part way. Set by `simpleLoop` around each dispatch (slice 10). */
   batch?: boolean
+  /** N8: a batch checks every member before sending any member. */
+  batchPhase?: 'preflight' | 'execute'
+  batchPlanKey?: string
+  /** The exact preflight decision for this logical call, checked by the gate. */
+  batchPrepared?: PreparedBatchEgress
+  /** Installed by the egress wrapper when attended batches may use N8. */
+  egressBatchEnabled?: boolean
+  toolSendClaims?: ToolSendClaims
+  batchRefuseAll?: () => void
 }
 
 /** What a resumed invocation is handed (slice 6). */
@@ -250,6 +311,12 @@ export interface ActiveRunFrame {
   readonly hitlPayloads?: HitlPayloadStore
   readonly continuationRoot?: string | null
   readonly batch?: boolean
+  readonly batchPhase?: 'preflight' | 'execute'
+  readonly batchPlanKey?: string
+  readonly batchPrepared?: PreparedBatchEgress
+  readonly egressBatchEnabled?: boolean
+  readonly toolSendClaims?: ToolSendClaims
+  readonly batchRefuseAll?: () => void
 }
 
 const NO_HOOKS: readonly never[] = Object.freeze([])
@@ -396,6 +463,12 @@ function build(frame: RunFrame): ActiveRunFrame {
     hitlPayloads: frame.hitlPayloads,
     continuationRoot: frame.continuationRoot,
     batch: frame.batch,
+    batchPhase: frame.batchPhase,
+    batchPlanKey: frame.batchPlanKey,
+    batchPrepared: frame.batchPrepared,
+    egressBatchEnabled: frame.egressBatchEnabled,
+    toolSendClaims: frame.toolSendClaims,
+    batchRefuseAll: frame.batchRefuseAll,
   }
 }
 
@@ -534,6 +607,12 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
     continuationRoot:
       partial.continuationRoot !== undefined ? partial.continuationRoot : open.continuationRoot,
     batch: partial.batch ?? open.batch,
+    batchPhase: partial.batchPhase ?? open.batchPhase,
+    batchPlanKey: partial.batchPlanKey ?? open.batchPlanKey,
+    batchPrepared: partial.batchPrepared ?? open.batchPrepared,
+    egressBatchEnabled: partial.egressBatchEnabled ?? open.egressBatchEnabled,
+    toolSendClaims: partial.toolSendClaims ?? open.toolSendClaims,
+    batchRefuseAll: partial.batchRefuseAll ?? open.batchRefuseAll,
   }
   return store.run(amended, fn)
 }

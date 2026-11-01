@@ -2681,7 +2681,12 @@ re-enters inside the pattern that paused, "as if it had not stopped".
     rounds' events through ONE projection that the live rounds use as well, so
     the next controller input of a resumed run equals that of a run that never
     paused, given the same outcome. No earlier tool is dispatched again: the
-    held call's entry carries its outcome.
+    held call's entry carries its outcome. For an attended resumable N8 batch,
+    the encrypted host plan restores exact arguments; its action and call events
+    contain metadata only. Each released call checks the prepared plan, recorded
+    request and answer, then claims its durable send identity before transport.
+    A `started` claim with no result reports outcome unknown without a retry;
+    a `finished` claim reuses its recorded result without another send.
   - `withReferences` re-attaches its recorded `reference_attached` selection
     (recorded by default) instead of calling the selector.
   - The stateless wrappers pass the resume through. The egress gate's tripwire
@@ -2768,9 +2773,7 @@ run can pause. Both use the mechanism above; neither invents an answer path.
   the same rule for a call construction could not see.
 - **The egress prompt (`egress-release`).** A Decide refusal at τe, and the
   `empty`, `none` and asked `loaded` cells with Decide down, raise it when the
-  call can pause and is not one of a batch (the run frame's `batch`, which
-  `simpleLoop` sets around each dispatch: a batch cannot pause part way, so a
-  batched call takes Refuse, O16). Its options, in the owner's order:
+  call can pause and is not one of a batch. Its options, in the owner's order:
   **Refuse** (the default and the only one the unattended rule may pick),
   **Accept**, **Refuse all similar actions**, and **Interrupt** (`stopsRun`).
   Its `summary` is `{ category, closes }` only; the arguments, their readable
@@ -2779,6 +2782,20 @@ run can pause. Both use the mechanism above; neither invents an answer path.
   egress check returns `{ held }`, `callTool` returns the placeholder (marked
   `redispatch`) without dispatching, and the loop pauses on it. A denial from
   another check wins over a hold.
+- **The attended batch prompt (`egress-batch-release`, N8).** On a whole
+  resumable path, `simpleLoop` preflights every eligible member before any
+  dispatch. One encrypted host plan holds exact arguments and the controller
+  action. If any row is held, one checklist presents the rows in call order,
+  defaulting each to Refuse; Continue releases only selected rows, Refuse all
+  closes the turn, and Interrupt stops it. A denial from another check wins
+  before a row can be held. A batch with zero held rows still uses a prepared
+  plan and metadata-only action and call events; its passes have explicit
+  batch-plan identity, not a person acceptance. The gate checks each released
+  call's key, argument digest, route and plan identity, plus the recorded
+  request and answer for an accepted row. The durable send claim prevents a
+  resumed host from sending a call twice.
+- **O16 remains for unattended or non-pausable batches.** They cannot raise a
+  checklist; a person cell takes Refuse before transport.
 - **Re-entry (O15).** `substituteHeld` keeps the `redispatch` mark on the
   event; the resumed `simpleLoop` dispatches that call again, under its own
   callId and callKey, before its next controller turn, and the gate answers

@@ -59,6 +59,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 const GRAPH = [
   'graph_me',
   'graph_calendar_today',
+  'graph_calendar_range',
   'graph_mail_recent',
   'graph_mail_attachments',
   'graph_files_search',
@@ -403,8 +404,8 @@ describe('general-next composition', () => {
     )
     expect(state).not.toContain('Choose the route whose own tools perform the next step')
     expect(criteria['office-data']).toBe(
-      'Read this user’s Microsoft 365 mail, calendar and file metadata; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
-        'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
+      'Read mail, calendar date ranges and files; compute and save files in the office sandbox; exact calculation on numbers in the user’s message is run here as code.\n' +
+        'Tools: mail/calendar (graph_mail_recent, graph_mail_attachments, graph_calendar_today, graph_calendar_range), files (graph_files_search, graph_files_list, graph_files_recent, graph_files_shared, graph_file_ingest copies in), sandbox (run code, save deliverables), profile (graph_me).',
     )
     expect(criteria['info-retrieval']).toBe(
       'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
@@ -987,6 +988,37 @@ describe('general-next composition', () => {
     expect(egressStates).toEqual([])
   })
 
+  it('routes a prior-month calendar request to the local, guarded Graph range reader', async () => {
+    choices = ['office-data', 'answer']
+    mocks.actor.mockResolvedValueOnce({
+      action: {
+        reasoning: 'calendar month',
+        tool_name: 'graph_calendar_range',
+        tool_args: JSON.stringify({ start: '2026-10-01', end: '2026-10-31' }),
+        is_final: true,
+      },
+    })
+    const result = await run(
+      'self_deployed',
+      deps,
+      'List my calendar events last month (October 2026)',
+    )
+    expect(requests.mock.calls[0][1].body).toContain('graph_calendar_range')
+    expect(gateway.calls).toContain('graph_calendar_range')
+    expect(
+      result.context.events.some(
+        (e) =>
+          e.type === 'tool_result' && (e.data as { tool: string }).tool === 'graph_calendar_range',
+      ),
+    ).toBe(true)
+    expect(egressStates).toEqual([])
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    expect(
+      walk(patterns).find((p) => p.config.patternId === 'doc')?.injectionGuard?.namespaces,
+    ).toContain('graph')
+    expect(composition.egress.local).toContain('graph')
+  })
+
   it('S3b: a gateway without context7 still builds, with that namespace undeclared', async () => {
     gateway.names = [...GRAPH, 'get_neo4j_schema', 'read_neo4j_cypher', 'search', 'fetch']
     const patterns = await agent.createPatterns('synthetic-session', deps)
@@ -1029,6 +1061,7 @@ describe('general-next composition', () => {
       }
       expect(fewShots.map((s) => s.tool)).toEqual(
         [
+          'graph_calendar_range',
           'graph_mail_recent',
           'graph_files_search',
           'sandbox_bash',
@@ -1378,9 +1411,7 @@ describe('general-next composition', () => {
       const intent = mocks.critic.mock.calls[0][0]
       const [request, scope] = intent.split(`\n\n${ROUTE_SCOPE_HEADING}:\n`)
       expect(request).toBe(message)
-      expect(scope).toMatch(
-        /^- office-data: Read this user’s Microsoft 365 mail, calendar and file metadata; /,
-      )
+      expect(scope).toMatch(/^- office-data: Read mail, calendar date ranges and files; /)
       // #832 (owner, 2026-10-28): the office step saves the file and the user indexes it
       // from the Data Stash, so "index it for this chat" is answered by saying so, not
       // missing from the step's results. MUTATION: drop the sentence from the office-data

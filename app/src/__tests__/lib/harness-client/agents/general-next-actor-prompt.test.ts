@@ -16,6 +16,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 const OFFICE = [
   'graph_me',
   'graph_calendar_today',
+  'graph_calendar_range',
   'graph_mail_recent',
   'graph_mail_attachments',
   'graph_files_search',
@@ -171,9 +172,10 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       .split('\n')
       .filter((line) => line.trim().startsWith('{"reasoning":'))
       .map((line) => JSON.parse(line))
-    // Six domain shots and the existing mode-gated sequential batch.
+    // Seven domain shots and the existing mode-gated sequential batch.
     expect(actions.map((a) => a.tool_name)).toEqual([
       'sandbox_write',
+      'graph_calendar_range',
       'graph_mail_recent',
       'graph_files_search',
       'sandbox_bash',
@@ -188,10 +190,11 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
       expect(action.is_final).toBe(false)
       expect(action.tool_name).not.toBe('Return')
     }
-    expect(JSON.parse(actions[1].tool_args)).toEqual({ unread_only: true, limit: 3 })
-    expect(JSON.parse(actions[2].tool_args)).toEqual({ query: 'sample budget', file_type: 'xlsx' })
-    expect(JSON.parse(actions[3].tool_args).command).toContain("doc.save('/work/out/sample.docx')")
-    expect(JSON.parse(actions[3].tool_args).command).toContain("python3 - <<'PY'\n")
+    expect(JSON.parse(actions[1].tool_args)).toEqual({ start: '2026-10-01', end: '2026-10-31' })
+    expect(JSON.parse(actions[2].tool_args)).toEqual({ unread_only: true, limit: 3 })
+    expect(JSON.parse(actions[3].tool_args)).toEqual({ query: 'sample budget', file_type: 'xlsx' })
+    expect(JSON.parse(actions[4].tool_args).command).toContain("doc.save('/work/out/sample.docx')")
+    expect(JSON.parse(actions[4].tool_args).command).toContain("python3 - <<'PY'\n")
   })
 
   // #507 run 2: every Markdown deliverable (11, 14, 17) failed while .docx and .csv passed,
@@ -288,7 +291,7 @@ describe.each([0, 1])('#507 office envelope (wire %i)', (wire) => {
 
   // MUTATIONS: rename unread_only / file_type in the registered Graph
   // schemas, or add a required property. The examples must fail this contract.
-  it.each(['graph_mail_recent', 'graph_files_search'])(
+  it.each(['graph_calendar_range', 'graph_mail_recent', 'graph_files_search'])(
     'keeps the %s example arguments within the registered schema',
     (name) => {
       const action = examples[wire]

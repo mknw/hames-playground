@@ -12,7 +12,7 @@ ENV
 cat >"$TMP/bin/git" <<'SH'
 #!/bin/sh
 case "$*" in
-  'archive '*) tar -cf - --files-from /dev/null ;;
+  'archive '*) tar -cf - docker-compose.yaml docker-compose.prod.yaml ;;
   'show '*) printf 'services: {}\n' ;;
   *) exit 99 ;;
 esac
@@ -50,6 +50,8 @@ assert lines[:2] == [
 print("\n".join(lines[:2]))
 PY
 cd "$TMP"
+printf 'services: {}\n' > docker-compose.yaml
+printf 'services: {}\n' > docker-compose.prod.yaml
 
 # Execute the runbook's first mutating command pair in a fake shell.
 stop_block() {

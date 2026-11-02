@@ -23,15 +23,25 @@ service env-file declarations from being discarded during the intermediate
 render. Keep the host's protected runtime env files in place.
 
 The gate supports scalar anchors/aliases (including repeated scalar anchor
-names, where later aliases use the latest value) and the Compose `!override` /
+names, where later aliases use the latest value), separator tabs and the Compose `!override` /
 `!reset` tags. Across the target tree, it refuses every `<<` merge key, mapping/sequence
 anchor or alias, other custom tag, `!!binary` tag, and reserved gate extension before hashing
 or rewriting configuration. The error identifies the source file and line;
 rewrite unsupported input before retrying. Compose still resolves supported
 file overlays, `include` and `extends`. YAML composition errors, including
 unresolved aliases, refuse with a file and line instead of skipping the document.
-Syntactically invalid non-YAML archive members remain ignored; Compose must
-still accept every file it loads.
+A parser error never proves that a file is irrelevant. Before hashing, the gate
+follows the selected Compose files' local literal `include` and `extends.file`
+references and refuses any unreadable selected input. It ignores an unreadable
+archive member only after excluding it from that input graph. Interpolated,
+remote, absolute, symlinked or missing references, paths outside the target tree and include
+`project_directory` overrides or multi-directory include overlays are unresolved
+and refuse before hashing; use
+literal in-tree references for this restricted upgrade. Declaration preservation
+receives only the selected validated nodes, so excluded members cannot rewrite
+selected files. It does not parse and potentially skip those nodes again.
+The measured compatibility covers Compose 2.39.4 and 5.6.0, including separator
+tabs and BOM-bearing UTF-16; it is not a claim of exhaustive parser equivalence.
 
 ## 1. Stop writers and take local dumps before changing the checkout
 

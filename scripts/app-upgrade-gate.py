@@ -253,7 +253,35 @@ def check_prediction(project, embedder_changed, clones=False, run_compose=None,
 ENV_FILE_MARKER = "x-upgrade-gate-env-file"
 
 
+def tab_separators(scan):
+    """Let whitespace scanners see tabs without changing scalar source bytes."""
+    def wrapped(self, *args):
+        previous = self.separating_tabs
+        self.separating_tabs = True
+        try:
+            return scan(self, *args)
+        finally:
+            self.separating_tabs = previous
+    return wrapped
+
+
 class ComposeLoader(yaml.SafeLoader):
+    separating_tabs = False
+
+    def peek(self, index=0):
+        char = super().peek(index)
+        return " " if self.separating_tabs and char == "\t" else char
+
+    # PyYAML forbids tabs in several separation positions that Compose accepts.
+    # Only scanner lookahead changes: prefix() still returns the original text,
+    # so tabs within plain/quoted/block scalars and source marks stay intact.
+    scan_to_next_token = tab_separators(yaml.SafeLoader.scan_to_next_token)
+    scan_plain_spaces = tab_separators(yaml.SafeLoader.scan_plain_spaces)
+    scan_tag = tab_separators(yaml.SafeLoader.scan_tag)
+    scan_directive = tab_separators(yaml.SafeLoader.scan_directive)
+    scan_block_scalar_indicators = tab_separators(yaml.SafeLoader.scan_block_scalar_indicators)
+    scan_block_scalar_ignored_line = tab_separators(yaml.SafeLoader.scan_block_scalar_ignored_line)
+
     def compose_node(self, parent, index):
         event = self.peek_event()
         # Compose rebinds a repeated scalar anchor for subsequent aliases.
@@ -295,27 +323,105 @@ def validate_target_tree(root):
 
     # References can use any filename. Read bytes so YAML's UTF-16 BOM support
     # applies too: a UTF-8 decode failure is not proof of a non-YAML member.
-    # Only syntax/reader errors can mark non-YAML; composition errors refuse.
-    # Compose still validates every file it loads.
+    # A parse failure is unresolved, not evidence of an irrelevant member.
+    # Selection below must exclude it independently before hashing.
+    documents, errors = {}, {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         violations = []
         try:
-            list(yaml.compose_all(path.read_bytes(), Loader=SubsetLoader))
+            documents[path] = list(yaml.compose_all(path.read_bytes(), Loader=SubsetLoader))
         except yaml.composer.ComposerError as error:
             # Composition failures can follow valid YAML syntax. Never classify
             # these as an irrelevant archive member or skip the rest silently.
             violations.append((error.problem_mark.line + 1, "unresolved or duplicate YAML anchor"))
-        except (yaml.reader.ReaderError, yaml.scanner.ScannerError, yaml.parser.ParserError):
-            pass  # A later parse error must not erase an observed refusal.
+        except (yaml.reader.ReaderError, yaml.scanner.ScannerError, yaml.parser.ParserError) as error:
+            mark = getattr(error, "problem_mark", None)
+            errors[path] = (mark.line + 1 if mark else 1, type(error).__name__)
         if violations:
             line, what = violations[0]
             stop(f"unsupported Compose YAML construct at {path.relative_to(root)}:{line}: {what}; this gate refuses it")
+    return documents, errors
 
 
-def preserve_env_files(root):
+def validate_compose_inputs(root, documents, errors, files):
+    """Prove exclusion by following every local include/extends input.
+
+    An unresolved reference refuses: never infer non-selection from a parser
+    error, filename extension, or an attempted reconstruction of interpolation.
+    """
+    root = root.resolve()
+    documents = {path.resolve(): nodes for path, nodes in documents.items()}
+    errors = {path.resolve(): error for path, error in errors.items()}
+
+    def refuse(path, line, what):
+        stop(f"unsupported Compose YAML construct at {path.relative_to(root)}:{line}: {what}; this gate refuses it")
+
+    def fields(node):
+        return node.value if isinstance(node, yaml.MappingNode) else []
+
+    def reference(node, source):
+        line = node.start_mark.line + 1
+        if not isinstance(node, yaml.ScalarNode) or not node.value or any(c in node.value for c in ("$", ":")):
+            refuse(source, line, "unresolved Compose input")
+        candidate = Path(os.path.abspath(source.parent / node.value))
+        path = candidate.resolve()
+        if (Path(node.value).is_absolute() or path != candidate
+                or not path.is_relative_to(root) or not path.is_file()):
+            refuse(source, line, "unresolved Compose input")
+        pending.append(path)
+        return path
+
+    pending = [root / name for name in files]
+    seen = set()
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        if path.resolve() != path:
+            refuse(path, 1, "unresolved Compose input symlink")
+        if path in errors:
+            line, kind = errors[path]
+            refuse(path, line, "unreadable selected Compose YAML (" + kind + ")")
+        if path not in documents:
+            refuse(path, 1, "unresolved Compose input")
+        for document in documents[path]:
+            for key, value in fields(document):
+                if key.value == "include" and value.tag != "!reset":
+                    if not isinstance(value, yaml.SequenceNode):
+                        refuse(path, key.start_mark.line + 1, "unresolved Compose input")
+                    for entry in value.value:
+                        if isinstance(entry, yaml.MappingNode):
+                            if not any(name.value == "path" for name, _ in fields(entry)):
+                                refuse(path, entry.start_mark.line + 1, "unresolved Compose input")
+                            for name, setting in fields(entry):
+                                if name.value == "project_directory":
+                                    refuse(path, name.start_mark.line + 1, "unresolved Compose input project_directory")
+                                if name.value == "path":
+                                    items = setting.value if isinstance(setting, yaml.SequenceNode) else [setting]
+                                    paths = [reference(item, path) for item in items]
+                                    # One include can overlay several files under
+                                    # a shared project directory. Different source
+                                    # directories make relative references ambiguous.
+                                    if not paths or len({item.parent for item in paths}) != 1:
+                                        refuse(path, setting.start_mark.line + 1, "unresolved Compose input directories")
+                        else:
+                            reference(entry, path)
+                if key.value == "services":
+                    for _, service in fields(value):
+                        for name, setting in fields(service):
+                            if name.value == "extends" and setting.tag != "!reset":
+                                for field, target in fields(setting):
+                                    if field.value == "file":
+                                        reference(target, path)
+    return {path: documents[path] for path in seen}
+
+
+def preserve_env_files(root, documents=None):
     """Keep service env_file declarations through Compose's YAML rendering."""
+    root = root.resolve()
     def rename(node, seen, parent, service_map=False):
         visit = (id(node), service_map)
         if visit in seen:
@@ -357,20 +463,15 @@ def preserve_env_files(root):
                 changed = rename(value, seen, parent, service_map) or changed
         return changed
 
-    # References may use any filename, not just *.yaml. Non-YAML archive
-    # members are left alone; Compose still validates every file it loads.
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        try:
-            documents = list(yaml.compose_all(path.read_bytes(), Loader=ComposeLoader))
-        except yaml.composer.ComposerError as error:
-            stop(f"unsupported Compose YAML construct at {path.relative_to(root)}:{error.problem_mark.line + 1}: "
-                 "unresolved or duplicate YAML anchor; this gate refuses it")
-        except (yaml.reader.ReaderError, yaml.scanner.ScannerError, yaml.parser.ParserError):
-            continue
+    # Reuse the exact validated nodes; a second parser pass cannot silently
+    # exempt a selected document from declaration preservation.
+    if documents is None:
+        documents, errors = validate_target_tree(root)
+        if errors:
+            stop("unresolved Compose inputs before declaration preservation")
+    for path, nodes in documents.items():
         changed = False
-        for node in documents:
+        for node in nodes:
             if not isinstance(node, yaml.MappingNode):
                 continue
             seen = set()
@@ -378,7 +479,7 @@ def preserve_env_files(root):
                 if key.value == "services" and isinstance(value, yaml.MappingNode):
                     changed = rename(value, seen, str(path.parent.relative_to(root)), service_map=True) or changed
         if changed:
-            path.write_text(yaml.serialize_all(documents))
+            path.write_text(yaml.serialize_all(nodes))
 
 
 def target_prediction(target_sha):
@@ -390,9 +491,10 @@ def target_prediction(target_sha):
         # Compose 2.39 resolves and drops them, changing config --hash output.
         with tarfile.open(fileobj=io.BytesIO(command("git", "archive", target_sha))) as archive:
             archive.extractall(directory, filter="data")
-        validate_target_tree(Path(directory))
+        documents, errors = validate_target_tree(Path(directory))
+        documents = validate_compose_inputs(Path(directory), documents, errors, compose_files().split(":"))
         files, project, current = configuration()
-        preserve_env_files(Path(directory))
+        preserve_env_files(Path(directory), documents)
         target_files = [part for name in files.split(":")
                         for part in ("-f", str(Path(directory) / name))]
         project_directory = directory

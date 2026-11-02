@@ -22,6 +22,13 @@ Compose inheritance and merge tags are still resolved by Compose; PyYAML keeps
 service env-file declarations from being discarded during the intermediate
 render. Keep the host's protected runtime env files in place.
 
+The gate supports scalar anchors/aliases and the Compose `!override` / `!reset`
+tags. Across the target tree, it refuses every `<<` merge key, mapping/sequence
+anchor or alias, other custom tag, and reserved gate extension before hashing
+or rewriting configuration. The error identifies the source file and line;
+rewrite unsupported input before retrying. Compose still resolves supported
+file overlays, `include` and `extends`.
+
 ## 1. Stop writers and take local dumps before changing the checkout
 
 Hold public ingress for **both hostnames** at the operator's external maintenance

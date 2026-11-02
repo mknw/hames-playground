@@ -164,6 +164,100 @@ esac
             self.assertIn('compose stop app', (root / 'trace').read_text())
 
 
+class ComposeSubsetReview(unittest.TestCase):
+    def refuses(self, body, line, what, name='parts/target.compose'):
+        # An unselected, arbitrarily named file still belongs to the target tree.
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode='w') as archive:
+            for filename, text in {'docker-compose.yaml': 'services: {app: {env_file: ./runtime.env}}',
+                                   name: body}.items():
+                raw = text.encode()
+                member = tarfile.TarInfo(filename); member.size = len(raw)
+                archive.addfile(member, io.BytesIO(raw))
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / 'prediction.json'
+            def command(*args):
+                self.assertEqual(args, ('git', 'archive', SHA))
+                return output.getvalue()
+            with patch.object(gate, 'command', side_effect=command), \
+                 patch.object(gate, 'configuration', side_effect=AssertionError('Hashing began')) as config, \
+                 patch.object(gate, 'preserve_env_files', side_effect=AssertionError('Target rewrite began')) as preserve, \
+                 patch.object(gate.subprocess, 'run', side_effect=AssertionError('External effect began')), \
+                 patch.object(gate.sys, 'argv', ['gate', 'predict', SHA, str(artifact)]):
+                expected = f'unsupported Compose YAML construct at {name}:{line}: {what}; this gate refuses it'
+                with self.assertRaisesRegex(SystemExit, re.escape(expected)):
+                    gate.main()
+                config.assert_not_called()
+                preserve.assert_not_called()
+                self.assertFalse(artifact.exists())
+
+    def test_root_merge_key_refuses(self):
+        self.refuses('name: fixture\n<<: {}\n', 2, 'merge key <<')
+
+    def test_nested_merge_key_refuses(self):
+        for key in ('<<', '"<<"', "'<<'"):
+            with self.subTest(key=key):
+                self.refuses('x-extra:\n  - nested:\n      ' + key + ': {}\n', 3, 'merge key <<')
+
+    def test_aliased_merge_key_refuses(self):
+        self.refuses('x-key: &key <<\nx-extra:\n  *key: {}\n', 3, 'merge key <<')
+
+    def test_mapping_anchor_refuses(self):
+        self.refuses('x-extra:\n  nested: &map {value: fixture}\n', 2, 'mapping/sequence anchor or alias')
+
+    def test_sequence_anchor_refuses(self):
+        self.refuses('x-extra:\n  nested: &seq [fixture]\n', 2, 'mapping/sequence anchor or alias')
+
+    def test_mapping_alias_refuses(self):
+        self.refuses('x-extra: &map {value: fixture}\nx-copy: *map\n', 1, 'mapping/sequence anchor or alias')
+
+    def test_sequence_alias_refuses(self):
+        self.refuses('x-extra: &seq [fixture]\nx-copy: *seq\n', 1, 'mapping/sequence anchor or alias')
+
+    def test_custom_tag_refuses(self):
+        for value in ('!unknown fixture', '!unknown {}', '!unknown []',
+                      '!<tag:example.invalid,2026:value> fixture'):
+            with self.subTest(value=value):
+                tag = 'tag:example.invalid,2026:value' if value.startswith('!<') else '!unknown'
+                self.refuses('x-extra:\n  nested: ' + value + '\n', 2, 'custom tag ' + tag)
+
+    def test_reserved_extension_anywhere_refuses(self):
+        self.refuses('x-extra:\n  - x-upgrade-gate-env-file: []\n', 2, 'reserved upgrade gate extension')
+        self.refuses('x-key: &key x-upgrade-gate-env-file\nx-extra:\n  *key: []\n', 3, 'reserved upgrade gate extension')
+
+    def test_later_yaml_error_does_not_hide_unsupported_construct(self):
+        # PyYAML rejects duplicate anchors; retain the earlier refusal even if
+        # another parser accepts this document or a later syntax error occurs.
+        self.refuses('x-first: &map {}\nx-second: &map {}\n', 1, 'mapping/sequence anchor or alias')
+        self.refuses('x-first: !unknown fixture\nx-second: [\n', 1, 'custom tag !unknown')
+
+    def test_root_merge_regression_forms_refuse(self):
+        # Reviewer root shapes now refuse under the explicit supported-subset ruling.
+        for merge in ('*project', '[*project]'):
+            for collision in ('', '      x-upgrade-gate-env-file: []\n'):
+                with self.subTest(merge=merge, collision=bool(collision)):
+                    self.refuses('x-project: &project\n  services:\n    app:\n'
+                                 '      env_file: ./runtime.env\n' + collision + '<<: ' + merge + '\n',
+                                 1, 'mapping/sequence anchor or alias')
+
+
+    def test_real_compose_inventory_is_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in ROOT.glob('docker-compose*.yaml'):
+                (root / path.name).write_bytes(path.read_bytes())
+            gate.validate_target_tree(root)
+
+    def test_supported_scalars_and_tags_are_not_mistaken_for_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'fixture.compose').write_text(
+                'x-value: &scalar <<\nx-alias: *scalar\nx-marker-value: x-upgrade-gate-env-file\n'
+                'x-string: !!str fixture\nx-reset-scalar: !reset null\nx-reset-sequence: !reset []\n'
+                'x-override: !override {value: fixture}\n')
+            gate.validate_target_tree(root)
+
+
 @unittest.skipUnless(os.environ.get('RV918_COMPOSE_CONFIG') == '1', 'opt-in real Compose parser; no daemon mutations')
 class ComposeReview(unittest.TestCase):
     def fixture(self, clones, change):
@@ -365,7 +459,7 @@ services:
                 gate.target_prediction(SHA)
 
 
-    def test_services_mapping_merge_preserves_env_file(self):
+    def test_services_mapping_merge_refuses(self):
         root, target, command, run = self.fixture(True, False)
         (root / 'runtime.env').write_text('VALUE=fixture-only\n')
         flat = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: ./runtime.env\n')
@@ -377,7 +471,7 @@ services:
             + flat.split('  caddy:\n')[1])
         (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
         self.assertEqual(expected, gate.configuration()[2], 'Merge syntax must be hash-equivalent')
-        self.prediction_equals_checkout(root, target, command, run)
+        self.prediction_refuses_subset(command, run)
 
     def test_scalar_reset_env_file_preserves_tag(self):
         root, target, command, run = self.fixture(True, False)
@@ -396,7 +490,7 @@ services:
         target['docker-compose.clones.yaml'] = target['docker-compose.clones.yaml'].replace('!reset null', '!reset []')
         self.prediction_equals_checkout(root, target, command, run)
 
-    def test_merged_service_target_only_env_change_refuses(self):
+    def test_merged_service_target_only_env_change_refuses_subset(self):
         root, target, command, run = self.fixture(True, False)
         for name, value in (('old.env', 'old'), ('new.env', 'new')):
             (root / name).write_text(f'VALUE={value}\n')
@@ -408,9 +502,7 @@ services:
         (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
         self.assertNotEqual(current['app-dev'], gate.configuration()[2]['app-dev'])
         (root / 'docker-compose.yaml').write_text(merged)
-        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
-            with self.assertRaisesRegex(SystemExit, 'forbidden target Compose hash change: app-dev'):
-                gate.target_prediction(SHA)
+        self.prediction_refuses_subset(command, run)
 
     def test_reserved_extension_direct_and_service_merge_refuse(self):
         for alias in (False, True):
@@ -424,7 +516,7 @@ services:
                 else:
                     target['docker-compose.yaml'] = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    ' + marker + '\n')
                 with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
-                    with self.assertRaisesRegex(SystemExit, 'reserved upgrade gate extension'):
+                    with self.assertRaisesRegex(SystemExit, 'mapping/sequence anchor or alias' if alias else 'reserved upgrade gate extension'):
                         gate.target_prediction(SHA)
 
     def test_services_mapping_reserved_extension_refuses(self):
@@ -443,9 +535,22 @@ services:
         (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
         gate.configuration()  # The target also is valid Compose input.
         (root / 'docker-compose.yaml').write_text(base)
-        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
-            with self.assertRaisesRegex(SystemExit, 'reserved upgrade gate extension'):
+        self.prediction_refuses_subset(command, run)
+
+    def prediction_refuses_subset(self, command, run):
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run), \
+             patch.object(gate, 'configuration', side_effect=AssertionError('Hashing began')):
+            with self.assertRaisesRegex(SystemExit, 'unsupported Compose YAML construct at .*: mapping/sequence anchor or alias; this gate refuses it'):
                 gate.target_prediction(SHA)
+
+    def test_scalar_alias_env_file_matches_checkout(self):
+        root, target, command, run = self.fixture(True, False)
+        (root / 'runtime.env').write_text('VALUE=fixture-only\n')
+        target['docker-compose.yaml'] = ('x-runtime: &runtime ./runtime.env\n'
+            + target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: *runtime\n'))
+        for name, body in target.items():
+            (root / name).write_text(body)
+        self.prediction_equals_checkout(root, target, command, run)
 
 
 @unittest.skipUnless(os.environ.get('RV918_COMPOSE_CONFIG') == '1', 'opt-in real Compose parser; no daemon mutations')
@@ -512,6 +617,10 @@ DEV_CLONE_PATH={root}/dev
                 return realrun(args, **kwargs)
 
             with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+                if merged:
+                    with self.assertRaisesRegex(SystemExit, 'unsupported Compose YAML construct at docker-compose.clones.yaml:.*mapping/sequence anchor or alias; this gate refuses it'):
+                        gate.target_prediction(target_sha)
+                    return
                 try:
                     predicted = gate.target_prediction(target_sha)
                 except SystemExit as error:
@@ -525,7 +634,7 @@ DEV_CLONE_PATH={root}/dev
     def test_production_clone_matches_checkout(self):
         self.check_shape(True)
 
-    def test_production_merged_clone_matches_checkout(self):
+    def test_production_merge_alias_clone_refuses(self):
         self.check_shape(True, merged=True)
 
 

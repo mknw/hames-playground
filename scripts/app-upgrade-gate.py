@@ -253,6 +253,49 @@ def check_prediction(project, embedder_changed, clones=False, run_compose=None,
 ENV_FILE_MARKER = "x-upgrade-gate-env-file"
 
 
+def validate_target_tree(root):
+    """Refuse unsupported YAML before any rewrite, marker trust or hashing.
+
+    Use PyYAML's composer boundary to retain source marks and key context;
+    do not teach the env_file rewriter arbitrary YAML merge/alias semantics.
+    """
+    class SubsetLoader(yaml.SafeLoader):
+        def compose_node(self, parent, index):
+            event = self.peek_event()
+            what = None
+            if (getattr(event, "anchor", None) and
+                    (isinstance(event, (yaml.MappingStartEvent, yaml.SequenceStartEvent))
+                     or (isinstance(event, yaml.AliasEvent) and
+                         isinstance(self.anchors.get(event.anchor), (yaml.MappingNode, yaml.SequenceNode))))):
+                what = "mapping/sequence anchor or alias"
+            tag = getattr(event, "tag", None)
+            if tag not in {None, "!override", "!reset"} and tag not in yaml.SafeLoader.yaml_constructors:
+                what = f"custom tag {tag}"
+            if what:
+                violations.append((event.start_mark.line + 1, what))
+            node = super().compose_node(parent, index)
+            if isinstance(parent, yaml.MappingNode) and index is None and isinstance(node, yaml.ScalarNode):
+                if node.value == "<<":
+                    violations.append((event.start_mark.line + 1, "merge key <<"))
+                elif node.value == ENV_FILE_MARKER:
+                    violations.append((event.start_mark.line + 1, "reserved upgrade gate extension"))
+            return node
+
+    # References can use any filename. As in preservation, ignore non-YAML
+    # members only after parsing the whole file; Compose validates its inputs.
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        violations = []
+        try:
+            list(yaml.compose_all(path.read_text(), Loader=SubsetLoader))
+        except (UnicodeError, yaml.YAMLError):
+            pass  # A later parse error must not erase an observed refusal.
+        if violations:
+            line, what = violations[0]
+            stop(f"unsupported Compose YAML construct at {path.relative_to(root)}:{line}: {what}; this gate refuses it")
+
+
 def preserve_env_files(root):
     """Keep service env_file declarations through Compose's YAML rendering."""
     def rename(node, seen, parent, service_map=False):
@@ -263,14 +306,8 @@ def preserve_env_files(root):
         changed = False
         if isinstance(node, yaml.MappingNode):
             for index, (key, value) in enumerate(node.value):
-                if key.value == "<<":
-                    # A services-map merge still contains service names; a
-                    # service-level merge contains fields. Keep that context.
-                    changed = rename(value, seen, parent, service_map) or changed
-                elif service_map:
+                if service_map:
                     changed = rename(value, seen, parent) or changed
-                elif key.value == ENV_FILE_MARKER:
-                    stop("reserved upgrade gate extension in target Compose")
                 elif key.value == "env_file":
                     key.value = ENV_FILE_MARKER
                     if value.tag == "!reset":
@@ -326,13 +363,14 @@ def preserve_env_files(root):
 def target_prediction(target_sha):
     if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
         stop("target must be a full commit SHA")
-    files, project, current = configuration()
     with tempfile.TemporaryDirectory(prefix="upgrade-target-") as directory:
         # Compose owns inheritance, interpolation and merge tags. Shield service
         # env_file declarations while rendering: even --no-env-resolution on
         # Compose 2.39 resolves and drops them, changing config --hash output.
         with tarfile.open(fileobj=io.BytesIO(command("git", "archive", target_sha))) as archive:
             archive.extractall(directory, filter="data")
+        validate_target_tree(Path(directory))
+        files, project, current = configuration()
         preserve_env_files(Path(directory))
         target_files = [part for name in files.split(":")
                         for part in ("-f", str(Path(directory) / name))]

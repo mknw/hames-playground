@@ -272,9 +272,13 @@ describe("the fake's Jev endpoint (Decisions API)", () => {
     const { fakeLlm } = await bootApp()
     fakeLlm.reset()
     const { createJevTransport } = await import('@hames-ai/harness-baml/jev-decide.server')
-    const r = await createJevTransport().decideAll({ spec: SET, state: 's' })
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    const r = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      createJevTransport().decideAll({ spec: SET, state: 's' }),
+    )
     expect(r.fields.route.method).toBe('jev')
     expect(r.fields.route.probs.search).toBeCloseTo(0.9, 9)
+    expect(r.fields.route.llmCall?.clientName).toBe('JevDecide')
     expect(r.fields.route.llmCall?.metrics?.basis).toBe('provider')
     expect(fakeLlm.calls.map((c) => [c.model, c.outcome, c.endpoint])).toEqual([
       ['typesafe/jev-1.13', 'ok', 'jev'],

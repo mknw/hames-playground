@@ -47,7 +47,7 @@ for (const theme of ['dark', 'light'] as const) {
     await expect(panel.getByText('I prefer synthetic examples', { exact: true })).toBeVisible()
     await expect(panel.getByText('Merged from 3')).toBeVisible()
     await expect(panel.getByText('Merged from 1', { exact: true })).toHaveCount(0)
-    await expect(panel.getByText(/Forget deletes rows/)).toBeVisible()
+    await expect(panel.getByText(/Forget removes a memory from your saved memories/)).toBeVisible()
     const downloadPromise = page.waitForEvent('download')
     await panel.getByRole('button', { name: 'Export my memories (Art. 15)' }).click()
     const download = await downloadPromise

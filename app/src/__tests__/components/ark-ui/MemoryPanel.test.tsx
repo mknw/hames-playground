@@ -39,7 +39,7 @@ it('lists metadata and sources, keeps disclosure visible and filters by kind', a
   expect(screen.getByText(/First seen/)).toBeTruthy()
   expect(
     screen.getByText(
-      "Forget deletes rows; it does not reach the responder's recorded prompt or the nightly pg_dump.",
+      'Forget removes a memory from your saved memories, so new replies stop using it. Your past conversations stay as they are, including the message it came from, and backups made before then keep a copy until they expire, normally within 9 days.',
     ),
   ).toBeTruthy()
   const source = screen.getByRole('link', { name: /Source conversation/ })

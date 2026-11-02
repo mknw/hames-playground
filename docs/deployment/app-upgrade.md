@@ -14,6 +14,14 @@ against that same SHA and the current Compose state; the first RELEASE app stop
 is conditional on its pass. The later `capture` gate still requires a stopped
 app and is a separate baseline for the boot checks.
 
+The gate requires PyYAML in the same `python3` interpreter used below. On
+Debian/Ubuntu, provision the `python3-yaml` package before the upgrade window
+(`sudo apt-get install python3-yaml`). The first block checks this prerequisite
+before changing release state; the gate also refuses to run without it. Target
+Compose inheritance and merge tags are still resolved by Compose; PyYAML keeps
+service env-file declarations from being discarded during the intermediate
+render. Keep the host's protected runtime env files in place.
+
 ## 1. Stop writers and take local dumps before changing the checkout
 
 Hold public ingress for **both hostnames** at the operator's external maintenance
@@ -45,6 +53,7 @@ block. The lock and exact-set comparison refuse a changed enabled set
 before the update; any failure is a stop. Do not restart `app-dev`.
 
 ```bash
+python3 -c 'import yaml' || exit 1
 dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 ( umask 077; mkdir -p -- "$PWD/upgrade-dumps" &&
   test ! -L "$PWD/upgrade-dumps" && chmod 700 -- "$PWD/upgrade-dumps" &&

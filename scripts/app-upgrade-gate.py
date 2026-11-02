@@ -16,6 +16,11 @@ import sys
 import tarfile
 import tempfile
 
+try:
+    import yaml
+except ImportError:
+    raise SystemExit("upgrade gate: install the python3-yaml host prerequisite; stop before boot")
+
 SINGLE_FILES = "docker-compose.yaml:docker-compose.prod.yaml"
 CLONE_FILES = SINGLE_FILES + ":docker-compose.clones.yaml"
 ALLOWED_FILES = {
@@ -245,15 +250,80 @@ def check_prediction(project, embedder_changed, clones=False, run_compose=None,
     return actions
 
 
+ENV_FILE_MARKER = "x-upgrade-gate-env-file"
+
+
+def preserve_env_files(root):
+    """Keep service env_file declarations through Compose's YAML rendering."""
+    def rename(node, seen, parent):
+        if id(node) in seen:
+            return False
+        seen.add(id(node))
+        changed = False
+        if isinstance(node, yaml.MappingNode):
+            for index, (key, value) in enumerate(node.value):
+                if key.value == ENV_FILE_MARKER:
+                    stop("reserved upgrade gate extension in target Compose")
+                if key.value == "env_file":
+                    key.value = ENV_FILE_MARKER
+                    # Extensions do not receive Compose's extends path rebasing.
+                    # Carry the source directory with each entry until after
+                    # Compose has interpolated its path and merged the lists.
+                    entries = value.value if isinstance(value, yaml.SequenceNode) else [value]
+                    preserved = []
+                    for entry in entries:
+                        if isinstance(entry, yaml.ScalarNode):
+                            fields = [(yaml.ScalarNode('tag:yaml.org,2002:str', 'path'), entry)]
+                        elif isinstance(entry, yaml.MappingNode):
+                            fields = list(entry.value)
+                        else:
+                            stop("unsupported target env_file declaration")
+                        fields.append((yaml.ScalarNode('tag:yaml.org,2002:str', 'x-upgrade-origin'),
+                                       yaml.ScalarNode('tag:yaml.org,2002:str', parent)))
+                        preserved.append(yaml.MappingNode('tag:yaml.org,2002:map', fields))
+                    tag = value.tag if isinstance(value, yaml.SequenceNode) else 'tag:yaml.org,2002:seq'
+                    node.value[index] = (key, yaml.SequenceNode(tag, preserved))
+                    changed = True
+                if key.value == "<<":
+                    changed = rename(value, seen, parent) or changed
+        elif isinstance(node, yaml.SequenceNode):
+            for value in node.value:
+                changed = rename(value, seen, parent) or changed
+        return changed
+
+    # References may use any filename, not just *.yaml. Non-YAML archive
+    # members are left alone; Compose still validates every file it loads.
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            documents = list(yaml.compose_all(path.read_text(), Loader=yaml.SafeLoader))
+        except (UnicodeError, yaml.YAMLError):
+            continue
+        changed = False
+        for node in documents:
+            if not isinstance(node, yaml.MappingNode):
+                continue
+            seen = set()
+            for key, value in node.value:
+                if key.value == "services" and isinstance(value, yaml.MappingNode):
+                    for _, service in value.value:
+                        changed = rename(service, seen, str(path.parent.relative_to(root))) or changed
+        if changed:
+            path.write_text(yaml.serialize_all(documents))
+
+
 def target_prediction(target_sha):
     if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
         stop("target must be a full commit SHA")
     files, project, current = configuration()
     with tempfile.TemporaryDirectory(prefix="upgrade-target-") as directory:
-        # Resolve includes/extends/env files from the complete target tree. Keep
-        # bind paths relative until the resolved model is loaded at the host root.
+        # Compose owns inheritance, interpolation and merge tags. Shield service
+        # env_file declarations while rendering: even --no-env-resolution on
+        # Compose 2.39 resolves and drops them, changing config --hash output.
         with tarfile.open(fileobj=io.BytesIO(command("git", "archive", target_sha))) as archive:
             archive.extractall(directory, filter="data")
+        preserve_env_files(Path(directory))
         target_files = [part for name in files.split(":")
                         for part in ("-f", str(Path(directory) / name))]
         project_directory = directory
@@ -271,9 +341,19 @@ def target_prediction(target_sha):
                 stop("target Compose render or dry run failed")
             return result.stderr if "--dry-run" in args else result.stdout
 
-        resolved = target_compose("config", "--no-path-resolution", "--format", "json")
+        resolved = yaml.safe_load(target_compose("config", "--no-path-resolution", "--format", "yaml"))
         model = Path(directory) / "resolved.json"
-        model.write_bytes(resolved)
+        for service in resolved["services"].values():
+            if ENV_FILE_MARKER in service:
+                entries = service.pop(ENV_FILE_MARKER)
+                if isinstance(entries, dict):
+                    entries = [entries]
+                for entry in entries:
+                    parent = entry.pop('x-upgrade-origin')
+                    if parent != '.' and not Path(entry['path']).is_absolute():
+                        entry['path'] = str(Path.cwd() / parent / entry['path'])
+                service["env_file"] = entries
+        model.write_text(json.dumps(resolved))
         target_files = ["-f", str(model)]
         project_directory = Path.cwd()
         rendered = json.loads(target_compose("config", "--format", "json"))

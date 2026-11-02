@@ -32,6 +32,20 @@ def shell(text, env=None):
 
 
 class OfflineReview(unittest.TestCase):
+    def test_missing_yaml_prerequisite_refuses_before_configuration(self):
+        # Disable site packages, independently of whether this machine has PyYAML.
+        result = subprocess.run(['python3', '-S', str(GATE), 'predict', SHA, '/unused'],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('python3-yaml host prerequisite', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_invalid_sha_never_reaches_configuration(self):
+        for value in ('', 'a'*39, 'a'*41, 'g'*40, 'A'*40, 'main'):
+            with self.subTest(value=value), patch.object(gate, 'configuration', side_effect=AssertionError('Invalid SHA reached configuration')):
+                with self.assertRaisesRegex(SystemExit, 'full commit SHA'):
+                    gate.target_prediction(value)
+
     def backup_fixture(self, edits=()):
         script = (ROOT / 'scripts/backup-preview.test.sh').read_text()
         script = script.split('\nrun_case success\n')[0]
@@ -232,6 +246,185 @@ services:
         for name,body in target.items(): (root / name).write_text(body)
         self.assertEqual(predicted['target_hashes'], gate.configuration()[2],
                          'Prediction accepted old inherited service instead of refusing target protected-service drift')
+
+
+    def prediction_equals_checkout(self, root, target, command, run):
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+            try:
+                predicted = gate.target_prediction(SHA)
+            except SystemExit as error:
+                self.fail(f'Valid unchanged shape refused: {error}')
+        for name, body in target.items():
+            (root/name).parent.mkdir(parents=True, exist_ok=True)
+            (root/name).write_text(body)
+        self.assertEqual(predicted['target_hashes'], gate.configuration()[2])
+
+    def test_production_root_env_file_matches_checkout(self):
+        root, target, command, run = self.fixture(False, False)
+        # Exact production service env_file form, with the protected root .env.
+        target['docker-compose.prod.yaml'] = 'services:\n  app:\n    env_file: !override\n      - path: ./.env\n        required: true\n'
+        (root/'docker-compose.prod.yaml').write_text(target['docker-compose.prod.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_host_relative_runtime_env_file_matches_checkout(self):
+        root, target, command, run = self.fixture(False, False)
+        (root/'runtime.env').write_text('SYNTHETIC_VALUE=fixture-only\n')
+        target['docker-compose.prod.yaml'] = 'services:\n  app:\n    env_file:\n      - path: ./runtime.env\n        required: true\n'
+        (root/'docker-compose.prod.yaml').write_text(target['docker-compose.prod.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_unchanged_clone_absolute_runtime_env_matches_checkout(self):
+        root, target, command, run = self.fixture(True, False)
+        runtime = root/'runtime.env'
+        runtime.write_text('SYNTHETIC_VALUE=fixture-only\n')
+        target['docker-compose.prod.yaml'] = f'services:\n  app:\n    env_file: {runtime}\n  app-dev:\n    env_file: {runtime}\n'
+        (root/'docker-compose.prod.yaml').write_text(target['docker-compose.prod.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_empty_runtime_env_control_matches_checkout(self):
+        root, target, command, run = self.fixture(True, False)
+        runtime = root/'runtime.env'
+        runtime.write_text('')
+        target['docker-compose.prod.yaml'] = f'services:\n  app:\n    env_file: {runtime}\n  app-dev:\n    env_file: {runtime}\n'
+        (root/'docker-compose.prod.yaml').write_text(target['docker-compose.prod.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_literal_dollar_interpolation_matches_checkout(self):
+        root, target, command, run = self.fixture(False, False)
+        with (root/'.env').open('a') as f:
+            f.write("DOLLAR_VALUE='prefix$RV918_UNSET_VARIABLE'\n")
+        target['docker-compose.yaml'] = target['docker-compose.yaml'].replace('REV: old', 'REV: ${DOLLAR_VALUE:?}')
+        (root/'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_two_hop_extends_uses_target_tree(self):
+        root, target, command, run = self.fixture(True, False)
+        old = 'services:\n  shared:\n    environment:\n      TRANSITIVE: old\n'
+        target['compose-leaf.yaml'] = old.replace('TRANSITIVE: old', 'TRANSITIVE: new')
+        (root/'compose-leaf.yaml').write_text(old)
+        middle = 'services:\n  shared:\n    extends:\n      file: compose-leaf.yaml\n      service: shared\n'
+        target['compose-middle.yaml'] = middle
+        (root/'compose-middle.yaml').write_text(middle)
+        target['docker-compose.yaml'] = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    extends:\n      file: compose-middle.yaml\n      service: shared\n')
+        (root/'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(SystemExit, 'forbidden target Compose hash change: app-dev'):
+                gate.target_prediction(SHA)
+
+    def test_inherited_env_files_merge_and_override_like_checkout(self):
+        for override in ('', '!override '):
+            with self.subTest(override=override):
+                root, target, command, run = self.fixture(True, False)
+                for name in ('base.env', 'extra.env'):
+                    (root / name).write_text('VALUE=fixture-only\n')
+                target['docker-compose.yaml'] = target['docker-compose.yaml'].replace(
+                    '  app:\n', '  app:\n    env_file: [./base.env]\n')
+                target['docker-compose.clones.yaml'] += f'    env_file: {override}[./extra.env]\n'
+                for name, body in target.items():
+                    (root / name).write_text(body)
+                self.prediction_equals_checkout(root, target, command, run)
+
+    def test_environment_key_named_env_file_is_not_rewritten(self):
+        root, target, command, run = self.fixture(True, False)
+        target['docker-compose.yaml'] = target['docker-compose.yaml'].replace(
+            '      REV: old', '      REV: old\n      env_file: literal-value')
+        (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_nested_inherited_env_file_matches_checkout(self):
+        root, target, command, run = self.fixture(True, False)
+        (root / 'parts').mkdir()
+        (root / 'parts/runtime.env').write_text('VALUE=fixture-only\n')
+        target['parts/shared.compose'] = 'services:\n  shared:\n    env_file: ./runtime.env\n'
+        target['docker-compose.yaml'] = target['docker-compose.yaml'].replace(
+            '  app:\n', '  app:\n    extends:\n      file: parts/shared.compose\n      service: shared\n')
+        for name, body in target.items():
+            (root / name).write_text(body)
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_included_target_service_and_env_file(self):
+        root, target, command, run = self.fixture(False, False)
+        (root / 'parts').mkdir()
+        (root / 'parts/runtime.env').write_text('VALUE=fixture-only\n')
+        target['parts/infra.compose'] = '''services:
+  included:
+    image: alpine:latest
+    env_file: ./runtime.env
+    environment:
+      REV: old
+    volumes:
+      - ./config:/config:ro
+'''
+        target['docker-compose.yaml'] += 'include:\n  - parts/infra.compose\n'
+        for name, body in target.items():
+            (root / name).write_text(body)
+        self.prediction_equals_checkout(root, target, command, run)
+        target['parts/infra.compose'] = target['parts/infra.compose'].replace('REV: old', 'REV: new')
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(SystemExit, 'forbidden target Compose hash change: included'):
+                gate.target_prediction(SHA)
+
+
+@unittest.skipUnless(os.environ.get('RV918_COMPOSE_CONFIG') == '1', 'opt-in real Compose parser; no daemon mutations')
+class ProductionComposeReview(unittest.TestCase):
+    def check_shape(self, clones):
+        realrun = subprocess.run
+        realcommand = gate.command
+        files = gate.CLONE_FILES if clones else gate.SINGLE_FILES
+        # Exercise the committed production inputs and a real target archive,
+        # with synthetic host configuration only. No runtime env file is copied.
+        target_sha = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD']).decode().strip()
+        archive = subprocess.check_output(['git', '-C', str(ROOT), 'archive', target_sha])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            oldcwd = Path.cwd()
+            self.addCleanup(os.chdir, oldcwd)
+            os.chdir(root)
+            for name in files.split(':'):
+                (root / name).write_bytes((ROOT / name).read_bytes())
+            runtime = root / 'runtime.env'
+            runtime.write_text('SYNTHETIC_VALUE=fixture-only\n')
+            (root / '.env').write_text(f'''COMPOSE_FILE={files}
+COMPOSE_PROFILES=app
+POSTGRES_PASSWORD=fixture-postgres
+NEO4J_PASSWORD=fixture-neo4j
+APP_DOMAIN=release.example.invalid
+DEV_APP_DOMAIN=dev.example.invalid
+ACME_EMAIL=ops@example.invalid
+RELEASE_DATABASE_URL=postgresql://release:fixture@postgres:5432/release
+DEV_DATABASE_URL=postgresql://dev:fixture@postgres:5432/dev
+RELEASE_RUNTIME_ENV_FILE={runtime}
+DEV_RUNTIME_ENV_FILE={runtime}
+DEV_CLONE_PATH={root}/dev
+''')
+
+            def command(*args):
+                if args[:2] == ('git', 'archive'):
+                    return archive
+                if args[:2] == ('git', 'show'):
+                    return (ROOT / args[2].split(':', 1)[1]).read_bytes()
+                return realcommand(*args)
+
+            def run(args, **kwargs):
+                if '--dry-run' in args:
+                    return subprocess.CompletedProcess(args, 0, b'',
+                        b'{"dry-run":true,"id":"Container hames-app","status":"Starting"}\n')
+                self.assertIn('config', args)
+                return realrun(args, **kwargs)
+
+            with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+                try:
+                    predicted = gate.target_prediction(target_sha)
+                except SystemExit as error:
+                    self.fail(f'Unchanged production shape refused: {error}')
+                self.assertEqual(predicted['target_hashes'], gate.configuration()[2])
+            os.chdir(oldcwd)
+
+    def test_production_single_matches_checkout(self):
+        self.check_shape(False)
+
+    def test_production_clone_matches_checkout(self):
+        self.check_shape(True)
 
 
 if __name__ == '__main__':

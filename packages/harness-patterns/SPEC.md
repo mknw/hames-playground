@@ -622,13 +622,22 @@ simpleLoop(neo4jController, tools.neo4j, {
 ```
 
 The `enrichNeo4jResult` recipe (`app/src/lib/harness-client/neo4j-enricher.server.ts`)
-walks the tool's returned rows for `name` strings, fetches a 1-hop neighborhood
-directly via the `neo4j-driver` singleton, and emits an enriched payload of shape
+walks the tool's returned rows for `name` strings, then fetches their 1-hop
+neighborhood by re-issuing a read **through the shared tool-call function**
+(`callTool('read_neo4j_cypher', …)`) — never a driver session of its own. That
+function is where the run's injection guard applies (SD-6), so on a route that
+declares the `neo4j` namespace the neighborhood arrives fenced exactly like the
+agent's own read. The query is a fixed, parameterised, read-only constant
+(`WHERE n.name IN $names … LIMIT 100`); the queried names are read through the
+fence (`unspotlight`), while `_touched` keeps them as the result carried them, so
+the hook adds no unfenced graph text. It emits an enriched payload of shape
 `{ rows, _neighborhood: { rows }, _touched: [...names] }`. The graph extractor
 recognizes that shape, dedups across the rows + neighborhood, and tags each
 node whose name is in `_touched` with `data.touched = true` so the Neo4j panel
-can highlight what the agent actually queried (vs. surrounding context).
-The same hook is also wired into `actorCritic`.
+can highlight what the agent actually queried (vs. surrounding context). The
+hook is available to `actorCritic` (same `onToolResult` config field, enforced
+on its batched and single-call paths), but the only wiring today is
+`general-next`'s Neo4j `simpleLoop` route.
 
 **Compact controller view: `resultOmit`.** A per-tool omit-list applied to the
 CONTROLLER TURN LOG only — the named fields are deleted (recursively, at every

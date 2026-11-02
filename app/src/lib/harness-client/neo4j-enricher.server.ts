@@ -26,8 +26,6 @@
  * original (un-enriched) tool result is preserved.
  */
 
-'use server'
-
 import { callTool } from '@hames-ai/harness-patterns/mcp-client.server'
 import { unspotlight } from '@hames-ai/harness-patterns/guard'
 import type { OnToolResult } from '@hames-ai/harness-patterns/types'

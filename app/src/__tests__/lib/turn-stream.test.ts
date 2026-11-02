@@ -9,11 +9,20 @@
  * frame, a torn-down stream, a paused write).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { runTurn, IDLE_TURN, type TurnSink, type TurnState } from '~/lib/turn-stream'
+import {
+  runTurn,
+  IDLE_TURN,
+  RECOVERY_MISSING_POLLS,
+  RECOVERY_POLL_MS,
+  type PersistedTurn,
+  type TurnRecovery,
+  type TurnSink,
+  type TurnState,
+} from '~/lib/turn-stream'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import type { GraphElement } from '@hames-ai/agents'
-import type { WarmingEventData } from '~/lib/sse-client'
+import { SSE_STALL_MS, type WarmingEventData } from '~/lib/sse-client'
 import type { HarnessSettings } from '~/lib/settings'
 import singleNodeFixture from './harness-client/fixtures/cypher-single-node.json'
 
@@ -630,5 +639,205 @@ describe('runTurn — the cold-start notice', () => {
 
     expect(rec.progress).toHaveLength(1)
     expect(rec.progress[0].type).toBe('controller_action')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// A lost stream: the answer is read back from the saved turn
+// ---------------------------------------------------------------------------
+
+/**
+ * The live failure this reproduces. The turn finished on the server in
+ * seconds, and its stream delivered the early frames and then nothing. `done`
+ * never arrived and the stream never closed, so the bubble showed a dot and an
+ * empty bar until a reload. The body enqueues `frames` and then never closes:
+ * that is the client's whole view of that stall.
+ */
+const sseThenSilence = (frames: Frame[]) => {
+  const text = frames.map((f) => `event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`).join('')
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text))
+    },
+  })
+  return { ok: true, status: 200, body } as unknown as Response
+}
+
+const savedAnswer = (over: Partial<PersistedTurn> = {}): PersistedTurn => ({
+  status: 'done',
+  messages: [
+    { id: 'u', role: 'user', content: 'what nodes exist?', timestamp: new Date(0) },
+    { id: 'a', role: 'assistant', content: 'The saved answer.', timestamp: new Date(0) },
+  ],
+  context: { events: [] } as unknown as UnifiedContext,
+  ...over,
+})
+
+/** A recovery double: `inFlight` polls report the turn still running, then it is free. */
+const recoveryDouble = (opts: { inFlight?: number; saved?: PersistedTurn } = {}) => {
+  let polls = 0
+  const rehydrated: PersistedTurn[] = []
+  const recovery: TurnRecovery = {
+    turnState: vi.fn(async () => ({ turnInFlight: polls++ < (opts.inFlight ?? 0) })),
+    load: vi.fn(async () => opts.saved ?? savedAnswer()),
+    rehydrate: (turn) => rehydrated.push(turn),
+  }
+  return { recovery, rehydrated }
+}
+
+describe('runTurn — a stream lost before the answer', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  // MUTATION: read with a bare `reader.read()` in `parseChatStream` (no stall
+  // bound) → the turn never settles and `settled` stays false. MUTATION: drop
+  // the `recovery` branch in `runTurn` → the turn ends in an error state with
+  // no answer, and the rehydrate assertions redden.
+  it('shows the saved answer after the stream goes silent, with no reload', async () => {
+    fetchMock.mockResolvedValue(sseThenSilence([controllerAction({ tool_name: 'Search' })]))
+    const rec = recorder()
+    const { recovery, rehydrated } = recoveryDouble({ inFlight: 1 })
+    let settled = false
+    const turn = runTurn(request(), rec.sink, recovery).then((r) => {
+      settled = true
+      return r
+    })
+
+    // Still inside the keepalive guarantee: nothing is decided yet.
+    await vi.advanceTimersByTimeAsync(SSE_STALL_MS - 1)
+    expect(settled).toBe(false)
+    expect(recovery.turnState).not.toHaveBeenCalled()
+
+    // Stalled. One poll finds the turn still running, the next finds it saved.
+    await vi.advanceTimersByTimeAsync(1 + RECOVERY_POLL_MS)
+    const result = await turn
+
+    expect(recovery.turnState).toHaveBeenCalledTimes(2)
+    expect(rehydrated).toEqual([savedAnswer()])
+    expect(result).toEqual({ state: { status: 'done' }, outcome: 'done', aborted: false })
+    expect(rec.states.at(-1)).toEqual({ status: 'done' })
+    expect(rec.finished).toBe(1)
+    // The saved transcript replaces the live one; nothing is appended twice.
+    expect(rec.messages).toEqual([])
+  })
+
+  // MUTATION: recover only on a stall (`lost && recovery`) → a bare close with
+  // no `done` paints nothing and the turn reads as done with no answer.
+  it('reads the saved turn when the stream closes without a done frame', async () => {
+    fetchMock.mockResolvedValue(sseResponse([controllerAction({})]))
+    const rec = recorder()
+    const { recovery, rehydrated } = recoveryDouble()
+
+    const result = await runTurn(request(), rec.sink, recovery)
+
+    expect(rehydrated).toHaveLength(1)
+    expect(result.state).toEqual({ status: 'done' })
+  })
+
+  it('reads the saved turn when the connection drops mid-stream', async () => {
+    fetchMock.mockResolvedValue(
+      sseThenFailure(
+        [controllerAction({})],
+        new TypeError('NetworkError when attempting to fetch'),
+      ),
+    )
+    const rec = recorder()
+    const { recovery, rehydrated } = recoveryDouble()
+
+    const result = await runTurn(request(), rec.sink, recovery)
+
+    expect(rehydrated).toHaveLength(1)
+    expect(result.state).toEqual({ status: 'done' })
+    expect(rec.messages).toEqual([])
+  })
+
+  // The answer is already in hand; the stall only cost the title or the close.
+  it('paints the done frame’s answer when the stall comes after done', async () => {
+    fetchMock.mockResolvedValue(sseThenSilence([done()]))
+    const rec = recorder()
+    const { recovery } = recoveryDouble()
+
+    const turn = runTurn(request(), rec.sink, recovery)
+    await vi.advanceTimersByTimeAsync(SSE_STALL_MS)
+    const result = await turn
+
+    expect(recovery.turnState).not.toHaveBeenCalled()
+    expect(rec.messages).toEqual([
+      expect.objectContaining({ role: 'assistant', content: 'Here is your answer.' }),
+    ])
+    expect(result.state).toEqual({ status: 'done' })
+  })
+
+  // An `error` frame is the server reporting the turn failed. That is the
+  // answer, so the saved turn is not polled for.
+  it('does not recover from an error frame', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(sseResponse([{ event: 'error', data: { error: 'boom' } }]))
+    const rec = recorder()
+    const { recovery } = recoveryDouble()
+
+    const result = await runTurn(request(), rec.sink, recovery)
+
+    expect(recovery.turnState).not.toHaveBeenCalled()
+    expect(result.state).toEqual({ status: 'error', message: 'boom' })
+  })
+
+  it('ends as the saved turn ended: a failed run reads as an error', async () => {
+    fetchMock.mockResolvedValue(sseResponse([]))
+    const rec = recorder()
+    const failed = savedAnswer({
+      status: 'error',
+      messages: [
+        { id: 'e', role: 'error', content: 'the box did not wake', timestamp: new Date(0) },
+      ],
+    })
+    const { recovery } = recoveryDouble({ saved: failed })
+
+    const result = await runTurn(request(), rec.sink, recovery)
+
+    expect(result).toMatchObject({
+      state: { status: 'error', message: 'the box did not wake' },
+      outcome: 'error',
+    })
+  })
+
+  it('stops waiting when the user presses Stop', async () => {
+    fetchMock.mockResolvedValue(sseResponse([]))
+    const rec = recorder()
+    const controller = new AbortController()
+    const { recovery } = recoveryDouble({ inFlight: Infinity })
+
+    const turn = runTurn(request({ signal: controller.signal }), rec.sink, recovery)
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * 2)
+    controller.abort()
+    const result = await turn
+
+    expect(result).toEqual({ state: { status: 'stopped' }, outcome: 'done', aborted: true })
+  })
+
+  it('gives up with an error when the conversation was never saved', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    fetchMock.mockResolvedValue(sseResponse([]))
+    const rec = recorder()
+    const recovery: TurnRecovery = {
+      turnState: vi.fn(async () => null),
+      load: vi.fn(),
+      rehydrate: vi.fn(),
+    }
+
+    const turn = runTurn(request(), rec.sink, recovery)
+    await vi.advanceTimersByTimeAsync(RECOVERY_POLL_MS * RECOVERY_MISSING_POLLS)
+    const result = await turn
+
+    expect(recovery.turnState).toHaveBeenCalledTimes(RECOVERY_MISSING_POLLS)
+    expect(recovery.load).not.toHaveBeenCalled()
+    expect(result.outcome).toBe('error')
+    expect(rec.messages.at(-1)).toMatchObject({ role: 'error' })
   })
 })

@@ -43,6 +43,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 
 const loadConversation = vi.fn()
+const getConversationTurnState = vi.fn()
 const promoteAction = vi.fn()
 const AGENTS = [
   {
@@ -95,6 +96,7 @@ vi.mock('~/lib/harness-client', async () => {
     ...graph,
     ...refs,
     loadConversation,
+    getConversationTurnState,
     promoteAction,
     getAgentList,
     // The tier switch beside the agent selector reads on mount and on every
@@ -547,6 +549,51 @@ describe('ChatInterface — sending a message', () => {
     })
     expect(transcript(container)).toContain('what nodes exist?')
     expect(transcript(container)).toContain('Here is your answer.')
+  })
+
+  // The live failure: the stream lost the turn's end, and the answer showed only
+  // after a reload. The turn's save is what the reload showed, so the view now
+  // shows that save itself. MUTATION: drop `recoveryFor(runSessionId)` from
+  // `runSend` → no answer is painted and the first assertion reddens.
+  it('shows the saved answer when the stream ends before it, with no reload', async () => {
+    getConversationTurnState.mockResolvedValue({ status: 'done', turnInFlight: false })
+    const host = makeHost()
+    const { container } = host.mount(() => <ChatInterface sessionId="s1" />)
+    await settle()
+    loadConversation.mockResolvedValue({
+      id: 's1',
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] }),
+      messages: [
+        {
+          id: 'u',
+          role: 'user',
+          content: 'what nodes exist?',
+          timestamp: new Date(0).toISOString(),
+        },
+        {
+          id: 'a',
+          role: 'assistant',
+          content: 'The saved answer.',
+          timestamp: new Date(0).toISOString(),
+        },
+      ],
+    })
+    const stream = drivenSseResponse()
+    fetchMock.mockResolvedValueOnce(stream.response)
+
+    send(container, 'what nodes exist?')
+    await settle()
+    stream.push({ event: 'message', data: { type: 'controller_action', ts: 1, data: {} } })
+    await settle()
+    stream.close()
+    await settle()
+
+    expect(transcript(container)).toContain('The saved answer.')
+    // Replaced, not appended: the user's message is on screen once.
+    expect(transcript(container).split('what nodes exist?')).toHaveLength(2)
+    expect(host.registry.runState('s1').isProcessing).toBe(false)
   })
 
   it('announces the run start and its outcome to the route', async () => {

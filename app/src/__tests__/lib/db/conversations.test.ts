@@ -18,6 +18,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 
 import {
   claimConversation,
+  getConversationTurnState,
   createConversation,
   loadConversation,
   releaseConversationClaim,
@@ -586,6 +587,45 @@ describe('the turn claim and the versioned save', () => {
     const after = (await loadConversation(id, TEST_USER))!
     expect(JSON.parse(after.serializedContext)).toEqual({ turn: 2 })
     expect(after.status).toBe('done')
+  })
+
+  // What a client whose stream was lost polls: liveness is the CLAIM, because
+  // a later turn claims the row without touching `status`.
+  // MUTATION: select `turn_claimed_at IS NOT NULL` without the lease arm →
+  // the lapsed claim still reads as in flight and the third assertion reddens.
+  // MUTATION: drop `AND user_id = $2` → the foreign read returns a state.
+  it('reports a turn in flight while the claim is live, and not once released or lapsed', async () => {
+    const id = mkId()
+    await seedRow(row(id))
+    await saveConversation({
+      ...row(id),
+      status: 'done',
+      version: (await claimConversation(id, TEST_USER))!.version,
+    })
+    expect(await getConversationTurnState(id, TEST_USER)).toEqual({
+      status: 'done',
+      turnInFlight: false,
+    })
+
+    const held = (await claimConversation(id, TEST_USER))!
+    expect(await getConversationTurnState(id, TEST_USER)).toEqual({
+      status: 'done',
+      turnInFlight: true,
+    })
+
+    await lapse(id)
+    expect(await getConversationTurnState(id, TEST_USER)).toMatchObject({ turnInFlight: false })
+
+    const next = (await claimConversation(id, TEST_USER))!
+    expect(next.version).not.toBe(held.version)
+    await releaseConversationClaim(id, TEST_USER, next.version, { failed: true })
+    expect(await getConversationTurnState(id, TEST_USER)).toEqual({
+      status: 'error',
+      turnInFlight: false,
+    })
+
+    expect(await getConversationTurnState(id, `${TEST_USER}-other`)).toBeNull()
+    expect(await getConversationTurnState(`missing-${id}`, TEST_USER)).toBeNull()
   })
 
   // MUTATION: make renewConversationClaim a no-op → the lapsed claim is taken.

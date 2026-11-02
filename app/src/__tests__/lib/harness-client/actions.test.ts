@@ -72,6 +72,9 @@ const dbDeleteConversations = vi.fn(async (ids: string[]) => ids)
 const dbGetConversationInferenceTier = vi.fn<
   (id: string, userId: string) => Promise<string | null>
 >(async () => null)
+const dbGetConversationTurnState = vi.fn<
+  (id: string, userId: string) => Promise<{ status: string; turnInFlight: boolean } | null>
+>(async () => ({ status: 'done', turnInFlight: true }))
 const dbSetConversationPinned = vi.fn<
   (id: string, userId: string, pinned: boolean) => Promise<string>
 >(async () => 'pinned')
@@ -80,6 +83,7 @@ vi.mock('../../../lib/db/conversations.server', () => ({
   promoteConversation: dbPromoteConversation,
   deleteConversations: dbDeleteConversations,
   getConversationInferenceTier: dbGetConversationInferenceTier,
+  getConversationTurnState: dbGetConversationTurnState,
   setConversationPinned: dbSetConversationPinned,
   CONVERSATION_PIN_LIMIT: 3,
 }))
@@ -309,6 +313,24 @@ describe('loadConversation', () => {
   it('throws for a conversation that is not the current user’s', async () => {
     loadSession.mockResolvedValue(null)
     await expect(actions.loadConversation('nope')).rejects.toThrow('Conversation not found')
+  })
+})
+
+// What a client whose stream was lost polls. It is a browser-reachable RPC, so
+// it answers only for the caller's own row (SD-13 style gate per export).
+describe('getConversationTurnState', () => {
+  // MUTATION: drop `await requireUser()` → the unauthenticated call resolves.
+  it('reads the caller’s own row, and refuses an unauthenticated caller', async () => {
+    isBypassEnabled.mockReturnValue(false)
+    await expect(actions.getConversationTurnState('c1')).resolves.toEqual({
+      status: 'done',
+      turnInFlight: true,
+    })
+    expect(dbGetConversationTurnState).toHaveBeenLastCalledWith('c1', 'entra-user')
+
+    getAuthenticatedUser.mockRejectedValueOnce(new Error('Authentication required'))
+    await expect(actions.getConversationTurnState('c1')).rejects.toThrow('Authentication required')
+    expect(dbGetConversationTurnState).toHaveBeenCalledTimes(1)
   })
 })
 

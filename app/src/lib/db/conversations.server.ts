@@ -445,6 +445,35 @@ export async function claimConversation(
   return null
 }
 
+/** Whether a turn holds a conversation now, and the row's lifted status. */
+export interface ConversationTurnState {
+  status: ConversationStatus
+  /** A live claim: a turn holds the row, so its persisted context is not final. */
+  turnInFlight: boolean
+}
+
+/**
+ * Read whether a turn still holds the row, for a client whose live stream
+ * stopped before the answer arrived. Reads plaintext columns only. `null` for
+ * an unknown id or someone else's row.
+ *
+ * Liveness is the claim, not `status`: a later turn claims the row without
+ * touching `status`. A claim older than the lease counts as dead, so a turn
+ * whose process died cannot keep a reader waiting.
+ */
+export async function getConversationTurnState(
+  id: string,
+  userId: string,
+): Promise<ConversationTurnState | null> {
+  const { rows } = await query<{ status: ConversationStatus; turn_live: boolean }>(
+    `SELECT status, NOT ${NO_LIVE_CLAIM} AS turn_live
+       FROM conversations WHERE id = $1 AND user_id = $2`,
+    [id, userId],
+  )
+  if (rows.length === 0) return null
+  return { status: rows[0].status, turnInFlight: rows[0].turn_live }
+}
+
 export interface SaveConversationInput {
   id: string
   userId: string

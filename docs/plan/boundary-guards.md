@@ -1,6 +1,6 @@
 # Boundary-only guards: a gated screen and an egress gate (Design)
 
-> **Status: revision 6, a design amendment (2026-11-02), not built; revisions 4 and 5 are not built and revision 3.1 is built.** Revision 6 reworks the ingress model check ([Revision 6](#revision-6-the-ingress-model-check-off-by-default-the-injection-ingress-guard)): the model screen and its gate question default to `off` on every tier, and the triage is re-engineered as the **injection-ingress-guard** — a three-choice classification (`safe` / `possible-instructions-for-ai` / `instructions-for-ai-detected`) at the existing Decide seam whose verdict attaches per content and drives the presentation of every link and citation to that content. Its rulings are O35 to O41; O41 is open and every slice waits for it. Revision 4 established
+> **Status: revision 6, a design amendment (2026-11-02), not built; revisions 4 and 5 are not built and revision 3.1 is built.** Revision 6 reworks the ingress model check ([Revision 6](#revision-6-the-ingress-model-check-off-by-default-the-injection-ingress-guard)): the model screen and its gate question default to `off` on every tier, and the triage is re-engineered as the **injection-ingress-guard** — a three-choice classification (`safe` / `possible-instructions-for-ai` / `instructions-for-ai-detected`) at the existing Decide seam whose verdict attaches per content and drives the presentation of every link and citation to that content. Its rulings are O35 to O41; O41 is RULED (2026-11-02): mode `off` does not let a deterministic finding force the screen — the classification replaces that path. Revision 4 established
 
 **Current screen default (owner, 2026-10-30):** The self-deployed tier now defaults to `gated`; the 2026-10-27 evaluation met the bar for moving from `shadow`. `GUARD_SCREEN` still explicitly accepts `off`, `shadow`, `gated` and `always`. The Anthropic tier still defaults to `always`, and its switch still accepts only `off` or `always`. Earlier shadow-mode decisions and test rows below record the rollout history. Revision 5 changes the egress gate and K5, not this built screen default.
 
@@ -109,7 +109,7 @@ Binding on revision 6 (2026-11-02, the owner's direction on [#938](https://githu
 - **O38. Label + friction, never withhold.** Content flows to the model; the classification drives presentation only: normal with a small link glyph / a small disclaimer / a red exclamation, and the per-link dialog (#901) carries the warning with its open-anyway action greyed and deliberately harder to activate. #901's implementation is a precondition of the display; its slicing goes to the owner. [Label + friction](#label--friction-never-withhold-o38)
 - **O39. Non-link content rides the citation plumbing.** Every cited chunk is marked like a link; uncited content does not surface. The residual — content that poisons the context without surfacing — is accepted, and the deterministic layer underneath is unchanged. [Non-link content](#non-link-content-the-citation-chip-is-the-marking-surface-o39)
 - **O40. One shared per-tier policy value** becomes the single owner of the screen-mode defaults; the two literals edited together today fold into it, shipped in the same slice as the defaults flip. [One shared value](#one-shared-per-tier-policy-value-o40)
-- **O41. OPEN — applied recommendation, owner may overrule.** Whether mode `off` still lets a deterministic finding force the screen. Recommendation: no — the classification replaces that path. The owner rules on the board; no revision-6 slice starts before the ruling. [O41](#o41-does-off-still-let-a-deterministic-finding-force-the-screen)
+- **O41. RULED (2026-11-02, board).** Whether mode `off` still lets a deterministic finding force the screen: it does not — the classification replaces that path. The owner's note, recorded: the triage (the injection-ingress-guard) is the replacement for the former gate question. [O41](#o41-does-off-still-let-a-deterministic-finding-force-the-screen)
 
 **Coordinator proposals on revision 4 (with later rulings and readings noted):**
 
@@ -629,7 +629,7 @@ What goes idle while the defaults hold. All of it stays built — the switches s
 - the screen's share of the spend report (`app/src/lib/eval-support/spend-budget.ts:12,186` counts `ScreenUntrustedContent` calls)
 - the D3 question — the self-deployed screen model measured as a screener — dissolves with the screen's ingress duty. It returns exactly when the screen is re-enabled, and the measurement owed then is the retired scenario's, revived for that review
 
-**O41 is open, and the build waits for it.**
+**O41 is RULED (2026-11-02): mode `off` does not let a deterministic finding force the screen — the classification replaces that path.**
 
 ### O41: does `off` still let a deterministic finding force the screen?
 
@@ -638,7 +638,7 @@ In plain words: today, in a mode that runs the screen, a K1 finding forces it wi
 - **(a) No — the classification replaces that path (recommendation, applied).** The rework replaces the whole model triage with the classification; an `off` that still forced the screen would keep exactly the path the rework retires, and "ingress is fully deterministic" would be false. A K1 finding is its own deterministic output — the neutralised spans, the markers, the provenance fence — and needs no second model to confirm what a pattern match already established.
 - **(b) Yes — a K1 finding still forces the screen even with the mode `off`.** The conservative reading: a deterministic hit is a positive, and the screen's report is what reaches a person through the `ingress-flag` prompt. The cost is that `off` is no longer off: one screen call per finding, on a screen the default exists to retire, and an `ingress-flag` path that is otherwise idle.
 
-**Status: OPEN — applied recommendation, owner to rule on the board.** The design proceeds on (a). The ruling decides slice 16's shape: under (a) the flip is a settings change and `shouldScreen` is untouched; under (b) the findings check moves ahead of the mode check, one line, and `off`'s meaning changes with it. No revision-6 slice starts before the ruling.
+**Status: RULED (2026-11-02, board): option (a) — mode `off` does not let a deterministic finding force the screen; the classification replaces that path. The owner's note, recorded: the triage (the injection-ingress-guard) is the replacement for the former gate question. Under (a) the flip is a settings change and `shouldScreen` is untouched.
 
 ### The classification
 
@@ -708,7 +708,7 @@ flowchart TB
   REF --> M1
   REF --> M2
   REF --> M3
-  K1 -.->|"screen re-enabled by its switch"| SCR["the built screen; ungated while O41 is open"]
+  K1 -.->|"screen re-enabled by its switch"| SCR["the built screen; ungated"]
   SCR -.-> ASK["ingress-flag (unchanged; idle by default)"]
 ```
 
@@ -751,11 +751,11 @@ Every row names the assertion that moves and the slice whose PR writes it; the m
 
 ### Slices (revision 6)
 
-Build order **16, 17, 18, 19**, after revision 5's slice 15; every slice waits for O41's ruling. Each gets code and security review; slice 17 also gets a prompt review (the classification question); slice 18's dialog copy rides #901's own reviews.
+Build order **16, 17, 18, 19**, after revision 5's slice 15. Each gets code and security review; slice 17 also gets a prompt review (the classification question); slice 18's dialog copy rides #901's own reviews.
 
 16. **Agent + app: the defaults flip and the shared value.** Screen mode `off` on both tiers; the shared per-tier policy value; the switch value-set narrowing with boot refusals; `GUARD_GATE_THRESHOLD` retired with its refusal; SPEC, both env templates, the Eval README's default lines, a changeset.
     - **Files:** `app/src/lib/inference/guard-config.server.ts`, `packages/agents/agents/general-next.server.ts` (the shared value), `packages/agents/types.ts` if the value rides `AgentGuards`, `packages/harness-patterns/SPEC.md`, `app/.env.example`, `.env.production.example`, `app/evals/general-next/README.md`, a changeset, their pins.
-    - **Depends on:** O41's ruling; revision 5's slice 15 (the same file).
+    - **Depends on:** revision 5's slice 15 (the same file).
 17. **Core + agent + app: the classification.** The `ingressGuard` option; the `guard.ingress` choice question after prompt review; the per-item attachment and event metadata; `shadow`; `GUARD_INGRESS`; the spend-budget and per-turn report counts; the office, info and documents guards' `ingressGuard` declarations; SPEC. No `.baml` change, no client regeneration.
     - **Depends on:** 16.
 18. **App: presentation.** The classification-driven reference presentation (glyph, disclaimer, red exclamation) and the #901 dialog's severity. Depends on #901's implementation — a precondition, its slicing the owner's — and on 17. The disposition that approved the URL-interpretation seam (2026-11-02) ordered that seam ahead of #901's implementation — the seam is bounded work on attacker-controlled text, and its offset mapping lands before defanging — so the seam is the precondition's precondition.
@@ -1501,8 +1501,8 @@ O24 to O28, O30 to O32 and O34 have owner answers recorded verbatim above. O29 a
 
 - **In plain words:** today a K1 finding forces the screen in every mode that runs it, and mode `off` answers first, so nothing does (`withInjectionGuard.server.ts:227-228`). After the flip, should `off` still force a model call on a deterministic finding?
 - **Options:** (a) no — the classification replaces the finding-forces-screen path; `off` means ingress is fully deterministic; (b) yes — a K1 finding still forces the screen with the mode `off`.
-- **Status: OPEN. Applied recommendation (a), owner may overrule; the owner rules on the board and no revision-6 slice starts before the ruling.** Under (a) the flip is a settings change; under (b) the findings check moves ahead of the mode check and `off`'s meaning changes with it.
-- **Blocks:** every revision-6 slice.
+- **Status: RULED (2026-11-02, board): option (a) — the classification replaces the finding-forces-screen path. The owner's note, recorded: the triage is the replacement for the former gate question. Under (a) the flip is a settings change.
+- **Blocks:** none (ruled).
 
 ### Historical and remaining low-stakes notes
 
@@ -1520,7 +1520,7 @@ The following statements about revision 3.1 defaults and fallback are historical
 
 Verified by reading: every `file:line` of the first draft on `9104cfed`, every `file:line` added in revision 1 on this branch after merging `main` at `a167d530`, including those the security delta contributed, and every `file:line` added in revision 3 after merging `main` at `1d1e0a5c` (the HITL option's `stopsRun` and the unattended pick, the embedder's provider check and its two literal consumers, the Graph message shaping, the agent registry, and #433 §6.1's classification rule, which is a design and not code); where a citation differs between the two trees, the text says which tree it is. The security delta's regex run, roster probe and mutation counts are its own, recorded on the PR, and were not re-run for this revision. Revision 3.1 read on this branch after merging `main` at `d5119976`: the four icon names exist in the installed `@iconify-json/material-symbols` collection, the chat input already uses the send and stop glyphs (`app/src/components/ark-ui/ChatInput.tsx:151`, `:171`), `tutorials-docs-pins.test.ts` compiles every page in `docs/tutorials/`, and each path in a slice's Files line exists on that tree or is marked new. Not run: no test, no eval, no live call (this is a design). Not measured: the two thresholds (τi, τe), both timeouts, the two egress bounds, the gate's latency and skip rate, the egress question's recall per category, how often a person is prompted, and whether a provenance-only fence changes how a controller treats tool results; all are placeholders until slices 7 and 8 are read. Revision 4 source claims were read on `origin/main` at `c7efebf1` and #879 changes at `4a38d053`. Revision 5 reconciles those claims with the 2026-11-01 owner rulings; no test, mutation or live eval was run for the design itself. Each revision-5 pin names a mutation for its implementation slice. SD-20's stale sentence about the sandbox's egress profiles is noted above and left for the brief's owner to correct. The `general` agent's missing guards (the inventory's D6) are out of scope and unchanged.
 
-Revision 6's source claims were read on this branch at `1837f1e0` (`withInjectionGuard.server.ts`, `guard-gate.server.ts`, `typedDecision.server.ts`, `jev-decide.server.ts`, `clients.server.ts`, `guard-config.server.ts` and its tests, `guard-switches.test.ts`, `general-next.server.ts` and its test's guard rows, `spend-budget.ts`, `with-references.server.ts`, `ChatMessages.tsx`, the eval scenarios' references, `SPEC.md`'s τi note). No test, mutation or eval was run for the design itself. Its rulings are recorded paraphrased at the owner's direction; O41 is open and every revision-6 slice waits for it.
+Revision 6's source claims were read on this branch at `1837f1e0` (`withInjectionGuard.server.ts`, `guard-gate.server.ts`, `typedDecision.server.ts`, `jev-decide.server.ts`, `clients.server.ts`, `guard-config.server.ts` and its tests, `guard-switches.test.ts`, `general-next.server.ts` and its test's guard rows, `spend-budget.ts`, `with-references.server.ts`, `ChatMessages.tsx`, the eval scenarios' references, `SPEC.md`'s τi note). No test, mutation or eval was run for the design itself. Its rulings are recorded paraphrased at the owner's direction; O41 is RULED (2026-11-02): mode `off` does not let a deterministic finding force the screen.
 
 ## See also
 

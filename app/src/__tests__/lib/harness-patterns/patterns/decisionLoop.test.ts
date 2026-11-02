@@ -2401,13 +2401,13 @@ describe('decisionLoop — a route is not offered again after two records in a r
   // MUTATION: add `&& kind !== 'retriever'` to `succeededCalls` in computeStats (no
   // retriever record reads as progress): read is withheld at decision 3.
   it('a real retriever that found matches twice in a row is NOT withheld: its result counts as its call', async () => {
-    // A different hit each time: the same hit again would be a repeat (next pin).
+    // A different hit each time: the rendered text (`source ?? id`) differs because `source` changes, so the same hit again would be a repeat (next pin).
     let n = 0
     const hit = () => ({
       backend: 'redis',
       id: `h${++n}`,
       content: 'Figures rose.',
-      source: 'q3.md',
+      source: `q${n}.md`,
     })
     const read = retriever<Data>({
       backends: [{ name: 'redis', type: 'vector', search: async () => [hit()] }],

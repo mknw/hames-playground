@@ -39,6 +39,7 @@ import {
   COLD_START_FALLBACK_MS,
   COLD_START_PLAUSIBILITY_FLOOR_MS,
   COLD_START_WINDOW,
+  SMALL_COLD_START_FALLBACK_MS,
   coldStartEstimate,
   noteColdStartMeasured,
   noteLargeCallStarting,
@@ -117,19 +118,27 @@ async function noticesFrom(body: () => void | Promise<void>): Promise<ColdStartE
 }
 
 describe('the estimate', () => {
-  it('falls back to the LONGEST published reading before anything is measured', () => {
+  it('falls back to the slowest measured snapshot RESTORE before anything is measured', () => {
     expect(coldStartEstimate()).toEqual({
       estimateMs: COLD_START_FALLBACK_MS,
       basis: 'default',
       samples: 0,
     })
-    // The provenance is the point: ~360s is what the box took from first request
-    // to available on 2026-08-27, not a rounded guess. Three readings exist
-    // (71.7s, 146s, ~360s) and this is deliberately the largest rather than
-    // their median — the errors are asymmetric and the owner settled the
-    // direction, because a pessimistic countdown clears early and an optimistic
-    // one is a promise the box breaks.
-    expect(COLD_START_FALLBACK_MS).toBe(360_000)
+    // The provenance is the point: 156.8s is the slowest of six 27B snapshot
+    // restores measured through the URL on Modal (11.9, 31.3, 31.3, 36.2, 62.2,
+    // 156.8s), rounded up to the second. Deliberately the largest rather than
+    // their median: the errors are asymmetric and the owner settled the direction
+    // (a pessimistic countdown clears early, an optimistic one is a promise the
+    // box breaks). Full boots (505–938s) are a different mode, stated by the
+    // notice once this runs out, and must not be folded in here.
+    expect(COLD_START_FALLBACK_MS).toBe(157_000)
+    expect(COLD_START_FALLBACK_MS).toBeGreaterThanOrEqual(156_800)
+    expect(COLD_START_FALLBACK_MS).toBeLessThan(505_000)
+  })
+
+  it('seeds the small box from its own slowest measured restore', () => {
+    // 21–31s through the URL; its own figure, not the 27B's.
+    expect(SMALL_COLD_START_FALLBACK_MS).toBe(31_000)
   })
 
   it('is the median of what was measured, and says so', () => {
@@ -178,24 +187,30 @@ describe('the estimate', () => {
  * exists to prevent.
  */
 describe('the plausibility floor', () => {
-  it('is a duration no container start plus 27B weight load could match', () => {
-    // Pinned inside the BAND the live numbers define rather than derived from
-    // another constant. It used to be a quarter of COLD_START_FALLBACK_MS, and
-    // that tie broke on 2026-08-27 when the fallback rose to 360s: a derived
-    // floor would have become 90s and started silently discarding the genuine
-    // 71.7s cold start measured on 2026-08-26. The two constants answer
-    // different questions — how long a cold start TYPICALLY takes (errs long) vs
-    // the fastest one that could be real (must sit under the fastest seen) — so
-    // they are pinned against their own evidence.
-    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBe(36_500)
-    // Above the load test's WARM p95 at 8-way concurrency (9.9s, 2026-08-25),
-    // with room, so no warm call can pass for a cold start...
-    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeGreaterThan(10_000)
-    // ...and below the FASTEST cold start ever measured (71.7s, 2026-08-26), so
-    // no real one is discarded.
-    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeLessThan(71_700)
-    // And explicitly NOT the old derivation, which is the regression this pins.
+  it('sits between a warm wake and the fastest measured snapshot restore', () => {
+    // Pinned inside the BAND the measurements define rather than derived from
+    // another constant. It was 36.5s, set when the fastest cold start ever seen
+    // was 71.7s; on Modal a snapshot restore can answer in 11.9s, and that floor
+    // discarded four of the six measured restores, so the history learned only
+    // the slow wakes. The fallback and the floor answer different questions —
+    // how long a cold start TYPICALLY takes (errs long) vs the fastest one that
+    // could be real (must sit under the fastest seen) — so each is pinned
+    // against its own evidence.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBe(10_000)
+    // Above the heaviest WARM figure on record (the load test's 8-way p95, 9.9s,
+    // 2026-08-25) and far above a warm wake ping (0.34s on Modal), so no warm
+    // wake can pass for a cold start...
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeGreaterThan(9_900)
+    // ...and below the FASTEST snapshot restore measured (11.9s), so no real
+    // cold start is discarded.
+    expect(COLD_START_PLAUSIBILITY_FLOOR_MS).toBeLessThan(11_900)
+    // And NOT the old derivation from the fallback.
     expect(COLD_START_PLAUSIBILITY_FLOOR_MS).not.toBe(COLD_START_FALLBACK_MS / 4)
+  })
+
+  it('records a fast snapshot restore the old 36.5s floor discarded', () => {
+    noteColdStartMeasured(31_300)
+    expect(coldStartEstimate()).toEqual({ estimateMs: 31_300, basis: 'measured', samples: 1 })
   })
 
   it('drops a reading too short to be a cold start, however the gate voted', () => {

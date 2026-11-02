@@ -742,7 +742,7 @@ describe('what the wait teaches the estimate', () => {
     // FAKE TIMERS, because the thing being measured is a multi-minute wait and
     // the module measures it off `Date.now()`. The stub advances the clock while
     // the request is "in flight", which is the only way to produce a duration
-    // above the 36.5s plausibility floor without actually waiting.
+    // above the plausibility floor without actually waiting.
     vi.useFakeTimers()
     noteLargeCallCompleted(Date.now() - 10 * 60 * 1000)
     fetchMock.mockImplementation(async () => {

@@ -3,8 +3,10 @@
  *
  * The self-hosted deployment scales to zero, so the first call after an idle
  * period pays a container start plus a 27B weight load: **71.7s, 146s and
- * ~360s** on the three occasions it has been measured against the live
- * deployment (2026-08-26, #273/#279, and 2026-08-27). For that whole
+ * ~360s** on the original host, which had no snapshots (2026-08-26, #273/#279,
+ * and 2026-08-27). On Modal the box restores a GPU memory snapshot instead
+ * (12–157s through the URL), unless it has to build a new one, which is a full
+ * boot (5–16 min; see {@link COLD_START_FALLBACK_MS}). For that whole
  * window the chat produces nothing — the SSE keep-alive proves the connection
  * is alive but is invisible to a human by construction
  * (`SSE_KEEPALIVE_MS`), which is why #273 left "no user-visible signal that a
@@ -94,27 +96,38 @@ assertServerOnImport()
 /**
  * The estimate used until this process has measured a cold start of its own.
  *
- * **360_000 ms**, raised from 146_000 on 2026-08-27. Three readings exist
- * against the live deployment, all of them real and all of them of the same
- * box: **71.7s** and **146s** (2026-08-26, #273/#279) and **~360s**
- * (2026-08-27, the reading that also overran the wake's old 300s bound).
+ * **157_000 ms**: the slowest GPU-snapshot RESTORE of the 27B measured on Modal,
+ * through the public URL, first request to first answer. Six readings exist
+ * (2026-10-17 and 2026-10-27, `deploy/modal/README.md` "The 27B"): **11.9s,
+ * 31.3s, 31.3s, 36.2s, 62.2s and 156.8s**. On 2026-11-02 the restore itself took
+ * ~36s inside the container.
  *
- * This is the LARGEST of the three and deliberately not their median, because
- * the two errors are not symmetric and the owner settled the direction: a
- * pessimistic countdown costs a user a spinner that clears early, and an
- * optimistic one is a promise the box breaks — which is the exact failure the
- * notice was built to end (#273's D-c was "a user watching a still screen has no
- * way to tell a warming GPU from a hung app"). A "~2 min" that runs on for
- * another four minutes tells them nothing they can trust twice.
+ * It was 360_000 from 2026-08-27, the largest of three readings on the original
+ * host (71.7s, 146s, ~360s), which had no snapshots: every cold start there was a
+ * full weight load. That figure described a box this deployment no longer runs,
+ * and on Modal it overstated a typical wait about tenfold.
  *
- * It is deliberately ONE named constant with its provenance attached rather than
- * a rounded "about six minutes" spelled into a label — a number the UI states as
- * an expectation has to be traceable to something that happened. And it is a
- * FALLBACK: any process that has measured cold starts of its own reports their
- * median instead, with `basis: 'measured'`, so a deployment faster than this one
- * stops being described by it after the first wait.
+ * Still the LARGEST reading and deliberately not the median (~34s), because the
+ * owner settled the direction on 2026-08-27 and the errors are still not
+ * symmetric: a pessimistic countdown costs a spinner that clears early, and an
+ * optimistic one is a promise the box breaks.
+ *
+ * What it does NOT cover is the other mode. A cold start that has to BUILD a
+ * snapshot is a full boot: after every redeploy, on each GPU type and worker type
+ * the box has not run on yet (Modal keeps snapshots per worker type, and needs
+ * 2–3 per GPU type), and when Modal recaptures them. Those took **505–938s** for
+ * the 27B and **305–552s** for the small box. Folding them into this figure
+ * would put the countdown back at ~16 min for every restore, so the notice
+ * states that mode separately once the countdown runs out
+ * (`COLD_START_FULL_BOOT_MS`, `lib/cold-start-format.ts`).
+ *
+ * It is ONE named constant with its provenance attached rather than a rounded
+ * label, because a number the UI states as an expectation has to be traceable to
+ * something that happened. And it is a FALLBACK: any process that has measured
+ * cold starts of its own reports their median instead, with
+ * `basis: 'measured'`.
  */
-export const COLD_START_FALLBACK_MS = 360_000
+export const COLD_START_FALLBACK_MS = 157_000
 
 /**
  * How many measured cold starts the estimate is taken over.
@@ -129,43 +142,34 @@ export const COLD_START_WINDOW = 8
 /**
  * Shortest duration the history will accept as a cold start.
  *
- * 36.5s. The recording gate in {@link noteLargeCallStarting} can only prove that
- * THIS process was quiet for longer than the scale-down it was configured with
- * (see the module docstring), and two ordinary situations make that false: a
- * `LARGE_LLM_SCALEDOWN_SECONDS` lower than the deployment's own, and a second app
- * instance. Both let a warm ~4s call through the gate, and five of those in an
- * eight-sample window pull the median to 4s while still reporting
- * `basis: 'measured'`.
+ * 10s, the same floor the small box uses
+ * ({@link SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS}). The recording gate in
+ * {@link noteLargeCallStarting} can only prove that THIS process was quiet for
+ * longer than the scale-down it was configured with (see the module docstring),
+ * and two ordinary situations make that false: a `LARGE_LLM_SCALEDOWN_SECONDS`
+ * lower than the deployment's own, and a second app instance. Both let a warm
+ * wake through the gate, and five of those in an eight-sample window would pull
+ * the median down while still reporting `basis: 'measured'`.
  *
- * This is the backstop that cannot be misconfigured. Nothing anywhere near this
- * fast starts a container and loads 27B of weights — the FASTEST cold start ever
- * measured on this deployment is 71.7s and the load test's WARM p95 at 8-way
- * concurrency is 9.9s — so a reading below the floor is a warm call the gate
- * misread, and dropping it cannot cost a real cold start. Deliberately generous
- * rather than tight: the cost of dropping a genuine 30s cold start is one lost
- * sample, and the cost of keeping a warm one is a confidently wrong promise to
- * every future user.
+ * What the history records is the wake poll's total, so the thing the floor must
+ * reject is a WARM wake ping: one 1-token completion, measured at 0.34s on a warm
+ * Modal box. The heaviest warm figure on record, the 8-way load test's p95 on the
+ * original host (9.9s, 2026-08-25, 2.75k-token prompts), is still below it.
  *
- * **ITS OWN LITERAL SINCE 2026-08-27, where it used to be a quarter of
- * {@link COLD_START_FALLBACK_MS}.** The derivation was arithmetic convenience,
- * not a relationship: the two constants answer different questions and move on
- * different evidence. The fallback is a claim about how long a cold start
- * TYPICALLY takes, and it errs LONG on purpose; the floor is a claim about the
- * fastest one that could possibly be real, and it must sit under the fastest one
- * ever seen. Keeping them tied broke the moment the fallback rose to 360s — a
- * derived floor would have become 90s and rejected the genuine 71.7s reading,
- * i.e. erring long on the estimate would have silently started discarding
- * measurements. So the floor stays where it was, and `cold-start.test.ts` pins it
- * inside the band the two live numbers define: comfortably above the 9.9s warm
- * p95, comfortably below the 71.7s cold start.
+ * It was 36.5s until 2026-11-02, set when the fastest cold start ever seen was
+ * 71.7s and a cold box held each request until it was up. On Modal a cold box
+ * answers 503 at once and the poll retries every 5s, so a snapshot restore can be
+ * fast, and the old floor discarded four of the six measured restores (11.9s,
+ * 31.3s, 31.3s, 36.2s). The history then learned only the slow wakes while its
+ * tooltip claimed the median of all of them. The floor must sit under the
+ * fastest real cold start, and on this host that is 11.9s.
  *
- * The poll gives it a second, mechanical reading it did not have before. With a
- * 30s per-attempt timeout and a ~5s gap (`wake.server.ts`), a wake that needed
- * even ONE retry has taken at least 35s — so a reading under this floor is
- * necessarily a wake whose FIRST attempt answered, which is a box that was
- * already up.
+ * It is its own literal, not derived from {@link COLD_START_FALLBACK_MS}: the
+ * fallback is a claim about how long a cold start typically takes and errs long;
+ * the floor is a claim about the fastest one that could be real.
+ * `cold-start.test.ts` pins it between the warm figures and the fastest restore.
  */
-export const COLD_START_PLAUSIBILITY_FLOOR_MS = 36_500
+export const COLD_START_PLAUSIBILITY_FLOOR_MS = 10_000
 
 /** Warm states that count as PROOF the box is up. Everything else — `starting`,
  *  `cold`, `unknown` — shows the notice. */
@@ -193,8 +197,11 @@ type HistoryGlobal = typeof globalThis & { [HISTORY_KEY]?: number[] }
 const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
 
 export type WakeBox = 'large' | 'small'
-/** Snapshot restores measured 21–31s; an estimate, separate from the first-boot budget. */
-export const SMALL_COLD_START_FALLBACK_MS = 30_000
+/** The small box's restore estimate: the slowest snapshot restore measured through
+ *  the URL (21–31s, `deploy/modal/README.md`). Largest, by the same rule as
+ *  {@link COLD_START_FALLBACK_MS}. A full boot (305–552s) is not covered by it;
+ *  the notice states that case once the countdown runs out. */
+export const SMALL_COLD_START_FALLBACK_MS = 31_000
 // Between sub-second warm health checks and the fastest measured cold start (21s).
 export const SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS = 10_000
 /** The small box releases its GPU after 300s idle. */

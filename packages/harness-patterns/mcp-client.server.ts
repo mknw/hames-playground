@@ -7,7 +7,12 @@
 
 import { assertServerOnImport } from './assert.server'
 import { createHash } from 'node:crypto'
-import { currentRunFrame, withToolCallId, type BatchEgressHeld } from './run-frame.server'
+import {
+  currentRunFrame,
+  EGRESS_VERDICT_KINDS_BY_PHASE,
+  withToolCallId,
+  type BatchEgressHeld,
+} from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
 import { canonicalJson, currentRunId, isHeldResult } from './hitl.server'
@@ -318,8 +323,11 @@ export const SEND_OUTCOME_UNKNOWN =
   'This request may have been sent, but its outcome was not recorded. It was not retried.'
 
 /** Run every pre-dispatch check without opening any transport. The denial wins
- * over a person cell, just as it does in callTool. Only a batch preflight may
- * consume a batchHeld verdict. */
+ *  over a held row, just as it does in callTool. Each check must answer in
+ *  the {@link EgressVerdict} union for the phase this consumer runs in —
+ *  `EGRESS_VERDICT_KINDS_BY_PHASE.preflight` — and a kind outside it denies
+ *  the call, so a check can never smuggle an execute-phase arm through the
+ *  preflight. */
 export async function preflightTool(
   name: string,
   args: Record<string, unknown>,
@@ -331,12 +339,16 @@ export async function preflightTool(
   for (const check of currentRunFrame()?.egressChecks ?? []) {
     try {
       const verdict = await check({ name, args })
-      if (typeof verdict === 'string' && verdict) denial ??= verdict
-      else if (verdict && typeof verdict === 'object') {
-        if ('batchHeld' in verdict) held ??= verdict.batchHeld
-        else if ('batchPassed' in verdict) auditByDecide = true
-        else if ('batchAudit' in verdict) denial ??= EGRESS_CHECK_FAILED
-        else if ('held' in verdict) denial ??= EGRESS_CHECK_FAILED
+      if (verdict && !EGRESS_VERDICT_KINDS_BY_PHASE.preflight.includes(verdict.kind)) {
+        // Out of phase, or no kind at all: a check answering for another
+        // consumer's phase denies the call — fail closed.
+        denial ??= EGRESS_CHECK_FAILED
+      } else if (verdict?.kind === 'refuse') {
+        denial ??= verdict.feedback
+      } else if (verdict?.kind === 'batch-hold') {
+        held ??= verdict.batchHeld
+      } else if (verdict?.kind === 'batch-pass') {
+        auditByDecide = true
       }
     } catch {
       denial ??= EGRESS_CHECK_FAILED
@@ -381,20 +393,22 @@ export async function callTool(
   for (const check of currentRunFrame()?.egressChecks ?? []) {
     try {
       const verdict = await check({ name, args })
-      if (typeof verdict === 'string' && verdict) denial ??= verdict
-      else if (
-        verdict &&
-        typeof verdict === 'object' &&
-        'held' in verdict &&
-        isHeldResult(verdict.held)
-      ) {
-        hold ??= verdict.held
-      } else if (verdict && typeof verdict === 'object' && 'batchHeld' in verdict) {
+      if (verdict && !EGRESS_VERDICT_KINDS_BY_PHASE.execute.includes(verdict.kind)) {
+        // Out of phase, or no kind at all: a check answering for another
+        // consumer's phase denies the call — fail closed, never a dispatch.
         denial ??= EGRESS_CHECK_FAILED
-      } else if (verdict && typeof verdict === 'object' && 'batchPassed' in verdict) {
-        denial ??= EGRESS_CHECK_FAILED
-      } else if (verdict && typeof verdict === 'object' && 'batchAudit' in verdict) {
-        audits.push(verdict.batchAudit)
+      } else {
+        switch (verdict?.kind) {
+          case 'refuse':
+            denial ??= verdict.feedback
+            break
+          case 'hold':
+            hold ??= verdict.held
+            break
+          case 'audit':
+            audits.push(verdict.record)
+            break
+        }
       }
     } catch {
       // An unavailable check must not turn into an unchecked dispatch, and its

@@ -51,7 +51,7 @@ dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -m 700 -- "$dump_root" ) || exit 1
 # Resolve the reviewed target and prove its Compose shape before disabling DEV
 # routines or stopping RELEASE. This writes only a private prediction artifact.
-TARGET_SHA='<reviewed-full-40-character-target-sha>'
+TARGET_SHA="${TARGET_SHA:?Set TARGET_SHA to the reviewed full commit before running this block}"
 test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
 case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
 ( umask 022; git fetch --quiet --prune --tags origin ) || exit 1

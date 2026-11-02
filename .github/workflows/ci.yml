@@ -188,6 +188,7 @@ jobs:
           scripts/backup-preview.test.sh
           scripts/app-upgrade-prestop.test.sh
           python3 scripts/app-upgrade-gate.test.py
+          python3 scripts/app-upgrade-review.test.py
 
       # Pins the Postgres → pgvector migration script (#419 M8) against a docker
       # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,

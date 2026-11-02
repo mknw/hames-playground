@@ -250,18 +250,20 @@ def target_prediction(target_sha):
         stop("target must be a full commit SHA")
     files, project, current = configuration()
     with tempfile.TemporaryDirectory(prefix="upgrade-target-") as directory:
-        target_files = []
-        for index, name in enumerate(files.split(":")):
-            target_file = Path(directory) / f"{index}-{Path(name).name}"
-            target_file.write_bytes(command("git", "show", f"{target_sha}:{name}"))
-            target_files.extend(("-f", str(target_file)))
+        # Resolve includes/extends/env files from the complete target tree. Keep
+        # bind paths relative until the resolved model is loaded at the host root.
+        with tarfile.open(fileobj=io.BytesIO(command("git", "archive", target_sha))) as archive:
+            archive.extractall(directory, filter="data")
+        target_files = [part for name in files.split(":")
+                        for part in ("-f", str(Path(directory) / name))]
+        project_directory = directory
 
         def target_compose(*args):
             env = os.environ.copy()
             env.pop("COMPOSE_FILE", None)
             env["COMPOSE_PROFILES"] = "app"
             result = subprocess.run(
-                ["docker", "compose", "--project-directory", str(Path.cwd()),
+                ["docker", "compose", "--project-directory", str(project_directory),
                  "--env-file", str(Path.cwd() / ".env"), *target_files, *args],
                 env=env, capture_output=True, check=False,
             )
@@ -269,6 +271,11 @@ def target_prediction(target_sha):
                 stop("target Compose render or dry run failed")
             return result.stderr if "--dry-run" in args else result.stdout
 
+        resolved = target_compose("config", "--no-path-resolution", "--format", "json")
+        model = Path(directory) / "resolved.json"
+        model.write_bytes(resolved)
+        target_files = ["-f", str(model)]
+        project_directory = Path.cwd()
         rendered = json.loads(target_compose("config", "--format", "json"))
         if rendered.get("name") != project:
             stop("target Compose project changed")

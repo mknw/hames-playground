@@ -12,6 +12,7 @@ ENV
 cat >"$TMP/bin/git" <<'SH'
 #!/bin/sh
 case "$*" in
+  'archive '*) tar -cf - --files-from /dev/null ;;
   'show '*) printf 'services: {}\n' ;;
   *) exit 99 ;;
 esac
@@ -21,7 +22,7 @@ cat >"$TMP/bin/docker" <<'SH'
 set -eu
 printf '%s\n' "$*" >>"$TRACE"
 case "$*" in
-  *'config --format json')
+  *'config --format json'|*'config --no-path-resolution --format json')
     printf '{"name":"hames","services":{"app":{},"caddy":{},"mcp-gateway":{},"embedder":{"mem_limit":"3221225472"},"mcp-config":{}}}\n' ;;
   *'config --hash *')
     for service in app caddy mcp-gateway embedder mcp-config; do

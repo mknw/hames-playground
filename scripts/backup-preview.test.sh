@@ -15,9 +15,11 @@ case "$*" in
   'compose ps --services --status running') printf 'postgres\n' ;;
   'compose exec -T postgres pg_dump '*) printf 'PGDUMP' ;;
   'compose exec -T postgres pg_restore --list') printf 'TABLE DATA public conversations\n' ;;
-  'compose ps -q neo4j') printf 'exact-container\n' ;;
-  'inspect --format {{.Image}} exact-container') printf 'sha256:exact\n' ;;
-  'inspect --format {{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}} exact-container') printf 'hames_neo4j_data\n' ;;
+  'compose ps -q neo4j')
+    if [ "${DRIFT:-}" = container ] && grep -q '^commit ' "$TRACE"; then printf 'replacement-container\n'; else printf 'exact-container\n'; fi ;;
+  'inspect --format {{.Image}} exact-container')
+    if [ "${DRIFT:-}" = expected-image ] || { [ "${DRIFT:-}" = image ] && grep -q '^commit ' "$TRACE"; }; then printf 'sha256:different\n'; else printf 'sha256:exact\n'; fi ;;
+  'inspect --format {{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}} exact-container') if [ "${DRIFT:-}" = volume ]; then printf 'other-volume\n'; else printf 'hames_neo4j_data\n'; fi ;;
   'commit --pause=false exact-container '*)
     [ "${FAIL_CAPTURE:-0}" = 0 ] || exit 1
     printf 'sha256:captured\n' ;;
@@ -70,3 +72,9 @@ if run_case dump-failure 0 0 0 1; then exit 1; fi
 grep -q '^compose start neo4j$' "$TMP/trace"
 grep -q '^image rm hames-neo4j:backup-' "$TMP/trace"
 echo 'PASS dump failure restarts Neo4j and cleans temporary image'
+
+for drift in volume expected-image container image; do
+  if DRIFT="$drift" run_case "refuse-$drift"; then exit 1; fi
+  if grep -q '^compose stop neo4j$' "$TMP/trace"; then exit 1; fi
+  echo "PASS $drift mismatch refuses before stop"
+done

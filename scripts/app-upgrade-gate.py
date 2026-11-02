@@ -255,17 +255,30 @@ ENV_FILE_MARKER = "x-upgrade-gate-env-file"
 
 def preserve_env_files(root):
     """Keep service env_file declarations through Compose's YAML rendering."""
-    def rename(node, seen, parent):
-        if id(node) in seen:
+    def rename(node, seen, parent, service_map=False):
+        visit = (id(node), service_map)
+        if visit in seen:
             return False
-        seen.add(id(node))
+        seen.add(visit)
         changed = False
         if isinstance(node, yaml.MappingNode):
             for index, (key, value) in enumerate(node.value):
-                if key.value == ENV_FILE_MARKER:
+                if key.value == "<<":
+                    # A services-map merge still contains service names; a
+                    # service-level merge contains fields. Keep that context.
+                    changed = rename(value, seen, parent, service_map) or changed
+                elif service_map:
+                    changed = rename(value, seen, parent) or changed
+                elif key.value == ENV_FILE_MARKER:
                     stop("reserved upgrade gate extension in target Compose")
-                if key.value == "env_file":
+                elif key.value == "env_file":
                     key.value = ENV_FILE_MARKER
+                    if value.tag == "!reset":
+                        # Compose ignores a reset's payload, including scalar
+                        # null. Preserve the reset on the shielded declaration.
+                        node.value[index] = (key, yaml.SequenceNode("!reset", []))
+                        changed = True
+                        continue
                     # Extensions do not receive Compose's extends path rebasing.
                     # Carry the source directory with each entry until after
                     # Compose has interpolated its path and merged the lists.
@@ -284,11 +297,9 @@ def preserve_env_files(root):
                     tag = value.tag if isinstance(value, yaml.SequenceNode) else 'tag:yaml.org,2002:seq'
                     node.value[index] = (key, yaml.SequenceNode(tag, preserved))
                     changed = True
-                if key.value == "<<":
-                    changed = rename(value, seen, parent) or changed
         elif isinstance(node, yaml.SequenceNode):
             for value in node.value:
-                changed = rename(value, seen, parent) or changed
+                changed = rename(value, seen, parent, service_map) or changed
         return changed
 
     # References may use any filename, not just *.yaml. Non-YAML archive
@@ -307,8 +318,7 @@ def preserve_env_files(root):
             seen = set()
             for key, value in node.value:
                 if key.value == "services" and isinstance(value, yaml.MappingNode):
-                    for _, service in value.value:
-                        changed = rename(service, seen, str(path.parent.relative_to(root))) or changed
+                    changed = rename(value, seen, str(path.parent.relative_to(root)), service_map=True) or changed
         if changed:
             path.write_text(yaml.serialize_all(documents))
 

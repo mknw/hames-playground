@@ -365,9 +365,92 @@ services:
                 gate.target_prediction(SHA)
 
 
+    def test_services_mapping_merge_preserves_env_file(self):
+        root, target, command, run = self.fixture(True, False)
+        (root / 'runtime.env').write_text('VALUE=fixture-only\n')
+        flat = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: ./runtime.env\n')
+        (root / 'docker-compose.yaml').write_text(flat)
+        expected = gate.configuration()[2]
+        service = flat.split('  app:\n')[1].split('  caddy:\n')[0]
+        target['docker-compose.yaml'] = ('x-services: &services\n  app:\n' + service
+            + flat.split('services:\n')[0] + 'services:\n  <<: *services\n  caddy:\n'
+            + flat.split('  caddy:\n')[1])
+        (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        self.assertEqual(expected, gate.configuration()[2], 'Merge syntax must be hash-equivalent')
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_scalar_reset_env_file_preserves_tag(self):
+        root, target, command, run = self.fixture(True, False)
+        (root / 'runtime.env').write_text('VALUE=fixture-only\n')
+        target['docker-compose.yaml'] = target['docker-compose.yaml'].replace(
+            '  app:\n', '  app:\n    env_file: ./runtime.env\n')
+        target['docker-compose.clones.yaml'] += '    env_file: !reset null\n'
+        for name, body in target.items():
+            (root / name).write_text(body)
+        expected = gate.configuration()[2]  # Compose accepts this declaration.
+        (root / 'docker-compose.clones.yaml').write_text(
+            target['docker-compose.clones.yaml'].replace('!reset null', '!reset []'))
+        self.assertEqual(expected, gate.configuration()[2], 'Both reset forms must be hash-equivalent')
+        (root / 'docker-compose.clones.yaml').write_text(target['docker-compose.clones.yaml'])
+        self.prediction_equals_checkout(root, target, command, run)
+        target['docker-compose.clones.yaml'] = target['docker-compose.clones.yaml'].replace('!reset null', '!reset []')
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_merged_service_target_only_env_change_refuses(self):
+        root, target, command, run = self.fixture(True, False)
+        for name, value in (('old.env', 'old'), ('new.env', 'new')):
+            (root / name).write_text(f'VALUE={value}\n')
+        base = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: ./old.env\n')
+        merged = base.replace('services:\n', 'x-services: &services\n', 1) + '\nservices:\n  <<: [*services]\n'
+        (root / 'docker-compose.yaml').write_text(merged)
+        current = gate.configuration()[2]
+        target['docker-compose.yaml'] = merged.replace('./old.env', './new.env')
+        (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        self.assertNotEqual(current['app-dev'], gate.configuration()[2]['app-dev'])
+        (root / 'docker-compose.yaml').write_text(merged)
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(SystemExit, 'forbidden target Compose hash change: app-dev'):
+                gate.target_prediction(SHA)
+
+    def test_reserved_extension_direct_and_service_merge_refuse(self):
+        for alias in (False, True):
+            with self.subTest(alias=alias):
+                root, target, command, run = self.fixture(True, False)
+                marker = 'x-upgrade-gate-env-file: [{path: ./runtime.env, x-upgrade-origin: .}]'
+                (root / 'runtime.env').write_text('VALUE=fixture-only\n')
+                if alias:
+                    target['docker-compose.yaml'] = ('x-common: &common\n  ' + marker + '\n'
+                        + target['docker-compose.yaml'].replace('  app:\n', '  app:\n    <<: *common\n'))
+                else:
+                    target['docker-compose.yaml'] = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    ' + marker + '\n')
+                with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+                    with self.assertRaisesRegex(SystemExit, 'reserved upgrade gate extension'):
+                        gate.target_prediction(SHA)
+
+    def test_services_mapping_reserved_extension_refuses(self):
+        root, target, command, run = self.fixture(True, False)
+        for name in ('old.env', 'new.env'):
+            (root / name).write_text('')
+        base = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: ./old.env\n')
+        (root / 'docker-compose.yaml').write_text(base)
+        gate.configuration()  # Baseline is accepted by the real parser.
+        changed = base.replace('env_file: ./old.env',
+            'env_file: ./new.env\n    x-upgrade-gate-env-file: [{path: ./old.env, x-upgrade-origin: .}]')
+        service = changed.split('  app:\n')[1].split('  caddy:\n')[0]
+        target['docker-compose.yaml'] = ('x-services: &services\n  app:\n' + service
+            + changed.split('services:\n')[0] + 'services:\n  <<: *services\n  caddy:\n'
+            + changed.split('  caddy:\n')[1])
+        (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        gate.configuration()  # The target also is valid Compose input.
+        (root / 'docker-compose.yaml').write_text(base)
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(SystemExit, 'reserved upgrade gate extension'):
+                gate.target_prediction(SHA)
+
+
 @unittest.skipUnless(os.environ.get('RV918_COMPOSE_CONFIG') == '1', 'opt-in real Compose parser; no daemon mutations')
 class ProductionComposeReview(unittest.TestCase):
-    def check_shape(self, clones):
+    def check_shape(self, clones, merged=False):
         realrun = subprocess.run
         realcommand = gate.command
         files = gate.CLONE_FILES if clones else gate.SINGLE_FILES
@@ -397,6 +480,22 @@ RELEASE_RUNTIME_ENV_FILE={runtime}
 DEV_RUNTIME_ENV_FILE={runtime}
 DEV_CLONE_PATH={root}/dev
 ''')
+            if merged:
+                baseline = gate.configuration()[2]
+                path = root / 'docker-compose.clones.yaml'
+                path.write_text(path.read_text().replace('services:\n', 'x-services: &services\n', 1)
+                                + '\nservices:\n  <<: *services\n')
+                self.assertEqual(baseline, gate.configuration()[2], 'Merge syntax must be hash-equivalent')
+                output = io.BytesIO()
+                with tarfile.open(fileobj=io.BytesIO(archive)) as original, tarfile.open(fileobj=output, mode='w') as updated:
+                    for member in original:
+                        content = original.extractfile(member) if member.isfile() else None
+                        if member.name == path.name:
+                            raw = path.read_bytes()
+                            member.size = len(raw)
+                            content = io.BytesIO(raw)
+                        updated.addfile(member, content)
+                archive = output.getvalue()
 
             def command(*args):
                 if args[:2] == ('git', 'archive'):
@@ -425,6 +524,9 @@ DEV_CLONE_PATH={root}/dev
 
     def test_production_clone_matches_checkout(self):
         self.check_shape(True)
+
+    def test_production_merged_clone_matches_checkout(self):
+        self.check_shape(True, merged=True)
 
 
 if __name__ == '__main__':

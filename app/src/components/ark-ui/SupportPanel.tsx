@@ -23,6 +23,7 @@ import { ObservabilityPanel } from './ObservabilityPanel'
 import { DataStashPanel, type StashAction } from './DataStashPanel'
 import { SandboxPanel } from './SandboxPanel'
 import { SANDBOX_BLINK_MS, sawSandboxEntry } from '~/lib/sandbox-blink'
+import type { SupportTabId } from '~/lib/support-rail'
 import type { ElementDefinition, StylesheetJsonBlock } from 'cytoscape'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 
@@ -74,6 +75,13 @@ export interface SupportPanelProps {
   pendingReference?: OpenReferenceTarget | null
   /** Fired after a successful upload so the route can watch embedding status. */
   onUploaded?: () => void
+  /** Collapse the panel (#933). Present ⇒ the collapse toggle renders at the
+   *  right end of the tab strip; absent (tests, embedders) it does not. */
+  onCollapse?: () => void
+  /** Open the panel on this tab — how the collapsed rail expands the panel onto
+   *  the tab its icon names. The route passes the value; the panel moves itself.
+   *  undefined leaves the current selection alone. */
+  openTab?: SupportTabId
 }
 
 // ============================================================================
@@ -111,6 +119,13 @@ export const SupportPanel = (props: SupportPanelProps) => {
     if (props.pendingReference) setSelectedTab('data')
   })
 
+  // Expand-on-a-tab (#933): the collapsed rail expands the panel onto the tab
+  // its icon names. The route passes the tab; the panel moves itself.
+  createEffect(() => {
+    const tab = props.openTab
+    if (tab) setSelectedTab(tab)
+  })
+
   // Filter graph elements by source
   const neo4jElements = createMemo(() =>
     props.graphElements.filter(
@@ -141,108 +156,147 @@ export const SupportPanel = (props: SupportPanelProps) => {
         flex="~ col"
         h="full"
       >
-        {/* Tab List */}
-        <Tabs.List bg="ui-bg-secondary" border="b ui-border-primary" flex="~ wrap" p="x-2" gap="1">
-          <Tabs.Trigger
-            value="neo4j-graph"
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            flex="~"
-            items="center"
-            gap="1"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'neo4j-graph' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color':
-                selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'transparent',
-              color:
-                selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
-            }}
-          >
-            <span class="i-material-symbols-database-outline" w="4" h="4" aria-hidden="true" />
-            Neo4j
-          </Tabs.Trigger>
+        {/* Tab strip row: the tabs plus, at its right end, the collapse toggle
+            (#933). The strip's chrome moved onto this row so the button sits
+            beside the tabs without being a child of the tablist — a non-tab
+            control inside role="tablist" is invalid ARIA. */}
+        <div
+          flex="~"
+          items="center"
+          justify="between"
+          bg="ui-bg-secondary"
+          border="b ui-border-primary"
+          p="x-2"
+          gap="1"
+        >
+          <Tabs.List flex="~ wrap" items="center" gap="1">
+            <Tabs.Trigger
+              value="neo4j-graph"
+              p="x-3 y-2"
+              text="sm ui-text-primary"
+              flex="~"
+              items="center"
+              gap="1"
+              cursor="pointer"
+              border="b-2 transparent"
+              transition="all"
+              data-state={selectedTab() === 'neo4j-graph' ? 'active' : 'inactive'}
+              style={{
+                'border-bottom-color':
+                  selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'transparent',
+                color:
+                  selectedTab() === 'neo4j-graph' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
+              }}
+            >
+              <span class="i-material-symbols-database-outline" w="4" h="4" aria-hidden="true" />
+              Neo4j
+            </Tabs.Trigger>
 
-          <Tabs.Trigger
-            value="memory"
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            flex="~"
-            items="center"
-            gap="1"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'memory' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color':
-                selectedTab() === 'memory' ? 'var(--ui-accent)' : 'transparent',
-              color: selectedTab() === 'memory' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
-            }}
-          >
-            <span class="i-material-symbols-psychology-outline" w="4" h="4" aria-hidden="true" />
-            Memory
-          </Tabs.Trigger>
+            <Tabs.Trigger
+              value="memory"
+              p="x-3 y-2"
+              text="sm ui-text-primary"
+              flex="~"
+              items="center"
+              gap="1"
+              cursor="pointer"
+              border="b-2 transparent"
+              transition="all"
+              data-state={selectedTab() === 'memory' ? 'active' : 'inactive'}
+              style={{
+                'border-bottom-color':
+                  selectedTab() === 'memory' ? 'var(--ui-accent)' : 'transparent',
+                color: selectedTab() === 'memory' ? 'var(--ui-accent)' : 'var(--ui-text-secondary)',
+              }}
+            >
+              <span class="i-material-symbols-psychology-outline" w="4" h="4" aria-hidden="true" />
+              Memory
+            </Tabs.Trigger>
 
-          <Tabs.Trigger
-            value="stats"
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color': selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
-              color: selectedTab() === 'stats' ? '#f59e0b' : 'var(--ui-text-secondary)',
-            }}
-          >
-            Context manager
-          </Tabs.Trigger>
+            <Tabs.Trigger
+              value="stats"
+              p="x-3 y-2"
+              text="sm ui-text-primary"
+              flex="~"
+              items="center"
+              gap="1"
+              cursor="pointer"
+              border="b-2 transparent"
+              transition="all"
+              data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
+              style={{
+                'border-bottom-color': selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
+                color: selectedTab() === 'stats' ? '#f59e0b' : 'var(--ui-text-secondary)',
+              }}
+            >
+              <span class="i-material-symbols-analytics-outline" w="4" h="4" aria-hidden="true" />
+              Context manager
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="data"
+              p="x-3 y-2"
+              text="sm ui-text-primary"
+              flex="~"
+              items="center"
+              gap="1"
+              cursor="pointer"
+              border="b-2 transparent"
+              transition="all"
+              data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
+              style={{
+                'border-bottom-color': selectedTab() === 'data' ? '#22d3ee' : 'transparent',
+                color: selectedTab() === 'data' ? '#22d3ee' : 'var(--ui-text-secondary)',
+              }}
+            >
+              <span class="i-material-symbols-dataset-outline" w="4" h="4" aria-hidden="true" />
+              Data
+            </Tabs.Trigger>
 
-          <Tabs.Trigger
-            value="data"
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            cursor="pointer"
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color': selectedTab() === 'data' ? '#22d3ee' : 'transparent',
-              color: selectedTab() === 'data' ? '#22d3ee' : 'var(--ui-text-secondary)',
-            }}
-          >
-            Data
-          </Tabs.Trigger>
-
-          <Tabs.Trigger
-            value="sandbox"
-            disabled={sandboxDisabled()}
-            title={sandboxDisabled() ? SANDBOX_UNAVAILABLE_REASON : undefined}
-            aria-describedby={sandboxDisabled() ? sandboxReasonId : undefined}
-            class={blinking() ? 'sandbox-tab-blink' : undefined}
-            p="x-3 y-2"
-            text="sm ui-text-primary"
-            flex="~"
-            items="center"
-            gap="1"
-            cursor={sandboxDisabled() ? 'not-allowed' : 'pointer'}
-            op={sandboxDisabled() ? '40' : '100'}
-            border="b-2 transparent"
-            transition="all"
-            data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
-            style={{
-              'border-bottom-color': selectedTab() === 'sandbox' ? '#10b981' : 'transparent',
-              color: selectedTab() === 'sandbox' ? '#10b981' : 'var(--ui-text-secondary)',
-            }}
-          >
-            <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />
-            Sandbox
-          </Tabs.Trigger>
-        </Tabs.List>
+            <Tabs.Trigger
+              value="sandbox"
+              disabled={sandboxDisabled()}
+              title={sandboxDisabled() ? SANDBOX_UNAVAILABLE_REASON : undefined}
+              aria-describedby={sandboxDisabled() ? sandboxReasonId : undefined}
+              class={blinking() ? 'sandbox-tab-blink' : undefined}
+              p="x-3 y-2"
+              text="sm ui-text-primary"
+              flex="~"
+              items="center"
+              gap="1"
+              cursor={sandboxDisabled() ? 'not-allowed' : 'pointer'}
+              op={sandboxDisabled() ? '40' : '100'}
+              border="b-2 transparent"
+              transition="all"
+              data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
+              style={{
+                'border-bottom-color': selectedTab() === 'sandbox' ? '#10b981' : 'transparent',
+                color: selectedTab() === 'sandbox' ? '#10b981' : 'var(--ui-text-secondary)',
+              }}
+            >
+              <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />
+              Sandbox
+            </Tabs.Trigger>
+          </Tabs.List>
+          {/* Collapse (#933) — the labelled toggle; the collapsed rail's icons
+              are the panel's other way back. */}
+          <Show when={props.onCollapse}>
+            <button
+              onClick={() => props.onCollapse?.()}
+              title="Collapse panel"
+              aria-label="Collapse panel"
+              data-testid="support-collapse"
+              p="2"
+              rounded="md"
+              hover="bg-ui-bg-hover"
+              transition="colors"
+              text="ui-text-tertiary hover:ui-accent"
+              shrink="0"
+              flex="~"
+            >
+              <span class="i-material-symbols-chevron-right" w="4" h="4" aria-hidden="true" />
+            </button>
+          </Show>
+        </div>
         {/* The disabled tab's reason, for assistive technology: a disabled
             button takes no focus, so a hover-only tooltip is not enough.
             Outside the tab list, which holds tabs and nothing else. */}

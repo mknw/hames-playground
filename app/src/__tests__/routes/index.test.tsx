@@ -83,6 +83,14 @@ vi.mock('~/components/ark-ui/SupportPanel', () => ({
   },
 }))
 
+let rail: any
+vi.mock('~/components/ark-ui/SupportPanelRail', () => ({
+  SupportPanelRail: (props: any): JSX.Element => {
+    rail = props
+    return <div data-testid="support-rail" />
+  },
+}))
+
 // ── Server actions ──────────────────────────────────────────────────────────
 type Thread = {
   id: string
@@ -136,7 +144,8 @@ beforeEach(() => {
   setSearchParams({})
   navigations.length = 0
   nextId = 0
-  sidebar = chat = support = undefined
+  sidebar = chat = support = rail = undefined
+  localStorage.clear()
   listConversations.mockResolvedValue([])
   deleteConversationsBulk.mockResolvedValue({ deleted: [] })
   fetchMock.mockResolvedValue(jsonResponse({ documents: [] }))
@@ -811,5 +820,32 @@ describe('chat route — the embedding guard', () => {
     fetchMock.mockResolvedValue(new Response('nope', { status: 500 }))
     await mount()
     expect(chat.embeddingSources).toBe(false)
+  })
+})
+
+describe('chat route — the support panel collapses (#933)', () => {
+  it('starts expanded and the toggle collapses it, persisting the choice', async () => {
+    await mount()
+    expect(rail).toBeUndefined() // no rail while expanded
+
+    support.onCollapse()
+    await tick(10)
+
+    expect(localStorage.getItem('support-panel.collapsed')).toBe('true')
+    expect(rail).toBeDefined() // the icons-only rail takes the panel's place
+  })
+
+  it('restores a persisted collapsed choice on mount and expands from the rail', async () => {
+    localStorage.setItem('support-panel.collapsed', 'true')
+    await mount()
+    expect(rail).toBeDefined()
+
+    // A rail icon expands the panel onto that tab.
+    rail.onExpand('data')
+    await tick(10)
+    expect(support.openTab).toBe('data')
+    // And the expansion records itself too — the choice is whatever the
+    // panel is showing, however it got there.
+    expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
   })
 })

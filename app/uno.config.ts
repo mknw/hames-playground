@@ -26,9 +26,11 @@ export default defineConfig({
   // Globs are relative to app/; entries are watched in dev.
   // The agents moved to @hames-ai/agents (#225 PR-2) — the icon literals moved
   // WITH them, into the overlay in `registry.server.ts` (one literal per
-  // registration), so this glob names that file now.
+  // registration), so this glob names that file now. The collapsed support
+  // rail (#933) keeps its tab-icon literals in `src/lib/support-rail.ts` for
+  // the same reason, listed beside it.
   content: {
-    filesystem: ['src/lib/harness-client/registry.server.ts'],
+    filesystem: ['src/lib/harness-client/registry.server.ts', 'src/lib/support-rail.ts'],
   },
   presets: [
     presetIcons({
@@ -458,6 +460,27 @@ export default defineConfig({
             animation: none;
             box-shadow: inset 0 -2px 0 var(--ui-success);
           }
+        }
+
+        /* Collapsed support rail (#933): an event landing for a collapsed tab
+           softly pulses that tab's rail icon — two low-contrast opacity dips
+           inside one 1.2s run, the sandbox tab's shape. Applied by
+           SupportPanelRail for SUPPORT_BLINK_MS, which mirrors the duration
+           (uno-theme.test.ts pins the pair, as it does the sandbox tab's). */
+        @keyframes support-rail-blink {
+          0%, 50%, 100% { opacity: 1; }
+          25%, 75%      { opacity: 0.35; }
+        }
+        .support-rail-blink {
+          animation: support-rail-blink 1.2s ease-in-out 1;
+        }
+        .support-rail-blink .support-rail-blink-dot { display: none; }
+        /* Motionless fallback: no pulsing — the icon carries a steady 6px dot
+           in the tab's accent for the same 1.2s, the same geometry as the
+           left rail's run-state dot. */
+        @media (prefers-reduced-motion: reduce) {
+          .support-rail-blink { animation: none; opacity: 1; }
+          .support-rail-blink .support-rail-blink-dot { display: block; }
         }
 
         /* Agent accent glyph in expanded sidebar rows. Muted at rest so the

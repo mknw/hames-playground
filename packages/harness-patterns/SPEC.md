@@ -1541,8 +1541,10 @@ degraded checks. An empty or unreadable directory is announced when a call
 actually uses the roster, once per turn.
 
 `decide: shadow` queues measurement after transport, behind active questions.
-At most one shadow question starts per turn; other and failed questions record
-abstained/skipped `decision_made` events. A name veto on the Anthropic tier
+Eligible questions drain serially, one in flight, within a shared per-turn
+`timeoutMs` budget; a failed question records an abstained `decision_made`
+event, and one left unstarted when the budget is spent records a skipped one.
+A name veto on the Anthropic tier
 records abstention without a shadow request. Shadow never prompts, blocks,
 spends N, or delays the outgoing call. Its stored record has `shadow: true`,
 `wouldRefuse` and `wouldCategory` when answered, tool and call id, with no state

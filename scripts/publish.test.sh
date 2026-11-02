@@ -10,12 +10,27 @@
 #   6. partially published on npm                      -> non-zero, listed
 #   7. --dry-run skips the registry gate, packs with --dry-run, no whoami
 #   8. no CONFIRM and a closed stdin                    -> aborted, non-zero
+#   9. no release tag at all                            -> refused
+# Review tests (PR #916, adapted from the reviewer's uncommitted
+# scripts/publish-review.test.sh; each carries its mutation in a comment):
+#   R1  semver ordering: v0.10.0 must beat v0.9.0       (mutation: sort mode)
+#   R2  prerelease / odd tags are never selected        (mutation: grep relaxed)
+#   R2b VERSION=0.11.0-rc.1 override is refused         (mutation: regex removed)
+#   R3  trap removes the worktree when publish fails    (mutation: trap removed)
+#   R4  VERSION override to a nonexistent tag: refused  (mutation: exit dropped)
+#       and named, nothing published, no release line
+#   R5  tags are FETCHED before the latest tag is chosen (the finding itself:
+#       red on the pre-#916-fix code, where selection preceded the fetch)
 # Run: scripts/publish.test.sh   (no arguments, exits 0 on green)
 
 # shellcheck disable=SC2016 # SC2016: the sh -c bodies are quoted on purpose — $1 is the sh positional, not the test's
 set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# PUBLISH_SH: the script under test; overriding it runs the suite against a
+# different tree — that is how the mutation proofs above are reproduced
+# (e.g. the pre-fix publish.sh for R5).
+PUBLISH_SH=${PUBLISH_SH:-$ROOT/scripts/publish.sh}
 failures=0
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -42,7 +57,14 @@ check() {
   fi
 }
 
-# expect name needle: needle must appear in the last run()'s output ($out)
+# expect_absent name needle: needle must NOT appear in the last run()'s output
+expect_absent() {
+  local name=$1 needle=$2
+  case "$out" in
+    *"$needle"*) echo "FAIL $name: unexpected '$needle': $out"; failures=$((failures + 1)) ;;
+    *) echo "ok   $name" ;;
+  esac
+}
 expect() {
   local name=$1 needle=$2
   case "$out" in
@@ -103,6 +125,7 @@ EOF
 cat > "$stub/pnpm" <<'EOF'
 #!/usr/bin/env bash
 printf 'pnpm %s\n' "$*" >> "${PNPM_LOG:?}"
+case "$*" in *publish*) exit "${PNPM_PUBLISH_RC:-0}" ;; esac
 exit 0
 EOF
 chmod +x "$stub/npm" "$stub/pnpm"
@@ -128,7 +151,7 @@ run() { # runs publish.sh in the fixture repo with the stubs on PATH; sets out+r
       PUBLISHED_PKGS="${PUBLISHED_PKGS:-}" VERSION="${VERSION:-}" \
       NPM_LOG="$tmp/npm.log" PNPM_LOG="$tmp/pnpm.log" PATH="$stub:$PATH" \
       $confirm_spec \
-      "$ROOT/scripts/publish.sh" ${args[@]+"${args[@]}"} < /dev/null 2>&1)
+      "$PUBLISH_SH" ${args[@]+"${args[@]}"} < /dev/null 2>&1)
   rc=$?
 }
 
@@ -199,6 +222,126 @@ run repo="$tmp/repo-no-tag"
 checkrc "no v* tag refused" 1
 expect "says no release found" "no release found"
 check "nothing reached pnpm" 0 sh -c '[ ! -s "$1" ]' sh "$tmp/pnpm.log"
+
+# ==========================================================================
+# Review tests for PR #916 (adapted from the reviewer's uncommitted
+# scripts/publish-review.test.sh). Each mutation named below is a change to
+# scripts/publish.sh (or the pre-fix state for R5) that turns the test red;
+# all were verified.
+# ==========================================================================
+
+# mkrepo: a fully-tagged release at $2 (repo tag v$2 + the five package tags),
+# optionally with earlier commits each carrying its own tag so tag ordering
+# can be observed. No packages/ tree — publish.sh never reads one through
+# the stubs.
+mkrepo() { # mkrepo <dir> <fully-tagged-version> [earlier-tag...]
+  local r=$1 ver=$2 t pkg
+  shift 2
+  git -C "$r" init -q
+  for t in "$@"; do
+    echo t > "$r/f"; git -C "$r" add -A
+    git -C "$r" -c user.name=t -c user.email=t@t commit -qm "$t"; git -C "$r" tag "$t"
+  done
+  echo final > "$r/f"; git -C "$r" add -A
+  git -C "$r" -c user.name=t -c user.email=t@t commit -qm "v$ver"; git -C "$r" tag "v$ver"
+  for pkg in agents connectors harness-baml harness-patterns sandbox; do
+    git -C "$r" tag "@hames-ai/$pkg@$ver"
+  done
+}
+
+# --- R1. semver ordering: v0.10.0 must beat v0.9.0 -----------------------------
+# mutation: --sort=-v:refname -> --sort=-refname (lexicographic) turns this red
+# (v0.9.0 sorts above v0.10.0 as a string).
+r1="$tmp/r1"; mkdir -p "$r1"
+mkrepo "$r1" 0.10.0 v0.9.0
+run repo="$r1"
+checkrc "R1 publish succeeds" 0
+check "R1 selects 0.10.0 over 0.9.0" 0 grep -qF "npm view @hames-ai/agents@0.10.0 version" "$tmp/npm.log"
+check "R1 v0.9.0 never selected" 0 sh -c '! grep -qF "agents@0.9.0" "$1"' sh "$tmp/npm.log"
+
+# --- R2. prerelease / malformed tags are never selected ------------------------
+# mutation: relax the selector grep to ^v?[0-9.]+ -> R2 red (0.11.0-rc.1 is
+# selected and its tag check fails).
+r2="$tmp/r2"; mkdir -p "$r2"
+mkrepo "$r2" 0.10.0
+git -C "$r2" tag v0.11.0-rc.1
+git -C "$r2" tag v2            # malformed two-part tag
+git -C "$r2" tag not-a-tag
+# the rc version is FULLY tagged (repo tag + the five package tags), so the
+# only thing refusing a prerelease override is the version-shape check
+for pkg in agents connectors harness-baml harness-patterns sandbox; do
+  git -C "$r2" tag "@hames-ai/$pkg@0.11.0-rc.1"
+done
+run repo="$r2"
+checkrc "R2 publish succeeds with odd tags present" 0
+check "R2 still selects 0.10.0" 0 grep -qF "npm view @hames-ai/agents@0.10.0 version" "$tmp/npm.log"
+check "R2 prerelease never selected" 0 sh -c '! grep -qF "0.11.0-rc.1" "$1"' sh "$tmp/npm.log"
+
+# R2b: a prerelease VERSION override is refused (the contract says x.y.z).
+# mutation: neutralise the version-shape regex (grep -Eq '') -> R2b red (the
+# fully-tagged rc version then publishes).
+export VERSION=0.11.0-rc.1; run repo="$r2"
+unset VERSION
+checkrc "R2b prerelease VERSION refused" 1
+check "R2b nothing reached pnpm" 0 sh -c '[ ! -s "$1" ]' sh "$tmp/pnpm.log"
+
+# --- R3. the trap removes the worktree when the publish fails ------------------
+# mutation: delete the `trap cleanup EXIT` line -> both assertions red (the
+# temp dir and the worktree registration survive).
+r3="$tmp/r3"; mkdir -p "$r3"
+mkrepo "$r3" 0.10.0
+mkdir -p "$tmp/wtbox"
+export PNPM_PUBLISH_RC=1 TMPDIR="$tmp/wtbox"
+run repo="$r3"
+unset PNPM_PUBLISH_RC TMPDIR
+checkrc "R3 failed publish exits non-zero" 1
+leftover=$(find "$tmp/wtbox" -mindepth 1 2>/dev/null | wc -l | tr -d ' ')
+check "R3 worktree directory removed" 0 test "$leftover" = 0
+reg=$(git -C "$r3" worktree list --porcelain | grep -c '^worktree' || true)
+check "R3 no worktree left registered" 0 test "$reg" = 1
+
+# --- R4. VERSION override to a nonexistent tag: refused and named --------------
+# mutation: delete the whole missing-repo-tag `if` block -> the naming and the
+# no-release-line assertions both go red (the script then prints
+# `release: v0.12.3 at ` with an empty commit; only the package-tag check still
+# refuses).
+r4="$tmp/r4"; mkdir -p "$r4"
+mkrepo "$r4" 0.10.0
+export VERSION=0.12.3; run repo="$r4"
+unset VERSION
+checkrc "R4 nonexistent-tag override refused" 1
+expect "R4 names the missing tag" "v0.12.3 does not exist"
+expect_absent "R4 no release line for a nonexistent tag" "release: v0.12.3"
+check "R4 nothing reached pnpm" 0 sh -c '[ ! -s "$1" ]' sh "$tmp/pnpm.log"
+
+# --- R5. tags are FETCHED before the latest tag is chosen ----------------------
+# The contract (CONTRIBUTING.md) reads "it fetches tags" and then chooses the
+# highest v<semver>: a release tagged elsewhere after the last local fetch must
+# still be selected. This test is the mutation proof for the reorder itself:
+# RED against the pre-fix publish.sh, where selection preceded the fetch (run
+# it with PUBLISH_SH pointing at a checkout of the old script) — the stale
+# release was selected and the previous version published instead.
+r5o="$tmp/r5-origin"; r5c="$tmp/r5-clone"
+mkdir -p "$r5o"
+mkrepo "$r5o" 0.10.0
+git -C "$r5o" init -q --bare "$tmp/r5-bare.git"
+git -C "$r5o" push -q "$tmp/r5-bare.git" --all >/dev/null 2>&1
+git -C "$r5o" push -q "$tmp/r5-bare.git" --tags >/dev/null 2>&1
+git clone -q "$tmp/r5-bare.git" "$r5c"
+# the maintainer (elsewhere) tags v0.11.0 and pushes it — the clone has not
+# fetched yet
+echo new > "$r5o/f"; git -C "$r5o" add -A
+git -C "$r5o" -c user.name=t -c user.email=t@t commit -qm "v0.11.0"; git -C "$r5o" tag v0.11.0
+for pkg in agents connectors harness-baml harness-patterns sandbox; do
+  git -C "$r5o" tag "@hames-ai/$pkg@0.11.0"
+done
+git -C "$r5o" push -q "$tmp/r5-bare.git" --tags >/dev/null 2>&1
+export CHECK_VERSION=0.11.0 NPM_LATEST=0.11.0
+run repo="$r5c"
+unset CHECK_VERSION NPM_LATEST
+checkrc "R5 publish succeeds" 0
+check "R5 fetched tag selected" 0 grep -qF "npm view @hames-ai/agents@0.11.0 version" "$tmp/npm.log"
+
 if [ "$failures" -eq 0 ]; then
   echo "all green"
 else

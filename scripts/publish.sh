@@ -41,7 +41,14 @@ cd "$ROOT"
 
 PKGS="agents connectors harness-baml harness-patterns sandbox"
 
-# --- 1. the release: VERSION override, else the highest semver `v*` tag ------
+# --- 1. FETCH FIRST: the tag selection and the VERSION-override existence
+# check below must both see fetched tags, or a release tagged elsewhere after
+# the last local fetch is invisible and the PREVIOUS release ships instead.
+if ! git fetch --tags >/dev/null 2>&1; then
+  echo "warning: git fetch --tags failed; using the local tags" >&2
+fi
+
+# --- 2. the release: VERSION override, else the highest semver `v*` tag ------
 if [ -n "${VERSION:-}" ]; then
   VERSION="${VERSION#v}"
 else
@@ -53,11 +60,7 @@ if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   exit 1
 fi
 
-if ! git fetch --tags >/dev/null 2>&1; then
-  echo "warning: git fetch --tags failed; using the local tags" >&2
-fi
-
-# --- 2. all five package tags must exist at the same commit ------------------
+# --- 3. all five package tags must exist at the same commit ------------------
 repo_commit=$(git rev-parse --verify --quiet "refs/tags/v$VERSION^{commit}" || true)
 if [ -z "$repo_commit" ]; then
   echo "ERROR: tag v$VERSION does not exist (run git fetch --tags, or check VERSION)" >&2
@@ -77,7 +80,7 @@ for pkg in $PKGS; do
   fi
 done
 
-# --- 3. the npm registry gate: never partially republish ---------------------
+# --- 4. the npm registry gate: never partially republish ---------------------
 if [ "$DRY" -eq 0 ]; then
   published=""
   for pkg in $PKGS; do
@@ -108,7 +111,7 @@ if [ "$DRY" -eq 0 ]; then
   fi
 fi
 
-# --- 4. confirmation ----------------------------------------------------------
+# --- 5. confirmation ----------------------------------------------------------
 if [ "$DRY" -eq 0 ] && [ "${CONFIRM:-}" != "1" ]; then
   printf 'publish @hames-ai/* %s from %s? [y/N] ' "$VERSION" "$repo_commit"
   if ! read -r reply; then
@@ -122,7 +125,7 @@ if [ "$DRY" -eq 0 ] && [ "${CONFIRM:-}" != "1" ]; then
   esac
 fi
 
-# --- 5. throwaway worktree at the release commit, removed on exit -------------
+# --- 6. throwaway worktree at the release commit, removed on exit -------------
 worktree=$(mktemp -d)
 cleanup() {
   git worktree remove --force "$worktree" >/dev/null 2>&1 || true
@@ -133,7 +136,7 @@ trap cleanup EXIT
 git worktree add --quiet --detach "$worktree" "$repo_commit"
 
 
-# --- 6. install, whoami, publish (the prepublishOnly tag guard stays) --------
+# --- 7. install, whoami, publish (the prepublishOnly tag guard stays) --------
 (
   cd "$worktree"
   echo "==> pnpm install --frozen-lockfile"
@@ -149,7 +152,7 @@ git worktree add --quiet --detach "$worktree" "$repo_commit"
   fi
 )
 
-# --- 7. verify npm actually has the version for every package -----------------
+# --- 8. verify npm actually has the version for every package -----------------
 if [ "$DRY" -eq 0 ]; then
   failed=0
   for pkg in $PKGS; do

@@ -150,7 +150,8 @@ successful `MANIFEST`, and absence of `INCOMPLETE`; also require the shared
 contents and Redis's header; Neo4j is checked only for nonempty bytes
 (scripts/backup-preview.sh:164). PREVIEW §9's isolated restore drill is the
 loadability check. The backup script captures the running Neo4j container's
-filesystem into a temporary image and proves it can run `neo4j-admin` before
+filesystem into a temporary image and proves its returned image ID can run
+`neo4j-admin` before
 stopping Neo4j. It checks the expected image ID and data volume supplied above;
 a changed container refuses the dump. The temporary image is removed on exit.
 The script restarts Neo4j after its dump; a failed health wait is a

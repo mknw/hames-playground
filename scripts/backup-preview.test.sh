@@ -18,14 +18,16 @@ case "$*" in
   'compose ps -q neo4j') printf 'exact-container\n' ;;
   'inspect --format {{.Image}} exact-container') printf 'sha256:exact\n' ;;
   'inspect --format {{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}} exact-container') printf 'hames_neo4j_data\n' ;;
-  'commit --pause=false exact-container '*) [ "${FAIL_CAPTURE:-0}" = 0 ] ;;
+  'commit --pause=false exact-container '*)
+    [ "${FAIL_CAPTURE:-0}" = 0 ] || exit 1
+    printf 'sha256:captured\n' ;;
   'image inspect '*) [ "${FAIL_IMAGE:-0}" = 0 ] ;;
   'image rm '*) ;;
-  'run --rm --network none --entrypoint neo4j-admin '*) [ "${FAIL_PROBE:-0}" = 0 ] ;;
+  'run --rm --pull never --network none --entrypoint neo4j-admin '*) [ "${FAIL_PROBE:-0}" = 0 ] ;;
   'compose stop neo4j') ;;
   'compose start neo4j') ;;
   'compose ps neo4j --format {{.Health}}') printf 'healthy\n' ;;
-  'run --rm --user root '*)
+  'run --rm --pull never --user root '*)
     [ "${FAIL_DUMP:-0}" = 0 ] || exit 1
     args=("$@")
     for ((i=0; i<${#args[@]}; i++)); do
@@ -53,7 +55,7 @@ run_case() {
 
 run_case success
 grep -q '^commit --pause=false exact-container hames-neo4j:backup-' "$TMP/trace"
-grep -q '^run --rm --user root .*hames-neo4j:backup-' "$TMP/trace"
+grep -q '^run --rm --pull never --user root .*sha256:captured' "$TMP/trace"
 grep -q '^image rm hames-neo4j:backup-' "$TMP/trace"
 test "$(grep -c '^image rm ' "$TMP/trace")" -eq 1
 test "$(grep -n '^commit ' "$TMP/trace" | cut -d: -f1)" -lt "$(grep -n '^compose stop neo4j$' "$TMP/trace" | cut -d: -f1)"

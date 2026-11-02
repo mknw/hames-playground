@@ -209,11 +209,12 @@ else
   trap cleanup_neo4j EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  docker commit --pause=false "$NEO4J_CONTAINER" "$DUMP_IMAGE" >/dev/null \
+  DUMP_IMAGE_ID="$(docker commit --pause=false "$NEO4J_CONTAINER" "$DUMP_IMAGE")" \
     || fail "could not capture the running neo4j container"
-  docker image inspect "$DUMP_IMAGE" >/dev/null \
+  [ -n "$DUMP_IMAGE_ID" ] || fail "neo4j image capture returned no image ID"
+  docker image inspect "$DUMP_IMAGE_ID" >/dev/null \
     || fail "captured neo4j image is unavailable"
-  docker run --rm --network none --entrypoint neo4j-admin "$DUMP_IMAGE" --version >/dev/null \
+  docker run --rm --pull never --network none --entrypoint neo4j-admin "$DUMP_IMAGE_ID" --version >/dev/null \
     || fail "captured neo4j-admin is unavailable"
   [ "$(compose ps -q neo4j)" = "$NEO4J_CONTAINER" ] \
     || fail "neo4j container changed during image capture"
@@ -233,10 +234,10 @@ else
   # that would drown a nightly cron log. Captured to a file and echoed only when
   # the command fails, so a failure still shows its reason.
   NEO4J_LOG="$OUT/.neo4j-admin.log"
-  if ! docker run --rm --user root \
+  if ! docker run --rm --pull never --user root \
     -v "$NEO4J_DATA_VOLUME":/data \
     -v "$OUT":/backups \
-    --entrypoint sh "$DUMP_IMAGE" -c \
+    --entrypoint sh "$DUMP_IMAGE_ID" -c \
     "neo4j-admin database dump neo4j --to-path=/backups --overwrite-destination=true \
        && chown $(id -u):$(id -g) /backups/neo4j.dump" \
     >"$NEO4J_LOG" 2>&1; then

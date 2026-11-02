@@ -312,6 +312,38 @@ describe('GraphVisualization — mounting and elements', () => {
     expect(layoutRuns[0].opts.fit).not.toBe(false)
   })
 
+  // #933: the collapsed support panel mounts the canvas at 0×0, so the first
+  // layout ran against no space. The expand must re-fit exactly once — and an
+  // ordinary resize after that must not steal the user's zoom and pan.
+  it('re-fits once on the zero→non-zero transition, never on an ordinary resize', async () => {
+    render(() => <GraphVisualization elements={nodes(['a', 'b'])} />)
+    await tick()
+    expect(added).toHaveLength(0) // still collapsed: no size yet
+
+    resizeCb?.([{ contentRect: { width: 0, height: 0 } }])
+    await tick()
+    expect(added).toHaveLength(0)
+
+    resizeCb?.([{ contentRect: { width: 800, height: 600 } }])
+    await tick()
+    expect(added).toHaveLength(2)
+    // fit ×2: the component's own first-load framing (SA-H9 era) plus the
+    // zero→non-zero re-fit this PR adds.
+    expect(fit).toHaveBeenCalledTimes(2) // first-load framing + the expand re-fit
+
+    resizeCb?.([{ contentRect: { width: 700, height: 500 } }])
+    await tick()
+    expect(fit).toHaveBeenCalledTimes(2) // an ordinary resize never re-fits
+    expect(cyInstance?.resize).toHaveBeenCalled()
+
+    // Collapse and expand again: exactly one more re-fit per expand.
+    resizeCb?.([{ contentRect: { width: 0, height: 0 } }])
+    await tick()
+    resizeCb?.([{ contentRect: { width: 800, height: 600 } }])
+    await tick()
+    expect(fit).toHaveBeenCalledTimes(3)
+  })
+
   // SA-H9. `cy.add()` throws on a malformed element, and it was called bare
   // inside a createEffect — so one bad row from one Cypher query took the whole
   // canvas down rather than costing itself.

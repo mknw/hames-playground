@@ -141,29 +141,32 @@ export const SupportPanelRail = (props: SupportPanelRailProps) => {
                 aria-label={`Open ${tab.label} panel`}
                 aria-disabled={disabled() ? 'true' : undefined}
                 data-testid={`support-rail-${tab.id}`}
+                position="relative"
+                flex="~"
+                items="center"
+                justify="center"
+                w="8"
+                h="8"
+                rounded="md"
+                transition="colors"
+                hover={!disabled() ? 'bg-ui-bg-hover' : undefined}
                 style={{
-                  position: 'relative',
-                  display: 'flex',
-                  'align-items': 'center',
-                  'justify-content': 'center',
-                  width: '32px',
-                  height: '32px',
-                  'border-radius': '0.375rem',
+                  // State-dependent, so they stay inline: the attributify
+                  // extractor only emits literal strings, and a value that
+                  // changes with `disabled` would silently emit nothing.
                   cursor: disabled() ? 'not-allowed' : 'pointer',
                   opacity: disabled() ? '0.4' : '1',
                 }}
-                hover={!disabled() ? 'bg-ui-bg-hover' : undefined}
-                transition="colors"
               >
+                {/* The per-tab accent is the one documented dynamic value that
+                    stays inline (agent-palette pattern); the static geometry
+                    lives in the attributify attributes above. */}
                 <span
                   class={blinking()[tab.id] ? tab.iconClass + ' support-rail-blink' : tab.iconClass}
                   aria-hidden="true"
-                  style={{
-                    width: '16px',
-                    height: '16px',
-                    color: tab.accent,
-                    opacity: disabled() ? '0.4' : '1',
-                  }}
+                  w="4"
+                  h="4"
+                  style={{ color: tab.accent }}
                 />
                 {/* The reduced-motion fallback's static dot (the CSS hides it
                     whenever motion is allowed). The accent is per-tab, so it

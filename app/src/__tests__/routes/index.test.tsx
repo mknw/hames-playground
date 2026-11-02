@@ -848,4 +848,25 @@ describe('chat route — the support panel collapses (#933)', () => {
     // panel is showing, however it got there.
     expect(localStorage.getItem('support-panel.collapsed')).toBe('false')
   })
+
+  // #935 review SHOULD: the collapsed panel stays mounted at 0 width (for
+  // `lazyMount`), so its invisible tab strip must not stay keyboard-reachable.
+  // Solid compiles boolean attributes to property assignment, and jsdom does
+  // not reflect the `inert` property back onto the attribute — so the DOM
+  // claim is read through the reflected property, which is the same fact a
+  // real browser exposes as the attribute.
+  const supportPanelEl = () => document.querySelector('[data-id="support"]') as HTMLElement
+  const supportInert = () => supportPanelEl().inert === true
+  it('marks the support panel inert while collapsed, focusable again when expanded', async () => {
+    await mount()
+    expect(supportInert()).toBe(false)
+
+    support.onCollapse()
+    await tick(10)
+    expect(supportInert()).toBe(true)
+
+    rail.onExpand()
+    await tick(10)
+    expect(supportInert()).toBe(false)
+  })
 })

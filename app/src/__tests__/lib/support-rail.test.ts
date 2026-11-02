@@ -125,20 +125,30 @@ describe('the rail stays honest with the panel it stands in for', () => {
     'utf8',
   )
 
-  /** The icon class the expanded tab trigger for `tabId` renders. Scans
-   *  forward from the trigger's `value="…"` to the next icon class or the
-   *  trigger's closing tag. */
-  const triggerIcon = (tabId: string): string | null => {
+  /** The trigger's JSX for `tabId`: from its `value="…"` to its closing tag. */
+  const triggerBlock = (tabId: string): string => {
     const start = panelSource.indexOf(`value="${tabId}"`)
     expect(start, `SupportPanel.tsx has a Tabs.Trigger for ${tabId}`).toBeGreaterThan(-1)
-    const window = panelSource.slice(start, panelSource.indexOf('</Tabs.Trigger>', start))
-    const match = window.match(/i-material-symbols-[a-z0-9-]+/)
-    return match ? match[0] : null
+    return panelSource.slice(start, panelSource.indexOf('</Tabs.Trigger>', start))
   }
+
+  /** The icon class the expanded tab trigger for `tabId` renders. */
+  const triggerIcon = (tabId: string): string | null =>
+    triggerBlock(tabId).match(/i-material-symbols-[a-z0-9-]+/)?.[0] ?? null
 
   it('uses the same icon as each expanded tab trigger', () => {
     for (const tab of SUPPORT_RAIL_TABS) {
       expect(triggerIcon(tab.id), `rail icon for ${tab.id}`).toBe(tab.iconClass)
+    }
+  })
+
+  it('uses the same accent as each expanded tab trigger', () => {
+    // The trigger's active state is what the accent mirrors — its colour and
+    // underline both render tab.accent. A trigger recolour must move the rail
+    // with it (or this fails).
+    for (const tab of SUPPORT_RAIL_TABS) {
+      const block = triggerBlock(tab.id)
+      expect(block, `accent for ${tab.id}`).toContain(tab.accent)
     }
   })
 

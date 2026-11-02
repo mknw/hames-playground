@@ -187,7 +187,8 @@ else
     || fail "neo4j container image changed since caller inspection"
   ACTUAL_VOLUME="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$NEO4J_CONTAINER")" \
     || fail "neo4j data mount inspection failed"
-  [ -n "$ACTUAL_VOLUME" ] && [ "$ACTUAL_VOLUME" = "$NEO4J_DATA_VOLUME" ] \
+  [ -n "$ACTUAL_VOLUME" ] || fail "neo4j data volume is missing"
+  [ "$ACTUAL_VOLUME" = "$NEO4J_DATA_VOLUME" ] \
     || fail "neo4j data volume differs from the expected volume"
 
   # Docker can retain a running container after its image record disappears.

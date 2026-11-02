@@ -71,9 +71,7 @@ export function MemoryPanel() {
         also turns memory off.
       </p>
       <p text="ui-text-secondary">
-        Forget removes a memory from your saved memories, so new replies stop using it. Your past
-        conversations stay as they are, including the message it came from, and backups made before
-        then keep a copy until they expire, normally within 9 days.
+        Forget removes a memory from your saved memories, so new replies stop using it.
       </p>
       <Show when={data.error}>
         <p role="alert">Unable to load memory. Please retry.</p>

@@ -10,7 +10,13 @@
  *  - trailing frame with no terminating blank line (flushed on close)
  */
 import { describe, it, expect } from 'vitest'
-import { parseChatStream, type ChatStreamEvent } from '../../lib/sse-client'
+import {
+  parseChatStream,
+  SSE_KEEPALIVE_FRAME,
+  StreamLostError,
+  StreamStalledError,
+  type ChatStreamEvent,
+} from '../../lib/sse-client'
 
 /** Build a minimal Response with a body that emits the given chunks in order. */
 function responseFrom(chunks: string[]): Response {
@@ -54,7 +60,7 @@ describe('parseChatStream', () => {
         `event: error\ndata: {"sessionId":"s1","error":"boom"}\n\n`,
       ]),
     )
-    expect(evts.map(e => e.event)).toEqual(['done', 'title_updated', 'error'])
+    expect(evts.map((e) => e.event)).toEqual(['done', 'title_updated', 'error'])
     if (evts[1].event === 'title_updated') {
       expect(evts[1].data.title).toBe('My Title')
     }
@@ -86,9 +92,7 @@ describe('parseChatStream', () => {
   })
 
   it('yields unknown event names for forward-compat', async () => {
-    const evts = await collect(
-      responseFrom([`event: future_event\ndata: {"hello":"world"}\n\n`]),
-    )
+    const evts = await collect(responseFrom([`event: future_event\ndata: {"hello":"world"}\n\n`]))
     expect(evts).toHaveLength(1)
     expect(evts[0].event).toBe('future_event')
     expect(evts[0].data).toEqual({ hello: 'world' })
@@ -132,5 +136,77 @@ describe('parseChatStream', () => {
     )
     expect(evts).toHaveLength(1)
     expect(evts[0].event).toBe('title_updated')
+  })
+})
+
+describe('parseChatStream — a stalled stream', () => {
+  /** A body whose bytes arrive on a schedule: `[delayMs, text]`, then it never closes. */
+  function scheduled(steps: Array<[number, string]>): Response {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const [delay, text] of steps) {
+          await new Promise((r) => setTimeout(r, delay))
+          controller.enqueue(encoder.encode(text))
+        }
+      },
+    })
+    return new Response(stream)
+  }
+  const frame = 'data: {"type":"user_message","ts":1,"patternId":"harness","data":{}}\n\n'
+
+  // MUTATION: replace `readWithin(reader, stallMs)` with `reader.read()` → the
+  // iteration waits forever and this test times out.
+  it('throws StreamStalledError once no bytes arrive for stallMs, after yielding what came', async () => {
+    const seen: ChatStreamEvent[] = []
+    const run = (async () => {
+      for await (const evt of parseChatStream(scheduled([[0, frame]]), { stallMs: 40 })) {
+        seen.push(evt)
+      }
+    })()
+
+    await expect(run).rejects.toBeInstanceOf(StreamStalledError)
+    await expect(run).rejects.toBeInstanceOf(StreamLostError)
+    expect(seen).toHaveLength(1)
+  }, 2_000)
+
+  // The bound is per read, not per stream: keepalive comments are bytes, and
+  // bytes are what prove the wire alive. MUTATION: start the stall timer once
+  // for the whole stream → it fires during the keepalives and this reddens.
+  it('treats keepalive comments as proof of life and never stalls on them', async () => {
+    const steps: Array<[number, string]> = Array.from({ length: 6 }, () => [
+      20,
+      SSE_KEEPALIVE_FRAME,
+    ])
+    const body = scheduled([...steps, [20, frame]])
+    const iter = parseChatStream(body, { stallMs: 40 })[Symbol.asyncIterator]()
+
+    await expect(iter.next()).resolves.toMatchObject({ done: false, value: { event: 'message' } })
+    await iter.return?.()
+  }, 2_000)
+
+  it('reports a failed read as StreamLostError, keeping the cause', async () => {
+    const cause = new TypeError('NetworkError when attempting to fetch resource.')
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(cause)
+      },
+    })
+
+    const err = await collect(new Response(stream)).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(StreamLostError)
+    expect((err as Error).cause).toBe(cause)
+  })
+
+  // Stop is not a lost stream: it must reach the caller as the abort it is.
+  it('passes an abort through unchanged', async () => {
+    const abort = new DOMException('aborted', 'AbortError')
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(abort)
+      },
+    })
+
+    await expect(collect(new Response(stream))).rejects.toBe(abort)
   })
 })

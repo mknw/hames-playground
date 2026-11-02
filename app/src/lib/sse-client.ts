@@ -52,6 +52,39 @@ export const SSE_KEEPALIVE_MS = 15_000
  *  constant so "the client ignores it" cannot drift into a lie. */
 export const SSE_KEEPALIVE_FRAME = ': keepalive\n\n'
 
+/**
+ * How long the stream may be byte-silent before the client treats it as
+ * stalled: three keepalive intervals.
+ *
+ * The keepalive puts bytes on the wire at least every {@link SSE_KEEPALIVE_MS}
+ * while the server holds the stream open, so silence for three intervals means
+ * the bytes are not arriving. The server may have closed the stream long
+ * before. A cold start does not trip this, because the keepalive runs through
+ * the wake. Seen live: a turn finished on the server in seconds, the proxy
+ * stopped delivering its stream, and the answer appeared only after a reload.
+ * `turn-stream.ts` handles the error by re-reading the persisted turn.
+ */
+export const SSE_STALL_MS = 3 * SSE_KEEPALIVE_MS
+
+/**
+ * The response stream failed: the connection dropped or stopped delivering.
+ * This is not the turn failing. The turn runs on the server either way.
+ */
+export class StreamLostError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'StreamLostError'
+  }
+}
+
+/** The stream delivered no bytes for `stallMs`. The turn itself may have ended. */
+export class StreamStalledError extends StreamLostError {
+  constructor(stallMs: number) {
+    super(`The response stream delivered nothing for ${Math.round(stallMs / 1000)}s.`)
+    this.name = 'StreamStalledError'
+  }
+}
+
 // ============================================================================
 // Event union
 // ============================================================================
@@ -168,42 +201,54 @@ function parseFrame(frame: string): { eventName: string; dataStr: string } | nul
  */
 export async function* parseChatStream(
   response: Response,
+  options: { stallMs?: number } = {},
 ): AsyncGenerator<ChatStreamEvent, void, void> {
   const reader = response.body?.getReader()
   if (!reader) throw new Error('No response stream')
+  const stallMs = options.stallMs ?? SSE_STALL_MS
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let ended = false
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-
-    // Frames are delimited by blank lines (\n\n). The last segment may be
-    // an incomplete frame; hold it in the buffer for the next read.
-    const frames = buffer.split('\n\n')
-    buffer = frames.pop() ?? ''
-
-    for (const frame of frames) {
-      if (!frame.trim()) continue
-      const parsed = parseFrame(frame)
-      if (!parsed) continue
-
-      let data: unknown
-      try {
-        data = JSON.parse(parsed.dataStr)
-      } catch {
-        // Skip malformed JSON rather than aborting the whole stream.
-        continue
+  try {
+    while (true) {
+      const { done, value } = await readWithin(reader, stallMs)
+      if (done) {
+        ended = true
+        break
       }
 
-      // The `as` casts are safe here: consumers narrow via `evt.event`, and
-      // unknown event names fall through to the `{ event: string; data: unknown }`
-      // arm. We trust the server to emit well-shaped payloads per type.
-      yield { event: parsed.eventName, data } as ChatStreamEvent
+      buffer += decoder.decode(value, { stream: true })
+
+      // Frames are delimited by blank lines (\n\n). The last segment may be
+      // an incomplete frame; hold it in the buffer for the next read.
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+
+      for (const frame of frames) {
+        if (!frame.trim()) continue
+        const parsed = parseFrame(frame)
+        if (!parsed) continue
+
+        let data: unknown
+        try {
+          data = JSON.parse(parsed.dataStr)
+        } catch {
+          // Skip malformed JSON rather than aborting the whole stream.
+          continue
+        }
+
+        // The `as` casts are safe here: consumers narrow via `evt.event`, and
+        // unknown event names fall through to the `{ event: string; data: unknown }`
+        // arm. We trust the server to emit well-shaped payloads per type.
+        yield { event: parsed.eventName, data } as ChatStreamEvent
+      }
     }
+  } finally {
+    // A stalled read, or a consumer that stopped early: release the body, so
+    // the browser does not keep a dead stream open.
+    if (!ended) reader.cancel().catch(() => {})
   }
 
   // Flush any final trailing frame if the stream closed without a blank line.
@@ -217,5 +262,29 @@ export async function* parseChatStream(
         /* ignore */
       }
     }
+  }
+}
+
+/**
+ * One `read()`. Throws {@link StreamStalledError} when no bytes arrive within
+ * `stallMs`, and {@link StreamLostError} when the read fails. An abort (Stop,
+ * page teardown) is rethrown as it is, because it is not a lost stream.
+ */
+async function readWithin(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  stallMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const stalled = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new StreamStalledError(stallMs)), stallMs)
+  })
+  const read = reader.read().catch((err: unknown) => {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err
+    throw new StreamLostError('The response stream failed.', { cause: err })
+  })
+  try {
+    return await Promise.race([read, stalled])
+  } finally {
+    clearTimeout(timer)
   }
 }

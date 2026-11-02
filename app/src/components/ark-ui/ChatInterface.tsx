@@ -34,13 +34,16 @@ import { LiveProgressBar } from './LiveProgressBar'
 import {
   promoteAction,
   loadConversation,
+  getConversationTurnState,
   extractGraphElements,
   extractReferences,
   getAgentList,
   type OpenReferenceTarget,
+  type LoadedConversation,
 } from '~/lib/harness-client'
 import { getSettings } from '~/lib/settings-store'
-import { runTurn, type TurnSink } from '~/lib/turn-stream'
+import { runTurn, type TurnRecovery, type TurnSink } from '~/lib/turn-stream'
+import type { Message } from './ChatMessages'
 import { startTrailingRefresh } from '~/lib/trailing-refresh'
 import { warningBubble } from '@hames-ai/agents/replay'
 import type { GraphElement } from './SupportPanel'
@@ -259,6 +262,61 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   const hasLocalTurn = (sid: string) =>
     untrack(() => registry.runState(sid).isProcessing || registry.messages(sid).length > 0)
 
+  /**
+   * Put a persisted conversation on screen under `sid`, as a reload shows it:
+   * the replayed transcript, then the stored events into the graph and
+   * observability panels. The caller has cleared `sid`'s panels. Filed under
+   * `sid`, so a slow load that resolves after the user moved on lands in the
+   * right thread rather than the visible one.
+   */
+  const showPersisted = (sid: string, messages: Message[], ctx: UnifiedContext | null) => {
+    registry.setMessages(sid, messages)
+    if (!ctx) return
+    const events = ctx.events ?? []
+    registry.appendEvents(sid, events)
+    pushGraph(sid, extractGraphElements(events.filter((e) => e.type === 'tool_result')))
+    props.onContextUpdate?.(sid, ctx)
+    // Re-attach retriever citations to the latest assistant message so the
+    // Sources footer + inline chips survive reload (best-effort — only the
+    // most recent turn's references are recoverable from the event stream).
+    const refs = extractReferences(events)
+    if (refs.length) {
+      registry.setMessages(sid, (prev) => {
+        const next = [...prev]
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].role === 'assistant') {
+            next[i] = { ...next[i], references: refs }
+            break
+          }
+        }
+        return next
+      })
+    }
+  }
+
+  /**
+   * How a turn whose stream is lost still shows its answer: wait for the turn
+   * to release the conversation, then show what it saved, as a reload would.
+   */
+  const recoveryFor = (runSessionId: string): TurnRecovery => ({
+    turnState: () => getConversationTurnState(runSessionId),
+    load: async () => {
+      const [loaded, state] = await Promise.all([
+        loadConversation(runSessionId),
+        getConversationTurnState(runSessionId),
+      ])
+      return {
+        status: state?.status ?? 'done',
+        messages: toMessages(loaded.messages),
+        context: JSON.parse(loaded.serialized) as UnifiedContext,
+      }
+    },
+    rehydrate: (turn) => {
+      registry.clearPanels(runSessionId)
+      showPersisted(runSessionId, turn.messages, turn.context)
+    },
+  })
+
   // When the parent swaps in a different sessionId (sidebar selection or
   // "+ New Chat"), reset local state and try to rehydrate from persisted
   // history. Brand-new sessions throw and we fall through to the welcome msg.
@@ -299,43 +357,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           setSelectedAgent(loaded.agentId)
           setCurrentKind(loaded.kind)
         }
-        registry.setMessages(
-          sid,
-          // Spread, don't re-list: this map used to pick four fields, which
-          // silently dropped the hint/patternId/turnInfo that error and warning
-          // bubbles carry. `timestamp` is the only field needing conversion.
-          loaded.messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) })),
-        )
-        // Replay events to parent so graph + observability repopulate. These
-        // are filed under `sid`, so a slow hydration that resolves after the
-        // user moved on lands in the right thread instead of the visible one.
+        let ctx: UnifiedContext | null = null
         try {
-          const ctx = JSON.parse(loaded.serialized) as UnifiedContext
-          const events = ctx.events ?? []
-          registry.appendEvents(sid, events)
-          pushGraph(sid, extractGraphElements(events.filter((e) => e.type === 'tool_result')))
-          if (props.onContextUpdate) {
-            props.onContextUpdate(sid, ctx)
-          }
-          // Re-attach retriever citations to the latest assistant message so the
-          // Sources footer + inline chips survive reload (best-effort — only the
-          // most recent turn's references are recoverable from the event stream).
-          const refs = extractReferences(events)
-          if (refs.length) {
-            registry.setMessages(sid, (prev) => {
-              const next = [...prev]
-              for (let i = next.length - 1; i >= 0; i--) {
-                if (next[i].role === 'assistant') {
-                  next[i] = { ...next[i], references: refs }
-                  break
-                }
-              }
-              return next
-            })
-          }
+          ctx = JSON.parse(loaded.serialized) as UnifiedContext
         } catch (err) {
           console.warn('[ChatInterface] failed to replay events:', err)
         }
+        showPersisted(sid, toMessages(loaded.messages), ctx)
       })
       .catch(() => {
         // Either a brand-new session id or no row yet. Nothing to plant: the
@@ -468,6 +496,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           mode,
         },
         sinkFor(runSessionId),
+        recoveryFor(runSessionId),
       )
 
       // A torn-down stream is either the user's Stop or page teardown, and the
@@ -700,4 +729,11 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       </Show>
     </div>
   )
+}
+
+/** Replayed messages with their timestamps revived. Spread, don't re-list: a
+ *  field list silently dropped the hint/patternId/turnInfo that error and
+ *  warning bubbles carry. */
+function toMessages(messages: LoadedConversation['messages']): Message[] {
+  return messages.map((m) => ({ ...m, timestamp: new Date(m.timestamp) }))
 }

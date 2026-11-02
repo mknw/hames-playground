@@ -30,6 +30,7 @@ import {
   shareConversation as dbShareConversation,
   unshareConversation as dbUnshareConversation,
   getShareToken as dbGetShareToken,
+  getConversationTurnState as dbGetConversationTurnState,
   type ConversationKind,
   type ConversationSource,
   type ConversationStatus,
@@ -391,6 +392,28 @@ export async function loadConversation(sessionId: string): Promise<LoadedConvers
     kind: loaded.kind,
     serialized: loaded.serializedContext,
   }
+}
+
+/** Whether a turn still holds a conversation, as a stalled stream's client asks it. */
+export interface ConversationTurnState {
+  status: ConversationStatus
+  /** A turn holds the row; its persisted context is not this turn's result yet. */
+  turnInFlight: boolean
+}
+
+/**
+ * Whether this conversation's turn has finished, for a client whose live stream
+ * stopped before the answer arrived (`turn-stream.ts`). The turn runs on
+ * server-side after its stream is lost, so the client polls this and loads the
+ * persisted conversation once no turn holds it. Plaintext columns only — no
+ * context is read, so polling it is cheap. `null` for an id with no row of the
+ * caller's: the first turn may not have seeded it yet.
+ */
+export async function getConversationTurnState(
+  sessionId: string,
+): Promise<ConversationTurnState | null> {
+  const user = await requireUser()
+  return dbGetConversationTurnState(sessionId, user.id)
 }
 
 /**

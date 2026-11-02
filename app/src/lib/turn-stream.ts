@@ -24,7 +24,12 @@ import { extractReferences } from '@hames-ai/agents'
 // dependency-free (no server-only imports), and the stream handler wants
 // exactly that guarantee.
 import { errorBubble, warningBubble } from '@hames-ai/agents/replay'
-import { parseChatStream, type DoneEventData, type WarmingEventData } from '~/lib/sse-client'
+import {
+  parseChatStream,
+  StreamLostError,
+  type DoneEventData,
+  type WarmingEventData,
+} from '~/lib/sse-client'
 import { openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { GraphElement } from '@hames-ai/agents'
@@ -111,6 +116,34 @@ export interface TurnSink {
   onState(state: TurnState): void
 }
 
+/** A conversation as the server persisted it — what a reload would show. */
+export interface PersistedTurn {
+  /** Lifted row status: `error` and `paused` end the turn as such. */
+  status: 'running' | 'paused' | 'done' | 'error'
+  /** The whole transcript, replayed from the stored context. */
+  messages: Message[]
+  context: UnifiedContext
+}
+
+/**
+ * How a turn whose live stream is lost still reaches its answer. The turn keeps
+ * running on the server when its stream stops, and its save is what a reload
+ * shows, so the client waits for the save and shows that instead.
+ */
+export interface TurnRecovery {
+  /** Whether a turn still holds the conversation; `null` when it has no row. */
+  turnState(): Promise<{ turnInFlight: boolean } | null>
+  /** The persisted conversation, once no turn holds it. */
+  load(): Promise<PersistedTurn>
+  /** Replace this conversation's transcript and panels with `turn`. */
+  rehydrate(turn: PersistedTurn): void
+}
+
+/** How often a lost stream's turn is polled for completion. */
+export const RECOVERY_POLL_MS = 3_000
+/** Polls that may find no row before recovery gives up: the turn never persisted. */
+export const RECOVERY_MISSING_POLLS = 10
+
 export interface TurnResult {
   /** Terminal state — the last value also handed to `sink.onState`. */
   state: TurnState
@@ -132,7 +165,11 @@ export interface TurnResult {
  * Never throws. Every failure path — a non-OK response, an `error` frame, a
  * thrown parse — lands as an `error` state with a bubble already appended.
  */
-export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<TurnResult> {
+export async function runTurn(
+  request: TurnRequest,
+  sink: TurnSink,
+  recovery?: TurnRecovery,
+): Promise<TurnResult> {
   const transition = (state: TurnState): TurnState => {
     sink.onState(state)
     return state
@@ -175,95 +212,122 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
 
     let finalResult: DoneEventData | null = null
     let runAnnounced = false
+    // Set when the stream itself failed — stalled, dropped, or closed without
+    // `done` — rather than the server reporting an error. The turn goes on
+    // without the stream, so the answer is read back from what it persists.
+    let lost: unknown = null
 
     // Typed SSE iteration — the parser handles frame buffering, malformed
     // JSON, partial reads, and yields discriminated `ChatStreamEvent`s.
-    for await (const sseEvt of parseChatStream(response)) {
-      // First event of the stream: the server-side early persist has
-      // committed, so the sidebar can pick up the new row.
-      if (!runAnnounced) {
-        runAnnounced = true
-        sink.onStarted()
-      }
+    try {
+      for await (const sseEvt of parseChatStream(response)) {
+        // First event of the stream: the server-side early persist has
+        // committed, so the sidebar can pick up the new row.
+        if (!runAnnounced) {
+          runAnnounced = true
+          sink.onStarted()
+        }
 
-      // The wait ends when the box answers, and any frame at all is evidence
-      // of that — the answer's own `message` frames, or `done`/`error` when the
-      // cold call was the turn's last. Clearing on "anything except another
-      // warming frame" rather than on a dedicated clear frame is deliberate: a
-      // dropped clear frame would leave a spinner up forever, and there is no
-      // frame here to drop. Checked BEFORE the per-type dispatch below so a
-      // frame that `continue`s still clears.
-      if (sseEvt.event === 'warming') {
-        warming = true
-        sink.onWarming(sseEvt.data)
-        continue
-      }
-      clearWarming()
+        // The wait ends when the box answers, and any frame at all is evidence
+        // of that — the answer's own `message` frames, or `done`/`error` when the
+        // cold call was the turn's last. Clearing on "anything except another
+        // warming frame" rather than on a dedicated clear frame is deliberate: a
+        // dropped clear frame would leave a spinner up forever, and there is no
+        // frame here to drop. Checked BEFORE the per-type dispatch below so a
+        // frame that `continue`s still clears.
+        if (sseEvt.event === 'warming') {
+          warming = true
+          sink.onWarming(sseEvt.data)
+          continue
+        }
+        clearWarming()
 
-      if (sseEvt.event === 'done') {
-        finalResult = sseEvt.data
-        continue
-      }
-      if (sseEvt.event === 'error') {
-        throw new Error(sseEvt.data.error)
-      }
-      if (sseEvt.event === 'title_updated') {
-        // Server pushed the LLM-generated title for this conversation — the
-        // caller patches its thread list in place. Lands regardless of which
-        // thread the user is currently viewing.
-        sink.onTitleUpdated(sseEvt.data.sessionId, sseEvt.data.title)
-        continue
-      }
-      if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
+        if (sseEvt.event === 'done') {
+          finalResult = sseEvt.data
+          continue
+        }
+        if (sseEvt.event === 'error') {
+          throw new Error(sseEvt.data.error)
+        }
+        if (sseEvt.event === 'title_updated') {
+          // Server pushed the LLM-generated title for this conversation — the
+          // caller patches its thread list in place. Lands regardless of which
+          // thread the user is currently viewing.
+          sink.onTitleUpdated(sseEvt.data.sessionId, sseEvt.data.title)
+          continue
+        }
+        if (sseEvt.event !== 'message') continue // Forward-compat: ignore unknown event names
 
-      const evt = sseEvt.data as ContextEvent
-      sink.ingestProgress(evt)
+        const evt = sseEvt.data as ContextEvent
+        sink.ingestProgress(evt)
 
-      // Surface the currently-running tool for the composer guard. A
-      // multi-call turn shows the batch size ("3 tools") instead of one name.
-      if (evt.type === 'controller_action') {
-        const data = evt.data as ControllerActionEventData
-        const toolName = data.action?.tool_name
-        const extraCalls = data.action?.additional_calls?.length ?? 0
-        if (toolName && toolName !== 'Return') {
-          transition({
-            status: 'streaming',
-            runningTool: extraCalls > 0 ? `${extraCalls + 1} tools` : toolName,
+        // Surface the currently-running tool for the composer guard. A
+        // multi-call turn shows the batch size ("3 tools") instead of one name.
+        if (evt.type === 'controller_action') {
+          const data = evt.data as ControllerActionEventData
+          const toolName = data.action?.tool_name
+          const extraCalls = data.action?.additional_calls?.length ?? 0
+          if (toolName && toolName !== 'Return') {
+            transition({
+              status: 'streaming',
+              runningTool: extraCalls > 0 ? `${extraCalls + 1} tools` : toolName,
+            })
+          } else if (data.action?.is_final) {
+            transition({ status: 'streaming', runningTool: null })
+          }
+        }
+
+        // Inline error/warning bubbles belong to the run's own transcript, so
+        // they are emitted here rather than waiting for the final result — a
+        // backgrounded run that hits a recoverable error still shows it when the
+        // user switches back (#105).
+        if (evt.type === 'error') {
+          // Presentation lives in `errorBubble` so this and `replayMessages`
+          // cannot diverge — the bubble must look identical whether it was
+          // painted from the live stream or rebuilt after a reload.
+          sink.appendMessage({
+            id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            timestamp: new Date(),
+            patternId: evt.patternId,
+            ...errorBubble(evt.data as ErrorEventData),
           })
-        } else if (data.action?.is_final) {
-          transition({ status: 'streaming', runningTool: null })
+        } else if (evt.type === 'warning') {
+          // A side task failed and the turn carried on (#420) — same amber
+          // bubble, from the same builder replay uses.
+          const bubble: Message = {
+            id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            timestamp: new Date(),
+            ...warningBubble(evt.data as WarningEventData),
+          }
+          if (finalResult) afterAnswer.push(bubble)
+          else sink.appendMessage(bubble)
         }
-      }
 
-      // Inline error/warning bubbles belong to the run's own transcript, so
-      // they are emitted here rather than waiting for the final result — a
-      // backgrounded run that hits a recoverable error still shows it when the
-      // user switches back (#105).
-      if (evt.type === 'error') {
-        // Presentation lives in `errorBubble` so this and `replayMessages`
-        // cannot diverge — the bubble must look identical whether it was
-        // painted from the live stream or rebuilt after a reload.
-        sink.appendMessage({
-          id: `err-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          timestamp: new Date(),
-          patternId: evt.patternId,
-          ...errorBubble(evt.data as ErrorEventData),
-        })
-      } else if (evt.type === 'warning') {
-        // A side task failed and the turn carried on (#420) — same amber
-        // bubble, from the same builder replay uses.
-        const bubble: Message = {
-          id: `warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          timestamp: new Date(),
-          ...warningBubble(evt.data as WarningEventData),
-        }
-        if (finalResult) afterAnswer.push(bubble)
-        else sink.appendMessage(bubble)
+        sink.pushEvents([evt])
+        if (evt.type === 'tool_result') sink.pushGraph(extractGraphElements([evt]))
       }
-
-      sink.pushEvents([evt])
-      if (evt.type === 'tool_result') sink.pushGraph(extractGraphElements([evt]))
+    } catch (error) {
+      if (!(error instanceof StreamLostError)) throw error
+      lost = error
     }
+    // No `done` means the answer has not arrived, and that includes a close
+    // with no `done`: the server sends `done` or `error` before it closes, so
+    // a bare close means the connection was cut.
+    if (!finalResult && recovery) {
+      console.warn(
+        '[turn] the response stream ended without a result; reading the saved turn instead:',
+        lost ?? 'closed without a done frame',
+      )
+      const persisted = await awaitPersistedTurn(recovery, request.signal)
+      sink.finishProgress()
+      clearWarming()
+      recovery.rehydrate(persisted)
+      const settled = settlePersisted(persisted)
+      return { state: transition(settled.state), outcome: settled.outcome, aborted: false }
+    }
+    // A lost stream with no recovery, or a stall after `done` (the answer is
+    // in hand; only the title or the close went missing), ends as before.
+    if (!finalResult && lost) throw lost
 
     sink.finishProgress()
     clearWarming()
@@ -328,7 +392,9 @@ export async function runTurn(request: TurnRequest, sink: TurnSink): Promise<Tur
  * only a HINT for the client's state — the card, toast and inbox read the
  * authoritative pending set from the server, and nothing here gates an answer.
  */
-function pendingRequestIds(final: DoneEventData | null): readonly string[] {
+function pendingRequestIds(
+  final: Pick<DoneEventData, 'status' | 'context'> | null,
+): readonly string[] {
   if (final?.status !== 'paused') return []
   const events = final.context?.events ?? []
   const idOf = (e: { data: unknown }) => (e.data as { requestId?: unknown }).requestId
@@ -337,4 +403,64 @@ function pendingRequestIds(final: DoneEventData | null): readonly string[] {
     .filter((e) => e.type === 'hitl_request')
     .map(idOf)
     .filter((id): id is string => typeof id === 'string' && !answered.has(id))
+}
+
+/**
+ * Wait until no turn holds the conversation, then load what it saved. A
+ * transient read failure polls again; Stop (the turn's signal) ends the wait
+ * as a teardown. A conversation that never gets a row throws, which the caller
+ * paints as an error: there is no saved turn to show.
+ */
+async function awaitPersistedTurn(
+  recovery: TurnRecovery,
+  signal: AbortSignal,
+): Promise<PersistedTurn> {
+  let missing = 0
+  for (;;) {
+    if (signal.aborted) throw stopped()
+    const state = await recovery.turnState().catch((err: unknown) => {
+      console.warn('[turn] could not read whether the turn finished; retrying:', err)
+      return undefined
+    })
+    if (state && !state.turnInFlight) return recovery.load()
+    if (state === null && ++missing >= RECOVERY_MISSING_POLLS) {
+      throw new Error('The response stream was lost and the conversation was not saved.')
+    }
+    await sleep(RECOVERY_POLL_MS, signal)
+  }
+}
+
+/** Where a recovered turn ended, read from its saved row and context. */
+function settlePersisted(turn: PersistedTurn): { state: TurnState; outcome: RunOutcome } {
+  if (turn.status === 'error') {
+    const last = turn.messages.at(-1)
+    return {
+      state: { status: 'error', message: last?.role === 'error' ? last.content : '' },
+      outcome: 'error',
+    }
+  }
+  const pendingIds = pendingRequestIds({ status: turn.status, context: turn.context })
+  if (pendingIds.length > 0) {
+    return { state: { status: 'awaiting-decision', requestIds: pendingIds }, outcome: 'done' }
+  }
+  return { state: { status: 'done' }, outcome: 'done' }
+}
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(stopped())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/** Stop during the wait is a teardown, the same `AbortError` a Stop mid-stream raises. */
+function stopped(): DOMException {
+  return new DOMException('Stopped while waiting for the saved turn', 'AbortError')
 }

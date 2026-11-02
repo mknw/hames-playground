@@ -118,6 +118,7 @@ import type {
   ContextEvent,
   DecideFn,
   EgressAuditEventData,
+  EgressBlockedEventData,
   EgressProbabilities,
   EgressRefusedEventData,
   EventType,
@@ -488,6 +489,13 @@ interface Degraded {
   refusedUnchecked: number
 }
 
+/** A recorded event whose live delivery failed; never retain the listener's error. */
+class EgressLiveEmissionError extends Error {
+  constructor(readonly eventType: EventType) {
+    super('egress live event listener failed')
+  }
+}
+
 /**
  * Wrap a pattern so every outgoing call inside it is judged before it leaves.
  *
@@ -534,7 +542,13 @@ export function withEgressGate(config: EgressGateConfig) {
       const record = (type: EventType, data: unknown, call?: Parameters<typeof redactCall>[0]) => {
         const event = createEvent(type, scope.id, data, redactCall(call))
         scope.events.push(event)
-        emitLive(event)
+        try {
+          emitLive(event)
+        } catch {
+          // The record exists even when its live listener fails. Keep the
+          // listener's exception (which may contain request data) out of view.
+          throw new EgressLiveEmissionError(type)
+        }
       }
       const warn = (
         key: keyof typeof EGRESS_WARNINGS,
@@ -662,6 +676,10 @@ export function withEgressGate(config: EgressGateConfig) {
       const check = async (call: { name: string; args: Readonly<Record<string, unknown>> }) => {
         const route = currentRunFrame()?.route ?? NO_ROUTE
         const tool = egressToolLabel(call.name)
+        const block = (rule: EgressBlockedEventData['rule'], feedback: string): string => {
+          record('egress_blocked', { tool, route, rule } satisfies EgressBlockedEventData)
+          return feedback
+        }
 
         // `check` sees outgoing calls only (`egressCheck` drops local ones).
         if ((directory === 'empty' || directory === 'unreadable') && !directoryAnnounced) {
@@ -773,7 +791,8 @@ export function withEgressGate(config: EgressGateConfig) {
         ): Promise<EgressVerdict> => {
           const { spans } = unchecked
           if (directory === 'loaded') {
-            if (why === 'roster-mode') return spans.length ? EGRESS_TEXTS.roster : undefined
+            if (why === 'roster-mode')
+              return spans.length ? block('name-match', EGRESS_TEXTS.roster) : undefined
             const asked =
               loadedDecideDown === 'ask' ||
               carriesUrlQuery(request.texts) ||
@@ -782,7 +801,7 @@ export function withEgressGate(config: EgressGateConfig) {
               degraded.refusedUnchecked++
               return person(unchecked)
             }
-            if (spans.length) return EGRESS_TEXTS.roster
+            if (spans.length) return block('name-match', EGRESS_TEXTS.roster)
             degraded.rosterOnly++
             return undefined
           }
@@ -792,7 +811,7 @@ export function withEgressGate(config: EgressGateConfig) {
           }
           // `empty` or `none`: the payload roster vetoes first, then the person
           // is asked (ruling C).
-          if (spans.length) return EGRESS_TEXTS.roster
+          if (spans.length) return block('name-match', EGRESS_TEXTS.roster)
           if (why === 'down') degraded.refusedUnchecked++
           return person(unchecked)
         }
@@ -820,9 +839,10 @@ export function withEgressGate(config: EgressGateConfig) {
                     prepared.batchPlanKey,
                   )))
             )
-              return EGRESS_BATCH_MISMATCH
-            if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
-            if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
+              return block('check-failed', EGRESS_BATCH_MISMATCH)
+            if (closures.turnClosed) return block('turn-closed', EGRESS_TEXTS.turnClosed)
+            if (closures.closedRoutes.has(route))
+              return block('route-closed', EGRESS_TEXTS.routeClosed)
             if (prepared.decision === 'refuse')
               return (
                 (prepared.byOwner ? EGRESS_OWNER_REFUSED : '') +
@@ -845,12 +865,21 @@ export function withEgressGate(config: EgressGateConfig) {
             }
             return undefined
           }
-          if (closures.turnClosed) return EGRESS_TEXTS.turnClosed
-          if (closures.closedRoutes.has(route)) return EGRESS_TEXTS.routeClosed
-          if (damaged) return EGRESS_TEXTS.damagedRoster
+          if (closures.turnClosed) return block('turn-closed', EGRESS_TEXTS.turnClosed)
+          if (closures.closedRoutes.has(route))
+            return block('route-closed', EGRESS_TEXTS.routeClosed)
+          if (damaged) return block('damaged-roster', EGRESS_TEXTS.damagedRoster)
 
           const read = readOutgoing(call.args)
-          if (!read.ok) return read.refusal
+          if (!read.ok) {
+            const rules: Record<string, EgressBlockedEventData['rule']> = {
+              [EGRESS_TEXTS.placeholder]: 'placeholder',
+              [EGRESS_TEXTS.undecodable]: 'undecodable',
+              [EGRESS_TEXTS.tooLong]: 'too-long',
+              [EGRESS_TEXTS.formatCharacter]: 'format-character',
+            }
+            return block(rules[read.refusal] ?? 'check-failed', read.refusal)
+          }
           const request = read.request
           if (fetchTools.has(call.name)) {
             // A leaf that carries an address, or sits under a `url` key (in an
@@ -865,7 +894,7 @@ export function withEgressGate(config: EgressGateConfig) {
               const bare = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '')
               return !given.has(bare) || addresses.some((a) => !given.has(a))
             })
-            if (ungiven) return EGRESS_TEXTS.fetchAddress
+            if (ungiven) return block('fetch-address', EGRESS_TEXTS.fetchAddress)
           }
 
           const spans = roster ? roster.match(request.texts) : []
@@ -963,8 +992,24 @@ export function withEgressGate(config: EgressGateConfig) {
         return next
       }
 
-      const egressCheck = (call: { name: string; args: Readonly<Record<string, unknown>> }) =>
-        isLocal(call.name) ? undefined : check(call)
+      const egressCheck = async (call: {
+        name: string
+        args: Readonly<Record<string, unknown>>
+      }): Promise<EgressVerdict> => {
+        try {
+          if (isLocal(call.name)) return undefined
+          return await check(call)
+        } catch (error) {
+          if (!(error instanceof EgressLiveEmissionError && error.eventType === 'egress_blocked')) {
+            record('egress_blocked', {
+              tool: egressToolLabel(call.name),
+              route: currentRunFrame()?.route ?? NO_ROUTE,
+              rule: 'check-failed',
+            } satisfies EgressBlockedEventData)
+          }
+          throw new Error('egress check failed')
+        }
+      }
 
       const observe = async (
         call: { readonly name: string },

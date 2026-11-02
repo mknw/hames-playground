@@ -20,6 +20,7 @@ import type {
   DecisionMadeEventData,
   EgressAuditEventData,
   EgressRefusedEventData,
+  EgressBlockedEventData,
   ModelCallEventData,
   WarningEventData,
   LoopRecoveryEventData,
@@ -50,6 +51,7 @@ function guardOf(type: EventType, data: unknown): Guard | undefined {
     }
     case 'egress_audit':
     case 'egress_refused':
+    case 'egress_blocked':
       return 'egress'
     case 'warning': {
       const task = (data as Partial<WarningEventData> | undefined)?.task
@@ -169,6 +171,10 @@ function actionPreview(type: EventType, data: unknown): string {
       const d = data as Partial<EgressRefusedEventData>
       const closes = d.closes === 'route' || d.closes === 'turn' ? `closes ${d.closes}` : undefined
       return `${d.tool}: refused (${[d.category ?? d.cause, closes].filter(Boolean).join(', ')})`
+    }
+    case 'egress_blocked': {
+      const d = data as EgressBlockedEventData
+      return `${d.tool}: blocked (${d.rule})`
     }
     case 'loop_recovery': {
       // The class and the round, which is what tells a recovery from a

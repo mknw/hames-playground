@@ -84,6 +84,7 @@ export const eventIconClasses: Record<EventType, string> = {
   // The refusal uses the egress prompt's own Refuse glyph.
   egress_audit: 'i-material-symbols-fact-check-outline',
   egress_refused: 'i-material-symbols-block',
+  egress_blocked: 'i-material-symbols-block',
 }
 
 export const eventColors: Record<EventType, string> = {
@@ -122,4 +123,5 @@ export const eventColors: Record<EventType, string> = {
   egress_audit: '#fb923c', // orange-400 — a control's record on outgoing data, the
   // content_sanitized family: not error red, and not a result
   egress_refused: '#fb923c', // same family: the egress control firing
+  egress_blocked: '#fb923c',
 }

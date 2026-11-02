@@ -402,19 +402,22 @@ describe('ObservabilityPanel — timeline construction', () => {
   // warning renders in the Tools column, beside every other side task's.
   it("puts a guard's event in the third, Guardrails, lane and a side task's warning in Tools", () => {
     const events = [
+      ev('egress_blocked', { tool: 'web_search', route: 'info', rule: 'check-failed' }),
       ev('warning', { task: 'egress_check', message: 'the company directory could not be read' }),
       ev('warning', { task: 'title', message: 'no title' }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
 
     expect(container.textContent).toContain('Guardrails')
-    const [guardCell, sideTaskCell] = rows(container).map((r) => r.parentElement!)
+    const [blockedCell, guardCell, sideTaskCell] = rows(container).map((r) => r.parentElement!)
     // Three columns: the guard's is the last, the side task's the middle one.
     expect(guardCell.nextElementSibling).toBeNull()
     expect(guardCell.previousElementSibling!.previousElementSibling).not.toBeNull()
     expect(sideTaskCell.nextElementSibling).not.toBeNull()
     expect(sideTaskCell.previousElementSibling).not.toBeNull()
     expect(guardCell.textContent).toContain('egress · the company directory')
+    expect(blockedCell.nextElementSibling).toBeNull()
+    expect(blockedCell.textContent).toContain('egress · web_search: blocked (check-failed)')
   })
 
   it('drops a malformed event with no type instead of throwing', () => {

@@ -2034,7 +2034,7 @@ it is offered.
   `retriever`), at least one of its own tool results came back `success: true`.
   `expandPreviousResult` does not count, and a retriever's one result counts as
   its call. A `planner` calls no tool, so a plan is its progress. A record makes
-  **no progress** in three cases:
+  **no progress** in four cases:
   - it `failed` (it threw, never returned, had no accepted attempt, no match or
     no plan), even when one of its calls succeeded;
   - it made no tool call;
@@ -2042,6 +2042,14 @@ it is offered.
     On an attended turn a held call is sent again once the person answers
     (slice 10). Its placeholder stays on the record with `success: true`, but it
     is not counted; only the re-sent call's result is.
+  - it is a **repeat**: its `result` is, character for character, the result of
+    an earlier record of the same route this run (`repeatOf`). A route's input
+    does not change within a turn unless an earlier step's result does — a
+    retriever's query is the user's message, or its rewrite, every time — so a
+    route dispatched again over the same input returns what the decision already
+    read. In one recorded run a document question re-read the same hits six
+    times and reached the bound. The step line says so:
+    `2. read-documents — succeeded, but returned the same result as step 1: no new information (retriever: …)`.
 
   The status alone does not decide it: a `simpleLoop` that Returns "I could not
   count them" after three failed reads is `succeeded` and made no progress. The
@@ -2054,8 +2062,8 @@ it is offered.
   offered straight after itself, so it cannot reach two. The rule has no
   configuration.
 
-While a route is withheld, the decisions model sees the same state as without
-the guard: the records that withheld it are in **This turn so far** and, within
+Apart from a repeat's step line, the guard adds nothing to the state. While a
+route is withheld, the decisions model sees the same state as without the guard: the records that withheld it are in **This turn so far** and, within
 `handoff.lastN`, in **Latest results**. The spec lacks the route's label, and
 `decision_made.labels` records the set each decision was offered, so a
 withholding is visible on the decision that lacked the route. `answer` is not a

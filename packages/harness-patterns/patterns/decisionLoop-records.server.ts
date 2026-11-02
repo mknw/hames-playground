@@ -105,6 +105,10 @@ export interface RouteOutput {
   /** The plan, for a succeeded planner route: the ONLY thing later children
    *  render under their PLAN heading. */
   readonly plan?: { readonly text: string; readonly steps: number }
+  /** The iteration of an earlier record of the same route this run whose
+   *  `result` this one repeats character for character ({@link repeatOf}): the
+   *  decision learned nothing new from it, so it is no progress. */
+  readonly repeats?: number
 }
 
 // ============================================================================
@@ -574,12 +578,28 @@ export function computeStats(
  *  of the run (the owner's "two", #809). */
 const REPEAT_LIMIT = 2
 
-/** Whether a record moved the turn on: it succeeded AND, for a route that calls
- *  tools, at least one of its own tool results came back successful. A planner
- *  calls no tool, so a plan is its progress. Every call failed (an egress refusal
- *  included), no call at all, or a failed record: no progress. */
+/** The iteration of the first earlier record of `r`'s route whose `result` is
+ *  exactly `r`'s, or `undefined`. A route's input does not change within a turn
+ *  unless an earlier step's result does (a retriever's query is the user's
+ *  message, or its rewrite, every time), so a route dispatched again over the
+ *  same input returns what the decision already read: a document question was
+ *  re-read six times over the same hits until the bound. Compared on the
+ *  record's own capped text, which is what the decisions model reads. */
+export function repeatOf(r: RouteOutput, earlier: readonly RouteOutput[]): number | undefined {
+  return earlier.find((p) => p.route === r.route && p.result === r.result)?.iteration
+}
+
+/** Whether a record moved the turn on: it succeeded, it is not a repeat
+ *  ({@link repeatOf}) AND, for a route that calls tools, at least one of its own
+ *  tool results came back successful. A planner calls no tool, so a plan is its
+ *  progress. Every call failed (an egress refusal included), no call at all, a
+ *  repeat, or a failed record: no progress. */
 export function madeProgress(r: RouteOutput): boolean {
-  return r.status === 'succeeded' && (r.stats.kind === 'planner' || r.stats.succeededCalls > 0)
+  return (
+    r.status === 'succeeded' &&
+    r.repeats === undefined &&
+    (r.stats.kind === 'planner' || r.stats.succeededCalls > 0)
+  )
 }
 
 /**
@@ -640,12 +660,18 @@ export function capText(text: string, max: number): string {
   return text.length > max ? text.slice(0, max) + truncationMarker(text.length - max) : text
 }
 
-/** `1. info-retrieval — succeeded (simpleLoop: …)` — one line per iteration. */
+/** `1. info-retrieval — succeeded (simpleLoop: …)` — one line per iteration. A
+ *  repeat says so: `2. read-documents — succeeded, but returned the same result
+ *  as step 1: no new information (retriever: …)`. */
 export function stepLine(r: RouteOutput): string {
   const head = `${r.iteration}. ${r.route} — `
-  return r.status === 'succeeded'
-    ? `${head}succeeded (${formatStats(r.stats)})`
-    : `${head}failed: ${r.failure ?? 'unknown'} (${formatStats(r.stats)})`
+  if (r.status === 'failed')
+    return `${head}failed: ${r.failure ?? 'unknown'} (${formatStats(r.stats)})`
+  const repeat =
+    r.repeats !== undefined
+      ? `, but returned the same result as step ${r.repeats}: no new information`
+      : ''
+  return `${head}succeeded${repeat} (${formatStats(r.stats)})`
 }
 
 /** One full output block: `[route] <result>` plus its reasoning. */

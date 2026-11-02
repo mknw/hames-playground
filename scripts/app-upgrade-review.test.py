@@ -685,6 +685,71 @@ services:
                          'Prediction accepted old inherited service instead of refusing target protected-service drift')
 
 
+    def test_scalar_key_alias_preserves_other_scalar_uses(self):
+        root, target, command, run = self.fixture(False, False)
+        (root / 'runtime.env').write_text('VALUE=synthetic-only\n')
+        target['docker-compose.yaml'] = 'x-key: &key env_file\n' + target['docker-compose.yaml'].replace('  caddy:\n', '  caddy:\n    *key: ./runtime.env\n    environment: {UNCHANGED: *key}\n')
+        for name, text in target.items():
+            (root / name).write_text(text)
+        actual = gate.configuration()[2]
+        self.assertIn('caddy', actual)
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_allowed_service_hash_matches_actual_target(self):
+        root, target, command, run = self.fixture(False, False)
+        (root / 'runtime.env').write_text('VALUE=synthetic-only\n')
+        target['docker-compose.yaml'] = 'x-key: &key env_file\n' + target['docker-compose.yaml'].replace('  app:\n', '  app:\n    *key: ./runtime.env\n').replace('      REV: old', '      REV: *key')
+        for name, text in target.items():
+            (root / name).write_text(text)
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_protected_alias_value_drift_cannot_be_masked(self):
+        root, target, command, run = self.fixture(False, False)
+        (root / 'runtime.env').write_text('VALUE=synthetic-only\n')
+        initial = target['docker-compose.yaml']
+        baseline = initial.replace('  caddy:\n', '  caddy:\n    env_file: ./runtime.env\n    environment: {VALUE: x-upgrade-gate-env-file}\n')
+        (root / 'docker-compose.yaml').write_text(baseline)
+        before = gate.configuration()[2]
+        target['docker-compose.yaml'] = 'x-key: &key env_file\n' + initial.replace('  caddy:\n', '  caddy:\n    *key: ./runtime.env\n    environment: {VALUE: *key}\n')
+        for name, text in target.items():
+            (root / name).write_text(text)
+        actual = gate.configuration()[2]
+        self.assertNotEqual(before['caddy'], actual['caddy'], 'Witness requires actual protected drift')
+        (root / 'docker-compose.yaml').write_text(baseline)
+        artifact = root / 'prediction.json'
+        with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run), patch.object(gate.sys, 'argv', ['gate', 'predict', SHA, str(artifact)]):
+            try:
+                gate.main()
+            except SystemExit as err:
+                self.assertIn('forbidden target Compose hash change: caddy', str(err))
+                self.assertFalse(artifact.exists())
+                return
+            predicted = json.loads(artifact.read_text())
+            with patch.object(gate.sys, 'argv', ['gate', 'prestop', SHA, str(artifact)]):
+                gate.main()
+        print('WITNESS ' + json.dumps({'baseline': before['caddy'], 'actual_target': actual['caddy'], 'predicted': predicted['target_hashes']['caddy'], 'artifact_created': artifact.exists(), 'prestop_accepted': True}))
+        self.assertEqual(predicted['target_hashes']['caddy'], before['caddy'], 'Witness must mask with old hash')
+        self.assertNotEqual(predicted['target_hashes']['caddy'], actual['caddy'], 'Witness must differ from actual target')
+        self.fail('Prediction accepted actual protected drift while reporting the old protected hash')
+
+    def test_shared_scalar_keys_and_paths_survive_all_declaration_forms(self):
+        for declaration in ('*runtime', '[*runtime]', '!override [*runtime]',
+                            '!reset null', '[{path: *runtime, required: true}]'):
+            with self.subTest(declaration=declaration):
+                root, target, command, run = self.fixture(False, False)
+                (root / 'runtime.env').write_text('VALUE=synthetic-only\n')
+                # The key anchor is on the first declaration itself. The same
+                # scalar is another service's key, an environment key and value;
+                # the path scalar is shared with environment values as well.
+                body = 'x-runtime: &runtime ./runtime.env\n' + target['docker-compose.yaml']
+                body = body.replace('  app:\n', '  app:\n    &key env_file: ' + declaration + '\n')
+                body = body.replace('      REV: old', '      REV: *key\n      *key: *runtime')
+                body = body.replace('  caddy:\n', '  caddy:\n    *key: ' + declaration
+                                    + '\n    environment: {UNCHANGED: *key, *key: *runtime}\n')
+                target['docker-compose.yaml'] = body
+                (root / 'docker-compose.yaml').write_text(body)
+                self.prediction_equals_checkout(root, target, command, run)
+
     def prediction_equals_checkout(self, root, target, command, run):
         with patch.object(gate, 'command', side_effect=command), patch.object(gate.subprocess, 'run', side_effect=run):
             try:

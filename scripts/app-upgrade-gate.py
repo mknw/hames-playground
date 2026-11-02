@@ -421,6 +421,11 @@ def validate_compose_inputs(root, documents, errors, files):
 
 def preserve_env_files(root, documents=None):
     """Keep service env_file declarations through Compose's YAML rendering."""
+    # Invariant: never edit the parsed node tree in place where anchors/aliases
+    # can share a node. Every rewritten key or value must be a FRESH node.
+    # Validation forbids shared collections, so replacing a mapping entry is
+    # safe; its scalar key/value may still be aliased anywhere in the document.
+    # Reuse untouched scalar nodes read-only, including paths inside new entries.
     root = root.resolve()
     def rename(node, seen, parent, service_map=False):
         visit = (id(node), service_map)
@@ -433,7 +438,7 @@ def preserve_env_files(root, documents=None):
                 if service_map:
                     changed = rename(value, seen, parent) or changed
                 elif key.value == "env_file":
-                    key.value = ENV_FILE_MARKER
+                    key = yaml.ScalarNode(key.tag, ENV_FILE_MARKER, key.start_mark, key.end_mark, style=key.style)
                     if value.tag == "!reset":
                         # Compose ignores a reset's payload, including scalar
                         # null. Preserve the reset on the shielded declaration.

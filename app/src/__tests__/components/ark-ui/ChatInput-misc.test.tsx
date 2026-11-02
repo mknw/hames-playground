@@ -102,3 +102,35 @@ describe('ChatInput', () => {
     expect(document.activeElement).toBe(box)
   })
 })
+
+describe('ChatInput — the initial draft', () => {
+  it('starts with the given text, still editable and not sent', () => {
+    const onSend = vi.fn()
+    const { container } = render(() => (
+      <ChatInput onSend={onSend} initialValue="Hi! What can you help me with?" />
+    ))
+
+    const box = textarea(container)
+    expect(box.value).toBe('Hi! What can you help me with?')
+
+    // Prefilled is not sent: the send button is there for the user to press.
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
+  it('starts empty when no draft is given', () => {
+    const { container } = render(() => <ChatInput onSend={vi.fn()} />)
+    expect(textarea(container).value).toBe('')
+  })
+
+  it('keeps the user’s edits — a later prop change does not clobber the draft', async () => {
+    const [draft, setDraft] = createSignal<string | undefined>('first')
+    const { container } = render(() => <ChatInput onSend={vi.fn()} initialValue={draft()} />)
+    const box = textarea(container)
+    expect(box.value).toBe('first')
+
+    type(box, 'first and my own words')
+    setDraft('second')
+    await Promise.resolve()
+    expect(box.value).toBe('first and my own words')
+  })
+})

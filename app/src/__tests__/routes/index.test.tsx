@@ -868,5 +868,32 @@ describe('chat route — the support panel collapses (#933)', () => {
     rail.onExpand()
     await tick(10)
     expect(supportInert()).toBe(false)
+describe('chat route — the use-cases draft', () => {
+  it('seeds the composer draft from ?q= and strips the parameter, without a history entry', async () => {
+    setSearchParams({ q: 'How many Project nodes are in the knowledge graph?' })
+    await mount()
+
+    // The draft reaches ChatInterface as its initialDraft prop (ChatInput
+    // seeds its own signal from it; that half is ChatInput's own test).
+    expect(chat.initialDraft).toBe('How many Project nodes are in the knowledge graph?')
+
+    // The parameter has served its purpose: stripped with `replace`, so a
+    // reload does not re-prefill and Back does not land on a stale question.
+    expect(navigations).toContainEqual({
+      params: { q: undefined },
+      options: { replace: true },
+    })
+  })
+
+  it('prefills nothing when the URL carries no ?q=', async () => {
+    await mount()
+    expect(chat.initialDraft).toBeUndefined()
+    expect(navigations).toHaveLength(0)
+  })
+
+  it('takes the first value when ?q= arrives twice', async () => {
+    setSearchParams({ q: ['first', 'second'] as unknown as string })
+    await mount()
+    expect(chat.initialDraft).toBe('first')
   })
 })

@@ -20,6 +20,10 @@ interface ChatInputProps {
   /** Monotonic token: every time it changes the textarea is focused. Used by
    *  the route to drop the cursor into the composer after `+ New Chat`. */
   focusToken?: number
+  /** Text the composer starts with — the use-cases page's "Try this" opens a
+   *  new chat with the question already drafted (never sent). Initial only:
+   *  a later change to the prop does not clobber what the user is typing. */
+  initialValue?: string
 }
 
 /**
@@ -34,7 +38,7 @@ interface ChatInputProps {
 const DEFAULT_BLOCKED_MESSAGE = 'Working on your last message…'
 
 export const ChatInput = (props: ChatInputProps) => {
-  const [value, setValue] = createSignal('')
+  const [value, setValue] = createSignal(props.initialValue ?? '')
   let textareaRef: HTMLTextAreaElement | undefined
 
   // `defer: true` skips the initial fire — we only focus when the token

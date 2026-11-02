@@ -113,6 +113,11 @@ export interface ChatInterfaceProps {
   /** Monotonic token forwarded to ChatInput — every change focuses the
    *  composer textarea (used to land focus there after `+ New Chat`). */
   focusInputToken?: number
+  /** Text to seed the composer with on first mount — the use-cases page's
+   *  "Try this" rides this in through a `?q=` query parameter (read once by
+   *  the route, then stripped from the URL). Read at mount only; it is a
+   *  starting draft, never a live override. */
+  initialDraft?: string
 }
 
 // ============================================================================
@@ -585,7 +590,10 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         py="2"
         bg="ui-bg-tertiary/50"
       >
-        <span text="sm ui-text-secondary">Agent:</span>
+        {/* The "agent" caption matches the nav's "metrics" / "use cases"
+            captions — the three page controls read as one group (owner,
+            2026-11-02). */}
+        <span text="2xs ui-text-tertiary">agent</span>
         <div w="64">
           <AgentSelector
             selectedAgent={selectedAgent()}
@@ -658,6 +666,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
           isProcessing={isProcessing()}
           onStop={handleStop}
           focusToken={props.focusInputToken}
+          initialValue={props.initialDraft}
         />
       </div>
 

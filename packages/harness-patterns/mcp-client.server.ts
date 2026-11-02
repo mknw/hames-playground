@@ -6,7 +6,6 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { createHash } from 'node:crypto'
 import {
   currentRunFrame,
   EGRESS_VERDICT_KINDS_BY_PHASE,
@@ -15,7 +14,7 @@ import {
 } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
-import { canonicalJson, currentRunId } from './hitl.server'
+import { authorizationDigest, currentRunId } from './hitl.server'
 import type { HeldResult, ToolCallResult, MCPToolDescription } from './types'
 import { isAgentWithheldTool, withholdingFor, type Withholding } from './agent-withheld-tools'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -455,9 +454,7 @@ export async function callTool(
   if (!runId || !callKey || !claims) {
     return { success: false, data: null, error: EGRESS_CHECK_FAILED }
   }
-  const digest = createHash('sha256')
-    .update(canonicalJson({ tool: name, args }))
-    .digest('hex')
+  const digest = authorizationDigest({ tool: name, args })
   try {
     const claim = await claims.claim({ runId, callKey, digest })
     if (claim.status === 'finished') {

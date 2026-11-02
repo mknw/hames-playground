@@ -11,12 +11,11 @@
  * run.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'node:crypto'
 import * as hitlModule from '../hitl.server'
 import { continueSession, harness, resumeHarness } from '../harness.server'
 import {
   askHuman,
-  canonicalJson,
+  authorizationDigest,
   held,
   readHitl,
   resolveUnattended,
@@ -403,14 +402,10 @@ describe('Accept', () => {
       { frame },
     )
     expect(order).toEqual(['claim', 'send', 'finish'])
-    const digest = createHash('sha256')
-      .update(
-        canonicalJson({
-          tool: 'web_search',
-          args: { query: 'synthetic-approved' },
-        }),
-      )
-      .digest('hex')
+    const digest = authorizationDigest({
+      tool: 'web_search',
+      args: { query: 'synthetic-approved' },
+    })
     expect(claim).toHaveBeenCalledExactlyOnceWith({
       runId: request.runId,
       callKey: expect.any(String),

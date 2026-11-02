@@ -5,7 +5,7 @@
  * shadow questions run after transport and never affect the call.
  */
 import { assertServerOnImport } from '../assert.server'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { createEvent, redactCall } from '../context.server'
 import {
   addressesIn,
@@ -27,9 +27,9 @@ import { isDegradedToolSurface } from '../gateway-health.server'
 import { emitLive } from '../live-event-context.server'
 import {
   askHumanHolding,
+  authorizationDigest,
   batchRowAcceptedInRun,
   canPauseHere,
-  canonicalJson,
   held as held_,
   recordedHolding,
 } from '../hitl.server'
@@ -833,9 +833,7 @@ export function withEgressGate(config: EgressGateConfig) {
           const frame = currentRunFrame()
           if (frame?.batchPhase === 'execute') {
             const prepared = frame.batchPrepared
-            const digest = createHash('sha256')
-              .update(canonicalJson({ tool: call.name, args: call.args }))
-              .digest('hex')
+            const digest = authorizationDigest({ tool: call.name, args: call.args })
             if (
               !prepared ||
               prepared.callKey !== frame.callKey ||

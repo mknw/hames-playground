@@ -297,6 +297,7 @@ export {
 export {
   askHuman,
   askHumanHolding,
+  authorizationDigest,
   canPauseHere,
   recordedHolding,
   canonicalJson,

@@ -41,6 +41,7 @@ import { trackEvent, resolveConfig, generateId, shouldTrack } from '../context.s
 import { createHash } from 'node:crypto'
 import {
   askHumanHolding,
+  authorizationDigest,
   canPauseHere,
   canonicalJson,
   currentRunId,
@@ -234,9 +235,6 @@ interface EgressBatchPlan {
   readonly members: readonly BatchMember[]
   readonly rows: readonly BatchRow[]
 }
-
-const batchDigest = (tool: string, args: Record<string, unknown>): string =>
-  createHash('sha256').update(canonicalJson({ tool, args })).digest('hex')
 
 const batchAuthorization = (plan: EgressBatchPlan) => ({
   batchKey: plan.batchKey,
@@ -1044,7 +1042,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               !member.args ||
               typeof member.args !== 'object' ||
               Array.isArray(member.args) ||
-              member.digest !== batchDigest(member.tool, member.args)
+              member.digest !== authorizationDigest({ tool: member.tool, args: member.args })
             )
               valid = false
             seen.add(member.index)
@@ -1498,7 +1496,7 @@ export function simpleLoop<T extends SimpleLoopData>(
               }
               if (!args || !sc.run) continue
               const callKey = callKeys[index]!
-              const digest = batchDigest(sc.tool, args)
+              const digest = authorizationDigest({ tool: sc.tool, args })
               const checked = await amendRunFrame(
                 { callKey, batch: true, batchPhase: 'preflight' },
                 () => preflightTool(sc.tool, args),

@@ -1,8 +1,7 @@
 /** PR #895 independent review probes. All outgoing calls use a synthetic transport. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'node:crypto'
 import { harness } from '../harness.server'
-import { askHuman, canonicalJson, held, readHitl } from '../hitl.server'
+import { askHuman, authorizationDigest, held, readHitl } from '../hitl.server'
 import { callTool, EGRESS_CHECK_FAILED, preflightTool } from '../mcp-client.server'
 import { configurePattern } from '../patterns/chain.server'
 import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.server'
@@ -318,9 +317,7 @@ describe('rv895 independent correctness probes', () => {
     const log: Log = []
     const { store } = memoryStore()
     const args = { query: 'review-forged-prepared' }
-    const digest = createHash('sha256')
-      .update(canonicalJson({ tool: 'web_search', args }))
-      .digest('hex')
+    const digest = authorizationDigest({ tool: 'web_search', args })
     const probe = configurePattern<Data>(
       'review-probe',
       async (scope) => {

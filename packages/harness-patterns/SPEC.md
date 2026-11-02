@@ -2819,9 +2819,10 @@ run can pause. Both use the mechanism above; neither invents an answer path.
   before a row can be held. A batch with zero held rows still uses a prepared
   plan and metadata-only action and call events; its passes have explicit
   batch-plan identity, not a person acceptance. The gate checks each released
-  call's key, argument digest, route and plan identity, plus the recorded
-  request and answer for an accepted row. The durable send claim prevents a
-  resumed host from sending a call twice.
+  call's key, argument digest (`authorizationDigest`, its one spelling),
+  route and plan identity, plus the recorded request and answer for an
+  accepted row. The durable send claim prevents a resumed host from sending a
+  call twice.
 - **O16 remains for unattended or non-pausable batches.** They cannot raise a
   checklist; a person cell takes Refuse before transport.
 - **Re-entry (O15).** `substituteHeld` keeps the `redispatch` mark on the

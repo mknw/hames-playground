@@ -15,7 +15,7 @@ import {
 } from './run-frame.server'
 import { activeTransports, processTransports } from './tool-transport.server'
 import { markGatewayReachable, markGatewayUnreachable } from './gateway-health.server'
-import { canonicalJson, currentRunId, isHeldResult } from './hitl.server'
+import { canonicalJson, currentRunId } from './hitl.server'
 import type { HeldResult, ToolCallResult, MCPToolDescription } from './types'
 import { isAgentWithheldTool, withholdingFor, type Withholding } from './agent-withheld-tools'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'

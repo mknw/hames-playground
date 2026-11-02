@@ -458,3 +458,18 @@ describe('tool-call counts', () => {
     expect(rows[0].summary.toolFailures).toBe(1)
   })
 })
+
+describe('timePricedMs', () => {
+  it('sums the stamped durations of time-priced attempts only', () => {
+    const s = foldEvents([
+      metered('a', { basis: 'time', timeRate: { eurPerHour: 4.6, durationMs: 45_000 } }),
+      metered('b', { basis: 'tokens' }),
+    ])
+    expect(s.timePricedMs).toBe(45_000)
+  })
+
+  it('is zero — the UI shows absent, not 0s — when no step carried a timeRate stamp', () => {
+    expect(foldEvents([metered('a', { basis: 'time' })]).timePricedMs).toBe(0)
+    expect(summarize(emptyTotals()).timePricedMs).toBe(0)
+  })
+})

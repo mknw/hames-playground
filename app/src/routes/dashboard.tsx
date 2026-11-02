@@ -338,9 +338,19 @@ export default function Dashboard() {
                     : ''
                 }`}
               />
-              <div grid="~ cols-1 sm:cols-2 lg:cols-4" gap="4">
+              {/* Exactly four tiles at desktop in every view, so the row never
+                  wraps (owner feedback on the round-1 screenshots): the merged
+                  cost tile plus hit-rate / output / tool calls when a
+                  token-priced step exists, or the cost tile plus output / tool
+                  calls / GPU compute time on a purely wall-clock-billed one.
+                  Two columns at 390 px — the owner called a clean 2-column wrap
+                  fine there. */}
+              <div grid="~ cols-2 lg:cols-4" gap="4">
                 {/* Same rule as the table's cost column: no priced step means no
-                    figure, not €0.0000. */}
+                    figure, not €0.0000. The caching saving is this tile's
+                    secondary line rather than its own tile (owner feedback): it
+                    is the same figure's other half, and the merge keeps the row
+                    at four tiles in the cached view. */}
                 <Card
                   label="Estimated cost"
                   value={
@@ -365,18 +375,19 @@ export default function Dashboard() {
                         ' nor the cold start before the first call.'
                       : '')
                   }
-                />
-                {/* Cache is a token-pricing phenomenon. A scope billed entirely by
-                    wall-clock — a purely self-deployed one — saves nothing by
-                    caching, so its cache cards are hidden rather than shown as 0. */}
+                >
+                  {/* No token-priced step ⇒ no saving line at all — a purely
+                      wall-clock-billed scope saves nothing by caching, and a
+                      fabricated €0.00 would read as a measured figure. */}
+                  <Show when={totals()!.tokenPricedCalls > 0}>
+                    <span text="xs ui-success">
+                      {`saved ${fmtEur(totals()!.savingsEur)} by caching (${fmtPct(
+                        totals()!.savingsPct,
+                      )} off ${fmtEur(totals()!.noCacheEur)} uncached)`}
+                    </span>
+                  </Show>
+                </Card>
                 <Show when={totals()!.tokenPricedCalls > 0}>
-                  <Card
-                    label="Saved by caching"
-                    value={fmtEur(totals()!.savingsEur)}
-                    tone="ui-success"
-                    hint={`${fmtPct(totals()!.savingsPct)} off ${fmtEur(totals()!.noCacheEur)} uncached`}
-                    title="Difference between the billed estimate and the same tokens priced with no caching. Wall-clock-billed steps contribute nothing here — caching cannot save GPU seconds."
-                  />
                   <Card
                     label="Cache hit-rate"
                     value={fmtPct(totals()!.cacheHitRate)}
@@ -405,6 +416,21 @@ export default function Dashboard() {
                   }
                   title="tool_call events in the folded conversations; a failure is a tool_result whose success is false. Independent of the LLM tier."
                 />
+                {/* The purely self-deployed view's fourth slot (owner feedback:
+                    three tiles left one blank): the GPU compute-time floor, a
+                    figure the fold already sums off `timeRate.durationMs`. It
+                    only fills this slot when NO token-priced step exists — a
+                    mixed scope already renders four tiles and its compute
+                    seconds are part of the ≥ cost figure above. */}
+                <Show when={totals()!.timePricedCalls > 0 && totals()!.tokenPricedCalls === 0}>
+                  <Card
+                    label="GPU compute time"
+                    value={totals()!.timePricedMs > 0 ? `≥ ${fmtMs(totals()!.timePricedMs)}` : '—'}
+                    tone="ui-accent"
+                    hint="floor — the seconds of the calls themselves; not the idle window after, nor the cold start before"
+                    title="Summed measured wall-clock of the time-priced attempts on the self-hosted GPUs (the stamps' timeRate). The box bills every second it is awake; this covers only the calls' own durations, so it is a floor on the compute bill, not the bill — the same reading the ≥ on the cost figure carries."
+                  />
+                </Show>
                 <div
                   p="4"
                   rounded="lg"

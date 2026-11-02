@@ -115,6 +115,14 @@ export interface MetricTotals {
    *  window after the last call and the cold start before the first, and
    *  neither is any call's measured duration. The UI renders a `≥`. */
   timePricedCalls: number
+  /** Measured wall-clock of the step's time-priced attempts, summed
+   *  (`EventMetrics.timeRate.durationMs`). The seconds the GPU actually spent
+   *  on these calls — a FLOOR on the box's bill, like the ≥ on the cost: the
+   *  idle scale-down window after the last call and the cold start before the
+   *  first are the box's seconds too and none of them is any call's duration.
+   *  Absent on every other step, so a scope with no time-priced attempt holds
+   *  0 here and the UI shows nothing rather than 0s. */
+  timePricedMs: number
   /** Metered steps that are NOT purely time-priced — the ones token pricing
    *  (and therefore caching) describes. Attempt-level by review of #934: a
    *  step whose attempts could not be priced still recorded cache
@@ -201,6 +209,7 @@ export function emptyTotals(): MetricTotals {
     noCacheEur: 0,
     pricedCalls: 0,
     timePricedCalls: 0,
+    timePricedMs: 0,
     tokenPricedCalls: 0,
     toolCalls: 0,
     toolFailures: 0,
@@ -261,6 +270,10 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
       ? m.timePricedAttempts === (m.attempts || 1)
       : m.basis === 'time'
   if (!purelyTimePriced) totals.tokenPricedCalls++
+  // The GPU's own seconds, summed straight off the stamps — the raw material
+  // for the dashboard's compute-time tile. `timeRate` exists only on steps
+  // that had a time-priced attempt, so nothing else contributes here.
+  totals.timePricedMs += m.timeRate?.durationMs ?? 0
   return totals
 }
 

@@ -44,8 +44,11 @@ import { registerToolNamespaces, ToolsFrom, toolTagsFor } from '../tools.server'
 import { markDegradedToolSurface } from '../gateway-health.server'
 import {
   amendRunFrame,
+  currentRunFrame,
   registerEffectiveTier,
   withRunFrame,
+  type EgressRefusal,
+  type EgressVerdict,
   type RunFrame,
 } from '../run-frame.server'
 import type {
@@ -204,6 +207,30 @@ const via = <T>(route: string, fn: () => Promise<T>) => amendRunFrame({ route },
 const ofType = <D>(events: ContextEvent[], type: string) =>
   events.filter((e) => e.type === type).map((e) => e.data as D)
 
+/** Run one outgoing call through the gate's own CHECK — the seam a verdict
+ *  crosses, the same entry `callTool` and `preflightTool` loop over — inside
+ *  the gated frame `run` builds, and return the verdict with the scope's
+ *  events. The seam-level assertions live here (#939): a refusal's identity
+ *  is its `kind` and `rule`, carried as data, not the feedback text a
+ *  consumer would have to map back to a code. */
+async function verdictOf(
+  config: Partial<EgressGateConfig>,
+  name: string,
+  args: Record<string, unknown>,
+  opts: { user?: string; prior?: ContextEvent[]; frame?: RunFrame } = {},
+) {
+  let verdict: EgressVerdict | undefined
+  const events = await run(
+    config,
+    async () => {
+      for (const check of currentRunFrame()?.egressChecks ?? [])
+        verdict = await check({ name, args })
+    },
+    opts,
+  )
+  return { verdict, events }
+}
+
 it('keeps an unattended prepared batch refusal unlabeled while a person refusal is labeled', async () => {
   const args = { query: 'synthetic-private' }
   const digest = createHash('sha256')
@@ -308,54 +335,56 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
   // percent-encoded ZWSP passes), or test the placeholder on `text` instead of
   // `unescaped` (the escaped placeholder passes): each case reaches the seam.
   it.each(['evidence', 'refuse'] as const)('%s name match', async (nameMatch) => {
-    for (const [args, text] of [
-      [{ query: `${NAME.slice(0, 3)}${ZWSP}${NAME.slice(3)}` }, EGRESS_TEXTS.formatCharacter],
-      [{ query: `solar${SOFT_HYPHEN}panels` }, EGRESS_TEXTS.formatCharacter],
-      [{ query: `${RLO}elpmaxe ivar` }, EGRESS_TEXTS.formatCharacter],
+    for (const [args, rule, feedback] of [
+      [
+        { query: `${NAME.slice(0, 3)}${ZWSP}${NAME.slice(3)}` },
+        'format-character',
+        EGRESS_TEXTS.formatCharacter,
+      ],
+      [{ query: `solar${SOFT_HYPHEN}panels` }, 'format-character', EGRESS_TEXTS.formatCharacter],
+      [{ query: `${RLO}elpmaxe ivar` }, 'format-character', EGRESS_TEXTS.formatCharacter],
       // Default-ignorable letters (not `Cf`) that split a name the roster then misses.
       ...HANGUL_FILLERS.map(
         (filler) =>
           [
             { query: `Ra${filler}vi Exam${filler}ple phone` },
+            'format-character',
             EGRESS_TEXTS.formatCharacter,
           ] as const,
       ),
       // A format character percent-encoded: judged after decoding.
-      [{ query: 'Ravi%E2%80%8BExample' }, EGRESS_TEXTS.formatCharacter],
-      [{ query: 'PERSON_3 phone' }, EGRESS_TEXTS.placeholder],
+      [{ query: 'Ravi%E2%80%8BExample' }, 'format-character', EGRESS_TEXTS.formatCharacter],
+      [{ query: 'PERSON_3 phone' }, 'placeholder', EGRESS_TEXTS.placeholder],
       // A placeholder spelt with a literal escape: judged after unescaping.
-      [{ query: '\\u0050ERSON_3 phone' }, EGRESS_TEXTS.placeholder],
-      [{ query: 'PERSON%203' }, EGRESS_TEXTS.placeholder],
-      [{ nested: { 'PERSON-4': 'x' } }, EGRESS_TEXTS.placeholder],
-      [{ query: 'broken %E0%A4%A' }, EGRESS_TEXTS.undecodable],
-      [{ query: 'x'.repeat(EGRESS_MAX_BLOCK_CHARS + 1) }, EGRESS_TEXTS.tooLong],
+      [{ query: '\\u0050ERSON_3 phone' }, 'placeholder', EGRESS_TEXTS.placeholder],
+      [{ query: 'PERSON%203' }, 'placeholder', EGRESS_TEXTS.placeholder],
+      [{ nested: { 'PERSON-4': 'x' } }, 'placeholder', EGRESS_TEXTS.placeholder],
+      [{ query: 'broken %E0%A4%A' }, 'undecodable', EGRESS_TEXTS.undecodable],
+      [{ query: 'x'.repeat(EGRESS_MAX_BLOCK_CHARS + 1) }, 'too-long', EGRESS_TEXTS.tooLong],
     ] as const) {
       const decide = egressDecide([PUBLIC])
       const roster = fakeRoster([NAME])
-      let result: ToolCallResult | undefined
-      const events = await run(
+      // The seam answer, not the callTool error: a refusal's identity is its
+      // kind and rule, carried as data. `readOutgoing` names the rule and
+      // `block` records it, so no consumer maps the feedback text back to a
+      // code (the old reverse map's silent 'check-failed' miss is gone).
+      const { verdict, events } = await verdictOf(
         {
           detectors: { default: { nameMatch, decide: nameMatch === 'evidence' ? 'on' : 'off' } },
           decide,
           roster,
         },
-        async () => {
-          result = await callTool('web_search', args as Record<string, unknown>)
-        },
+        'web_search',
+        args as Record<string, unknown>,
       )
-      expect(result, JSON.stringify(args).slice(0, 60)).toMatchObject({
-        success: false,
-        error: text,
+      expect(verdict, JSON.stringify(args).slice(0, 60)).toEqual({
+        kind: 'refuse',
+        rule,
+        feedback,
       })
       expect(decide.seen.states).toHaveLength(0)
       expect(roster.matched).toHaveLength(0)
       expect(sent).not.toHaveBeenCalled()
-      const rule = new Map([
-        [EGRESS_TEXTS.formatCharacter, 'format-character'],
-        [EGRESS_TEXTS.placeholder, 'placeholder'],
-        [EGRESS_TEXTS.undecodable, 'undecodable'],
-        [EGRESS_TEXTS.tooLong, 'too-long'],
-      ]).get(text)
       expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
         { tool: 'web_search', route: null, rule },
       ])
@@ -2134,5 +2163,125 @@ describe('per-tool detector pairs', () => {
       ofType<WarningEventData>(events, 'warning').filter((w) => w.task === 'egress_check'),
     ).toHaveLength(1)
     warning.mockRestore()
+  })
+})
+
+// ==============================================================================
+// The verdict at the gate seam (#939): one discriminated union, not five shapes
+// ==============================================================================
+
+describe('the verdict at the gate seam', () => {
+  // A refusal's identity is its `kind` + `rule`, carried as data — the step-1
+  // matrix above asserts it for `readOutgoing`'s four rules; these assert the
+  // gate's other refusals and the void pass. MUTATION: drop a producer's `rule`
+  // (block, tripwire) — the `toEqual`s go red, and the union's required field
+  // fails typecheck first; re-introduce a text→code map in the gate — the
+  // wrong-rule verdict goes red instead of silently recording 'check-failed'.
+  it('the deterministic refusals carry their rules beside their fixed feedback', async () => {
+    const ungiven = await verdictOf(
+      { decide: egressDecide([PUBLIC]), fetchTools: ['fetch'], addressSources: ['web'] },
+      'fetch',
+      { url: 'https://invented.example/page' },
+    )
+    expect(ungiven.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'fetch-address',
+      feedback: EGRESS_TEXTS.fetchAddress,
+    })
+    expect(ofType<EgressBlockedEventData>(ungiven.events, 'egress_blocked')).toEqual([
+      { tool: 'fetch', route: null, rule: 'fetch-address' },
+    ])
+
+    const veto = await verdictOf(
+      {
+        detectors: { default: { nameMatch: 'refuse', decide: 'off' } },
+        roster: fakeRoster([NAME]),
+      },
+      'web_search',
+      { query: `${NAME} phone` },
+    )
+    expect(veto.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'name-match',
+      feedback: EGRESS_TEXTS.roster,
+    })
+
+    const damaged = await verdictOf(
+      { decide: egressDecide([PUBLIC]), roster: fakeRoster([], 'loaded', { damaged: true }) },
+      'web_search',
+      { query: 'solar' },
+    )
+    expect(damaged.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'damaged-roster',
+      feedback: EGRESS_TEXTS.damagedRoster,
+    })
+  })
+
+  it('a Decide refusal carries rule "decide"; an outage "unchecked"', async () => {
+    const refused = await verdictOf({ decide: egressDecide([PERSONAL]) }, 'web_search', {
+      query: 'solar',
+    })
+    expect(refused.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'decide',
+      feedback: EGRESS_TEXTS.personalClosing,
+    })
+    expect(ofType<EgressRefusedEventData>(refused.events, 'egress_refused')).toEqual([
+      { tool: 'web_search', route: null, cause: 'decide', category: 'personal', closes: 'route' },
+    ])
+
+    const outage = await verdictOf(
+      { decide: egressDecide(['throw']), roster: fakeRoster([]) },
+      'web_search',
+      { query: 'solar' },
+    )
+    expect(outage.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'unchecked',
+      feedback: EGRESS_TEXTS.uncheckedClosing,
+    })
+  })
+
+  it('a closed turn and a closed route carry their rules; a passing call answers void', async () => {
+    const refusal = (route: string | null, closes: 'route' | 'turn') =>
+      createEvent('egress_refused', 'probe', {
+        tool: 'web_search',
+        route,
+        cause: 'decide',
+        category: 'personal',
+        closes,
+      } satisfies EgressRefusedEventData)
+    const decide = egressDecide([PUBLIC])
+    const turn = await verdictOf(
+      { decide },
+      'web_search',
+      { query: 'solar' },
+      { prior: [refusal(null, 'turn')] },
+    )
+    expect(turn.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'turn-closed',
+      feedback: EGRESS_TEXTS.turnClosed,
+    })
+    const route = await verdictOf(
+      { decide },
+      'web_search',
+      { query: 'solar' },
+      { prior: [refusal(null, 'route')] },
+    )
+    expect(route.verdict).toEqual({
+      kind: 'refuse',
+      rule: 'route-closed',
+      feedback: EGRESS_TEXTS.routeClosed,
+    })
+    // A call nothing refuses answers void: the call goes.
+    const passing = await verdictOf(
+      { decide: egressDecide([PUBLIC]), roster: fakeRoster([NAME]) },
+      'web_search',
+      { query: 'solar' },
+    )
+    expect(passing.verdict).toBeUndefined()
+    expect(sent).not.toHaveBeenCalled()
   })
 })

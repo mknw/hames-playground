@@ -524,7 +524,7 @@ export const EGRESS_GATE_FIXTURES: readonly EgressGateFixture[] = [
 export function fixtureState(row: EgressGateFixture, drawNonce?: () => string): string {
   if (Array.isArray(row.args)) throw new Error(`${row.id}: a sequence is graded at the gate`)
   const read = readOutgoing(row.args as Readonly<Record<string, unknown>>)
-  if (!read.ok) throw new Error(`${row.id}: refused at step 1 (${read.refusal})`)
+  if (!read.ok) throw new Error(`${row.id}: refused at step 1 (${read.rule})`)
   return renderEgressState(
     {
       tool: row.tool,

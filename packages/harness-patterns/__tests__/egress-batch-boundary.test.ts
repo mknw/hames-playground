@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { harness } from '../harness.server'
 import { askHuman, canonicalJson, held, readHitl } from '../hitl.server'
-import { callTool } from '../mcp-client.server'
+import { callTool, EGRESS_CHECK_FAILED, preflightTool } from '../mcp-client.server'
 import { configurePattern } from '../patterns/chain.server'
 import { decisionLoop, DECISION_LOOP_ANSWER } from '../patterns/decisionLoop.server'
 import { simpleLoop } from '../patterns/simpleLoop.server'
@@ -13,7 +13,13 @@ import {
   type EgressGateConfig,
 } from '../patterns/withEgressGate.server'
 import { registerToolNamespaces } from '../tools.server'
-import { amendRunFrame, type RunFrame } from '../run-frame.server'
+import {
+  amendRunFrame,
+  withRunFrame,
+  type BatchEgressHeld,
+  type EgressRefusal,
+  type RunFrame,
+} from '../run-frame.server'
 import type { ToolTransport } from '../tool-transport.server'
 import type {
   ConfiguredPattern,
@@ -21,6 +27,7 @@ import type {
   ControllerFn,
   ControllerInput,
   DecideFn,
+  HeldResult,
   HitlPayloadStore,
 } from '../types'
 
@@ -358,5 +365,156 @@ describe('rv895 independent correctness probes', () => {
       result.context.events.filter((e) => e.type === 'egress_blocked').map((e) => e.data),
     ).toEqual([{ tool: 'web_search', route: null, rule: 'check-failed' }])
     expect(result.context.events.filter((e) => e.type === 'hitl_request')).toEqual([])
+  })
+})
+
+// ==============================================================================
+// The verdict's phase legality (#939): one table, beside the union
+// ==============================================================================
+
+describe('the verdict phase-legality table (EGRESS_VERDICT_KINDS_BY_PHASE)', () => {
+  // The table beside `EgressVerdict` in `run-frame.server.ts` is the contract:
+  // a check answering in a kind its consumer's phase does not list is
+  // answering out of phase, and DENIES the call — fail closed, never a
+  // dispatch, never a silent fall-through. The synthetic checks here answer in
+  // one fixed kind each, so every illegal cell is pinned on its own.
+  // MUTATION: let either consumer accept an out-of-phase arm (route
+  // `batch-hold` to the placeholder in `callTool`, or record the `audit`
+  // closure out of `preflightTool`): every row below goes red.
+  const held: HeldResult = { held: true, requestId: 'request-1', note: 'pending' }
+  const batchHeld: BatchEgressHeld = {
+    cause: 'decide',
+    route: null,
+    payload: { tool: 'web_search', args: {}, lines: [], hosts: [], spans: [] },
+  }
+
+  it('callTool denies the preflight-only kinds and dispatches nothing', async () => {
+    for (const outOfPhase of [{ kind: 'batch-hold', batchHeld }, { kind: 'batch-pass' }] as const) {
+      const log: Log = []
+      await withRunFrame(
+        { transports: [transport(log)], egressChecks: [async () => outOfPhase] },
+        async () => {
+          expect(await callTool('web_search', { query: 'q' })).toEqual({
+            success: false,
+            data: null,
+            error: EGRESS_CHECK_FAILED,
+          })
+        },
+      )
+      expect(log).toEqual([])
+    }
+  })
+
+  it('an audit closure outside the execute phase denies in callTool and never runs', async () => {
+    let recorded = 0
+    const log: Log = []
+    await withRunFrame(
+      {
+        transports: [transport(log)],
+        egressChecks: [
+          async () => ({
+            kind: 'audit',
+            record: () => {
+              recorded++
+            },
+          }),
+        ],
+      },
+      async () => {
+        expect(await callTool('web_search', { query: 'q' })).toEqual({
+          success: false,
+          data: null,
+          error: EGRESS_CHECK_FAILED,
+        })
+      },
+    )
+    expect(log).toEqual([])
+    expect(recorded).toBe(0)
+  })
+
+  it('preflightTool denies the execute-only kinds; the closure never runs', async () => {
+    let recorded = 0
+    for (const outOfPhase of [
+      { kind: 'hold', held },
+      {
+        kind: 'audit',
+        record: () => {
+          recorded++
+        },
+      },
+    ] as const) {
+      await withRunFrame(
+        {
+          transports: [transport([])],
+          batchPhase: 'preflight',
+          egressChecks: [async () => outOfPhase],
+        },
+        async () => {
+          expect(await preflightTool('web_search', { query: 'q' })).toEqual({
+            denial: EGRESS_CHECK_FAILED,
+          })
+        },
+      )
+    }
+    expect(recorded).toBe(0)
+  })
+
+  it('each legal arm keeps its action: refuse denies, hold placeholders, the preflight answers rows', async () => {
+    const refuse: EgressRefusal = {
+      kind: 'refuse',
+      rule: 'name-match',
+      feedback: 'Refused: no.',
+    }
+    const log: Log = []
+    await withRunFrame(
+      { transports: [transport(log)], egressChecks: [async () => refuse] },
+      async () => {
+        expect(await callTool('web_search', { query: 'q' })).toEqual({
+          success: false,
+          data: null,
+          error: 'Refused: no.',
+        })
+      },
+    )
+    await withRunFrame(
+      { transports: [transport(log)], egressChecks: [async () => ({ kind: 'hold', held })] },
+      async () => {
+        expect(await callTool('web_search', { query: 'q' })).toEqual({
+          success: true,
+          data: held,
+        })
+      },
+    )
+    await withRunFrame(
+      {
+        transports: [transport(log)],
+        batchPhase: 'preflight',
+        egressChecks: [async () => ({ kind: 'batch-hold', batchHeld })],
+      },
+      async () => {
+        expect(await preflightTool('web_search', { query: 'q' })).toEqual({ held: batchHeld })
+      },
+    )
+    await withRunFrame(
+      {
+        transports: [transport(log)],
+        batchPhase: 'preflight',
+        egressChecks: [async () => ({ kind: 'batch-pass' })],
+      },
+      async () => {
+        expect(await preflightTool('web_search', { query: 'q' })).toEqual({
+          auditByDecide: true,
+        })
+      },
+    )
+    await withRunFrame(
+      { transports: [transport(log)], batchPhase: 'preflight', egressChecks: [async () => refuse] },
+      async () => {
+        expect(await preflightTool('web_search', { query: 'q' })).toEqual({
+          denial: 'Refused: no.',
+        })
+      },
+    )
+    expect(log).toEqual([])
   })
 })

@@ -176,7 +176,7 @@ async function egressMatch(
   const { roster } = await createEgressRoster({ directory })(payloads, user)
   return (args: Record<string, unknown>): string[] => {
     const read = readOutgoing(args)
-    return read.ok ? roster.match(read.request.texts) : [read.refusal]
+    return read.ok ? roster.match(read.request.texts) : [read.feedback]
   }
 }
 const result = (id: string, payload: unknown, summary: string) => ({
@@ -1118,7 +1118,11 @@ describe('fix round 1 remaining findings', () => {
   it.each(['PERSON 3', 'PERSON-3', 'PERSON__3_EMAIL', 'PERSON%203', 'PERSON-3-FUTURE'])(
     'refuses the linkable placeholder %s',
     async (query) => {
-      expect(readOutgoing({ query })).toEqual({ ok: false, refusal: EGRESS_TEXTS.placeholder })
+      expect(readOutgoing({ query })).toEqual({
+        ok: false,
+        rule: 'placeholder',
+        feedback: EGRESS_TEXTS.placeholder,
+      })
     },
   )
 
@@ -1354,7 +1358,7 @@ describe('withholding and outgoing checks', () => {
         egressChecks: [
           () => {
             calls.push('outer')
-            return 'outer denial'
+            return { kind: 'refuse', rule: 'check-failed', feedback: 'outer denial' }
           },
           () => {
             calls.push('after-denial')

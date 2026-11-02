@@ -1479,9 +1479,17 @@ materialisation remain governed by their existing contracts.
 One check before every outgoing call, on every tier, around whatever pattern it
 wraps: it installs ONE `egressChecks` entry and ONE `afterToolCall` hook on the
 run frame (`RunFrame.egressChecks` concatenates innermost first, never replaces;
-`callTool` runs every check before any transport, and a denial is a recoverable
-tool failure carrying the check's text; a check that throws denies with the
-fixed `EGRESS_CHECK_FAILED`, never its exception). A call is egress unless it is
+`callTool` runs every check before any transport, and a check answers in ONE
+discriminated verdict (`EgressVerdict`, `run-frame.server.ts`): `refuse`
+carries `{ rule, feedback }` as data and denies the call as a recoverable tool
+failure carrying the feedback; `hold` is the placeholder the loop pauses on;
+`batch-hold`/`batch-pass` are the batch preflight's rows; `audit` records after the
+dispatch, in the execute phase only; `void` is the call goes. The phase-legality
+table (`EGRESS_VERDICT_KINDS_BY_PHASE`, written once beside the union) rules
+which kinds each consumer — `callTool` at a dispatch, `preflightTool` at the
+batch preflight — may act on; a kind outside it denies with the fixed
+`EGRESS_CHECK_FAILED`, never a dispatch, and a check that throws denies with the
+same fixed text, never its exception. A call is egress unless it is
 declared local: a namespace in `local` (its arguments reach only systems that
 already hold the deployment's data; network locality is not the test) or an
 exact name in `localTools` (a name that is in `catalog` refuses the run).
@@ -1566,7 +1574,8 @@ The counts and closures derive from recorded `egress_refused` events, including
 across pause/resume. One route's checks run in arrival order, so the next call
 sees a closure. Name vetoes and other deterministic blocks write exactly one
 metadata-only `egress_blocked` event and do not spend N. Model-facing views
-render a fixed line. A throwing check still returns `EGRESS_CHECK_FAILED`.
+render a fixed line. A throwing check still answers a `refuse` verdict whose
+feedback is the fixed `EGRESS_CHECK_FAILED`, never its exception.
 
 A roster source that throws (a neutralised identity field) or a local result
 whose observation throws DAMAGES the gate: every later outgoing call is refused
@@ -2798,9 +2807,9 @@ run can pause. Both use the mechanism above; neither invents an answer path.
   Its `summary` is `{ category, closes }` only; the arguments, their readable
   lines, every host and the roster's matches are the payload row's, and the
   decision authorizes the tool and its arguments alone. Nothing is sent: the
-  egress check returns `{ held }`, `callTool` returns the placeholder (marked
-  `redispatch`) without dispatching, and the loop pauses on it. A denial from
-  another check wins over a hold.
+  egress check answers `{ kind: 'hold', held }`, `callTool` returns the
+  placeholder (marked `redispatch`) without dispatching, and the loop pauses
+  on it. A denial (`refuse`) from another check wins over a hold.
 - **The attended batch prompt (`egress-batch-release`, N8).** On a whole
   resumable path, `simpleLoop` preflights every eligible member before any
   dispatch. One encrypted host plan holds exact arguments and the controller

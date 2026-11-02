@@ -37,6 +37,7 @@ import {
   amendRunFrame,
   currentRunFrame,
   effectiveTier,
+  type EgressRefusal,
   type EgressVerdict,
 } from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
@@ -705,14 +706,17 @@ export function withEgressGate(config: EgressGateConfig) {
         const route = currentRunFrame()?.route ?? NO_ROUTE
         const tool = egressToolLabel(call.name)
         const callId = currentRunFrame()?.callKey ?? randomUUID()
-        const block = (rule: EgressBlockedEventData['rule'], feedback: string): string => {
+        const block = (rule: EgressBlockedEventData['rule'], feedback: string): EgressRefusal => {
           record('egress_blocked', { tool, route, rule } satisfies EgressBlockedEventData)
-          return feedback
+          return { kind: 'refuse', rule, feedback }
         }
 
         /** A tripwire: count it, close the route past N, record it, and answer
          *  with the text for whether this refusal closed the route. */
-        const tripwire = (cause: 'decide' | 'unchecked', category?: 'personal' | 'company') => {
+        const tripwire = (
+          cause: 'decide' | 'unchecked',
+          category?: 'personal' | 'company',
+        ): EgressRefusal => {
           const count = (closures.counts.get(route) ?? 0) + 1
           closures.counts.set(route, count)
           const closes = count > maxRetries
@@ -724,18 +728,21 @@ export function withEgressGate(config: EgressGateConfig) {
             ...(category && { category }),
             closes: closes ? 'route' : 'none',
           } satisfies EgressRefusedEventData)
+          let feedback: string
           if (cause === 'unchecked') {
-            return closes ? EGRESS_TEXTS.uncheckedClosing : EGRESS_TEXTS.uncheckedOpen
+            feedback = closes ? EGRESS_TEXTS.uncheckedClosing : EGRESS_TEXTS.uncheckedOpen
+          } else if (category === 'company') {
+            feedback = closes ? EGRESS_TEXTS.companyClosing : EGRESS_TEXTS.companyOpen
+          } else {
+            feedback = closes ? EGRESS_TEXTS.personalClosing : EGRESS_TEXTS.personalOpen
           }
-          if (category === 'company') {
-            return closes ? EGRESS_TEXTS.companyClosing : EGRESS_TEXTS.companyOpen
-          }
-          return closes ? EGRESS_TEXTS.personalClosing : EGRESS_TEXTS.personalOpen
+          return { kind: 'refuse', rule: cause, feedback }
         }
 
         /** The person's decision on this call: the button they pressed, or the
-         *  unattended rule's pick, which is Refuse. */
-        const decided = (choice: string, held: Held, byOwner = false): string | undefined => {
+         *  unattended rule's pick, which is Refuse. An owner's answer prefixes
+         *  the feedback, never the record. */
+        const decided = (choice: string, held: Held, byOwner = false): EgressVerdict => {
           if (choice === 'accept') {
             record('egress_audit', {
               tool,
@@ -755,10 +762,17 @@ export function withEgressGate(config: EgressGateConfig) {
               ...(held.category && { category: held.category }),
               closes: 'turn',
             } satisfies EgressRefusedEventData)
-            return (byOwner ? EGRESS_OWNER_REFUSED_ALL : '') + EGRESS_TEXTS.turnClosed
+            return {
+              kind: 'refuse',
+              rule: held.cause,
+              feedback: (byOwner ? EGRESS_OWNER_REFUSED_ALL : '') + EGRESS_TEXTS.turnClosed,
+            }
           }
           // Refuse, and anything else: the tripwire this refusal would have been.
-          return (byOwner ? EGRESS_OWNER_REFUSED : '') + tripwire(held.cause, held.category)
+          const refusal = tripwire(held.cause, held.category)
+          return byOwner
+            ? { ...refusal, feedback: EGRESS_OWNER_REFUSED + refusal.feedback }
+            : refusal
         }
 
         /** A cell that names the person: ask, where the call can pause and is
@@ -769,6 +783,7 @@ export function withEgressGate(config: EgressGateConfig) {
           }
           if (currentRunFrame()?.batchPhase === 'preflight') {
             return {
+              kind: 'batch-hold',
               batchHeld: {
                 cause: held.cause,
                 ...(held.category && { category: held.category }),
@@ -795,7 +810,10 @@ export function withEgressGate(config: EgressGateConfig) {
           )
           if (outcome.status === 'rebound') return tripwire(held.cause, held.category)
           if (outcome.status === 'pending') {
-            return { held: { ...held_(outcome, EGRESS_HELD_NOTE), redispatch: true } }
+            return {
+              kind: 'hold',
+              held: { ...held_(outcome, EGRESS_HELD_NOTE), redispatch: true },
+            }
           }
           // No choice (an unattended rule that decided nothing) refuses.
           return decided(outcome.choice ?? 'refuse', held, outcome.by === 'person')
@@ -838,18 +856,20 @@ export function withEgressGate(config: EgressGateConfig) {
             if (closures.turnClosed) return block('turn-closed', EGRESS_TEXTS.turnClosed)
             if (closures.closedRoutes.has(route))
               return block('route-closed', EGRESS_TEXTS.routeClosed)
-            if (prepared.decision === 'refuse')
-              return (
-                (prepared.byOwner ? EGRESS_OWNER_REFUSED : '') +
-                tripwire(prepared.cause ?? 'unchecked', prepared.category)
-              )
+            if (prepared.decision === 'refuse') {
+              const refusal = tripwire(prepared.cause ?? 'unchecked', prepared.category)
+              return prepared.byOwner
+                ? { ...refusal, feedback: EGRESS_OWNER_REFUSED + refusal.feedback }
+                : refusal
+            }
             if (
               prepared.decision === 'accept' ||
               (prepared.decision === 'pass' && prepared.auditByDecide)
             ) {
               const allowedBy = prepared.decision === 'accept' ? 'person' : 'decide'
               return {
-                batchAudit: () =>
+                kind: 'audit',
+                record: () =>
                   record('egress_audit', {
                     tool,
                     hosts: [],
@@ -864,15 +884,7 @@ export function withEgressGate(config: EgressGateConfig) {
           if (closures.closedRoutes.has(route))
             return block('route-closed', EGRESS_TEXTS.routeClosed)
           const read = readOutgoing(call.args)
-          if (!read.ok) {
-            const rules: Record<string, EgressBlockedEventData['rule']> = {
-              [EGRESS_TEXTS.placeholder]: 'placeholder',
-              [EGRESS_TEXTS.undecodable]: 'undecodable',
-              [EGRESS_TEXTS.tooLong]: 'too-long',
-              [EGRESS_TEXTS.formatCharacter]: 'format-character',
-            }
-            return block(rules[read.refusal] ?? 'check-failed', read.refusal)
-          }
+          if (!read.ok) return block(read.rule, read.feedback)
           const request = read.request
           if (fetchTools.has(call.name)) {
             // A leaf that carries an address, or sits under a `url` key (in an
@@ -1011,7 +1023,7 @@ export function withEgressGate(config: EgressGateConfig) {
             })
           }
           if (spans.length && currentRunFrame()?.batchPhase === 'preflight') {
-            return { batchPassed: true }
+            return { kind: 'batch-pass' }
           }
           if (spans.length) {
             record('egress_audit', {

@@ -175,10 +175,22 @@ export interface OutgoingRequest {
   readonly raw: readonly { readonly key: string | null; readonly value: string }[]
 }
 
-/** What reading a call's arguments gives: the request, or a step-1 refusal. */
+/** A step-1 rule: what `readOutgoing` refuses with, as `egress_blocked`
+ *  records it. */
+export type EgressStepOneRule = 'placeholder' | 'undecodable' | 'too-long' | 'format-character'
+
+/** What reading a call's arguments gives: the request, or a step-1 refusal
+ *  carried as data — the rule code beside its fixed feedback, so no consumer
+ *  ever maps the text back to a code. */
 export type ReadOutgoing =
   | { readonly ok: true; readonly request: OutgoingRequest }
-  | { readonly ok: false; readonly refusal: string }
+  | {
+      readonly ok: false
+      /** The rule that refused, as `egress_blocked` records it. */
+      readonly rule: EgressStepOneRule
+      /** The fixed feedback (`EGRESS_TEXTS`) the caller sees. */
+      readonly feedback: string
+    }
 
 // A run of percent escapes, decoded as one: a literal percent ("5% growth") is
 // left alone. The same decode the old outgoing check ran.
@@ -201,15 +213,15 @@ function decodeLeaf(text: string): string {
  * Read a call's arguments as the gate judges them, running step 1's
  * deterministic refusals that need nothing but the arguments, in this order:
  * undecodable encoding, a format character, a placeholder, the size bound. Each
- * returns its fixed text. Throws on a value no JSON argument can be (a cycle, a
- * depth past {@link MAX_DEPTH}); `callTool` turns a throwing check into a
+ *  returns its rule and its fixed text. Throws on a value no JSON argument can be
+ *  (a cycle, a depth past {@link MAX_DEPTH}); `callTool` turns a throwing check into a
  * refusal.
  */
 export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgoing {
   const lines: string[] = []
   const texts: string[] = []
   const raw: { key: string | null; value: string }[] = []
-  let refusal: string | undefined
+  let refusal: { readonly rule: EgressStepOneRule; readonly feedback: string } | undefined
 
   // Decode one string (a leaf or a key) and check it; `undefined` when refused.
   const read = (value: string): string | undefined => {
@@ -217,11 +229,11 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
     try {
       decoded = decodeLeaf(value)
     } catch {
-      refusal ??= EGRESS_TEXTS.undecodable
+      refusal ??= { rule: 'undecodable', feedback: EGRESS_TEXTS.undecodable }
       return undefined
     }
     if (FORMAT_CHARACTER.test(decoded)) {
-      refusal ??= EGRESS_TEXTS.formatCharacter
+      refusal ??= { rule: 'format-character', feedback: EGRESS_TEXTS.formatCharacter }
       return undefined
     }
     // The strip is defence in depth behind the refusal, should the two sets diverge.
@@ -230,7 +242,7 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
       String.fromCharCode(parseInt(hex, 16)),
     )
     if (PLACEHOLDER.test(unescaped)) {
-      refusal ??= EGRESS_TEXTS.placeholder
+      refusal ??= { rule: 'placeholder', feedback: EGRESS_TEXTS.placeholder }
       return undefined
     }
     texts.push(text)
@@ -269,9 +281,10 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
   }
   walk(args, '', null, 0)
 
-  if (refusal) return { ok: false, refusal }
+  if (refusal) return { ok: false, ...refusal }
   const block = lines.join('\n')
-  if (block.length > EGRESS_MAX_BLOCK_CHARS) return { ok: false, refusal: EGRESS_TEXTS.tooLong }
+  if (block.length > EGRESS_MAX_BLOCK_CHARS)
+    return { ok: false, rule: 'too-long', feedback: EGRESS_TEXTS.tooLong }
   return { ok: true, request: { lines, block, texts, raw } }
 }
 

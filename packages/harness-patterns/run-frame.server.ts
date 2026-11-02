@@ -62,6 +62,7 @@ import type {
   ByTier,
   ContextEvent,
   ContinuationSegment,
+  EgressBlockedEventData,
   HeldResult,
   HitlPayloadStore,
   ToolCallResult,
@@ -102,17 +103,18 @@ export interface InferenceSlot {
   readonly clientOverride?: RunClientOverride
 }
 
-/** Pre-dispatch check, above every transport. A reason denies the call with a
- *  recoverable tool failure; every enclosing check still runs. A check must
- *  return feedback without quoting private arguments. */
+/** Pre-dispatch check, above every transport. A `refuse` verdict denies the
+ *  call with its feedback as a recoverable tool failure; every enclosing check
+ *  still runs. A check must answer in the {@link EgressVerdict} union, and its
+ *  refusal feedback must not quote private arguments. */
 export type EgressCheck = (call: {
   readonly name: string
   readonly args: Readonly<Record<string, unknown>>
 }) => EgressVerdict | Promise<EgressVerdict>
 
-/** A denial (its feedback), nothing (the call goes), or the call HELD for a
- *  person (boundary guards slice 10): `callTool` returns the placeholder as
- *  the call's result, dispatches nothing, and the loop pauses on it. */
+/** The row a `batch-hold` verdict carries (boundary guards slice 10, N8): a
+ *  call held for a batch preflight's person review. `preflightTool` returns
+ *  it; `simpleLoop` presents the row on the checklist. */
 export interface BatchEgressHeld {
   readonly cause: 'decide' | 'unchecked'
   readonly category?: 'personal' | 'company'
@@ -160,13 +162,76 @@ export interface ToolSendClaims {
   }): Promise<void>
 }
 
+/** The rule an egress refusal was recorded under: a deterministic block's
+ *  `egress_blocked` rule, or a Decide refusal's `egress_refused` cause. */
+export type EgressRefusalRule = EgressBlockedEventData['rule'] | 'decide' | 'unchecked'
+
+/** One kind of {@link EgressVerdict}: the discriminator the gate's producers
+ *  set and its two consumers switch on. */
+export type EgressVerdictKind = 'refuse' | 'hold' | 'batch-hold' | 'batch-pass' | 'audit'
+
+/**
+ * One verdict from an egress check ({@link EgressCheck}) on one outgoing call —
+ *  ONE discriminated union, not five shapes each consumer sniffs by key.
+ *  Nothing (`void`) is the call goes.
+ *
+ * PHASE LEGALITY — the whole table, written once, here, and nowhere else. A
+ *  check answers for the phase its verdict's consumer runs in; a kind the
+ *  consumer's phase does not list is a check answering out of phase and DENIES
+ *  the call (`EGRESS_CHECK_FAILED`) — fail closed, never a dispatch, never a
+ *  silent fall-through:
+ *
+ * | kind         | `preflightTool` (the batch preflight)   | `callTool` (a dispatch: a batch's execute phase, or no batch) |
+ * | ------------ | --------------------------------------- | ----------------------------------------------------------- |
+ * | `refuse`     | denial                                  | denial                                                      |
+ * | `hold`       | denied                                  | the placeholder; the loop pauses on it                      |
+ * | `batch-hold` | a held row for the person's checklist   | denied                                                      |
+ * | `batch-pass` | the plan row is audited by Decide       | denied                                                      |
+ * | `audit`      | denied                                  | recorded after dispatch, in the execute phase only         |
+ *
+ * {@link EGRESS_VERDICT_KINDS_BY_PHASE} is this table as the one record both
+ *  consumers consult.
+ */
+
+/** The refusal arm of {@link EgressVerdict}, on its own: the call is denied,
+ *  `feedback` is the recoverable tool failure the caller sees, and must not
+ *  quote private arguments. `rule` carries the refusal as data — so no
+ *  consumer and no test ever maps the fixed feedback text back to a code. */
+export interface EgressRefusal {
+  readonly kind: 'refuse'
+  readonly rule: EgressRefusalRule
+  readonly feedback: string
+}
+
 export type EgressVerdict =
-  | string
   | void
-  | { readonly held: HeldResult }
-  | { readonly batchHeld: BatchEgressHeld }
-  | { readonly batchPassed: true }
-  | { readonly batchAudit: () => void }
+  | EgressRefusal
+  /** The call is HELD for a person (boundary guards slice 10): `callTool`
+   *  returns the placeholder as the call's result, dispatches nothing, and
+   *  the loop pauses on it. */
+  | { readonly kind: 'hold'; readonly held: HeldResult }
+  /** The call is held for a batch preflight's person review (N8). */
+  | { readonly kind: 'batch-hold'; readonly batchHeld: BatchEgressHeld }
+  /** A batch preflight's pass on a call the roster matched: the plan row is
+   *  audited by Decide (`PreparedBatchEgress.auditByDecide`), not by a person. */
+  | { readonly kind: 'batch-pass' }
+  /** The call goes, and its `egress_audit` is recorded by `record` after the
+   *  dispatch, in the execute phase only. */
+  | { readonly kind: 'audit'; readonly record: () => void }
+
+/** The phase-legality table on {@link EgressVerdict}, as the one record both
+ *  consumers consult: a verdict whose kind is not in its consumer's set
+ *  denies the call (`EGRESS_CHECK_FAILED`). */
+export const EGRESS_VERDICT_KINDS_BY_PHASE: Readonly<
+  Record<'preflight' | 'execute', readonly EgressVerdictKind[]>
+> = Object.freeze({
+  /** `preflightTool`, before any transport (N8). */
+  preflight: ['refuse', 'batch-hold', 'batch-pass'],
+  /** `callTool` at a dispatch: a batch's execute phase, or no batch. The
+   *  `audit` closure records only inside a batch's execute phase; the
+   *  post-dispatch check in `callTool` enforces that on the phase itself. */
+  execute: ['refuse', 'hold', 'audit'],
+})
 
 /** One stash document write, as an observer sees it: which conversation's stash
  *  and which document. Never the content. */

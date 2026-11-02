@@ -24,6 +24,20 @@ vi.mock('../../../lib/db/conversations.server', () => ({
   listConversationEvents: (userId: string) => listConversationEvents(userId),
   CONVERSATION_EVENTS_SCAN_LIMIT: 200,
 }))
+// The action also reads the two process-local self-deployed windows. Both are
+// server-only modules that assert on import — mock the surface, not the seam.
+vi.mock('../../../lib/inference/cold-start.server', () => ({
+  largeColdStartStats: () => ({
+    samples: 1,
+    medianMs: 31_300,
+    slowestMs: 62_200,
+    basis: 'measured',
+  }),
+  smallColdStartStats: () => ({ samples: 0, medianMs: null, slowestMs: null, basis: 'default' }),
+}))
+vi.mock('../../../lib/metrics/call-latency.server', () => ({
+  tierLatency: () => ({ p50Ms: 4_100, samples: 5 }),
+}))
 
 import { getMetricsDashboard } from '../../../lib/metrics/dashboard.server'
 import type { ContextEvent } from '@hames-ai/harness-patterns/types'
@@ -73,6 +87,14 @@ describe('getMetricsDashboard', () => {
     expect(listConversationEvents).toHaveBeenCalledWith('oid-1')
     expect(out.totals.costEur).toBeCloseTo(0.5)
     expect(out.byConversation.map((c) => c.id)).toEqual(['conv-1'])
+  })
+
+  it('carries the self-deployed windows the route renders beside the fold', async () => {
+    const out = await getMetricsDashboard()
+
+    expect(out.inference.large).toMatchObject({ samples: 1, basis: 'measured' })
+    expect(out.inference.small).toMatchObject({ samples: 0, basis: 'default' })
+    expect(out.inference.selfDeployedCall).toEqual({ p50Ms: 4_100, samples: 5 })
   })
 
   it('scopes to the bypass user without an auth lookup when bypass is on', async () => {

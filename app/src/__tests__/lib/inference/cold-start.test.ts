@@ -41,11 +41,14 @@ import {
   COLD_START_WINDOW,
   SMALL_COLD_START_FALLBACK_MS,
   coldStartEstimate,
+  largeColdStartStats,
   noteColdStartMeasured,
   noteLargeCallStarting,
   resetColdStartHistory,
+  resetSmallColdStartHistory,
   runWithColdStartWatch,
   settleColdStart,
+  smallColdStartStats,
   type ColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
@@ -454,5 +457,41 @@ describe('what the wait is allowed to teach the estimate', () => {
       },
     )
     expect(coldStartEstimate().basis).toBe('default')
+  })
+})
+
+// ============================================================================
+// The dashboard's per-box stats (#931)
+// ============================================================================
+
+describe('the dashboard stats', () => {
+  beforeEach(() => {
+    resetColdStartHistory()
+    resetSmallColdStartHistory()
+  })
+
+  it('reads the same window the estimate does, and adds the slowest reading', () => {
+    for (const ms of [100_000, 200_000, 150_000]) noteColdStartMeasured(ms)
+    expect(largeColdStartStats()).toEqual({
+      samples: 3,
+      medianMs: 150_000,
+      slowestMs: 200_000,
+      basis: 'measured',
+    })
+  })
+
+  it('reports nulls and the default basis for a box this process has not measured', () => {
+    expect(smallColdStartStats()).toEqual({
+      samples: 0,
+      medianMs: null,
+      slowestMs: null,
+      basis: 'default',
+    })
+  })
+
+  it('keeps the two boxes independent', () => {
+    noteColdStartMeasured(120_000)
+    expect(largeColdStartStats().samples).toBe(1)
+    expect(smallColdStartStats().samples).toBe(0)
   })
 })

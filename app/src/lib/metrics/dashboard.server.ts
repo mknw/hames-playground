@@ -21,6 +21,12 @@ import {
   type ConversationEvents,
   type DashboardData,
 } from '@hames-ai/harness-patterns/metrics/aggregate'
+import {
+  largeColdStartStats,
+  smallColdStartStats,
+  type ColdStartBoxStats,
+} from '../inference/cold-start.server'
+import { tierLatency, type TierLatency } from './call-latency.server'
 
 // ============================================================================
 // Auth helper (mirrors harness-client/actions.server.ts)
@@ -43,6 +49,22 @@ export interface MetricsDashboard extends DashboardData {
    *  fold covers the most recent N conversations, not all of them — the page
    *  says so rather than presenting a partial total as complete. */
   conversationScanLimit: number
+  /** Self-deployed inference figures that do NOT come from the event stream:
+   *  the two GPU boxes' wake-wait windows and the rolling per-call latency on
+   *  the tier, all recorded by this app process rather than persisted per
+   *  user. Durations and counts only — the wake history and the latency
+   *  window hold no user id, no conversation id and no content (SD-10). */
+  inference: {
+    /** The 27B box's wake-wait window. */
+    large: ColdStartBoxStats
+    /** The 4B box's wake-wait window. */
+    small: ColdStartBoxStats
+    /** Rolling median duration of recent self-deployed-tier model calls —
+     *  the warm-ish contrast to the wake waits above, and NOT a
+     *  time-to-first-token: a cold start is inside the window, and the
+     *  duration covers a whole call's generation, not its first token. */
+    selfDeployedCall: TierLatency
+  }
 }
 
 /** A JSONB blob written by an older/partial run may have no `events` array. */
@@ -71,5 +93,10 @@ export async function getMetricsDashboard(topConversations = 10): Promise<Metric
     ...buildDashboard(conversations, { topConversations }),
     generatedAt: Date.now(),
     conversationScanLimit: CONVERSATION_EVENTS_SCAN_LIMIT,
+    inference: {
+      large: largeColdStartStats(),
+      small: smallColdStartStats(),
+      selfDeployedCall: tierLatency('self_deployed'),
+    },
   }
 }

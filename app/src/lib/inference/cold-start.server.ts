@@ -242,6 +242,46 @@ export function resetSmallColdStartHistory(): void {
 export function smallColdStartEstimate(): ColdStartEstimate {
   return estimateFor('small')
 }
+
+/** What the metrics dashboard's self-deployed section shows for one box.
+ *
+ *  The same process-local window the chat notice estimates from — durations
+ *  only, no user id, no conversation id, no content (SD-10). The dashboard
+ *  labels it "this app process": a restart empties the history and a second
+ *  instance holds its own. */
+export interface ColdStartBoxStats {
+  /** Wake waits this process recorded (capped at {@link COLD_START_WINDOW}). */
+  samples: number
+  /** Median wake wait, or `null` when nothing was recorded. */
+  medianMs: number | null
+  /** Slowest wake wait in the window, or `null` when nothing was recorded.
+   *  Nearest-rank at p=1, like the median — a real duration, not an average. */
+  slowestMs: number | null
+  /** `default` (always with `samples: 0`) means the chat notice is falling
+   *  back to its named constant; `measured` means the figures above are this
+   *  process's own readings. Never dress the fallback up as a reading. */
+  basis: 'measured' | 'default'
+}
+
+function boxStats(box: WakeBox): ColdStartBoxStats {
+  const values = box === 'large' ? history : small.history
+  return {
+    samples: values.length,
+    medianMs: percentileMs(values, 0.5),
+    slowestMs: percentileMs(values, 1),
+    basis: values.length > 0 ? 'measured' : 'default',
+  }
+}
+
+/** The 27B's wake-wait window, for the metrics dashboard. */
+export function largeColdStartStats(): ColdStartBoxStats {
+  return boxStats('large')
+}
+
+/** The 4B's wake-wait window, for the metrics dashboard. */
+export function smallColdStartStats(): ColdStartBoxStats {
+  return boxStats('small')
+}
 function estimateFor(box: WakeBox): ColdStartEstimate {
   const values = box === 'large' ? history : small.history
   const measured = percentileMs(values, 0.5)

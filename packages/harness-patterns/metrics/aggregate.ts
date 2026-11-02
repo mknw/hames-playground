@@ -115,6 +115,30 @@ export interface MetricTotals {
    *  window after the last call and the cold start before the first, and
    *  neither is any call's measured duration. The UI renders a `≥`. */
   timePricedCalls: number
+  /** Measured wall-clock of the step's time-priced attempts, summed
+   *  (`EventMetrics.timeRate.durationMs`). The seconds the GPU actually spent
+   *  on these calls — a FLOOR on the box's bill, like the ≥ on the cost: the
+   *  idle scale-down window after the last call and the cold start before the
+   *  first are the box's seconds too and none of them is any call's duration.
+   *  Absent on every other step, so a scope with no time-priced attempt holds
+   *  0 here and the UI shows nothing rather than 0s. */
+  timePricedMs: number
+  /** Metered steps that are NOT purely time-priced — the ones token pricing
+   *  (and therefore caching) describes. Attempt-level by review of #934: a
+   *  step whose attempts could not be priced still recorded cache
+   *  read/write tokens, and a MIXED step (time-priced attempt + token-priced
+   *  one) carries token-priced cache hits too, so both count here — a mixed
+   *  step counts in this AND in `timePricedCalls`, whose ≥ floor marker is
+   *  unchanged. Only a step every physical call of which was time-priced
+   *  falls outside it. The dashboard shows its cache figures only where this
+   *  is non-zero. */
+  tokenPricedCalls: number
+  /** Tool calls recorded as `tool_call` events. Not an LLM figure — counted
+   *  for every conversation regardless of tier. */
+  toolCalls: number
+  /** `tool_result` events whose `success` is false. A call whose result never
+   *  landed is neither; the two numbers are independent counts. */
+  toolFailures: number
 }
 
 /** Totals plus the ratios the UI shows. */
@@ -185,11 +209,30 @@ export function emptyTotals(): MetricTotals {
     noCacheEur: 0,
     pricedCalls: 0,
     timePricedCalls: 0,
+    timePricedMs: 0,
+    tokenPricedCalls: 0,
+    toolCalls: 0,
+    toolFailures: 0,
   }
 }
 
-/** Accumulate one event into `totals` (mutates — folds own their accumulator). */
+/** Accumulate one event into `totals` (mutates — folds own their accumulator).
+ *
+ *  Tool-call counts ride the same fold because they come off the same event
+ *  stream the caller already loaded: a `tool_call` event is one call, a
+ *  `tool_result` with `success: false` one failure. Everything else about a
+ *  tool event (its name, its arguments, its output) stays out of the totals —
+ *  this module sums counts, never content. */
 export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTotals {
+  if (event.type === 'tool_call') {
+    totals.toolCalls++
+    return totals
+  }
+  if (event.type === 'tool_result') {
+    const d = event.data as { success?: boolean } | null | undefined
+    if (d?.success === false) totals.toolFailures++
+    return totals
+  }
   const m = getEventMetrics(event)
   if (!m) {
     // An LLM step with no accounting: countable, but nothing to sum.
@@ -211,6 +254,26 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
     totals.noCacheEur += cost.noCacheEur
     if (isTimePricedStep(m)) totals.timePricedCalls++
   }
+  // The cache gate counts TOKEN-billed steps, not priced ones. A metered step
+  // whose attempts could not be priced carries no cost/basis stamp yet still
+  // recorded its cache read/write tokens, so it belongs here; and a MIXED step
+  // (a time-priced attempt plus a token-priced one) carries token-priced cache
+  // hits too, so it counts in BOTH counters — the ≥ floor marker stays on
+  // `timePricedCalls`, the recorded hit-rate and segments stay visible. Only a
+  // step EVERY physical call of which was time-priced hides cache figures.
+  // `isTimePricedStep` itself is unchanged. Pre-`timePricedAttempts` stamps
+  // carry only `basis`, which cannot distinguish a mixed step from a pure one,
+  // so `basis: 'time'` is read as pure — the same reading that has kept the
+  // marker on those events all along.
+  const purelyTimePriced =
+    m.timePricedAttempts !== undefined
+      ? m.timePricedAttempts === (m.attempts || 1)
+      : m.basis === 'time'
+  if (!purelyTimePriced) totals.tokenPricedCalls++
+  // The GPU's own seconds, summed straight off the stamps — the raw material
+  // for the dashboard's compute-time tile. `timeRate` exists only on steps
+  // that had a time-priced attempt, so nothing else contributes here.
+  totals.timePricedMs += m.timeRate?.durationMs ?? 0
   return totals
 }
 

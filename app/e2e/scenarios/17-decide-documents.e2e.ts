@@ -4,18 +4,9 @@
  * real database, real SSE turn. The tier line is the invariant: no uploaded file
  * name reaches the Anthropic tier's decisions host. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { bootApp, newSessionId, type AppHandles } from '../lib/app'
+import { bootApp, eventsOfType, newSessionId, settleSummaries, type AppHandles } from '../lib/app'
 import { IS_HERMETIC } from '../lib/mode'
-import {
-  storeDocument,
-  setDocumentFlags,
-  type CallTool,
-} from '@hames-ai/harness-patterns/stash/document-store.server'
-import {
-  registerStashTransport,
-  resetStashTransport,
-} from '@hames-ai/harness-patterns/stash-transport.server'
-import { claimSessionOwnership } from '../../src/lib/stash/ownership.server'
+import type { CallTool } from '@hames-ai/harness-patterns/stash/document-store.server'
 
 /** The subset of Redis the stash uses, with RedisJSON's answer to a bracket-union
  *  path (selector order, absent members skipped). */
@@ -62,18 +53,27 @@ const HIDDEN = 'hidden-roster.md'
 const ARCHIVED = 'archived-roster.md'
 
 let app: AppHandles
+let documents: typeof import('@hames-ai/harness-patterns/stash/document-store.server')
+let stash: typeof import('@hames-ai/harness-patterns/stash-transport.server')
+let ownership: typeof import('../../src/lib/stash/ownership.server')
+let prefs: typeof import('../../src/lib/db/user-prefs.server')
 let uninstallGraph: (() => void) | undefined
 beforeAll(async () => {
   app = await bootApp()
+  documents = await import('@hames-ai/harness-patterns/stash/document-store.server')
+  stash = await import('@hames-ai/harness-patterns/stash-transport.server')
+  ownership = await import('../../src/lib/stash/ownership.server')
+  prefs = await import('../../src/lib/db/user-prefs.server')
   uninstallGraph = await app.installGraphTools()
   await app.wipe()
 })
-beforeEach(() => {
+beforeEach(async () => {
+  await app.wipe()
   app.fakeLlm.reset()
   app.fakeGateway.reset()
 })
 afterAll(async () => {
-  resetStashTransport()
+  stash.resetStashTransport()
   uninstallGraph?.()
   await app.wipe()
 })
@@ -81,28 +81,28 @@ afterAll(async () => {
 /** A session owned by the suite's user, holding two visible and two excluded documents. */
 async function sessionWithDocuments(tag: string): Promise<string> {
   const redis = memoryRedis()
-  registerStashTransport(() => redis)
+  stash.registerStashTransport(() => redis)
   const sessionId = newSessionId(tag)
-  expect(await claimSessionOwnership(sessionId, app.userId)).toBe(true)
+  expect(await ownership.claimSessionOwnership(sessionId, app.userId)).toBe(true)
   const base = { sessionId, ingestStatus: 'indexed' as const }
-  await storeDocument(
+  await documents.storeDocument(
     { ...base, filename: SALES, mimeType: 'text/csv', content: 'region,revenue\nNorth,47\n' },
     redis,
   )
-  await storeDocument(
+  await documents.storeDocument(
     { ...base, filename: NOTES, mimeType: 'text/markdown', content: 'Target count: 50.' },
     redis,
   )
-  const hidden = await storeDocument(
+  const hidden = await documents.storeDocument(
     { ...base, filename: HIDDEN, mimeType: 'text/markdown', content: 'x' },
     redis,
   )
-  const archived = await storeDocument(
+  const archived = await documents.storeDocument(
     { ...base, filename: ARCHIVED, mimeType: 'text/markdown', content: 'x' },
     redis,
   )
-  await setDocumentFlags(sessionId, hidden.id, { hidden: true }, redis)
-  await setDocumentFlags(sessionId, archived.id, { archived: true }, redis)
+  await documents.setDocumentFlags(sessionId, hidden.id, { hidden: true }, redis)
+  await documents.setDocumentFlags(sessionId, archived.id, { archived: true }, redis)
   return sessionId
 }
 
@@ -143,6 +143,7 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
     expect(frames.find((f) => f.event === 'done')?.data.status, JSON.stringify(frames)).not.toBe(
       'error',
     )
+    await settleSummaries(app, sessionId)
     const row = (await app.readRow(sessionId))!
     const { requestState, persistedState } = firstDecision(app, row, 'private')
 
@@ -171,6 +172,7 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
       message: 'How many Project nodes are in the knowledge graph?',
     })
     expect(frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+    await settleSummaries(app, sessionId)
     const row = (await app.readRow(sessionId))!
     const { requestState, persistedState, requests } = firstDecision(app, row, 'jev')
 
@@ -190,41 +192,94 @@ describe.runIf(IS_HERMETIC)('the decide request and the documents', () => {
   // Mutation: a view change that reads an earlier `decision_made` (or its
   // `llmCall`) back into the decide window. The saved blob keeps the names the
   // private turn sent; nothing may carry them onto the other tier.
-  it('a private turn, then an Anthropic turn on the same session: the second turn sends no name', async () => {
-    await app.setTier('self_deployed')
-    await app.goToSleep()
-    const sessionId = await sessionWithDocuments('decide-docs-flip')
-    const first = await app.runTurnOverSse({
-      sessionId,
-      agentId: 'general-next',
-      message: 'How many Project nodes are in the knowledge graph?',
-    })
-    expect(first.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
-    // The blob holds the names the private turn sent (the premise of the pin).
-    const afterFirst = (await app.readRow(sessionId))!
-    expect(afterFirst.serializedContext).toContain(SALES)
-
-    await app.setTier('anthropic', sessionId)
-    app.fakeLlm.reset()
-    app.fakeGateway.reset()
-    const second = await app.runTurnOverSse({
-      sessionId,
-      agentId: 'general-next',
-      message: 'And how many Person nodes?',
-    })
-    expect(second.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
-    const sent = decisions(app.fakeLlm.calls)
-    expect(sent.length).toBeGreaterThan(0)
-    for (const c of sent) {
-      expect(c.endpoint).toBe('jev')
-      for (const name of [NOTES, SALES, HIDDEN, ARCHIVED, 'lantern']) {
-        expect(c.prompt).not.toContain(name)
+  it.each(['retained', 'redacted'] as const)(
+    'a private turn with %s call records, then an Anthropic turn sends no name',
+    async (records) => {
+      await app.setTier('self_deployed')
+      await app.goToSleep()
+      const memoryText = 'I prefer concise replies about synthetic gardens.'
+      if (records === 'redacted') {
+        await prefs.setMemoryEnabledForUser(app.userId, true)
+        const seed = await sessionWithDocuments('decide-docs-memory-seed')
+        await app.runTurn(seed, memoryText, 'general-next')
+        await settleSummaries(app, seed)
+        expect(
+          eventsOfType((await app.readRow(seed))!.serializedContext, 'memory_written'),
+        ).not.toEqual([])
+        app.fakeLlm.reset()
+        app.fakeGateway.reset()
       }
-    }
-    expect(JSON.parse(sent[0].prompt).state).toContain(
-      'Uploaded documents in this conversation: 2 (names not shown)',
-    )
-  })
+      const sessionId = await sessionWithDocuments('decide-docs-flip')
+      const first = await app.runTurnOverSse({
+        sessionId,
+        agentId: 'general-next',
+        message: 'How many Project nodes are in the knowledge graph?',
+      })
+      expect(first.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+      await settleSummaries(app, sessionId)
+      const afterFirst = (await app.readRow(sessionId))!
+      const privateCalls = decisions(app.fakeLlm.calls)
+      expect(privateCalls.length).toBeGreaterThan(0)
+      for (const call of privateCalls) {
+        expect(call.endpoint).toBe('private')
+        const state = JSON.parse(call.prompt).state
+        expect(state).toContain(SALES)
+        expect(state).toContain(NOTES)
+      }
+      const recalled = eventsOfType(afterFirst.serializedContext, 'memory_recalled')
+      expect(recalled).toHaveLength(1)
+      if (records === 'retained') {
+        // This premise must stay strong: actual earlier records hold both names.
+        expect(recalled[0]).toMatchObject({ attached: [], skipped: 'disabled' })
+        expect(afterFirst.serializedContext).toContain(SALES)
+        expect(afterFirst.serializedContext).toContain(NOTES)
+        const { requestState, persistedState } = firstDecision(app, afterFirst, 'private')
+        expect(persistedState).toBe(requestState)
+      } else {
+        expect(recalled[0].attached).not.toEqual([])
+        expect(JSON.parse(privateCalls[0].prompt).state).toContain(memoryText)
+        const events = JSON.parse(afterFirst.serializedContext).events as Array<{
+          type: string
+          data: { key?: string }
+          llmCall?: { variables: unknown; rawInput?: string }
+        }>
+        const nextSteps = events.filter(
+          (e) => e.type === 'decision_made' && e.data.key === 'next_step',
+        )
+        expect(nextSteps).toHaveLength(privateCalls.length)
+        for (const event of nextSteps) {
+          expect(event.llmCall).toBeDefined()
+          expect(event.llmCall!.variables).toEqual({})
+          expect(event.llmCall!.rawInput).toBeUndefined()
+        }
+        expect(afterFirst.serializedContext).not.toContain(SALES)
+        expect(afterFirst.serializedContext).not.toContain(NOTES)
+      }
+
+      await app.setTier('anthropic', sessionId)
+      app.fakeLlm.reset()
+      app.fakeGateway.reset()
+      const second = await app.runTurnOverSse({
+        sessionId,
+        agentId: 'general-next',
+        message: 'And how many Person nodes?',
+      })
+      expect(second.frames.find((f) => f.event === 'done')?.data.status).not.toBe('error')
+      await settleSummaries(app, sessionId)
+      const sent = decisions(app.fakeLlm.calls)
+      expect(sent.length).toBeGreaterThan(0)
+      for (const c of sent) {
+        expect(c.endpoint).toBe('jev')
+        for (const name of [NOTES, SALES, HIDDEN, ARCHIVED, 'lantern']) {
+          expect(c.prompt).not.toContain(name)
+        }
+        expect(c.prompt).not.toContain(memoryText)
+      }
+      expect(JSON.parse(sent[0].prompt).state).toContain(
+        'Uploaded documents in this conversation: 2 (names not shown)',
+      )
+    },
+  )
 
   it("another user's turn on the first user's session id lists nothing", async () => {
     await app.setTier('anthropic')

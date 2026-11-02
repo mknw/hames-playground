@@ -117,7 +117,15 @@ The one piece of real infrastructure is **Postgres**, and it is the throwaway
 suite's own `provisionDatabase()` — same
 `global-setup.ts`, same `DATA_ENCRYPTION_KEY`. Dev rows are never touched. The
 suite runs as the dev-bypass user and deletes its own rows before and after each
-scenario file. Which Postgres server it uses is not a default: `TEST_DATABASE_URL`,
+scenario file. `app.wipe()` first restores memory's default-off preference, then
+erases memories under the repository's owner lock before deleting conversations.
+Memory scenarios explicitly enable it; otherwise a previous file's preference
+would let later turns create and recall memories (#942). Scenario 17 also wipes
+between tests and waits for each tool turn's detached settle/summary before
+resetting the fakes. Its two tier-flip cases explicitly exercise retained private
+call records and quoted-memory redaction, both through the outgoing wire checks.
+
+Which Postgres server it uses is not a default: `TEST_DATABASE_URL`,
 or the compose one once `HAMES_TEST_ALLOW_LOCAL_DB` names your checkout, or it
 refuses to start (see "Which Postgres a test run may touch" in
 [`docs/testing/pyramid.md`](../../docs/testing/pyramid.md)).

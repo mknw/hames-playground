@@ -1,5 +1,6 @@
 /** Slice 15's deterministic recall observation. Synthetic directory rows only;
  * no model, tenant, or network. Misses are measurements, never a pass bar. */
+import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { createContext, createScope } from '@hames-ai/harness-patterns/context.server'
 import { configurePattern } from '@hames-ai/harness-patterns/patterns/chain.server'
 import { createEventView } from '@hames-ai/harness-patterns/patterns/event-view.server'
@@ -7,6 +8,8 @@ import { withEgressGate } from '@hames-ai/harness-patterns/patterns/withEgressGa
 import { callTool } from '@hames-ai/harness-patterns/mcp-client.server'
 import { amendRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import type { EgressRosterSource } from '@hames-ai/harness-patterns'
+
+assertServerOnImport()
 
 export const NAME_RECALL_DIRECTORY = [
   { displayName: 'Mira Cedar', mail: 'mira.cedar@example.test' },

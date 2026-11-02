@@ -40,7 +40,8 @@ run this in the deployment user's shell from the release checkout root. The
 private JSON file contains **only routine IDs**, including every user's enabled
 routine; neither encrypted `input` nor `label` is read. Keep the directory
 and file under `0700`/`0600`, outside the rotated backups tree, and do not print
-or commit them. The lock and exact-set comparison refuse a changed enabled set
+or commit them. Set `TARGET_SHA` to the reviewed full target commit before this
+block. The lock and exact-set comparison refuse a changed enabled set
 before the update; any failure is a stop. Do not restart `app-dev`.
 
 ```bash

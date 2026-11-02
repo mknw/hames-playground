@@ -99,8 +99,12 @@ describe('G13 Neo4j isolation', () => {
     expect(image).toContain('/var/lib/neo4j/plugins/n10s.jar')
     expect(image).toContain('cp /var/lib/neo4j/labs/apoc-*-core.jar')
   })
-  it('backup and restore use the same Neo4j image as compose', () => {
-    expect(read('scripts/backup-preview.sh')).toContain(`NEO4J_IMAGE:-${base.services.neo4j.image}`)
+  it('backup captures the running Neo4j filesystem; restore uses the Compose image', () => {
+    const backup = read('scripts/backup-preview.sh')
+    expect(backup).toContain('docker commit --pause=false "$NEO4J_CONTAINER" "$DUMP_IMAGE"')
+    expect(backup).toContain('docker image inspect "$DUMP_IMAGE_ID"')
+    expect(backup).toContain('--entrypoint sh "$DUMP_IMAGE_ID"')
+    expect(backup).not.toContain(`NEO4J_IMAGE:-${base.services.neo4j.image}`)
     const restore = read('docs/PREVIEW.md').split('# 2. Neo4j')[1].split('# 3. Redis')[0]
     expect(restore).toContain(`--entrypoint sh ${base.services.neo4j.image}`)
     expect(restore).toContain(`NEO4J_AUTH=neo4j/restorecheck ${base.services.neo4j.image}`)

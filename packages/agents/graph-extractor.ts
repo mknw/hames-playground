@@ -5,6 +5,7 @@
  * Maps pattern IDs to graph sources (neo4j) for UI tab filtering.
  */
 
+import { unspotlight } from '@hames-ai/harness-patterns/guard'
 import type { GraphElement } from './types'
 
 // ============================================================================
@@ -64,6 +65,25 @@ function isEnrichedNeo4jResult(value: unknown): value is EnrichedNeo4jResult {
 /** Schema-info bag from `get_neo4j_schema` (APOC shape) — never a graph node. */
 function looksLikeSchemaInfo(obj: Record<string, unknown>): boolean {
   return (obj.type === 'node' || obj.type === 'relationship') && 'count' in obj
+}
+
+/**
+ * The result with every string read through the injection guard's fence.
+ *
+ * A route that declares the `neo4j` namespace in its guard fences EVERY string
+ * leaf of a graph read (`spotlight: 'always'`), item id included, so a fenced
+ * name is neither readable as a label nor equal to the same name from another
+ * call. The fence is for the model; this function feeds a human-facing canvas,
+ * so it reads the body. Content the guard neutralized stays neutralized: only
+ * the fence comes off.
+ */
+function unfence(value: unknown): unknown {
+  if (typeof value === 'string') return unspotlight(value)
+  if (Array.isArray(value)) return value.map(unfence)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unfence(v)]))
+  }
+  return value
 }
 
 // ============================================================================
@@ -420,7 +440,7 @@ export function extractGraphElements(events: unknown[]): GraphElement[] {
 
     // Parse based on tool type
     if (isNeo4jGraphResult(toolName, result)) {
-      elements.push(...parseNeo4jResult(result, source))
+      elements.push(...parseNeo4jResult(unfence(result), source))
     }
   }
 

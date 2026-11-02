@@ -722,6 +722,14 @@ export const FAKE_ANSWER_MARK = 'E2E-FAKE-ANSWER'
 /** The tool call the fake controller makes on turn 0, before returning. */
 export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
 
+/** A graph question answered by NAME, the scalar shape the shipped few-shots
+ * teach. The fake gateway answers its query with synthetic rows. */
+export const FAKE_GRAPH_LOOKUP_QUESTION = 'What does the knowledge graph say about Redis?'
+export const FAKE_GRAPH_LOOKUP_ARGS = JSON.stringify({
+  query: 'MATCH (c:Concept {name: $name}) RETURN c.name AS name, c.description AS description',
+  params: { name: 'Redis' },
+})
+
 /**
  * The reply body for one function — a JSON envelope for the class-returning
  * functions, bare text for the four that return `string`.
@@ -780,6 +788,15 @@ function replyForBase(fn: BamlFunctionName, prompt: string): string {
           tool_name: 'Return',
           tool_args: `${FAKE_ANSWER_MARK}: the graph reports 42 nodes.`,
           is_final: true,
+        })
+      }
+      if (prompt.includes(FAKE_GRAPH_LOOKUP_QUESTION)) {
+        return JSON.stringify({
+          reasoning: 'Look the concept up by name.',
+          tool_name: 'read_neo4j_cypher',
+          tool_args: FAKE_GRAPH_LOOKUP_ARGS,
+          status: 'Querying the graph',
+          is_final: false,
         })
       }
       return JSON.stringify({

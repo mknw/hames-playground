@@ -63,8 +63,9 @@ export interface FakeGateway {
  *
  * Fixed, with no per-scenario override. There was a `setResult()` and nothing
  * called it: every scenario here asserts on conversation FLOW, and the one that
- * needs a different reply needs a failing one, which is `setError()`. A
- * per-tool result override belongs with the first assertion that reads it.
+ * needs a different reply needs a failing one, which is `setError()`. The one
+ * exception is keyed on the QUERY, not set by a scenario: see
+ * {@link graphReadResult}.
  */
 const DEFAULT_RESULTS: Record<string, string> = {
   get_neo4j_schema: JSON.stringify([{ label: 'Node', properties: { name: 'STRING' } }]),
@@ -72,6 +73,29 @@ const DEFAULT_RESULTS: Record<string, string> = {
   write_neo4j_cypher: JSON.stringify({ nodes_created: 0 }),
   search: JSON.stringify([{ title: 'E2E result', url: 'https://example.invalid/e2e' }]),
   fetch: 'E2E fetched page body.',
+}
+
+/** Synthetic rows for the graph-lookup question (`FAKE_GRAPH_LOOKUP_ARGS`):
+ * the scalar `c.name AS name` shape the shipped few-shots teach. */
+export const FAKE_GRAPH_LOOKUP_ROWS = [{ name: 'Redis', description: 'An in-memory data store.' }]
+
+/** Synthetic 1-hop neighbourhood, in the MCP server's row shape: nodes as
+ * property maps, a relationship as `[start, TYPE, end]`. */
+export const FAKE_GRAPH_NEIGHBORHOOD_ROWS = [
+  {
+    n: { name: 'Redis' },
+    r: [{ name: 'Redis' }, 'HAS_CONCEPT', { name: 'Streams' }],
+    m: { name: 'Streams' },
+  },
+]
+
+/** A graph read answers by its query: the lookup and the host enricher's
+ * neighbourhood read get synthetic graph rows, every other read the count. */
+function graphReadResult(args: Record<string, unknown>): string | undefined {
+  const query = typeof args.query === 'string' ? args.query : ''
+  if (query.includes('WHERE n.name IN $names')) return JSON.stringify(FAKE_GRAPH_NEIGHBORHOOD_ROWS)
+  if (query.includes('{name: $name}')) return JSON.stringify(FAKE_GRAPH_LOOKUP_ROWS)
+  return undefined
 }
 
 const TOOLS = [
@@ -159,7 +183,10 @@ export async function startFakeGateway(port = 0): Promise<FakeGateway> {
             reply({ content: [{ type: 'text', text: failure }], isError: true })
             return
           }
-          const text = DEFAULT_RESULTS[name] ?? JSON.stringify({ ok: true })
+          const text =
+            (name === 'read_neo4j_cypher' ? graphReadResult(args) : undefined) ??
+            DEFAULT_RESULTS[name] ??
+            JSON.stringify({ ok: true })
           reply({ content: [{ type: 'text', text }] })
           return
         }

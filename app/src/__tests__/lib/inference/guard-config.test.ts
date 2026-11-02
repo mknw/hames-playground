@@ -38,17 +38,15 @@ afterEach(() => {
 })
 
 describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
-  // The pseudonymiser's default is ON (boundary guards slice 5, owner ruling
-  // (c) of 2026-10-28): retirement is flipping it, after a fix for the egress
-  // gate's measured gap has been measured. MUTATION: `PSEUDONYMISE_DEFAULT =
-  // false`: red here, and in guard-switches.test.ts's composition chain.
+  // Slice 15: retirement defaults off. MUTATION: default true, or warn on
+  // default off; the config and composition pins must turn red.
   it('unset, every value is the declared default, per tier', () => {
     expect(guardConfig()).toEqual({
       screenMode: { default: 'gated', anthropic: 'always' },
       egressTools: undefined,
       egressNameMatch: undefined,
       egressDecide: undefined,
-      pseudonymise: true,
+      pseudonymise: false,
       // #844: today's numbers, as literals rather than the constants they come
       // from, so moving a constant is a red here and not a silent new default.
       gateThreshold: 0.15,
@@ -164,7 +162,6 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   it.each([
     ['GUARD_SCREEN_ANTHROPIC', 'off'],
     ['GUARD_EGRESS_DECIDE', 'off'],
-    ['GUARD_PSEUDONYMISE', 'off'],
   ])(
     '%s=%j logs its own boot warning, naming the variable and what it switches off',
     (variable, value) => {
@@ -181,9 +178,15 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
     vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
     assertGuardsConfigured()
-    expect(warns).toHaveLength(4)
+    expect(warns).toHaveLength(3)
     assertGuardsConfigured()
-    expect(warns).toHaveLength(8)
+    expect(warns).toHaveLength(6)
+  })
+
+  it.each([undefined, 'off', 'on'])('GUARD_PSEUDONYMISE=%j never warns at boot', (value) => {
+    vi.stubEnv('GUARD_PSEUDONYMISE', value)
+    assertGuardsConfigured()
+    expect(warns).toEqual([])
   })
 
   it('valid values never refuse boot', () => {

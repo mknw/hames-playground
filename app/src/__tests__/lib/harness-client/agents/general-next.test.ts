@@ -1489,19 +1489,25 @@ describe('general-next composition', () => {
     },
   )
 
-  it('G14: only info declares the filter; a private run calls the supplied host', async () => {
-    const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)
-    const patterns = await agent.createPatterns('synthetic-session', {
-      ...deps,
-      guards: { pseudonymiseForWeb },
-    })
-    const routes = routesOf(patterns)
-    expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([false, true, false, false])
-    await withRunFrame({ inference: { tier: 'self_deployed' } }, () =>
-      harness(...patterns)('synthetic task'),
-    )
-    expect(pseudonymiseForWeb).toHaveBeenCalledTimes(1)
-  })
+  it.each(['anthropic', 'self_deployed'])(
+    'G14: only info declares the filter; a %s run calls the supplied host',
+    async (tier) => {
+      const pseudonymiseForWeb = vi.fn(deps.guards!.pseudonymiseForWeb!)
+      const patterns = await agent.createPatterns('synthetic-session', {
+        ...deps,
+        guards: { pseudonymiseForWeb },
+      })
+      const routes = routesOf(patterns)
+      expect(routes.map((p) => harnessPseudonymisesInputs([p]))).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ])
+      await withRunFrame({ inference: { tier } }, () => harness(...patterns)('synthetic task'))
+      expect(pseudonymiseForWeb).toHaveBeenCalledTimes(1)
+    },
+  )
 
   // Boundary guards slice 5: K5 is composed exactly when the host supplies the
   // filter. With none — no `guards` bag (this replaces G14 D3's withhold for
@@ -2823,7 +2829,7 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
   })
 
   // GUARD_PSEUDONYMISE=off composes the info route WITHOUT the wrapper, on the
-  // tier where it would otherwise run: the controller sees directory names as
+  // same way on both tiers: the controller sees directory names as
   // they are. MUTATION: restore the unconditional wrapper (or pass a null
   // filter into it): the names here are rewritten to PERSON_n and this goes
   // red — or the route withholds its inherited content outright.
@@ -2858,8 +2864,7 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
   // it, on both tiers. MUTATION: compose withPseudonymisedInputs around the
   // info route whatever the bag says — with no filter the self-deployed
   // handoff is withheld, with the host's filter it carries PERSON_n instead of
-  // the name: red either way on that tier. The Anthropic case stays green
-  // under both, as it should: K5 never runs there.
+  // the name: red either way on both tiers.
   it.each(['anthropic', 'self_deployed'])(
     'GUARD_PSEUDONYMISE=off: the info controller reads a directory name as written, and the egress gate judges the call that carries it (%s)',
     async (tier) => {

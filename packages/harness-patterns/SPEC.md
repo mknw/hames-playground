@@ -1389,12 +1389,8 @@ Wrap the web route's `withReferences` with this config-transparent input
 boundary (K5). What LEAVES is not this wrapper's: every outgoing call is judged
 by [`withEgressGate`](#withegressgateconfigpattern-boundary-guards-slice-4), which
 took this wrapper's outgoing check (K6) and its refusal of web calls (boundary
-guards, slice 4). It applies unless the run's `effectiveTier()` is exactly `'anthropic'`:
-the answer the tier module registered into the run frame, so an absent or empty
-tier is whatever the host's policy defaults to (the self-deployed tier on the
-reference host, which is protected) and a present but unrecognised tier is the
-self-deployed tier, refused when unreachable. With no tier module registered, core reads the
-raw `inference.tier`. Core imports no host
+guards, slice 4). When explicitly composed, it applies on every tier, including
+Anthropic; there is no tier skip (boundary guards slice 15). Core imports no host
 privacy code. The host supplies the optional `pseudonymise: PseudonymiseForWeb`:
 `(payloads, latestUserMessage) => Promise<WebPseudonymisation>`, returning
 `apply<T>(value: T): T`, `redact<T>(value: T): T` and `checkLiterals(value): string | void`.
@@ -1421,8 +1417,7 @@ child's earlier-conversation block can name a person only a hidden route read),
 plus a code-built status/stats-only handoff. This is
 roster input, never extra sibling visibility: the loop filters the synthetic
 context before invoking the wrapper. The wrapper deletes this key in `finally`
-before calling anything inward, including on explicit-Anthropic pass-through,
-failure and a throw. No adapter renders it.
+before calling anything inward, including on failure and a throw. No adapter renders it.
 
 Under `chain()`, returned rewritten data is forwarded to subsequent steps just
 like any other child result; it is not confined to the wrapped child. Under
@@ -2355,8 +2350,9 @@ the removed `general` agent and is the default agent. Its `orchestrator` chooses
 Redis retriever, pattern id `retriever`) and `think` (the planner). The web
 route wraps `withReferences` in `withPseudonymisedInputs` when the host supplies
 the filter (`AgentGuards.pseudonymiseForWeb`), and composes no wrapper without
-one (boundary guards slice 5): the reference app supplies it unless
-`GUARD_PSEUDONYMISE=off`, the switch whose default flips at K5's retirement.
+one (boundary guards slice 15): the reference app defaults to no filter.
+`GUARD_PSEUDONYMISE=on` opts in on both tiers; `off` and unset omit it.
+Neither setting warns at boot; unknown values still refuse boot.
 The whole loop is wrapped in `withEgressGate` (search-only tools default to
 `{ nameMatch: 'evidence', decide: 'on' }`, N = 0; fetch addresses from `web`, `context7` and `graph` results; local:
 `neo4j`, `graph`, and the office box's

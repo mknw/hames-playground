@@ -23,8 +23,8 @@ install it) Microsoft Graph.
 Scenario 12 runs the registered `general-next` agent against W4's runnable
 graph-count case: two systemone choices, the actual guarded info route, one
 synthesis, SSE and persistence. It also pins the visible error when the private
-decisions shim is unconfigured. This scenario uses the explicit Anthropic tier
-for its successful leg; S7's private input/egress boundary is layer-1 evidence.
+decisions shim is unconfigured. The graph-count case runs on both tiers with default-off input masking;
+explicit input masking and its failure paths remain layer-1 evidence.
 It exercises no P4 file path and boots no sandbox. The test boot mirrors the
 namespace registration normally performed by middleware, without importing the
 production tool transport. The inference fake selects this knowledge route once

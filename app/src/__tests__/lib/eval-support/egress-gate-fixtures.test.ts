@@ -8,6 +8,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
+vi.mock('../../../lib/org-graph/roster-source.server', () => ({ loadDirectoryRoster: vi.fn() }))
+
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
 import { resolveRules, sanitizeText } from '@hames-ai/harness-patterns/injection-guard'
@@ -158,3 +160,43 @@ describe('the egress-gate fixture rows', () => {
     expect(userBlock).toContain("> [the rest of the user's message is not shown]")
   })
 })
+
+// Slice 15: these are measurements, not assertions that obfuscated names are
+// caught. Mutations: remove either fixture or change refuse/off to evidence/on.
+import {
+  NAME_RECALL_DIRECTORY,
+  NAME_RECALL_DETECTORS,
+  NAME_RECALL_FIXTURES,
+  measureNameListRecall,
+  syntheticNameRecallRoster,
+} from '../../../lib/eval-support/egress-name-recall.server'
+import { createEgressRoster } from '../../../lib/harness-client/web-pseudonymiser.server'
+import { loadDirectoryRoster } from '../../../lib/org-graph/roster-source.server'
+
+it.each(['anthropic', 'self_deployed'])(
+  'records name-list recall without live calls (%s)',
+  async (tier) => {
+    expect(NAME_RECALL_DETECTORS).toEqual({ nameMatch: 'refuse', decide: 'off' })
+    expect(NAME_RECALL_FIXTURES.map((r) => r.id)).toEqual([
+      'literal-control',
+      'homoglyph',
+      'letter-by-letter',
+    ])
+    vi.mocked(loadDirectoryRoster).mockResolvedValue(NAME_RECALL_DIRECTORY)
+    const observations = await withRunFrame({ inference: { tier } }, async () => {
+      const synthetic = await measureNameListRecall(
+        syntheticNameRecallRoster(createEgressRoster({ directory: 'none' })),
+      )
+      const directory = await measureNameListRecall(createEgressRoster())
+      expect(synthetic).toEqual(directory)
+      return directory
+    })
+    expect(loadDirectoryRoster).toHaveBeenCalled()
+    // The control proves that names actually populated the roster. No recall
+    // expectation is placed on either evasion row: those values are reported.
+    expect(observations[0].value).toBe('1/1; dispatched=0; decide calls=0')
+    expect(observations).toHaveLength(3)
+    for (const row of observations) expect(row.value).toMatch(/decide calls=0$/)
+    process.stdout.write(`${JSON.stringify({ tier, nameListRecall: observations })}\n`)
+  },
+)

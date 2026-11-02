@@ -157,6 +157,10 @@ it('wires the guards’ settings into the driver’s bag, one env read (#845 rev
   expect(driver).toMatch(
     /maxOutgoingRetriesPostTripwire: guardNumbers\.maxOutgoingRetriesPostTripwire/,
   )
+  // Slice 15: the eval must follow the host's masking switch, including unset.
+  expect(driver).toMatch(
+    /pseudonymiseForWeb: guardNumbers\.pseudonymise\s*\? createWebPseudonymiser\(\{ directory: 'none' \}\)\s*: undefined/,
+  )
   // The bag has to BE the deps slot it fills, not a rebuilt subset of it.
   // MUTATION: rebuild the deps literal's `guards` slot without the three
   // numbers (`guards: { pseudonymiseForWeb: guards.pseudonymiseForWeb,
@@ -464,5 +468,14 @@ describe('the small box charges through the served-family seam (#882)', () => {
         if (!openRouterLarge) expect(boxes[0].eurPerHour).toBe(4)
       }
     },
+  )
+})
+
+it('the egress scenario records the slice 15 name-list observations', () => {
+  expect(read('evals/scenarios/egress-gate.ts')).toContain(
+    "syntheticNameRecallRoster(createEgressRoster({ directory: 'none' }))",
+  )
+  expect(read('evals/scenarios/egress-gate.ts')).toContain(
+    'const observations: Observation[] = await measureNameListRecall(',
   )
 })

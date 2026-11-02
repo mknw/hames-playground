@@ -17,7 +17,7 @@
  * `GUARD_PSEUDONYMISE`'s default to `off`, and the switch stays) and sets τe:
  * the recall and false-refusal figures in this scenario's report. Each
  * fixture's binary is therefore a check — a miss names itself — with two
- * deliberate exceptions:
+ * deliberate exceptions (plus the separate deterministic name-list observations):
  *
  *  - The split-sequence fixture is graded on the SEQUENCE (how many fragments
  *    of one copied sentence go out before the first refusal) and reported as an
@@ -42,6 +42,11 @@
  * the same substitution the offline test makes. The gate rows run through the
  * REAL `withEgressGate` with the real decide seam and that same stub, so step
  * 1 and the whole entry behave as production does.
+ *
+ * Slice 15 also records homoglyph and letter-by-letter name-list recall under
+ * refuse/off using the real matcher and gate over a synthetic directory. This
+ * part makes no live calls and has no recall pass bar; its offline pin records
+ * the same observations and checks equivalence with the directory-loading path.
  *
  * Live runs need the owner's spend go; this scenario is built and read
  * hermetically and NEVER wakes a box on its own.
@@ -72,6 +77,11 @@ import {
   fixtureState,
   type EgressGateFixture,
 } from '../../src/lib/eval-support/egress-gate-fixtures.server'
+import { createEgressRoster } from '../../src/lib/harness-client/web-pseudonymiser.server'
+import {
+  measureNameListRecall,
+  syntheticNameRecallRoster,
+} from '../../src/lib/eval-support/egress-name-recall.server'
 import { check, type Check, type Observation, type Scenario } from '../harness'
 
 /** The gate records exactly these three, as Decide returned them. */
@@ -117,7 +127,9 @@ export const egressGateScenario: Scenario = {
   what: 'the guard.egress choice question on its 41 fixture rows, per tier: the read that gates the K5 retirement (the default flip) and sets τe (boundary guards slice 7)',
   run: async () => {
     const checks: Check[] = []
-    const observations: Observation[] = []
+    const observations: Observation[] = await measureNameListRecall(
+      syntheticNameRecallRoster(createEgressRoster({ directory: 'none' })),
+    )
     const decide = createDecideAdapter()
     const servedClients = new Set<string>()
 

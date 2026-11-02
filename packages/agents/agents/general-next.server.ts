@@ -293,15 +293,10 @@ async function createPatterns(
       },
     ),
   )
-  // K5 (the web route's input filter) is composed exactly when the host
-  // supplies the filter: the app's default bag does (GUARD_PSEUDONYMISE unset
-  // or `on`). Without one — GUARD_PSEUDONYMISE=off, or a bag with no `guards`
-  // at all — the route is composed WITHOUT the wrapper, never with a null
-  // filter that would withhold every word of inherited content off the
-  // Anthropic tier (boundary guards slice 5, replacing G14 D3's withhold for
-  // the no-`guards` shape). The egress gate judges what leaves either way.
-  // Retirement is flipping the app's default, after the egress gate's
-  // measured gap has a measured fix.
+  // K5 is composed only when the host supplies a filter (the app's explicit
+  // GUARD_PSEUDONYMISE=on). Default/off omits the wrapper; an absent filter
+  // passed INTO the wrapper would withhold earlier content on either tier.
+  // The egress gate judges what leaves either way (boundary guards slice 15).
   const pseudonymise = deps.guards?.pseudonymiseForWeb
   const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
   const info = withInjectionGuard(infoGuard)(infoRoute)

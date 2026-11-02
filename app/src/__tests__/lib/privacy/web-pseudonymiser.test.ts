@@ -296,13 +296,15 @@ describe('web input copies (G14)', () => {
     expect(observed).not.toContain('Mira Cedar')
   })
 
-  it('explicit Anthropic keeps the existing input behaviour, but consumes the roster key (E2)', async () => {
+  it('explicit Anthropic rewrites inputs and consumes the roster key (slice 15)', async () => {
     const host = vi.fn(createWebPseudonymiser())
     const { seen } = await referencesRun(host, 'anthropic')
-    expect(host).not.toHaveBeenCalled()
-    expect(JSON.stringify(seen[0].priorResults)).toContain('Mira Cedar')
-    expect(JSON.stringify(seen[1].turns)).toContain('Lena Birch')
-    expect(seen[0].planContext).toContain('Otto Willow')
+    expect(host).toHaveBeenCalledOnce()
+    expect(JSON.stringify(seen[0].priorResults)).not.toContain('Mira Cedar')
+    expect(JSON.stringify(seen[0].priorResults)).toContain('PERSON_1')
+    expect(JSON.stringify(seen[1].turns)).not.toContain('Lena Birch')
+    expect(JSON.stringify(seen[1].turns)).toContain('PERSON_2_EMAIL')
+    expect(seen[0].planContext).not.toContain('Otto Willow')
   })
 })
 
@@ -1232,16 +1234,20 @@ describe('withholding and outgoing checks', () => {
   // #795: the warning names why, from the host's RosterUnavailable through
   // core's wrapper (mutation: throw a plain Error for the directory → its reason
   // reads filter-failed).
-  it.each([
-    ['missing', 'not-configured'],
-    ['roster', 'filter-failed'],
-    ['table', 'filter-failed'],
-    ['directory', 'directory-unreadable'],
-    ['empty', 'directory-empty'],
-    ['apply', 'filter-failed'],
-  ] as const)(
-    'fails closed on %s (reason %s) without a turn error, and leaves the call to the egress gate',
-    async (failure, reason) => {
+  it.each(
+    [
+      ['missing', 'not-configured'],
+      ['roster', 'filter-failed'],
+      ['table', 'filter-failed'],
+      ['directory', 'directory-unreadable'],
+      ['empty', 'directory-empty'],
+      ['apply', 'filter-failed'],
+    ].flatMap(([failure, reason]) =>
+      ['anthropic', 'self_deployed'].map((tier) => [failure, reason, tier]),
+    ),
+  )(
+    'fails closed on %s (reason %s, tier %s) without a turn error, and leaves the call to the egress gate',
+    async (failure, reason, tier) => {
       if (failure === 'roster')
         vi.spyOn(roster, 'extractRoster').mockImplementation(() => {
           throw new Error('sensitive roster failure')
@@ -1258,7 +1264,7 @@ describe('withholding and outgoing checks', () => {
           throw new Error('sensitive rewrite error')
         })
       const filter = failure === 'missing' ? undefined : createWebPseudonymiser()
-      const { seen, scope } = await referencesRun(filter)
+      const { seen, scope } = await referencesRun(filter, tier)
       expect(seen[0].priorResults).toBeUndefined()
       expect(seen[0].planContext).toContain('Steps so far:')
       expect(seen[0].planContext).not.toMatch(/PLAN|Otto|useful body|Latest results/)
@@ -1279,7 +1285,7 @@ describe('withholding and outgoing checks', () => {
         return s
       })
       const wrapped = withPseudonymisedInputs({ pseudonymise: filter })(inner)
-      await withRunFrame(frame('self_deployed'), () =>
+      await withRunFrame(frame(tier), () =>
         wrapped.fn(
           createScope('probe', { [WEB_ROSTER_INPUT]: { payloads: [], steps: '' } }),
           createEventView(createContext('task')),

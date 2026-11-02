@@ -5,7 +5,6 @@
  *  outgoing check and its refusal of web calls. */
 import { assertServerOnImport } from '../assert.server'
 import { trackEvent } from '../context.server'
-import { currentRunFrame, effectiveTier } from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
 import type {
   ConfiguredPattern,
@@ -95,14 +94,8 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
       let rewritten: UnifiedContext | undefined
       let filter: WebPseudonymisation | undefined
       let reason: WebPrivacyUnavailableReason = 'not-configured'
-      // The ONE tier rule: the registered tier module's answer (an absent or
-      // empty frame tier is the host's default, a present but unrecognised one is
-      // the self-deployed tier, refused when unreachable; routing reads the same); the
-      // raw slot only when core runs with no tier interpreter registered.
-      const explicitAnthropic =
-        (effectiveTier() ?? currentRunFrame()?.inference?.tier) === 'anthropic'
       try {
-        if (!explicitAnthropic && config.pseudonymise) {
+        if (config.pseudonymise) {
           filter = await config.pseudonymise(
             [
               ...ctx.events.filter((e) => e.type === 'tool_result').map((e) => e.data),
@@ -145,11 +138,10 @@ export function withPseudonymisedInputs(config: { pseudonymise?: PseudonymiseFor
             ? error.reason
             : 'filter-failed'
       } finally {
-        // Every path, including explicit Anthropic and a throwing host. Never
+        // Every path, including a throwing host. Never
         // move this after inner dispatch: the payloads may be excluded siblings.
         delete scope.data[WEB_ROSTER_INPUT]
       }
-      if (explicitAnthropic) return pattern.fn(scope, view)
 
       if (!filter || !rewritten) {
         // What the child would have read, counted before it is replaced: the

@@ -22,12 +22,16 @@ Compose inheritance and merge tags are still resolved by Compose; PyYAML keeps
 service env-file declarations from being discarded during the intermediate
 render. Keep the host's protected runtime env files in place.
 
-The gate supports scalar anchors/aliases and the Compose `!override` / `!reset`
-tags. Across the target tree, it refuses every `<<` merge key, mapping/sequence
-anchor or alias, other custom tag, and reserved gate extension before hashing
+The gate supports scalar anchors/aliases (including repeated scalar anchor
+names, where later aliases use the latest value) and the Compose `!override` /
+`!reset` tags. Across the target tree, it refuses every `<<` merge key, mapping/sequence
+anchor or alias, other custom tag, `!!binary` tag, and reserved gate extension before hashing
 or rewriting configuration. The error identifies the source file and line;
 rewrite unsupported input before retrying. Compose still resolves supported
-file overlays, `include` and `extends`.
+file overlays, `include` and `extends`. YAML composition errors, including
+unresolved aliases, refuse with a file and line instead of skipping the document.
+Syntactically invalid non-YAML archive members remain ignored; Compose must
+still accept every file it loads.
 
 ## 1. Stop writers and take local dumps before changing the checkout
 

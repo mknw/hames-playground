@@ -171,7 +171,7 @@ class ComposeSubsetReview(unittest.TestCase):
         with tarfile.open(fileobj=output, mode='w') as archive:
             for filename, text in {'docker-compose.yaml': 'services: {app: {env_file: ./runtime.env}}',
                                    name: body}.items():
-                raw = text.encode()
+                raw = text.encode() if isinstance(text, str) else text
                 member = tarfile.TarInfo(filename); member.size = len(raw)
                 archive.addfile(member, io.BytesIO(raw))
         with tempfile.TemporaryDirectory() as directory:
@@ -240,6 +240,58 @@ class ComposeSubsetReview(unittest.TestCase):
                                  '      env_file: ./runtime.env\n' + collision + '<<: ' + merge + '\n',
                                  1, 'mapping/sequence anchor or alias')
 
+    def test_earlier_composer_error_cannot_hide_later_unsupported_input(self):
+        # Compose accepts reused scalar anchor names; PyYAML's composer stops
+        # at the second definition, before any of these forbidden constructs.
+        prefix = 'x-first: &same first\nx-second: &same second\n'
+        for suffix, line, reason in (
+            ('<<: {}\n', 3, 'merge key <<'),
+            ('x-extra: {"<<": {}}\n', 3, 'merge key <<'),
+            ('x-key: &key <<\nx-extra: {*key: {}}\n', 4, 'merge key <<'),
+            ('x-extra: &map {}\nx-copy: *map\n', 3, 'mapping/sequence anchor or alias'),
+            ('x-extra: &seq []\nx-copy: *seq\n', 3, 'mapping/sequence anchor or alias'),
+            ('x-extra: !unknown fixture\n', 3, 'custom tag !unknown'),
+            ('x-extra: {x-upgrade-gate-env-file: []}\n', 3, 'reserved upgrade gate extension'),
+        ):
+            with self.subTest(suffix=suffix):
+                self.refuses(prefix + suffix, line, reason)
+
+    def test_binary_tag_refuses_before_hashing(self):
+        for body in (
+            'x-extra: { !!binary eC11cGdyYWRlLWdhdGUtZW52LWZpbGU=: []}\n',
+            'x-extra: !!binary eC11cGdyYWRlLWdhdGUtZW52LWZpbGU=\n',
+            'x-extra: { !!binary PDw=: {}}\n',
+        ):
+            with self.subTest(body=body):
+                self.refuses(body, 1, 'binary tag')
+
+    def test_utf16_yaml_cannot_hide_reserved_key(self):
+        for encoding in ('utf-16-le', 'utf-16-be'):
+            with self.subTest(encoding=encoding):
+                body = '\ufeffx-extra: {x-upgrade-gate-env-file: []}\n'.encode(encoding)
+                self.refuses(body, 1, 'reserved upgrade gate extension')
+
+    def test_unresolved_alias_cannot_hide_later_input(self):
+        self.refuses('x-extra: *missing\nx-later: {"<<": {}}\n', 1,
+                     'unresolved or duplicate YAML anchor')
+
+    def test_repeated_scalar_aliases_keep_binding_and_declaration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'arbitrary-name'
+            path.write_text('x-first: &same first.env\nx-before: *same\n'
+                            'x-second: &same second.env\nx-after: *same\n'
+                            'services: {app: {env_file: *same}}\n')
+            try:
+                gate.validate_target_tree(root)
+                gate.preserve_env_files(root)
+                document = gate.yaml.safe_load(path.read_text())
+            except (SystemExit, gate.yaml.YAMLError) as error:
+                self.fail(f'Supported repeated scalar declarations were not preserved: {error}')
+            self.assertEqual(document['x-before'], 'first.env')
+            self.assertEqual(document['x-after'], 'second.env')
+            self.assertEqual(document['services']['app'], {
+                'x-upgrade-gate-env-file': [{'path': 'second.env', 'x-upgrade-origin': '.'}]})
 
     def test_real_compose_inventory_is_supported(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -260,6 +312,96 @@ class ComposeSubsetReview(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('RV918_COMPOSE_CONFIG') == '1', 'opt-in real Compose parser; no daemon mutations')
 class ComposeReview(unittest.TestCase):
+    def test_compose_accepted_prefix_cannot_bypass_subset_refusal(self):
+        # Both real parsers accept these entire documents, including the reused
+        # scalar anchor names. Test a selected overlay with no services in it.
+        prefix = 'x-first: &same first\nx-second: &same second\n'
+        for suffix in ('<<: {}\n', 'x-extra: &map {}\nx-copy: *map\n',
+                       'x-extra: &seq []\nx-copy: *seq\n',
+                       'x-extra: !unknown fixture\n',
+                       'x-extra: {x-upgrade-gate-env-file: []}\n'):
+            with self.subTest(suffix=suffix):
+                root, target, command, run = self.fixture(False, False)
+                target['docker-compose.prod.yaml'] = prefix + suffix
+                (root / 'docker-compose.prod.yaml').write_text(prefix + suffix)
+                self.assertIn('app', gate.configuration()[2])
+                with patch.object(gate, 'command', side_effect=command), \
+                     patch.object(gate.subprocess, 'run', side_effect=run):
+                    with self.assertRaisesRegex(SystemExit, 'unsupported Compose YAML construct'):
+                        gate.target_prediction(SHA)
+
+    def test_encoded_marker_cannot_forge_protected_hash(self):
+        root, target, command, run = self.fixture(False, False)
+        (root / 'old.env').write_text('VALUE=fixture-only\n')
+        baseline = target['docker-compose.yaml'].replace(
+            '  caddy:\n', '  caddy:\n    env_file: ./old.env\n')
+        (root / 'docker-compose.yaml').write_text(baseline)
+        current = gate.configuration()[2]
+        target['docker-compose.yaml'] = baseline.replace(
+            '    env_file: ./old.env',
+            '    !!binary eC11cGdyYWRlLWdhdGUtZW52LWZpbGU=: [{path: ./old.env, x-upgrade-origin: .}]')
+        (root / 'docker-compose.yaml').write_text(target['docker-compose.yaml'])
+        self.assertNotEqual(current['caddy'], gate.configuration()[2]['caddy'])
+        (root / 'docker-compose.yaml').write_text(baseline)
+        with patch.object(gate, 'command', side_effect=command), \
+             patch.object(gate.subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(SystemExit, 'binary tag'):
+                gate.target_prediction(SHA)
+
+    def test_repeated_scalar_anchors_preserve_declarations(self):
+        root, target, command, run = self.fixture(True, False)
+        for name in ('first.env', 'second.env'):
+            (root / name).write_text('VALUE=fixture-only\n')
+        target['docker-compose.yaml'] = (
+            'x-first: &runtime ./first.env\nx-before: *runtime\n'
+            'x-second: &runtime ./second.env\nx-after: *runtime\n'
+            + target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: *runtime\n'))
+        for name, body in target.items():
+            (root / name).write_text(body)
+        self.prediction_equals_checkout(root, target, command, run)
+
+    def test_utf16_compose_declarations_and_refusal(self):
+        for encoding in ('utf-16-le', 'utf-16-be'):
+            with self.subTest(encoding=encoding):
+                root, target, command, run = self.fixture(True, False)
+                (root / 'runtime.env').write_text('VALUE=fixture-only\n')
+                plain = target['docker-compose.yaml'].replace('  app:\n', '  app:\n    env_file: ./runtime.env\n')
+                target['docker-compose.yaml'] = ('\ufeff' + plain).encode(encoding)
+                (root / 'docker-compose.yaml').write_bytes(target['docker-compose.yaml'])
+                actual = gate.configuration()[2]
+                with patch.object(gate, 'command', side_effect=command), \
+                     patch.object(gate.subprocess, 'run', side_effect=run):
+                    try:
+                        prediction = gate.target_prediction(SHA)
+                    except SystemExit as error:
+                        self.fail(f'Compose-accepted encoding was not preserved: {error}')
+                self.assertEqual(prediction['target_hashes'], actual)
+                target['docker-compose.prod.yaml'] = ('\ufeffx-extra: {x-upgrade-gate-env-file: []}\n').encode(encoding)
+                (root / 'docker-compose.prod.yaml').write_bytes(target['docker-compose.prod.yaml'])
+                self.assertIn('app', gate.configuration()[2])
+                with patch.object(gate, 'command', side_effect=command), \
+                     patch.object(gate.subprocess, 'run', side_effect=run):
+                    with self.assertRaisesRegex(SystemExit, 'reserved upgrade gate extension'):
+                        gate.target_prediction(SHA)
+
+    def test_malformed_archive_members_are_not_compose_inputs(self):
+        # Reader/scanner/parser failures are distinct from ComposerError: these
+        # non-YAML members are also refused by each real Compose parser.
+        for body, error in (
+            ('ordinary text\nx-later: {"<<": {}}\n', gate.yaml.scanner.ScannerError),
+            ('[text] trailing\nx-later: {"<<": {}}\n', gate.yaml.parser.ParserError),
+            ('not YAML\x00\nx-later: {"<<": {}}\n', gate.yaml.reader.ReaderError),
+        ):
+            with self.subTest(error=error):
+                root, target, command, run = self.fixture(False, False)
+                with self.assertRaises(error):
+                    list(gate.yaml.compose_all(body))
+                target['arbitrary-name'] = body
+                self.prediction_equals_checkout(root, target, command, run)
+                result = subprocess.run(['docker', 'compose', '-f', str(root / 'arbitrary-name'), 'config'],
+                                        capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+
     def fixture(self, clones, change):
         realrun = subprocess.run
         realcommand = gate.command
@@ -301,7 +443,7 @@ services:
                 output = io.BytesIO()
                 with tarfile.open(fileobj=output, mode='w') as archive:
                     for name, body in target.items():
-                        data = body.encode()
+                        data = body.encode() if isinstance(body, str) else body
                         entry = tarfile.TarInfo(name); entry.size = len(data)
                         archive.addfile(entry, io.BytesIO(data))
                 return output.getvalue()

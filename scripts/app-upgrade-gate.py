@@ -253,13 +253,23 @@ def check_prediction(project, embedder_changed, clones=False, run_compose=None,
 ENV_FILE_MARKER = "x-upgrade-gate-env-file"
 
 
+class ComposeLoader(yaml.SafeLoader):
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        # Compose rebinds a repeated scalar anchor for subsequent aliases.
+        # Both validation and preservation must keep reading the same document.
+        if isinstance(event, yaml.ScalarEvent) and isinstance(self.anchors.get(event.anchor), yaml.ScalarNode):
+            del self.anchors[event.anchor]
+        return super().compose_node(parent, index)
+
+
 def validate_target_tree(root):
     """Refuse unsupported YAML before any rewrite, marker trust or hashing.
 
     Use PyYAML's composer boundary to retain source marks and key context;
     do not teach the env_file rewriter arbitrary YAML merge/alias semantics.
     """
-    class SubsetLoader(yaml.SafeLoader):
+    class SubsetLoader(ComposeLoader):
         def compose_node(self, parent, index):
             event = self.peek_event()
             what = None
@@ -271,6 +281,8 @@ def validate_target_tree(root):
             tag = getattr(event, "tag", None)
             if tag not in {None, "!override", "!reset"} and tag not in yaml.SafeLoader.yaml_constructors:
                 what = f"custom tag {tag}"
+            if tag == 'tag:yaml.org,2002:binary':
+                what = "binary tag"
             if what:
                 violations.append((event.start_mark.line + 1, what))
             node = super().compose_node(parent, index)
@@ -281,15 +293,21 @@ def validate_target_tree(root):
                     violations.append((event.start_mark.line + 1, "reserved upgrade gate extension"))
             return node
 
-    # References can use any filename. As in preservation, ignore non-YAML
-    # members only after parsing the whole file; Compose validates its inputs.
+    # References can use any filename. Read bytes so YAML's UTF-16 BOM support
+    # applies too: a UTF-8 decode failure is not proof of a non-YAML member.
+    # Only syntax/reader errors can mark non-YAML; composition errors refuse.
+    # Compose still validates every file it loads.
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         violations = []
         try:
-            list(yaml.compose_all(path.read_text(), Loader=SubsetLoader))
-        except (UnicodeError, yaml.YAMLError):
+            list(yaml.compose_all(path.read_bytes(), Loader=SubsetLoader))
+        except yaml.composer.ComposerError as error:
+            # Composition failures can follow valid YAML syntax. Never classify
+            # these as an irrelevant archive member or skip the rest silently.
+            violations.append((error.problem_mark.line + 1, "unresolved or duplicate YAML anchor"))
+        except (yaml.reader.ReaderError, yaml.scanner.ScannerError, yaml.parser.ParserError):
             pass  # A later parse error must not erase an observed refusal.
         if violations:
             line, what = violations[0]
@@ -345,8 +363,11 @@ def preserve_env_files(root):
         if not path.is_file():
             continue
         try:
-            documents = list(yaml.compose_all(path.read_text(), Loader=yaml.SafeLoader))
-        except (UnicodeError, yaml.YAMLError):
+            documents = list(yaml.compose_all(path.read_bytes(), Loader=ComposeLoader))
+        except yaml.composer.ComposerError as error:
+            stop(f"unsupported Compose YAML construct at {path.relative_to(root)}:{error.problem_mark.line + 1}: "
+                 "unresolved or duplicate YAML anchor; this gate refuses it")
+        except (yaml.reader.ReaderError, yaml.scanner.ScannerError, yaml.parser.ParserError):
             continue
         changed = False
         for node in documents:

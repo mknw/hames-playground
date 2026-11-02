@@ -2031,9 +2031,9 @@ describe('per-tool detector pairs', () => {
     expect(context7?.error).toBe(EGRESS_TEXTS.roster)
   })
 
-  // MUTATION: wait for shadow before transport or start every queued question:
+  // MUTATION: wait for shadow before transport or cap the serial queue at one:
   // the transport observation or call count changes.
-  it('runs one shadow question after transport and records queued work skipped', async () => {
+  it('drains fast shadow questions serially after transport', async () => {
     const decide = egressDecide([PERSONAL])
     const transportCountAtAsk: number[] = []
     const measured = Object.assign(
@@ -2050,17 +2050,17 @@ describe('per-tool detector pairs', () => {
           expect((await callTool('web_search', { query: `public ${n}` })).success).toBe(true)
       },
     )
-    expect(transportCountAtAsk).toEqual([3])
+    expect(transportCountAtAsk).toEqual([3, 3, 3])
     const made = ofType<{ shadow: true; abstained: boolean; skipReason?: string }>(
       events,
       'decision_made',
     )
     expect(made).toHaveLength(3)
-    expect(made.filter((d) => d.skipReason === 'queued')).toHaveLength(2)
+    expect(made.filter((d) => d.skipReason === 'queued')).toHaveLength(0)
     expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toEqual([])
   })
 
-  it('does not start another shadow question after an earlier one in the turn', async () => {
+  it('can start a later shadow question after one completed in the same turn', async () => {
     const decide = egressDecide([PUBLIC])
     const prior = createEvent('decision_made', 'prior', {
       shadow: true,
@@ -2075,9 +2075,9 @@ describe('per-tool detector pairs', () => {
       },
       { prior: [prior] },
     )
-    expect(decide.seen.states).toEqual([])
-    expect(ofType<{ skipReason: string; callId: string }>(events, 'decision_made')).toContainEqual(
-      expect.objectContaining({ shadow: true, skipReason: 'queued', callId: expect.any(String) }),
+    expect(decide.seen.states).toHaveLength(1)
+    expect(ofType<{ shadow: true; callId: string }>(events, 'decision_made')).toContainEqual(
+      expect.objectContaining({ shadow: true, callId: expect.any(String), wouldRefuse: false }),
     )
   })
 

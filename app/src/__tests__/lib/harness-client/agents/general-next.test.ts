@@ -3015,3 +3015,28 @@ it('does not aggregate stored shadow egress verdicts in general-next', () => {
   const source = readFileSync('../packages/agents/agents/general-next.server.ts', 'utf8')
   expect(source).not.toMatch(/\bwouldRefuse\b|\bwouldCategory\b/)
 })
+
+// Independent PR #919 review evidence. MUTATION: treat tag:egress as an exact
+// name, ignore the operator's selected set, or omit one selected detector.
+it('rv919: operator tag selection replaces search defaults and carries both detectors', async () => {
+  await agent.createPatterns('review-selector-session', {
+    ...deps,
+    guards: {
+      ...deps.guards,
+      egressTools: ['tag:egress'],
+      egressNameMatch: 'refuse',
+      egressDecide: 'off',
+    },
+  })
+  expect(composition.egress.detectors).toEqual({
+    default: { nameMatch: 'off', decide: 'off' },
+    tools: {},
+    tags: { egress: { nameMatch: 'refuse', decide: 'off' } },
+  })
+  await expect(
+    agent.createPatterns('review-invalid-selector-session', {
+      ...deps,
+      guards: { ...deps.guards, egressTools: ['tag:missing-review-type'] },
+    }),
+  ).rejects.toThrow(/selects no catalog tool/)
+})

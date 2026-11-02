@@ -33,7 +33,12 @@ import {
   held as held_,
   recordedHolding,
 } from '../hitl.server'
-import { amendRunFrame, currentRunFrame, type EgressVerdict } from '../run-frame.server'
+import {
+  amendRunFrame,
+  currentRunFrame,
+  effectiveTier,
+  type EgressVerdict,
+} from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
 import { inferServer } from '../tools.server'
 import type {
@@ -591,17 +596,14 @@ export function withEgressGate(config: EgressGateConfig) {
       const queues = new Map<string | null, Promise<unknown>>()
       const shadows: Array<{ state: string; tool: string; callId: string }> = []
       const lastUserIndex = ctx.events.findLastIndex((e) => e.type === 'user_message')
-      const shadowAlreadyStarted = ctx.events.slice(lastUserIndex + 1).some((e) => {
-        if (e.type !== 'decision_made') return false
-        const decision = e.data as DecisionMadeEventData
+      let degradedCatalogWarned = ctx.events.slice(lastUserIndex + 1).some((e) => {
+        const warning = e.data as Partial<WarningEventData> | undefined
         return (
-          decision.shadow === true &&
-          decision.skipReason !== 'anthropic-veto' &&
-          decision.skipReason !== 'queued' &&
-          decision.skipReason !== 'unaskable'
+          e.type === 'warning' &&
+          warning?.task === EGRESS_WARNING_TASK &&
+          warning.message === EGRESS_WARNINGS.checkDegraded
         )
       })
-      let degradedCatalogWarned = false
       const recordShadowAbstained = (
         tool: string,
         callId: string,
@@ -628,6 +630,7 @@ export function withEgressGate(config: EgressGateConfig) {
       const askEgress = async (
         state: string,
         shadow?: { tool: string; callId: string },
+        waitMs = timeoutMs,
       ): Promise<EgressAnswer> => {
         const decide = config.decide!
         const abort = new AbortController()
@@ -637,8 +640,8 @@ export function withEgressGate(config: EgressGateConfig) {
           timer = setTimeout(() => {
             timedOut = true
             abort.abort()
-            reject(new Error(`the egress question timed out after ${timeoutMs} ms`))
-          }, timeoutMs)
+            reject(new Error(`the egress question timed out after ${waitMs} ms`))
+          }, waitMs)
         })
         deadline.catch(() => undefined)
         // The deadline aborts the request; the race bounds the wait even for a
@@ -914,7 +917,8 @@ export function withEgressGate(config: EgressGateConfig) {
               warn(directory === 'empty' ? 'directoryMissing' : 'directoryUnreadable')
             }
           }
-          if (damaged) return block('damaged-roster', EGRESS_TEXTS.damagedRoster)
+          if (detector.nameMatch !== 'off' && damaged)
+            return block('damaged-roster', EGRESS_TEXTS.damagedRoster)
           const spans = detector.nameMatch !== 'off' && roster ? roster.match(request.texts) : []
           const hosts = destinationHosts(request.texts)
           // What a person would be shown and asked about: exactly this call.
@@ -946,7 +950,7 @@ export function withEgressGate(config: EgressGateConfig) {
           }
           const veto = detector.nameMatch === 'refuse' && spans.length > 0
           if (detector.decide === 'shadow') {
-            if (veto && currentRunFrame()?.inference?.tier === 'anthropic') {
+            if (veto && (effectiveTier() ?? currentRunFrame()?.inference?.tier) === 'anthropic') {
               recordShadowAbstained(tool, callId, 'anthropic-veto')
             } else {
               try {
@@ -1088,12 +1092,15 @@ export function withEgressGate(config: EgressGateConfig) {
         )
       } finally {
         // Transport has already finished; measurement cannot hold an outgoing call.
-        const first = shadowAlreadyStarted ? undefined : shadows.shift()
-        if (first) {
+        const deadline = Date.now() + timeoutMs
+        while (shadows.length > 0) {
+          const remaining = deadline - Date.now()
+          if (remaining <= 0) break
+          const next = shadows.shift()!
           try {
-            await askEgress(first.state, first)
+            await askEgress(next.state, next, remaining)
           } catch {
-            recordShadowAbstained(first.tool, first.callId, 'failed')
+            recordShadowAbstained(next.tool, next.callId, 'failed')
           }
         }
         for (const pending of shadows) recordShadowAbstained(pending.tool, pending.callId, 'queued')

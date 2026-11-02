@@ -48,9 +48,10 @@ uniform. See `packages/harness-patterns/run-frame.server.ts`.
 **Web pseudonymisation guard** — the web route's boundary over earlier
 results, retaining their content while replacing known identities with
 placeholders. It no longer checks outgoing tool arguments: the **egress gate**
-(`withEgressGate`) judges every outgoing call, on every tier, and only a
+(`withEgressGate`) checks every outgoing call, on every tier, and only a
 declared local namespace (in `general-next`: `neo4j`, `graph`) is never asked
-about; `context7` library lookup is outbound and judged like web search. See
+about. `context7` library lookup is outbound, but its model detectors are opt-in;
+deterministic checks still apply. See
 [`packages/harness-patterns/SPEC.md`](packages/harness-patterns/SPEC.md#withpseudonymisedinputsconfigpattern-507-g14).
 
 **Proposal** — a question put to a person from outside a run, by a post-reply

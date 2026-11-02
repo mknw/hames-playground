@@ -1,10 +1,12 @@
 /**
- * Nav — the dashboard/chat toggle in the top bar (#132).
+ * Nav — the captioned page-link group in the top bar (metrics · use cases),
+ * and what each does on the page it opened.
  *
- * The single interesting behaviour is that the one icon link flips both its
- * destination and its affordance depending on whether the dashboard is the
- * current route; everything else in the bar is delegated to ThemeSwitcher and
- * UserMenu, which have their own tests.
+ * The links no longer flip their icon: each keeps its OWN glyph in both
+ * states, carries a tiny caption naming it, and the pressed-in state marks
+ * the page that is open — clicking that link again returns to the chat.
+ * Everything else in the bar is delegated to ThemeSwitcher and UserMenu,
+ * which have their own tests.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
 import { createSignal } from 'solid-js'
@@ -69,23 +71,59 @@ beforeEach(() => {
 })
 
 describe('Nav', () => {
-  it('links to the dashboard from the chat route', () => {
-    const { container } = render(() => <Nav />)
-    const link = container.querySelector('a')!
+  /** The two page links, found by their stable accessible names. */
+  const pageLink = (container: HTMLElement, label: string) =>
+    [...container.querySelectorAll('a')].find((a) => a.getAttribute('aria-label') === label)!
 
-    expect(link.getAttribute('href')).toBe('/dashboard')
-    expect(link.getAttribute('aria-label')).toBe('Metrics dashboard')
-    expect(link.querySelector('span')!.className).toContain('i-material-symbols-monitoring')
+  it('links to the dashboard and to the use-cases page from the chat route', () => {
+    const { container } = render(() => <Nav />)
+
+    const metrics = pageLink(container, 'Metrics dashboard')
+    const useCases = pageLink(container, 'Use cases')
+    expect(metrics.getAttribute('href')).toBe('/dashboard')
+    expect(useCases.getAttribute('href')).toBe('/use-cases')
+
+    // Each link keeps its OWN icon in both states — the icon no longer flips
+    // to a chat glyph on the page it opened — and each carries its tiny
+    // caption, so the two read as one captioned group.
+    expect(metrics.querySelector('span')!.className).toContain('i-material-symbols-monitoring')
+    expect(metrics.textContent).toContain('metrics')
+    expect(useCases.querySelector('span')!.className).toContain('i-material-symbols-checklist')
+    expect(useCases.textContent).toContain('use cases')
+
+    // On the chat route neither page is open, so neither is pressed in.
+    expect(metrics.getAttribute('aria-current')).toBeNull()
+    expect(useCases.getAttribute('aria-current')).toBeNull()
   })
 
-  it('links back to the chat while on the dashboard', () => {
+  it('on the dashboard, the metrics link is pressed in and returns to chat', () => {
     setPathname('/dashboard')
     const { container } = render(() => <Nav />)
-    const link = container.querySelector('a')!
 
-    expect(link.getAttribute('href')).toBe('/')
-    expect(link.getAttribute('aria-label')).toBe('Back to chat')
-    expect(link.querySelector('span')!.className).toContain('i-material-symbols-chat-outline')
+    const metrics = pageLink(container, 'Back to chat — metrics dashboard is open')
+    expect(metrics.getAttribute('href')).toBe('/')
+    expect(metrics.getAttribute('aria-current')).toBe('page')
+    // Its own icon in both states: no chat glyph swap.
+    expect(metrics.querySelector('span')!.className).toContain('i-material-symbols-monitoring')
+
+    // The use-cases link is untouched by where the reader happens to be.
+    const useCases = pageLink(container, 'Use cases')
+    expect(useCases.getAttribute('href')).toBe('/use-cases')
+    expect(useCases.getAttribute('aria-current')).toBeNull()
+  })
+
+  it('on the use-cases page, that link is pressed in and returns to chat', () => {
+    setPathname('/use-cases')
+    const { container } = render(() => <Nav />)
+
+    const useCases = pageLink(container, 'Back to chat — use cases page is open')
+    expect(useCases.getAttribute('href')).toBe('/')
+    expect(useCases.getAttribute('aria-current')).toBe('page')
+    expect(useCases.querySelector('span')!.className).toContain('i-material-symbols-checklist')
+
+    const metrics = pageLink(container, 'Metrics dashboard')
+    expect(metrics.getAttribute('href')).toBe('/dashboard')
+    expect(metrics.getAttribute('aria-current')).toBeNull()
   })
 
   it('carries the theme control alongside the link', () => {

@@ -160,6 +160,13 @@ const ALLOWLIST: Exception[] = [
       'solid-router intercepts a same-origin plain anchor, so the click never leaves the app.',
   },
   {
+    file: 'src/components/Nav.tsx',
+    match: "href={onUseCases() ? '/' : '/use-cases'}",
+    reason:
+      "In-app navigation between the app's own two routes (chat ⇄ use cases). " +
+      'solid-router intercepts a same-origin plain anchor, so the click never leaves the app.',
+  },
+  {
     file: 'src/components/ark-ui/UserMenu.tsx',
     match: 'href="/profile"',
     reason: "In-app navigation to the app's own profile route, from inside the user menu.",

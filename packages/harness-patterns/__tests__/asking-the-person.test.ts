@@ -1513,55 +1513,23 @@ describe('the directory matrix, attended and not', () => {
   const withQuery = { url: 'https://example.org/?q=a' }
   const short = { url: 'https://example.org/' }
 
-  // Row 69. MUTATIONS: swap any one cell (unreadable asks; empty refuses
-  // attended); or return a category text in a D5 cell → red.
-  it.each(['empty', 'none'] as const)(
-    "'%s' with Decide down asks attended and refuses unattended, with the D5 text",
+  // Slice 13: outage is irrecoverable for any directory and never creates a person request.
+  it.each(['loaded', 'empty', 'none', 'unreadable'] as const)(
+    "'%s' with Decide down refuses attended and unattended without a prompt",
     async (directory) => {
       const cell = withDecideDown(directory, short)
-      const asked = await cell.attended()
-      const [request] = readHitl(asked.context).pending
-      expect(request).toMatchObject({
-        kind: EGRESS_RELEASE_KIND,
-        summary: { category: 'unchecked' },
-      })
-      const refused = await cell.unattended()
-      expect(resultsOf(refused.context.events, 'fetch')[0].error).toBe(
-        EGRESS_TEXTS.uncheckedClosing,
-      )
+      for (const result of [await cell.attended(), await cell.unattended()]) {
+        expect(readHitl(result.context).pending).toEqual([])
+        expect(resultsOf(result.context.events, 'fetch')[0].error).toBe(
+          EGRESS_TEXTS.uncheckedClosing,
+        )
+        expect(eventsOf(result.context.events, 'error')).toEqual([
+          expect.objectContaining({ kind: 'egress_decide_unavailable', severity: 'irrecoverable' }),
+        ])
+      }
       expect(cell.log).toEqual([])
     },
   )
-
-  it("'unreadable' refuses attended too, and asks no one", async () => {
-    const cell = withDecideDown('unreadable', withQuery)
-    const result = await cell.attended()
-    expect(eventsOf(result.context.events, 'hitl_request')).toEqual([])
-    expect(resultsOf(result.context.events, 'fetch')[0].error).toBe(EGRESS_TEXTS.uncheckedClosing)
-  })
-
-  // Row 75. MUTATION: fall back to the roster for every call → the call with a
-  // URL query goes out unasked → red.
-  it("'loaded', Decide timed out: a URL query is asked (attended) or refused; a short call goes on the roster", async () => {
-    const queried = withDecideDown('loaded', withQuery)
-    expect(readHitl((await queried.attended()).context).pending[0]?.kind).toBe(EGRESS_RELEASE_KIND)
-    const refused = await queried.unattended()
-    expect(resultsOf(refused.context.events, 'fetch')[0].error).toBe(EGRESS_TEXTS.uncheckedClosing)
-    expect(queried.log).toEqual([])
-
-    const plain = withDecideDown('loaded', short)
-    const sent = await plain.attended()
-    expect(readHitl(sent.context).pending).toEqual([])
-    expect(plain.log.map((c) => c.name)).toEqual(['fetch'])
-  })
-
-  // Row 76. MUTATION: ignore `loadedDecideDown` → 'ask' leaves the short call
-  // to the roster → red.
-  it("loadedDecideDown 'ask' asks a short call too", async () => {
-    const cell = withDecideDown('loaded', short, { loadedDecideDown: 'ask' })
-    expect(readHitl((await cell.attended()).context).pending[0]?.kind).toBe(EGRESS_RELEASE_KIND)
-    expect(cell.log).toEqual([])
-  })
 
   // Row 77. MUTATION: name only the outer URL's host → the redirector's target
   // is missing from what the person is shown → red.

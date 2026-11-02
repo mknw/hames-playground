@@ -162,7 +162,7 @@ const rosterGate = (config: Partial<EgressGateConfig> = {}) =>
     local: ['neo4j'],
     catalog: CATALOG,
     roster: createEgressRoster(),
-    mode: 'roster',
+    detectors: { default: { nameMatch: 'refuse', decide: 'off' } },
     ...config,
   })
 /** What the real host roster finds in a call's arguments, read the way the gate
@@ -687,10 +687,9 @@ describe('the egress roster against the real gate (boundary guards, slice 4)', (
       return s
     })
     await withRunFrame(frame('self_deployed'), () =>
-      rosterGate({ mode: 'filter', decide })(child).fn(
-        scope,
-        createEventView(createContext('Find the keynote')),
-      ),
+      rosterGate({ detectors: { default: { nameMatch: 'evidence', decide: 'on' } }, decide })(
+        child,
+      ).fn(scope, createEventView(createContext('Find the keynote'))),
     )
     expect(outgoing).toHaveBeenCalledOnce()
     expect(scope.events.filter((e) => e.type === 'egress_audit').map((e) => e.data)).toEqual([

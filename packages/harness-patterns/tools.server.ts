@@ -46,6 +46,17 @@ export interface ToolsOptions {
    * free; lenient→strict is breaking — which is why it starts strict.
    */
   namespaces: NamespaceResolver
+  /** Optional deployment metadata for tool types. */
+  tagsFor?: (toolName: string) => readonly string[] | undefined
+}
+
+const catalogTags = new WeakMap<readonly string[], Readonly<Record<string, readonly string[]>>>()
+
+/** Name-keyed tags derived from the same discovery as a name-only catalog. */
+export function toolTagsFor(
+  catalog: readonly string[],
+): Readonly<Record<string, readonly string[]>> {
+  return catalogTags.get(catalog) ?? {}
 }
 
 /** The deployment's registered namespace resolvers, consulted in registration
@@ -109,6 +120,12 @@ function groupTools(mcpTools: MCPToolDescription[], options?: ToolsOptions): Too
   }
 
   const all = mcpTools.map((t) => t.name)
+  const tags: Record<string, readonly string[]> = {}
+  for (const tool of mcpTools) {
+    const declared = tool.tags ?? options?.tagsFor?.(tool.name)
+    if (declared?.length) tags[tool.name] = [...new Set(declared)]
+  }
+  catalogTags.set(all, tags)
 
   // Provenance for the outage guard (#278 F1). `all` means "every tool this app
   // can reach", and the gateway is part of that surface whether or not it

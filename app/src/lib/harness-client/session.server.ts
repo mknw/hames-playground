@@ -18,7 +18,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern } from '@hames-ai/harness-patterns'
 import { deserializeContext } from '@hames-ai/harness-patterns'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
-import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
+import { mcpNamespace, mcpToolTags } from '@hames-ai/connectors/mcp-catalog'
 import { enrichNeo4jResult } from './neo4j-enricher.server'
 import { createRedisBackend } from '@hames-ai/harness-patterns/retriever'
 import { createDecisionDocuments, privateDecisionRun } from './decision-documents.server'
@@ -92,7 +92,9 @@ export function agentDeps(): AgentDeps {
       const switches = guardConfig()
       return {
         screenMode: switches.screenMode,
-        egressMode: switches.egressMode,
+        egressTools: switches.egressTools,
+        egressNameMatch: switches.egressNameMatch,
+        egressDecide: switches.egressDecide,
         // The guards' numbers (#844): τi, τe and the tripwire's N, each the
         // pattern's own default when its variable is unset.
         gateThreshold: switches.gateThreshold,
@@ -107,6 +109,7 @@ export function agentDeps(): AgentDeps {
     })(),
     egressRoster: createEgressRoster({ directory: 'required' }),
     toolNamespaces: mcpNamespace,
+    toolTags: mcpToolTags,
     enrichNeo4jResult,
     createRedisBackend,
     createDecisionDocuments,

@@ -35,7 +35,7 @@ import type { ClientOverride } from '@hames-ai/harness-baml/consumer-clients.ser
 import type {
   ConfiguredPattern,
   DecisionDocumentsSource,
-  EgressMode,
+  EgressDetectors,
   EgressRosterSource,
   IngressClassifier,
   MemoryConfig,
@@ -74,9 +74,8 @@ export interface GraphElement extends ElementDefinition {
  *   `'off'` and `'always'` — `'gated'` or `'shadow'` there would send every
  *   body the screen would have read to that tier's decisions host by an env
  *   var, a processor change that belongs in a reviewed line of code.
- * - `egressMode` sets the egress gate's `mode` (`'filter'` decides with the
- *   roster's matches as evidence; `'roster'` vetoes on a match and asks no
- *   model). Accepted on both tiers.
+ * - `egressTools`, `egressNameMatch` and `egressDecide` select per-tool detectors.
+ *   The former mode setting was removed.
  * - `classifyIngress` is the host's classifier (ruling O), passed as a
  *   screen's `classify`. Absent: every payload is external, the safe default.
  *   It rides `guards` rather than its own `AgentDeps` field — one path to the
@@ -107,7 +106,9 @@ export interface GraphElement extends ElementDefinition {
  */
 export interface AgentGuards {
   readonly screenMode?: ByTier<ScreenMode>
-  readonly egressMode?: ByTier<EgressMode>
+  readonly egressTools?: readonly string[]
+  readonly egressNameMatch?: EgressDetectors['nameMatch']
+  readonly egressDecide?: EgressDetectors['decide']
   readonly classifyIngress?: IngressClassifier
   readonly pseudonymiseForWeb?: PseudonymiseForWeb
   readonly gateThreshold?: number
@@ -168,8 +169,8 @@ export interface AgentDeps {
    * thresholds and the egress tripwire's N (#844), plus the tenant's own
    * document hosts — a deployment fact that narrows one deterministic rule
    * (`exfil-data-url`) on one field, not a guard mode. The deterministic layers
-   * have no other switch, and a value the design leaves in code (an `exempt` list,
-   * `loadedDecideDown`) stays there. An invalid value REFUSES boot; one weaker
+   * have no other switch, and a value the design leaves in code (an `exempt` list)
+   * stays there. An invalid value REFUSES boot; one weaker
    * than a tier's default warns.
    */
   guards?: AgentGuards
@@ -189,6 +190,7 @@ export interface AgentDeps {
    * on the day a catalog moves.
    */
   toolNamespaces: (toolName: string) => string | undefined
+  toolTags?: (toolName: string) => readonly string[] | undefined
   /** App-side Neo4j tool-result decorator (the app's neo4j-enricher). */
   enrichNeo4jResult?: OnToolResult
   /** Data Stash backend factory (the app's retriever wiring). */
@@ -252,6 +254,8 @@ export interface AgentDeps {
  */
 export interface AgentDefinition {
   id: string
+  /** Every registered agent declares its outgoing boundary. */
+  egressPolicy?: 'gate' | 'local-only'
   name: string
   description: string
   /**

@@ -61,7 +61,10 @@ export function errorBubble(data: ErrorEventData): {
   if (data.iteration !== undefined) parts.push(`attempt ${data.iteration + 1}`)
   return {
     role: data.severity === 'recoverable' ? 'warning' : 'error',
-    content: data.error ?? '',
+    content:
+      data.kind === 'egress_decide_unavailable'
+        ? 'An outside request was refused because its safety check was unavailable.'
+        : (data.error ?? ''),
     ...(data.hint !== undefined ? { hint: data.hint } : {}),
     ...(parts.length > 0 ? { turnInfo: `(${parts.join(', ')})` } : {}),
   }

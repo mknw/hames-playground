@@ -11,6 +11,7 @@ import {
   retriever,
   simpleLoop,
   Tools,
+  toolTagsFor,
   withEgressGate,
   withInjectionGuard,
   withMemory,
@@ -138,7 +139,7 @@ async function createPatterns(
 ): Promise<ConfiguredPattern<AgentData>[]> {
   if (!deps.withSandbox) throw new Error('general-next requires deps.withSandbox')
   if (!deps.createRedisBackend) throw new Error('general-next requires deps.createRedisBackend')
-  const tools = await Tools({ namespaces: deps.toolNamespaces })
+  const tools = await Tools({ namespaces: deps.toolNamespaces, tagsFor: deps.toolTags })
   const schema = await getGraphSchema('general-next', sessionId, deps)
   const baml = bamlPatterns()
 
@@ -323,24 +324,37 @@ async function createPatterns(
   // A fetch address must come from the user or from content the run did not
   // compute: web pages, library docs and Microsoft 365 data give addresses; a
   // Cypher RETURN and the office box's output do not (O21).
+  const fetchTools = (tools.web ?? []).filter((name) => name.includes('fetch'))
   const egressGate = withEgressGate({
     local: ['neo4j', 'graph'],
     localTools: officeLocalTools(officeAttach, sandboxTools),
     catalog: tools.all,
-    fetchTools: (tools.web ?? []).filter((name) => name.includes('fetch')),
+    fetchTools,
+    toolTags: toolTagsFor(tools.all),
+    detectors: (() => {
+      const search = (tools.web ?? []).filter((name) => !fetchTools.includes(name))
+      const pair = {
+        nameMatch: deps.guards?.egressNameMatch ?? 'evidence',
+        decide: deps.guards?.egressDecide ?? 'on',
+      } as const
+      const selected = deps.guards?.egressTools ?? search
+      const exact: Record<string, typeof pair> = {}
+      const tags: Record<string, typeof pair> = {}
+      for (const selector of selected) {
+        if (selector.startsWith('tag:')) tags[selector.slice(4)] = pair
+        else exact[selector] = pair
+      }
+      return { default: { nameMatch: 'off', decide: 'off' } as const, tools: exact, tags }
+    })(),
     // Like the info guard, context7 only when the gateway offers it: the gate
     // refuses, on every turn, a source namespace no catalog tool resolves to.
     addressSources: ['web', ...(docTools.length ? ['context7'] : []), 'graph'],
     roster: deps.egressRoster,
     decide: createDecideAdapter(),
-    // The composition root's GUARD_EGRESS switch (slice 6), validated at boot;
-    // the design's default — Decide decides, a roster match is evidence —
-    // stands without it.
-    mode: deps.guards?.egressMode ?? 'filter',
+    // The composition root validates these bounds at boot.
     threshold: deps.guards?.egressThreshold,
     maxOutgoingRetriesPostTripwire:
       deps.guards?.maxOutgoingRetriesPostTripwire ?? GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
-    loadedDecideDown: 'by-shape',
     // An attended turn asks the person where the gate would refuse; an
     // unattended one (a routine, an eval) still refuses (slice 10).
     askPerson: true,
@@ -429,6 +443,7 @@ async function createPatterns(
 
 export const generalNextAgent: AgentDefinition = {
   id: 'general-next',
+  egressPolicy: 'gate',
   name: 'General Agent · Next',
   description:
     'Moves between Microsoft 365, an office sandbox, the knowledge graph, web and uploaded documents',

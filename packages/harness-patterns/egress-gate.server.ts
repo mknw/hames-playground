@@ -149,11 +149,6 @@ export const GUARD_EGRESS_TIMEOUT_MS = 5_000
  *  placeholder: a search query or a page address never needs thousands). */
 export const EGRESS_MAX_BLOCK_CHARS = 2_048
 
-/** The decoded block over which a call is not left to the roster alone when
- *  Decide is down on a loaded directory (`loadedDecideDown: 'by-shape'`). A
- *  placeholder. */
-export const EGRESS_SMALL_BLOCK_CHARS = 200
-
 /** How much of the user's latest message the state quotes. Cutting it only
  *  removes exemptions, which is the safe direction. */
 export const EGRESS_USER_CAP = 4_000

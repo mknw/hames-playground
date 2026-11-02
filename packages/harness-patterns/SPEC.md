@@ -1506,67 +1506,56 @@ EgressRosterSource`) is built with the user's latest message cut to the 4 000
 characters the state quotes (only what Decide sees exempts), matches the
 normalised leaves and returns its spans as the request wrote them.
 
-`mode` (`ByTier<'filter' | 'roster'>`, default `'filter'` with a `decide`, else
-`'roster'`): in `'filter'` the egress question `guard.egress` (`GUARD_EGRESS`, a
-`choice` over `personal`, `company`, `nothing_private`) is asked over a state the
-gate renders (`renderEgressState`): the tool name and every host the request
-names (nested URLs in decoded query values to three levels) outside the quotes,
-JSON-quoted on one line; the roster's spans as evidence under a header that
-claims no trust, each capped at 80, neutralised and quoted; the user's latest
-message (its first 4 000 characters) and the block, every line prefixed `"> "`
-and each quote bounded by markers carrying a per-call nonce. A state over the
-decision box's byte budget is unavailable. At or above τe (`threshold`, default
-`GUARD_EGRESS_THRESHOLD`, 0.3; the reference app reads `GUARD_EGRESS_THRESHOLD`
-from its environment, #844) on
-1 − P(`nothing_private`) the call is refused with the larger private label's
-text (a tie names personal); below it the call goes out, and a roster match is
-recorded as an `egress_audit` event (human-facing only: one fixed line with no
-payload in LLM-facing views, no server log). Each answer is a `decision_made` event keyed
-`guard.egress`, with no state text. A Decide failure is retried once within the
-one `timeoutMs` budget (5 000 ms), which aborts the request through
-`DecideInput.signal`; a timeout is not retried.
+`detectors` selects a `{ nameMatch, decide }` pair per outgoing tool. `nameMatch`
+accepts `off`, `evidence`, or `refuse`; `decide` accepts `off`, `on`, or
+`shadow`. Exact tool selectors override tags, which override the default.
+Equal overlapping tag rules deduplicate; conflicting rules, unknown selectors,
+local-only selectors, and empty tag expansions refuse construction. The reserved
+`tag:egress` selects every non-local catalog name. The host passes a name-keyed
+`toolTags` map beside the name-only `catalog`. Each outgoing tool without an
+active detector produces a warning naming it. An unknown tool in a degraded
+catalog refuses when the default has neither active Decide nor a vetoing name
+matcher. Step 1 and the given-address rule run under every pair.
 
-With Decide unavailable (`'roster'` mode, a failure after the retry, a timeout,
-a state it cannot be asked over), the directory status the roster reports
-decides (D5): `loaded` vetoes on a roster match with the roster text; with Decide
-down, `loadedDecideDown: 'by-shape'` (default) refuses a call with a URL query or
-a block over 200 characters and leaves any other to the roster, `'ask'` refuses
-every one; `empty` and `none` veto on a match and refuse the rest; `unreadable`
-refuses. Every refusal on Decide's answer, and the `empty`, `none` and asked
-`loaded` cells with Decide down, is where the design asks the person: with
-`askPerson`, see [Asking the person](#asking-the-person-at-the-boundaries-boundary-guards-slice-10);
-without it, or with nobody to ask, they refuse. A damaged roster and a degraded
-turn (with its counts in `detail`) each record a `warning` with task
-`egress_check` and a fixed message. So does an `empty` or `unreadable`
-directory, once per turn and at the turn's first outgoing check, never before
-it: its fallback says outside requests were still checked, which a turn that
-makes none would contradict. A resumed invocation reads the turn's events and
-does not warn again.
+The roster is loaded only when the chosen name matcher is enabled. `off` never
+calls it; `evidence` passes matched spans to Decide without vetoing; `refuse`
+blocks a match before active Decide and without spending N. The question
+`guard.egress` (`GUARD_EGRESS`, a `choice` over `personal`, `company`,
+`nothing_private`) receives a state rendered by `renderEgressState`: the tool
+name and every destination host outside the quotes, the matched spans as
+untrusted evidence, the latest user message and this call's decoded block.
+The quote is bounded by a per-call nonce. A state over the decision box's byte
+budget is unavailable. At or above τe (`threshold`, default
+`GUARD_EGRESS_THRESHOLD`, 0.3) on 1 − P(`nothing_private`), active Decide
+refuses with the larger private label's fixed text; below it the call proceeds.
+A Decide refusal may ask the person through `askPerson` where the call can
+pause. A failure gets one retry inside a single 5 000 ms deadline; timeout
+is not retried.
+
+An active `decide: on` failure, timeout, or unaskable state refuses on every
+directory status and request shape. It records `egress_refused` and an
+irrecoverable `error` of kind `egress_decide_unavailable` with fixed metadata-only
+text, gives the controller fixed feedback, and shows a visible turn notice.
+No person prompt is offered. The separate `egress_check` warning still reports
+degraded checks. An empty or unreadable directory is announced when a call
+actually uses the roster, once per turn.
+
+`decide: shadow` queues measurement after transport, behind active questions.
+At most one shadow question starts per turn; other and failed questions record
+abstained/skipped `decision_made` events. A name veto on the Anthropic tier
+records abstention without a shadow request. Shadow never prompts, blocks,
+spends N, or delays the outgoing call. Its stored record has `shadow: true`,
+`wouldRefuse` and `wouldCategory` when answered, tool and call id, with no state
+text or arguments. No agent report reads these records.
 
 **The tripwire** (`maxOutgoingRetriesPostTripwire`, N, default
-`GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE`, 0; the reference app reads
-`GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` from its environment, #844). A refusal on
-Decide's answer or for want of one is a tripwire and an `egress_refused` event:
-refusal N + 1 on a route closes that route until the user's next message, and
-every later outgoing call of the route is refused with no model call. A route is
-the run frame's `route` slot, which `decisionLoop` writes around each child from
-its route key; calls outside any route share one bucket. The counts, the closed
-routes and the turn-wide closure are derived from the turn's recorded
-`egress_refused` events (everything after the last `user_message`,
-`egressClosures`), so a pause and resume continue the same count. One route's
-checks run one at a time in arrival (batch) order, so a tripwire is seen by the
-next call of the same batch; calls that pass still run concurrently.
-
-Every deterministic refusal records exactly one `egress_blocked` event with
-`tool`, `route`, and a fixed `rule`: step-1 integrity, an ungiven fetch address,
-the current roster veto, a closed route or turn, a damaged roster, or a throwing
-check. This event carries no arguments, matched spans, exception text, or
-server-log copy. It is always committed and appears in the Guardrails timeline;
-model-facing event views render only `an outgoing request was blocked`.
-`egressClosures` counts only `egress_refused`, so deterministic blocks never
-spend the route's retry allowance. A throwing check still gives the controller
-`EGRESS_CHECK_FAILED`; recording its `check-failed` block does not change that
-feedback. The D5 Decide-unavailable directory matrix remains in force.
+`GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE`, 0). Active Decide refusals and outages
+spend one retry: refusal N + 1 on a route closes it until the next user message.
+The counts and closures derive from recorded `egress_refused` events, including
+across pause/resume. One route's checks run in arrival order, so the next call
+sees a closure. Name vetoes and other deterministic blocks write exactly one
+metadata-only `egress_blocked` event and do not spend N. Model-facing views
+render a fixed line. A throwing check still returns `EGRESS_CHECK_FAILED`.
 
 A roster source that throws (a neutralised identity field) or a local result
 whose observation throws DAMAGES the gate: every later outgoing call is refused
@@ -2332,8 +2321,8 @@ route wraps `withReferences` in `withPseudonymisedInputs` when the host supplies
 the filter (`AgentGuards.pseudonymiseForWeb`), and composes no wrapper without
 one (boundary guards slice 5): the reference app supplies it unless
 `GUARD_PSEUDONYMISE=off`, the switch whose default flips at K5's retirement.
-The whole loop is wrapped in `withEgressGate` (`'filter'` on both tiers, N = 0, `loadedDecideDown:
-'by-shape'`; fetch addresses from `web`, `context7` and `graph` results; local:
+The whole loop is wrapped in `withEgressGate` (search-only tools default to
+`{ nameMatch: 'evidence', decide: 'on' }`, N = 0; fetch addresses from `web`, `context7` and `graph` results; local:
 `neo4j`, `graph`, and the office box's
 in-VM tools by name while that box is booted `mcp-only`). The info route admits only the
 `retriever` sibling plus its own results, excludes sandbox-promoted documents

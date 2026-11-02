@@ -937,10 +937,9 @@ describe('general-next composition', () => {
     expect(agent.servers).toEqual(expect.arrayContaining(['office sandbox', 'Data Stash']))
   })
 
-  // MUTATION: declare `maxOutgoingRetriesPostTripwire: 1` (or `mode: 'roster'`,
-  // or `loadedDecideDown: 'ask'`, or add `'neo4j'` to `addressSources`) in
-  // general-next's egress gate.
-  it('declares the egress gate on both tiers: filter mode, N = 0, by-shape, the host roster', async () => {
+  // MUTATION: declare `maxOutgoingRetriesPostTripwire: 1` or add `'neo4j'`
+  // to `addressSources` in general-next's egress gate.
+  it('declares the egress gate on both tiers: search detector, N = 0, host roster', async () => {
     const egressRoster = vi.fn()
     await agent.createPatterns('synthetic-session', { ...deps, egressRoster })
     expect(composition.egress).toMatchObject({
@@ -948,11 +947,36 @@ describe('general-next composition', () => {
       localTools: SANDBOX,
       fetchTools: ['fetch', 'fetch_content', 'web_fetch_exa'],
       addressSources: ['web', 'context7', 'graph'],
-      mode: 'filter',
+      detectors: {
+        default: { nameMatch: 'off', decide: 'off' },
+        tools: {
+          search: { nameMatch: 'evidence', decide: 'on' },
+          web_search_exa: { nameMatch: 'evidence', decide: 'on' },
+        },
+      },
       maxOutgoingRetriesPostTripwire: 0,
-      loadedDecideDown: 'by-shape',
     })
     expect(composition.egress.roster).toBe(egressRoster)
+  })
+
+  // Slice 13 O29. MUTATION: include fetch in the derived search list, or
+  // hard-code Exa search when only Exa fetch is offered: one map differs.
+  it('derives the search default from offered web names minus fetch names', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    gateway.names = gateway.names.filter((name) => name !== 'web_search_exa')
+    await agent.createPatterns('synthetic-session', deps)
+    expect((composition.egress.detectors as { tools: Record<string, unknown> }).tools).toEqual({
+      search: { nameMatch: 'evidence', decide: 'on' },
+    })
+    expect(
+      warnings.mock.calls.some(([line]) => String(line).includes("'fetch' has no active detector")),
+    ).toBe(true)
+    expect(
+      warnings.mock.calls.some(([line]) =>
+        String(line).includes("'web_fetch_exa' has no active detector"),
+      ),
+    ).toBe(true)
+    warnings.mockRestore()
   })
 
   // MUTATION: derive `localTools` without reading the profile (return `tools`
@@ -1472,7 +1496,10 @@ describe('general-next composition', () => {
   // records the `web_privacy` withhold, red.
   it.each([
     ['no guards bag', { ...deps, guards: undefined }],
-    ['a guards bag without the filter', { ...deps, guards: { egressMode: 'filter' as const } }],
+    [
+      'a guards bag without the filter',
+      { ...deps, guards: { egressNameMatch: 'evidence' as const } },
+    ],
   ])(
     'slice 5: with %s, no withPseudonymisedInputs; nothing is withheld and the egress gate judges the call',
     async (_label, supplied) => {
@@ -1547,7 +1574,7 @@ describe('general-next composition', () => {
   // MUTATION: declare `context7` local in general-next's egress gate: the
   // library lookup is never asked about and goes out.
   it.each(['anthropic', 'self_deployed'])(
-    'S3b: on the %s tier the egress gate asks about context7 like web search, and leaves neo4j reads local',
+    'S3b: on the %s tier Context7 is opt-in, while neo4j reads stay local',
     async (tier) => {
       egressAnswer = (state) => (state.includes('PRIVATE-NAME') ? 'personal' : 'nothing_private')
       const call = (tool_name: string, query: string) => ({
@@ -1567,12 +1594,8 @@ describe('general-next composition', () => {
           (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === tool,
         )?.data
       expect(byTool('read_neo4j_cypher')).toMatchObject({ success: true })
-      expect(byTool('resolve-library-id')).toMatchObject({
-        success: false,
-        error: EGRESS_TEXTS.personalClosing,
-      })
-      expect(egressStates).toHaveLength(1)
-      expect(egressStates[0]).toContain('Service: "resolve-library-id"')
+      expect(byTool('resolve-library-id')).toMatchObject({ success: true })
+      expect(egressStates).toHaveLength(0)
     },
   )
 
@@ -2707,11 +2730,9 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
     ])
   })
 
-  // The egress switch, live: GUARD_EGRESS=roster vetoes a directory match and
-  // never asks the guard.egress question; 'filter' (the default, pinned above)
-  // asks. MUTATION: drop `mode: deps.guards?.egressMode` from general-next's
-  // egress gate: the roster case asks the egress question and this goes red.
-  it('GUARD_EGRESS=roster vetoes a directory match on the egress gate with no Decide call', async () => {
+  // MUTATION: drop the selected name matcher or Decide setting from general-next's
+  // gate; the name-only case asks Decide and this goes red.
+  it('the refuse/off detector vetoes a directory match without a Decide call', async () => {
     mocks.controller.mockResolvedValueOnce({
       action: {
         reasoning: 'search',
@@ -2724,10 +2745,16 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const result = await run('self_deployed', {
       ...deps,
-      guards: { ...deps.guards, egressMode: 'roster' },
+      guards: { ...deps.guards, egressNameMatch: 'refuse', egressDecide: 'off' },
       egressRoster: createEgressRoster(),
     })
-    expect(composition.egress.mode).toBe('roster')
+    expect(
+      (
+        composition.egress.detectors as {
+          tools: Record<string, { nameMatch: string; decide: string }>
+        }
+      ).tools.search,
+    ).toEqual({ nameMatch: 'refuse', decide: 'off' })
     // The gate never asked the egress question: the roster decided alone.
     expect(egressStates).toEqual([])
     // The veto reaches the controller as the fixed roster text, on the call's
@@ -2744,8 +2771,8 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
     expect(result.context.events.some((e) => e.type === 'egress_refused')).toBe(false)
   })
 
-  // The filter mode keeps its audited, Decide-judged path under the switch.
-  it('GUARD_EGRESS=filter (the declared default) judges the same call through the question', async () => {
+  // The evidence/on detector judges the same call through Decide.
+  it('the evidence/on default judges the same call through Decide', async () => {
     mocks.controller.mockResolvedValueOnce({
       action: {
         reasoning: 'search',
@@ -2759,10 +2786,16 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
       await import('../../../../lib/harness-client/web-pseudonymiser.server')
     const result = await run('self_deployed', {
       ...deps,
-      guards: { ...deps.guards, egressMode: 'filter' },
+      guards: { ...deps.guards, egressNameMatch: 'evidence', egressDecide: 'on' },
       egressRoster: createEgressRoster(),
     })
-    expect(composition.egress.mode).toBe('filter')
+    expect(
+      (
+        composition.egress.detectors as {
+          tools: Record<string, { nameMatch: string; decide: string }>
+        }
+      ).tools.search,
+    ).toEqual({ nameMatch: 'evidence', decide: 'on' })
     expect(egressStates).toHaveLength(1)
     const web = result.context.events.find(
       (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
@@ -2974,4 +3007,11 @@ describe('general-next: the guard thresholds and the tripwire N as settings (#84
       EGRESS_TEXTS.personalClosing,
     ])
   })
+})
+
+// Slice 13 source pin. MUTATION: read wouldRefuse from the agent report path:
+// this test turns red; shadow analysis belongs to a separate issue.
+it('does not aggregate stored shadow egress verdicts in general-next', () => {
+  const source = readFileSync('../packages/agents/agents/general-next.server.ts', 'utf8')
+  expect(source).not.toMatch(/\bwouldRefuse\b|\bwouldCategory\b/)
 })

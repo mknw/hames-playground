@@ -92,7 +92,7 @@ const toolsSpy = vi.spyOn(await import('@hames-ai/harness-patterns/tools.server'
 // wrapped to supply `agentDeps()`.
 const { getAgent } = await import('../../../lib/harness-client/registry.server')
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
-const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
+const { mcpNamespace, mcpToolTags } = await import('@hames-ai/connectors/mcp-catalog')
 const { createDecisionDocuments, privateDecisionRun } =
   await import('../../../lib/harness-client/decision-documents.server')
 
@@ -124,7 +124,7 @@ describe('the bag the composition root supplies is the bag the moved factories r
 
     // The resolver the factory passed is THE app's catalog function — not a
     // lookalike a second bag might have built.
-    expect(toolsSpy).toHaveBeenCalledWith({ namespaces: mcpNamespace })
+    expect(toolsSpy).toHaveBeenCalledWith({ namespaces: mcpNamespace, tagsFor: mcpToolTags })
   })
 
   it('the app suppliers reach the factory — the registered wrapper closes over agentDeps()', async () => {

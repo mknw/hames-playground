@@ -110,6 +110,7 @@ vi.mock('@hames-ai/harness-patterns/tools.server', async (importOriginal) => ({
     .inferServer,
   Tools: vi.fn(async () => mockToolSets),
   ToolsFrom: vi.fn(async () => mockToolSets),
+  toolTagsFor: vi.fn(() => ({})),
 }))
 
 // ============================================================================

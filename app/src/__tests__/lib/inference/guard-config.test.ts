@@ -45,7 +45,9 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   it('unset, every value is the declared default, per tier', () => {
     expect(guardConfig()).toEqual({
       screenMode: { default: 'gated', anthropic: 'always' },
-      egressMode: 'filter',
+      egressTools: undefined,
+      egressNameMatch: undefined,
+      egressDecide: undefined,
       pseudonymise: true,
       // #844: today's numbers, as literals rather than the constants they come
       // from, so moving a constant is a red here and not a silent new default.
@@ -92,13 +94,18 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
     },
   )
 
-  it.each(['filter', 'roster', ' ROSTER '])(
-    'GUARD_EGRESS=%j sets the gate mode on every tier',
-    (raw) => {
-      vi.stubEnv('GUARD_EGRESS', raw)
-      expect(guardConfig().egressMode).toBe(raw.trim().toLowerCase())
-    },
-  )
+  it('O26 parses the three per-tool switches and refuses the obsolete one', () => {
+    vi.stubEnv('GUARD_EGRESS_TOOLS', 'search,tag:egress')
+    vi.stubEnv('GUARD_EGRESS_NAME_MATCH', ' REFUSE ')
+    vi.stubEnv('GUARD_EGRESS_DECIDE', 'shadow')
+    expect(guardConfig()).toMatchObject({
+      egressTools: ['search', 'tag:egress'],
+      egressNameMatch: 'refuse',
+      egressDecide: 'shadow',
+    })
+    vi.stubEnv('GUARD_EGRESS', 'roster')
+    expect(() => guardConfig()).toThrow(/GUARD_EGRESS is obsolete/)
+  })
 
   it("GUARD_PSEUDONYMISE=on|off flips the web route's input filter", () => {
     vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
@@ -109,7 +116,8 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
 
   it.each([
     ['GUARD_SCREEN', 'nonsense', 'off, shadow, gated, always'],
-    ['GUARD_EGRESS', 'by-hope', 'filter, roster'],
+    ['GUARD_EGRESS_NAME_MATCH', 'by-hope', 'off, evidence, refuse'],
+    ['GUARD_EGRESS_DECIDE', 'by-hope', 'off, on, shadow'],
     ['GUARD_PSEUDONYMISE', 'maybe', 'on, off'],
   ])('%s=%j refuses boot, naming the variable and the allowed values', (variable, value, names) => {
     vi.stubEnv(variable, value)
@@ -155,7 +163,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
 
   it.each([
     ['GUARD_SCREEN_ANTHROPIC', 'off'],
-    ['GUARD_EGRESS', 'roster'],
+    ['GUARD_EGRESS_DECIDE', 'off'],
     ['GUARD_PSEUDONYMISE', 'off'],
   ])(
     '%s=%j logs its own boot warning, naming the variable and what it switches off',
@@ -169,7 +177,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
 
   it('the warnings are one per weakened value per boot, not per call', () => {
     vi.stubEnv('GUARD_SCREEN', 'off')
-    vi.stubEnv('GUARD_EGRESS', 'roster')
+    vi.stubEnv('GUARD_EGRESS_DECIDE', 'off')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
     vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
     assertGuardsConfigured()
@@ -181,7 +189,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   it('valid values never refuse boot', () => {
     vi.stubEnv('GUARD_SCREEN', 'gated')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
-    vi.stubEnv('GUARD_EGRESS', 'filter')
+    vi.stubEnv('GUARD_EGRESS_DECIDE', 'on')
     vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
     expect(() => assertGuardsConfigured()).not.toThrow()
   })
@@ -352,7 +360,9 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
       resolve(__dirname, '../../../lib/inference/guard-config.server.ts'),
       'utf8',
     )
-    const read = [...source.matchAll(/process\.env\.(GUARD_[A-Z_]+)/g)].map((m) => m[1])
+    const read = [...source.matchAll(/process\.env\.(GUARD_[A-Z_]+)/g)]
+      .map((m) => m[1])
+      .filter((name) => name !== 'GUARD_EGRESS')
     expect(read.length).toBeGreaterThan(0)
     // The app package's template and the deployment template at the repo root.
     for (const template of ['.env.example', '../.env.production.example']) {

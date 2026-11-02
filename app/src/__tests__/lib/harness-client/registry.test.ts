@@ -43,6 +43,7 @@ function stubAgent(id: string, extra: Partial<AgentConfig> = {}): AgentConfig {
     icon: `i-${id}`,
     accent: 'blue',
     servers: [],
+    egressPolicy: 'local-only',
     createPatterns: async () => [],
     ...extra,
   }
@@ -78,6 +79,7 @@ function freshAgent(overrides: Partial<{ createPatterns: PatternFactory }> = {})
     icon: `i-${id}`,
     accent: 'violet',
     servers: ['neo4j'],
+    egressPolicy: 'local-only',
     createPatterns,
   })
   return { id, createPatterns }
@@ -263,4 +265,15 @@ describe('agentUsesRedisRetriever / agentUsesSyncWorkspace — failure fallback'
     await expect(agentUsesRedisRetriever(a.id, 's')).resolves.toBe(false)
     await expect(agentUsesSyncWorkspace(b.id, 's')).resolves.toBe(false)
   })
+})
+
+// Revision 5 slice 13. MUTATION: remove registerAgent's declaration check, or
+// accept a gate claim with no composed wrapper: one assertion turns red.
+it('requires a declared outgoing boundary and verifies gate composition', async () => {
+  const base = stubAgent(`outgoing-${seq++}`, { servers: ['web'] })
+  expect(() => registerAgent({ ...base, egressPolicy: undefined })).toThrow(
+    /egress gate or local-only/,
+  )
+  registerAgent({ ...base, egressPolicy: 'gate' })
+  await expect(getAgent(base.id)!.createPatterns('s')).rejects.toThrow(/composed none/)
 })

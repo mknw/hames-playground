@@ -86,7 +86,8 @@ export {
   type EgressClosures,
   type EgressDirectoryStatus,
   type EgressGateConfig,
-  type EgressMode,
+  type EgressDetectors,
+  type EgressDetectorConfig,
   type EgressRoster,
   type EgressRosterSource,
 } from './withEgressGate.server'

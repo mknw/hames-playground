@@ -65,10 +65,9 @@ BACKUP_DIR="${BACKUP_DIR:-$REPO_ROOT/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-7}"
 POSTGRES_DB="${POSTGRES_DB:-hames}"
 POSTGRES_USER="${POSTGRES_USER:-postgres}"
-# Must match the neo4j service's image in docker-compose.yaml: the dump runs in
-# a throwaway container against the stopped store, and a newer Neo4j would try
-# to upgrade the store format rather than read it.
-NEO4J_IMAGE="${NEO4J_IMAGE:-hames-neo4j:local}"
+# Optional expected image ID from the caller. Never resolve a mutable tag for
+# the dump: the running container's filesystem is captured before any outage.
+NEO4J_IMAGE="${NEO4J_IMAGE:-}"
 NEO4J_DATA_VOLUME="${NEO4J_DATA_VOLUME:-hames_neo4j_data}"
 # How many times to poll Neo4j's healthcheck after the dump before declaring
 # the graph down. Iterations, not seconds: each one is a `docker compose ps`
@@ -180,18 +179,50 @@ if [ "$SKIP_NEO4J" -eq 1 ]; then
   log "neo4j: skipped (--no-neo4j)"
   echo "neo4j      SKIPPED (--no-neo4j)" >>"$MANIFEST"
 else
-  log "neo4j: stopping (brief outage)"
-  compose stop neo4j >/dev/null
+  NEO4J_CONTAINER="$(compose ps -q neo4j)" || fail "neo4j container lookup failed"
+  [ -n "$NEO4J_CONTAINER" ] || fail "neo4j container is missing"
+  ACTUAL_IMAGE="$(docker inspect --format '{{.Image}}' "$NEO4J_CONTAINER")" \
+    || fail "neo4j container inspection failed"
+  [ -z "$NEO4J_IMAGE" ] || [ "$ACTUAL_IMAGE" = "$NEO4J_IMAGE" ] \
+    || fail "neo4j container image changed since caller inspection"
+  ACTUAL_VOLUME="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "$NEO4J_CONTAINER")" \
+    || fail "neo4j data mount inspection failed"
+  [ -n "$ACTUAL_VOLUME" ] && [ "$ACTUAL_VOLUME" = "$NEO4J_DATA_VOLUME" ] \
+    || fail "neo4j data volume differs from the expected volume"
 
-  # Two different jobs, and they must not share one function.
-  #
-  # On the way out of a FAILED run — a dump error, a Ctrl-C — this is
-  # best-effort: we are already exiting non-zero for a reason the operator will
-  # see, and swallowing a second error here keeps that reason on screen.
-  # Leaving the graph down until someone notices is worse than a missing
-  # night's backup, so it is attempted whatever happened.
-  restart_neo4j_besteffort() { compose start neo4j >/dev/null 2>&1 || true; }
-  trap restart_neo4j_besteffort EXIT
+  # Docker can retain a running container after its image record disappears.
+  # Commit its current filesystem while it is still running, without pausing
+  # the service. Volume contents are excluded from commit and dumped below.
+  DUMP_IMAGE="hames-neo4j:backup-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  NEO4J_STOPPED=0
+  cleanup_neo4j() {
+    local status=$?
+    if [ "$NEO4J_STOPPED" -eq 1 ]; then
+      compose start neo4j >/dev/null 2>&1 || true
+    fi
+    if ! docker image rm "$DUMP_IMAGE" >/dev/null 2>&1; then
+      printf '[backup] FAILED: temporary Neo4j image cleanup failed: %s\n' "$DUMP_IMAGE" >&2
+      status=1
+    fi
+    exit "$status"
+  }
+  trap cleanup_neo4j EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  docker commit --pause=false "$NEO4J_CONTAINER" "$DUMP_IMAGE" >/dev/null \
+    || fail "could not capture the running neo4j container"
+  docker image inspect "$DUMP_IMAGE" >/dev/null \
+    || fail "captured neo4j image is unavailable"
+  docker run --rm --network none --entrypoint neo4j-admin "$DUMP_IMAGE" --version >/dev/null \
+    || fail "captured neo4j-admin is unavailable"
+  [ "$(compose ps -q neo4j)" = "$NEO4J_CONTAINER" ] \
+    || fail "neo4j container changed during image capture"
+  [ "$(docker inspect --format '{{.Image}}' "$NEO4J_CONTAINER")" = "$ACTUAL_IMAGE" ] \
+    || fail "neo4j image changed during image capture"
+  log "neo4j: stopping (brief outage)"
+  # A failed stop may still have stopped the service; retry start on exit.
+  NEO4J_STOPPED=1
+  compose stop neo4j >/dev/null
 
   log "neo4j: neo4j-admin database dump"
   # --user root so the throwaway container can read the store (owned by the
@@ -205,7 +236,7 @@ else
   if ! docker run --rm --user root \
     -v "$NEO4J_DATA_VOLUME":/data \
     -v "$OUT":/backups \
-    --entrypoint sh "$NEO4J_IMAGE" -c \
+    --entrypoint sh "$DUMP_IMAGE" -c \
     "neo4j-admin database dump neo4j --to-path=/backups --overwrite-destination=true \
        && chown $(id -u):$(id -g) /backups/neo4j.dump" \
     >"$NEO4J_LOG" 2>&1; then
@@ -225,7 +256,6 @@ else
   # the instant `start` returns, while Neo4j itself needs ~80s more. The
   # service's healthcheck (`wget --spider localhost:7474`) is what "the graph is
   # back" means, so that is what is polled.
-  trap - EXIT
   compose start neo4j >/dev/null || fail "neo4j did not restart after the dump — THE GRAPH IS DOWN"
   log "neo4j: started, polling its healthcheck up to ${NEO4J_RESTART_TIMEOUT} times"
   NEO4J_UP=0
@@ -238,6 +268,7 @@ else
   done
   [ "$NEO4J_UP" -eq 1 ] \
     || fail "neo4j is still not healthy after ${NEO4J_RESTART_TIMEOUT} polls — THE GRAPH IS DOWN"
+  NEO4J_STOPPED=0
   log "neo4j: restarted and healthy"
 
   [ -s "$OUT/neo4j.dump" ] || fail "neo4j dump is empty"

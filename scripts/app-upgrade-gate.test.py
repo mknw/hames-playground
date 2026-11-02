@@ -238,6 +238,10 @@ class UpgradeGateTest(unittest.TestCase):
                                       Path(__file__).parents[1] / "docs/deployment/app-upgrade.md"))
         blocks = re.findall(r"```bash\n(.*?)\n```", runbook.read_text(), re.S)
         drain = next(block for block in blocks if 'dev_enabled_ids="$dump_root/' in block)
+        # This fixture exercises DEV SQL only; the target prediction is tested
+        # separately and cannot fetch a commit in an offline shell.
+        drain = drain.replace(drain[drain.index("# Resolve the reviewed target"):
+                                      drain.index("dev_psql()")], "")
         restore = next(block for block in blocks if "restore_dev_routines()" in block)
         bin_dir = Path(self.tmp.name) / "bin"
         bin_dir.mkdir()

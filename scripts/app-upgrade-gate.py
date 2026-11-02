@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 SINGLE_FILES = "docker-compose.yaml:docker-compose.prod.yaml"
 CLONE_FILES = SINGLE_FILES + ":docker-compose.clones.yaml"
@@ -175,8 +176,9 @@ def check_caddy():
         stop("no regular Caddy bind mount could be compared")
 
 
-def check_prediction(project, embedder_changed, clones=False):
-    rendered = json.loads(compose("config", "--format", "json"))
+def check_prediction(project, embedder_changed, clones=False, run_compose=None,
+                     require_app_start=True):
+    rendered = json.loads((run_compose or compose)("config", "--format", "json"))
     if rendered.get("name") != project:
         stop("Compose project changed before prediction")
     targets = {}
@@ -189,11 +191,15 @@ def check_prediction(project, embedder_changed, clones=False):
     args = ["--dry-run", "--progress", "json", "up", "-d"]
     if not clones:
         args.append("--remove-orphans")
-    result = subprocess.run(["docker", "compose", *args], capture_output=True, check=False)
-    if result.returncode:
-        stop("Compose dry run failed")
+    if run_compose is None:
+        result = subprocess.run(["docker", "compose", *args], capture_output=True, check=False)
+        if result.returncode:
+            stop("Compose dry run failed")
+        predicted_output = result.stderr
+    else:
+        predicted_output = run_compose(*args)
     # Compose's JSON progress stream is on stderr, not stdout.
-    predicted = result.stderr.decode().splitlines()
+    predicted = predicted_output.decode().splitlines()
     if not predicted:
         stop("Compose dry run returned no prediction")
     actions = []
@@ -233,14 +239,83 @@ def check_prediction(project, embedder_changed, clones=False):
         else:
             stop(f"forbidden predicted {status} for {service}")
         actions.append(f"{service}: {status}")
-    if not app_start or (embedder_changed and not embedder_recreate):
+    if (require_app_start and not app_start) or (embedder_changed and not embedder_recreate):
         stop("release app start or intended embedder recreation is absent from prediction")
     print("Allowed dry-run actions: " + ", ".join(actions))
+    return actions
+
+
+def target_prediction(target_sha):
+    if not re.fullmatch(r"[0-9a-f]{40}", target_sha):
+        stop("target must be a full commit SHA")
+    files, project, current = configuration()
+    with tempfile.TemporaryDirectory(prefix="upgrade-target-") as directory:
+        target_files = []
+        for index, name in enumerate(files.split(":")):
+            target_file = Path(directory) / f"{index}-{Path(name).name}"
+            target_file.write_bytes(command("git", "show", f"{target_sha}:{name}"))
+            target_files.extend(("-f", str(target_file)))
+
+        def target_compose(*args):
+            env = os.environ.copy()
+            env.pop("COMPOSE_FILE", None)
+            env["COMPOSE_PROFILES"] = "app"
+            result = subprocess.run(
+                ["docker", "compose", "--project-directory", str(Path.cwd()),
+                 "--env-file", str(Path.cwd() / ".env"), *target_files, *args],
+                env=env, capture_output=True, check=False,
+            )
+            if result.returncode:
+                stop("target Compose render or dry run failed")
+            return result.stderr if "--dry-run" in args else result.stdout
+
+        rendered = json.loads(target_compose("config", "--format", "json"))
+        if rendered.get("name") != project:
+            stop("target Compose project changed")
+        if str(rendered["services"]["embedder"].get("mem_limit")) != "3221225472":
+            stop("target embedder does not have the durable 3 GiB Compose cap")
+        target = {}
+        for line in target_compose("config", "--hash", "*").decode().splitlines():
+            service, digest = line.split()
+            if service in target or not re.fullmatch(r"[0-9a-f]{64}", digest):
+                stop("invalid target Compose hash output")
+            target[service] = digest
+        if target.keys() != current.keys():
+            stop("target Compose service inventory changed")
+        for service in current:
+            if service not in {"app", "embedder"} and target[service] != current[service]:
+                stop(f"forbidden target Compose hash change: {service}")
+        actions = check_prediction(project, target["embedder"] != current["embedder"],
+                                   files != SINGLE_FILES, target_compose, False)
+    return {"target_sha": target_sha, "files": files, "project": project,
+            "current_hashes": current, "target_hashes": target, "dry_run_actions": actions}
 
 
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] in {"predict", "prestop"}:
+        action, target_sha, path = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+        if action == "predict" and path.exists():
+            stop("prediction artifact already exists")
+        if action == "prestop":
+            try:
+                recorded = json.loads(path.read_text())
+            except (OSError, ValueError):
+                stop("private target prediction missing or unreadable")
+            if not isinstance(recorded, dict) or recorded.get("target_sha") != target_sha:
+                stop("private target prediction has a different target")
+        expected = target_prediction(target_sha)
+        if action == "predict":
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as output:
+                json.dump(expected, output)
+            print("Private target prediction captured")
+            return
+        if recorded != expected:
+            stop("private target prediction differs from pinned target or current Compose state")
+        print("prestop prediction gate passed")
+        return
     if len(sys.argv) != 3 or sys.argv[1] not in {"capture", "preboot", "postboot"}:
-        stop("usage: app-upgrade-gate.py capture|preboot|postboot BASELINE.json")
+        stop("usage: app-upgrade-gate.py predict|prestop SHA PREDICTION.json or capture|preboot|postboot BASELINE.json")
     action, path = sys.argv[1], Path(sys.argv[2])
     if action == "capture":
         if path.exists():

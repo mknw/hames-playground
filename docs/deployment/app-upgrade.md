@@ -7,6 +7,13 @@ and review the full target commit SHA and migration diff first. Keep Engine and
 database image changes separate; use the [Engine gate](docker-engine-upgrade.md)
 for those. Never use `down -v`, reset data volumes or prune retained images.
 
+The §1 `predict` command renders the pinned target's Compose files without
+moving the release checkout, checks protected-service hashes, and records its
+dry-run actions in a private 0600 artifact. `prestop` recomputes the prediction
+against that same SHA and the current Compose state; the first RELEASE app stop
+is conditional on its pass. The later `capture` gate still requires a stopped
+app and is a separate baseline for the boot checks.
+
 ## 1. Stop writers and take local dumps before changing the checkout
 
 Hold public ingress for **both hostnames** at the operator's external maintenance
@@ -41,6 +48,19 @@ dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 ( umask 077; mkdir -p -- "$PWD/upgrade-dumps" &&
   test ! -L "$PWD/upgrade-dumps" && chmod 700 -- "$PWD/upgrade-dumps" &&
   mkdir -m 700 -- "$dump_root" ) || exit 1
+# Resolve the reviewed target and prove its Compose shape before disabling DEV
+# routines or stopping RELEASE. This writes only a private prediction artifact.
+TARGET_SHA='<reviewed-full-40-character-target-sha>'
+test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
+case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+( umask 022; git fetch --quiet --prune --tags origin ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" ||
+  ( umask 022; git fetch --quiet origin "$TARGET_SHA" ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" || exit 1
+gate_copy="$dump_root/app-upgrade-gate.py"
+( umask 077; git show "$TARGET_SHA:scripts/app-upgrade-gate.py" > "$gate_copy" ) || exit 1
+prediction="$dump_root/target-prediction.json"
+python3 "$gate_copy" predict "$TARGET_SHA" "$prediction" || exit 1
 dev_psql() {
   docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
     -d "$DEV_DB" -X -v ON_ERROR_STOP=1 -qAt "$@"
@@ -90,6 +110,7 @@ user for either shape. Capture the §3 baseline **after** the dump, because the
 backup script restarts Neo4j:
 
 ```sh
+python3 "$gate_copy" prestop "$TARGET_SHA" "$prediction" || exit 1
 docker compose stop app || exit 1
 neo4j_id=$(docker compose ps -q neo4j) || exit 1
 test -n "$neo4j_id" || exit 1
@@ -128,8 +149,11 @@ successful `MANIFEST`, and absence of `INCOMPLETE`; also require the shared
 `neo4j.dump` and `redis.rdb`. The backup verifies Postgres's archive table of
 contents and Redis's header; Neo4j is checked only for nonempty bytes
 (scripts/backup-preview.sh:164). PREVIEW §9's isolated restore drill is the
-loadability check. Capture with the currently running Neo4j image, not a rebuilt
-mutable tag. The script restarts Neo4j after its dump; a failed health wait is a
+loadability check. The backup script captures the running Neo4j container's
+filesystem into a temporary image and proves it can run `neo4j-admin` before
+stopping Neo4j. It checks the expected image ID and data volume supplied above;
+a changed container refuses the dump. The temporary image is removed on exit.
+The script restarts Neo4j after its dump; a failed health wait is a
 failed gate. Do not continue with partial files.
 
 Keep this `upgrade-dumps/` directory outside the routinely rotated `backups/`
@@ -170,23 +194,12 @@ between those stages.
 
 From the current release checkout root, after §1 and §2, capture the baseline
 **before checkout**. Keep the gate script and JSON private in the retained dump
-directory. Fetch the reviewed target under `022` without moving the checkout,
-then copy the reviewed gate script from that SHA. A missing script or baseline
-stops the release. Set `TARGET_SHA` to the reviewed full commit and replace the
+directory. The reviewed target and gate script were fetched before the first
+mutation in §1. A missing script or baseline stops the release. Replace the
 example hostname and email below with the existing real values. Preserve any
 other required bootstrap arguments on **every** call:
 
 ```bash
-TARGET_SHA='<reviewed-full-40-character-target-sha>'
-test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
-case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
-umask 022
-( umask 022; git fetch --quiet --prune --tags origin ) || exit 1
-git cat-file -e "$TARGET_SHA^{commit}" ||
-  ( umask 022; git fetch --quiet origin "$TARGET_SHA" ) || exit 1
-git cat-file -e "$TARGET_SHA^{commit}" || exit 1
-gate_copy="$dump_root/app-upgrade-gate.py"
-( umask 077; git show "$TARGET_SHA:scripts/app-upgrade-gate.py" > "$gate_copy" ) || exit 1
 baseline="$dump_root/preboot-baseline.json"
 python3 "$gate_copy" capture "$baseline" || exit 1
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \

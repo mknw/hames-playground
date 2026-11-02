@@ -100,6 +100,7 @@ beforeAll(async () => {
       description: 'Synthetic pause holding a payload',
       welcome: 'Synthetic pause holding a payload',
       servers: [],
+      egressPolicy: 'local-only',
       icon: 'i-material-symbols-rule',
       accent: 'indigo',
       createPatterns: async () => [

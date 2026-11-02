@@ -108,6 +108,7 @@ export function createExaTransport(
         }
         return listed.map((tool) => ({
           name: tool.name,
+          ...(tool.name === 'web_search_exa' ? { tags: ['web-search'] } : {}),
           description: tool.description ?? '',
           inputSchema: tool.inputSchema,
         }))

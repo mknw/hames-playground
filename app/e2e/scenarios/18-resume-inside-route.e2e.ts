@@ -91,6 +91,7 @@ beforeAll(async () => {
     description: 'Synthetic pause inside a route',
     welcome: 'Synthetic pause inside a route',
     servers: [],
+    egressPolicy: 'local-only',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns: async () => [

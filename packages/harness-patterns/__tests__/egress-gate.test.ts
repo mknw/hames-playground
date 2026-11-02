@@ -40,7 +40,8 @@ import { callTool, EGRESS_CHECK_FAILED } from '../mcp-client.server'
 import { setLivePatternEnabled } from '../live-event-context.server'
 import { neutralizeFenceMarkers } from '../injection-guard'
 import { renderGuardGateState } from '../guard-gate.server'
-import { registerToolNamespaces } from '../tools.server'
+import { registerToolNamespaces, ToolsFrom, toolTagsFor } from '../tools.server'
+import { markDegradedToolSurface } from '../gateway-health.server'
 import {
   amendRunFrame,
   registerEffectiveTier,
@@ -306,7 +307,7 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
   // fillers pass), or test the raw value instead of the decoded one (the
   // percent-encoded ZWSP passes), or test the placeholder on `text` instead of
   // `unescaped` (the escaped placeholder passes): each case reaches the seam.
-  it.each(['filter', 'roster'] as const)('%s mode', async (mode) => {
+  it.each(['evidence', 'refuse'] as const)('%s name match', async (nameMatch) => {
     for (const [args, text] of [
       [{ query: `${NAME.slice(0, 3)}${ZWSP}${NAME.slice(3)}` }, EGRESS_TEXTS.formatCharacter],
       [{ query: `solar${SOFT_HYPHEN}panels` }, EGRESS_TEXTS.formatCharacter],
@@ -332,9 +333,16 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
       const decide = egressDecide([PUBLIC])
       const roster = fakeRoster([NAME])
       let result: ToolCallResult | undefined
-      const events = await run({ mode, decide, roster }, async () => {
-        result = await callTool('web_search', args as Record<string, unknown>)
-      })
+      const events = await run(
+        {
+          detectors: { default: { nameMatch, decide: nameMatch === 'evidence' ? 'on' : 'off' } },
+          decide,
+          roster,
+        },
+        async () => {
+          result = await callTool('web_search', args as Record<string, unknown>)
+        },
+      )
       expect(result, JSON.stringify(args).slice(0, 60)).toMatchObject({
         success: false,
         error: text,
@@ -359,9 +367,15 @@ describe('step 1: integrity refusals run before the roster and Decide, in both m
   // longer contains the roster literal and the call is dispatched.
   it('a fullwidth spelling of a roster name matches after NFKC', async () => {
     let result: ToolCallResult | undefined
-    await run({ mode: 'roster', roster: fakeRoster([NAME]) }, async () => {
-      result = await callTool('web_search', { query: `${fullwidth(NAME)} phone` })
-    })
+    await run(
+      {
+        detectors: { default: { nameMatch: 'refuse', decide: 'off' } },
+        roster: fakeRoster([NAME]),
+      },
+      async () => {
+        result = await callTool('web_search', { query: `${fullwidth(NAME)} phone` })
+      },
+    )
     expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.roster })
   })
 
@@ -862,12 +876,16 @@ describe("'filter' mode", () => {
     expect(result).toMatchObject({ success: false })
   })
 
-  it("a per-tier mode resolves per call: 'roster' on the tier that names it", async () => {
+  it('one detector pair applies on the Anthropic tier', async () => {
     registerEffectiveTier(() => 'anthropic')
     const decide = egressDecide([PUBLIC])
     let result: ToolCallResult | undefined
     await run(
-      { decide, mode: { default: 'filter', anthropic: 'roster' }, roster: fakeRoster([NAME]) },
+      {
+        decide,
+        detectors: { default: { nameMatch: 'refuse', decide: 'on' } },
+        roster: fakeRoster([NAME]),
+      },
       async () => {
         result = await callTool('web_search', { query: NAME })
       },
@@ -898,10 +916,17 @@ describe("'roster' mode", () => {
   it('a roster match is refused with the roster text and no Decide call; not a tripwire', async () => {
     const decide = egressDecide([PUBLIC])
     const results: ToolCallResult[] = []
-    const events = await run({ mode: 'roster', decide, roster: fakeRoster([NAME]) }, async () => {
-      results.push(await callTool('web_search', { query: `${NAME} phone` }))
-      results.push(await callTool('web_search', { query: 'solar panels' }))
-    })
+    const events = await run(
+      {
+        detectors: { default: { nameMatch: 'refuse', decide: 'off' } },
+        decide,
+        roster: fakeRoster([NAME]),
+      },
+      async () => {
+        results.push(await callTool('web_search', { query: `${NAME} phone` }))
+        results.push(await callTool('web_search', { query: 'solar panels' }))
+      },
+    )
     expect(results[0]).toMatchObject({ success: false, error: EGRESS_TEXTS.roster })
     expect(results[1]).toMatchObject({ success: true })
     expect(decide.seen.states).toHaveLength(0)
@@ -1114,13 +1139,13 @@ describe('the egress state', () => {
       result = await callTool('web_search', { query: 'solar eeeeeeeeeeeeeeee' })
     })
     // No nonce the request does not carry: the question is unavailable, and a
-    // short call on a loaded directory goes out on the roster alone.
+    // an unrenderable state refuses before transport.
     expect(decide.seen.states).toEqual([])
-    expect(result).toMatchObject({ success: true })
+    expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.uncheckedClosing })
     expect(ofType<WarningEventData>(events, 'warning')).toEqual([
       expect.objectContaining({
         message: EGRESS_WARNINGS.checkDegraded,
-        detail: { timeouts: 0, failures: 1, rosterOnly: 1, refusedUnchecked: 0 },
+        detail: { timeouts: 0, failures: 1 },
       }),
     ])
   })
@@ -1245,155 +1270,37 @@ describe('the shared fence neutraliser', () => {
 })
 
 // ============================================================================
-// The directory matrix (D5) and Decide's failures
-// ============================================================================
-
-describe('the directory matrix', () => {
-  const SHORT = { query: 'solar panels' }
-  const MATCH = { query: `${NAME} phone` }
-  const URL_QUERY = { query: 'see https://news.example/a?id=7' }
-
-  async function cell(
-    directory: EgressDirectoryStatus,
-    decideScript: Step[] | 'roster-mode',
-    args: Record<string, unknown>,
-    extra: Partial<EgressGateConfig> = {},
-  ) {
-    const config: Partial<EgressGateConfig> =
-      decideScript === 'roster-mode'
-        ? { mode: 'roster' }
-        : { decide: egressDecide(decideScript), timeoutMs: 50 }
-    let result: ToolCallResult | undefined
-    let after: ToolCallResult | undefined
-    const events = await run(
-      { ...config, roster: fakeRoster([NAME], directory), ...extra },
-      async () => {
-        await via('info', async () => {
-          result = await callTool('web_search', args)
-          after = await callTool('web_search', { query: 'another public query' })
-        })
-      },
-    )
-    return { result: result!, after: after!, events }
-  }
-
-  // MUTATION: swap any one cell (e.g. leave `unreadable` to the roster), or
-  // return a category text in a D5 cell: the table goes red at that row.
-  it.each([
-    // directory, Decide, args, the call's outcome, whether it closed the route
-    ['loaded', 'roster-mode', MATCH, EGRESS_TEXTS.roster, false],
-    ['loaded', 'roster-mode', SHORT, 'sent', false],
-    ['loaded', 'down', MATCH, EGRESS_TEXTS.roster, false],
-    ['loaded', 'down', SHORT, 'sent', false],
-    ['loaded', 'down', URL_QUERY, EGRESS_TEXTS.uncheckedClosing, true],
-    ['empty', 'roster-mode', MATCH, EGRESS_TEXTS.roster, false],
-    ['empty', 'roster-mode', SHORT, EGRESS_TEXTS.uncheckedClosing, true],
-    ['empty', 'down', SHORT, EGRESS_TEXTS.uncheckedClosing, true],
-    ['none', 'roster-mode', MATCH, EGRESS_TEXTS.roster, false],
-    ['none', 'down', SHORT, EGRESS_TEXTS.uncheckedClosing, true],
-    ['unreadable', 'roster-mode', SHORT, EGRESS_TEXTS.uncheckedClosing, true],
-    ['unreadable', 'down', MATCH, EGRESS_TEXTS.uncheckedClosing, true],
-    ['empty', 'answers', MATCH, 'sent', false],
-    ['unreadable', 'answers', SHORT, 'sent', false],
-    ['none', 'answers', SHORT, 'sent', false],
-  ] as const)('%s directory, Decide %s, %j', async (directory, decide, args, outcome, closes) => {
-    const script: Step[] | 'roster-mode' =
-      decide === 'roster-mode' ? 'roster-mode' : decide === 'down' ? ['throw'] : [PUBLIC]
-    const { result, after, events } = await cell(directory, script, args)
-    if (outcome === 'sent') expect(result).toMatchObject({ success: true })
-    else expect(result).toMatchObject({ success: false, error: outcome })
-    // A D5 refusal is a tripwire (the route closes at N = 0); a roster veto is not.
-    if (closes) expect(after).toMatchObject({ error: EGRESS_TEXTS.routeClosed })
-    else if (directory === 'loaded' || decide === 'answers')
-      expect(after).toMatchObject({ success: true })
-    // One tripwire record per D5 refusal: this call's, or (an empty or none
-    // directory after a roster veto) the follow-up call's own.
-    const followUpRefused = !closes && after.error === EGRESS_TEXTS.uncheckedClosing
-    expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toHaveLength(
-      closes || followUpRefused ? 1 : 0,
-    )
-  })
-
-  // MUTATION: read a status outside the four as `loaded` instead of
-  // `unreadable`: the short call goes out on the roster alone.
-  it('a directory status outside the four is read as unreadable', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { result, events } = await cell('bogus' as EgressDirectoryStatus, ['throw'], SHORT)
-    expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.uncheckedClosing })
-    expect(sent).not.toHaveBeenCalled()
-    expect(ofType<WarningEventData>(events, 'warning').map((w) => w.message)).toContain(
-      EGRESS_WARNINGS.directoryUnreadable,
-    )
-  })
-
-  // MUTATION: ignore `loadedDecideDown` (always 'by-shape'), or default it to
-  // 'ask': the short call's outcome flips in one of the two runs.
-  it("loadedDecideDown: 'ask' refuses a short call too; 'by-shape' (default) leaves it to the roster", async () => {
-    const asked = await cell('loaded', ['throw'], SHORT, { loadedDecideDown: 'ask' })
-    expect(asked.result).toMatchObject({ error: EGRESS_TEXTS.uncheckedClosing })
-    const byDefault = await cell('loaded', ['throw'], SHORT)
-    expect(byDefault.result).toMatchObject({ success: true })
-    const long = await cell('loaded', ['throw'], { query: 'q '.repeat(120) })
-    expect(long.result).toMatchObject({ error: EGRESS_TEXTS.uncheckedClosing })
-  })
-
-  // MUTATION: drop the per-turn warning or its counts: no egress_check warning
-  // carries `rosterOnly`.
-  it('empty and unreadable warn once; a declared none does not; Decide down is counted', async () => {
-    const warnings = async (directory: EgressDirectoryStatus, script: Step[]) =>
-      ofType<WarningEventData>((await cell(directory, script, SHORT)).events, 'warning')
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect((await warnings('empty', [PUBLIC])).map((w) => w.message)).toEqual([
-      EGRESS_WARNINGS.directoryMissing,
-    ])
-    expect((await warnings('unreadable', [PUBLIC])).map((w) => w.message)).toEqual([
-      EGRESS_WARNINGS.directoryUnreadable,
-    ])
-    expect(await warnings('none', [PUBLIC])).toEqual([])
-    const degraded = await warnings('loaded', ['throw'])
-    expect(degraded).toHaveLength(1)
-    expect(degraded[0]).toMatchObject({
-      task: 'egress_check',
-      message: EGRESS_WARNINGS.checkDegraded,
-      detail: { timeouts: 0, failures: 2, rosterOnly: 2, refusedUnchecked: 0 },
-    })
-  })
-
-  const directoryWarnings = (events: ContextEvent[]) =>
-    ofType<WarningEventData>(events, 'warning').filter(
-      (w) => w.message === EGRESS_WARNINGS.directoryMissing,
-    )
-
-  // MUTATION: warn at the gate's entry again (before any call): this turn makes
-  // only a local call, and its warning would say outside requests were checked.
-  it('a turn with no outgoing call records no directory warning and logs nothing', async () => {
-    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const events = await run({ mode: 'roster', roster: fakeRoster([NAME], 'empty') }, async () => {
-      expect(await callTool('read_neo4j_cypher', { query: 'RETURN 1' })).toMatchObject({
-        success: true,
-      })
-    })
-    expect(directoryWarnings(events)).toEqual([])
-    expect(log).not.toHaveBeenCalled()
-  })
-
-  // MUTATION: seed the latch `false` instead of reading the turn's events: the
-  // resumed invocation warns a second time. Or read every event instead of the
-  // turn's: the earlier turn's warning silences this one.
-  it('the directory warning is once per TURN: a resumed invocation stays quiet, a new turn warns', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const config = { mode: 'roster' as const, roster: fakeRoster([NAME], 'empty') }
-    const outgoing = async () => {
-      await via('info', () => callTool('web_search', { query: 'solar panels' }))
-    }
-    const first = await run(config, outgoing)
-    expect(directoryWarnings(first)).toHaveLength(1)
-    // Resumed: the paused invocation's warning is already in this turn.
-    expect(directoryWarnings(await run(config, outgoing, { prior: first }))).toEqual([])
-    // The next turn: that warning sits before its user message.
-    const next = [...first, createEvent('user_message', 'harness', { content: 'next question' })]
-    expect(directoryWarnings(await run(config, outgoing, { prior: next }))).toHaveLength(1)
-  })
+// Active Decide outages refuse on every directory shape.
+// MUTATION: restore the directory fallback or emit no error event: these rows fail.
+describe('active Decide outage', () => {
+  it.each(['loaded', 'empty', 'none', 'unreadable'] as const)(
+    '%s refuses with fixed error and no prompt',
+    async (directory) => {
+      const sentinel = 'private exception text'
+      const decide = Object.assign(
+        async () => {
+          throw new Error(sentinel)
+        },
+        { supportedTypes: ['choice'] as const },
+      ) as DecideFn
+      let result: ToolCallResult | undefined
+      const events = await run(
+        { decide, roster: fakeRoster([], directory), askPerson: true },
+        async () => {
+          result = await callTool('web_search', { query: 'solar panels' })
+        },
+      )
+      expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.uncheckedClosing })
+      expect(sent).not.toHaveBeenCalled()
+      expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toHaveLength(1)
+      expect(ofType<{ kind: string; severity: string }>(events, 'error')).toEqual([
+        expect.objectContaining({ kind: 'egress_decide_unavailable', severity: 'irrecoverable' }),
+      ])
+      expect(ofType(events, 'hitl_request')).toEqual([])
+      expect(JSON.stringify(events)).not.toContain(sentinel)
+      expect(JSON.stringify(result)).not.toContain(sentinel)
+    },
+  )
 })
 
 describe("Decide's failures", () => {
@@ -1415,10 +1322,10 @@ describe("Decide's failures", () => {
     })
     expect(hung.seen.states).toHaveLength(1)
     expect(hung.seen.signals[0]?.aborted).toBe(true)
-    // Loaded, short, no URL query: it went out on the roster alone, and the turn says so.
-    expect(late).toMatchObject({ success: true })
+    // A loaded directory cannot bypass an active Decide timeout.
+    expect(late).toMatchObject({ success: false, error: EGRESS_TEXTS.uncheckedClosing })
     expect(ofType<WarningEventData>(events, 'warning')[0]).toMatchObject({
-      detail: { timeouts: 1, failures: 0, rosterOnly: 1, refusedUnchecked: 0 },
+      detail: { timeouts: 1, failures: 0 },
     })
   })
 
@@ -1438,9 +1345,9 @@ describe("Decide's failures", () => {
     await vi.advanceTimersByTimeAsync(1)
     await done
     expect(hung.seen.signals[0]?.aborted).toBe(true)
-    expect(result).toMatchObject({ success: true })
+    expect(result).toMatchObject({ success: false, error: EGRESS_TEXTS.uncheckedClosing })
     expect(ofType<WarningEventData>(events!, 'warning')[0]).toMatchObject({
-      detail: { timeouts: 1, failures: 0, rosterOnly: 1, refusedUnchecked: 0 },
+      detail: { timeouts: 1, failures: 0 },
     })
   })
 
@@ -1543,12 +1450,15 @@ describe('the roster', () => {
         : { success: true, data: 'ok' },
     )
     const results: ToolCallResult[] = []
-    await run({ mode: 'roster', roster: fakeRoster([]) }, async () => {
-      await via('office', () => callTool('read_neo4j_cypher', { query: 'RETURN 1' }))
-      results.push(
-        await via('info', () => callTool('web_search', { query: 'Mia Example sick leave' })),
-      )
-    })
+    await run(
+      { detectors: { default: { nameMatch: 'refuse', decide: 'off' } }, roster: fakeRoster([]) },
+      async () => {
+        await via('office', () => callTool('read_neo4j_cypher', { query: 'RETURN 1' }))
+        results.push(
+          await via('info', () => callTool('web_search', { query: 'Mia Example sick leave' })),
+        )
+      },
+    )
     expect(results[0]).toMatchObject({ error: EGRESS_TEXTS.roster })
   })
 })
@@ -1568,7 +1478,10 @@ describe('the fixed texts', () => {
       })
     }
     const carried = { query: `${NAME} PERSON_7 ⟦sentinel⟧`, note: `${NAME} ⟦sentinel⟧` }
-    await probe({ mode: 'roster' }, [{ query: `${NAME} ⟦sentinel⟧` }, carried])
+    await probe({ detectors: { default: { nameMatch: 'refuse', decide: 'off' } } }, [
+      { query: `${NAME} ⟦sentinel⟧` },
+      carried,
+    ])
     await probe({ decide: egressDecide([PERSONAL]) }, [{ query: `${NAME} ⟦sentinel⟧` }, carried])
     await probe({ decide: egressDecide([COMPANY]), maxOutgoingRetriesPostTripwire: 1 }, [
       { query: `${NAME} ⟦sentinel⟧` },
@@ -1931,9 +1844,15 @@ it('a blocked name is recorded once without request content or a server-log copy
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
       logged.push(args.map(String).join(' '))
     })
-  const events = await run({ mode: 'roster', roster: fakeRoster([sentinel]) }, async () => {
-    await callTool('web_search', { query: sentinel })
-  })
+  const events = await run(
+    {
+      detectors: { default: { nameMatch: 'refuse', decide: 'off' } },
+      roster: fakeRoster([sentinel]),
+    },
+    async () => {
+      await callTool('web_search', { query: sentinel })
+    },
+  )
   expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toEqual([
     { tool: 'web_search', route: null, rule: 'name-match' },
   ])
@@ -1973,12 +1892,20 @@ it('a live listener failure cannot turn one step-1 refusal into two blocks', asy
 
 describe('construction refuses what would read like a gate and check nothing', () => {
   it.each([
-    [{ mode: 'filter' as const }, /no `decide` was passed/],
-    [{ mode: 'strict' as never }, /not 'filter' or 'roster'/],
-    [{ mode: { anthropic: 'roster' } as never }, /no `default`/],
+    [
+      { detectors: { default: { nameMatch: 'evidence', decide: 'on' } } as const },
+      /no `decide` was passed/,
+    ],
+    [
+      { detectors: { default: { nameMatch: 'strict', decide: 'off' } } as never },
+      /invalid detectors/,
+    ],
+    [
+      { detectors: { default: { nameMatch: 'off', decide: 'strict' } } as never },
+      /invalid detectors/,
+    ],
     [{ maxOutgoingRetriesPostTripwire: -1 }, /maxOutgoingRetriesPostTripwire/],
     [{ maxOutgoingRetriesPostTripwire: 1.5 }, /maxOutgoingRetriesPostTripwire/],
-    [{ loadedDecideDown: 'never' as never }, /loadedDecideDown/],
     [{ threshold: 1.5, decide: egressDecide([PUBLIC]) }, /threshold/],
     [{ timeoutMs: 0, decide: egressDecide([PUBLIC]) }, /timeoutMs/],
   ])('%j', (extra, message) => {
@@ -1990,5 +1917,222 @@ describe('construction refuses what would read like a gate and check nothing', (
     expect(() =>
       withEgressGate({ local: [], catalog: CATALOG, decide: noul as unknown as DecideFn }),
     ).toThrow(/choice/)
+  })
+})
+
+// Revision 5, slice 13. MUTATION: make evidence veto, send a refuse match to
+// active Decide, or read the roster under off: this table turns red.
+describe('per-tool detector pairs', () => {
+  it('carries declared tool-type tags beside the name-only catalog', () => {
+    const tools = ToolsFrom([{ name: 'search', tags: ['web-search'] }, { name: 'fetch' }])
+    expect(tools.all).toEqual(['search', 'fetch'])
+    expect(toolTagsFor(tools.all)).toEqual({ search: ['web-search'] })
+  })
+
+  it.each(['off', 'evidence', 'refuse'] as const)(
+    '%s name matching with each Decide setting',
+    async (nameMatch) => {
+      for (const decision of ['off', 'on', 'shadow'] as const) {
+        const roster = fakeRoster([NAME])
+        const rosterSource = vi.fn(roster)
+        const decide = egressDecide([PUBLIC])
+        let result: ToolCallResult | undefined
+        const events = await run(
+          { detectors: { default: { nameMatch, decide: decision } }, roster: rosterSource, decide },
+          async () => {
+            result = await callTool('web_search', { query: NAME })
+          },
+          { frame: { callKey: 'pair-1', inference: { tier: 'self_deployed' } } },
+        )
+        expect(result?.success, `${nameMatch}/${decision}`).toBe(nameMatch !== 'refuse')
+        expect(roster.matched.length, `${nameMatch}/${decision}`).toBe(nameMatch === 'off' ? 0 : 1)
+        expect(rosterSource, `${nameMatch}/${decision}`).toHaveBeenCalledTimes(
+          nameMatch === 'off' ? 0 : 1,
+        )
+        expect(decide.seen.states.length, `${nameMatch}/${decision}`).toBe(
+          decision === 'on' && nameMatch === 'refuse' ? 0 : decision === 'off' ? 0 : 1,
+        )
+        expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toEqual([])
+        if (nameMatch === 'refuse')
+          expect(ofType<EgressBlockedEventData>(events, 'egress_blocked')).toContainEqual({
+            tool: 'web_search',
+            route: null,
+            rule: 'name-match',
+          })
+        if (decision === 'shadow')
+          expect(
+            ofType<{ shadow: true; tool: string; callId: string }>(events, 'decision_made'),
+          ).toContainEqual(
+            expect.objectContaining({
+              shadow: true,
+              tool: 'web_search',
+              callId: 'pair-1',
+              wouldRefuse: false,
+            }),
+          )
+      }
+    },
+  )
+
+  // MUTATION: resolve tags ahead of an exact name, or choose one conflicting
+  // tag silently: the exact override and construction refusals fail.
+  it('resolves exact > tag > default and validates selectors', async () => {
+    const tags = { web_search: ['web-search'], web_search_exa: ['web-search'] }
+    const pair = { nameMatch: 'refuse', decide: 'off' } as const
+    const off = { nameMatch: 'off', decide: 'off' } as const
+    const config = {
+      local: ['neo4j'],
+      catalog: CATALOG,
+      toolTags: tags,
+      roster: fakeRoster([NAME]),
+      detectors: { default: off, tags: { 'web-search': pair }, tools: { web_search: off } },
+    }
+    let first: ToolCallResult | undefined
+    let second: ToolCallResult | undefined
+    await run(config, async () => {
+      first = await callTool('web_search', { query: NAME })
+      second = await callTool('web_search_exa', { query: NAME })
+    })
+    expect(first?.success).toBe(true)
+    expect(second?.error).toBe(EGRESS_TEXTS.roster)
+    expect(() =>
+      withEgressGate({
+        ...config,
+        detectors: { default: off, tags: { egress: pair, 'web-search': off } },
+      }),
+    ).toThrow(/conflicting tag/)
+    for (const bad of [
+      { tools: { missing: pair } },
+      { tools: { read_neo4j_cypher: pair } },
+      { tags: { typo: pair } },
+    ])
+      expect(() =>
+        withEgressGate({ ...config, detectors: { default: off, ...bad } as never }),
+      ).toThrow()
+    expect(() =>
+      withEgressGate({ ...config, detectors: { default: off, tags: { egress: pair } } }),
+    ).not.toThrow()
+    expect(() =>
+      withEgressGate({
+        ...config,
+        detectors: { default: off, tags: { egress: pair, 'web-search': pair } },
+      }),
+    ).not.toThrow()
+    expect(() =>
+      withEgressGate({
+        ...config,
+        detectors: { default: { nameMatch: 'typo', decide: 'on' } as never },
+      }),
+    ).toThrow(/invalid detectors/)
+    let context7: ToolCallResult | undefined
+    await run({ ...config, detectors: { default: off, tags: { egress: pair } } }, async () => {
+      context7 = await callTool('resolve-library-id', { query: NAME })
+    })
+    expect(context7?.error).toBe(EGRESS_TEXTS.roster)
+  })
+
+  // MUTATION: wait for shadow before transport or cap the serial queue at one:
+  // the transport observation or call count changes.
+  it('drains fast shadow questions serially after transport', async () => {
+    const decide = egressDecide([PERSONAL])
+    const transportCountAtAsk: number[] = []
+    const measured = Object.assign(
+      async (input: Parameters<DecideFn>[0]) => {
+        transportCountAtAsk.push(sent.mock.calls.length)
+        return decide(input)
+      },
+      { supportedTypes: ['choice'] as const },
+    ) as DecideFn
+    const events = await run(
+      { detectors: { default: { nameMatch: 'off', decide: 'shadow' } }, decide: measured },
+      async () => {
+        for (let n = 0; n < 3; n++)
+          expect((await callTool('web_search', { query: `public ${n}` })).success).toBe(true)
+      },
+    )
+    expect(transportCountAtAsk).toEqual([3, 3, 3])
+    const made = ofType<{ shadow: true; abstained: boolean; skipReason?: string }>(
+      events,
+      'decision_made',
+    )
+    expect(made).toHaveLength(3)
+    expect(made.filter((d) => d.skipReason === 'queued')).toHaveLength(0)
+    expect(ofType<EgressRefusedEventData>(events, 'egress_refused')).toEqual([])
+  })
+
+  it('can start a later shadow question after one completed in the same turn', async () => {
+    const decide = egressDecide([PUBLIC])
+    const prior = createEvent('decision_made', 'prior', {
+      shadow: true,
+      tool: 'web_search',
+      callId: 'earlier',
+      wouldRefuse: false,
+    })
+    const events = await run(
+      { detectors: { default: { nameMatch: 'off', decide: 'shadow' } }, decide },
+      async () => {
+        expect((await callTool('web_search', { query: 'public' })).success).toBe(true)
+      },
+      { prior: [prior] },
+    )
+    expect(decide.seen.states).toHaveLength(1)
+    expect(ofType<{ shadow: true; callId: string }>(events, 'decision_made')).toContainEqual(
+      expect.objectContaining({ shadow: true, callId: expect.any(String), wouldRefuse: false }),
+    )
+  })
+
+  // MUTATION: send a vetoed Anthropic query to Decide: the seam sees a state.
+  it('records Anthropic veto abstention without a shadow request', async () => {
+    const decide = egressDecide([PUBLIC])
+    const events = await run(
+      {
+        detectors: { default: { nameMatch: 'refuse', decide: 'shadow' } },
+        decide,
+        roster: fakeRoster([NAME]),
+      },
+      async () => {
+        expect((await callTool('web_search', { query: NAME })).success).toBe(false)
+      },
+      { frame: { inference: { tier: 'anthropic' } } },
+    )
+    expect(decide.seen.states).toEqual([])
+    expect(ofType<{ skipReason: string }>(events, 'decision_made')).toContainEqual(
+      expect.objectContaining({ shadow: true, skipReason: 'anthropic-veto' }),
+    )
+  })
+
+  // MUTATION: skip the given-address rule under both-off, or fall through an
+  // unknown degraded-catalog call: one of these refusals disappears.
+  it('runs step 1 and O21 under both-off, and refuses unverified degraded calls', async () => {
+    const catalog = [...CATALOG]
+    markDegradedToolSurface(catalog)
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let placeholder: ToolCallResult | undefined
+    let ungiven: ToolCallResult | undefined
+    let unknown: ToolCallResult | undefined
+    const events = await run(
+      {
+        catalog,
+        detectors: {
+          default: { nameMatch: 'off', decide: 'off' },
+          tools: { unverified_outgoing: { nameMatch: 'off', decide: 'off' } },
+        },
+        fetchTools: ['fetch'],
+        addressSources: ['web'],
+      },
+      async () => {
+        placeholder = await callTool('web_search', { query: 'PERSON_1' })
+        ungiven = await callTool('fetch', { url: 'https://unknown.example/' })
+        unknown = await callTool('unverified_outgoing', { query: 'public' })
+      },
+    )
+    expect(placeholder?.error).toBe(EGRESS_TEXTS.placeholder)
+    expect(ungiven?.error).toBe(EGRESS_TEXTS.fetchAddress)
+    expect(unknown?.success).toBe(false)
+    expect(sent).not.toHaveBeenCalled()
+    expect(
+      ofType<WarningEventData>(events, 'warning').filter((w) => w.task === 'egress_check'),
+    ).toHaveLength(1)
+    warning.mockRestore()
   })
 })

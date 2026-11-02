@@ -53,6 +53,10 @@ function guardOf(type: EventType, data: unknown): Guard | undefined {
     case 'egress_refused':
     case 'egress_blocked':
       return 'egress'
+    case 'error':
+      return (data as Partial<ErrorEventData> | undefined)?.kind === 'egress_decide_unavailable'
+        ? 'egress'
+        : undefined
     case 'warning': {
       const task = (data as Partial<WarningEventData> | undefined)?.task
       return task === 'egress_check' ? 'egress' : task === 'web_privacy' ? 'privacy' : undefined

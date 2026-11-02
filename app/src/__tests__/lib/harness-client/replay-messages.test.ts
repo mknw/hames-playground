@@ -161,6 +161,18 @@ describe('error and warning bubbles', () => {
   })
 
   describe('errorBubble', () => {
+    it('shows the fixed egress outage notice on live and replay paths', () => {
+      expect(
+        errorBubble({
+          kind: 'egress_decide_unavailable',
+          severity: 'irrecoverable',
+          error: 'private sentinel',
+        }),
+      ).toMatchObject({
+        role: 'error',
+        content: 'An outside request was refused because its safety check was unavailable.',
+      })
+    })
     it('maps a recoverable error to a warning, with a 1-indexed turn label', () => {
       // The event stores turn 4 (0-indexed); the user saw "turn 5".
       expect(errorBubble(EXHAUSTED)).toEqual({

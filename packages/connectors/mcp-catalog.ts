@@ -31,6 +31,12 @@
  *  the heuristic's verb list can't silently regroup them. */
 const MCP_TOOL_CATALOG: Record<string, string> = {}
 
+/** Search types only; fetch types deliberately carry no search tag. */
+export function mcpToolTags(name: string): readonly string[] | undefined {
+  const bare = name.split('__').at(-1)
+  return bare === 'search' || bare === 'web_search_exa' ? ['web-search'] : undefined
+}
+
 // Neo4j Cypher server. These already resolve to 'neo4j' via the verb-strip
 // heuristic in core (read_/write_/get_ → parts[1]), but pin them explicitly so
 // a future edit to the `verbs` list can't silently regroup them.

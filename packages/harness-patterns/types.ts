@@ -1088,6 +1088,8 @@ export interface MCPToolDescription {
   name: string
   description?: string
   inputSchema?: Record<string, unknown>
+  /** Deployment-declared tool type labels, never inferred from arguments. */
+  tags?: readonly string[]
 }
 
 export interface ToolCallResult {
@@ -1385,7 +1387,12 @@ export interface ErrorEventData {
    *  this terminal failure so a missing lookup cannot become an answer.
    *
    *  Absent for other non-LLM errors (tool errors, etc.). */
-  kind?: 'llm_call' | 'budget_exhausted' | 'recovery_exhausted' | 'gateway_unavailable'
+  kind?:
+    | 'llm_call'
+    | 'budget_exhausted'
+    | 'recovery_exhausted'
+    | 'gateway_unavailable'
+    | 'egress_decide_unavailable'
 }
 
 /**
@@ -1999,6 +2006,12 @@ export interface DecisionMadeEventData {
   /** The SIZE of the state, never the text. */
   stateChars: number
   shadow?: true
+  /** Egress shadow metadata; no argument or question state is stored. */
+  wouldRefuse?: boolean
+  wouldCategory?: 'personal' | 'company'
+  tool?: string
+  callId?: string
+  skipReason?: 'unaskable' | 'queued' | 'anthropic-veto' | 'failed'
   /** Shadow mode only, and only when the gate answered: what the gate WOULD
    *  have decided at its own configured threshold — run the screen (true) or
    *  skip it (false). The timeline row reads this, not `label`, whose argmax

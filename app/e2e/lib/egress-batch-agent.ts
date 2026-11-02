@@ -38,6 +38,7 @@ export async function registerBatchAgent(outside: ToolTransport): Promise<void> 
     description: 'Two synthetic outside calls held together',
     welcome: 'Synthetic egress batch',
     servers: [],
+    egressPolicy: 'gate',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns: async () => [

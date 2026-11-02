@@ -33,6 +33,7 @@ beforeAll(async () => {
     description: 'Synthetic pause and retry conversation',
     welcome: 'Synthetic pause and retry conversation',
     servers: [],
+    egressPolicy: 'local-only',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns: async () => [

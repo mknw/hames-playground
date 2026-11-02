@@ -52,6 +52,7 @@ function register(id: string, createPatterns: () => Promise<ConfiguredPattern<Se
     description: 'Test-only decision conversation',
     welcome: 'Test-only decision conversation',
     servers: [],
+    egressPolicy: 'local-only',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns,

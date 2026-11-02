@@ -69,7 +69,25 @@ const agentRegistry = new Map<string, AgentConfig>()
  * Register an agent configuration.
  */
 export function registerAgent(config: AgentConfig): void {
-  agentRegistry.set(config.id, config)
+  if (config.egressPolicy !== 'gate' && config.egressPolicy !== 'local-only')
+    throw new Error(
+      `[registry] agent '${config.id}' must declare an egress gate or local-only policy.`,
+    )
+  agentRegistry.set(config.id, {
+    ...config,
+    createPatterns: async (sessionId) => {
+      const patterns = await config.createPatterns(sessionId)
+      if (config.egressPolicy === 'gate') {
+        const containsGate = (nodes: readonly ConfiguredPattern<SessionData>[]): boolean =>
+          nodes.some(
+            (node) => node.name.startsWith('withEgressGate(') || containsGate(node.children ?? []),
+          )
+        if (!containsGate(patterns))
+          throw new Error(`[registry] agent '${config.id}' declared a gate but composed none.`)
+      }
+      return patterns
+    },
+  })
 }
 
 // The legacy-id map lives in its own dependency-free module so the turn

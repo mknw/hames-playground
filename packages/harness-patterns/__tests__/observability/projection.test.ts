@@ -379,6 +379,7 @@ describe('isGuardEvent', () => {
       ['egress_audit', { tool: 'fetch', spans: [] }],
       ['egress_refused', { tool: 'fetch', cause: 'decide', closes: 'none' }],
       ['egress_blocked', { tool: 'fetch', route: null, rule: 'check-failed' }],
+      ['error', { kind: 'egress_decide_unavailable', error: 'fixed' }],
       ['decision_made', { key: GUARD_SCREEN.key, label: 'true' }],
       ['decision_made', { key: GUARD_EGRESS.key, label: 'personal' }],
       ['model_call', { role: 'screen', source: 'web/fetch' }],

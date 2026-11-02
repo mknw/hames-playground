@@ -91,6 +91,7 @@ beforeAll(async () => {
     description: 'Synthetic outgoing call held for the person',
     welcome: 'Synthetic outgoing call held for the person',
     servers: [],
+    egressPolicy: 'gate',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns: async () => [

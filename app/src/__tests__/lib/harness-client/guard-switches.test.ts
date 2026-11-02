@@ -72,6 +72,9 @@ beforeEach(() => {
   vi.stubEnv('GUARD_SCREEN', undefined)
   vi.stubEnv('GUARD_SCREEN_ANTHROPIC', undefined)
   vi.stubEnv('GUARD_EGRESS', undefined)
+  vi.stubEnv('GUARD_EGRESS_TOOLS', undefined)
+  vi.stubEnv('GUARD_EGRESS_NAME_MATCH', undefined)
+  vi.stubEnv('GUARD_EGRESS_DECIDE', undefined)
   vi.stubEnv('GUARD_PSEUDONYMISE', undefined)
   vi.stubEnv('GUARD_GATE_THRESHOLD', undefined)
   vi.stubEnv('GUARD_EGRESS_THRESHOLD', undefined)
@@ -87,7 +90,9 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
     const { guards, egressRoster } = agentDeps()
     expect(guards).toMatchObject({
       screenMode: { default: 'gated', anthropic: 'always' },
-      egressMode: 'filter',
+      egressTools: undefined,
+      egressNameMatch: undefined,
+      egressDecide: undefined,
       gateThreshold: 0.15,
       egressThreshold: 0.3,
       maxOutgoingRetriesPostTripwire: 0,
@@ -110,10 +115,14 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
   it('the switch values in the bag are the ones guardConfig() parses', () => {
     vi.stubEnv('GUARD_SCREEN', 'off')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
-    vi.stubEnv('GUARD_EGRESS', 'roster')
+    vi.stubEnv('GUARD_EGRESS_TOOLS', 'tag:egress')
+    vi.stubEnv('GUARD_EGRESS_NAME_MATCH', 'refuse')
+    vi.stubEnv('GUARD_EGRESS_DECIDE', 'off')
     expect(agentDeps().guards).toMatchObject({
       screenMode: { default: 'off', anthropic: 'off' },
-      egressMode: 'roster',
+      egressTools: ['tag:egress'],
+      egressNameMatch: 'refuse',
+      egressDecide: 'off',
     })
     expect(guardConfig().screenMode).toMatchObject({ default: 'off', anthropic: 'off' })
   })

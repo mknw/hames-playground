@@ -63,6 +63,7 @@ beforeAll(async () => {
     description: 'Test-only planner chain',
     welcome: 'Test-only planner chain',
     servers: [],
+    egressPolicy: 'local-only',
     icon: 'i-material-symbols-rule',
     accent: 'indigo',
     createPatterns: async (): Promise<ConfiguredPattern<SessionData>[]> => {

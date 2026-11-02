@@ -76,6 +76,7 @@ beforeAll(async () => {
       description: 'Synthetic memory test',
       welcome: 'Synthetic memory test',
       servers: [],
+      egressPolicy: 'local-only',
       icon: 'i-material-symbols-rule',
       accent: 'indigo',
       createPatterns: async () => {

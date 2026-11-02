@@ -426,6 +426,49 @@ describe('slice 6 · after an answer the run continues inside the route', () => 
     expect(decide.offered[3]).toEqual(['work', DECISION_LOOP_ANSWER])
   })
 
+  // MUTATION: rebuild the finished records without the earlier ones (`recordOf(…,
+  // done.thrown, [])` in the replay loop) → the resumed state reads step 2 as an
+  // ordinary success, though the live run showed it as a repeat → red.
+  it('a record rebuilt on resume is still a repeat of the step it repeated', async () => {
+    const reader = simpleLoop<Data>(
+      scripted([act('plain_read'), act('Return', {}, { tool_args: 'the same rows' })]).fn,
+      ['plain_read'],
+      { patternId: 'reader' },
+    )
+    const states: string[] = []
+    const script = ['reader', 'reader', 'work', DECISION_LOOP_ANSWER]
+    const decide = (async ({
+      spec,
+      state,
+    }: {
+      spec: { labels: readonly { id: string }[] }
+      state: string
+    }) => {
+      states.push(state)
+      const ids = spec.labels.map((l) => l.id)
+      const want = script[states.length - 1]
+      return {
+        probs: Object.fromEntries(ids.map((id) => [id, id === want ? 1 : 0])),
+        method: 'jev',
+        calibrated: false,
+      }
+    }) as unknown as DecideFn
+    Object.assign(decide, {
+      supportedTypes: ['choice'],
+      limits: () => ({ contextWindow: 131_072 }),
+    })
+    const { resumed } = await pauseAndApprove(
+      agent({ reader, work: loopOf(readThenWriteThenReturn().fn) }, decide),
+      [],
+    )
+
+    expect(resumed.status).not.toBe('error')
+    expect(states).toHaveLength(4)
+    const line = '2. reader — succeeded, but returned the same result as step 1: no new information'
+    expect(states[2]).toContain(line)
+    expect(states[3]).toContain(line)
+  })
+
   // MUTATION: drop `&& r.redispatch !== true` from `succeededCalls` in
   // computeStats → the superseded placeholder (`success: true`) reads as a
   // successful call, the first record makes progress, and decision 3 offers

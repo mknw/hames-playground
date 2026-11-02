@@ -86,6 +86,9 @@ function child(
   id: string,
   seen: { data: unknown[]; events: unknown[] } = { data: [], events: [] },
 ) {
+  // A new result each run: the same one again would be a repeat, which the loop
+  // withholds after two (decisionLoop-records' `repeatOf`).
+  let n = 0
   return configurePattern<Data>(
     'simpleLoop',
     async (scope, view) => {
@@ -105,7 +108,7 @@ function child(
           action: {
             reasoning: 'because',
             tool_name: 'Return',
-            tool_args: 'found it',
+            tool_args: `found it (${++n})`,
             is_final: true,
           } as ControllerAction,
           turn: 0,

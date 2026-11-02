@@ -70,7 +70,8 @@
  *     which spent the whole bound and never answered. The guard is on the
  *     option SET, not in a prompt: the label is absent from that decision's spec.
  *   - any route is not offered again this turn once two of its records in a row
- *     made no progress: failed, or no tool call that succeeded (`madeProgress`,
+ *     made no progress: failed, no tool call that succeeded, or a result
+ *     identical to an earlier one of the route (`madeProgress`, `repeatOf`,
  *     `stalledRoutes`). A route whose every read failed was re-dispatched six
  *     times over the same honest failure in a recorded run (#809). Same guard,
  *     same place: the option set; `answer` is never a route, so it stays.
@@ -122,6 +123,7 @@ import {
   leafPattern,
   renderConversation,
   renderHandoff,
+  repeatOf,
   resultBlock,
   routeKind,
   stalledRoutes,
@@ -610,6 +612,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     childEvents: ContextEvent[],
     wallMs: number,
     thrown: string | undefined,
+    earlier: readonly RouteOutput[],
   ): RouteOutput => {
     const kind = kinds.get(label)!
     const leafId = leafIds.get(label)!
@@ -626,7 +629,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
             childEvents.filter((e) => e.patternId === leafId),
             maxChars,
           )
-    return extracted.ok
+    const record: RouteOutput = extracted.ok
       ? {
           iteration,
           route: label,
@@ -652,6 +655,8 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           reasoning: '',
           failure: extracted.failure,
         }
+    const repeats = repeatOf(record, earlier)
+    return repeats === undefined ? record : { ...record, repeats }
   }
 
   const fn = (scope: PatternScope<T>, view: EventView): Promise<PatternScope<T>> =>
@@ -700,7 +705,14 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const paused = taken ? replayIterations(taken) : undefined
     if (paused) {
       for (const done of paused.finished) {
-        const record = recordOf(done.route, done.iteration, done.events, done.wallMs, done.thrown)
+        const record = recordOf(
+          done.route,
+          done.iteration,
+          done.events,
+          done.wallMs,
+          done.thrown,
+          records,
+        )
         records.push(record)
         rosterPayloads.push(done.events.filter((e) => e.type === 'tool_result').map((e) => e.data))
         if (record.plan) latestPlan = record.plan
@@ -983,6 +995,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
         iterationEvents,
         (resuming ? paused.wallMs : 0) + wallMs,
         thrownMessage,
+        records,
       )
       records.push(record)
       rosterPayloads.push(

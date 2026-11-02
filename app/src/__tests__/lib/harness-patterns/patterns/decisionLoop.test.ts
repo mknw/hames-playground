@@ -183,6 +183,13 @@ const looking = (
     trackEvent(s, 'controller_action', returnAction(typeof text === 'string' ? text : text()), true)
   })
 
+/** A Return text that differs on every call: the same text again is a repeat
+ *  (`repeatOf`), which the repeat rule counts as no progress. */
+const fresh = (text: string) => {
+  let n = 0
+  return () => `${text} ${++n}`
+}
+
 const route = (pattern: ConfiguredPattern<Data>, extra: Partial<Route> = {}): Route => ({
   pattern,
   description: `does ${pattern.config.patternId}`,
@@ -2235,7 +2242,7 @@ describe('decisionLoop — a planner route is not offered twice in a row, nor on
   // `info` is withheld and the loop exits early with ['info'].
   it('only a planner route is guarded straight after itself: any other route that made progress may repeat', async () => {
     const { decide } = scriptedDecide(['info', 'info', 'info', 'answer'])
-    const ctx = await run([build({ info: route(looking('i', 'x')) }, decide)])
+    const ctx = await run([build({ info: route(looking('i', fresh('x'))) }, decide)])
     expect(decided(ctx)).toEqual(['info', 'info', 'info', 'answer'])
   })
 })
@@ -2378,7 +2385,10 @@ describe('decisionLoop — a route is not offered again after two records in a r
     const { decide, offeredAt } = stubborn('info')
     const ctx = await run([
       build(
-        { info: route(looking('i', 'partial', [false, true])), other: route(returning('o', 'x')) },
+        {
+          info: route(looking('i', fresh('partial'), [false, true])),
+          other: route(returning('o', 'x')),
+        },
         decide,
       ),
     ])
@@ -2391,9 +2401,16 @@ describe('decisionLoop — a route is not offered again after two records in a r
   // MUTATION: add `&& kind !== 'retriever'` to `succeededCalls` in computeStats (no
   // retriever record reads as progress): read is withheld at decision 3.
   it('a real retriever that found matches twice in a row is NOT withheld: its result counts as its call', async () => {
-    const hit = { backend: 'redis', id: 'h1', content: 'Figures rose.', source: 'q3.md' }
+    // A different hit each time: the rendered text (`source ?? id`) differs because `source` changes, so the same hit again would be a repeat (next pin).
+    let n = 0
+    const hit = () => ({
+      backend: 'redis',
+      id: `h${++n}`,
+      content: 'Figures rose.',
+      source: `q${n}.md`,
+    })
     const read = retriever<Data>({
-      backends: [{ name: 'redis', type: 'vector', search: async () => [hit] }],
+      backends: [{ name: 'redis', type: 'vector', search: async () => [hit()] }],
       rewrite: (async () => ({ value: '' })) as never,
       patternId: 'read-p',
     })
@@ -2405,6 +2422,92 @@ describe('decisionLoop — a route is not offered again after two records in a r
     ])
     expect(decided(ctx)).toEqual(['read', 'read', 'read'])
     expect(offeredAt[2]).toEqual(['read', 'other', 'answer'])
+  })
+
+  // A document question on the private tier: the retriever's query is the user's
+  // message (or its rewrite) every time, so each read of the turn returns the same
+  // hits, every record read `succeeded` with a match, and the decider re-chose
+  // `read` until the bound. A repeat is no progress, and the step line says so.
+  // MUTATIONS: drop `r.repeats === undefined &&` from `madeProgress` (read is
+  // dispatched six times and the loop ends on its bound); drop the `repeats`
+  // branch from `stepLine` (the state never says a step brought nothing new).
+  it('a real retriever returning the SAME hits again is no progress: shown as a repeat, then withheld', async () => {
+    const hits = [
+      {
+        backend: 'redis',
+        id: 'h1',
+        docId: 'd1',
+        startOffset: 0,
+        endOffset: 40,
+        content: 'Section 2 lists the submission rules.',
+        source: 'call.pdf',
+      },
+      {
+        backend: 'redis',
+        id: 'h2',
+        docId: 'd1',
+        startOffset: 41,
+        endOffset: 90,
+        content: 'Applicants submit one proposal each.',
+        source: 'call.pdf',
+      },
+    ]
+    const search = vi.fn(async () => hits)
+    const read = retriever<Data>({
+      backends: [{ name: 'redis', type: 'vector', search }],
+      rewrite: (async () => ({ value: '' })) as never,
+      patternId: 'read-p',
+    })
+    const states: string[] = []
+    const { decide, offeredAt } = stubborn('read')
+    const recording = (async (input: { state: string }) => {
+      states.push(input.state)
+      return (decide as unknown as (i: unknown) => Promise<unknown>)(input)
+    }) as unknown as DecideFn
+    Object.assign(recording, {
+      supportedTypes: ['choice'],
+      limits: () => ({ contextWindow: 131_072 }),
+    })
+    const ctx = await run([
+      build({ read: route(read), other: route(returning('o', 'x')) }, recording),
+    ])
+
+    expect(search).toHaveBeenCalledTimes(3)
+    expect(decided(ctx)).toEqual(['read', 'read', 'read', 'answer'])
+    expect(offeredAt[3]).toEqual(['other', 'answer'])
+    expect(states[1]).toContain('1. read — succeeded (retriever: 2 matches')
+    expect(states[1]).not.toContain('no new information')
+    expect(states[2]).toContain(
+      '2. read — succeeded, but returned the same result as step 1: no new information (retriever: 2 matches',
+    )
+    expect(states[3]).toContain(
+      '3. read — succeeded, but returned the same result as step 1: no new information',
+    )
+    // Withheld, not exhausted: the loop answers without a budget error.
+    expect(eventsOf(ctx, 'orchestrator', 'error')).toHaveLength(0)
+  })
+
+  // MUTATION: drop `p.route === r.route &&` from `repeatOf`: b's record reads as a
+  // repeat of a's, though b never ran before.
+  it('a repeat is of the SAME route: another route returning the same text is new to it', async () => {
+    const { decide, states } = scriptedDecide(['a', 'b', 'answer'])
+    await run([
+      build({ a: route(looking('a-p', 'same')), b: route(looking('b-p', 'same')) }, decide),
+    ])
+    expect(states[2]).toContain('2. b — succeeded (simpleLoop')
+    expect(states[2]).not.toContain('no new information')
+  })
+
+  // MUTATION: in `repeatOf`, compare only with the record just before (`earlier.at(-1)`):
+  // a's third record repeats its first across b's, and is no longer marked.
+  it('a repeat is of ANY earlier record of the route this turn, not only the one just before', async () => {
+    const { decide, states } = scriptedDecide(['a', 'b', 'a', 'answer'])
+    await run([
+      build({ a: route(looking('a-p', 'same')), b: route(looking('b-p', 'other')) }, decide),
+    ])
+    expect(states[3]).toContain(
+      '3. a — succeeded, but returned the same result as step 1: no new information',
+    )
   })
 
   // MUTATION: add `&& kind !== 'actorCritic'` to `succeededCalls` in computeStats (no
@@ -2560,7 +2663,7 @@ describe('decisionLoop — maxIterations', () => {
     const synth = fake('compactExecution', 'synth', (_s, view) => {
       synthSaw.push(view.fromAll().errors().get().at(-1)?.type ?? 'none')
     })
-    const ctx = await run([build({ a: route(looking('a-p', 'again')) }, decide), synth])
+    const ctx = await run([build({ a: route(looking('a-p', fresh('again'))) }, decide), synth])
     expect(calls()).toBe(6)
     expect(eventsOf(ctx, 'orchestrator', 'tool_result')).toHaveLength(6)
     const errors = eventsOf(ctx, 'orchestrator', 'error')

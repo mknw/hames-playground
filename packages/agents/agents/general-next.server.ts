@@ -273,6 +273,13 @@ async function createPatterns(
           liveEvents: true,
           returnStyle: 'answer',
           rememberPriorTurns: false,
+          // The Neo4j tab draws a graph read inside its 1-hop neighbourhood,
+          // which the host's enricher attaches here. The few-shots return
+          // scalar columns (`c.name AS name`), so without it a graph answer
+          // gives the tab nothing to draw. The neighbourhood is for the tab:
+          // the controller's turn log leaves it out, the event keeps it.
+          onToolResult: deps.enrichNeo4jResult,
+          resultOmit: { read_neo4j_cypher: ['_neighborhood', '_touched'] },
         },
       ),
       {

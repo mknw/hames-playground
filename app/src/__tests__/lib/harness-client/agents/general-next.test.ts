@@ -870,6 +870,23 @@ describe('general-next composition', () => {
     expect(all.every((p) => !/humanGate|confirm/.test(p.name))).toBe(true)
   })
 
+  // The Neo4j tab draws the graph from the info loop's reads. The retired
+  // `neo4j-query` loops carried the host's enricher and this route never did,
+  // so a graph answer gave the tab nothing to draw. MUTATION: drop
+  // `onToolResult` from the info loop's config — red.
+  it("hands the host's Neo4j enricher to the info loop and keeps its output from the controller", async () => {
+    const enrichNeo4jResult = vi.fn()
+    const patterns = await agent.createPatterns('synthetic-session', {
+      ...deps,
+      enrichNeo4jResult,
+    })
+    const loop = walk(patterns).find((p) => p.name === 'simpleLoop')!
+    expect(loop.config).toMatchObject({
+      onToolResult: enrichNeo4jResult,
+      resultOmit: { read_neo4j_cypher: ['_neighborhood', '_touched'] },
+    })
+  })
+
   // Resume inside a route (slice 6): a pause can be resumed inside a route
   // only where every pattern from the root down declares its OWN resumable
   // capability. The info route (where the outgoing tools are) is resumable all

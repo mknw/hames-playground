@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { extractGraphElements, isEdgeElement, isNodeElement } from '@hames-ai/agents'
+import { FENCE, sanitizeUntrusted } from '@hames-ai/harness-patterns/guard'
 
 import schemaFixture from './fixtures/neo4j-schema.json'
 import singleNodeFixture from './fixtures/cypher-single-node.json'
@@ -108,6 +109,83 @@ describe('graph-extractor — enrichment payload', () => {
     // Both neighborhood edges land
     expect(edges).toHaveLength(2)
     expect(edges.every((e) => e.data?.source === 'Redis')).toBe(true)
+  })
+})
+
+// ============================================================================
+// A read on a guarded route (general-next's info route)
+// ============================================================================
+
+/** What the info route's guard does to a graph read: every string leaf fenced
+ *  (`spotlight: 'always'`), the fence naming the call that returned it. */
+function fenced(data: unknown, item: string): unknown {
+  return sanitizeUntrusted(
+    data,
+    { tool: 'read_neo4j_cypher', namespace: 'neo4j', item },
+    { spotlight: 'always' },
+  ).data
+}
+
+function infoEvent(result: unknown) {
+  return { ...toolResultEvent('read_neo4j_cypher', result), patternId: 'info' }
+}
+
+describe('graph-extractor — a read on a guarded route', () => {
+  // The shape the shipped few-shots teach: scalar columns, no node object.
+  const rows = [{ name: 'Redis', description: 'An in-memory data store.' }]
+  const neighborhood = [
+    {
+      n: { name: 'Redis' },
+      r: [{ name: 'Redis' }, 'HAS_CONCEPT', { name: 'Streams' }],
+      m: { name: 'Streams' },
+    },
+  ]
+
+  it('characterisation: scalar rows alone give the tab nothing to draw', () => {
+    // Why the route needs the enricher: without the neighbourhood there is no
+    // node object in a `c.name AS name` row.
+    expect(extractGraphElements([infoEvent(fenced(rows, 'call-1'))])).toEqual([])
+  })
+
+  it('draws a fenced, enriched read with readable ids and the touched node tagged', () => {
+    const touched = (fenced(rows, 'call-1') as Array<{ name: string }>).map((r) => r.name)
+    expect(touched[0]).toContain(FENCE.open)
+    const result = {
+      rows: fenced(rows, 'call-1'),
+      _neighborhood: { rows: fenced(neighborhood, 'call-2') },
+      _touched: touched,
+    }
+    // MUTATION: drop `unfence` in extractGraphElements — ids carry the fence
+    // and the touched tag no longer matches.
+    const elements = extractGraphElements([infoEvent(result)])
+    const nodes = elements.filter(isNodeElement)
+    expect(nodes.map((n) => n.data?.id).sort()).toEqual(['Redis', 'Streams'])
+    expect(nodes.find((n) => n.data?.id === 'Redis')?.data?.touched).toBe(true)
+    expect(nodes.find((n) => n.data?.id === 'Streams')?.data?.touched).toBeUndefined()
+    const edges = elements.filter(isEdgeElement)
+    expect(edges.map((e) => [e.data?.source, e.data?.label, e.data?.target])).toEqual([
+      ['Redis', 'HAS_CONCEPT', 'Streams'],
+    ])
+    expect(JSON.stringify(elements)).not.toContain(FENCE.open)
+  })
+
+  it('one node read by two calls is one element, though each call fenced it differently', () => {
+    const node = [{ c: { name: 'Redis' } }]
+    const elements = extractGraphElements([
+      infoEvent(fenced(node, 'call-1')),
+      infoEvent(fenced(node, 'call-2')),
+    ])
+    expect(elements.map((e) => e.data?.id)).toEqual(['Redis'])
+  })
+
+  it('survives the persisted round trip a reload replays', () => {
+    const result = {
+      rows: fenced(rows, 'call-1'),
+      _neighborhood: { rows: fenced(neighborhood, 'call-2') },
+      _touched: (fenced(rows, 'call-1') as Array<{ name: string }>).map((r) => r.name),
+    }
+    const replayed = JSON.parse(JSON.stringify([infoEvent(result)])) as unknown[]
+    expect(extractGraphElements(replayed).filter(isNodeElement)).toHaveLength(2)
   })
 })
 

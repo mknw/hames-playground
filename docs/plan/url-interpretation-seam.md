@@ -49,7 +49,7 @@ non-consumers** of the initial seam: `memory-acceptance.server.ts:66` (`URL_RE` 
 already re-implements host extraction over `new URL` — the natural future consumer, to be
 evaluated as a named later slice once the seam's contract is proven). Three corpus rules that
 match URL text but never interpret a URL — `exfil-instruction`, `exfil-auto-image`, and
-`exfil-html-tag` (`packages/harness-patterns/injection-guard.ts:671-695`) — stay outside by this
+`exfil-html-tag` (`packages/harness-patterns/injection-guard.ts:671-698`) — stay outside by this
 design's own interpret criterion: they flag or defang a lexical match and parse no address.
 With those dispositions named, "five, none more" is auditable rather than implicit.
 

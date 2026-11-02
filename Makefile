@@ -73,3 +73,18 @@ embed:
 llm-small:
 	$(call require_model,$(MODELS_DIR)/$(LLM_SMALL_MODEL))
 	llama-server -m $(MODELS_DIR)/$(LLM_SMALL_MODEL) --host $(LLM_SMALL_HOST) --port $(LLM_SMALL_PORT) --ctx-size 32768 --chat-template-kwargs '{"enable_thinking":false}'
+
+# Publish the packages of the latest release tag (the highest `v<semver>` tag)
+# to npm, from a throwaway worktree at that tag's commit — see CONTRIBUTING.md,
+# "How a release happens". Nothing here replaces the per-package
+# `prepublishOnly` tag guard, which stays the real check.
+#   VERSION=x.y.z         publish that version instead of the latest tag
+#   CONFIRM=1             skip the y/N confirmation prompt
+#   NPM_USERCONFIG=path   npm config file for the whoami / publish steps
+.PHONY: publish publish-dry
+publish:
+	@scripts/publish.sh
+
+# Pack without publishing: `--dry-run`, no registry gates, no prompt.
+publish-dry:
+	@scripts/publish.sh --dry-run

@@ -308,6 +308,7 @@ template_string LoopControllerBody(
     {{ _.role("system") }}
     You are an AI agent that accomplishes tasks by calling tools.
     Select one tool per turn. Use "Return" when you have enough information.
+    When you search or fetch outside the company, use public terms. Keep the names of private people — colleagues, customer contacts, correspondents, anyone you learned from mail, files or the directory — out of those queries, unless the user's own request names them or the person is a public figure in their public role.
     {{ LoopReturnStyle(return_style) }}
 
     {# ────────── CACHED TIER 1 · agent-static: context · tools · examples ────────── #}

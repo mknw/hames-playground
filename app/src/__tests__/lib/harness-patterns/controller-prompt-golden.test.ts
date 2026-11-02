@@ -20,6 +20,11 @@
  * affordance sentence in those 16 bodies: the skip holds only while the critic
  * has not yet given feedback on the held result, and a rejected result runs
  * again — no other byte changes.
+ * #913 revision 5 slice 14 inserts the approved two-sentence passage once after
+ * the tool-selection sentence in all 12 LoopController bodies. Four
+ * ControllerThinking bodies were first captured offline at slice 13's main
+ * 873eda43aeeacad45fdd7a1d4c8b85a4269819ac, then given that same insertion.
+ * ActorController and Planner bodies are byte-identical to that base.
  */
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -151,6 +156,24 @@ const CASES: Record<string, Record<string, Render>> = {
         o,
       ),
   },
+  ControllerThinking: {
+    first: (o, client = b) =>
+      client.request.ControllerThinking('q', 'i', TOOLS, [], null, null, null, null, null, null, o),
+    parallel: (o, client = b) =>
+      client.request.ControllerThinking(
+        'Find the "sample"\nfile',
+        'Find the sample',
+        TOOLS,
+        TURNS,
+        'CONTEXT\nSynthetic schema',
+        [{ ref_id: 'r0', tool: 'search', summary: 'Previous synthetic result' }],
+        FEW_SHOTS,
+        'parallel',
+        'PLAN\n1. Search\n2. Inspect',
+        'answer',
+        o,
+      ),
+  },
   ActorController: {
     first: (o, client = b) =>
       client.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, o),
@@ -203,6 +226,7 @@ const CLIENTS: Record<string, string[]> = {
     'AnthropicSonnet46NoThink',
     'LargeQwen',
   ],
+  ControllerThinking: ['LargeQwenThink', 'LargeQwenThinkOR'],
   ActorController: ['ActorAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'LargeQwen'],
   Planner: ['PlannerAnthropic', 'AnthropicSonnet5', 'AnthropicSonnet46', 'LargeQwen'],
 }
@@ -279,6 +303,46 @@ describe('#625 shared bodies can omit content-side reasoning', () => {
       // The function still owns its original output format in this template-only
       // test; S3 owns the separate counterpart output type.
       expect(actual).toContain(fn === 'Planner' ? 'n_steps' : 'tool_name')
+    },
+  )
+})
+
+// Layer 1: exact wording, shared placement and rendered multiplicity, not a
+// model-behaviour claim. Mutations: delete-passage, duplicate-loop-passage,
+// actor-passage, duplicate-info-prefix, and bypass-thinking-body.
+const OUTGOING_PASSAGE =
+  "When you search or fetch outside the company, use public terms. Keep the names of private people — colleagues, customer contacts, correspondents, anyone you learned from mail, files or the directory — out of those queries, unless the user's own request names them or the person is a public figure in their public role."
+
+describe('#913 slice 14 outgoing prompt passage', () => {
+  it('lives once in the shared loop body and stays out of actor and the info prefix', () => {
+    const source = readFileSync(
+      path.resolve(process.cwd(), '../packages/harness-baml/baml_src/simpleLoop.baml'),
+      'utf8',
+    )
+    const body = source
+      .split('template_string LoopControllerBody(')[1]
+      .split('function LoopController(')[0]
+    expect(body).toContain(
+      'Select one tool per turn. Use "Return" when you have enough information.\n    ' +
+        OUTGOING_PASSAGE,
+    )
+    expect(source.split(OUTGOING_PASSAGE)).toHaveLength(2)
+    for (const file of [
+      '../packages/harness-baml/baml_src/actorCritic.baml',
+      '../packages/agents/agents/general-next.server.ts',
+    ]) {
+      expect(readFileSync(path.resolve(process.cwd(), file), 'utf8')).not.toContain(
+        OUTGOING_PASSAGE,
+      )
+    }
+  })
+
+  it.each(RENDERS.filter(({ fn }) => fn !== 'Planner'))(
+    '$name inherits exactly the intended number of passages',
+    async ({ fn, render, client }) => {
+      const body = (await render({ client, env: ENV })).body.text()
+      const encoded = JSON.stringify(OUTGOING_PASSAGE).slice(1, -1)
+      expect(body.split(encoded)).toHaveLength(fn === 'ActorController' ? 1 : 2)
     },
   )
 })

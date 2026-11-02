@@ -365,14 +365,48 @@ describe('tokenPricedCalls', () => {
     expect(s.pricedCalls).toBe(2)
   })
 
-  it('counts a MIXED step time-priced, not token-priced', () => {
-    // Its figure is a floor either way; the cache cards stay hidden when it is
-    // the only priced step in the scope.
+  it('counts a MIXED step in BOTH counters — its cache hits stay visible', () => {
+    // Review #934: the floor rationale justifies the ≥ on the cost figure,
+    // not hiding the hit-rate and segments the step recorded. The gate is
+    // attempt-level: only a step EVERY physical call of which was time-priced
+    // falls outside the token-priced count.
     const s = foldEvents([
-      metered('a', { costEur: 1.83, noCacheEur: 1.83, basis: 'tokens', timePricedAttempts: 1 }),
+      // Genuinely mixed: two physical calls, one billed by wall-clock, one by
+      // token (the stamp's `basis` names the last one).
+      metered('a', {
+        costEur: 1.83,
+        noCacheEur: 1.83,
+        basis: 'tokens',
+        timePricedAttempts: 1,
+        attempts: 2,
+      }),
     ])
-    expect(s.tokenPricedCalls).toBe(0)
     expect(s.timePricedCalls).toBe(1)
+    expect(s.tokenPricedCalls).toBe(1)
+  })
+
+  it('does not count a purely time-priced step — every call of it was wall-clock', () => {
+    const s = foldEvents([
+      metered('a', {
+        costEur: 0.9,
+        noCacheEur: 0.9,
+        basis: 'time',
+        timePricedAttempts: 3,
+        attempts: 3,
+      }),
+    ])
+    expect(s.timePricedCalls).toBe(1)
+    expect(s.tokenPricedCalls).toBe(0)
+  })
+
+  it('counts an UNPRICED metered step — its cache tokens were still recorded', () => {
+    // Review #934: the stamping writes cost/basis only when pricing was known,
+    // so such a step landed in neither counter under a priced-only gate and a
+    // scope made only of them would hide its recorded hit-rate.
+    const s = foldEvents([metered('a', { costEur: undefined, noCacheEur: undefined })])
+    expect(s.pricedCalls).toBe(0)
+    expect(s.timePricedCalls).toBe(0)
+    expect(s.tokenPricedCalls).toBe(1)
   })
 
   it('is zero for a purely time-priced scope, and zero on empty input', () => {

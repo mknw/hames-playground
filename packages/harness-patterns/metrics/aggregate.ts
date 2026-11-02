@@ -115,11 +115,15 @@ export interface MetricTotals {
    *  window after the last call and the cold start before the first, and
    *  neither is any call's measured duration. The UI renders a `≥`. */
   timePricedCalls: number
-  /** Priced calls with NO time-priced attempt — the ones token pricing (and
-   *  therefore caching) describes. The dashboard shows its cache figures only
-   *  where this is non-zero: a purely wall-clock-billed scope saves nothing by
-   *  caching, and a mixed step counts as time-priced because its figure is a
-   *  floor regardless of its token-priced share. */
+  /** Metered steps that are NOT purely time-priced — the ones token pricing
+   *  (and therefore caching) describes. Attempt-level by review of #934: a
+   *  step whose attempts could not be priced still recorded cache
+   *  read/write tokens, and a MIXED step (time-priced attempt + token-priced
+   *  one) carries token-priced cache hits too, so both count here — a mixed
+   *  step counts in this AND in `timePricedCalls`, whose ≥ floor marker is
+   *  unchanged. Only a step every physical call of which was time-priced
+   *  falls outside it. The dashboard shows its cache figures only where this
+   *  is non-zero. */
   tokenPricedCalls: number
   /** Tool calls recorded as `tool_call` events. Not an LLM figure — counted
    *  for every conversation regardless of tier. */
@@ -240,8 +244,23 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
     totals.costEur += cost.costEur
     totals.noCacheEur += cost.noCacheEur
     if (isTimePricedStep(m)) totals.timePricedCalls++
-    else totals.tokenPricedCalls++
   }
+  // The cache gate counts TOKEN-billed steps, not priced ones. A metered step
+  // whose attempts could not be priced carries no cost/basis stamp yet still
+  // recorded its cache read/write tokens, so it belongs here; and a MIXED step
+  // (a time-priced attempt plus a token-priced one) carries token-priced cache
+  // hits too, so it counts in BOTH counters — the ≥ floor marker stays on
+  // `timePricedCalls`, the recorded hit-rate and segments stay visible. Only a
+  // step EVERY physical call of which was time-priced hides cache figures.
+  // `isTimePricedStep` itself is unchanged. Pre-`timePricedAttempts` stamps
+  // carry only `basis`, which cannot distinguish a mixed step from a pure one,
+  // so `basis: 'time'` is read as pure — the same reading that has kept the
+  // marker on those events all along.
+  const purelyTimePriced =
+    m.timePricedAttempts !== undefined
+      ? m.timePricedAttempts === (m.attempts || 1)
+      : m.basis === 'time'
+  if (!purelyTimePriced) totals.tokenPricedCalls++
   return totals
 }
 

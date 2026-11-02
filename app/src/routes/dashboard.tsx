@@ -498,7 +498,7 @@ export default function Dashboard() {
                       }
                       tone="ui-accent"
                       hint={`${d().inference.selfDeployedCall.samples} recent call(s) — a whole call's duration, NOT time-to-first-token`}
-                      title="Median duration of the last 32 model calls on the self-deployed tier. It is the warm-ish contrast to the cold figure beside it, not a matched measurement: it covers a full call's generation (cold starts included, the median keeps them from dominating), and no warm time-to-first-token is recorded."
+                      title="Median duration of the last 32 model calls on the self-deployed tier. It is the warm-ish contrast to the cold figure beside it, not a matched measurement: it covers a full call's generation, not its first token, and no warm time-to-first-token is recorded. (Under wake-then-run a cold start is paid by the wake poll before the harness starts, so a completed call's duration does not include one.)"
                     />
                   </div>
                 </Show>

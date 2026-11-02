@@ -423,8 +423,12 @@ export default function Home() {
             shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
           />
 
-          {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox) */}
-          <Splitter.Panel id="support">
+          {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox).
+              `inert` while collapsed (#935 review): the panel stays mounted at 0
+              width for `lazyMount`, but its tab strip and buttons must not be
+              invisible focus targets — focusable-but-unreachable is the
+              focus-obscured class of failure. */}
+          <Splitter.Panel id="support" inert={supportCollapsed() || undefined}>
             <SupportPanel
               graphElements={graphElements()}
               highlightedIds={highlightedIds()}

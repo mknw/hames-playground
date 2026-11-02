@@ -43,18 +43,32 @@ bump to any one bumps all five. While the family is at `0.x`:
    updated `CHANGELOG.md`s.
 3. Merging that PR makes the same workflow tag the merge commit —
    `@hames-ai/<pkg>@<version>` for each package plus a repo-level `v<version>`.
-4. **Publishing is manual** and done by the maintainer, from the release tag, not `main`
-   (`prepublishOnly` refuses unless HEAD is exactly `@hames-ai/<pkg>@<version>`;
-   all five tags point at the same commit, so one checkout serves `-r`):
+4. **Publishing is manual** and done by the maintainer with `make publish` from
+   the repo root (or `scripts/publish.sh` directly). The target works on the
+   latest release — the highest `v<semver>` tag — without checking anything out:
 
    ```sh
-   git fetch --tags && git checkout @hames-ai/harness-patterns@<version>
-   pnpm install --frozen-lockfile
-   pnpm -r publish --no-git-checks
+   make publish            # publish the latest release tag
+   make publish-dry        # pack without publishing, no prompt
    ```
 
+   It fetches tags, refuses unless every `@hames-ai/<pkg>@<version>` tag exists
+   and points at the same commit as `v<version>` (naming the tag that differs),
+   refuses a partial npm publish (if npm already has the version for SOME
+   packages it lists them and exits non-zero — never republish over a partial
+   release; if it has it for all five it prints `already published` and exits 0),
+   prints the version and commit and asks for y/N, then runs
+   `pnpm install --frozen-lockfile`, `npm whoami` and
+   `pnpm -r publish --no-git-checks` from a throwaway worktree at that commit —
+   your own checkout is never touched. Finally it verifies
+   `npm view @hames-ai/<pkg> version` for all five. Overrides: `VERSION=x.y.z`
+   (a specific version instead of the latest tag), `CONFIRM=1` (skip the prompt),
+   `NPM_USERCONFIG=<path>` (an alternative npm config file for the whoami and
+   publish steps — see npm's `userconfig` documentation).
+
    `--no-git-checks` is needed because the tag leaves a detached HEAD, which pnpm's
-   own `publish-branch` check rejects; the tag guard replaces that check.
+   own `publish-branch` check rejects; the per-package `prepublishOnly` tag guard
+   (`scripts/check-release-tag.mjs`) replaces that check and stays the real gate.
 
    Always `pnpm`, never `npm publish`: the packages reference each other as
    `workspace:^`, which pnpm rewrites to a real range at pack time and npm ships

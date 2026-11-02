@@ -201,6 +201,17 @@ jobs:
         working-directory: .
         run: scripts/check-release-tag.test.sh
 
+      # Pins `make publish` (scripts/publish.sh): latest v-tag selection, the
+      # five package tags at the same commit, the already/partially published
+      # registry gate, the dry-run path and the confirmation gate — against
+      # stubbed npm and pnpm, in a throwaway git repo. Nothing is published,
+      # no registry is contacted, and no tag in the real repo is touched.
+      - name: Shell tests (make publish)
+        working-directory: .
+        run: |
+          shellcheck -x scripts/publish.sh scripts/publish.test.sh
+          scripts/publish.test.sh
+
   # The app's unit suite with the coverage floor, and the @hames-ai/harness-patterns
   # suite that rides along. Layer 1 with no database (see `postgres` below for the
   # one with).

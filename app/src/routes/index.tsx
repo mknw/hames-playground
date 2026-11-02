@@ -1,9 +1,15 @@
-import { Splitter } from '@ark-ui/solid/splitter'
-import { createSignal, createMemo, createEffect, onCleanup, onMount } from 'solid-js'
+import { Splitter, useSplitter } from '@ark-ui/solid/splitter'
+import { Show, createSignal, createMemo, createEffect, onCleanup, onMount } from 'solid-js'
 import { useSearchParams } from '@solidjs/router'
 import { ChatInterface } from '~/components/ark-ui/ChatInterface'
 import { ChatSidebar, mergeThreadsWithPlaceholder } from '~/components/ark-ui/ChatSidebar'
 import { SupportPanel, type GraphElement } from '~/components/ark-ui/SupportPanel'
+import { SupportPanelRail } from '~/components/ark-ui/SupportPanelRail'
+import {
+  loadSupportCollapsePref,
+  saveSupportCollapsePref,
+  type SupportTabId,
+} from '~/lib/support-rail'
 import type { UnifiedContext, ToolResultEventData } from '@hames-ai/harness-patterns'
 import { isEdgeElement, isNodeElement } from '@hames-ai/agents'
 import type { OpenReferenceTarget } from '~/lib/harness-client'
@@ -67,6 +73,16 @@ export default function Home() {
   }
 
   const [sidebarCollapsed, setSidebarCollapsed] = createSignal(false)
+
+  // The right panel's collapsed state (#933). Persisted per browser, not per
+  // user — localStorage with both halves try/catch, so a refused write or an
+  // SSR render costs nothing. The splitter's onCollapse/onExpand (below) are
+  // the single writers: they fire for the toggle AND for a drag past the
+  // panel's min size, so every way of collapsing records the same choice.
+  const [supportCollapsed, setSupportCollapsed] = createSignal(loadSupportCollapsePref())
+  // A rail-icon click expands the panel onto that tab; the signal rides down
+  // to SupportPanel as its `openTab` prop. undefined = keep the open tab.
+  const [requestedSupportTab, setRequestedSupportTab] = createSignal<SupportTabId>()
 
   // Optimistic placeholder for a freshly-minted "+ New Chat" id that hasn't
   // been persisted yet (see #44). Cleared once the real row arrives in the
@@ -205,7 +221,53 @@ export default function Home() {
     threadList.refetch()
   }
 
+  // ---------------------------------------------------------------------------
+  // Support panel collapse (#933) — the splitter's collapsePanel/expandPanel,
+  // driven from two places: the labelled toggle in the panel's tab strip, and
+  // the collapsed rail's tab icons (which also move the open tab). onCollapse/
+  // onExpand record whichever way it happened.
+  // ---------------------------------------------------------------------------
+  const handleSupportVisibility = (collapsed: boolean) => {
+    setSupportCollapsed(collapsed)
+    saveSupportCollapsePref(collapsed)
+  }
+  const toggleSupportPanel = () => {
+    const api = splitterApi()
+    if (supportCollapsed()) api.expandPanel('support')
+    else api.collapsePanel('support')
+  }
+  const openSupportTab = (tab?: SupportTabId) => {
+    if (tab) setRequestedSupportTab(tab)
+    splitterApi().expandPanel('support')
+  }
+
+  const splitterApi = useSplitter({
+    orientation: 'horizontal',
+    defaultSize: [60, 40],
+    panels: [
+      // Chat's max is 100, not the old 80: resizeByDelta refuses any result
+      // whose sizes don't sum to 100, so with chat capped at 80 the support
+      // panel could never give away enough space to reach collapsedSize 0 —
+      // the collapse would be silently rejected. The cap was redundant for
+      // dragging anyway: support's own minSize 30 already bounds how far the
+      // resize trigger can squeeze it.
+      { id: 'chat', collapsible: true, minSize: 40, maxSize: 100 },
+      { id: 'support', collapsible: true, minSize: 30, maxSize: 60 },
+    ],
+    onCollapse: (details) => {
+      if (details.panelId === 'support') handleSupportVisibility(true)
+    },
+    onExpand: (details) => {
+      if (details.panelId === 'support') handleSupportVisibility(false)
+    },
+  })
+
   onMount(() => {
+    // A browser that left the panel collapsed gets it collapsed again. The
+    // mount call rather than a seeded defaultSize: the splitter's own min/max
+    // constraints own the initial layout, and collapsePanel respects them.
+    if (supportCollapsed()) splitterApi().collapsePanel('support')
+
     const onUnload = () => registry.abortAll()
     window.addEventListener('beforeunload', onUnload)
     onCleanup(() => window.removeEventListener('beforeunload', onUnload))
@@ -314,16 +376,8 @@ export default function Home() {
 
   return (
     <SessionRegistryContext.Provider value={registry}>
-      <main h="[calc(100vh-4rem)]">
-        <Splitter.Root
-          orientation="horizontal"
-          defaultSize={[60, 40]}
-          panels={[
-            { id: 'chat', collapsible: true, minSize: 40, maxSize: 80 },
-            { id: 'support', collapsible: true, minSize: 30, maxSize: 60 },
-          ]}
-          h="full"
-        >
+      <main h="[calc(100vh-4rem)]" flex="~">
+        <Splitter.RootProvider value={splitterApi} h="full" flex="1" min-w="0">
           {/* Chat Panel — sidebar lives at this level so thread selection can
             swap the sessionId fed into ChatInterface. */}
           <Splitter.Panel id="chat">
@@ -369,8 +423,12 @@ export default function Home() {
             shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
           />
 
-          {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox) */}
-          <Splitter.Panel id="support">
+          {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox).
+              `inert` while collapsed (#935 review): the panel stays mounted at 0
+              width for `lazyMount`, but its tab strip and buttons must not be
+              invisible focus targets — focusable-but-unreachable is the
+              focus-obscured class of failure. */}
+          <Splitter.Panel id="support" inert={supportCollapsed() || undefined}>
             <SupportPanel
               graphElements={graphElements()}
               highlightedIds={highlightedIds()}
@@ -384,9 +442,24 @@ export default function Home() {
               onStashAction={handleStashAction}
               pendingReference={pendingReference()}
               onUploaded={() => watchEmbedding(selectedSessionId())}
+              onCollapse={toggleSupportPanel}
+              openTab={requestedSupportTab()}
             />
           </Splitter.Panel>
-        </Splitter.Root>
+        </Splitter.RootProvider>
+
+        {/* Collapsed support rail (#933) — the 3rem icons-only strip the panel
+            leaves behind. Mounted only while collapsed, so its activity
+            counters snapshot the conversation as it stands at collapse time. */}
+        <Show when={supportCollapsed()}>
+          <SupportPanelRail
+            sessionId={selectedSessionId()}
+            graphElements={graphElements()}
+            contextEvents={contextEvents()}
+            sandboxAvailable={currentAgentUsesSandbox()}
+            onExpand={openSupportTab}
+          />
+        </Show>
       </main>
     </SessionRegistryContext.Provider>
   )

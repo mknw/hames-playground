@@ -168,6 +168,8 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
   let cy: Core | null = null
   let resizeObserver: ResizeObserver | undefined
   let resizeRafId: number | undefined
+  // Last container visibility, for the zero→non-zero re-fit below (#933).
+  let wasVisible = false
 
   // eslint-disable-next-line solid/reactivity
   const [selectedLayout, setSelectedLayout] = createSignal<LayoutName>(props.layout ?? 'cose')
@@ -357,8 +359,19 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
       resizeRafId = requestAnimationFrame(() => {
         resizeRafId = undefined
         if (!containerRef?.isConnected) return
-        setVisible(width > 0 && height > 0)
+        const nowVisible = width > 0 && height > 0
+        setVisible(nowVisible)
         cy?.resize()
+        // Re-fit on a zero→non-zero transition (#933). While the container was
+        // 0-sized — the collapsed support panel, or any other invisible mount —
+        // any layout that ran there computed positions against no space, so a
+        // bare resize() would surface a viewport with everything off-canvas.
+        // Re-fit only on the transition: an ordinary resize must not steal the
+        // user's zoom and pan.
+        if (nowVisible && !wasVisible && cy && cy.elements().nonempty()) {
+          cy.fit(undefined, 50)
+        }
+        wasVisible = nowVisible
       })
     })
     resizeObserver.observe(containerRef)

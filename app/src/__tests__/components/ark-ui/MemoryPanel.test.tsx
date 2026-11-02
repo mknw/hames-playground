@@ -39,9 +39,11 @@ it('lists metadata and sources, keeps disclosure visible and filters by kind', a
   expect(screen.getByText(/First seen/)).toBeTruthy()
   expect(
     screen.getByText(
-      "Forget deletes rows; it does not reach the responder's recorded prompt or the nightly pg_dump.",
+      'Forget removes a memory from your saved memories, so new replies stop using it.',
     ),
   ).toBeTruthy()
+  // The past-conversations/backups sentence was dropped per owner revision (PR #920).
+  expect(screen.queryByText(/past conversations stay as they are/)).toBeNull()
   const source = screen.getByRole('link', { name: /Source conversation/ })
   expect(source.getAttribute('target')).toBe('_blank')
   expect(source.getAttribute('rel')).toContain('noopener')

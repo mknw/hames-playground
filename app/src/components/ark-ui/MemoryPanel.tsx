@@ -71,8 +71,7 @@ export function MemoryPanel() {
         also turns memory off.
       </p>
       <p text="ui-text-secondary">
-        Forget deletes rows; it does not reach the responder's recorded prompt or the nightly
-        pg_dump.
+        Forget removes a memory from your saved memories, so new replies stop using it.
       </p>
       <Show when={data.error}>
         <p role="alert">Unable to load memory. Please retry.</p>

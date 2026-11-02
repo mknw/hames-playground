@@ -331,3 +331,96 @@ describe('buildDashboard', () => {
     expect(d.totals.costEur).toBe(0)
   })
 })
+
+// ============================================================================
+// Token-priced vs time-priced, and tool calls (#931)
+// ============================================================================
+
+function toolCall(patternId: string, tool = 'read_neo4j_cypher'): ContextEvent {
+  return {
+    type: 'tool_call',
+    ts: 4,
+    patternId,
+    data: { tool, args: { synthetic: true } },
+  } as ContextEvent
+}
+
+function toolResult(patternId: string, success: boolean): ContextEvent {
+  return {
+    type: 'tool_result',
+    ts: 5,
+    patternId,
+    data: { tool: 'read_neo4j_cypher', result: 'ok', success },
+  } as ContextEvent
+}
+
+describe('tokenPricedCalls', () => {
+  it('counts priced steps with no time-priced attempt — the scopes cache figures describe', () => {
+    const s = foldEvents([
+      metered('a', { basis: 'tokens' }),
+      metered('b', { costEur: 0.01, noCacheEur: 0.01, basis: 'time' }),
+    ])
+    expect(s.tokenPricedCalls).toBe(1)
+    expect(s.timePricedCalls).toBe(1)
+    expect(s.pricedCalls).toBe(2)
+  })
+
+  it('counts a MIXED step time-priced, not token-priced', () => {
+    // Its figure is a floor either way; the cache cards stay hidden when it is
+    // the only priced step in the scope.
+    const s = foldEvents([
+      metered('a', { costEur: 1.83, noCacheEur: 1.83, basis: 'tokens', timePricedAttempts: 1 }),
+    ])
+    expect(s.tokenPricedCalls).toBe(0)
+    expect(s.timePricedCalls).toBe(1)
+  })
+
+  it('is zero for a purely time-priced scope, and zero on empty input', () => {
+    expect(foldEvents([metered('a', { basis: 'time' })]).tokenPricedCalls).toBe(0)
+    expect(summarize(emptyTotals()).tokenPricedCalls).toBe(0)
+  })
+})
+
+describe('tool-call counts', () => {
+  it('counts tool_call events and failed tool_results off the same stream', () => {
+    const s = foldEvents([
+      toolCall('loop'),
+      toolCall('loop'),
+      toolResult('loop', true),
+      toolResult('loop', false),
+      metered('loop'),
+    ])
+    expect(s.toolCalls).toBe(2)
+    expect(s.toolFailures).toBe(1)
+    // Tool events are not LLM steps and carry no metrics.
+    expect(s.meteredCalls).toBe(1)
+    expect(s.unmeteredCalls).toBe(0)
+  })
+
+  it('is independent of tier and pricing, and stays zero without tool events', () => {
+    const s = foldEvents([toolCall('a'), toolResult('a', true), metered('a', { basis: 'time' })])
+    expect(s.toolCalls).toBe(1)
+    expect(s.toolFailures).toBe(0)
+    const none = foldEvents([metered('a')])
+    expect(none.toolCalls).toBe(0)
+    expect(none.toolFailures).toBe(0)
+  })
+
+  it('folds tool counts per conversation; tool-only conversations stay dropped', () => {
+    const rows = aggregateByConversation([
+      conversation('t', [
+        metered('loop'),
+        toolCall('loop'),
+        toolCall('loop'),
+        toolResult('loop', false),
+        toolResult('loop', true),
+      ]),
+      conversation('silent', [toolCall('loop')]),
+    ])
+    // The dashboard's rows describe LLM activity; a conversation whose only
+    // events are tool calls would still be an all-zero row there.
+    expect(rows.map((r) => r.id)).toEqual(['t'])
+    expect(rows[0].summary.toolCalls).toBe(2)
+    expect(rows[0].summary.toolFailures).toBe(1)
+  })
+})

@@ -1,12 +1,15 @@
 /**
  * Metrics Dashboard (#132)
  *
- * Token, cache and cost transparency across everything the signed-in user has
- * run. Numbers come from `event.metrics` (#122 / PR #130) folded server-side —
- * see `@hames-ai/harness-patterns/metrics/aggregate` for the fold and `dashboard.server.ts` for the
- * user-scoped load. Auth matches the rest of the app: the page renders behind
- * `AuthProvider`, and the server action independently re-checks the session,
- * so an unauthenticated fetch gets nothing regardless of the client gate.
+ * Tokens, tool calls and self-deployed GPU transparency across everything the
+ * signed-in user has run. Cache figures render only where a token-priced step
+ * exists — a step billed by wall-clock (the self-deployed tier) saves nothing
+ * by caching. Numbers come from `event.metrics` (#122 / PR #130) folded
+ * server-side — see `@hames-ai/harness-patterns/metrics/aggregate` for the fold
+ * and `dashboard.server.ts` for the user-scoped load. Auth matches the rest of
+ * the app: the page renders behind `AuthProvider`, and the server action
+ * independently re-checks the session, so an unauthenticated fetch gets nothing
+ * regardless of the client gate.
  *
  * No chart library by design — composition bars are two divs and a width.
  */
@@ -35,6 +38,15 @@ const floorMark = (s: MetricSummary): string => (s.timePricedCalls > 0 ? '≥ ' 
 const fmtPct = (v: number): string => `${Math.round(v * 100)}%`
 
 const fmtWhen = (ms: number): string => new Date(ms).toLocaleString()
+
+/** Wake waits and call durations: 9_400 → "9.4s", 157_000 → "2m 37s". Below
+ *  10s one decimal keeps a sub-second reading from rounding to a bare 0s. */
+const fmtMs = (ms: number): string => {
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
+}
 
 // ============================================================================
 // Building blocks
@@ -73,10 +85,40 @@ const Card = (props: {
   </div>
 )
 
-/** Input-token composition: fresh / cache read / cache write, as one bar. */
+/** One GPU box's wake-wait window: count, median and slowest, with the basis.
+ *  "—" means this app process has measured no wake — the chat's countdown then
+ *  runs on its named fallback constant, and this card does not dress that up as
+ *  a reading. */
+const BoxWakeCard = (props: {
+  label: string
+  stats: MetricsDashboard['inference']['large']
+  title: string
+}) => (
+  <Card
+    label={props.label}
+    value={
+      props.stats.medianMs === null
+        ? '—'
+        : `${fmtMs(props.stats.medianMs)} / ${fmtMs(props.stats.slowestMs!)}`
+    }
+    hint={
+      props.stats.samples > 0
+        ? `median / slowest of ${props.stats.samples} wake(s) · ${props.stats.basis}`
+        : 'no wake measured by this process yet'
+    }
+    title={props.title}
+  />
+)
+/** Input-token composition: fresh / cache read / cache write, as one bar.
+ *
+ *  Cache segments render only when the scope contains a token-priced step
+ *  (`tokenPricedCalls > 0`): on a purely wall-clock-billed scope caching is not
+ *  a billing variable, and a bar reading "75% cache" would dress a GPU-second
+ *  figure in token-price colours. */
 const CompositionBar = (props: { summary: MetricSummary }) => {
   const total = () => Math.max(1, props.summary.inputTotalTokens)
   const seg = (n: number) => `${(n / total()) * 100}%`
+  const showCache = () => props.summary.tokenPricedCalls > 0
   return (
     <div flex="~ col" gap="2" m="t-2">
       <div flex="~" h="2" w="full" rounded="full" overflow="hidden" bg="ui-bg-tertiary">
@@ -85,33 +127,42 @@ const CompositionBar = (props: { summary: MetricSummary }) => {
           style={{ width: seg(props.summary.inputUncachedTokens) }}
           title={`Uncached input: ${props.summary.inputUncachedTokens.toLocaleString()} tokens`}
         />
-        <div
-          bg="violet-400"
-          style={{ width: seg(props.summary.inputCacheReadTokens) }}
-          title={`Cache read: ${props.summary.inputCacheReadTokens.toLocaleString()} tokens`}
-        />
-        <div
-          bg="amber-400"
-          style={{ width: seg(props.summary.inputCacheWriteTokens) }}
-          title={`Cache write: ${props.summary.inputCacheWriteTokens.toLocaleString()} tokens`}
-        />
+        <Show when={showCache()}>
+          <div
+            bg="violet-400"
+            style={{ width: seg(props.summary.inputCacheReadTokens) }}
+            title={`Cache read: ${props.summary.inputCacheReadTokens.toLocaleString()} tokens`}
+          />
+          <div
+            bg="amber-400"
+            style={{ width: seg(props.summary.inputCacheWriteTokens) }}
+            title={`Cache write: ${props.summary.inputCacheWriteTokens.toLocaleString()} tokens`}
+          />
+        </Show>
       </div>
       <div flex="~ wrap" gap="3" text="xs ui-text-secondary">
         <span>
           <span text="ui-success">■</span> fresh {fmtTok(props.summary.inputUncachedTokens)}
         </span>
-        <span>
-          <span text="violet-400">■</span> cache read {fmtTok(props.summary.inputCacheReadTokens)}
-        </span>
-        <span>
-          <span text="amber-400">■</span> cache write {fmtTok(props.summary.inputCacheWriteTokens)}
-        </span>
+        <Show when={showCache()}>
+          <span>
+            <span text="violet-400">■</span> cache read {fmtTok(props.summary.inputCacheReadTokens)}
+          </span>
+          <span>
+            <span text="amber-400">■</span> cache write{' '}
+            {fmtTok(props.summary.inputCacheWriteTokens)}
+          </span>
+        </Show>
       </div>
     </div>
   )
 }
 
-const Th = (props: { children: import('solid-js').JSX.Element; right?: boolean }) => (
+const Th = (props: {
+  children: import('solid-js').JSX.Element
+  right?: boolean
+  title?: string
+}) => (
   // Alignment stays an inline style: `text="right"` emits no CSS under this
   // UnoCSS config (verified against the built stylesheet), unlike `text="left"`.
   <th
@@ -163,9 +214,16 @@ const SummaryCells = (props: { summary: MetricSummary }) => (
     </Td>
     <Td right>{fmtTok(props.summary.outputTokens)}</Td>
     <Td right>
-      <span text={props.summary.cacheHitRate > 0 ? 'violet-400' : 'ui-text-tertiary'}>
-        {fmtPct(props.summary.cacheHitRate)}
-      </span>
+      {/* Cache is a token-pricing phenomenon: a scope billed entirely by
+          wall-clock saves nothing by caching, so it gets a dash, not a 0%. */}
+      <Show
+        when={props.summary.tokenPricedCalls > 0}
+        fallback={<span text="ui-text-tertiary">—</span>}
+      >
+        <span text={props.summary.cacheHitRate > 0 ? 'violet-400' : 'ui-text-tertiary'}>
+          {fmtPct(props.summary.cacheHitRate)}
+        </span>
+      </Show>
     </Td>
     <Td right>
       <Show when={props.summary.pricedCalls > 0} fallback={<span text="ui-text-tertiary">—</span>}>
@@ -199,7 +257,8 @@ export default function Dashboard() {
             Metrics
           </h1>
           <span text="xs ui-text-secondary">
-            Tokens, cache and estimated cost (EUR) across your conversations
+            Tokens, tool calls and estimated cost (EUR) across your conversations — cache figures
+            shown only where token-priced steps ran
           </span>
         </div>
         <div flex="~" items="center" gap="2" m="l-auto">
@@ -307,27 +366,44 @@ export default function Dashboard() {
                       : '')
                   }
                 />
-                <Card
-                  label="Saved by caching"
-                  value={fmtEur(totals()!.savingsEur)}
-                  tone="ui-success"
-                  hint={`${fmtPct(totals()!.savingsPct)} off ${fmtEur(totals()!.noCacheEur)} uncached`}
-                  title="Difference between the billed estimate and the same tokens priced with no caching. Wall-clock-billed steps contribute nothing here — caching cannot save GPU seconds."
-                />
-                <Card
-                  label="Cache hit-rate"
-                  value={fmtPct(totals()!.cacheHitRate)}
-                  tone="violet-400"
-                  hint={`${fmtTok(totals()!.inputCacheReadTokens)} of ${fmtTok(
-                    totals()!.inputTotalTokens,
-                  )} input tokens`}
-                  title="Share of input tokens served from cache (billed at 0.1× the base input rate)"
-                />
+                {/* Cache is a token-pricing phenomenon. A scope billed entirely by
+                    wall-clock — a purely self-deployed one — saves nothing by
+                    caching, so its cache cards are hidden rather than shown as 0. */}
+                <Show when={totals()!.tokenPricedCalls > 0}>
+                  <Card
+                    label="Saved by caching"
+                    value={fmtEur(totals()!.savingsEur)}
+                    tone="ui-success"
+                    hint={`${fmtPct(totals()!.savingsPct)} off ${fmtEur(totals()!.noCacheEur)} uncached`}
+                    title="Difference between the billed estimate and the same tokens priced with no caching. Wall-clock-billed steps contribute nothing here — caching cannot save GPU seconds."
+                  />
+                  <Card
+                    label="Cache hit-rate"
+                    value={fmtPct(totals()!.cacheHitRate)}
+                    tone="violet-400"
+                    hint={`${fmtTok(totals()!.inputCacheReadTokens)} of ${fmtTok(
+                      totals()!.inputTotalTokens,
+                    )} input tokens`}
+                    title="Share of input tokens served from cache (billed at 0.1× the base input rate)"
+                  />
+                </Show>
                 <Card
                   label="Output tokens"
                   value={fmtTok(totals()!.outputTokens)}
                   tone="ui-accent"
                   hint={`${fmtTok(totals()!.totalTokens)} tokens in total`}
+                />
+                <Card
+                  label="Tool calls"
+                  value={String(totals()!.toolCalls)}
+                  hint={
+                    totals()!.toolCalls > 0
+                      ? totals()!.toolFailures > 0
+                        ? `${totals()!.toolFailures} failed`
+                        : 'none failed'
+                      : 'none recorded in these conversations'
+                  }
+                  title="tool_call events in the folded conversations; a failure is a tool_result whose success is false. Independent of the LLM tier."
                 />
                 <div
                   p="4"
@@ -370,10 +446,73 @@ export default function Dashboard() {
             </section>
 
             {/* ---------------------------------------------------------- */}
+            {/* Self-deployed inference                                     */}
+            {/* ---------------------------------------------------------- */}
+            <Show
+              when={
+                (d().inference.large.samples ?? 0) + (d().inference.small.samples ?? 0) > 0 ||
+                totals()!.timePricedCalls > 0
+              }
+            >
+              <section>
+                <SectionTitle
+                  title="Self-deployed inference"
+                  note="wake waits recorded by this app process — a restart empties them, and another instance holds its own"
+                />
+                <div grid="~ cols-1 sm:cols-2" gap="4">
+                  <BoxWakeCard
+                    label="27B wake-ups (GPU boot-up)"
+                    stats={d().inference.large}
+                    title="How long the large box took to answer its first request after scaling to zero. Each figure is a wake poll's TOTAL wait — the cold-start countdown in the chat header estimates from the same window."
+                  />
+                  <BoxWakeCard
+                    label="4B wake-ups (GPU boot-up)"
+                    stats={d().inference.small}
+                    title="How long the small box took to answer its health check after scaling to zero. Same window the chat's cold-start estimate uses."
+                  />
+                </div>
+                <Show
+                  when={
+                    d().inference.large.medianMs !== null ||
+                    d().inference.selfDeployedCall.p50Ms !== null
+                  }
+                >
+                  <div grid="~ cols-1 sm:cols-2" gap="4" m="t-4">
+                    <Card
+                      label="Cold: first answer after a wake (27B)"
+                      value={
+                        d().inference.large.medianMs === null
+                          ? '—'
+                          : fmtMs(d().inference.large.medianMs!)
+                      }
+                      tone="ui-accent"
+                      hint={`${d().inference.large.samples} wake(s) — the wait is to a 1-token probe, so this is time-to-first-token after a cold start`}
+                      title="The closest honest cold figure the records hold: the median total wait of this process's wake polls on the large box. The probe is a 1-token completion, so the wait is effectively time to first token on a cold box."
+                    />
+                    <Card
+                      label="Warm: recent call duration (self-hosted tier)"
+                      value={
+                        d().inference.selfDeployedCall.p50Ms === null
+                          ? '—'
+                          : fmtMs(d().inference.selfDeployedCall.p50Ms!)
+                      }
+                      tone="ui-accent"
+                      hint={`${d().inference.selfDeployedCall.samples} recent call(s) — a whole call's duration, NOT time-to-first-token`}
+                      title="Median duration of the last 32 model calls on the self-deployed tier. It is the warm-ish contrast to the cold figure beside it, not a matched measurement: it covers a full call's generation (cold starts included, the median keeps them from dominating), and no warm time-to-first-token is recorded."
+                    />
+                  </div>
+                </Show>
+              </section>
+            </Show>
+
+            {/* ---------------------------------------------------------- */}
             {/* Per-pattern                                                */}
             {/* ---------------------------------------------------------- */}
             <section>
-              <SectionTitle title="By pattern" note="ranked by estimated cost" />
+              <SectionTitle
+                title="By pattern"
+                note={`${d().byPattern.length} pattern${d().byPattern.length === 1 ? '' : 's'} · ranked by estimated cost`}
+              />
               <div rounded="lg" bg="ui-bg-secondary" border="1 ui-border-primary" overflow="auto">
                 <table w="full" border="collapse">
                   <thead bg="ui-bg-tertiary">
@@ -432,6 +571,12 @@ export default function Dashboard() {
                       <Th right>Output</Th>
                       <Th right>Cached</Th>
                       <Th right>Cost</Th>
+                      <Th
+                        right
+                        title="tool_call events in this conversation; failures in parentheses"
+                      >
+                        Tools
+                      </Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -452,6 +597,15 @@ export default function Dashboard() {
                             </span>
                           </Td>
                           <SummaryCells summary={row.summary} />
+                          <Td right>
+                            {row.summary.toolCalls > 0
+                              ? `${row.summary.toolCalls}${
+                                  row.summary.toolFailures > 0
+                                    ? ` (${row.summary.toolFailures})`
+                                    : ''
+                                }`
+                              : '—'}
+                          </Td>
                         </tr>
                       )}
                     </For>
@@ -461,15 +615,26 @@ export default function Dashboard() {
             </section>
 
             <footer flex="~ col" gap="1" text="xs ui-text-secondary" m="t-2">
-              <span>
-                Every figure is in euro. Token-priced clients are priced at the $/MTok rates in
-                force for the client that served each step (see{' '}
-                <span font="mono">CLIENT_PRICING</span> in <span font="mono">lib/settings.ts</span>
-                ), with cache reads at 0.1× and cache writes at 1.25× the base input rate, converted
-                at a static USD→EUR rate (<span font="mono">EUR_PER_USD</span>) — there is no live
-                FX lookup. Steps whose client could not be priced are counted but left out of the
-                cost columns.
-              </span>
+              <Show
+                when={totals()!.tokenPricedCalls > 0}
+                fallback={
+                  <span>
+                    Every figure is in euro. Steps whose client could not be priced are counted but
+                    left out of the cost columns.
+                  </span>
+                }
+              >
+                <span>
+                  Every figure is in euro. Token-priced clients are priced at the $/MTok rates in
+                  force for the client that served each step (see{' '}
+                  <span font="mono">CLIENT_PRICING</span> in{' '}
+                  <span font="mono">lib/settings.ts</span>
+                  ), with cache reads at 0.1× and cache writes at 1.25× the base input rate,
+                  converted at a static USD→EUR rate (<span font="mono">EUR_PER_USD</span>) — there
+                  is no live FX lookup. Steps whose client could not be priced are counted but left
+                  out of the cost columns.
+                </span>
+              </Show>
               <Show when={totals()!.timePricedCalls > 0}>
                 <span>
                   A <span font="mono">≥</span> marks a figure that includes wall-clock-billed steps.

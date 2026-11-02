@@ -115,6 +115,18 @@ export interface MetricTotals {
    *  window after the last call and the cold start before the first, and
    *  neither is any call's measured duration. The UI renders a `≥`. */
   timePricedCalls: number
+  /** Priced calls with NO time-priced attempt — the ones token pricing (and
+   *  therefore caching) describes. The dashboard shows its cache figures only
+   *  where this is non-zero: a purely wall-clock-billed scope saves nothing by
+   *  caching, and a mixed step counts as time-priced because its figure is a
+   *  floor regardless of its token-priced share. */
+  tokenPricedCalls: number
+  /** Tool calls recorded as `tool_call` events. Not an LLM figure — counted
+   *  for every conversation regardless of tier. */
+  toolCalls: number
+  /** `tool_result` events whose `success` is false. A call whose result never
+   *  landed is neither; the two numbers are independent counts. */
+  toolFailures: number
 }
 
 /** Totals plus the ratios the UI shows. */
@@ -185,11 +197,29 @@ export function emptyTotals(): MetricTotals {
     noCacheEur: 0,
     pricedCalls: 0,
     timePricedCalls: 0,
+    tokenPricedCalls: 0,
+    toolCalls: 0,
+    toolFailures: 0,
   }
 }
 
-/** Accumulate one event into `totals` (mutates — folds own their accumulator). */
+/** Accumulate one event into `totals` (mutates — folds own their accumulator).
+ *
+ *  Tool-call counts ride the same fold because they come off the same event
+ *  stream the caller already loaded: a `tool_call` event is one call, a
+ *  `tool_result` with `success: false` one failure. Everything else about a
+ *  tool event (its name, its arguments, its output) stays out of the totals —
+ *  this module sums counts, never content. */
 export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTotals {
+  if (event.type === 'tool_call') {
+    totals.toolCalls++
+    return totals
+  }
+  if (event.type === 'tool_result') {
+    const d = event.data as { success?: boolean } | null | undefined
+    if (d?.success === false) totals.toolFailures++
+    return totals
+  }
   const m = getEventMetrics(event)
   if (!m) {
     // An LLM step with no accounting: countable, but nothing to sum.
@@ -210,6 +240,7 @@ export function accumulate(totals: MetricTotals, event: ContextEvent): MetricTot
     totals.costEur += cost.costEur
     totals.noCacheEur += cost.noCacheEur
     if (isTimePricedStep(m)) totals.timePricedCalls++
+    else totals.tokenPricedCalls++
   }
   return totals
 }

@@ -25,6 +25,24 @@ const { default: Dashboard } = await import('~/routes/dashboard')
 
 const tick = () => new Promise((r) => setTimeout(r, 20))
 
+function conversation(id: string, events: ContextEvent[]): ConversationEvents {
+  return { id, title: `Thread ${id}`, agentId: 'search', updatedAt: 1_700_000_000_000, events }
+}
+
+/** Process-local self-deployed figures the route does not derive from events.
+ *  Shape mirrors `MetricsDashboard['inference']`. */
+const inference = {
+  large: { samples: 3, medianMs: 31_300, slowestMs: 62_200, basis: 'measured' },
+  small: { samples: 0, medianMs: null, slowestMs: null, basis: 'default' },
+  selfDeployedCall: { p50Ms: 4_100, samples: 12 },
+} as const
+
+const dashboardPayload = (conversations: ConversationEvents[]) => ({
+  ...buildDashboard(conversations),
+  generatedAt: 1_700_000_000_000,
+  conversationScanLimit: 200,
+  inference,
+})
 function metered(
   patternId: string,
   costEur: number,
@@ -59,20 +77,14 @@ function unmetered(patternId: string): ContextEvent {
   } as ContextEvent
 }
 
-function conversation(id: string, events: ContextEvent[]): ConversationEvents {
-  return { id, title: `Thread ${id}`, agentId: 'search', updatedAt: 1_700_000_000_000, events }
-}
-
 describe('Dashboard route', () => {
   it('renders totals, both aggregates and the unmetered notice', async () => {
-    getMetricsDashboard.mockResolvedValue({
-      ...buildDashboard([
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([
         conversation('alpha', [metered('neo4j-query', 0.4), unmetered('neo4j-query')]),
         conversation('beta', [metered('web-search', 0.1)]),
       ]),
-      generatedAt: 1_700_000_000_000,
-      conversationScanLimit: 200,
-    })
+    )
 
     const { container } = render(() => <Dashboard />)
     await tick()
@@ -105,14 +117,12 @@ describe('Dashboard route', () => {
   })
 
   it('marks every cost figure a floor, and explains why, once a step was time-billed', async () => {
-    getMetricsDashboard.mockResolvedValue({
-      ...buildDashboard([
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([
         conversation('alpha', [metered('neo4j-query', 0.4, 'time')]),
         conversation('beta', [metered('web-search', 0.1)]),
       ]),
-      generatedAt: 1_700_000_000_000,
-      conversationScanLimit: 200,
-    })
+    )
 
     const { container } = render(() => <Dashboard />)
     await tick()
@@ -140,11 +150,10 @@ describe('Dashboard route', () => {
 
   it('says "most recent N" when the load hit its row ceiling', async () => {
     getMetricsDashboard.mockResolvedValue({
-      ...buildDashboard([
+      ...dashboardPayload([
         conversation('alpha', [metered('neo4j-query', 0.4)]),
         conversation('beta', [metered('web-search', 0.1)]),
       ]),
-      generatedAt: 1_700_000_000_000,
       conversationScanLimit: 2,
     })
 
@@ -155,16 +164,112 @@ describe('Dashboard route', () => {
   })
 
   it('shows an empty state when nothing has been run', async () => {
-    getMetricsDashboard.mockResolvedValue({
-      ...buildDashboard([conversation('quiet', [])]),
-      generatedAt: 1_700_000_000_000,
-      conversationScanLimit: 200,
-    })
+    getMetricsDashboard.mockResolvedValue(dashboardPayload([conversation('quiet', [])]))
 
     const { container } = render(() => <Dashboard />)
     await tick()
 
     expect(container.textContent).toContain('No LLM activity recorded yet.')
     expect(container.querySelectorAll('tbody tr')).toHaveLength(0)
+  })
+})
+
+describe('Dashboard route — cache visibility', () => {
+  it('hides the cache cards and dashes the cached cells on a purely time-billed account', async () => {
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([conversation('alpha', [metered('neo4j-query', 0.4, 'time')])]),
+    )
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    const text = container.textContent ?? ''
+
+    // Caching saves nothing on wall-clock-billed steps: no card, no percentage,
+    // no cache segment — a dash, never a fabricated 0.
+    expect(text).not.toContain('Saved by caching')
+    expect(text).not.toContain('Cache hit-rate')
+    expect(text).not.toContain('cache read')
+    // The tool-call card and the self-deployed section take the space.
+    expect(text).toContain('Tool calls')
+    expect(text).toContain('Self-deployed inference')
+  })
+
+  it('keeps the cache cards once a token-priced step exists', async () => {
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([conversation('alpha', [metered('neo4j-query', 0.4)])]),
+    )
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    expect(container.textContent).toContain('Saved by caching')
+    expect(container.textContent).toContain('Cache hit-rate')
+  })
+})
+
+describe('Dashboard route — self-deployed inference', () => {
+  it("renders each box's wake-wait window and the cold/warm contrast", async () => {
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([conversation('a', [metered('p', 0.1)])]),
+    )
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    const text = container.textContent ?? ''
+
+    // Boot-up per box: median / slowest, count, and the measured basis.
+    expect(text).toContain('27B wake-ups')
+    expect(text).toContain('4B wake-ups')
+    expect(text).toContain('31s / 1m 02s')
+    expect(text).toContain('median / slowest of 3 wake(s) · measured')
+    // The 4B box has no reading here — a dash, not its fallback constant.
+    expect(text).toContain('no wake measured by this process yet')
+    // Cold vs warm, labelled as what each actually measures.
+    expect(text).toContain('Cold: first answer after a wake (27B)')
+    expect(text).toContain('Warm: recent call duration (self-hosted tier)')
+    expect(text).toContain('4.1s')
+  })
+
+  it('hides the section when no wake was measured and no step was time-billed', async () => {
+    getMetricsDashboard.mockResolvedValue({
+      ...dashboardPayload([conversation('a', [metered('p', 0.1)])]),
+      inference: {
+        large: { samples: 0, medianMs: null, slowestMs: null, basis: 'default' },
+        small: { samples: 0, medianMs: null, slowestMs: null, basis: 'default' },
+        selfDeployedCall: { p50Ms: null, samples: 0 },
+      },
+    })
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    expect(container.textContent).not.toContain('Self-deployed inference')
+  })
+})
+
+describe('Dashboard route — tool calls', () => {
+  it('counts tool calls and failures on the totals card and per conversation', async () => {
+    getMetricsDashboard.mockResolvedValue(
+      dashboardPayload([
+        conversation('alpha', [
+          metered('loop', 0.1),
+          { type: 'tool_call', ts: 3, patternId: 'loop', data: { tool: 't' } } as ContextEvent,
+          { type: 'tool_call', ts: 4, patternId: 'loop', data: { tool: 't' } } as ContextEvent,
+          {
+            type: 'tool_result',
+            ts: 5,
+            patternId: 'loop',
+            data: { tool: 't', result: 'ok', success: false },
+          } as ContextEvent,
+        ]),
+      ]),
+    )
+
+    const { container } = render(() => <Dashboard />)
+    await tick()
+    const text = container.textContent ?? ''
+
+    expect(text).toContain('Tool calls')
+    expect(text).toContain('1 failed')
+    // The conversation row: 2 calls, 1 failure in parentheses.
+    expect(text).toContain('2 (1)')
   })
 })

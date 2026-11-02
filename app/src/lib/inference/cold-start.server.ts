@@ -198,10 +198,13 @@ const history: number[] = ((globalThis as HistoryGlobal)[HISTORY_KEY] ??= [])
 
 export type WakeBox = 'large' | 'small'
 /** The small box's restore estimate: the slowest snapshot restore measured through
- *  the URL (21–31s, `deploy/modal/README.md`). Largest, by the same rule as
- *  {@link COLD_START_FALLBACK_MS}. A full boot (305–552s) is not covered by it;
- *  the notice states that case once the countdown runs out. */
-export const SMALL_COLD_START_FALLBACK_MS = 31_000
+ *  the URL — 31.4s, the largest of the 2026-10-15 L4 readings in
+ *  `deploy/modal/README.md` — rounded UP, by the same rule as
+ *  {@link COLD_START_FALLBACK_MS}: a countdown that clears before the slowest
+ *  measured restore is the optimistic promise that rule exists to forbid. A full
+ *  boot (305–552s) is not covered by it; the notice states that case once the
+ *  countdown runs out. */
+export const SMALL_COLD_START_FALLBACK_MS = 32_000
 // Between sub-second warm health checks and the fastest measured cold start (21s).
 export const SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS = 10_000
 /** The small box releases its GPU after 300s idle. */

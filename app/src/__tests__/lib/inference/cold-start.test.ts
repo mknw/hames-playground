@@ -136,9 +136,11 @@ describe('the estimate', () => {
     expect(COLD_START_FALLBACK_MS).toBeLessThan(505_000)
   })
 
-  it('seeds the small box from its own slowest measured restore', () => {
-    // 21–31s through the URL; its own figure, not the 27B's.
-    expect(SMALL_COLD_START_FALLBACK_MS).toBe(31_000)
+  it('seeds the small box from its own slowest measured restore, rounded up', () => {
+    // 21.1–31.4s through the URL (`deploy/modal/README.md`, 2026-10-15 L4); the
+    // largest, 31.4s, rounds up like the 27B figure — a countdown that clears
+    // 0.4s before the slowest measured restore is the promise the rule forbids.
+    expect(SMALL_COLD_START_FALLBACK_MS).toBe(32_000)
   })
 
   it('is the median of what was measured, and says so', () => {

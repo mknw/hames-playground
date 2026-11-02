@@ -155,18 +155,17 @@
 // beside it. The keep-alive was never that — a
 // comment frame is invisible to a human by construction — so the two are
 // complementary rather than one covering for the other. The estimate defaults
-// to the LONGEST of the three readings above (~360s) until a server has measured
-// one of its own; that constant is `COLD_START_FALLBACK_MS`, and this comment is
-// its provenance. Largest rather than median, because the errors are not
-// symmetric: a pessimistic countdown clears early and an optimistic one is a
-// promise the box breaks. The plausibility FLOOR is its own literal (36.5s) and
-// no longer a quarter of it — a reading that fast is dropped rather than
-// recorded, because nothing that fast starts a container and loads 27B of
-// weights, and the alternative is a warm ~4s call entering the history as a
-// measured "cold start" whenever the app's configured scale-down window is
-// shorter than the deployment's own. Deriving it from the fallback broke the
-// moment the fallback rose: a quarter of 360s is 90s, which would have rejected
-// the genuine 71.7s cold start above.
+// to `COLD_START_FALLBACK_MS` until a server has measured one of its own: since
+// 2026-11-02 the slowest snapshot RESTORE measured on Modal (157s), where it was
+// the LONGEST of the three no-snapshot readings above (~360s). Largest rather
+// than median, because the errors are not symmetric: a pessimistic countdown
+// clears early and an optimistic one is a promise the box breaks. A start that
+// must build a snapshot (a full boot) is stated by the notice once that runs
+// out. The plausibility FLOOR is its own literal (10s, under the fastest
+// measured restore, 11.9s) and never derived from the fallback — a reading that
+// fast is dropped rather than recorded, because the alternative is a warm wake
+// entering the history as a measured "cold start" whenever the app's configured
+// scale-down window is shorter than the deployment's own.
 client<llm> LargeQwen {
   provider openai-generic
   options {

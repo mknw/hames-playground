@@ -143,7 +143,7 @@ describe('small box wake', () => {
       smallScaledownSeconds(),
       SMALL_COLD_START_FALLBACK_MS,
       SMALL_COLD_START_PLAUSIBILITY_FLOOR_MS,
-    ]).toEqual([720_000, 10_000, 5_000, 300, 30_000, 10_000])
+    ]).toEqual([720_000, 10_000, 5_000, 300, 32_000, 10_000])
     vi.stubEnv('SMALL_LLM_WAKE_TIMEOUT_MS', '12000')
     vi.stubEnv('SMALL_LLM_WAKE_ATTEMPT_TIMEOUT_MS', '3000')
     vi.stubEnv('SMALL_LLM_WAKE_POLL_INTERVAL_MS', '1000')
@@ -326,6 +326,8 @@ describe('small box wake', () => {
       (e) => notices.push(e),
       async () => noteBoxCallStarting('small'),
     )
-    expect(notices).toEqual([{ estimateMs: 30_000, basis: 'default', samples: 0 }])
+    expect(notices).toEqual([
+      { estimateMs: SMALL_COLD_START_FALLBACK_MS, basis: 'default', samples: 0 },
+    ])
   })
 })

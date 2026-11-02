@@ -39,19 +39,36 @@ export function formatColdStartEstimate(ms: number): string | null {
 }
 
 /**
+ * The longest FULL BOOT measured on the self-hosted host: 938s, the 27B's first
+ * cold start after a deploy, which built two snapshots (`deploy/modal/README.md`,
+ * "The 27B"). A cold start that has to build a GPU snapshot rather than restore
+ * one takes 505–938s for the 27B and 305–552s for the small box. That happens
+ * after every redeploy, on each GPU or worker type the box has not run on yet, and
+ * when the platform recaptures its snapshots. The countdown estimates a restore,
+ * so this figure is stated only once the countdown has run out.
+ */
+export const COLD_START_FULL_BOOT_MS = 938_000
+
+/**
  * The notice's second line: what is happening and how much longer.
  *
- * Past the estimate it stops counting and says so, rather than sitting at
- * `~0 sec` or going negative. That case is expected rather than exceptional —
- * a burst of chats queues on ONE replica (measured 2026-08-26), so the second
- * sender's wait is the first sender's wait plus their own — and a notice that
- * silently expired would leave a spinner claiming nothing.
+ * Past the estimate it stops counting and says what the longer wait can be,
+ * rather than sitting at `~0 sec` or going negative. That case is expected
+ * rather than exceptional: the estimate is a snapshot RESTORE, and a box that
+ * has to build a new snapshot takes minutes longer. A region short of GPUs can
+ * add a queue on top of that (25 min once, 2026-10-27), and a burst of chats
+ * queues on ONE replica. A notice that silently expired would leave a spinner
+ * claiming nothing.
  */
 export function coldStartDetail(estimateMs: number, elapsedMs: number): string {
   const remaining = formatColdStartEstimate(estimateMs - elapsedMs)
   if (remaining) return `warming up… (estimated time to first token: ~${remaining})`
   const typical = formatColdStartEstimate(estimateMs)
-  return typical ? `warming up… (longer than the usual ~${typical})` : 'warming up…'
+  const fullBoot = formatColdStartEstimate(COLD_START_FULL_BOOT_MS)
+  return typical
+    ? `warming up… (longer than the usual ~${typical}: a start that builds a new GPU snapshot ` +
+        `has taken up to ~${fullBoot}, more if no GPU is free)`
+    : 'warming up…'
 }
 
 /**
@@ -81,8 +98,9 @@ export function coldStartBasisHint(basis: 'measured' | 'default', samples: numbe
     )
   }
   return (
-    'This server has not measured a cold start yet, so this is the published reading rather ' +
-    'than a local measurement. The endpoint scales to zero, so the first call after an idle ' +
-    'period pays a container start and a model load.'
+    'This server has not measured a cold start yet, so this is the slowest GPU snapshot ' +
+    'restore measured on the host, not a local measurement. The endpoint scales to zero, so ' +
+    'the first call after an idle period restores a snapshot; a start that has to build a new ' +
+    'one takes several minutes longer.'
   )
 }

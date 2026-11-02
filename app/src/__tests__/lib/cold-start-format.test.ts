@@ -24,6 +24,7 @@ import {
   coldStartAnnouncement,
   coldStartBasisHint,
   coldStartDetail,
+  COLD_START_FULL_BOOT_MS,
   formatColdStartEstimate,
 } from '~/lib/cold-start-format'
 
@@ -65,9 +66,20 @@ describe('coldStartDetail', () => {
 
   it('stops counting past the estimate instead of hitting zero or going negative', () => {
     const overrun = coldStartDetail(146_000, 200_000)
-    expect(overrun).toBe('warming up… (longer than the usual ~2 min)')
+    expect(overrun).toBe(
+      'warming up… (longer than the usual ~2 min: a start that builds a new GPU snapshot ' +
+        'has taken up to ~16 min, more if no GPU is free)',
+    )
     expect(overrun).not.toContain('0 sec')
     expect(overrun).not.toContain('-')
+  })
+
+  it('states the full-boot case only once the restore estimate has run out', () => {
+    // The countdown estimates a snapshot restore; a full boot is the other mode,
+    // and the longest one measured (938s) is what the overrun states.
+    expect(COLD_START_FULL_BOOT_MS).toBe(938_000)
+    expect(coldStartDetail(157_000, 156_000)).not.toContain('snapshot')
+    expect(coldStartDetail(157_000, 158_000)).toContain('up to ~16 min')
   })
 
   it('still says what is happening when there is no figure worth stating', () => {
@@ -105,6 +117,9 @@ describe('coldStartBasisHint', () => {
   it('never presents the fallback as something this server measured', () => {
     const hint = coldStartBasisHint('default', 0)
     expect(hint).toContain('has not measured a cold start')
+    // ...and says what the fallback IS: a restore figure, with the slower mode named.
+    expect(hint).toContain('snapshot restore')
+    expect(hint).toContain('build a new one')
     expect(hint).not.toMatch(/median/i)
   })
 })

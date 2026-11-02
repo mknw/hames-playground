@@ -1339,14 +1339,99 @@ with tempfile.TemporaryDirectory() as tmp:
 PY
   exit $?
 fi
-if [[ ${1:-} == --clone-mutations || ${1:-} == --clone-mutations-list ]]; then
+if [[ ${1:-} == --clone-mutations* ]]; then
   python3 - "$SCRIPT" "$0" "${2:-all}" "${1:-}" <<'PY'
 import os, pathlib, subprocess, sys, tempfile
 source, harness = map(pathlib.Path, sys.argv[1:3])
-shard, list_only = sys.argv[3], sys.argv[4] == '--clone-mutations-list'
+shard, mode = sys.argv[3], sys.argv[4]
+list_only = mode == '--clone-mutations-list'
+selftest_only = mode == '--clone-mutations-selftest'
 if shard not in ('all', '1', '2'):
     sys.exit('Clone mutation shard must be 1, 2, or all')
 original = source.read_text()
+# The one shared whole-suite subprocess deadline (baseline and every mutant
+# re-run the entire `--clones-only` subset). The slowest measured mutant on a
+# warm GitHub runner, b5's `boot-stage-preflight-R1` (PR #918 run 41394407332,
+# job 125122425275), flushed its KILLED record 86.647 s after the previous one
+# while a sibling runner on the slower side already showed 90 s exceeded for
+# the same mutant — the old 90 s cap sat inside run-to-run variability. 180 s
+# keeps more than 2x headroom over that observed 86.647 s target duration
+# while a hung child still fails the shard well inside the CI job cap.
+WHOLE_SUITE_TIMEOUT_S = 180
+
+def captured_text(stream):
+    # TimeoutExpired carries bytes even under text=True (POSIX), and its
+    # stderr can be None when nothing was written before the deadline.
+    if isinstance(stream, bytes):
+        return stream.decode('utf-8', 'replace')
+    return stream or ''
+
+def bounded_tail(text, limit):
+    # The END of the child's output is the progress a timeout must preserve
+    # for diagnosis; the head is noise. Keep a bounded tail, report the elision.
+    text = text.rstrip()
+    if len(text) <= limit:
+        return text
+    return '[... %d earlier characters elided ...]\n%s' % (len(text) - limit, text[-limit:])
+
+def suite_run(command, case, env=None, cwd=None, timeout=WHOLE_SUITE_TIMEOUT_S):
+    """One whole-suite subprocess under the shared deadline.
+
+    On TimeoutExpired the child's captured partial stdout/stderr is printed
+    with the active case name and the elapsed deadline, so the next failure
+    names where it stopped. The result stays failing/inconclusive: never a
+    killed mutant and never a pass.
+    """
+    try:
+        return subprocess.run(command, env=env, cwd=cwd, capture_output=True,
+                              text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        sys.exit('TIMEOUT: %s exceeded the %ss whole-suite deadline '
+                 '(inconclusive failure, not killed, not passed)\n'
+                 'partial stdout tail:\n%s\npartial stderr tail:\n%s'
+                 % (case, exc.timeout, bounded_tail(captured_text(exc.stdout), 8000),
+                    bounded_tail(captured_text(exc.stderr), 4000)))
+
+def timeout_selftest():
+    """Synthetic timeout: fail-closed, and the evidence survives the handler.
+
+    Drives the exact suite_run() the corpus uses against children that emit
+    progress and then hang past a 2 s deadline, and fails the shard unless
+    the result is a named, bounded, evidence-preserving failure.
+    """
+    try:
+        suite_run(['bash', '-c', 'echo "selftest progress A1"; sleep 30'],
+                  'selftest-named-partial', timeout=2)
+    except SystemExit as exc:
+        message = str(exc)
+        for needed in ('TIMEOUT', 'selftest-named-partial',
+                       'exceeded the 2s whole-suite deadline',
+                       'selftest progress A1'):
+            if needed not in message:
+                sys.exit('Timeout selftest failed, missing %r:\n%s' % (needed, message))
+        if "b'" in message:
+            sys.exit('Timeout selftest failed: captured bytes were not decoded:\n' + message)
+    else:
+        sys.exit('Timeout selftest failed: a timed-out case did not fail closed')
+    noise = 'x' * 9000  # pushes the head line past the 8000-char stdout tail
+    try:
+        suite_run(['bash', '-c', 'echo "selftest head marker HEAD-ELIDED"; printf %s "$0"; echo; echo "selftest final progress Z9"; sleep 30', noise],
+                  'selftest-bounded-tail', timeout=2)
+    except SystemExit as exc:
+        message = str(exc)
+        if 'selftest final progress Z9' not in message:
+            sys.exit('Timeout selftest failed: final progress missing from the tail:\n' + message)
+        if 'HEAD-ELIDED' in message:
+            sys.exit('Timeout selftest failed: unbounded head kept in the tail')
+        if 'elided' not in message:
+            sys.exit('Timeout selftest failed: elided size not reported')
+    else:
+        sys.exit('Timeout selftest failed: a timed-out case did not fail closed')
+    print('TIMEOUT-SELFTEST ok: fail-closed with case, deadline and bounded partial output', flush=True)
+
+if selftest_only:
+    timeout_selftest()
+    sys.exit(0)
 mutants = [
     ('overlay-not-applied', '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$files" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)',
      '(cd "$APP_DIR" && sudo env COMPOSE_FILE="$COMPOSE_FILES" COMPOSE_PROFILES="$COMPOSE_PROFILE" docker compose "$@" 2>/dev/null)'),
@@ -1518,7 +1603,8 @@ compose_caddy_env_unused() {
     ('images-prebuild-skipped', 'if [[ -f $ENV_FILE ]] && [[ $(compose_files) != "$COMPOSE_FILES" ]] &&', 'if false &&'),
 ]
 if not list_only:
-    baseline = subprocess.run(['bash', str(harness), '--clones-only'], capture_output=True, text=True, timeout=90)
+    timeout_selftest()  # proves this shard's own timeout handling first
+    baseline = suite_run(['bash', str(harness), '--clones-only'], 'baseline --clones-only')
     if baseline.returncode:
         sys.exit('Baseline failed: ' + baseline.stdout + baseline.stderr)
 render_test = ['python3', str(source.parent / 'prepare-embedder.test.py'), '-k', 'test_boot_refuses_failed_compose_render_before_prepare_or_up']
@@ -1541,7 +1627,7 @@ with tempfile.TemporaryDirectory() as tmp:
         changed.write_text(original.replace(old, new))
         env = {**os.environ, 'BOOTSTRAP_SCRIPT': str(changed)}
         command = render_test if name == 'render-failure-refusal-off' else ['bash', str(harness), '--clones-only']
-        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=90)
+        result = suite_run(command, name, env=env)
         signal = 'FAIL: test_boot_refuses_failed_compose_render_before_prepare_or_up' if name == 'render-failure-refusal-off' else (expected or ['FAIL clones'])[0]
         if not result.returncode or signal not in result.stdout + result.stderr:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
@@ -1627,8 +1713,8 @@ with tempfile.TemporaryDirectory() as tmp:
             continue
         changed = pathlib.Path(tmp) / 'validate-clones.mjs'
         changed.write_text(policy.replace(old, new))
-        result = subprocess.run(['corepack', 'pnpm', 'test:run', 'src/__tests__/lib/config/compose-clones.test.ts'],
-            cwd=source.parent.parent / 'app', env={**os.environ, 'CI': '1', 'TEST_DATABASE_URL': 'postgresql://x:x@127.0.0.1:59999/x', 'CLONE_VALIDATOR_SCRIPT': str(changed)}, capture_output=True, text=True, timeout=90)
+        result = suite_run(['corepack', 'pnpm', 'test:run', 'src/__tests__/lib/config/compose-clones.test.ts'],
+            name, cwd=source.parent.parent / 'app', env={**os.environ, 'CI': '1', 'TEST_DATABASE_URL': 'postgresql://x:x@127.0.0.1:59999/x', 'CLONE_VALIDATOR_SCRIPT': str(changed)})
         if not result.returncode or 'AssertionError' not in result.stdout + result.stderr:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)
@@ -1646,7 +1732,7 @@ with tempfile.TemporaryDirectory() as tmp:
         changed = pathlib.Path(tmp) / 'validate-clones.mjs'
         changed.write_text(policy.replace(old, 'true'))
         env = {**os.environ, 'CLONE_VALIDATOR_SCRIPT': str(changed)}
-        result = subprocess.run(['bash', str(harness), '--clones-only'], env=env, capture_output=True, text=True, timeout=90)
+        result = suite_run(['bash', str(harness), '--clones-only'], name, env=env)
         if not result.returncode or 'FAIL clones' not in result.stdout:
             sys.exit('SURVIVED or invalid mutation: ' + name + '\n' + result.stdout + result.stderr)
         print('KILLED ' + name, flush=True)

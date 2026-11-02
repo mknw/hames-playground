@@ -108,16 +108,21 @@ EOF
 chmod +x "$stub/npm" "$stub/pnpm"
 
 run() { # runs publish.sh in the fixture repo with the stubs on PATH; sets out+rc
-  # flag --unset-confirm leaves CONFIRM unset in the child; the rest pass through
-  local unset_confirm=0 a
+  # flags: --unset-confirm leaves CONFIRM unset in the child; repo=<path> runs
+  # in a different repo; the rest pass through as script arguments
+  local unset_confirm=0 a run_repo="$repo"
   local args=()
   for a in "$@"; do
-    if [ "$a" = "--unset-confirm" ]; then unset_confirm=1; else args+=("$a"); fi
+    case $a in
+      --unset-confirm) unset_confirm=1 ;;
+      repo=*) run_repo="${a#repo=}" ;;
+      *) args+=("$a") ;;
+    esac
   done
   local confirm_spec=""
   [ "$unset_confirm" = 0 ] && confirm_spec="CONFIRM=1"
   : > "$tmp/npm.log"; : > "$tmp/pnpm.log"
-  out=$(cd "$repo" && \
+  out=$(cd "$run_repo" && \
     env -u CONFIRM \
       CHECK_VERSION="${CHECK_VERSION:-0.10.0}" NPM_LATEST="${NPM_LATEST:-0.10.0}" \
       PUBLISHED_PKGS="${PUBLISHED_PKGS:-}" VERSION="${VERSION:-}" \
@@ -186,6 +191,14 @@ checkrc "unconfirmed run aborts" 1
 expect "says aborted" "aborted"
 check "nothing reached pnpm" 0 sh -c '[ ! -s "$1" ]' sh "$tmp/pnpm.log"
 
+# --- 9. no release tag at all: a repo with no v* tag ---------------------------
+mkdir -p "$tmp/repo-no-tag"
+git -C "$tmp/repo-no-tag" init -q
+git -C "$tmp/repo-no-tag" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "no tags"
+run repo="$tmp/repo-no-tag"
+checkrc "no v* tag refused" 1
+expect "says no release found" "no release found"
+check "nothing reached pnpm" 0 sh -c '[ ! -s "$1" ]' sh "$tmp/pnpm.log"
 if [ "$failures" -eq 0 ]; then
   echo "all green"
 else

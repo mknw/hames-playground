@@ -31,6 +31,11 @@ case "${1:-}" in
   *) echo "usage: $0 [--dry-run]" >&2; exit 2 ;;
 esac
 
+# --- 0. NPM_USERCONFIG -> NPM_CONFIG_USERCONFIG for EVERY npm step: the
+# registry gate below, whoami, the publish, and the post-publish verify.
+if [ -n "${NPM_USERCONFIG:-}" ]; then
+  export NPM_CONFIG_USERCONFIG="$NPM_USERCONFIG"
+fi
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 
@@ -90,7 +95,15 @@ if [ "$DRY" -eq 0 ]; then
   fi
   if [ "$#" -gt 0 ]; then
     echo "ERROR: already on npm at $VERSION; refusing a partial republish:" >&2
-    for p in "$@"; do echo "  $p" >&2; done
+    echo "  published: $*" >&2
+    missing=""
+    for pkg in $PKGS; do
+      case " $* " in
+        *" @hames-ai/$pkg "*) ;;
+        *) missing="$missing @hames-ai/$pkg" ;;
+      esac
+    done
+    echo "  not yet published:$missing" >&2
     exit 1
   fi
 fi
@@ -119,11 +132,8 @@ trap cleanup EXIT
 
 git worktree add --quiet --detach "$worktree" "$repo_commit"
 
-# --- 6. install, whoami, publish (the prepublishOnly tag guard stays) ---------
-if [ -n "${NPM_USERCONFIG:-}" ]; then
-  export NPM_CONFIG_USERCONFIG="$NPM_USERCONFIG"
-fi
 
+# --- 6. install, whoami, publish (the prepublishOnly tag guard stays) --------
 (
   cd "$worktree"
   echo "==> pnpm install --frozen-lockfile"

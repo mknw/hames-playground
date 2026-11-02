@@ -60,7 +60,13 @@ export interface ScenarioContext {
 
 export interface Scenario {
   id: string
-  role: EvalRole
+  /** The BAML role the scenario measures. Optional because a scenario may
+   *  make NO BAML call at all: `retrieval-quality` grades the retrieval
+   *  backends (embed + search), which route through the embedding seam, not
+   *  through a role. `undefined` reads in the report as no expected client and
+   *  no served-by row — which is the honest rendering of a scenario that has
+   *  no model call to attribute. */
+  role?: EvalRole
   title: string
   /** One line: which recurrent branch this pins, and why it is worth a call. */
   what: string
@@ -220,6 +226,12 @@ export function summarizeLatency(samples: CallSample[]): LatencyStats[] {
   return stats.sort((a, b) => b.p50Ms - a.p50Ms)
 }
 
+/** What a scenario without a BAML role reports as its expected client — every
+ *  scenario here makes BAML calls through a role except the ones that make
+ *  none at all (the retrieval-quality grader talks to the embedder and Redis,
+ *  never to a chat client). */
+const NO_BAML_CALL_CLIENT = '(no BAML call)'
+
 export function check(name: string, pass: boolean, detail: string): Check {
   return { name, pass, detail }
 }
@@ -274,7 +286,9 @@ async function runScenarioInFrame(
         ...collectors.map((c) => servedBy(c) ?? '(unreported)'),
         ...adapterCalls.map((c) => c.clientName ?? '(unreported)'),
       ],
-      expectedClient: expectedClientFor(routing, scenario.role),
+      expectedClient: scenario.role
+        ? expectedClientFor(routing, scenario.role)
+        : NO_BAML_CALL_CLIENT,
       ms: Date.now() - started,
       calls: [
         ...callSamples(timing),
@@ -293,7 +307,9 @@ async function runScenarioInFrame(
       checks: [],
       observations: [],
       servedBy: [],
-      expectedClient: expectedClientFor(routing, scenario.role),
+      expectedClient: scenario.role
+        ? expectedClientFor(routing, scenario.role)
+        : NO_BAML_CALL_CLIENT,
       ms: Date.now() - started,
       // A scenario that threw still made the calls it made before throwing —
       // and on a new client those are often the interesting ones.

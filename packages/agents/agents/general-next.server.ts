@@ -312,6 +312,9 @@ async function createPatterns(
       generateQuery: true,
       rewrite: baml.retrieveQuery,
       liveEvents: true,
+      // Opt-in paging (#927 slice 2): this route advances through a long
+      // document across re-dispatches instead of returning the same chunks.
+      page: true,
     }),
   )
   const plannableTools = [...new Set([...collectToolNames(office), ...infoTools])]

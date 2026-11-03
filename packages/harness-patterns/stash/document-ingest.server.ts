@@ -101,6 +101,12 @@ export interface SearchHit {
   endOffset?: number
   /** Vector distance (lower = closer) when the backend reports one. */
   score?: number
+  /**
+   * Total chunk count of this hit's source document, when the document record
+   * records one (#927). Absent for a document ingested before the count was
+   * stored — a missing count is never reported as 0.
+   */
+  docChunks?: number
 }
 
 export interface SearchOptions {
@@ -109,6 +115,13 @@ export interface SearchOptions {
   embedding?: EmbeddingConfig
   callTool?: CallTool
   embedOneFn?: (text: string, config?: EmbeddingConfig) => Promise<SingleEmbeddingResult>
+  /**
+   * Chunk ids the caller already holds (paging, #927 slice 2). Excluded inside
+   * the visibility-widening search loop — not as a post-filter — so a page of
+   * a long document still returns `k` chunks when every visible chunk beyond
+   * the first batch would otherwise have been hidden.
+   */
+  excludeIds?: string[]
 }
 
 // ============================================================================
@@ -414,7 +427,9 @@ export async function ingestStashDocument(
       ingestDoc = { ...doc, content: markdown, mimeType: MARKDOWN_MIME, encoding: undefined }
     }
     const result = await ingestDocument(ingestDoc, opts)
-    await markIngestStatus(sessionId, docId, 'indexed', callTool)
+    // The chunk count rides the status write: one record read and one write,
+    // and the count lands with the 'indexed' that vouches for it (#927).
+    await markIngestStatus(sessionId, docId, 'indexed', callTool, undefined, result.chunks)
     return result
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
@@ -436,6 +451,10 @@ const MAX_INGEST_ERROR_CHARS = 500
  * the failure handler, where a throw would replace the real ingest error with a
  * Redis one AND propagate out of a function documented not to throw. The status
  * is a progress indicator; losing it must not cost the ingest run (sf-H2).
+ *
+ * `chunkCount` rides the 'indexed' write (the only status that vouches for a
+ * count): the number of chunks the run just indexed, for the documents block
+ * and the retriever's step line (#927).
  */
 async function markIngestStatus(
   sessionId: string,
@@ -443,13 +462,23 @@ async function markIngestStatus(
   ingestStatus: IngestStatus,
   callTool: CallTool,
   reason?: string,
+  chunkCount?: number,
 ): Promise<void> {
   // A failure records its reason; any other status clears the previous one, so
   // a retry that is under way or succeeded never shows a stale failure.
   const ingestError =
     ingestStatus === 'failed' ? (reason ?? 'unknown error').slice(0, MAX_INGEST_ERROR_CHARS) : null
   try {
-    await setDocumentFlags(sessionId, docId, { ingestStatus, ingestError }, callTool)
+    await setDocumentFlags(
+      sessionId,
+      docId,
+      {
+        ingestStatus,
+        ingestError,
+        ...(ingestStatus === 'indexed' && chunkCount !== undefined ? { chunkCount } : {}),
+      },
+      callTool,
+    )
   } catch (err) {
     console.warn(
       `[ingest] could not persist ingestStatus='${ingestStatus}' for ${docId}:`,
@@ -536,26 +565,29 @@ const MAX_SEARCH_SPAN = 200
 const FLAG_READ_CONCURRENCY = 4
 
 /**
- * Whether a document may reach the agent's context: neither hidden nor archived,
- * judged by its CURRENT flags. The flags are read from the stored document
- * rather than from the cached {@link listDocuments} result or from the chunk's
- * own payload, because both can be older than the user's last hide/archive.
+ * What one document's CURRENT record says about a search hit of it: whether the
+ * document may reach the agent's context (neither hidden nor archived), and the
+ * chunk count its record carries, when one was recorded (#927). The flags are
+ * read from the stored document rather than from the cached {@link listDocuments}
+ * result or from the chunk's own payload, because both can be older than the
+ * user's last hide/archive.
  *
- * Fails closed: a document whose flags cannot be read, whose record is absent
- * (chunks outlive the record they name), or a chunk that names no document, is
- * treated as not visible, and the reason is logged.
+ * Fails closed on visibility: a document whose flags cannot be read, whose
+ * record is absent (chunks outlive the record they name), or a chunk that names
+ * no document, is treated as not visible, and the reason is logged. A missing
+ * chunk count is reported as absent, never as 0.
  */
-async function isDocumentVisible(
+async function documentState(
   sessionId: string,
   docId: string,
   callTool: CallTool,
-): Promise<boolean> {
+): Promise<{ visible: boolean; chunks?: number }> {
   if (!docId) {
     console.warn(
       `[ingest] dropped a search hit with no document id for session ${sessionId} ` +
         '— its hidden/archived flags cannot be checked.',
     )
-    return false
+    return { visible: false }
   }
   try {
     const doc = await getDocumentStrict(sessionId, docId, callTool)
@@ -564,15 +596,18 @@ async function isDocumentVisible(
         `[ingest] dropped search hits of document ${docId} for session ${sessionId}: ` +
           'its record is absent, so its hidden/archived flags cannot be checked.',
       )
-      return false
+      return { visible: false }
     }
-    return !(doc.hidden || doc.archived)
+    return {
+      visible: !(doc.hidden || doc.archived),
+      ...(doc.chunkCount !== undefined ? { chunks: doc.chunkCount } : {}),
+    }
   } catch (err) {
     console.warn(
       `[ingest] dropped search hits of document ${docId} for session ${sessionId}: ` +
         `its hidden/archived flags could not be read (${err instanceof Error ? err.message : String(err)}).`,
     )
-    return false
+    return { visible: false }
   }
 }
 
@@ -582,7 +617,7 @@ async function isDocumentVisible(
  * embedded with the *recorded* provider/model, and {@link assertSameSpace}
  * re-checks dimensionality — a search can never compare across embedding spaces.
  *
- * Hits of hidden or archived documents are dropped (see {@link isDocumentVisible}):
+ * Hits of hidden or archived documents are dropped (see {@link documentState}):
  * hiding a document does not remove its chunks from the index, so the flags are
  * honoured here, at search time, which is also what makes un-hiding instant.
  * Since filtered hits would otherwise shrink the answer below `k` while visible
@@ -617,11 +652,12 @@ export async function searchDocuments(
   })
 
   const k = opts.k ?? 5
-  // One flag read per document per search, however many spans are tried.
-  const visibility = new Map<string, Promise<boolean>>()
-  const visible = (docId: string) => {
-    let v = visibility.get(docId)
-    if (!v) visibility.set(docId, (v = isDocumentVisible(sessionId, docId, callTool)))
+  const excludeSet = new Set(opts.excludeIds ?? [])
+  // One record read per document per search, however many spans are tried.
+  const states = new Map<string, Promise<{ visible: boolean; chunks?: number }>>()
+  const stateOf = (docId: string) => {
+    let v = states.get(docId)
+    if (!v) states.set(docId, (v = documentState(sessionId, docId, callTool)))
     return v
   }
 
@@ -632,29 +668,39 @@ export async function searchDocuments(
     // Resolve this batch's distinct documents up front, a few at a time, so the
     // loop below only awaits settled answers.
     const pending = [...new Set(hits.map((h) => str(h.payload.doc_id) ?? ''))].filter(
-      (id) => !visibility.has(id),
+      (id) => !states.has(id),
     )
     for (let i = 0; i < pending.length; i += FLAG_READ_CONCURRENCY) {
-      await Promise.all(pending.slice(i, i + FLAG_READ_CONCURRENCY).map(visible))
+      await Promise.all(pending.slice(i, i + FLAG_READ_CONCURRENCY).map(stateOf))
     }
 
     const out: SearchHit[] = []
     for (const h of hits) {
+      const docId = str(h.payload.doc_id) ?? ''
+      const chunkIndex = num(h.payload.chunk_index) ?? 0
+      // Paging (#927 slice 2): a chunk the caller already returned in this turn
+      // is excluded here — inside the visibility-widening loop, never as a
+      // post-filter — so an excluded document cannot shrink a page below k.
+      // The exclusion keys on the chunk's composite id (`docId:chunkIndex`, the
+      // shape the retriever hands back), never on the document id: paging a
+      // long document must still be able to return later chunks of it.
+      if (excludeSet.has(`${docId}:${chunkIndex}`)) continue
       const content = str(h.payload.content)
       if (content == null) continue
-      const docId = str(h.payload.doc_id) ?? ''
-      if (!(await visible(docId))) continue
+      const state = await stateOf(docId)
+      if (!state.visible) continue
       out.push({
         docId,
         ...(h.payload.provenance === 'sandbox-output'
           ? { provenance: 'sandbox-output' as const }
           : {}),
         source: str(h.payload.source) ?? '',
-        chunkIndex: num(h.payload.chunk_index) ?? 0,
+        chunkIndex,
         content,
         startOffset: num(h.payload.start_offset),
         endOffset: num(h.payload.end_offset),
         score: h.score,
+        ...(state.chunks !== undefined ? { docChunks: state.chunks } : {}),
       })
       if (out.length >= k) break
     }

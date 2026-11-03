@@ -54,6 +54,11 @@ export interface DecisionDocument {
   readonly uploadedAt: number
   /** Indexed for search (`read-documents` can quote it). */
   readonly searchable: boolean
+  /**
+   * Chunk count of the last successful ingest (#927). Absent for a document
+   * ingested before the count was recorded — rendered as no count, never as 0.
+   */
+  readonly chunks?: number
 }
 
 /** What the host's source returns, once per run. */
@@ -90,7 +95,9 @@ export function isDecisionDocuments(value: unknown): value is DecisionDocuments 
       Number.isFinite(x.size) &&
       typeof x.uploadedAt === 'number' &&
       Number.isFinite(x.uploadedAt) &&
-      typeof x.searchable === 'boolean'
+      typeof x.searchable === 'boolean' &&
+      (x.chunks === undefined ||
+        (typeof x.chunks === 'number' && Number.isInteger(x.chunks) && x.chunks >= 0))
     )
   })
 }
@@ -192,7 +199,12 @@ function sizeLabel(bytes: number): string {
 
 function line(d: DecisionDocument): string {
   const name = safeDocumentName(d.name) ?? WITHHELD_DOCUMENT_NAME
-  const facts = `${documentTypeLabel(d.mimeType)}, ${sizeLabel(d.size)}, ${d.searchable ? 'searchable' : 'not searchable'}`
+  const facts = [
+    documentTypeLabel(d.mimeType),
+    sizeLabel(d.size),
+    d.searchable ? 'searchable' : 'not searchable',
+    ...(d.chunks !== undefined ? [`${d.chunks} chunks`] : []),
+  ].join(', ')
   return `- ${name} (${facts})`
 }
 

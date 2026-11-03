@@ -385,6 +385,77 @@ describe('decisionLoop — iteration, records, state', () => {
   })
 })
 
+// ========================================================================
+// The retriever route’s cumulative step line (#927)
+// ========================================================================
+
+describe('decisionLoop — the retriever’s cumulative `k of N chunks seen` (#927)', () => {
+  /** A retriever-shaped route whose every dispatch returns 5 hits of one
+   *  84-chunk document, with fresh text each time (a repeated result would
+   *  be a repeat under the #809 rule and make no progress). */
+  const paging = (id: string) => {
+    let n = 0
+    return fake('retriever', id, (s) => {
+      const page = n++
+      trackEvent(
+        s,
+        'tool_result',
+        {
+          tool: 'retriever',
+          success: true,
+          summary: `page ${page}`,
+          result: {
+            query: 'q',
+            backends: ['stash'],
+            matches: Array.from({ length: 5 }, (_, c) => ({
+              backend: 'stash',
+              id: `${id}:${page}:${c}`,
+              content: `page ${page} chunk ${c} of the document`,
+              source: 'a.txt',
+              docId: 'a',
+              chunkIndex: page * 5 + c,
+              startOffset: 0,
+              endOffset: 10,
+              docChunks: 84,
+            })),
+            references: [],
+          },
+        } as ToolResultEventData,
+        true,
+      )
+    })
+  }
+
+  // MUTATION: drop the same-route accumulation in computeStats (`seen =
+  // matches.length`) → dispatch 3 reads `(5 of 84 chunks seen)` again and
+  // this pin fails; drop `recordOf`’s `r.route === label` filter → it reads
+  // `(15 of 84 chunks seen)`, counting the OTHER route’s record, and it
+  // fails too.
+  it('a second dispatch of the route reads the turn’s CUMULATIVE seen count; another route’s records do not count', async () => {
+    const seam = scriptedDecide(['read-documents', 'web-lookup', 'read-documents', 'answer'])
+    const loop = build(
+      {
+        'read-documents': route(paging('read-documents')),
+        'web-lookup': route(paging('web-lookup')),
+      },
+      seam.decide,
+    )
+    await run([loop])
+    // The state of the 4th decide call holds all three step lines.
+    const lines = seam.states[3]!.split('\n')
+    const step1 = lines.find((l) => l.startsWith('1. read-documents'))!
+    const step2 = lines.find((l) => l.startsWith('2. web-lookup'))!
+    const step3 = lines.find((l) => l.startsWith('3. read-documents'))!
+    // Each dispatch matched 5 chunks of the same 84-chunk document.
+    expect(step1).toContain('(5 of 84 chunks seen)')
+    expect(step2).toContain('(5 of 84 chunks seen)')
+    // Dispatch 3 of `read-documents` has seen 5 + 5 this turn — and
+    // `web-lookup`’s 5 do not accumulate onto it.
+    expect(step3).toContain('(10 of 84 chunks seen)')
+    expect(seam.states[3]).not.toContain('15 of 84')
+  })
+})
+
 // ============================================================================
 // Child scope: synthetic context, own viewConfig, fresh data
 // ============================================================================

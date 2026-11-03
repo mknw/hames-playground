@@ -32,6 +32,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import type {
+  ContextEvent,
   PatternScope,
   EventView,
   ConfiguredPattern,
@@ -87,6 +88,12 @@ export interface RetrievalHit {
   endOffset?: number
   /** Anything else a backend wants to attach (non-standard, untyped). */
   metadata?: Record<string, unknown>
+  /**
+   * Total chunk count of this hit's source document, when the backend knows it
+   * (#927). Absent for a document with no recorded count — never fabricated
+   * as 0.
+   */
+  docChunks?: number
 }
 
 /**
@@ -127,7 +134,10 @@ export interface RetrieverResult {
 export interface RetrieverBackend {
   name: string
   type: 'vector' | 'keyword' | 'graph' | 'web'
-  search(query: { text: string; intent?: string }, opts: { k: number }): Promise<RetrievalHit[]>
+  search(
+    query: { text: string; intent?: string },
+    opts: { k: number; excludeIds?: string[] },
+  ): Promise<RetrievalHit[]>
 }
 
 export interface RetrieverConfig extends PatternConfig {
@@ -154,6 +164,16 @@ export interface RetrieverConfig extends PatternConfig {
   /** No-LLM alternative to `generateQuery`: build the query from the last N user
    *  turns joined, instead of just the last message. Default: last message. */
   turnWindow?: number
+  /**
+   * Opt-in paging (#927 slice 2): when true, the retriever excludes the chunk
+   * ids it already returned for this route in this turn — the decision loop
+   * exposes earlier same-route events to a re-dispatched route — so a repeat
+   * dispatch of the same route advances through a long document instead of
+   * returning the same k chunks. The exclusion is a search-time filter
+   * (`searchDocuments`' `excludeIds`), so hidden documents never shrink a page
+   * below k.
+   */
+  page?: boolean
 }
 
 export interface RetrieverData {
@@ -175,6 +195,7 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
     turnWindow,
     rewrite,
     generateQuery = false,
+    page = false,
     ...patternConfig
   } = config
   const backendKinds = backends.map((b) => b.name)
@@ -267,12 +288,44 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       // Optional context hint passed to backends alongside the query.
       const intent = (scope.data as RetrieverData).intent
 
+      // With paging enabled, exclude the chunk ids this route already returned
+      // in this turn: the decision loop exposes earlier same-route events to a
+      // re-dispatched route, so a repeat dispatch advances instead of repeating
+      // (#927 slice 2). The ids ride to `searchDocuments` as a search-time
+      // filter, so hidden documents never shrink a page below k. Scoping keys
+      // on the route (patternId), not the tool name, and on the CURRENT TURN —
+      // the slice starting at the last `user_message` event, the same boundary
+      // rule `sliceByLastNTurns` derives turns by (event-view.server.ts). No
+      // event carries a `turn` field (`createEvent` sets none), so the boundary
+      // is derived from the stream, never read off an event: an earlier turn's
+      // results stay eligible for re-retrieval, so a fresh question starts from
+      // the top of the document again.
+      const excludeIds =
+        page && view.exists()
+          ? (() => {
+              const contextEvents = view.unfiltered().get()
+              let turnStart = 0
+              for (let i = contextEvents.length - 1; i >= 0; i--) {
+                if (contextEvents[i]!.type === 'user_message') {
+                  turnStart = i
+                  break
+                }
+              }
+              return contextEvents.slice(turnStart).flatMap((e) => {
+                if (e.patternId !== scope.id) return []
+                const d = e.data as ToolResultEventData
+                const r = d.result as RetrieverResult | undefined
+                return (r?.matches ?? []).map((m) => m.id)
+              })
+            })()
+          : undefined
+
       // Fan out to all backends concurrently; a failing backend yields [] and an
       // error event rather than sinking the whole retrieval.
       const perBackend = await Promise.all(
         backends.map(async (backend) => {
           try {
-            return await backend.search({ text, intent }, { k })
+            return await backend.search({ text, intent }, { k, excludeIds })
           } catch (err) {
             trackEvent(
               scope,

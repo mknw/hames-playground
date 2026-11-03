@@ -172,3 +172,44 @@ describe('listDocumentSummariesStrict', () => {
     expect(ops.map(([n]) => n)).not.toContain('srem')
   })
 })
+
+describe('chunkCount on the summary (#927)', () => {
+  // MUTATION: drop 'chunkCount' from SUMMARY_PATH → the count is not read.
+  it('a recorded count rides the summary', async () => {
+    const { callTool } = fake({ d1: meta({ chunkCount: 84 }) })
+    expect(await listDocumentSummariesStrict('s', callTool)).toEqual([
+      {
+        id: 'd1',
+        filename: 'a.md',
+        mimeType: 'text/markdown',
+        size: 10,
+        uploadedAt: 1,
+        excluded: false,
+        chunkCount: 84,
+      },
+    ])
+  })
+
+  // MUTATION: fabricate a 0 for an absent count → this pin fails.
+  it('a document ingested before the count was recorded carries none', async () => {
+    const { callTool } = fake({ d1: meta() })
+    const [summary] = await listDocumentSummariesStrict('s', callTool)
+    expect(summary).not.toHaveProperty('chunkCount')
+  })
+
+  // MUTATION: accept a number anywhere in the optional tail (e.g. read flags by
+  // position after the count joined) → a number NOT last must stay unreadable.
+  it.each([
+    [
+      'flags then a non-final number',
+      JSON.stringify(['a.md', 'text/markdown', 1, 1, true, 84, false]),
+    ],
+    ['two numbers', JSON.stringify(['a.md', 'text/markdown', 1, 1, 2, 84])],
+  ])('a number that is not the last optional member is unreadable (%s)', async (_what, data) => {
+    const callTool: CallTool = async (name) => {
+      if (name === 'smembers') return { success: true, data: ['d1'] }
+      return { success: true, data }
+    }
+    await expect(listDocumentSummariesStrict('s', callTool)).rejects.toThrow(/unreadable/)
+  })
+})

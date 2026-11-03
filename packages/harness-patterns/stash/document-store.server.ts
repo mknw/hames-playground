@@ -54,6 +54,14 @@ export interface StashDocumentMeta {
   mimeType: string
   /** Content size in bytes (UTF-8). */
   size: number
+  /**
+   * Chunk count of the last successful ingest (`IngestResult.chunks`) — a derived
+   * figure like `size`, stored beside it so the documents block and the
+   * retriever's step line can say how much of the document there is to read
+   * (#927). Absent for a document ingested before it was recorded, or never
+   * ingested: a missing count is rendered as no count, never as 0.
+   */
+  chunkCount?: number
   /** Upload timestamp (epoch ms). */
   uploadedAt: number
   /** Hidden from LLM context (mirrors tool-result stash semantics). Retrieval
@@ -537,6 +545,8 @@ export interface StashDocumentSummary {
   filename: string
   mimeType: string
   size: number
+  /** Chunk count of the last successful ingest; absent when never recorded. */
+  chunkCount?: number
   uploadedAt: number
   /** `hidden` or `archived`: either keeps a document out of LLM context. */
   excluded: boolean
@@ -545,10 +555,11 @@ export interface StashDocumentSummary {
 
 /** The member names read per document, in the ORDER the reply carries them:
  *  RedisJSON answers a bracket union in selector order and skips an absent
- *  member, so the four required members come first and the optional ones are
- *  told apart by type (a string is `ingestStatus`, a boolean is a flag). */
+ *  member, so the four required members come first, the optional ones are told
+ *  apart by type (a string is `ingestStatus`, a boolean is a flag), and
+ *  `chunkCount` rides LAST, so in the reply it can only be the final member. */
 const SUMMARY_PATH =
-  "$['filename','mimeType','size','uploadedAt','ingestStatus','hidden','archived']"
+  "$['filename','mimeType','size','uploadedAt','ingestStatus','hidden','archived','chunkCount']"
 const INGEST_STATUSES: readonly string[] = ['pending', 'indexed', 'failed', 'not_indexed']
 
 /** Parse one {@link SUMMARY_PATH} reply. `null` is an absent document; anything
@@ -579,6 +590,13 @@ function parseSummary(id: string, data: unknown): StashDocumentSummary | null {
   if (status !== undefined && !INGEST_STATUSES.includes(status)) {
     throw new Error('stash read returned an unreadable document')
   }
+  // `chunkCount` is the last selector: the union skips an absent member, so a
+  // trailing number is the count and everything before it is a boolean flag.
+  // A number anywhere else is a reply this parser does not understand.
+  let chunkCount: number | undefined
+  if (typeof rest[rest.length - 1] === 'number') {
+    chunkCount = rest.pop() as number
+  }
   if (rest.length > 2 || !rest.every((f) => typeof f === 'boolean')) {
     throw new Error('stash read returned an unreadable document')
   }
@@ -590,6 +608,7 @@ function parseSummary(id: string, data: unknown): StashDocumentSummary | null {
     uploadedAt,
     excluded: rest.some((f) => f === true),
     ...(status ? { ingestStatus: status as IngestStatus } : {}),
+    ...(chunkCount !== undefined ? { chunkCount } : {}),
   }
 }
 
@@ -651,6 +670,8 @@ export async function setDocumentFlags(
     ingestError?: string | null
     /** Derived markdown for a converted binary (see {@link StashDocument.derivedText}). */
     derivedText?: string
+    /** Chunk count recorded by the last successful ingest (#927). */
+    chunkCount?: number
   },
   callTool: CallTool = resolveStashCallTool(),
 ): Promise<StashDocument | null> {
@@ -663,6 +684,7 @@ export async function setDocumentFlags(
   if (patch.ingestError === null) delete doc.ingestError
   else if (patch.ingestError !== undefined) doc.ingestError = patch.ingestError
   if (patch.derivedText !== undefined) doc.derivedText = patch.derivedText
+  if (patch.chunkCount !== undefined) doc.chunkCount = patch.chunkCount
 
   // Rewriting via json_set at `$` would clear any existing expiry, so we
   // re-apply a TTL. There is no `ttl` tool on the Redis MCP surface to read the

@@ -171,6 +171,19 @@ export default defineConfig({
         success: 'var(--ui-success)',
       },
     },
+    // presetWind4 ships `xs`…`9xl` and nothing below `xs`, so `text="2xs"` was
+    // a silent no-op: no theme entry, no rule, no CSS — every site that asked
+    // for a caption size rendered at the ambient 16px (found by the #937
+    // review, on the nav's captions). In wind4 the size namespace is `text`,
+    // resolved through `--text-<size>-fontSize` / `-lineHeight` custom
+    // properties — `theme.fontSize` is dead weight here. Declared so the size
+    // exists; `uno-theme.test.ts` pins that the utility actually emits.
+    text: {
+      '2xs': {
+        fontSize: '0.6875rem',
+        lineHeight: '0.875rem',
+      },
+    },
   },
   shortcuts: {
     // Futuristic UI shortcuts

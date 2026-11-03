@@ -10,8 +10,16 @@ import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
  * Top bar. The old "Home"/"About" text links are gone (#132) — the chat is the
  * root route and the SolidStart demo page it linked to no longer exists. What
  * remains is the preview status strip on the left (inference tier, self-hosted
- * warm state, global counters) and a row of icon controls on the right: metrics
- * dashboard, theme, user.
+ * warm state, global counters) and a row of icon controls on the right: the
+ * metrics dashboard and use-cases pages, theme, user.
+ *
+ * The two page links read as one captioned group (owner, 2026-11-02): each
+ * keeps its OWN icon in both states — the icon no longer flips to a chat glyph
+ * on the page it opened — and each carries a tiny caption naming it
+ * ("metrics", "use cases"), matched by the agent selector's "agent" caption on
+ * the chat page. The way back to chat is the pressed state: the link whose
+ * page is open renders active (`aria-current="page"`, filled background) and
+ * clicking it again navigates to `/`.
  *
  * The bar itself is on the theme-aware `ui-*` tokens (#226 B8) — it houses the
  * theme control and it sits above the auth pages, so a dark bar over a light
@@ -36,6 +44,7 @@ import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
 export default function Nav() {
   const location = useLocation()
   const onDashboard = () => location.pathname === '/dashboard'
+  const onUseCases = () => location.pathname === '/use-cases'
   /** Sign-in and the share page — neither has a session for the strip to read. */
   const onPublicRoute = () => isPublicRoute(location.pathname)
   /** The anonymous share page — no session, so no session-shaped controls. */
@@ -54,31 +63,67 @@ export default function Nav() {
             <HitlInbox />
           </Show>
           <Show when={!onSharePage()}>
+            {/* One captioned link per page. `aria-current` marks the open one;
+                its label says what pressing it now does, because a control
+                that navigates somewhere unexpected under the same name is
+                the kind of surprise this bar should not spring on anyone. */}
             <a
               href={onDashboard() ? '/' : '/dashboard'}
-              flex="~"
+              flex="~ col"
               items="center"
               justify="center"
-              w="10"
-              h="10"
-              rounded="full"
+              gap="0.5"
+              p="1"
+              rounded="lg"
               bg={onDashboard() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
-              border="1 cyber-700/50"
+              border={onDashboard() ? '1 ui-accent/60' : '1 cyber-700/50'}
               transition="all"
-              title={onDashboard() ? 'Back to chat' : 'Metrics dashboard — tokens, cache, costs'}
-              aria-label={onDashboard() ? 'Back to chat' : 'Metrics dashboard'}
+              aria-current={onDashboard() ? 'page' : undefined}
+              title={
+                onDashboard()
+                  ? 'Back to chat — metrics dashboard is open'
+                  : 'Metrics dashboard — tokens, cache, costs'
+              }
+              aria-label={
+                onDashboard() ? 'Back to chat — metrics dashboard is open' : 'Metrics dashboard'
+              }
             >
               <span
-                class={
-                  onDashboard()
-                    ? 'i-material-symbols-chat-outline'
-                    : 'i-material-symbols-monitoring'
-                }
+                class="i-material-symbols-monitoring"
                 w="5"
                 h="5"
                 text="ui-accent"
                 aria-hidden="true"
               />
+              <span text="2xs ui-text-primary">metrics</span>
+            </a>
+            <a
+              href={onUseCases() ? '/' : '/use-cases'}
+              flex="~ col"
+              items="center"
+              justify="center"
+              gap="0.5"
+              p="1"
+              rounded="lg"
+              bg={onUseCases() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
+              border={onUseCases() ? '1 ui-accent/60' : '1 cyber-700/50'}
+              transition="all"
+              aria-current={onUseCases() ? 'page' : undefined}
+              title={
+                onUseCases()
+                  ? 'Back to chat — use cases page is open'
+                  : 'Use cases — what you can ask'
+              }
+              aria-label={onUseCases() ? 'Back to chat — use cases page is open' : 'Use cases'}
+            >
+              <span
+                class="i-material-symbols-checklist"
+                w="5"
+                h="5"
+                text="ui-accent"
+                aria-hidden="true"
+              />
+              <span text="2xs ui-text-primary">use cases</span>
             </a>
           </Show>
           <ThemeSwitcher />

@@ -870,3 +870,48 @@ describe('chat route — the support panel collapses (#933)', () => {
     expect(supportInert()).toBe(false)
   })
 })
+describe('chat route — the use-cases draft', () => {
+  it('seeds the composer draft from ?q= and strips the parameter, without a history entry', async () => {
+    // A question as the use-cases page sends it today: the catalogue's
+    // verbatim turn, which is what "Try this" fills the composer with.
+    setSearchParams({ q: 'How many Project nodes are in the knowledge graph?' })
+    await mount()
+
+    // The draft reaches ChatInterface as its initialDraft prop (ChatInput
+    // seeds its own signal from it; that half is ChatInput's own test).
+    expect(chat.initialDraft).toBe('How many Project nodes are in the knowledge graph?')
+
+    // The parameter has served its purpose: stripped with `replace`, so a
+    // reload does not re-prefill and Back does not land on a stale question.
+    expect(navigations).toContainEqual({
+      params: { q: undefined },
+      options: { replace: true },
+    })
+  })
+
+  it('prefills nothing when the URL carries no ?q=', async () => {
+    await mount()
+    expect(chat.initialDraft).toBeUndefined()
+    expect(navigations).toHaveLength(0)
+  })
+
+  it('takes the first value when ?q= arrives twice', async () => {
+    setSearchParams({ q: ['first', 'second'] as unknown as string })
+    await mount()
+    expect(chat.initialDraft).toBe('first')
+  })
+
+  it('caps a ?q= draft at QUESTION_DRAFT_MAX_CHARS instead of feeding the composer unbounded', async () => {
+    // #937 review, SHOULD: a URL can carry megabytes, and the composer is a
+    // textarea, not a file upload. The cap lives where the draft is read.
+    const { QUESTION_DRAFT_MAX_CHARS } = await import('~/lib/use-cases')
+    const over = 'x'.repeat(QUESTION_DRAFT_MAX_CHARS + 500)
+    setSearchParams({ q: over })
+    await mount()
+    expect(chat.initialDraft).toHaveLength(QUESTION_DRAFT_MAX_CHARS)
+    // …and a question that fits is passed through whole.
+    setSearchParams({ q: 'short' })
+    await mount()
+    expect(chat.initialDraft).toBe('short')
+  })
+})

@@ -292,7 +292,8 @@ export default function Dashboard() {
             Refresh
           </button>
           {/* No "back to chat" control here: `Nav` renders on every route and
-              already flips to a chat-icon link while you are on /dashboard. */}
+              its metrics link is pressed-in while you are on /dashboard —
+              clicking it again returns to the chat. */}
         </div>
       </header>
 

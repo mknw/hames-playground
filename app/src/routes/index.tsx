@@ -15,6 +15,7 @@ import { isEdgeElement, isNodeElement } from '@hames-ai/agents'
 import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import { CONVERSATION_PARAM } from '~/lib/share-link'
+import { QUESTION_DRAFT_MAX_CHARS, QUESTION_DRAFT_PARAM } from '~/lib/use-cases'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { applyToolResultAction } from '~/lib/api-client'
 import { hasPendingIngest, refreshDocuments } from '~/lib/stash-documents'
@@ -54,7 +55,7 @@ export default function Home() {
   // nothing has any reason to know yet. It gains a URL the moment its first run
   // starts (`handleRunStarted`).
   // ---------------------------------------------------------------------------
-  const [searchParams, setSearchParams] = useSearchParams<{ c?: string }>()
+  const [searchParams, setSearchParams] = useSearchParams<{ c?: string; q?: string }>()
   const [fallbackSessionId, setFallbackSessionId] = createSignal(newSessionId())
   const selectedSessionId = createMemo(() => {
     // `useSearchParams` hands back `string | string[] | undefined`: a URL with
@@ -63,6 +64,28 @@ export default function Home() {
     const raw = searchParams[CONVERSATION_PARAM]
     const fromUrl = Array.isArray(raw) ? raw[0] : raw
     return fromUrl ? fromUrl : fallbackSessionId()
+  })
+
+  // The use-cases page's "Try this" lands here as `/?q=<question>`: read the
+  // question once, at component setup, as the composer's starting draft, then
+  // strip the parameter from the URL in a replace — a reload must not
+  // re-prefill, and the question has already been served. Solid's
+  // `useSearchParams` decodes the value, so what arrives is the question as
+  // asked. A plain one-shot read, not a signal: ChatInput seeds from it at
+  // mount and never re-reads the prop.
+  const draftFromUrl = (() => {
+    const raw = searchParams[QUESTION_DRAFT_PARAM]
+    const value = (Array.isArray(raw) ? raw[0] : raw) || undefined
+    // A URL can carry megabytes; the composer is a textarea, not a file
+    // upload. 2,000 characters is ample for every question the use-cases
+    // page offers (the longest is ~250), so anything longer is an abuse
+    // shaped link, not a question — truncated rather than trusted.
+    return value === undefined ? undefined : value.slice(0, QUESTION_DRAFT_MAX_CHARS)
+  })()
+  onMount(() => {
+    if (draftFromUrl !== undefined) {
+      setSearchParams({ [QUESTION_DRAFT_PARAM]: undefined }, { replace: true })
+    }
   })
 
   /** Put a conversation in the URL. `replace` is for the case where the user
@@ -408,6 +431,7 @@ export default function Home() {
                   onTitleUpdated={threadList.applyTitle}
                   onPromoted={threadList.markPromoted}
                   focusInputToken={focusInputToken()}
+                  initialDraft={draftFromUrl}
                 />
               </div>
             </div>

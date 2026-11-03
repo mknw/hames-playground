@@ -132,7 +132,7 @@ function latencySection(results: ScenarioResult[]): string[] {
       lines.push(
         row([
           `[${r.scenario.title}](#${r.scenario.id})`,
-          r.scenario.role,
+          r.scenario.role ?? '(no BAML role)',
           '—',
           '0',
           '—',
@@ -144,7 +144,12 @@ function latencySection(results: ScenarioResult[]): string[] {
       continue
     }
     for (const st of stats) {
-      lines.push(latencyRow([`[${r.scenario.title}](#${r.scenario.id})`, r.scenario.role], st))
+      lines.push(
+        latencyRow(
+          [`[${r.scenario.title}](#${r.scenario.id})`, r.scenario.role ?? '(no BAML role)'],
+          st,
+        ),
+      )
     }
   }
   lines.push('')
@@ -190,7 +195,7 @@ export function renderReport(results: ScenarioResult[], meta: RunMeta): string {
       row([
         ok(scenarioPassed(r)),
         `[${r.scenario.title}](#${r.scenario.id})`,
-        r.scenario.role,
+        r.scenario.role ?? '(no BAML role)',
         r.error ? 'threw' : `${r.checks.filter((c) => c.pass).length}/${r.checks.length}`,
         served,
         `${r.ms}`,
@@ -204,7 +209,7 @@ export function renderReport(results: ScenarioResult[], meta: RunMeta): string {
     lines.push(`### ${r.scenario.id}`, '')
     lines.push(`**${r.scenario.title}** — ${r.scenario.what}`, '')
     lines.push(
-      `Role \`${r.scenario.role}\` · expected client \`${r.expectedClient}\` · ` +
+      `Role \`${r.scenario.role ?? '(no BAML role)'}\` · expected client \`${r.expectedClient}\` · ` +
         `served by ${[...new Set(r.servedBy)].join(', ') || '(not captured)'} · ${r.ms}ms`,
       '',
     )

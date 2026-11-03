@@ -62,6 +62,7 @@ import {
   currentFenceHeader,
   LEGACY_FENCE_HEADER,
 } from './scenarios/fence-wording'
+import { retrievalQualityScenario } from './scenarios/retrieval-quality'
 
 /** Declaration order is report order. Cheap structural checks first so a
  *  misconfigured run fails in a second rather than after twenty calls. The
@@ -71,6 +72,9 @@ import {
  *  fixtures and samples, read side by side (N7). */
 export const SCENARIOS: Scenario[] = [
   truncationDetectionScenario,
+  // Zero chat-model calls (embedder + Redis only), so it runs before the
+  // billed scenarios and a misconfigured endpoint fails in a second.
+  retrievalQualityScenario,
   screenScenario,
   egressGateScenario,
   createFenceWordingScenario(LEGACY_FENCE_HEADER),
@@ -154,8 +158,11 @@ async function main(): Promise<void> {
   }
   console.log('')
 
-  // Decide-only runs must not wake a different model or call another provider.
-  if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide'))
+  // Decide-only and role-less runs must not wake a different model or call
+  // another provider: `retrieval-quality` makes no BAML call at all (the
+  // embedder and Redis only), so a retrieval-only run never needs a preflight
+  // and never needs a chat credential.
+  if (!thinkingPlanner && scenarios.some((s) => s.role !== 'decide' && s.role !== undefined))
     await preflight(
       routing.client ??
         (privateInferenceOnly() && routing.byRole

@@ -109,6 +109,10 @@ it.each([
     }
     // Boundary guards slice 7: the egress-gate scenario and the fence-wording
     // factory (the fence header is a parameter, derived at module scope).
+    // Zero-BAML scenario (role-less): the retrieval grader makes no BAML call.
+    modules['./scenarios/retrieval-quality'] = {
+      retrievalQualityScenario: { id: 'retrieval-quality' },
+    }
     modules['./scenarios/egress-gate'] = {
       egressGateScenario: { id: 'egress-gate', role: 'decide' },
     }

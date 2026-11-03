@@ -188,6 +188,60 @@ as an _observation_ instead, which lands in the report but never fails the run.
 | `describe-batch-shape`                             | describe         | One summary per item with ids echoed verbatim — the contract `compactBulkData` matches results back on.                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `reference-selector-ids`                           | describe         | The citation picker, and the least summarization-like of the six functions on this role: every returned `ref_id` is a real candidate, the relevant one is ranked first, and the unrelated ones are not all attached. An invented id attaches nothing, so the failure is a silently missing citation.                                                                                                                                                                                                                          |
 | `controller-structured-output-reliability`         | controller       | N escaping-heavy controller calls, counting parse failures. Reported as a rate; the pass/fail threshold is deliberately an owner decision, so the only check is "at least one valid action".                                                                                                                                                                                                                                                                                                                                  |
+| `retrieval-quality`                                | (no BAML role)   | recall@k and MRR of a KNOWN answer chunk per question, per backend configuration, graded by chunk id against a synthetic corpus — no LLM judge. The acceptance check #928 slice 1 (vector+BM25+RRF) is owed and #927 slice 3 (model-chosen k) is graded on. See the section below.                                                                                                                                                                                                                                            |
+
+### Retrieval quality (#945, for #928 slice 1 and #927 slice 3)
+
+`retrieval-quality` is the deterministic retrieval eval the owner ruled hybrid
+retrieval accepted under: it ingests a small SYNTHETIC corpus (three fictional
+documents, ~21 chunks, written for this eval — no real names, hosts or data)
+into a fresh stash session and asks 12 questions whose answers sit in KNOWN
+chunks. The grader compares the returned (docId, chunkIndex) pairs against the
+answer key — no LLM judge — and reports **recall@5 / @10 / @20 and MRR per
+backend configuration**, plus a per-question rank table and category rollups
+(`exact-term`: exact codes, part numbers and figures an embedder blurs;
+`paraphrase`: answers sharing almost no surface terms with the question;
+`deep`: answers beyond the first page of 5, among generic-vocabulary
+distractors; `easy`: the sanity floor). recall@10/@20 are what paging (#927
+slice 2) can reach that a single k=5 read cannot; the owner sets the bars for
+accepting #928 slice 1 and un-deferring #927 slice 3 from these numbers.
+
+The quality numbers are **observations, never checks** — a bar is an owner
+decision, the same posture as the reliability scenario. What IS checked
+deterministically: the ingested corpus chunked exactly like the answer key
+was derived from (a chunker change otherwise grades against stale chunk
+indexes silently), every configuration returns a non-empty ranking for every
+question, and every question is graded.
+
+Prerequisites for a live run: Redis (`docker compose up -d`) and the configured
+embedder (dev default `make embed` on :8090). **No chat model is called, and no
+BAML role is routed** — the only model work is embedding, on whatever
+`EMBEDDINGS_*` configures. Cost envelope for one run:
+
+```bash
+EVAL_ONLY=retrieval-quality pnpm eval:harness
+```
+
+- One embed HTTP request per document ingest — 3 requests of 7 / 11 / 3 chunk
+  texts (the 64-text batch-size guard never splits these) — plus 12 query
+  embeddings per configuration (~15 embedding calls today), against the
+  deployment's own 0.6B embedder — negligible unless that endpoint sits on
+  metered infrastructure.
+- 2 Redis writes per chunk plus the document records, serial over the gateway
+  — the slowest part of the run, in seconds to a couple of minutes.
+- **Zero BAML/chat calls.** The runner skips its preflight when the selected
+  scenarios are all role-less, so a retrieval-only run needs no chat
+  credential and wakes no GPU box.
+- The session is deleted at the end (`deleteSessionStash`); a crashed run
+  leaves its keys to the stash's 7-day TTL.
+
+The grader arithmetic lives in `src/lib/retrieval-metrics.ts` and is
+pinned by CI unit tests (`src/__tests__/lib/evals/`), mutation included. The
+hermetic loopback proof in `evals/retrieval-quality.hermetic.ts` runs the real
+chunk → embed → index → KNN → grade pipeline over a fake Redis transport and a
+deterministic fake embedder, so the wiring is proven without live
+infrastructure; the fake embedder's numbers are wiring evidence, never a
+quality measurement.
 
 ### Latency
 
@@ -235,6 +289,10 @@ structural checks first). Two rules:
 - **A scenario with zero checks fails.** `scenarioPassed()` enforces it, because
   a green cell that asserts nothing is worse than a red one — it manufactures a
   coverage number.
+
+A scenario that makes no BAML call declares no `role` (the interface is
+optional since `retrieval-quality`); the report prints `(no BAML role)` and
+the runner skips its preflight when the whole run is role-less.
 
 ## Conversation acceptance scenarios
 

@@ -127,7 +127,7 @@ export function interpretUrlSpans(
         hostname: url.hostname,
         port: url.port,
         level,
-        sourceSpan,
+        sourceSpan: level === 0 ? null : sourceSpan,
       })
     }
     if (level >= nestedLevels) return
@@ -157,7 +157,7 @@ export function interpretUrlSpans(
     }
     const span: UrlSpan = { start: range.start, end: range.end, raw, url }
     result.push(span)
-    if (url) collect(url, 0, null)
+    if (url) collect(url, 0, span)
   }
   return { spans: result, destinations }
 }

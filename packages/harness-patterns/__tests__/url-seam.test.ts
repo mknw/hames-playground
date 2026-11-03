@@ -2,7 +2,9 @@
  * The URL interpretation seam (`docs/plan/url-interpretation-seam.md`, slice
  * 1): the pure module's contract, pinned on the three properties the egress
  * readers depend on — verbatim spans, every scheme occurrence, and no
- * canonicalization before comparison.
+ * canonicalization before comparison — plus the destinations' provenance:
+ * a nested destination carries its containing top-level span, a level-0 one
+ * carries none.
  *
  * Every pin names the source mutation that turns it red; the PR records that
  * each was run. Nothing here touches a server, a transport or the network.
@@ -52,5 +54,29 @@ describe('the URL interpretation seam (slice 1)', () => {
     // The reader keeps the verbatim address for the given-address comparison:
     // an unparseable candidate is still an address, never dropped.
     expect(addressesIn(text)).toEqual(['https://%'])
+  })
+
+  // MUTATION: revert the entry threading (`collect(url, 0, null)` at the
+  // level-0 call): every destination reports `sourceSpan: null` again, and
+  // the nested assertion fails.
+  it('a destination from a query value carries its containing top-level span; a level-0 destination carries none', () => {
+    const top = 'https://a.example/r?u=https://b.example/p'
+    const text = `see ${top} tail`
+    const { spans, destinations } = interpretUrlSpans(text, egressArgumentSpans(text), {
+      nestedLevels: 1,
+    })
+    const [topDestination, nested] = destinations
+    // A URL written directly in the input has no containing span.
+    expect(topDestination?.level).toBe(0)
+    expect(topDestination?.sourceSpan).toBeNull()
+    // The nested one names the top-level span it came from — same offsets and
+    // spelling as the level-0 span, never a canonical rewrite.
+    expect(nested?.level).toBe(1)
+    expect(nested?.href).toBe('https://b.example/p')
+    const [topSpan] = spans
+    expect(nested?.sourceSpan?.raw).toBe(top)
+    expect(nested?.sourceSpan?.start).toBe(topSpan?.start)
+    expect(nested?.sourceSpan?.end).toBe(topSpan?.end)
+    expect(text.slice(nested!.sourceSpan!.start, nested!.sourceSpan!.end)).toBe(top)
   })
 })

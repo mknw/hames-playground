@@ -7,15 +7,23 @@
  *
  * - `turns` — the catalogue's questions VERBATIM, against
  *   `evals/general-next/scenarios.catalogue.json`: this is what "Try this"
- *   sends, the wording the eval round actually measured.
+ *   sends, the wording the eval round actually measured. The `untested`
+ *   question is exempt — it has no catalogue entry, because no round has run
+ *   it yet.
  * - `pageTurns` — the page's own wording, pinned sentence by sentence in this
  *   file: it is hand-written for PMs, so an accidental edit to a title or a
  *   sentence fails here before it ships. Nothing is invented: each rewritten
  *   sentence still asks what its catalogue scenario asks.
  *
- * The results are the recorded outcomes of eval run 10 (2026-10-30) — the
- * dispatch's enumeration, held here as data so a hand edit to one side fails
- * loudly rather than quietly disagreeing.
+ * The card order is pinned twice over (owner, round 4): `rank` is an explicit
+ * field on every question, and the section arrays must already be in rank
+ * order — array order is what renders, so rank that disagrees with it would be
+ * decoration.
+ *
+ * The results are the recorded outcomes of eval run 10 (2026-10-30) for the
+ * questions the page still carries from that round — the dispatch's
+ * enumeration, held here as data so a hand edit to one side fails loudly
+ * rather than quietly disagreeing.
  *
  * Like `scenario-catalogue.test.ts`, the catalogue is read as text: src/ may
  * not import evals/.
@@ -41,32 +49,25 @@ const catalogue: { scenarios: Json[] } = JSON.parse(
 const flat = USE_CASE_SECTIONS.flatMap((s) => s.questions)
 const catalogueById = new Map(catalogue.scenarios.map((s) => [s.id as string, s]))
 
-/** Run 10 (2026-10-30), exactly as recorded: pass / fail / gated. */
+/** Run 10 (2026-10-30), exactly as recorded for the questions still on the
+ *  page from that round: pass / fail / gated. The rewritten web-search
+ *  question is not in the round (pinned separately below), and the
+ *  retry-a-failed-question scenario was removed from the page entirely. */
 const RUN_10 = {
-  works: ['01', '02', '03', '04', '05', '06', '07', '09', '10', '11', '12', '13', '17'],
-  'not-yet': ['08', '14'],
+  works: ['01', '02', '04', '05', '06', '07', '09', '10', '11', '12', '13', '17'],
+  'not-yet': ['14'],
   coming: ['15', '16'],
 }
 
-/** The page's own wording, pinned sentence by sentence: the PM text is
- *  hand-written, so an accidental edit to a title or a sentence fails here
- *  before it ships (the catalogue turns have their own verbatim pin below). */
+/** The page's own wording, pinned sentence by sentence IN SECTION ORDER: the
+ *  PM text is hand-written, so an accidental edit to a title or a sentence
+ *  fails here before it ships (the catalogue turns have their own verbatim
+ *  pin above). */
 const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
-  { id: '01-greeting', title: 'A quick hello', pageTurns: ['Hi! What can you help me with?'] },
   {
     id: '02-graph-count',
     title: 'Count active projects',
     pageTurns: ['How many projects are currently active in the organization?'],
-  },
-  {
-    id: '03-web-read',
-    title: 'Search the web',
-    pageTurns: ['Find the Next.js release notes and read the page. What changed in version 15.5?'],
-  },
-  {
-    id: '06-read-only',
-    title: 'Edit the org graph',
-    pageTurns: ['Add a project called Lantern to the org graph.'],
   },
   {
     id: '09-upload-summary',
@@ -90,17 +91,17 @@ const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
     ],
   },
   {
-    id: '12-retrieve-citation',
-    title: 'Answer with a citation',
-    pageTurns: [
-      'According to the uploaded lantern-notes.md, what is the release date? Please cite the document.',
-    ],
-  },
-  {
     id: '13-two-sources',
     title: 'Cross-check two sources',
     pageTurns: [
       'Compare the number of projects in the organization with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
+    ],
+  },
+  {
+    id: '12-retrieve-citation',
+    title: 'Answer with a citation',
+    pageTurns: [
+      'According to the uploaded lantern-notes.md, what is the release date? Please cite the document.',
     ],
   },
   {
@@ -112,9 +113,21 @@ const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
     ],
   },
   {
-    id: '04-library-docs',
-    title: 'Look up developer docs',
-    pageTurns: ['Find the SolidJS createSignal docs and show me a tiny counter example.'],
+    id: '06-read-only',
+    title: 'Edit the org graph',
+    pageTurns: ['Add a project called Lantern to the org graph.'],
+  },
+  {
+    id: 'pm-web-guidance',
+    title: 'Search the web',
+    pageTurns: [
+      'Search the web for recent public guidance on project status reporting and summarize the three most common recommendations.',
+    ],
+  },
+  {
+    id: '01-greeting',
+    title: 'A quick hello',
+    pageTurns: ['Hi! What can you help me with?'],
   },
   {
     id: '05-memory-lookup',
@@ -133,12 +146,9 @@ const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
     ],
   },
   {
-    id: '08-follow-up-failure',
-    title: 'Retry a failed question',
-    pageTurns: [
-      'How many projects are currently active in the organization?',
-      'That failed earlier. Please try the same count again now.',
-    ],
+    id: '04-library-docs',
+    title: 'Look up developer docs',
+    pageTurns: ['Find the SolidJS createSignal docs and show me a tiny counter example.'],
   },
   {
     id: '14-analysis-index-follow-up',
@@ -167,30 +177,81 @@ const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
   },
 ]
 
+/** The card order within each section, most relevant to a project manager
+ *  first (owner, round 4). The `rank` field and the section arrays must agree
+ *  with this — array order is what renders. */
+const EXPECTED_ORDER: Record<'must' | 'should' | 'nice', string[]> = {
+  must: [
+    '02-graph-count',
+    '09-upload-summary',
+    '10-csv-analysis',
+    '11-mail-to-file',
+    '13-two-sources',
+    '12-retrieve-citation',
+    '17-mail-analysis-follow-up',
+    '06-read-only',
+    'pm-web-guidance',
+    '01-greeting',
+  ],
+  should: [
+    '05-memory-lookup',
+    '07-follow-up-success',
+    '04-library-docs',
+    '14-analysis-index-follow-up',
+    '15-graph-file-summary',
+  ],
+  nice: ['16-graph-files-analysis'],
+}
+
 describe('use-cases data', () => {
-  it('carries exactly the 17 run-10 scenarios, each unique', () => {
-    expect(flat).toHaveLength(17)
-    expect(new Set(flat.map((q) => q.id)).size).toBe(17)
+  it('carries exactly the 16 page questions, each unique', () => {
+    expect(flat).toHaveLength(16)
+    expect(new Set(flat.map((q) => q.id)).size).toBe(16)
   })
 
-  it('every question exists in the catalogue with status "existing"', () => {
-    for (const q of flat) {
+  it('every tested question exists in the catalogue with status "existing"', () => {
+    for (const q of flat.filter((q) => q.result !== 'untested')) {
       const row = catalogueById.get(q.id)
       expect(row, `catalogue is missing ${q.id}`).toBeDefined()
       expect(row!.status).toBe('existing')
     }
   })
 
-  it('carries the catalogue turns verbatim — "Try this" sends the catalogue question', () => {
-    for (const q of flat) {
+  it('the untested question has no catalogue entry — no round has run it', () => {
+    const untested = flat.filter((q) => q.result === 'untested')
+    expect(untested.map((q) => q.id)).toEqual(['pm-web-guidance'])
+    expect(catalogueById.get('pm-web-guidance')).toBeUndefined()
+  })
+
+  it('carries the catalogue turns verbatim for tested questions — "Try this" sends the catalogue question', () => {
+    for (const q of flat.filter((q) => q.result !== 'untested')) {
       expect(q.turns, q.id).toEqual(catalogueById.get(q.id)!.turns)
     }
   })
 
-  it('carries the page text exactly as written for PMs', () => {
+  it('carries the page text exactly as written for PMs, in section order', () => {
     expect(flat.map((q) => ({ id: q.id, title: q.title, pageTurns: q.pageTurns }))).toEqual(
       PAGE_TEXT,
     )
+  })
+
+  it('orders each section by rank, most relevant to a project manager first', () => {
+    // Owner, round 4: the order is an explicit `rank` field, not array order
+    // by accident. Both halves pinned: the ids in array order, and the ranks
+    // sequential from 1 — so reordering the array without renumbering rank
+    // (or renumbering without reordering) fails here.
+    for (const section of USE_CASE_SECTIONS) {
+      const ids = section.questions.map((q) => q.id)
+      expect(ids, section.priority).toEqual(EXPECTED_ORDER[section.priority])
+      const ranks = section.questions.map((q) => q.rank)
+      expect(ranks, section.priority).toEqual(ranks.map((_, i) => i + 1))
+    }
+  })
+
+  it('gives every question one material-symbols icon literal', () => {
+    for (const q of flat) {
+      expect(q.icon, q.id).toMatch(/^i-material-symbols(-light)?-[a-z0-9-]+$/)
+    }
   })
 
   it('carries a short title for every question', () => {
@@ -237,12 +298,13 @@ describe('use-cases data', () => {
   it('the section grouping matches each catalogue priority', () => {
     for (const section of USE_CASE_SECTIONS) {
       for (const q of section.questions) {
+        if (q.result === 'untested') continue // no catalogue entry yet
         expect(catalogueById.get(q.id)!.priority).toBe(section.priority)
       }
     }
   })
 
-  it('results are exactly run 10: pass, fail and gated where recorded', () => {
+  it('results are exactly run 10 for the questions that round measured', () => {
     for (const [result, prefixes] of Object.entries(RUN_10)) {
       for (const prefix of prefixes) {
         const q = flat.find((candidate) => candidate.id.startsWith(prefix))
@@ -250,18 +312,21 @@ describe('use-cases data', () => {
         expect(q!.result, `${q!.id}`).toBe(result)
       }
     }
+    // The rewritten web-search question is new — the page says so, not a
+    // borrowed result from the Next.js question it replaced.
+    expect(flat.find((q) => q.id === 'pm-web-guidance')!.result).toBe('untested')
   })
 
-  it('every result is one of the three the page knows how to render', () => {
-    for (const q of flat) expect(['works', 'not-yet', 'coming']).toContain(q.result)
+  it('every result is one of the four the page knows how to render', () => {
+    for (const q of flat) expect(['works', 'not-yet', 'coming', 'untested']).toContain(q.result)
   })
 
   it('keeps the two texts the same shape, turn for turn', () => {
     for (const q of flat) {
       expect(q.pageTurns, q.id).toHaveLength(q.turns.length)
     }
-    // Six of the seventeen carry follow-ups — the page's "then ask:" cases.
-    expect(flat.filter((q) => q.pageTurns.length > 1)).toHaveLength(6)
+    // Five of the sixteen carry follow-ups — the page's "then ask:" cases.
+    expect(flat.filter((q) => q.pageTurns.length > 1)).toHaveLength(5)
   })
 
   it('maps exactly the developer terms the page would otherwise show', () => {

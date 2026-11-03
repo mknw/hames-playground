@@ -2,10 +2,11 @@
  * The `/use-cases` page — a static snapshot plus markup, so everything here is
  * jsdom-cheap. What is asserted is the page's promise to its reader: plain
  * headings per priority, one plain line on how each section did, the data-updated
- * line, a short titled card per question in a tiled grid, "Try this" only where
- * the result is Works (owner decision, #937 round 3), and NO eval jargon, no
- * scenario ids, no "gated", no "P4" — and no developer term the plain-words map
- * exists to translate — anywhere in the rendered text.
+ * line, a short titled card per question in a tiled grid — icon beside title, in
+ * the snapshot's rank order — "Try this" only where the result is Tested (owner
+ * decision, #937 round 3), and NO eval jargon, no scenario ids, no "gated", no
+ * "P4" — and no developer term the plain-words map exists to translate —
+ * anywhere in the rendered text.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -49,24 +50,24 @@ describe('use-cases page', () => {
   it('says plainly how each section did in the last test', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
-    expect(container.textContent).toContain('All 10 worked in the last test.')
-    expect(container.textContent).toContain('3 of 6 worked in the last test.')
+    expect(container.textContent).toContain('9 of 10 worked in the last test.')
+    expect(container.textContent).toContain('3 of 5 worked in the last test.')
     // The nice-to-have section's misses are all not-runnable-yet, so a bare
-    // "0 of 2" would read as failure. It says coming soon instead.
+    // "0 of 1" would read as failure. It says coming soon instead.
     expect(container.textContent).toContain('Coming soon — these were not runnable')
   })
 
-  it('offers "Try this" only where the result is Works, prefilled and never sent', async () => {
+  it('offers "Try this" only where the result is Tested, prefilled and never sent', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
 
     const works = flat.filter((q) => q.result === 'works')
-    expect(works).toHaveLength(13)
+    expect(works).toHaveLength(12)
 
     const tries = [...container.querySelectorAll('a')].filter((a) =>
       a.textContent?.includes('Try this'),
     )
-    expect(tries).toHaveLength(13)
+    expect(tries).toHaveLength(12)
 
     // Each link opens a brand-new chat (bare `/`, no `?c=`) with the catalogue's
     // FIRST turn as the draft — the wording the eval round measured. A
@@ -77,8 +78,8 @@ describe('use-cases page', () => {
       expect(hrefs[i]).not.toContain('c=')
     }
 
-    // No button where it did not work — "Not yet reliable" and "Coming soon"
-    // carry the badge alone.
+    // No button where it did not work — "Not yet reliable", "Coming soon" and
+    // the untested web-search question carry the badge alone.
     const cards = [...container.querySelectorAll('li')]
     for (const q of flat.filter((candidate) => candidate.result !== 'works')) {
       const card = cards.find((li) => li.textContent?.includes(q.title))
@@ -93,7 +94,7 @@ describe('use-cases page', () => {
     const thenAsks = [...container.querySelectorAll('p,span')].filter((el) =>
       el.textContent?.trim().startsWith('Then ask:'),
     )
-    expect(thenAsks).toHaveLength(6)
+    expect(thenAsks).toHaveLength(5)
     // The follow-up text itself is on the page too.
     expect(container.textContent).toContain('And which release tag do you have noted for it?')
   })
@@ -109,7 +110,7 @@ describe('use-cases page', () => {
     const thenAskBlocks = [...container.querySelectorAll('li div')].filter(
       (el) => el.querySelector('span')?.textContent?.trim() === 'Then ask:',
     )
-    expect(thenAskBlocks).toHaveLength(6)
+    expect(thenAskBlocks).toHaveLength(5)
     for (const block of thenAskBlocks) {
       for (const p of [...block.querySelectorAll('p, span')]) {
         expect(p.getAttribute('text')).toContain('lg')
@@ -143,15 +144,18 @@ describe('use-cases page', () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
     // Counted by the badge glyph, not the word: the plain-words headings say
-    // "Works today", so a text count of "Works" would double-count.
+    // "Works today", and "Not tested yet" contains "tested" lowercase, so a
+    // text count of any one word would double-count.
     const badges = (icon: string) => container.querySelectorAll(`.${icon}`).length
-    expect(badges('i-material-symbols-task-alt')).toBe(13)
-    expect(badges('i-material-symbols-error')).toBe(2)
+    expect(badges('i-material-symbols-task-alt')).toBe(12)
+    expect(badges('i-material-symbols-error')).toBe(1)
     expect(badges('i-material-symbols-schedule')).toBe(2)
+    expect(badges('i-material-symbols-pending')).toBe(1)
     const text = container.textContent ?? ''
-    expect(text).toContain('Works')
+    expect(text).toContain('Tested')
     expect(text).toContain('Not yet reliable')
     expect(text).toContain('Coming soon')
+    expect(text).toContain('Not tested yet')
   })
 
   it('never shows a developer term the plain-words map exists to translate', async () => {
@@ -194,5 +198,30 @@ describe('use-cases page', () => {
     expect(text).not.toContain('knowledge graph')
     expect(text).not.toContain('Project nodes')
     expect(text.match(/graph/g)).toHaveLength(2) // title + question of 06, both "org graph"
+  })
+
+  it('renders the question icon on every card, and nothing else carries it', async () => {
+    // Owner, round 4: one material-symbols icon per question, beside its
+    // title, decorative. The class literal lives in the snapshot; this pin
+    // checks the RENDER: every card carries exactly its question's glyph, and
+    // no card carries a second one. Remove the icon from the card (or break
+    // the class in the data) and this goes red.
+    const { container } = renderPage()
+    const cards = [...container.querySelectorAll('li')]
+    expect(cards).toHaveLength(flat.length)
+    for (const q of flat) {
+      const card = cards.find((li) => li.textContent?.includes(q.title))
+      expect(card, q.id).toBeDefined()
+      const glyphs = [...card!.querySelectorAll('span')].filter((el) =>
+        el.className.includes(q.icon),
+      )
+      expect(glyphs, q.id).toHaveLength(1)
+      expect(glyphs[0]!.getAttribute('aria-hidden'), q.id).toBe('true')
+      // And no OTHER card's icon leaked onto this one.
+      const otherIcons = flat.filter((other) => other.id !== q.id).map((other) => other.icon)
+      for (const cls of [...card!.querySelectorAll('span')].map((el) => el.className)) {
+        expect(otherIcons.includes(cls), `${q.id}: ${cls}`).toBe(false)
+      }
+    }
   })
 })

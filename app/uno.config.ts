@@ -30,7 +30,13 @@ export default defineConfig({
   // rail (#933) keeps its tab-icon literals in `src/lib/support-rail.ts` for
   // the same reason, listed beside it.
   content: {
-    filesystem: ['src/lib/harness-client/registry.server.ts', 'src/lib/support-rail.ts'],
+    filesystem: [
+      'src/lib/harness-client/registry.server.ts',
+      'src/lib/support-rail.ts',
+      // The use-cases snapshot carries each question's icon class as a data
+      // literal (same reason as the two above).
+      'src/lib/use-cases.ts',
+    ],
   },
   presets: [
     presetIcons({
@@ -302,6 +308,17 @@ export default defineConfig({
     // sidebar animations. Listed as exceptions in the kg-dtalk-ui skill.
     {
       getCSS: () => `
+        /* The shared bar's page tabs (owner, round 4): from md up the label
+           rides beside its icon on one line; below md the tab collapses to
+           its icon only — the anchor's aria-label carries the name. A
+           hand-written rule rather than utilities because the valueless
+           'hidden' ATTRIBUTE in JSX is the native one (wind4's preflight
+           hides [hidden] with !important, which no display utility can
+           override at md), and attributify has no other base-none form. */
+        .nav-tab-label { display: none; }
+        @media (min-width: 48rem) {
+          .nav-tab-label { display: inline; }
+        }
         .prose-chat {
           line-height: 1.6;
           word-wrap: break-word;

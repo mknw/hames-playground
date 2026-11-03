@@ -18,8 +18,10 @@
  *
  * The scan's regexes are terminal (no backtracking into a variable-length run
  * followed by anything; SD-2), no regex is built from input, and nested-URL
- * following recurses at most `nestedLevels` deep (the egress reader passes 3),
- * so the whole call is linear in input length plus a bounded number of parsed
+ * following recurses at most `nestedLevels` deep (the egress reader passes 2:
+ * the seam counts query-follow hops from 0, where the old reader's
+ * `NESTED_URL_LEVELS = 3` counted levels from 1), so the whole call is linear
+ * in input length plus a bounded number of parsed
  * URLs. Nothing here truncates or refuses on size: the egress reader's own
  * `EGRESS_MAX_BLOCK_CHARS` bound already refused oversized text before this
  * module sees it.

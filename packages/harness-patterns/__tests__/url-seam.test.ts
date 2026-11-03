@@ -79,4 +79,21 @@ describe('the URL interpretation seam (slice 1)', () => {
     expect(nested?.sourceSpan?.end).toBe(topSpan?.end)
     expect(text.slice(nested!.sourceSpan!.start, nested!.sourceSpan!.end)).toBe(top)
   })
+
+  // Slice 2: `destinationHosts` consumes `destinations`, so their contract is
+  // load-bearing. MUTATION: push every destination (drop the `seenHref` check
+  // in `collect`): the same nested URL appears twice — first through the
+  // query recursion, then as the literal top-level span — and both assertions
+  // fail: the count, and the retained first appearance's level.
+  it('destinations are deduplicated by canonical href; the first appearance is the one kept', () => {
+    const text = 'see https://a.example/r?u=https://b.example/p tail'
+    const { destinations } = interpretUrlSpans(text, egressArgumentSpans(text), {
+      nestedLevels: 1,
+    })
+    // b.example is reached through the query first; its later literal span is
+    // the same href and is dropped — the retained destination is the first
+    // appearance's (level 1, from the query value).
+    expect(destinations).toHaveLength(2)
+    expect(destinations[1]).toMatchObject({ level: 1, hostname: 'b.example' })
+  })
 })

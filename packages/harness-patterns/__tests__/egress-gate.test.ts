@@ -1028,6 +1028,35 @@ describe('the egress state', () => {
     ])
   })
 
+  // Slice 2: `destinationHosts` consumes the seam's `destinations`, whose
+  // query-follow hops are counted from 0 — this reader's three levels count the
+  // direct URL as level 1, so the seam is asked for two hops. MUTATION: pass
+  // `nestedLevels: 3` (or `NESTED_URL_LEVELS`) at the call site: one MORE
+  // generation is named and this pin goes red; drop the seam's searchParams
+  // recursion (`url-seam.ts` `collect`) or its second percent-decode and the
+  // pinned chain loses d2/d3 and this pin goes red too.
+  it('follows a doubly-encoded query chain to three levels and no further', () => {
+    const enc = encodeURIComponent
+    const u4 = 'https://d4.example/end'
+    const u3 = `https://d3.example/m?u=${enc(enc(u4))}`
+    const u2 = `https://d2.example/m?u=${enc(enc(u3))}`
+    expect(destinationHosts([`https://d1.example/m?u=${enc(enc(u2))}`])).toEqual([
+      'd1.example',
+      'd2.example',
+      'd3.example',
+    ])
+  })
+
+  // MUTATION: drop the `!hosts.includes(...)` dedup in `destinationHosts`:
+  // the two a.example URLs are different hrefs (the seam's dedup-by-href
+  // cannot absorb them) and the host is named twice. The seam's own
+  // first-wins dedup-by-href is pinned in url-seam.test.ts.
+  it('names each host once, in appearance order, across different URLs that share it', () => {
+    expect(
+      destinationHosts(['first https://a.example/x then https://a.example/y?u=https://b.example/']),
+    ).toEqual(['a.example', 'b.example'])
+  })
+
   // MUTATION: drop the `"> "` prefix in `quote`: forged layout lines start at
   // column 0.
   it('forged layout, user-message and evidence headers arrive inside the quote', async () => {

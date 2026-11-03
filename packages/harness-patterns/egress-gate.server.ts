@@ -157,7 +157,9 @@ export const EGRESS_USER_CAP = 4_000
 /** How long a roster span the state quotes. */
 export const EGRESS_SPAN_CAP = 80
 
-/** How deep nested URLs in decoded query values are followed for their hosts. */
+/** How deep nested URLs in decoded query values are followed for their hosts
+ *  (levels counted from 1: a URL written directly is level 1). The seam counts
+ *  query-follow hops from 0, so this is passed to it as `NESTED_URL_LEVELS - 1`. */
 const NESTED_URL_LEVELS = 3
 
 /** A JSON-shaped argument deeper than this is not an argument. */
@@ -308,32 +310,28 @@ function urlsIn(text: string): URL[] {
 
 /**
  * Every host the request names (the `Destination named in the request:` lines),
- * in order of appearance, deduplicated: each http(s) URL's `hostname` (ASCII,
- * IDNA to punycode, lower case), and the hosts of URLs nested in its decoded
- * query values, followed to three levels, so an open redirector on a reputable
- * host names the host it forwards to as well. It claims nothing about where the
- * service sends the request.
+ *  in order of appearance, deduplicated: each http(s) URL's `hostname` (ASCII,
+ *  IDNA to punycode, lower case), and the hosts of URLs nested in its decoded
+ *  query values, followed to three levels, so an open redirector on a reputable
+ *  host names the host it forwards to as well. The nested following and the
+ *  second percent-decode of query values are the URL interpretation seam's
+ *  (`url-seam.ts`): this consumes its `destinations` and keeps the appearance
+ *  order and the host deduplication. It claims nothing about where the
+ *  service sends the request.
  */
 export function destinationHosts(texts: readonly string[]): string[] {
   const hosts: string[] = []
-  const visit = (text: string, level: number): void => {
-    for (const url of urlsIn(text)) {
-      if (url.hostname && !hosts.includes(url.hostname)) hosts.push(url.hostname)
-      if (level < NESTED_URL_LEVELS)
-        url.searchParams.forEach((v) => {
-          // A query value is decoded once by URLSearchParams; decode what is
-          // left too, so a doubly-encoded nested URL is followed as well.
-          let decoded = v
-          try {
-            decoded = decodeLeaf(v)
-          } catch {
-            // Broken encoding: follow the value as it is.
-          }
-          visit(decoded, level + 1)
-        })
-    }
+  for (const text of texts) {
+    const { destinations } = interpretUrlSpans(text, egressArgumentSpans(text), {
+      // The seam counts query-follow hops from 0 (a URL written directly in
+      //  the input is level 0); this reader's three levels count the direct
+      //  URL as level 1, so its constant names one hop fewer there.
+      nestedLevels: NESTED_URL_LEVELS - 1,
+    })
+    for (const destination of destinations)
+      if (destination.hostname && !hosts.includes(destination.hostname))
+        hosts.push(destination.hostname)
   }
-  for (const text of texts) visit(text, 1)
   return hosts
 }
 

@@ -73,7 +73,7 @@ export interface AppHandles {
   setTier(tier: 'anthropic' | 'self_deployed', sessionId?: string): Promise<void>
   /** The persisted row for a conversation, or null. */
   readRow(sessionId: string): Promise<StoredRow | null>
-  /** Delete every row this suite's user owns. Test database only. */
+  /** Reset memory to its default-off state and delete this user's conversations. */
   wipe(): Promise<void>
   /**
    * Forget that this process ever saw the self-hosted box answer, so the next
@@ -395,13 +395,17 @@ async function boot(): Promise<AppHandles> {
     },
 
     async wipe() {
+      // #942: deleting memories alone leaves memory_enabled on after scenario
+      // 10. Later tests then write/recall memories depending on file order and
+      // detached-settle timing. Commit OFF before erasure, as the app does;
+      // the repository's owner lock also waits out a writer already committing.
+      await prefs.setMemoryEnabledForUser(userId, false)
+      const memories = await import('../../src/lib/db/memories.server')
       // Memories first: memory_sources' FK refuses a conversation delete that
       // would strand a source (#531); the sources cascade from memories.
-      await dbClient
-        .query('DELETE FROM memories WHERE user_id = $1', [userId])
-        .catch((err: { code?: string }) => {
-          if (err.code !== '42P01') throw err
-        })
+      await memories.deleteAllMemoriesForUser(userId).catch((err: unknown) => {
+        if (!(err instanceof memories.MemoryUnavailableError)) throw err
+      })
       await dbClient.query('DELETE FROM conversations WHERE user_id = $1', [userId])
     },
   }

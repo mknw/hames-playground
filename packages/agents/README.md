@@ -136,9 +136,9 @@ is capped, and the tool-result bodies it quotes keep the fence they arrived in. 
 route admits only its own and retriever
 references, excluding sandbox-promoted documents, and pseudonymises inherited
 content when the host supplies `deps.guards.pseudonymiseForWeb`. Without it —
-the `GUARD_PSEUDONYMISE=off` switch, or no `guards` bag at all — the route is
+the default/`GUARD_PSEUDONYMISE=off` path, or no `guards` bag at all — the route is
 composed without the wrapper, so earlier content reaches it as written rather
-than withheld (boundary guards slice 5). The web route's outgoing calls are
+than withheld (boundary guards slice 15). Explicit `on` supplies a filter on both tiers. The web route's outgoing calls are
 judged by the egress gate (`deps.egressRoster`; `deps.guards.egressTools`, `egressNameMatch`, and
 `egressDecide` select per-tool detectors). A supplied filter that cannot be built withholds earlier
 content, and the egress gate refuses what it cannot judge. An unconfigured private decisions endpoint
@@ -162,7 +162,7 @@ guards in code sets the same fields directly:
 | `GUARD_EGRESS_TOOLS`                     | comma-separated exact tool names or `tag:` selectors for the selected detector pair                                                                                                | names or tags, default search tools   |
 | `GUARD_EGRESS_NAME_MATCH`                | name matching for selected tools                                                                                                                                                   | `off` / `evidence` / `refuse`         |
 | `GUARD_EGRESS_DECIDE`                    | Decide for selected tools                                                                                                                                                          | `off` / `on` / `shadow`               |
-| `GUARD_PSEUDONYMISE`                     | the web route's input pseudonymiser (default `on`; `off` is its retirement switch)                                                                                                 | `on` / `off`                          |
+| `GUARD_PSEUDONYMISE`                     | the web route's input pseudonymiser (default `off`; explicit `on` applies on both tiers)                                                                                           | `on` / `off`                          |
 | `GUARD_GATE_THRESHOLD`                   | τi, `gateThreshold`: the screen runs when the gate's probability is at or above it (default `0.15`; obeyed only by a `gated` screen)                                               | a number from 0 to 1                  |
 | `GUARD_EGRESS_THRESHOLD`                 | τe, `egressThreshold`: an outgoing call is refused or asked about when the private mass is at or above it (default `0.3`)                                                          | a number from 0 to 1                  |
 | `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | the tripwire's N, `maxOutgoingRetriesPostTripwire`: refusal N + 1 on a route closes it for the turn (default `0`)                                                                  | a whole number, 0 or greater          |

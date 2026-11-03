@@ -316,10 +316,8 @@ export async function createDriver(
     documents,
     descriptions: descriptions.filter((t) => isSandboxTool(t.name)),
   })
-  // The production factory, so general-next's info route runs behind its real G14 filter
-  // and not the fail-closed refusal an absent dep produces. `none` because the hermetic
-  // run has no org graph: the directory leg is NOT covered here (live mode keeps it off
-  // too, since the eval holds no tenant data). No fixture carries an identity, so no substitution runs: this proves presence only.
+  // Production factories, with no tenant directory in this synthetic eval.
+  // The input filter follows GUARD_PSEUDONYMISE, default off (slice 15).
   const { createEgressRoster, createWebPseudonymiser } =
     await import('../../src/lib/harness-client/web-pseudonymiser.server')
   // The production classifier too (ruling O): the graph's rows are internal, and no fixture
@@ -340,7 +338,9 @@ export async function createDriver(
     gateThreshold: guardNumbers.gateThreshold,
     egressThreshold: guardNumbers.egressThreshold,
     maxOutgoingRetriesPostTripwire: guardNumbers.maxOutgoingRetriesPostTripwire,
-    pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
+    pseudonymiseForWeb: guardNumbers.pseudonymise
+      ? createWebPseudonymiser({ directory: 'none' })
+      : undefined,
     classifyIngress,
   }
   const dispose = registerTransport(transport)

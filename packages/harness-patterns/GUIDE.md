@@ -210,8 +210,8 @@ Place `withPseudonymisedInputs({ pseudonymise: hostFilter })` directly around
 and all inherited child data, preserving the latest user message. Rewritten
 copies are limited to the child's visible events and post-checked per string;
 residual bodies become `[withheld: private identity]` (per leaf inside a JSON
-body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. Only an
-explicit `'anthropic'` run passes through. Supply a host `PseudonymiseForWeb`
+body) and provenance fences stay intact. A roster identity the screen already neutralized fails the filter closed for the rest of the conversation. A supplied
+filter runs on both inference tiers; K5 does not interpret the tier. Supply a host `PseudonymiseForWeb`
 that builds a per-invocation rewrite, selective redaction and literal post-check; no host privacy
 module or table is imported into core. When the host knows why it cannot build
 the filter, it throws `RosterUnavailable('directory-empty' | 'directory-unreadable'
@@ -254,9 +254,12 @@ docs: <https://github.com/mknw/hames-playground/blob/main/docs/tutorials/guardra
 The reference application registers `general-next` as a selectable agent
 (#507 S3; it replaced the removed `general`), built in `packages/agents/agents/general-next.server.ts`.
 It combines four routes: an office sandbox with Microsoft 365, Neo4j/web
-lookups (plus `context7` library docs), the conversation's Redis retriever, and planning. The web route uses
-the host-supplied G14 pseudonymiser around `withReferences`; missing private
-configuration withholds earlier content and refuses web calls. The loop itself
+lookups (plus `context7` library docs), the conversation's Redis retriever, and planning. The web route wraps
+`withReferences` in the host-supplied G14 pseudonymiser only when
+`GUARD_PSEUDONYMISE=on`, on both inference tiers. Default/unset and explicit `off`
+omit the wrapper. Neither valid setting warns at boot; unknown values refuse boot.
+A supplied filter that cannot be built withholds earlier content; the egress gate
+judges outgoing calls. The loop itself
 sanitises and screens nothing: the office and info route guards declare the
 screen, the documents route's guard none, and a route record carries the
 fence its tool results arrived in. Memory

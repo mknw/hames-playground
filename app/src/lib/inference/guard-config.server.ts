@@ -17,7 +17,7 @@ assertServerOnImport()
  *  design's Settings table). Keep both maps in agreement. */
 const SCREEN_DEFAULTS = { self_deployed: 'gated', anthropic: 'always' } as const
 /** The declared default for the input pseudonymiser. */
-const PSEUDONYMISE_DEFAULT = true
+const PSEUDONYMISE_DEFAULT = false
 /** τi's and τe's defaults are the patterns' own; N's default is the patterns'
  *  constant too, the one spelling the egress gate and general-next share. */
 const GATE_THRESHOLD_DEFAULT = GUARD_GATE_THRESHOLD
@@ -121,12 +121,6 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
       throw new Error(
         'GUARD_PSEUDONYMISE must be one of: on, off; refusing to boot with an unrecognised value.',
       )
-  }
-  if (pseudonymiseRaw === 'off') {
-    warnings.push(
-      "[guards] GUARD_PSEUDONYMISE=off switches off the web route's input pseudonymiser: names are " +
-        'no longer rewritten before they reach the model. Restore the default by unsetting it.',
-    )
   }
 
   const gateRaw = process.env.GUARD_GATE_THRESHOLD

@@ -1,7 +1,7 @@
 /** #507 S3, layer 2: W4's RUNNABLE NOW 02-graph-count through the real
  * registered candidate, SSE, adapters, guard and persistence. No sandbox boots
- * on this route. Anthropic explicitly passes through G14; private rewrite and
- * egress are layer-1 evidence in S7, and P4 file-path cases remain gated. */
+ * on this route. Slice 15 pins default-off input masking on both tiers; explicit
+ * masking and its failure paths are layer-1 evidence. P4 file-path cases remain gated. */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { extractGraphElements, isEdgeElement, isNodeElement } from '@hames-ai/agents'
 import { FENCE } from '@hames-ai/harness-patterns/guard'
@@ -26,61 +26,72 @@ afterAll(async () => {
 })
 
 describe.runIf(IS_HERMETIC)('general-next conversation', () => {
-  it('decides, reads the synthetic graph, answers once and persists the route output', async () => {
-    await app.setTier('anthropic')
-    const sessionId = newSessionId('general-next-count')
-    const { status, frames } = await app.runTurnOverSse({
-      sessionId,
-      agentId: 'general-next',
-      message: 'How many Project nodes are in the knowledge graph?',
-    })
-    expect(status).toBe(200)
-    const done = frames.find((f) => f.event === 'done')
-    expect(done?.data.response, JSON.stringify(frames)).toContain(FAKE_ANSWER_MARK)
-    expect(done?.data.response).toContain('42')
-    expect(done?.data.status).not.toBe('error')
-    await settleSummaries(app, sessionId)
-    const row = (await app.readRow(sessionId))!
-    expect(row).not.toBeNull()
-    expect(row.agentId).toBe('general-next')
-    expect(row.status).toBe('done')
-    expect(
-      eventsOfType(row.serializedContext, 'decision_made')
-        .filter((d) => d.key === 'next_step')
-        .map((d) => d.label),
-    ).toEqual(['info-retrieval', 'answer'])
-    expect(eventsOfType(row.serializedContext, 'tool_result')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ tool: 'read_neo4j_cypher', success: true }),
-        expect.objectContaining({
-          tool: 'info-retrieval',
-          success: true,
-          result: expect.stringContaining('42'),
-        }),
-      ]),
-    )
-    const decoded = JSON.parse(row.serializedContext)
-    expect(
-      decoded.events.filter(
-        (e: { type: string; patternId: string }) =>
-          e.type === 'tool_result' && e.patternId === 'orchestrator',
-      ),
-    ).toHaveLength(1)
-    expect(app.fakeGateway.toolCalls.filter((c) => c.name === 'read_neo4j_cypher')).toHaveLength(1)
-    expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toHaveLength(1)
-    // Boundary guards slice 3, ruling O: a graph read is the deployment's own content,
-    // so the host's classifier keeps it to the deterministic pass and no screen runs.
-    // MUTATION: drop `classify` from general-next's info guard — a screen call appears.
-    expect(app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent')).toHaveLength(0)
-    const decisions = app.fakeLlm.calls.filter(
-      (c) => c.endpoint && JSON.parse(c.prompt).questions.next_step,
-    )
-    expect(decisions).toHaveLength(2)
-    expect(decisions.every((c) => c.endpoint === 'jev')).toBe(true)
-    expect(JSON.parse(decisions[1].prompt).state).toContain('42')
-    expect(JSON.parse(decisions[1].prompt).state).not.toContain('⟦')
-    expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(true)
-  })
+  it.each(['anthropic', 'self_deployed'] as const)(
+    'decides, reads the synthetic graph, answers and persists with default-off masking (%s)',
+    async (tier) => {
+      await app.setTier(tier)
+      const { agentDeps } = await import('../../src/lib/harness-client/session.server')
+      expect(agentDeps().guards?.pseudonymiseForWeb).toBeUndefined()
+      const sessionId = newSessionId('general-next-count')
+      const { status, frames } = await app.runTurnOverSse({
+        sessionId,
+        agentId: 'general-next',
+        message: 'How many Project nodes are in the knowledge graph?',
+      })
+      expect(status).toBe(200)
+      const done = frames.find((f) => f.event === 'done')
+      expect(done?.data.response, JSON.stringify(frames)).toContain(FAKE_ANSWER_MARK)
+      expect(done?.data.response).toContain('42')
+      expect(done?.data.status).not.toBe('error')
+      await settleSummaries(app, sessionId)
+      const row = (await app.readRow(sessionId))!
+      expect(row).not.toBeNull()
+      expect(row.agentId).toBe('general-next')
+      expect(row.status).toBe('done')
+      expect(
+        eventsOfType(row.serializedContext, 'decision_made')
+          .filter((d) => d.key === 'next_step')
+          .map((d) => d.label),
+      ).toEqual(['info-retrieval', 'answer'])
+      expect(eventsOfType(row.serializedContext, 'tool_result')).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ tool: 'read_neo4j_cypher', success: true }),
+          expect.objectContaining({
+            tool: 'info-retrieval',
+            success: true,
+            result: expect.stringContaining('42'),
+          }),
+        ]),
+      )
+      const decoded = JSON.parse(row.serializedContext)
+      expect(
+        decoded.events.filter(
+          (e: { type: string; patternId: string }) =>
+            e.type === 'tool_result' && e.patternId === 'orchestrator',
+        ),
+      ).toHaveLength(1)
+      expect(app.fakeGateway.toolCalls.filter((c) => c.name === 'read_neo4j_cypher')).toHaveLength(
+        1,
+      )
+      expect(app.fakeLlm.calls.filter((c) => c.fn === 'Synthesize')).toHaveLength(1)
+      // Boundary guards slice 3, ruling O: a graph read is the deployment's own content,
+      // so the host's classifier keeps it to the deterministic pass and no screen runs.
+      // MUTATION: drop `classify` from general-next's info guard — a screen call appears.
+      expect(app.fakeLlm.calls.filter((c) => c.fn === 'ScreenUntrustedContent')).toHaveLength(0)
+      const decisions = app.fakeLlm.calls.filter(
+        (c) => c.endpoint && JSON.parse(c.prompt).questions.next_step,
+      )
+      expect(decisions).toHaveLength(2)
+      expect(
+        decisions.every((c) => c.endpoint === (tier === 'anthropic' ? 'jev' : 'private')),
+      ).toBe(true)
+      expect(JSON.parse(decisions[1].prompt).state).toContain('42')
+      expect(JSON.parse(decisions[1].prompt).state).not.toContain('⟦')
+      expect(frames.some((f) => f.event === 'message' && f.data.type === 'decision_made')).toBe(
+        true,
+      )
+    },
+  )
 
   // The Neo4j tab draws what `extractGraphElements` finds in the turn's
   // `tool_result` events: each live frame as it arrives (turn-stream.ts), and

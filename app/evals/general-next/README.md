@@ -121,13 +121,13 @@ prove the **dependency contract**, not Office rendering, numerical Python/Excel
 execution, vector search quality, app-upload HTTP integration or containment.
 Those integration claims remain owed to app-path evidence using synthetic documents
 seeded through the app's upload path and the shipped sandbox. The driver interface
-allows those integrations to be supplied independently. The driver supplies the production
-`createWebPseudonymiser` as `AgentDeps.pseudonymiseForWeb`, so the Eval runs the path that
-ships: `general-next`'s `info` route behind its input pseudonymiser, which stays on by
-default (boundary guards slice 5) until its retirement flips that default to `off`; the
-switch stays either way. The production G14 filter is present
-and passes identity-free payloads; no substitution is exercised (no fixture carries an
-identity, and the directory leg is off: `directory: 'none'`). The driver also supplies the
+allows those integrations to be supplied independently. The driver follows the production `GUARD_PSEUDONYMISE` switch: default/off omits
+`AgentGuards.pseudonymiseForWeb`; explicit `on` supplies `createWebPseudonymiser`.
+The wrapper then runs on both tiers, though this conversation runner remains
+private-tier-only. Neither value warns at boot; invalid values refuse boot.
+The eval disables the directory leg (`directory: 'none'`); its identity-free
+fixtures exercise composition, not substitution recall.
+The driver also supplies the
 production `createEgressRoster` as `AgentDeps.egressRoster`, on the same `none` directory, so
 every outgoing call is judged by the egress question with the payload roster as evidence.
 Scripted inference checks

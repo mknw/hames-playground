@@ -447,6 +447,8 @@ describe.runIf(IS_HERMETIC)('scenario 10: memory through real turns', () => {
       await settled(id)
       expect(await stored()).toHaveLength(1)
       await app.wipe()
+      const { getMemoryEnabled } = await import('../../src/lib/db/user-prefs.server')
+      expect(await getMemoryEnabled(app.userId)).toBe(false)
       expect(await stored()).toEqual([])
       expect(await app.readRow(id)).toBeNull()
     })

@@ -86,7 +86,7 @@ afterEach(() => {
 })
 
 describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', () => {
-  it('unset, the bag carries the design defaults and the real web filter', () => {
+  it('unset, the bag carries the design defaults without an input filter', () => {
     const { guards, egressRoster } = agentDeps()
     expect(guards).toMatchObject({
       screenMode: { default: 'gated', anthropic: 'always' },
@@ -98,7 +98,7 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
       maxOutgoingRetriesPostTripwire: 0,
     })
     expect(guards!.classifyIngress).toBeTypeOf('function')
-    expect(guards!.pseudonymiseForWeb).toMatchObject({ SYNTHETIC_FILTER: true })
+    expect(guards!.pseudonymiseForWeb).toBeUndefined()
     expect(egressRoster).toMatchObject({ SYNTHETIC_ROSTER: true })
   })
 
@@ -154,12 +154,7 @@ describe('agentDeps() carries the tenant document hosts', () => {
   })
 })
 
-// Boundary guards slice 5, owner ruling (c) of 2026-10-28: K5 stays, switchable
-// and ON by default, until a fix for the egress gate's measured gap has itself
-// been measured; `off` is the retirement switch. The chain from the env var
-// through the REAL bag to the REAL agent's composition, so neither half can
-// drift alone. What each composition does in a turn is pinned beside
-// general-next's other composition pins (`agents/general-next.test.ts`).
+// Slice 15: default off; the env → real bag → real agent composition stays pinned.
 describe('GUARD_PSEUDONYMISE reaches general-next through agentDeps() (boundary guards slice 5)', () => {
   const compose = async () => {
     const { guards, egressRoster } = agentDeps()
@@ -173,9 +168,7 @@ describe('GUARD_PSEUDONYMISE reaches general-next through agentDeps() (boundary 
     return { root: patterns[0].name, pseudonymises: harnessPseudonymisesInputs(patterns) }
   }
 
-  // MUTATION: flip the declared default to off (`PSEUDONYMISE_DEFAULT = false`
-  // in guard-config.server.ts): the unset case composes no wrapper, red.
-  it.each([undefined, 'on'])(
+  it.each(['on'])(
     'GUARD_PSEUDONYMISE=%j: the info route is wrapped in withPseudonymisedInputs',
     async (value) => {
       vi.stubEnv('GUARD_PSEUDONYMISE', value)
@@ -189,11 +182,14 @@ describe('GUARD_PSEUDONYMISE reaches general-next through agentDeps() (boundary 
   // MUTATION: ignore the switch (build `pseudonymiseForWeb` in agentDeps()
   // whatever guardConfig() says, or parse `off` as on): the wrapper is
   // composed, red. The egress gate is composed either way.
-  it('GUARD_PSEUDONYMISE=off: no withPseudonymisedInputs anywhere, and the egress gate still wraps every route', async () => {
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
-    expect(await compose()).toEqual({
-      root: 'withInjectionGuard(withEgressGate(decisionLoop))',
-      pseudonymises: false,
-    })
-  })
+  it.each([undefined, 'off'])(
+    'GUARD_PSEUDONYMISE=%j: no input wrapper, and the egress gate still wraps every route',
+    async (value) => {
+      vi.stubEnv('GUARD_PSEUDONYMISE', value)
+      expect(await compose()).toEqual({
+        root: 'withInjectionGuard(withEgressGate(decisionLoop))',
+        pseudonymises: false,
+      })
+    },
+  )
 })

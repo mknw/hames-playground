@@ -56,7 +56,7 @@ tier — one rule, and the guards read the same rule the router does.
 | Guard gate                      | in front of the screen, external content only    | one small decision call per clean payload | `shadow`           | never asked    |
 | Injection screen                | same seam, after the sanitiser                   | one model call per screened payload       | `shadow` (runs)    | `always`       |
 | Egress gate                     | one check before every outgoing call, both tiers | one small decision call per outgoing call | `filter`           | `filter`       |
-| Input pseudonymiser             | one route's view, before the model reads it      | no model call                             | on                 | off            |
+| Input pseudonymiser             | one route's view, before the model reads it      | no model call                             | off (opt-in)       | off (opt-in)   |
 
 The mode names in the tier columns (`shadow`, `gated`, `always`, `filter`,
 `off`) are defined in [the four screen modes](#the-four-screen-modes) and
@@ -71,39 +71,36 @@ import {
   withEgressGate,
   withInjectionGuard,
   type ConfiguredPattern,
-} from "@hames-ai/harness-patterns";
-import {
-  createDecideAdapter,
-  createInjectionScreen,
-} from "@hames-ai/harness-baml";
+} from '@hames-ai/harness-patterns'
+import { createDecideAdapter, createInjectionScreen } from '@hames-ai/harness-baml'
 
-type Data = Record<string, unknown>;
+type Data = Record<string, unknown>
 
 // A pattern you already have — any configured pattern wraps the same way.
-declare const loop: ConfiguredPattern<Data>;
+declare const loop: ConfiguredPattern<Data>
 
-const gate = createGuardGate(createDecideAdapter());
+const gate = createGuardGate(createDecideAdapter())
 
 const guarded = withEgressGate({
-  local: ["neo4j"], // its arguments reach only your own database
-  catalog: ["web_search", "fetch_page"],
+  local: ['neo4j'], // its arguments reach only your own database
+  catalog: ['web_search', 'fetch_page'],
   decide: createDecideAdapter(),
   askPerson: true,
 })(
   withInjectionGuard({
-    namespaces: ["web"],
-    catalog: ["web_search", "fetch_page"],
-    spotlight: "always",
+    namespaces: ['web'],
+    catalog: ['web_search', 'fetch_page'],
+    spotlight: 'always',
     screen: {
       run: createInjectionScreen(),
       // Record the gate's answer and screen anyway, until measurements say
       // the gate can be trusted to skip the screen.
-      mode: { default: "shadow", anthropic: "always" },
+      mode: { default: 'shadow', anthropic: 'always' },
       gate,
       askPerson: true,
     },
   })(loop),
-);
+)
 ```
 
 The decision seam is the same one the agent's own step decisions use —
@@ -460,28 +457,28 @@ that appears only in free prose, not in a labelled identity field, is
 invisible to it.
 
 Since the egress gate took over the judgement of what leaves, the
-pseudonymiser's remaining job is that one rewrite. The shipped agent composes
-it on its lookup route by default. Retiring it there means flipping that
-default to `off`; the switch stays, and the wrapper stays available to library
-hosts either way.
-An operator can turn it off with `GUARD_PSEUDONYMISE=off` (below), which
-removes the wrapper rather than weakening it.
+pseudonymiser's remaining job is that one rewrite. The shipped agent omits
+it by default and with `GUARD_PSEUDONYMISE=off`. Explicit
+`GUARD_PSEUDONYMISE=on` supplies the filter on both tiers, without a boot
+warning for either valid setting. The wrapper stays available to library
+hosts: a supplied filter runs on both tiers, and K5 does not interpret the tier.
 
 ## The operator switches
 
-Four environment variables let an operator weaken a model-backed layer
+Four environment variables configure the guard layers
 without a code change, and three more set the guards' numbers. They are read and validated in one module; an
 unrecognised value refuses to boot (naming the variable and its allowed
 values, never echoing the value); and any value **below** a tier's declared
 default logs its one boot warning saying what it switched off. Restarting is
-the only way to silence a warning.
+the only way to silence a warning. `GUARD_PSEUDONYMISE` is the exception:
+its default is `off`, and neither `on` nor `off` warns.
 
 | Variable                 | Values                          | Sets                                        | Default (warned below)                       |
 | ------------------------ | ------------------------------- | ------------------------------------------- | -------------------------------------------- |
 | `GUARD_SCREEN`           | `off` `shadow` `gated` `always` | the screen's mode on the self-deployed tier | the tier's declared default (`shadow` today) |
 | `GUARD_SCREEN_ANTHROPIC` | `off` `always`                  | the screen's mode on the Anthropic tier     | `always`; `gated`/`shadow` refuse boot       |
 | `GUARD_EGRESS`           | `filter` `roster`               | the egress gate's mode, both tiers          | `filter`; `roster` warns                     |
-| `GUARD_PSEUDONYMISE`     | `on` `off`                      | the input pseudonymiser                     | `on`; `off` warns                            |
+| `GUARD_PSEUDONYMISE`     | `on` `off`                      | the input pseudonymiser                     | `off`; neither valid setting warns           |
 
 `GUARD_SCREEN` covers the self-deployed tier only, on purpose: one switch
 covering both tiers could move the Anthropic tier from "screen everything" to
@@ -592,8 +589,8 @@ them:
 - the egress gate wrapped around the whole decision loop, `local` naming the
   graph database and the company tenant's read-only tools, the sandbox's
   in-VM tools local while its box has no network, and N = 0;
-- the pseudonymiser on the lookup route, on by default; its retirement flips
-  `GUARD_PSEUDONYMISE`'s default to `off` and keeps the switch.
+- the optional pseudonymiser on the lookup route: omitted by default, supplied
+  by `GUARD_PSEUDONYMISE=on` on both tiers.
 
 Everything declared above is settable the same way in your own host: declare
 the guards at the agent definition, wrap the loop with the egress gate, and

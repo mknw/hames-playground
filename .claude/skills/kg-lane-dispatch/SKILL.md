@@ -46,10 +46,11 @@ A lane's findings land in a **GitHub issue or PR comment** — filed by the lane
 its own reasoning. That is the deliverable. Every task spec says so explicitly, and
 says which: a comment on the PR under review, or a new issue when the work has no PR.
 
-This is what makes findings durable, attributable, and reviewable on the owner's own
-schedule, instead of a payload that decays inside an agent conversation.
+This is the agents' durable record: attributable, and there for the next lane, the
+reviewer and whoever later diagnoses the work, instead of a payload that decays inside an
+agent conversation.
 
-## 3. The owner reads it; the coordinator relays
+## 3. The URL is the record; the coordinator relays
 
 A lane's `worker_done` (or an Agent-tool subagent's final message) carries:
 
@@ -60,14 +61,17 @@ A lane's `worker_done` (or an Agent-tool subagent's final message) carries:
 
 The coordinator's job with that report is to **relay the link and the one-line status**,
 then act on the workflow consequence — commission the next review, dispatch the fix
-lane, hold the merge. The substance is already at the URL, written for the owner, who
-reads it there.
+lane, hold the merge. The substance is already at the URL.
+
+Anything put to the owner goes through the `sync-panel` skill: a Needs-you item, with a
+decision page at medium complexity or higher, where the comment is linked as the agents'
+record. "Put X to the owner" in a task spec means that sync-panel decision.
 
 Say so in the task spec, in these words or close to them:
 
 ```
-The OWNER reviews this personally: post your findings as the comment, and report back
-only the URL, a one-line verdict, and gate results.
+Post your findings as the comment: it is the agents' record. Report back only the URL,
+a one-line verdict, and gate results.
 ```
 
 ### A lane speaks exactly three times' worth of message types
@@ -168,10 +172,10 @@ Read docs/agents/sensitive-domain-brief.md and apply it if your scope falls with
 
 <what to do, verified against source, with the specifics the lane needs>
 
-Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">.
-The OWNER reviews this personally: report back only the URL, a one-line verdict, and
-gate results. Do not merge. Send only ask / escalation / worker_done messages — never
---type heartbeat, and worker_done exactly once, at the end.
+Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">;
+it is the agents' record. [Put <the open questions> to the owner.] Report back only the
+URL, a one-line verdict, and gate results. Do not merge. Send only ask / escalation /
+worker_done messages — never --type heartbeat, and worker_done exactly once, at the end.
 ```
 
 `Do not merge` and the message-type line stay explicit in every spec — both are
@@ -303,3 +307,21 @@ gap in a message that still reads as fluent prose.
 This rule was once scoped to "a long spec", and both words were the escape hatch — the
 messages that broke under it were short, and were `--body` rather than `--spec`
 (2026-09-19, twice in one session).
+
+## Design record
+
+**2026-11-03 — the comment is the agents' record.** Prompted by the owner after a board
+item linked a long agent comment, about 1,500 words, that restated an already-merged
+design and left the owner's five questions at the bottom of a collapsed block: "For me
+personally, it would be more valuable to have the mechanism explained and the open
+questions (plain first, then explained), as a local html artifact linked in the board
+item." "I would have to be out of my mind to re-read info that I already
+reviewed/deliberated on." "the main problem is: rather than continuing the (metaphorical)
+'conversation' on what was decided, agents dump a load of jargon difficult to relate to
+previous work. I worked really hard yesterday to move guardrails forward and take the
+right decisions. Density is one problem, clarity another and continuity too." "we can't
+rely on you to just learn all the doctrines. These have to be repeatable." What fought
+it: every spec carried "The OWNER reviews this personally: post your findings as the
+comment", so a lane wrote its comment for the owner, and the owner was sent to it. Now
+the comment is the agents' durable record, anything put to the owner goes through
+`sync-panel`, and the sub-agent brief's copies of the retired line changed with it.

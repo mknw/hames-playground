@@ -39,6 +39,7 @@ import { assertServerOnImport } from './assert.server'
 import { drawFenceNonce, GUARD_GATE_MAX_STATE_BYTES, LINE_BREAK } from './guard-gate.server'
 import { neutralizeFenceMarkers } from './injection-guard'
 import { defineChoice } from './patterns/typedDecision.server'
+import { egressArgumentSpans, interpretUrlSpans } from './url-seam'
 
 assertServerOnImport()
 
@@ -288,34 +289,21 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
   return { ok: true, request: { lines, block, texts, raw } }
 }
 
-// One URL from its scheme to the first character no address carries. Terminal,
-// so it cannot backtrack (SD-2); every input is under the size bound.
-const URL_AT = /https?:\/\/[^\s"'<>\\^`{|}]+/iy
-const SCHEME = /https?:\/\//gi
-
 /** Every http(s) address in `text` as it is written, nested ones included: each
  *  scheme occurrence starts one, so a URL inside another URL's query is found
- *  too. Unparsed, for a verbatim comparison. */
+ *  too. Unparsed, for a verbatim comparison. The scan and its offsets are the
+ *  URL interpretation seam's (`url-seam.ts`); `raw` is the original spelling,
+ *  never a canonical rewrite, so the given-address comparison never
+ *  canonicalizes either.
+ */
 export function addressesIn(text: string): string[] {
-  const found: string[] = []
-  for (const at of text.matchAll(SCHEME)) {
-    URL_AT.lastIndex = at.index
-    const candidate = URL_AT.exec(text)?.[0]
-    if (candidate) found.push(candidate)
-  }
-  return found
+  return interpretUrlSpans(text, egressArgumentSpans(text)).spans.map((span) => span.raw)
 }
 
 function urlsIn(text: string): URL[] {
-  const urls: URL[] = []
-  for (const candidate of addressesIn(text)) {
-    try {
-      urls.push(new URL(candidate))
-    } catch {
-      // Not an address after all.
-    }
-  }
-  return urls
+  return interpretUrlSpans(text, egressArgumentSpans(text)).spans.flatMap((span) =>
+    span.url ? [span.url] : [],
+  )
 }
 
 /**

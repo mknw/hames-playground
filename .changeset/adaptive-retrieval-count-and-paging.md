@@ -1,6 +1,6 @@
 ---
-'@hames-ai/harness-patterns': minor
-'@hames-ai/agents': minor
+"@hames-ai/harness-patterns": minor
+"@hames-ai/agents": minor
 ---
 
 Adaptive document retrieval: ingest now records the chunk count it computed beside the document's size, and the retriever can page through a long document across re-dispatches instead of returning the same k chunks (#927 slices 1 and 2).

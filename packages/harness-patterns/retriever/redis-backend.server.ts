@@ -38,7 +38,7 @@ export function createRedisBackend(
   return {
     name: 'redis',
     type: 'vector',
-    async search({ text }, { k }): Promise<RetrievalHit[]> {
+    async search({ text }, { k, excludeIds }): Promise<RetrievalHit[]> {
       if (ensureIngested && !ensured) {
         // Fire the ingest safety net in the BACKGROUND — never block the query.
         // Ingesting a session's docs is O(chunks) serial gateway writes (minutes
@@ -69,7 +69,7 @@ export function createRedisBackend(
             )
           })
       }
-      const hits = await searchFn(sessionId, text, { k })
+      const hits = await searchFn(sessionId, text, { k, excludeIds })
       return hits.map((h) => ({
         backend: 'redis',
         ...(h.provenance ? { provenance: h.provenance } : {}),
@@ -82,6 +82,9 @@ export function createRedisBackend(
         chunkIndex: h.chunkIndex,
         startOffset: h.startOffset,
         endOffset: h.endOffset,
+        // The document record's chunk count, when one is recorded (#927): the
+        // step line's "N chunks" and, with paging, the page's total.
+        ...(h.docChunks !== undefined ? { docChunks: h.docChunks } : {}),
       }))
     },
   }

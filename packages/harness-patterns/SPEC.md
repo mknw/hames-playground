@@ -2021,6 +2021,7 @@ interface DecisionDocument {
   size: number
   uploadedAt: number
   searchable: boolean
+  chunks?: number // the recorded ingest chunk count; absent → rendered as none (#927)
 }
 ```
 
@@ -2102,7 +2103,10 @@ iteration with its status and stats counted by code from the child's events
 (turns or attempts used against the child's own bound, tool calls, errors, wall
 time; a route that hit its bound reads differently from one that finished early;
 the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the extractor puts the same fence back around the block it quotes) — it does not
-record how many documents it _searched_) — then **Latest results**, the last
+record how many documents it _searched_ — and, when every matched document
+recorded its chunk count at ingest (#927), that combined count, rendered as
+`in 1 document (84 chunks)`; a document with no recorded count renders no
+count, never a fabricated 0) — then **Latest results**, the last
 `handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
 window. Memory reaches it only through the memories block (below).
 
@@ -2117,9 +2121,11 @@ distinct name (the newer wins), newest first, ties by id, at most
 `DECISION_DOCUMENTS_MAX_CHARS` (1 000) characters (names are shed from the tail),
 and a last line `- (+K more documents, names not shown)` counting every visible
 document not shown by name. Each line is `- "<name>" (<type>, <size>,
-searchable|not searchable)`: the type comes from a fixed allowlist of the stored
+searchable|not searchable[, N chunks])`: the type comes from a fixed allowlist of the stored
 `mimeType` (Markdown, text, CSV, PDF, Word, Excel, image, `other`), never printed
-raw. Without a list: `Uploaded documents in this conversation: N (names not
+raw; `N chunks` is the document's recorded ingest chunk count (#927), shown only
+when the host's summary carries one — a document ingested before the count was
+stored renders without it, never as 0. Without a list: `Uploaded documents in this conversation: N (names not
 shown)`. With no visible documents the block is omitted, so such a state is
 byte-identical to one built without a source.
 

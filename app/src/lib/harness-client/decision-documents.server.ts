@@ -8,9 +8,8 @@
  * the host decides what a run may reveal:
  *
  *   - the run frame's raw tier slot is exactly `'self_deployed'` (the private tier:
- *     the self-hosted decisions shim, no public provider) → the visible total
- *     AND every visible document's name, type and size; the recalled memories'
- *     text;
+ *     AND every visible document's name, type, size and ingested chunk count;
+ *     the recalled memories' text;
  *   - anything else (`'anthropic'`, an unrecognised value, a frame with no tier
  *     slot) → the visible total only; the memories' count only. No uploaded-file
  *     name and no memory text reaches the Anthropic tier's decisions host.
@@ -92,6 +91,7 @@ export function createDecisionDocuments(
         size: d.size,
         uploadedAt: d.uploadedAt,
         searchable: d.ingestStatus === 'indexed',
+        ...(d.chunkCount !== undefined ? { chunks: d.chunkCount } : {}),
       })),
     }
   }

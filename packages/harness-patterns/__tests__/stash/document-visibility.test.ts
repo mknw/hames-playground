@@ -495,3 +495,59 @@ describe('ensureSessionIngested — hidden and archived documents', () => {
     expect((await getDocument('s1', 'a', fake.callTool))?.ingestStatus).toBe('indexed')
   })
 })
+
+// ============================================================================
+// The recorded chunk count (#927 slice 1)
+// ============================================================================
+
+describe('the ingest records the chunk count beside the size', () => {
+  let fake: Fake
+  beforeEach(() => {
+    fake = makeFakeRedis()
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  // MUTATION: drop `chunkCount` from markIngestStatus's 'indexed' patch → the
+  // record carries no count and the next two pins fail.
+  it('a successful ingest stamps the record with the chunk count it indexed', async () => {
+    await seedIndexed(fake, 'a')
+    const doc = await getDocument('s1', 'a', fake.callTool)
+    expect(doc?.chunkCount).toBe(1)
+  })
+
+  it('a failed ingest records no count', async () => {
+    await storeDocument(
+      {
+        sessionId: 's1',
+        id: 'bin',
+        filename: 'bin.bin',
+        mimeType: 'application/octet-stream',
+        content: 'x',
+        encoding: 'base64',
+      },
+      fake.callTool,
+    )
+    expect(await ingestStashDocument('s1', 'bin', { callTool: fake.callTool, embedFn })).toBeNull()
+    expect((await getDocument('s1', 'bin', fake.callTool))?.chunkCount).toBeUndefined()
+  })
+
+  // MUTATION: make `documentState` return `chunks: 0` for an absent record count
+  // → this pin fails on the fabricated 0.
+  it('a hit carries the count its record holds; a legacy record carries none', async () => {
+    await seedIndexed(fake, 'a')
+    const hits = await search(fake)
+    expect(hits).toHaveLength(1)
+    expect(hits[0].docChunks).toBe(1)
+
+    // A document ingested before #927 has no count on its record: its hits name
+    // none, and never a fabricated 0.
+    await seedIndexed(fake, 'legacy')
+    fake.json.set('stash:doc:s1:legacy', {
+      ...(fake.json.get('stash:doc:s1:legacy') as Record<string, unknown>),
+      chunkCount: undefined,
+    })
+    const legacy = (await search(fake, undefined, 5)).find((h) => h.docId === 'legacy')
+    expect(legacy).toBeDefined()
+    expect(legacy?.docChunks).toBeUndefined()
+  })
+})

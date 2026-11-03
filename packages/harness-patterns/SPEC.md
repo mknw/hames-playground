@@ -1252,8 +1252,9 @@ decision loop uses, over the same 20 000-character head the screen reads. The
 screen runs when its pTrue is at or above `threshold` (τi, default
 `GUARD_GATE_THRESHOLD`, 0.15, an unmeasured placeholder; on the self-deployed
 tier it must stay below 0.199, where the decision box floors an unsure "no"). A
-host sets it per deployment; the reference app reads `GUARD_GATE_THRESHOLD` from
-its environment (#844). Its state quotes the head with every line
+host sets it per deployment; the reference app retired the variable (revision 6,
+#938): a still-set `GUARD_GATE_THRESHOLD` refuses boot, and τi is code-owned there.
+Its state quotes the head with every line
 prefixed `"> "` (a line starts after CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028
 or U+2029) between markers carrying a per-call 16-hex nonce from the platform's
 cryptographic source, drawn again if the quoted text contains it, after the

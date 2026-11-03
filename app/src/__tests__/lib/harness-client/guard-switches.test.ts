@@ -63,6 +63,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
 const { guardConfig } = await import('../../../lib/inference/guard-config.server')
+const { SCREEN_POLICY_BY_TIER } = await import('@hames-ai/agents/types')
 const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
 const { harnessPseudonymisesInputs } = await import('@hames-ai/harness-patterns')
 const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
@@ -85,11 +86,19 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
-describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', () => {
-  it('unset, the bag carries the design defaults without an input filter', () => {
+describe('agentDeps() composes the GUARD_* switches (boundary guards slices 6 and 16)', () => {
+  // Slice 16 (O40): the bag's screen defaults are the ONE shared per-tier
+  // policy value, compared against SCREEN_POLICY_BY_TIER itself rather than
+  // literals, so guard-config keeping its own literals cannot agree silently.
+  // MUTATION: restore the bag's own literals in guard-config.server.ts (drop
+  // the shared value): this goes red.
+  it('unset, the bag carries the shared per-tier screen defaults, without an input filter', () => {
     const { guards, egressRoster } = agentDeps()
     expect(guards).toMatchObject({
-      screenMode: { default: 'gated', anthropic: 'always' },
+      screenMode: {
+        default: SCREEN_POLICY_BY_TIER.self_deployed,
+        anthropic: SCREEN_POLICY_BY_TIER.anthropic,
+      },
       egressTools: undefined,
       egressNameMatch: undefined,
       egressDecide: undefined,
@@ -97,9 +106,24 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
       egressThreshold: 0.3,
       maxOutgoingRetriesPostTripwire: 0,
     })
+    expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
     expect(guards!.classifyIngress).toBeTypeOf('function')
     expect(guards!.pseudonymiseForWeb).toBeUndefined()
     expect(egressRoster).toMatchObject({ SYNTHETIC_ROSTER: true })
+  })
+  it('GUARD_SCREEN=off|always reaches the bag on its own tier; gated and shadow refuse boot', () => {
+    vi.stubEnv('GUARD_SCREEN', 'always')
+    expect(agentDeps().guards).toMatchObject({
+      screenMode: { default: 'always', anthropic: 'off' },
+    })
+    vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
+    expect(agentDeps().guards).toMatchObject({
+      screenMode: { default: 'always', anthropic: 'always' },
+    })
+    for (const retired of ['gated', 'shadow']) {
+      vi.stubEnv('GUARD_SCREEN', retired)
+      expect(() => agentDeps(), retired).toThrow(/no longer accepts gated or shadow/)
+    }
   })
 
   // MUTATION: drop the `pseudonymise ? …` branch (build the filter whatever
@@ -127,17 +151,20 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slice 6)', 
     expect(guardConfig().screenMode).toMatchObject({ default: 'off', anthropic: 'off' })
   })
 
-  // #844. MUTATION: omit one of the three numbers from agentDeps()'s bag (the
-  // agent then keeps its own default whatever the operator set): red.
-  it('the guard numbers in the bag are the ones guardConfig() parses', () => {
-    vi.stubEnv('GUARD_GATE_THRESHOLD', '0.1')
+  // #844. MUTATION: omit one of the numbers from agentDeps()'s bag (the agent
+  // then keeps its own default whatever the operator set): red. τi's variable is
+  // retired (revision 6): a still-set value refuses boot before a bag exists, so
+  // the bag's gateThreshold is pinned at the pattern's own default.
+  it('the guard numbers in the bag are the ones guardConfig() parses; τi refuses its variable', () => {
     vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.2')
     vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '2')
     expect(agentDeps().guards).toMatchObject({
-      gateThreshold: 0.1,
+      gateThreshold: 0.15,
       egressThreshold: 0.2,
       maxOutgoingRetriesPostTripwire: 2,
     })
+    vi.stubEnv('GUARD_GATE_THRESHOLD', '0.1')
+    expect(() => agentDeps()).toThrow(/GUARD_GATE_THRESHOLD is obsolete/)
   })
 })
 

@@ -40,6 +40,7 @@ import {
 import { V0_IN_VM_SERVERS } from '@hames-ai/sandbox/types'
 import { MCP_TOOL_CATALOG, mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import type { AgentData, AgentDeps } from '@hames-ai/agents'
+import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
 // Package harness is deliberately used to exercise real ingest bytes independently of the host policy (pinned in stash-bridge).
 import { buildGraphHarness } from '../../../../../../packages/connectors/__tests__/graph/harness'
 import { grade } from '../../../../lib/eval-support/conversation-checks'
@@ -244,6 +245,12 @@ const deps: AgentDeps = {
     }),
   },
 }
+
+// Slice 16 (revision 6): both tiers' declared screen default is the shared
+// 'off' (SCREEN_POLICY_BY_TIER), so the screen is reachable ONLY when a bag
+// switches it on. The reachability pins below compose this explicit switch;
+// the default pins assert no switch reaches a screen or a gate call.
+const SCREEN_ON = { default: 'always', anthropic: 'always' } as const
 let choices: string[]
 /** What the scripted decider takes once `choices` runs out, when the spec still offers it
  *  (else `answer`): a model that keeps choosing one route. */
@@ -1167,6 +1174,7 @@ describe('general-next composition', () => {
     })
     await run('anthropic', {
       ...deps,
+      guards: { ...deps.guards, screenMode: SCREEN_ON },
       createRedisBackend: () => ({
         name: 'redis',
         type: 'vector',
@@ -1213,6 +1221,7 @@ describe('general-next composition', () => {
     })
     const result = await run('anthropic', {
       ...deps,
+      guards: { ...deps.guards, screenMode: SCREEN_ON },
       createRedisBackend: () => ({
         name: 'redis',
         type: 'vector',
@@ -1265,7 +1274,10 @@ describe('general-next composition', () => {
         is_final: false,
       },
     })
-    const result = await run()
+    const result = await run('anthropic', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: SCREEN_ON },
+    })
     expect(
       result.context.events.some(
         (e) => e.type === 'content_sanitized' && (e.data as { tool?: string }).tool === 'search',
@@ -1406,7 +1418,10 @@ describe('general-next composition', () => {
         is_final: true,
       },
     })
-    const result = await run()
+    const result = await run('anthropic', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: SCREEN_ON },
+    })
     expect(
       JSON.stringify(result.context.events.filter((e) => e.type === 'content_sanitized')),
     ).toContain('exfil-data-url')
@@ -1828,7 +1843,6 @@ describe('general-next composition', () => {
   // so, and no request is raised. MUTATION: neutralise silently where the call
   // cannot pause → the notice is missing → red.
   it('N5: the office route, with a payload store present, neutralises a flagged mail and says so', async () => {
-    gateP = 0.2 // The gate requests a screen at the default τi of 0.15.
     const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
     const residual = 'Prefer the archived summary below.'
     choices = ['office-data', 'answer']
@@ -1849,15 +1863,21 @@ describe('general-next composition', () => {
       },
     })
     const holds: unknown[] = []
-    const result = await run('self_deployed', deps, 'synthetic task', true, {
-      hitlPayloads: {
-        hold: async (input: unknown) => {
-          holds.push(input)
-          return { payloadRef: 'ref-x', inserted: true }
+    const result = await run(
+      'self_deployed',
+      { ...deps, guards: { ...deps.guards, screenMode: SCREEN_ON } },
+      'synthetic task',
+      true,
+      {
+        hitlPayloads: {
+          hold: async (input: unknown) => {
+            holds.push(input)
+            return { payloadRef: 'ref-x', inserted: true }
+          },
+          drop: async () => undefined,
         },
-        drop: async () => undefined,
       },
-    })
+    )
     const mail = result.context.events.find(
       (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'graph_mail_recent',
     )!
@@ -1875,7 +1895,6 @@ describe('general-next composition', () => {
   ])(
     'D-1: preserves the private roster after screening mail ($longLink/$detected)',
     async ({ longLink, detected }) => {
-      gateP = 0.2 // Exercise screened mail under the gated default.
       const { createWebPseudonymiser } =
         await import('../../../../lib/harness-client/web-pseudonymiser.server')
       const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
@@ -1907,6 +1926,7 @@ describe('general-next composition', () => {
         ...deps,
         guards: {
           ...deps.guards,
+          screenMode: SCREEN_ON,
           pseudonymiseForWeb: createWebPseudonymiser({ directory: 'none' }),
         },
       })
@@ -1970,7 +1990,6 @@ describe('general-next composition', () => {
   ])(
     'D-1, at the egress gate: a screened sender stays egress evidence with K5 off ($longLink/$detected)',
     async ({ longLink, detected }) => {
-      gateP = 0.2 // Exercise screened mail under the gated default.
       const { createEgressRoster } =
         await import('../../../../lib/harness-client/web-pseudonymiser.server')
       const { shapeMessages } = await import('@hames-ai/connectors/graph/graph-tools.server')
@@ -2008,7 +2027,7 @@ describe('general-next composition', () => {
       })
       await run('self_deployed', {
         ...deps,
-        guards: { ...deps.guards, pseudonymiseForWeb: undefined },
+        guards: { ...deps.guards, screenMode: SCREEN_ON, pseudonymiseForWeb: undefined },
         egressRoster: createEgressRoster({ directory: 'none' }),
       })
       expect(
@@ -2594,7 +2613,7 @@ it.each([false, undefined])(
   },
 )
 
-describe('general-next: the screen mode per tier and its gate (boundary guards slice 3)', () => {
+describe('general-next: the screen mode per tier and its gate (boundary guards slices 3 and 16)', () => {
   const searchOnce = () =>
     mocks.controller.mockResolvedValueOnce({
       action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
@@ -2604,36 +2623,53 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
       (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.screen',
     )
 
-  // MUTATION: drop `anthropic: 'always'` from general-next's screen mode (the
-  // Anthropic tier then takes 'shadow' and asks the gate, sending the body to
-  // that tier's decisions host): the gate is asked and this goes red.
-  it('the Anthropic tier screens every external result and never asks the gate', async () => {
-    searchOnce()
-    gateway.result = 'CLEAN-WEB-SENTINEL'
-    const result = await run('anthropic')
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
-    expect(gateStates).toEqual([])
-    expect(gateDecisions(result.context.events)).toHaveLength(0)
-  })
+  const screenModes = () =>
+    composition.guardConfigs
+      .filter((c) => typeof c === 'object' && c !== null && 'screen' in c)
+      .map((c) => (c as { screen: { mode: unknown } }).screen.mode)
 
-  // MUTATION: revert general-next's default to 'shadow': the gate's skip is
-  // recorded but ignored, so the screen call appears and this test goes red.
-  it("the self-deployed tier defaults to 'gated': a gate skip omits the screen", async () => {
+  // Slice 16 (O35/O40): both tiers' declared default is the ONE shared
+  // SCREEN_POLICY_BY_TIER — 'off' — so with no switch set NO screen call and NO
+  // gate question happens on either tier, and each composed screen.mode IS
+  // the shared value (agent default == composition-root default, the fold).
+  // MUTATION: restore the old defaults in SCREEN_POLICY_BY_TIER, or local literals
+  // in general-next's fallback: the screen call appears and this goes red.
+  it.each(['anthropic', 'self_deployed'] as const)(
+    'the %s tier defaults to the shared off: no screen call, no gate question',
+    async (tier) => {
+      searchOnce()
+      gateway.result = 'CLEAN-WEB-SENTINEL'
+      const result = await run(tier)
+      expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
+      expect(mocks.screen).not.toHaveBeenCalled()
+      expect(gateStates).toEqual([])
+      expect(gateDecisions(result.context.events)).toHaveLength(0)
+      expect(screenModes()).toEqual([
+        {
+          default: SCREEN_POLICY_BY_TIER.self_deployed,
+          anthropic: SCREEN_POLICY_BY_TIER.anthropic,
+        },
+        {
+          default: SCREEN_POLICY_BY_TIER.self_deployed,
+          anthropic: SCREEN_POLICY_BY_TIER.anthropic,
+        },
+      ])
+    },
+  )
+
+  // The split (revision 6): the screen is reachable only when its switch is
+  // on. An explicit 'always' composes the ungated screen; the 'shadow' switch
+  // below records the gate's skip and still runs it.
+  it("an explicit 'always' switch runs the screen and never asks the gate", async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
-    const result = await run('self_deployed')
-    expect(gateStates).toHaveLength(1)
-    expect(gateStates[0]).toContain('\n> CLEAN-WEB-SENTINEL\n')
-    expect(gateStates[0]).toMatch(/---END CONTENT UNDER REVIEW [0-9a-f]{16}---$/)
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).not.toContain('search')
-    const [decision] = gateDecisions(result.context.events)
-    expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul' })
-    expect((decision.data as { shadow?: true }).shadow).toBeUndefined()
-    expect((decision.data as { pTrue: number }).pTrue).toBeCloseTo(0.05)
-    // The decision records the state's size, never its text.
-    expect(JSON.stringify(decision)).not.toContain('CLEAN-WEB-SENTINEL')
-    // The loop's own states never carry the gate's.
-    expect(states.join('\n')).not.toContain('CONTENT UNDER REVIEW')
+    const result = await run('self_deployed', {
+      ...deps,
+      guards: { ...deps.guards, screenMode: SCREEN_ON },
+    })
+    expect(gateStates).toEqual([])
+    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+    expect(gateDecisions(result.context.events)).toHaveLength(0)
   })
 
   it("an explicit 'shadow' switch records a skip and still runs the screen", async () => {
@@ -2666,7 +2702,7 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
     gateway.result = 'CLEAN-INTERNAL-SENTINEL'
     await run('anthropic', {
       ...deps,
-      guards: { ...deps.guards, classifyIngress: () => 'internal' },
+      guards: { ...deps.guards, classifyIngress: () => 'internal', screenMode: SCREEN_ON },
     })
     expect(gateway.calls).toEqual(expect.arrayContaining(['search', 'graph_mail_recent']))
     expect(mocks.screen).not.toHaveBeenCalled()
@@ -2702,11 +2738,12 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
         (c as { screen?: unknown }).screen !== undefined,
     )
 
-  // The switch reaches the guards as a `screen.mode`, and the DEFAULTS the
-  // switch replaces are the design's: 'gated' on the self-deployed tier and
-  // 'always' on the Anthropic one. MUTATION: ignore `deps.guards.screenMode`
-  // (restore the agent's own tier map): the off case here goes red — the
-  // screen runs where the operator switched it off.
+  // The switch reaches the guards as a `screen.mode`. Revision 16 folded both
+  // tiers' defaults into the shared SCREEN_POLICY_BY_TIER — 'off' — so the
+  // explicit off composed here matches what unset now means; the pin stays
+  // because the bag must still carry what the operator asked for. MUTATION:
+  // ignore `deps.guards.screenMode` (restore the agent's own tier map): the
+  // off case here goes red — the screen runs where the operator switched it off.
   it.each(['anthropic', 'self_deployed'] as const)(
     'GUARD_SCREEN=off reaches both route guards and no screen call happens (%s)',
     async (tier) => {
@@ -2731,12 +2768,13 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
     },
   )
 
-  // The Anthropic half of security delta N5, at the AGENT: GUARD_SCREEN — the
-  // self-deployed tier's switch — must leave the Anthropic tier's 'always'
-  // alone, so a weaker mode there can only ever come from
-  // GUARD_SCREEN_ANTHROPIC, which refuses anything but off/always at boot.
-  // MUTATION: apply GUARD_SCREEN to both tiers (spread it over the map) in
-  // general-next: the gate is asked on the Anthropic tier and this goes red.
+  // The Anthropic half of security delta N5, at the AGENT: the bag's
+  // self-deployed-side value must leave the Anthropic tier alone, so a weaker
+  // mode there can only ever come from the anthropic side of the map. (The
+  // env switches themselves narrow to off | always at boot, revision 6; the
+  // per-tier map this composes is still typed for all four modes.)
+  // MUTATION: apply the self-deployed value to both tiers (spread it over the
+  // map) in general-next: the gate is asked on the Anthropic tier and this goes red.
   it('GUARD_SCREEN=gated leaves the Anthropic tier screening every external result, gate never asked', async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'

@@ -68,12 +68,13 @@ export interface GraphElement extends ElementDefinition {
  * per-tier defaults for it.
  *
  * - `screenMode` sets the injection screen's `mode` on every guard that
- *   declares one. The composition root validates it against each tier's
- *   declared default: on the self-deployed tier (and an absent or unknown
- *   one) every of the four values is accepted, on the Anthropic tier only
- *   `'off'` and `'always'` — `'gated'` or `'shadow'` there would send every
- *   body the screen would have read to that tier's decisions host by an env
- *   var, a processor change that belongs in a reviewed line of code.
+ *   declares one. Both tiers' declared default is the shared
+ *   `SCREEN_POLICY_BY_TIER` below: `'off'` since revision 6 (boundary
+ *   guards #938, O35), so a host that composes no screen settings runs a
+ *   fully deterministic ingress. The composition root's switches accept
+ *   only `'off'` and `'always'` per tier; a set `'gated'` or `'shadow'`
+ *   refuses boot naming the change, and the four core values remain
+ *   reachable in a reviewed line of code (the bag is typed `ByTier`).
  * - `egressTools`, `egressNameMatch` and `egressDecide` select per-tool detectors.
  *   The former mode setting was removed.
  * - `classifyIngress` is the host's classifier (ruling O), passed as a
@@ -87,8 +88,9 @@ export interface GraphElement extends ElementDefinition {
  *   inherited content on the tier it runs on (boundary guards slice 5).
  * - `gateThreshold` is τi, the guard gate's `threshold` (`createGuardGate`):
  *   the screen runs when the gate's pTrue is at or above it. It decides
- *   anything only where the screen's mode is `'gated'`. Absent:
- *   `GUARD_GATE_THRESHOLD`.
+ *   anything only where the screen's mode is `'gated'`. Absent: the gate's
+ *   own `GUARD_GATE_THRESHOLD` default — the env variable of that name
+ *   retired with revision 6 (#938), and a still-set value refuses boot.
  * - `egressThreshold` is τe, the egress gate's `threshold`: a call is refused
  *   (or the person asked) when 1 − P(`nothing_private`) is at or above it, on
  *   every tier. Absent: `GUARD_EGRESS_THRESHOLD`.
@@ -100,8 +102,9 @@ export interface GraphElement extends ElementDefinition {
  *   same link anywhere else is still flagged. A deployment fact, not a switch.
  *   Absent or empty: no link is exempt.
  *
- * The three numbers are the host's to validate (the app refuses boot on an
- * out-of-range value and warns on one looser than the default); the patterns
+ * τe and the egress tripwire's N are the host's to validate (the app refuses
+ * boot on an out-of-range value and warns on one looser than the default);
+ * τi is code-owned since revision 6, its env variable retired. The patterns
  * themselves still refuse a value outside their range at construction.
  */
 export interface AgentGuards {
@@ -115,6 +118,23 @@ export interface AgentGuards {
   readonly egressThreshold?: number
   readonly maxOutgoingRetriesPostTripwire?: number
   readonly documentHosts?: readonly string[]
+}
+
+/** The screen's ONE shared per-tier policy value (boundary-guards revision 6,
+ *  O40): the mode every tier's guard composes when the host sets no screen
+ *  switch, and the default each tier's boot validation measures a set switch
+ *  against — declared once here so the agent's fallback and the composition
+ *  root's validation read one literal and can no longer disagree. Both
+ *  values are `'off'` (O35): with no switch set, ingress is fully
+ *  deterministic (rewrite, fence, provenance) and no model call is made.
+ *  `self_deployed` is the tier an absent or unknown one resolves to (ruling E),
+ *  which the agent spells `default` in its `ByTier` map. */
+export const SCREEN_POLICY_BY_TIER: {
+  readonly self_deployed: ScreenMode
+  readonly anthropic: ScreenMode
+} = {
+  self_deployed: 'off',
+  anthropic: 'off',
 }
 
 /**

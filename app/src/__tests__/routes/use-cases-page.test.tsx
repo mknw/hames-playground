@@ -78,6 +78,46 @@ describe('use-cases page', () => {
     expect(container.textContent).toContain('And which release tag do you have noted for it?')
   })
 
+  it('renders the follow-ups and section summaries at the ≥17px body size', () => {
+    // #937 review, SHOULD: the "then ask" turns ARE question content, so they
+    // must meet the body-size criterion the first turn meets (text-lg = 18px),
+    // not the 16px the old `base` rendered at. Same for the section summary
+    // lines. jsdom applies no stylesheet, so the pin is the class attribute;
+    // wind4's own fontSize theme carries `lg` (18px), which is not re-pinned
+    // here. Flip the `text="lg"` attributes back to `base` and this goes red.
+    const { container } = renderPage()
+    const thenAskBlocks = [...container.querySelectorAll('li div')].filter(
+      (el) => el.querySelector('span')?.textContent?.trim() === 'Then ask:',
+    )
+    expect(thenAskBlocks).toHaveLength(6)
+    for (const block of thenAskBlocks) {
+      for (const p of [...block.querySelectorAll('p, span')]) {
+        expect(p.getAttribute('text')).toContain('lg')
+      }
+    }
+    for (const summary of [...container.querySelectorAll('section > div p')]) {
+      expect(summary.getAttribute('text')).toContain('lg')
+    }
+  })
+
+  it('gives every "Try this" link its question in the accessible name', () => {
+    // #937 review, SHOULD: 17 identical "Try this" entries are indistinguishable
+    // in a screen reader's link list. Each aria-label names the question; the
+    // visible text stays "Try this".
+    const { container } = renderPage()
+    const names = [...container.querySelectorAll('a')]
+      .filter((a) => a.textContent?.includes('Try this'))
+      .map((a) => a.getAttribute('aria-label')!)
+    expect(names).toHaveLength(17)
+    for (let i = 0; i < flat.length; i++) {
+      const suffix = flat[i].turns.length > 1 ? ' (then a follow-up question)' : ''
+      expect(names[i]).toBe(`Try this: ${flat[i].turns[0]}${suffix}`)
+    }
+    // Distinctness is the point: 02 and 07 ask the SAME first question, and
+    // the follow-up note is what keeps their link names apart.
+    expect(new Set(names).size).toBe(17)
+  })
+
   it('words every result plainly, with the word — not just colour', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')

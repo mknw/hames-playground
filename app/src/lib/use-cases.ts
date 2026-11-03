@@ -37,6 +37,12 @@ export interface UseCaseSection {
  *  URL, so a reload does not re-prefill. */
 export const QUESTION_DRAFT_PARAM = 'q'
 
+/** Upper bound on a `?q=` draft. 2,000 characters is ample for every question
+ *  this page offers (the longest is ~250); the cap is enforced where the chat
+ *  route reads the parameter, so an abuse-shaped link cannot stuff the
+ *  composer with megabytes of URL. */
+export const QUESTION_DRAFT_MAX_CHARS = 2_000
+
 /** When the recorded round ran — shown once on the page. */
 export const USE_CASES_TESTED_ON = '30 October 2026'
 

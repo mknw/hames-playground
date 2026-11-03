@@ -95,7 +95,7 @@ export default function Nav() {
                 text="ui-accent"
                 aria-hidden="true"
               />
-              <span text="2xs ui-text-tertiary">metrics</span>
+              <span text="2xs ui-text-primary">metrics</span>
             </a>
             <a
               href={onUseCases() ? '/' : '/use-cases'}
@@ -123,7 +123,7 @@ export default function Nav() {
                 text="ui-accent"
                 aria-hidden="true"
               />
-              <span text="2xs ui-text-tertiary">use cases</span>
+              <span text="2xs ui-text-primary">use cases</span>
             </a>
           </Show>
           <ThemeSwitcher />

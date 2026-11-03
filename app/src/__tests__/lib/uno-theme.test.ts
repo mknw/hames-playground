@@ -206,3 +206,19 @@ describe('the Sandbox tab blink (#415)', () => {
     expect(reduced).toMatch(/\.sandbox-tab-blink\s*\{[^}]*box-shadow:\s*inset/)
   })
 })
+
+describe('fontSize theme', () => {
+  it('emits a real font-size rule for text-2xs — the caption size is not a silent no-op', async () => {
+    // presetWind4 ships `xs`…`9xl` and nothing below, so before the #937 fix
+    // `text="2xs"` generated no CSS at all and every caption site rendered
+    // at the ambient 16px. This is the no-op's tripwire: remove the
+    // `theme.fontSize['2xs']` entry in uno.config.ts and this goes red.
+    // In wind4 the utility resolves through custom properties, so BOTH halves
+    // have to exist: the `.text-2xs` rule referencing them, and the theme
+    // layer declaring them. Removing the entry kills both.
+    const css = await cssFor('text-2xs')
+    expect(css).toMatch(/\.text-2xs\s*\{[^}]*font-size:\s*var\(--text-2xs-fontSize\)/)
+    expect(css).toMatch(/--text-2xs-fontSize:\s*0\.6875rem/)
+    expect(css).toMatch(/--text-2xs-lineHeight:\s*0\.875rem/)
+  })
+})

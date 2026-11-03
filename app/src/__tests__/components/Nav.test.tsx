@@ -96,6 +96,27 @@ describe('Nav', () => {
     expect(useCases.getAttribute('aria-current')).toBeNull()
   })
 
+  it('renders the captions small and readable: 2xs (11px), on ui-text-primary', () => {
+    // The #937 review's blocking finding: `text="2xs"` used to emit NO CSS
+    // (no theme entry below `xs`), so the captions silently rendered at the
+    // ambient 16px, and `ui-text-tertiary` measured below 4.5:1 on the pressed
+    // tint. jsdom applies no stylesheet, so what is pinned here is the class
+    // half of the chain; `uno-theme.test.ts` pins that `.text-2xs` actually
+    // emits font-size: 0.6875rem, and `ui-text-primary` is the one existing
+    // token the reviewer measured above 4.5:1 on the pressed tint in BOTH
+    // themes. Drop either half and one of the two tests goes red.
+    const { container } = render(() => <Nav />)
+    const captions = [...container.querySelectorAll('nav a span')].filter((el) =>
+      ['metrics', 'use cases'].includes(el.textContent ?? ''),
+    )
+    expect(captions).toHaveLength(2)
+    for (const caption of captions) {
+      expect(caption.getAttribute('text')).toContain('2xs')
+      expect(caption.getAttribute('text')).toContain('ui-text-primary')
+      expect(caption.getAttribute('text')).not.toContain('ui-text-tertiary')
+    }
+  })
+
   it('on the dashboard, the metrics link is pressed in and returns to chat', () => {
     setPathname('/dashboard')
     const { container } = render(() => <Nav />)

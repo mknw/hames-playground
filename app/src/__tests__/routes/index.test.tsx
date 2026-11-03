@@ -896,4 +896,18 @@ describe('chat route — the use-cases draft', () => {
     await mount()
     expect(chat.initialDraft).toBe('first')
   })
+
+  it('caps a ?q= draft at QUESTION_DRAFT_MAX_CHARS instead of feeding the composer unbounded', async () => {
+    // #937 review, SHOULD: a URL can carry megabytes, and the composer is a
+    // textarea, not a file upload. The cap lives where the draft is read.
+    const { QUESTION_DRAFT_MAX_CHARS } = await import('~/lib/use-cases')
+    const over = 'x'.repeat(QUESTION_DRAFT_MAX_CHARS + 500)
+    setSearchParams({ q: over })
+    await mount()
+    expect(chat.initialDraft).toHaveLength(QUESTION_DRAFT_MAX_CHARS)
+    // …and a question that fits is passed through whole.
+    setSearchParams({ q: 'short' })
+    await mount()
+    expect(chat.initialDraft).toBe('short')
+  })
 })

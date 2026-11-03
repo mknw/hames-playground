@@ -92,7 +92,7 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
       flex="~ items-center gap-2"
       p="x-3 y-1.5"
       rounded="full"
-      bg="ui-success/10"
+      bg="ui-success/8"
       text="base ui-success"
       font="medium"
     >
@@ -102,6 +102,15 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
   </Show>
 )
 
+/** The link's accessible name. 02 and 07 ask the same first question (the
+ *  catalogue really does reuse it), so the name must carry more than the turn
+ *  text alone: a multi-turn question says a follow-up comes — which is also
+ *  exactly what a screen-reader user scanning the link list wants to know. */
+const tryThisLabel = (question: UseCaseQuestion): string =>
+  question.turns.length > 1
+    ? `Try this: ${question.turns[0]} (then a follow-up question)`
+    : `Try this: ${question.turns[0]}`
+
 const QuestionCard = (props: { question: UseCaseQuestion }) => (
   <li p="4" rounded="lg" bg="ui-bg-secondary" border="1 ui-border-primary" flex="~ col" gap="3">
     {/* The question as asked — the largest text on the card on purpose. */}
@@ -110,12 +119,12 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
     </p>
     <Show when={props.question.turns.length > 1}>
       <div flex="~ col" gap="1" pl="4" border="l-2 ui-border-secondary">
-        <span text="base ui-text-secondary" font="medium">
+        <span text="lg ui-text-secondary" font="medium">
           Then ask:
         </span>
         <For each={props.question.turns.slice(1)}>
           {(turn) => (
-            <p text="base ui-text-secondary" leading="relaxed" m="0">
+            <p text="lg ui-text-secondary" leading="relaxed" m="0">
               {turn}
             </p>
           )}
@@ -135,6 +144,7 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
         min-h="11"
         text="lg"
         rounded="md"
+        aria-label={tryThisLabel(props.question)}
       >
         <span class="i-material-symbols-send-outline" w="5" h="5" aria-hidden="true" />
         Try this
@@ -169,7 +179,7 @@ export default function UseCases() {
                 <h2 text="2xl ui-text-primary" font="medium" m="0">
                   {SECTION_LABELS[section.priority]}
                 </h2>
-                <p text="base ui-text-secondary" m="0">
+                <p text="lg ui-text-secondary" m="0">
                   {sectionSummary(section.questions)}
                 </p>
               </div>

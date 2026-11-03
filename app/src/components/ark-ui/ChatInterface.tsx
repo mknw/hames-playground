@@ -593,7 +593,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
         {/* The "agent" caption matches the nav's "metrics" / "use cases"
             captions — the three page controls read as one group (owner,
             2026-11-02). */}
-        <span text="2xs ui-text-tertiary">agent</span>
+        <span text="2xs ui-text-primary">agent</span>
         <div w="64">
           <AgentSelector
             selectedAgent={selectedAgent()}

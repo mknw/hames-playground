@@ -15,7 +15,7 @@ import { isEdgeElement, isNodeElement } from '@hames-ai/agents'
 import type { OpenReferenceTarget } from '~/lib/harness-client'
 import { newSessionId } from '~/lib/session-id'
 import { CONVERSATION_PARAM } from '~/lib/share-link'
-import { QUESTION_DRAFT_PARAM } from '~/lib/use-cases'
+import { QUESTION_DRAFT_MAX_CHARS, QUESTION_DRAFT_PARAM } from '~/lib/use-cases'
 import type { StashAction } from '~/components/ark-ui/DataStashPanel'
 import { applyToolResultAction } from '~/lib/api-client'
 import { hasPendingIngest, refreshDocuments } from '~/lib/stash-documents'
@@ -75,7 +75,12 @@ export default function Home() {
   // mount and never re-reads the prop.
   const draftFromUrl = (() => {
     const raw = searchParams[QUESTION_DRAFT_PARAM]
-    return (Array.isArray(raw) ? raw[0] : raw) || undefined
+    const value = (Array.isArray(raw) ? raw[0] : raw) || undefined
+    // A URL can carry megabytes; the composer is a textarea, not a file
+    // upload. 2,000 characters is ample for every question the use-cases
+    // page offers (the longest is ~250), so anything longer is an abuse
+    // shaped link, not a question — truncated rather than trusted.
+    return value === undefined ? undefined : value.slice(0, QUESTION_DRAFT_MAX_CHARS)
   })()
   onMount(() => {
     if (draftFromUrl !== undefined) {

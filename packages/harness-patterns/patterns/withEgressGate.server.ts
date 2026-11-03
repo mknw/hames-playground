@@ -8,7 +8,6 @@ import { assertServerOnImport } from '../assert.server'
 import { randomUUID } from 'node:crypto'
 import { createEvent, redactCall } from '../context.server'
 import {
-  addressesIn,
   destinationHosts,
   EGRESS_SPAN_CAP,
   EGRESS_TEXTS,
@@ -42,6 +41,7 @@ import {
 } from '../run-frame.server'
 import { resumableStep, wrapperResumable } from '../resume.server'
 import { inferServer } from '../tools.server'
+import { egressArgumentSpans, interpretUrlSpans } from '../url-seam'
 import type {
   ConfiguredPattern,
   ContextEvent,
@@ -424,6 +424,14 @@ function damageCause(error: unknown): string {
 // side only, so the request's own address is still compared whole.
 const TRAILING_PUNCTUATION = /[.,;:!?)\]]+$/
 
+/** Every address span the seam's egress argument scan finds in `text` (slice
+ *  3: `docs/plan/url-interpretation-seam.md`). The given-address corpus
+ *  consumes the seam's spans, whose `raw` is the original spelling, never a
+ *  canonical rewrite — so neither side of the comparison canonicalizes. The
+ *  same spans `addressesIn` projects to strings; this keeps the span contract
+ *  as the corpus's address source, as slice 2 did for `destinationHosts`. */
+const addressSpans = (text: string) => interpretUrlSpans(text, egressArgumentSpans(text)).spans
+
 /** What a person would be asked to release: exactly this call, readably, and
  *  the roster's matches in it. The decision AUTHORIZES the tool and its
  *  arguments alone, so a re-entry finds it whatever else is shown. */
@@ -544,14 +552,14 @@ export function withEgressGate(config: EgressGateConfig) {
           closes: 'turn',
         } satisfies EgressRefusedEventData)
       }
-      // The addresses the controller was given (O21), each as `addressesIn`
-      // finds it: the user's latest message and the data of every
+      // The addresses the controller was given (O21), each as the seam's
+      // argument scan finds it: the user's latest message and the data of every
       // `addressSources` result in the context, extended by this invocation's.
       const given = new Set<string>()
       const give = (text: string): void => {
-        for (const address of addressesIn(text)) {
-          given.add(address)
-          given.add(address.replace(TRAILING_PUNCTUATION, ''))
+        for (const span of addressSpans(text)) {
+          given.add(span.raw)
+          given.add(span.raw.replace(TRAILING_PUNCTUATION, ''))
         }
       }
       give(latestUser)
@@ -892,10 +900,10 @@ export function withEgressGate(config: EgressGateConfig) {
             // controls and space) is stripped here: `trim()` also strips
             // Unicode spaces a parser keeps, and those would carry data.
             const ungiven = request.raw.some(({ key, value }) => {
-              const addresses = addressesIn(value)
+              const addresses = addressSpans(value)
               if (addresses.length === 0 && key?.toLowerCase() !== 'url') return false
               const bare = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '')
-              return !given.has(bare) || addresses.some((a) => !given.has(a))
+              return !given.has(bare) || addresses.some((span) => !given.has(span.raw))
             })
             if (ungiven) return block('fetch-address', EGRESS_TEXTS.fetchAddress)
           }

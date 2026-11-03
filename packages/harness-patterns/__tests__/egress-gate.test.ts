@@ -492,7 +492,7 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
 
   // The web fetch tool's argument may be a `ref://<id>` token that the tool
   // server resolves to a URL from an earlier search result. The gate sees the
-  // token string, not the URL it resolves to: `addressesIn` matches http(s)
+  // token string, not the URL it resolves to: the argument scan matches http(s)
   // schemes only, so the token never joins the given-address corpus even when
   // a result carries it, and a fetch under a `url` key is refused (O21).
   // Open residual: the token resolves server-side to a URL the gate did not
@@ -641,7 +641,7 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
     expect(result).toMatchObject({ success: true })
   })
 
-  // MUTATION: drop the whole-value comparison (only `addressesIn(value)` must
+  // MUTATION: drop the whole-value comparison (only the seam spans' raws must
   // be given), or apply it under a `url` key only, or give an array item no
   // key (`null`), or compare by substring (`text.includes(a)`): one of the
   // refused shapes goes on to Decide.
@@ -710,6 +710,29 @@ describe('step 1: a fetch address nobody gave the controller (O21)', () => {
       'sent',
       EGRESS_TEXTS.fetchAddress,
     ])
+  })
+
+  // Slice 3: the corpus consumes the seam's spans, whose `raw` is the source
+  // spelling, never the parser's canonical form. MUTATION: compare canonical
+  // forms (`new URL(a).href`) instead of the verbatim addresses, on either
+  // side: both fetches below canonicalize to the given address, become
+  // "given", and reach Decide.
+  it('an address the parser would canonicalize to a given one is not given', async () => {
+    const decide = egressDecide([PUBLIC])
+    const results: ToolCallResult[] = []
+    await run(
+      { decide, ...O21 },
+      async () => {
+        results.push(await callTool('fetch', { url: 'HTTPS://DOCS.EXAMPLE/guide?v=3' }))
+        results.push(await callTool('fetch', { url: 'https://docs.example:443/guide?v=3' }))
+      },
+      { prior: [webResult(`see ${GIVEN} for more`)] },
+    )
+    expect(results.map((r) => r.error)).toEqual([
+      EGRESS_TEXTS.fetchAddress,
+      EGRESS_TEXTS.fetchAddress,
+    ])
+    expect(decide.seen.states).toHaveLength(0)
   })
 
   // MUTATION: drop the `addressSources` requirement in `refuseUnreadableSettings`:

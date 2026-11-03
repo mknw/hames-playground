@@ -1,9 +1,10 @@
 /**
  * The `/use-cases` page — a static snapshot plus markup, so everything here is
  * jsdom-cheap. What is asserted is the page's promise to its reader: plain
- * headings per priority, one plain line on how each section did, the day of
- * the last test, a prefilled-never-sent "Try this" per question, and NO eval
- * jargon (ids, "gated", "P4") anywhere in the rendered text.
+ * headings per priority, one plain line on how each section did, the data-updated
+ * line, a short titled card per question in a tiled grid, a prefilled-never-sent
+ * "Try this" per question, and NO eval jargon (ids, "gated", "P4") anywhere in
+ * the rendered text.
  */
 
 import { describe, it, expect } from 'vitest'
@@ -23,12 +24,18 @@ function renderPage() {
 const flat = USE_CASE_SECTIONS.flatMap((s) => s.questions)
 
 describe('use-cases page', () => {
-  it('opens with the intro and the day of the last test, once', async () => {
+  it('opens with the intro and the data-updated line, once', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
-    expect(container.textContent).toContain('Last tested:')
+    expect(container.textContent).toContain('Data updated:')
     expect(container.textContent).toContain(USE_CASES_TESTED_ON)
-    expect(container.textContent.match(/Last tested:/g)).toHaveLength(1)
+    expect(container.textContent.match(/Data updated:/g)).toHaveLength(1)
+    // Run 10 recorded no time of day, so none is rendered — the line is the
+    // snapshot's own timestamp, never a build or render time.
+    const stamp = [...container.querySelectorAll('p')].find((p) =>
+      p.textContent?.includes('Data updated:'),
+    )
+    expect(stamp?.textContent).toBe(`Data updated: ${USE_CASES_TESTED_ON}`)
   })
 
   it('renders one plain section per catalogue priority, in order', async () => {
@@ -102,8 +109,8 @@ describe('use-cases page', () => {
 
   it('gives every "Try this" link its question in the accessible name', () => {
     // #937 review, SHOULD: 17 identical "Try this" entries are indistinguishable
-    // in a screen reader's link list. Each aria-label names the question; the
-    // visible text stays "Try this".
+    // in a screen reader's link list. Each aria-label names the question by its
+    // title and its words; the visible text stays "Try this".
     const { container } = renderPage()
     const names = [...container.querySelectorAll('a')]
       .filter((a) => a.textContent?.includes('Try this'))
@@ -111,10 +118,10 @@ describe('use-cases page', () => {
     expect(names).toHaveLength(17)
     for (let i = 0; i < flat.length; i++) {
       const suffix = flat[i].turns.length > 1 ? ' (then a follow-up question)' : ''
-      expect(names[i]).toBe(`Try this: ${flat[i].turns[0]}${suffix}`)
+      expect(names[i]).toBe(`Try this — ${flat[i].title}: ${flat[i].turns[0]}${suffix}`)
     }
-    // Distinctness is the point: 02 and 07 ask the SAME first question, and
-    // the follow-up note is what keeps their link names apart.
+    // Distinctness is the point: 02, 07 and 08 all open on the same question
+    // now, and their titles are what keep their link names apart.
     expect(new Set(names).size).toBe(17)
   })
 
@@ -142,11 +149,22 @@ describe('use-cases page', () => {
     expect(text).not.toContain('nice')
   })
 
-  it('keeps jargon-free titles out of the page but the questions verbatim', async () => {
+  it('gives every question a short title, and words the questions for PMs', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
-    // The questions as asked are the content of the page.
-    expect(container.textContent).toContain('How many Project nodes are in the knowledge graph?')
-    expect(container.textContent).toContain('Hi! What can you help me with?')
+
+    // One titled card per question, in the section order the data carries.
+    const titles = [...container.querySelectorAll('h3')].map((h) => h.textContent)
+    expect(titles).toEqual(flat.map((q) => q.title))
+
+    // The audience wording, not the catalogue's: the read questions say what
+    // the graph holds, the write question names the org graph once, titled.
+    const text = container.textContent ?? ''
+    expect(text).toContain('How many projects are currently active in the organization?')
+    expect(text).toContain('Hi! What can you help me with?')
+    expect(text).toContain('Edit the org graph')
+    expect(text).not.toContain('knowledge graph')
+    expect(text).not.toContain('Project nodes')
+    expect(text.match(/graph/g)).toHaveLength(2) // title + question of 06, both "org graph"
   })
 })

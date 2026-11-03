@@ -4,10 +4,14 @@
  * The page renders this module, never the catalogue, so the pin here is the
  * only thing keeping the two honest with each other: every question on the
  * page must exist in `evals/general-next/scenarios.catalogue.json` with
- * status "existing", and its title, priority and user turns must be the
- * catalogue's verbatim. The results are the recorded outcomes of eval run 10
- * (2026-10-30) — the dispatch's enumeration, held here as data so a hand edit
- * to one side fails loudly rather than quietly disagreeing.
+ * status "existing", and its priority must be the catalogue's verbatim.
+ * The title and the question wording are the page's own, deliberately — the
+ * audience is PMs, so the catalogue's graph vocabulary is rewritten (and the
+ * rewrite is pinned below); nothing is invented: each rewritten sentence
+ * still asks what its catalogue scenario asks. The results are the recorded
+ * outcomes of eval run 10 (2026-10-30) — the dispatch's enumeration, held
+ * here as data so a hand edit to one side fails loudly rather than quietly
+ * disagreeing.
  *
  * Like `scenario-catalogue.test.ts`, the catalogue is read as text: src/ may
  * not import evals/.
@@ -16,7 +20,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { QUESTION_DRAFT_PARAM, USE_CASES_TESTED_ON, USE_CASE_SECTIONS } from '../../lib/use-cases'
+import {
+  QUESTION_DRAFT_PARAM,
+  USE_CASES_TESTED_AT,
+  USE_CASES_TESTED_ON,
+  USE_CASE_SECTIONS,
+} from '../../lib/use-cases'
 
 type Json = Record<string, unknown>
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -48,13 +57,45 @@ describe('use-cases data', () => {
     }
   })
 
-  it('title, priority and user turns are the catalogue fields verbatim', () => {
+  it('carries a short title for every question', () => {
     for (const q of flat) {
-      const row = catalogueById.get(q.id)!
-      expect(q.title).toBe(row.title)
-      expect(USE_CASE_SECTIONS.find((s) => s.questions.includes(q))!.priority).toBe(row.priority)
-      expect(q.turns).toEqual(row.turns)
+      expect(q.title.length, `${q.id} title`).toBeGreaterThan(0)
+      expect(q.title.length, `${q.id} title`).toBeLessThanOrEqual(40)
     }
+  })
+
+  it('words the questions for PMs: the graph is never named except the owned org-graph write', () => {
+    for (const q of flat) {
+      for (const t of [q.title, ...q.turns]) {
+        expect(t).not.toMatch(/neo4j/i)
+        expect(t).not.toMatch(/knowledge graph/i)
+        // 'graph' survives only inside the owned phrase 'org graph'.
+        for (const m of t.matchAll(/graph/g)) {
+          expect(t.slice(Math.max(0, (m.index ?? 0) - 4), m.index), `${q.id}: ${t}`).toMatch(
+            /org $/i,
+          )
+        }
+      }
+    }
+    // The write-shaped question is the one place the owner allows the org
+    // graph to be named, and its title is the context that makes it clear.
+    const orgGraph = flat.filter((q) => q.turns.some((t) => t.includes('org graph')))
+    expect(orgGraph.map((q) => q.id)).toEqual(['06-read-only'])
+    expect(orgGraph[0]!.title).toBe('Edit the org graph')
+    expect(orgGraph[0]!.turns[0]).toBe('Add a project called Lantern to the org graph.')
+  })
+
+  it('keeps the count questions in the audience’s own words', () => {
+    expect(flat.find((q) => q.id === '02-graph-count')!.turns[0]).toBe(
+      'How many projects are currently active in the organization?',
+    )
+  })
+
+  it('names the day the round ran, and no time it never recorded', () => {
+    expect(USE_CASES_TESTED_ON).toBe('30 October 2026')
+    // Run 10 recorded only a date. A time appears here only when a round
+    // actually records one — never invented.
+    expect(USE_CASES_TESTED_AT).toBeUndefined()
   })
 
   it('the section grouping matches each catalogue priority', () => {
@@ -79,16 +120,14 @@ describe('use-cases data', () => {
     for (const q of flat) expect(['works', 'not-yet', 'coming']).toContain(q.result)
   })
 
-  it('keeps the multi-turn questions multi-turn, in order', () => {
+  it('keeps the multi-turn questions multi-turn, and the follow-ups verbatim', () => {
+    // The follow-up turns carried no graph vocabulary, so they stay the
+    // catalogue's own; only the first turns were rewritten for the audience.
     for (const q of flat.filter((candidate) => candidate.turns.length > 1)) {
-      expect(q.turns).toEqual(catalogueById.get(q.id)!.turns)
+      expect(q.turns.slice(1)).toEqual((catalogueById.get(q.id)!.turns as string[]).slice(1))
     }
     // Six of the seventeen carry follow-ups — the page's "then ask:" cases.
     expect(flat.filter((q) => q.turns.length > 1)).toHaveLength(6)
-  })
-
-  it('names the day the round ran', () => {
-    expect(USE_CASES_TESTED_ON).toBe('30 October 2026')
   })
 
   it('hands "Try this" its query parameter', () => {

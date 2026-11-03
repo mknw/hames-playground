@@ -872,12 +872,13 @@ describe('chat route — the support panel collapses (#933)', () => {
 })
 describe('chat route — the use-cases draft', () => {
   it('seeds the composer draft from ?q= and strips the parameter, without a history entry', async () => {
-    setSearchParams({ q: 'How many Project nodes are in the knowledge graph?' })
+    // A question as the use-cases page words it today.
+    setSearchParams({ q: 'How many projects are currently active in the organization?' })
     await mount()
 
     // The draft reaches ChatInterface as its initialDraft prop (ChatInput
     // seeds its own signal from it; that half is ChatInput's own test).
-    expect(chat.initialDraft).toBe('How many Project nodes are in the knowledge graph?')
+    expect(chat.initialDraft).toBe('How many projects are currently active in the organization?')
 
     // The parameter has served its purpose: stripped with `replace`, so a
     // reload does not re-prefill and Back does not land on a stale question.

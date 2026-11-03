@@ -10,6 +10,12 @@
  * priority (must / should / nice) under plain headings, each with one plain
  * sentence about how its questions did in the last round.
  *
+ * Layout: tiled — one card per question in a responsive grid (one column at
+ * phone width, two from md up), each card opening with its short title so an
+ * instruction-shaped question ("Edit the org graph") carries its own context.
+ * The look is deliberately quiet: the ui-* theme tokens only, tinted accents,
+ * no glow — in both themes.
+ *
  * Auth matches the rest of the app: the route renders behind `AuthProvider`
  * (see `app.tsx`) and reads nothing from the server, so there is no server
  * action here to gate — the page is a static snapshot module plus markup.
@@ -23,6 +29,7 @@ import { A } from '@solidjs/router'
 import { For, Show } from 'solid-js'
 import {
   QUESTION_DRAFT_PARAM,
+  USE_CASES_TESTED_AT,
   USE_CASES_TESTED_ON,
   USE_CASE_SECTIONS,
   type UseCaseQuestion,
@@ -102,17 +109,30 @@ const ResultBadge = (props: { result: UseCaseResult }) => (
   </Show>
 )
 
-/** The link's accessible name. 02 and 07 ask the same first question (the
- *  catalogue really does reuse it), so the name must carry more than the turn
- *  text alone: a multi-turn question says a follow-up comes — which is also
- *  exactly what a screen-reader user scanning the link list wants to know. */
+/** The link's accessible name. 02, 07 and 08 all open on the same first
+ *  question now, so the name must carry more than the turn text alone: the
+ *  title distinguishes them — which is also exactly what a screen-reader user
+ *  scanning the link list wants to know, and a multi-turn question says a
+ *  follow-up comes. */
 const tryThisLabel = (question: UseCaseQuestion): string =>
   question.turns.length > 1
-    ? `Try this: ${question.turns[0]} (then a follow-up question)`
-    : `Try this: ${question.turns[0]}`
+    ? `Try this — ${question.title}: ${question.turns[0]} (then a follow-up question)`
+    : `Try this — ${question.title}: ${question.turns[0]}`
 
 const QuestionCard = (props: { question: UseCaseQuestion }) => (
-  <li p="4" rounded="lg" bg="ui-bg-secondary" border="1 ui-border-primary" flex="~ col" gap="3">
+  <li
+    flex="~ col"
+    gap="3"
+    p="5"
+    rounded="lg"
+    bg="ui-bg-secondary"
+    border="1 ui-border-primary"
+    h="full"
+  >
+    {/* The short title — the context an instruction-shaped question needs. */}
+    <h3 text="base ui-text-secondary" font="medium" m="0">
+      {props.question.title}
+    </h3>
     {/* The question as asked — the largest text on the card on purpose. */}
     <p text="lg ui-text-primary" leading="relaxed" m="0">
       {props.question.turns[0]}
@@ -131,19 +151,24 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
         </For>
       </div>
     </Show>
-    <div flex="~ wrap" items="center" justify="between" gap="3">
+    {/* mt-auto pins the footer to the tile's bottom, so badges and buttons
+        line up across a grid row whatever the questions' lengths. */}
+    <div flex="~ wrap" items="center" justify="between" gap="3" mt="auto" pt="1">
       <ResultBadge result={props.question.result} />
       {/* In-app navigation (router link, not an external link): it lands on a
           brand-new chat — bare `/` with no `?c=` — with the question prefilled
-          in the composer, never sent. */}
+          in the composer, never sent. The quiet tinted button, not the chat
+          app's cyber-button: this page is a guide, not the product. */}
       <A
         href={`/?${QUESTION_DRAFT_PARAM}=${encodeURIComponent(props.question.turns[0])}`}
-        cyber-button=""
         flex="~ items-center gap-2"
-        px="5"
+        px="4"
         min-h="11"
-        text="lg"
+        text="lg ui-accent"
+        font="medium"
         rounded="md"
+        bg="ui-accent/10 hover:ui-accent/20"
+        border="1 ui-border-accent"
         aria-label={tryThisLabel(props.question)}
       >
         <span class="i-material-symbols-send-outline" w="5" h="5" aria-hidden="true" />
@@ -158,7 +183,7 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
 export default function UseCases() {
   return (
     <main flex="~ col" gap="6" p="6" bg="ui-bg-primary" text="ui-text-primary" font="sans">
-      <div max-w="3xl" mx="auto" w="full" flex="~ col" gap="6">
+      <div max-w="5xl" mx="auto" w="full" flex="~ col" gap="6">
         <header flex="~ col" gap="2">
           <h1 text="3xl ui-text-primary" font="medium" m="0">
             Use cases
@@ -167,8 +192,12 @@ export default function UseCases() {
             This page shows what you can ask the assistant. Every question below is something you
             can type straight into the chat — or press “Try this” and we will put it in for you.
           </p>
-          <p text="base ui-text-secondary" m="0">
-            Last tested: {USE_CASES_TESTED_ON}
+          {/* The snapshot's own timestamp, never a build or render time: the
+              line describes the data, not this deploy. */}
+          <p flex="~ items-center" gap="1.5" text="base ui-text-secondary" m="0">
+            <span class="i-material-symbols-history" w="4" h="4" aria-hidden="true" />
+            Data updated: {USE_CASES_TESTED_ON}
+            <Show when={USE_CASES_TESTED_AT !== undefined}>, {USE_CASES_TESTED_AT}</Show>
           </p>
         </header>
 
@@ -183,7 +212,8 @@ export default function UseCases() {
                   {sectionSummary(section.questions)}
                 </p>
               </div>
-              <ul flex="~ col" gap="4" p="0" m="0" list="none">
+              {/* Tiled: one card per question, two columns from md up. */}
+              <ul grid="~ cols-1 md:cols-2" gap="4" p="0" m="0" list="none">
                 <For each={section.questions}>
                   {(question) => <QuestionCard question={question} />}
                 </For>

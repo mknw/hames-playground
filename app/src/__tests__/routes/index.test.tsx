@@ -868,6 +868,8 @@ describe('chat route — the support panel collapses (#933)', () => {
     rail.onExpand()
     await tick(10)
     expect(supportInert()).toBe(false)
+  })
+})
 describe('chat route — the use-cases draft', () => {
   it('seeds the composer draft from ?q= and strips the parameter, without a history entry', async () => {
     setSearchParams({ q: 'How many Project nodes are in the knowledge graph?' })

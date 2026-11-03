@@ -1,6 +1,6 @@
 ---
 name: kg-lane-dispatch
-description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back, and the review loop that lands the work — whose terms bind a fix, and the coordinator's merge mechanics. Use when writing a task spec, handing work to a lane, worker, or subagent in THIS repo, or reviewing and merging what one sends back. How to split work, pick an agent type or model, or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
+description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back, and the review loop that lands the work — whose terms bind a fix, the coordinator's merge mechanics, and which agent and model run a lane here. Use when writing a task spec, handing work to a lane, worker, or subagent in THIS repo, or reviewing and merging what one sends back. How to split work or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
 ---
 
 # kg-lane-dispatch — how work leaves the coordinator, and how it lands
@@ -44,11 +44,31 @@ Keep coordination narration generic in the same spirit: name the lane
 
 A lane's findings land in a **GitHub issue or PR comment** — filed by the lane, under
 its own reasoning. That is the deliverable. Every task spec says so explicitly, and
-says which: a comment on the PR under review, or a new issue when the work has no PR.
+says which: a comment on the PR under review, or a new issue when the work has no PR
+(a security finding is the exception, below).
 
 This is the agents' durable record: attributable, and there for the next lane, the
 reviewer and whoever later diagnoses the work, instead of a payload that decays inside an
 agent conversation.
+
+**Every spec that produces public text says whether that text is public or private**,
+decided before the first word is written, because the repo is public. Company data and
+deployment-instance detail stay private, by category: internal drive, site and file
+names; fixtures or scenarios derived from real company data; people's names and
+addresses; the company's tenant or domain; a real host's name, address, ports, hardening
+or provider account; excerpts of logs from real conversations. A spec names these
+categories, never an example of one. A company-data job reports by message with nothing
+posted to GitHub, while generic code for that data travels as an ordinary PR. The agent
+that writes public pages is private tooling, so public text and commits name it only in
+general words ("the agent that writes public pages").
+
+**A security finding stays private until its fix merges.** For a weakness in a live
+system the deliverable is a private file, and its path goes to the coordinator by
+mailbox; a public issue, if one is wanted, is filed after the merge. The fix PR carries a
+generic title and body until it merges, and a review on it posts only a short verdict
+("changes needed, details sent privately") with the finding in the private file.
+Private files live in the coordinator's notes folder, `~/orca-coordinator-specs`: it is
+owner-only, and nothing in it is quoted, linked or committed in public text.
 
 ## 3. The URL is the record; the coordinator relays
 
@@ -62,6 +82,13 @@ A lane's `worker_done` (or an Agent-tool subagent's final message) carries:
 The coordinator's job with that report is to **relay the link and the one-line status**,
 then act on the workflow consequence — commission the next review, dispatch the fix
 lane, hold the merge. The substance is already at the URL.
+
+**The project board moves with the lane**, because it is the owner's view of what is
+happening and it does not move on its own. A lane's work has an issue or PR on the board
+before the lane starts (company-data jobs stay off GitHub and off the board). Dispatch
+moves it to In progress, the PR to In review, the merge to Done. Every digest runs a
+stale check: a closed or merged item not yet in Done moves to Done, and an In-progress
+item with no live lane moves to Backlog.
 
 Anything put to the owner goes through the `sync-panel` skill: a Needs-you item, with a
 decision page at medium complexity or higher, where the comment is linked as the agents'
@@ -125,7 +152,10 @@ goes red is.
 **Every fix round gets a delta review, until CONVERGED.** The same reviewer,
 re-reading only the delta — a deliberate departure from `dispatching-work`'s
 fresh-reviewer default, because only the agent that wrote the terms can tell a
-fix that honours them from one that re-solved the problem. The loop terminates
+fix that honours them from one that re-solved the problem. So every dispatch of
+the loop stays unreleased until the reviewer says CONVERGED (release closes the
+terminal the next delta needs; see _A dispatch receipt is not a running lane_
+below). The loop terminates
 on the **reviewer's** word — a lane declaring itself done is a report, not a
 verdict, and the round that introduces a regression is usually the one that
 felt trivial.
@@ -139,9 +169,15 @@ door.
 
 ## 5. Merge mechanics (the coordinator's half)
 
-The lane never merges. The coordinator does, and these are the four checks that
+The lane never merges. The coordinator does, and these are the five checks that
 a green CI run does not make for you.
 
+- **A merge that touches a guard waits for the owner's OK**, and the owner sees
+  the mechanism before any guard action: the steps the call goes through, the
+  exact decision rule with its real numbers, and `file:line` for the guard and
+  its test, laid out with the `spell-it-out` skill. Guard changes and npm
+  publishing are the owner's; every other merge and choice is the
+  coordinator's to make and record.
 - **Check `baseRefName == main` before EVERY merge**, not once per stack.
   `gh pr view <n> --json baseRefName`. A PR opened off another branch merges
   **into that branch**, silently, and the work never reaches `main`.
@@ -172,6 +208,8 @@ Read docs/agents/sensitive-domain-brief.md and apply it if your scope falls with
 
 <what to do, verified against source, with the specifics the lane needs>
 
+Public or private: <public | private — no company data or deployment-instance detail>.
+
 Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">;
 it is the agents' record. [Put <the open questions> to the owner.] Report back only the
 URL, a one-line verdict, and gate results. Do not merge. Send only ask / escalation /
@@ -183,7 +221,9 @@ guardrails a lane otherwise talks itself past.
 
 ## Starting the worker: worktree first
 
-A lane runs in its own worktree — created first, then pinned at start:
+A lane runs in its own Orca worktree — created first, then pinned at start. An
+Orca worktree is also what lets the owner watch a lane; an Agent-tool worktree
+does not show up in Orca.
 
 ```bash
 orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
@@ -208,23 +248,33 @@ stays empty while lanes run. A lane that needs something from the main checkout
 (a gitignored log, a local config) gets the absolute path in its spec, marked
 read-only.
 
-**Lane agent and model (pi era, owner ruling 2026-08-29):** lanes run
-`--agent pi` with the tier model — `z-ai/glm-5.3` for security/critical work
-(auth, routing, secrets, tests-as-evidence), `z-ai/glm-5.3-flash` for complex
-work (reviews, fix rounds bound to written terms, coordination),
-`deepseek/deepseek-v4-flash-3107` for normal/mechanical work (owner-ruled id;
-⚠ pi's local catalog lists `-flash`, `-0731`, `-vision-exp`, `-pro`, `-pro-0813` but
-not `-3107` — pi accepts unknown ids as custom models and routes silently, so verify
-with `pi update` or against the catalog before relying on it; flagged to the owner
-2026-08-30). The Claude-era
-`--agent claude --model opus` remains the default only in Claude-side
-sessions; both mappings coexist. Orca cannot set pi's model (the docs scope `--model`
-to Claude, Codex and Cursor), and orca launches `pi` directly — the pi-kg.sh wrapper
-was removed 2026-08-29 — so the live lever is pi's own `defaultModel` in
-`~/.pi/agent/settings.json` (verify it equals the tier model you want before
-dispatching; a changed setting takes effect on the next launched lane). Verify agent
-availability against the
-runtime's registry of record, never against examples in help text or skills.
+**Lane agent and model (owner ruling 2026-10-27; this block is the one routing
+table, and every other routing line points here):**
+
+- **pi on `z-ai/glm-5.3-flash`** takes small and mechanical work (fixture and
+  grader edits, small PRs, research), every delta review, and **every security
+  and prompt review**.
+- **Claude on Opus 5.5** (`--agent claude --model opus`) takes only large or
+  complex execution and the first-round review of a large PR. An Opus 5.5
+  review that completed without a model downgrade also counts as a security
+  gate when pi is unavailable; read the transcript's model before counting it.
+- **Codex on GPT-6.1-Sol** is approved for execution and review, complex work
+  included (`--agent codex --model gpt-6.1-sol`, with `--effort high` or
+  `xhigh`); split load between its quota and Claude's.
+- **Security work never runs on Fable**: its guardrails interrupt the work
+  mid-turn.
+- **Read usage in the same step as every dispatch**, for both Claude and Codex
+  (`codexbar usage --provider claude`, `--provider codex`), because quota
+  exhaustion kills lanes mid-flight and a figure sampled once at the start of a
+  programme enforces nothing.
+
+Orca cannot set pi's model (the docs scope `--model` to Claude, Codex and
+Cursor), so the lever is pi's own `defaultModel` in `~/.pi/agent/settings.json`,
+which must also be listed in `enabledModels` there — otherwise pi launches the
+first enabled model silently. Verify the model in the TUI footer after launch; a
+changed setting takes effect on the next launched lane. Verify agent
+availability against the runtime's registry of record, never against examples in
+help text or skills.
 
 **Dispatch after the TUI can accept input — the stall is the setup race.** A prompt
 delivered before the agent TUI can accept input is lost; the runtime reports
@@ -265,9 +315,20 @@ branch, the push, the posted comment — never bookkeeping. And after an accepte
 `worker_done`, run `orca orchestration worker-release --dispatch <id> --json` (it
 archives inspectable output and closes only that coordinator-owned terminal; use
 `worker-read` afterwards for the transcript) — completed worker terminals left open
-are how a Run accumulates a terminal zoo (36 observed 2026-08-30). Never substitute
+are how a Run accumulates a terminal zoo (36 observed 2026-08-30). A reviewer is the
+exception to releasing at `worker_done`: release its dispatches only once it says
+CONVERGED, then all of the loop's dispatch ids together, because a delta sent to a
+released terminal dies and a fresh reviewer has to take over. Never substitute
 a broad `terminal close` when release returns `release_pending` or
 `release_unknown`; follow the receipt's recovery action.
+
+**A spinner is not progress.** A lane is alive only when its token counter moves
+between two reads a few minutes apart; a "Working…" spinner, a file mtime or
+`git status` says nothing about liveness, so when the counter is out of view, read
+a wider tail or wait and read again. A lane past its expected-by time with a frozen
+counter is stopped and restarted, never given more time. Its replacement starts in
+that worktree only after `worker-stop` has confirmed the old lane exited (a release
+is not that confirmation), so two lanes never write one tree.
 
 ## Writing any agent-bound text safely
 
@@ -308,6 +369,22 @@ This rule was once scoped to "a long spec", and both words were the escape hatch
 messages that broke under it were short, and were `--body` rather than `--spec`
 (2026-09-19, twice in one session).
 
+**Where the text lands (an Orca rule, open to change with a move off Orca).** Orca
+injects a message into a terminal the moment it arrives, so text sent to a terminal
+someone is typing in lands in the middle of what they are writing. Hence:
+
+- A PM or coordinator the owner types in is reached through its run mailbox
+  (`orca orchestration send --run <run> --to run:<run>`), never through its terminal.
+- A lane's terminal may get one short pointer line after a mailbox send ("mailbox
+  has X, drain it"), because an idle agent does not read its mailbox. A terminal
+  send carries that pointer and never content: long terminal sends arrive truncated.
+- A mailbox body stays under about 2,000 characters; anything longer goes in a
+  file, and the message carries its path.
+
+Any coordinator or PM may run `dispatching-work`'s `scripts/watch-inbox.sh` on
+its own mailbox, so it notices new messages without anyone typing into its
+terminal.
+
 ## Design record
 
 **2026-11-03 — the comment is the agents' record.** Prompted by the owner after a board
@@ -325,3 +402,9 @@ it: every spec carried "The OWNER reviews this personally: post your findings as
 comment", so a lane wrote its comment for the owner, and the owner was sent to it. Now
 the comment is the agents' durable record, anything put to the owner goes through
 `sync-panel`, and the sub-agent brief's copies of the retired line changed with it.
+
+**2026-11-03 — working rules from the doctrine audit.** Standing owner rulings that
+lived only in coordinator memory are written at the point each governs: public or
+private, security findings, the board, liveness, reviewer release, the guard merge
+gate, where agent-bound text lands, and the one routing block. The owner took every
+recommendation of the decision; each rule's reason is its own clause above.

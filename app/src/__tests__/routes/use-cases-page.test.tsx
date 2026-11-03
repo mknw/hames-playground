@@ -50,7 +50,11 @@ describe('use-cases page', () => {
   it('says plainly how each section did in the last test', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
-    expect(container.textContent).toContain('9 of 10 worked in the last test.')
+    // The must section is 9 tested + 1 untested, so the summary separates the
+    // tested results from the newcomer instead of reading the newcomer as a miss.
+    expect(container.textContent).toContain(
+      'All 9 tested questions worked in the last test; 1 is new and not tested yet.',
+    )
     expect(container.textContent).toContain('3 of 5 worked in the last test.')
     // The nice-to-have section's misses are all not-runnable-yet, so a bare
     // "0 of 1" would read as failure. It says coming soon instead.

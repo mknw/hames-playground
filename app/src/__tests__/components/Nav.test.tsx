@@ -99,7 +99,8 @@ describe('Nav', () => {
   it('reads as a tab strip: one line, shared height, no boxed button look', () => {
     // Owner, round 4: the links were boxed buttons of variable height (icon
     // above a tiny caption). Now each tab is an icon followed by its label on
-    // ONE line at one shared height (h="9"), with no border attribute at all.
+    // ONE line at one shared height (h="11" — the house ≥44px header-target
+    // bar from the parent PR's review), with no border attribute at all.
     // The label span collapses below md via the `.nav-tab-label` preflight
     // class — jsdom applies no stylesheet, so what is pinned here is the
     // attribute/class half of the chain; the real render is the screenshots.
@@ -110,7 +111,7 @@ describe('Nav', () => {
     expect(tabs).toHaveLength(2)
     for (const tab of tabs) {
       expect(tab.getAttribute('flex'), 'one line, not a column').toContain('items-center')
-      expect(tab.getAttribute('h'), 'every tab the same height').toBe('9')
+      expect(tab.getAttribute('h'), 'every tab the same height').toBe('11')
       expect(tab.getAttribute('border'), 'no boxed button look').toBeNull()
       const label = [...tab.querySelectorAll('span')].find((el) =>
         el.className.includes('nav-tab-label'),

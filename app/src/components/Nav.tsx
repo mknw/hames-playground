@@ -79,7 +79,7 @@ export default function Nav() {
                 href={onDashboard() ? '/' : '/dashboard'}
                 flex="~ items-center"
                 gap="1.5"
-                h="9"
+                h="11"
                 px="3"
                 rounded="md"
                 whitespace="nowrap"
@@ -110,7 +110,7 @@ export default function Nav() {
                 href={onUseCases() ? '/' : '/use-cases'}
                 flex="~ items-center"
                 gap="1.5"
-                h="9"
+                h="11"
                 px="3"
                 rounded="md"
                 whitespace="nowrap"

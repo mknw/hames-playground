@@ -62,6 +62,15 @@ type UseCaseSection = (typeof USE_CASE_SECTIONS)[number]
 const sectionSummary = (questions: UseCaseQuestion[]): string => {
   const worked = questions.filter((q) => q.result === 'works').length
   const failed = questions.filter((q) => q.result === 'not-yet').length
+  const untested = questions.filter((q) => q.result === 'untested').length
+  const tested = questions.length - untested
+  if (untested > 0) {
+    const newcomer =
+      untested === 1 ? '1 is new and not tested yet' : `${untested} are new and not tested yet`
+    if (worked === tested)
+      return `All ${tested} tested questions worked in the last test; ${newcomer}.`
+    return `${worked} of ${tested} tested questions worked in the last test; ${newcomer}.`
+  }
   if (worked === questions.length) return `All ${questions.length} worked in the last test.`
   if (failed > 0 || worked > 0) return `${worked} of ${questions.length} worked in the last test.`
   return 'Coming soon — these were not runnable in the last test.'

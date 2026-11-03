@@ -21,6 +21,13 @@ SPEC.loader.exec_module(gate)
 
 
 class UpgradeGateTest(unittest.TestCase):
+    def test_target_requires_full_lowercase_hex_sha_before_configuration(self):
+        for value in ("", "a" * 39, "a" * 41, "g" * 40, "A" * 40, "main"):
+            with self.subTest(value=value), patch.object(gate, "configuration") as config:
+                with self.assertRaisesRegex(SystemExit, "full commit SHA"):
+                    gate.target_prediction(value)
+                config.assert_not_called()
+
     def setUp(self):
         rendered = {"name": "hames", "services": {name: {} for name in (
             "app", "app-dev", "caddy", "mcp-gateway", "embedder", "mcp-config", "postgres")}}
@@ -238,6 +245,10 @@ class UpgradeGateTest(unittest.TestCase):
                                       Path(__file__).parents[1] / "docs/deployment/app-upgrade.md"))
         blocks = re.findall(r"```bash\n(.*?)\n```", runbook.read_text(), re.S)
         drain = next(block for block in blocks if 'dev_enabled_ids="$dump_root/' in block)
+        # This fixture exercises DEV SQL only; the target prediction is tested
+        # separately and cannot fetch a commit in an offline shell.
+        drain = drain.replace(drain[drain.index("# Resolve the reviewed target"):
+                                      drain.index("dev_psql()")], "")
         restore = next(block for block in blocks if "restore_dev_routines()" in block)
         bin_dir = Path(self.tmp.name) / "bin"
         bin_dir.mkdir()

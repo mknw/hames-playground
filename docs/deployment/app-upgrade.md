@@ -7,6 +7,42 @@ and review the full target commit SHA and migration diff first. Keep Engine and
 database image changes separate; use the [Engine gate](docker-engine-upgrade.md)
 for those. Never use `down -v`, reset data volumes or prune retained images.
 
+The §1 `predict` command renders the pinned target's Compose files without
+moving the release checkout, checks protected-service hashes, and records its
+dry-run actions in a private 0600 artifact. `prestop` recomputes the prediction
+against that same SHA and the current Compose state; the first RELEASE app stop
+is conditional on its pass. The later `capture` gate still requires a stopped
+app and is a separate baseline for the boot checks.
+
+The gate requires PyYAML in the same `python3` interpreter used below. On
+Debian/Ubuntu, provision the `python3-yaml` package before the upgrade window
+(`sudo apt-get install python3-yaml`). The first block checks this prerequisite
+before changing release state; the gate also refuses to run without it. Target
+Compose inheritance and merge tags are still resolved by Compose; PyYAML keeps
+service env-file declarations from being discarded during the intermediate
+render. Keep the host's protected runtime env files in place.
+
+The gate supports scalar anchors/aliases (including repeated scalar anchor
+names, where later aliases use the latest value), separator tabs and the Compose `!override` /
+`!reset` tags. Across the target tree, it refuses every `<<` merge key, mapping/sequence
+anchor or alias, other custom tag, `!!binary` tag, and reserved gate extension before hashing
+or rewriting configuration. The error identifies the source file and line;
+rewrite unsupported input before retrying. Compose still resolves supported
+file overlays, `include` and `extends`. YAML composition errors, including
+unresolved aliases, refuse with a file and line instead of skipping the document.
+A parser error never proves that a file is irrelevant. Before hashing, the gate
+follows the selected Compose files' local literal `include` and `extends.file`
+references and refuses any unreadable selected input. It ignores an unreadable
+archive member only after excluding it from that input graph. Interpolated,
+remote, absolute, symlinked or missing references, paths outside the target tree and include
+`project_directory` overrides or multi-directory include overlays are unresolved
+and refuse before hashing; use
+literal in-tree references for this restricted upgrade. Declaration preservation
+receives only the selected validated nodes, so excluded members cannot rewrite
+selected files. It does not parse and potentially skip those nodes again.
+The measured compatibility covers Compose 2.39.4 and 5.6.0, including separator
+tabs and BOM-bearing UTF-16; it is not a claim of exhaustive parser equivalence.
+
 ## 1. Stop writers and take local dumps before changing the checkout
 
 Hold public ingress for **both hostnames** at the operator's external maintenance
@@ -33,14 +69,29 @@ run this in the deployment user's shell from the release checkout root. The
 private JSON file contains **only routine IDs**, including every user's enabled
 routine; neither encrypted `input` nor `label` is read. Keep the directory
 and file under `0700`/`0600`, outside the rotated backups tree, and do not print
-or commit them. The lock and exact-set comparison refuse a changed enabled set
+or commit them. Set `TARGET_SHA` to the reviewed full target commit before this
+block. The lock and exact-set comparison refuse a changed enabled set
 before the update; any failure is a stop. Do not restart `app-dev`.
 
 ```bash
+python3 -c 'import yaml' || exit 1
 dump_root="$PWD/upgrade-dumps/$(date -u +%Y%m%dT%H%M%SZ)"
 ( umask 077; mkdir -p -- "$PWD/upgrade-dumps" &&
   test ! -L "$PWD/upgrade-dumps" && chmod 700 -- "$PWD/upgrade-dumps" &&
   mkdir -m 700 -- "$dump_root" ) || exit 1
+# Resolve the reviewed target and prove its Compose shape before disabling DEV
+# routines or stopping RELEASE. This writes only a private prediction artifact.
+TARGET_SHA="${TARGET_SHA:?Set TARGET_SHA to the reviewed full commit before running this block}"
+test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
+case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
+( umask 022; git fetch --quiet --prune --tags origin ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" ||
+  ( umask 022; git fetch --quiet origin "$TARGET_SHA" ) || exit 1
+git cat-file -e "$TARGET_SHA^{commit}" || exit 1
+gate_copy="$dump_root/app-upgrade-gate.py"
+( umask 077; git show "$TARGET_SHA:scripts/app-upgrade-gate.py" > "$gate_copy" ) || exit 1
+prediction="$dump_root/target-prediction.json"
+python3 "$gate_copy" predict "$TARGET_SHA" "$prediction" || exit 1
 dev_psql() {
   docker compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" \
     -d "$DEV_DB" -X -v ON_ERROR_STOP=1 -qAt "$@"
@@ -90,6 +141,7 @@ user for either shape. Capture the §3 baseline **after** the dump, because the
 backup script restarts Neo4j:
 
 ```sh
+python3 "$gate_copy" prestop "$TARGET_SHA" "$prediction" || exit 1
 docker compose stop app || exit 1
 neo4j_id=$(docker compose ps -q neo4j) || exit 1
 test -n "$neo4j_id" || exit 1
@@ -128,8 +180,12 @@ successful `MANIFEST`, and absence of `INCOMPLETE`; also require the shared
 `neo4j.dump` and `redis.rdb`. The backup verifies Postgres's archive table of
 contents and Redis's header; Neo4j is checked only for nonempty bytes
 (scripts/backup-preview.sh:164). PREVIEW §9's isolated restore drill is the
-loadability check. Capture with the currently running Neo4j image, not a rebuilt
-mutable tag. The script restarts Neo4j after its dump; a failed health wait is a
+loadability check. The backup script captures the running Neo4j container's
+filesystem into a temporary image and proves its returned image ID can run
+`neo4j-admin` before
+stopping Neo4j. It checks the expected image ID and data volume supplied above;
+a changed container refuses the dump. The temporary image is removed on exit.
+The script restarts Neo4j after its dump; a failed health wait is a
 failed gate. Do not continue with partial files.
 
 Keep this `upgrade-dumps/` directory outside the routinely rotated `backups/`
@@ -170,23 +226,12 @@ between those stages.
 
 From the current release checkout root, after §1 and §2, capture the baseline
 **before checkout**. Keep the gate script and JSON private in the retained dump
-directory. Fetch the reviewed target under `022` without moving the checkout,
-then copy the reviewed gate script from that SHA. A missing script or baseline
-stops the release. Set `TARGET_SHA` to the reviewed full commit and replace the
+directory. The reviewed target and gate script were fetched before the first
+mutation in §1. A missing script or baseline stops the release. Replace the
 example hostname and email below with the existing real values. Preserve any
 other required bootstrap arguments on **every** call:
 
 ```bash
-TARGET_SHA='<reviewed-full-40-character-target-sha>'
-test "$(id -u)" -ne 0 && test "${#TARGET_SHA}" -eq 40 || exit 1
-case "$TARGET_SHA" in *[!0-9a-f]*) exit 1 ;; esac
-umask 022
-( umask 022; git fetch --quiet --prune --tags origin ) || exit 1
-git cat-file -e "$TARGET_SHA^{commit}" ||
-  ( umask 022; git fetch --quiet origin "$TARGET_SHA" ) || exit 1
-git cat-file -e "$TARGET_SHA^{commit}" || exit 1
-gate_copy="$dump_root/app-upgrade-gate.py"
-( umask 077; git show "$TARGET_SHA:scripts/app-upgrade-gate.py" > "$gate_copy" ) || exit 1
 baseline="$dump_root/preboot-baseline.json"
 python3 "$gate_copy" capture "$baseline" || exit 1
 bash scripts/bootstrap-vps.sh --hostname app.example.invalid \

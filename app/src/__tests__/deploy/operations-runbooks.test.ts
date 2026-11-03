@@ -124,11 +124,9 @@ describe('operations runbooks (#432 G20 rows 7, 12, 13)', () => {
     expect(missingReferences(`${doc}\n\`MISSING_APPLICATION_CONFIG\``)).toContain(
       'MISSING_APPLICATION_CONFIG',
     )
-    expect(
-      missingReferences(
-        read(runbooks[2]).replace("TARGET_SHA='<reviewed-full-40-character-target-sha>'", ''),
-      ),
-    ).toContain('TARGET_SHA')
+    expect(missingReferences(read(runbooks[2]).replace(/^TARGET_SHA=.*$/m, ''))).toContain(
+      'TARGET_SHA',
+    )
   })
 
   it('keeps retained upgrade dumps gitignored', () => {

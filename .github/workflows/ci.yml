@@ -168,6 +168,12 @@ jobs:
       # stages run against a fake box. Shims for sudo/docker/uname/sshd/ufw/
       # ss/systemctl; no daemon, no root. ShellCheck is preinstalled on
       # ubuntu-latest.
+      - name: Upgrade gate Python prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml
+          python3 -c 'import yaml'
+
       - name: Shell tests (VPS bootstrap)
         working-directory: .
         run: |
@@ -184,6 +190,11 @@ jobs:
           # in-memory host; no nft, systemctl, loginctl, incus or docker runs.
           python3 scripts/env-vm-guard.test.py
           python3 scripts/env-vm-guard.test.py --mutations
+          shellcheck -x scripts/backup-preview.sh scripts/backup-preview.test.sh scripts/app-upgrade-prestop.test.sh
+          scripts/backup-preview.test.sh
+          scripts/app-upgrade-prestop.test.sh
+          python3 scripts/app-upgrade-gate.test.py
+          python3 scripts/app-upgrade-review.test.py
 
       # Pins the Postgres → pgvector migration script (#419 M8) against a docker
       # shim that ALLOW-LISTS the calls it may make: the source mount stays :ro,

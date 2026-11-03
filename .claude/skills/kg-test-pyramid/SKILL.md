@@ -202,3 +202,20 @@ Scattering the same calls across a week pays that cold start every time and
 leaves a warm box billed for a window nobody used — which is the whole reason
 layer 4 is a burst rather than a gate. Inside it, burst discipline is structural
 rather than a knob: one process, one file at a time, at most two turns in flight.
+
+### 9. A test that cannot fail is fixed or deleted
+
+The rule is `dispatching-work`'s _Reviewing a test PR_: a move or extraction
+re-proves every comparison test, a guard's review asks what else spells the same
+thing and whether the scan covers what is claimed, and a test that cannot fail is
+fixed or deleted, never left green. This repo's instances of each part:
+
+- **#342** — the whole suite stayed green while the app and the library read two
+  different `AsyncLocalStorage` instances, so every user setting reverted to the
+  library default with no error.
+- **#351** — after an extraction, both sides of a two-tree render comparison
+  imported the same module, and the test compared one tree with itself.
+- **#353** — a privacy source scan passed its author's mutation and still missed a
+  second spelling of the identifier it forbade, plus every directory outside its
+  four scan roots; a whole-tree scan here keeps a check that fails on an empty
+  file list.

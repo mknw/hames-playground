@@ -6,12 +6,14 @@ Project-level guidance for Claude Code, Codex and Pi in this repository.
 
 ## Commands
 
-**Every `pnpm` SCRIPT runs from `app/`; the workspace INSTALL runs at the repo ROOT** — never npm/npx. `app/` consumes the packages under `packages/` through `workspace:*`, and those links are created only by an install at the ROOT — so an install run from `app/` leaves a package declared, present on disk and unlinked, which surfaces at dev-server start as a misleading `Cannot find module '@hames-ai/…'`. The `predev` guard (`app/scripts/check-workspace-links.mjs`) checks every `workspace:` dependency and repairs a gap by running `pnpm install --frozen-lockfile` at the root itself. The script list itself is a one-file lookup in `app/package.json`; what is not in that file:
+**Every `pnpm` SCRIPT runs from `app/`; the workspace INSTALL runs at the repo ROOT** — never npm/npx; Python tooling and scripts use `uv`, never pip. `app/` consumes the packages under `packages/` through `workspace:*`, and those links are created only by an install at the ROOT — so an install run from `app/` leaves a package declared, present on disk and unlinked, which surfaces at dev-server start as a misleading `Cannot find module '@hames-ai/…'`. The `predev` guard (`app/scripts/check-workspace-links.mjs`) checks every `workspace:` dependency and repairs a gap by running `pnpm install --frozen-lockfile` at the root itself. The script list itself is a one-file lookup in `app/package.json`; what is not in that file:
 
 - **There is ONE BAML corpus and its client is COMMITTED.** `packages/harness-baml/baml_src/` is the only `baml_src/` in the repo, and `packages/harness-baml/baml_client/` is generated from it and checked in — so a fresh clone, a fresh worktree, CI and the docker build all have the client already and nothing regenerates on the way in. After editing a `.baml` file, regenerate from the package (`pnpm baml-generate` from `packages/harness-baml/`) and COMMIT the result; never hand-edit `baml_client/`. `app/` has no `baml_src/` and no generate script — the duplicate app tree was deleted 2026-09-22, because two corpora that agree until they do not is a silence, not an error.
 - **Three llama-servers, three ports, and mixing them up is the trap.** `pnpm dev:llama` starts the local _chat_ model (GLM-4.7-Flash) on **8080**. The other two are `make` targets at the repo root, each running in the foreground: `make embed` serves the Data Stash _embedding_ model on **8090**, `make llm-small` serves the small summarizer (`SmallQwen`, the designated describe-role model) on **8095**. Their GGUF weights live gitignored in `models/` — [`models/README.md`](models/README.md) says which file goes where, and a missing one fails the target outright instead of leaving a dead port.
 - **`pnpm dev:exposed`** binds 0.0.0.0 — required for anything in Docker (Playwright MCP, the gateway) to reach the dev server.
 - **`pnpm release:check` runs the whole hermetic pyramid and answers once.** Unit → app-path e2e → browser e2e, in that order, stopping at the first failure, and it writes ONE go/no-go report to `evals/reports/` whose last section lists the **live steps it did not run** (both tiers of `pnpm eval:harness` — `planner-plan-shape` and `screen-on-the-tier` in particular — and the `smoke-self-deployed.ts` runbook check). A GO from it is a statement about the hermetic layers only, which is why that section is not a footnote. The four layers, what each sees that the one below cannot, why there are three test databases, the ten determinism fixes behind #280/#285, and why the five webfont families are self-hosted rather than fetched from Google (they were the last live dependency inside the layers called hermetic): [`docs/testing/pyramid.md`](docs/testing/pyramid.md).
+
+**Git answers questions read-only** (`git show <ref>:<path>`, `git diff <ref> -- <path>`), and a WIP commit comes before any experiment that writes the working tree, because a tree-writing command has no undo. A repository outside this one is read-only from work here unless your task names it; what it needs goes in a note for the owner.
 
 ### Client routing: the tier of a run
 
@@ -102,16 +104,7 @@ test work (`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
 FIRST, then act. Relevance is judged by the work's scope, never its size: a
 task that "seems simple" is not an exemption.
 
-**Model tiers for Pi sessions (additive to the Fable/Opus rule).** When selecting
-models or dispatching from inside Pi: **GLM 5.3**
-(`z-ai/glm-5.3`) for security/critical workloads (auth, routing, secrets,
-tests-as-evidence); **GLM 5.3 Flash** (`z-ai/glm-5.3-flash`) for complex tasks
-(reviews, fix rounds bound to written terms, coordination); **deepseek-v4-flash
-latest** (`deepseek/deepseek-v4-flash-3107`) for normal/mechanical tasks. This
-does NOT replace the Claude-era rule — `model: opus` frontmatter in
-`.claude/agents/*.md` and the Fable/Opus ladder in `dispatching-work` keep
-governing Claude sessions; pi ignores frontmatter aimed at Claude's Agent tool.
-Both mappings coexist so pi and Claude can be used together or swapped.
+**Lane agent and model:** the one routing table, for Pi and Claude sessions alike, is the dated block of that name in the `kg-lane-dispatch` skill.
 
 Project skills live in `.claude/skills/` (tracked in git, so worktrees inherit
 them — no copy step); relative links under `.agents/skills/` expose the three
@@ -176,6 +169,8 @@ fix what it finds.
 ## Harness Patterns — Quick Reference
 
 Framework in `packages/harness-patterns/` (`@hames-ai/harness-patterns`); the BAML-backed adapters below are a DIFFERENT package, `packages/harness-baml/`. Front page: [`README.md`](packages/harness-patterns/README.md); how to compose a harness, write your own pattern and consume the package: [`GUIDE.md`](packages/harness-patterns/GUIDE.md); full API + design spec: [`SPEC.md`](packages/harness-patterns/SPEC.md).
+
+**Trade-offs are settings, and a guard keeps its switch.** A behaviour that trades value against privacy or safety is a developer setting with a stated default, and retiring a guard changes its default rather than removing its switch (splitting one switch into finer ones is fine), because "we want to be able to parametrize any deployment as desired" (owner). The owner's one exception: the four layers that call no model — the sanitiser, the integrity refusals, the roster check and the directory declaration — stay without an off switch, and relaxing one is a reviewed code change.
 
 <!-- The `prettier-ignore` markers below are load-bearing: the repo root has no
      .prettierrc, so prettier's defaults would rewrite these samples to double

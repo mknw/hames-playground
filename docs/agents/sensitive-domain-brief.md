@@ -123,6 +123,13 @@ that binds specifically in these areas.
   comment**, filed by you, under your own reasoning — a comment on the PR under
   review, or a new issue when there is no PR. Orchestration messages evaporate on
   acknowledgement; the timeline is the durable, attributable record.
+- **A security finding stays private until its fix merges.** The repo is public,
+  so a weakness in a live system goes to a private file whose path you send the
+  coordinator by mailbox, never into a public issue; a public issue, if any,
+  comes after the merge. On the fix PR, title and body stay generic until it
+  merges, and a review posts only a short verdict ("changes needed, details sent
+  privately") with the finding in the private file. Where those files live is
+  the `kg-lane-dispatch` skill's §2.
 - **Report back the URL.** Report back only the URL, a one-line verdict or
   status, gate results, and anything genuinely blocking. Do not send the
   coordinator the substance — it is already at the URL, and a coordinator that

@@ -40,6 +40,11 @@ else**, so this file stays cheap to maintain and safe to read in parallel.
   and no-retries. Reach for it when a change adds or moves a test, or when a
   finding is "this was not caught". Same repo-local-config indirection as the
   row above.
+- **A capability a deployment can no longer configure** is a finding: the
+  trade-offs-are-settings rule under `AGENTS.md`'s _Harness Patterns_ holds a
+  retired guard to a changed default with its switch kept. A renamed or split
+  switch is not a finding, and neither is the four model-free layers having
+  none.
 - **House vocabulary** — [`GLOSSARY.md`](../GLOSSARY.md); decisions not to
   re-litigate — [`docs/adr/`](adr/README.md).
 - **Module boundaries** — the `codebase-design` skill's vocabulary (depth,

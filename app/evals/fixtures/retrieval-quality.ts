@@ -432,6 +432,10 @@ export const QUESTIONS: FixtureQuestion[] = [
   // ── deep: the answer sits beyond the first page of 5 ─────────────────────
   // All three live in the handbook's last sections, whose generic vocabulary
   // (grant, report, records, committee, recovery) recurs in ~10 earlier chunks.
+  // q-deep-records and q-deep-appeal INTENTIONALLY share one ground-truth
+  // chunk (fx-meridian:10): both markers land in the same records-retention
+  // section. Not an error — deriveGroundTruth() is per-question and each
+  // marker is unique on its own.
   {
     id: 'q-deep-records',
     category: 'deep',

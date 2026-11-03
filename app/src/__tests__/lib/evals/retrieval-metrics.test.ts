@@ -22,9 +22,11 @@ import {
 
 const TRUTH: GroundTruthChunk = { docId: 'd1', chunkIndex: 4 }
 
-/** Hits d1:0..9 in order, with d1:4 (the truth) at 1-based rank `at`. */
-function corpusOrderedWithTruthAt(at: number): GradedHit[] {
-  const others = [...Array(10).keys()]
+/** Hit list with d1:4 (the truth) at 1-based rank `at`. `size` is the total
+ *  hit count and must be >= at — the default 10 caps at rank 10, so boundary
+ *  ranks above that must size the list explicitly. */
+function corpusOrderedWithTruthAt(at: number, size = 10): GradedHit[] {
+  const others = [...Array(size).keys()]
     .filter((i) => i !== 4)
     .map((i) => ({ docId: 'd1', chunkIndex: i }))
   return [...others.slice(0, at - 1), { docId: 'd1', chunkIndex: 4 }, ...others.slice(at - 1)]
@@ -96,7 +98,11 @@ describe('summarizeGrades', () => {
   const ks = [5, 10, 20]
 
   function g(id: string, rank: number | null) {
-    const hits = rank === null ? [] : corpusOrderedWithTruthAt(rank)
+    // Size the list past the rank, so a rank of 20 or 21 is REAL — the same
+    // rank in a 10-hit list would silently grade as rank 10 and both
+    // largestK boundary mutations would survive (measured: they did).
+    const size = rank === null ? 10 : Math.max(10, rank + 1)
+    const hits = rank === null ? [] : corpusOrderedWithTruthAt(rank, size)
     return gradeQuestion(id, hits, TRUTH, ks)
   }
 
@@ -116,6 +122,37 @@ describe('summarizeGrades', () => {
     const s = summarizeGrades('vector-only', [g('paged', 8), g('gone', null)], ks)
     expect(s.pagedFindable).toEqual(['paged'])
     expect(s.totalMisses).toEqual(['gone'])
+  })
+
+  it('pins both pagedFindable boundaries exactly (review SHOULD-1)', () => {
+    // Both edges of the paged/unpaged split were mutation-blind: `>` vs `>=`
+    // against firstK and `<=` vs `<` against largestK each shipped silently
+    // (12/12 green under both mutations), and this number is what the paging
+    // analysis (#927) reads. Rank is 1-based, so the exact edges are 5/6 and
+    // 20/21.
+    const boundary = (rank: number | null) => summarizeGrades('v', [g(`q${rank}`, rank)], ks)
+    // Exactly the first page: rank 5 is inside k=5, NOT a paged find.
+    expect(boundary(5).pagedFindable).toEqual([])
+    expect(boundary(5).totalMisses).toEqual([])
+    // One past the page: rank 6 is the first paged find.
+    expect(boundary(6).pagedFindable).toEqual(['q6'])
+    // Exactly the largest graded k: rank 20 is still paged-findable.
+    expect(boundary(20).pagedFindable).toEqual(['q20'])
+  })
+
+  it('rank largestK+1 of a LONGER list is neither paged-findable nor a total miss', () => {
+    // The helper above only reaches rank 10; this builds a 25-hit list with
+    // the truth at rank 21 — one past the largest graded k, as the review
+    // prescribes, so `<= largestK` vs `< largestK` is distinguishable and a
+    // rank>largestK hit is still NOT "unretrieved".
+    const others = [...Array(25).keys()]
+      .filter((i) => i !== 4)
+      .map((i) => ({ docId: 'd1', chunkIndex: i }))
+    const hits = [...others.slice(0, 20), { docId: 'd1', chunkIndex: 4 }, ...others.slice(20)]
+    const s = summarizeGrades('v', [gradeQuestion('deep', hits, TRUTH, ks)], ks)
+    expect(s.pagedFindable).toEqual([])
+    expect(s.totalMisses).toEqual([])
+    expect(s.recallAtK[20]).toBe(0)
   })
 
   it('is 0 on an empty grade set rather than NaN', () => {

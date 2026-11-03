@@ -222,9 +222,11 @@ BAML role is routed** — the only model work is embedding, on whatever
 EVAL_ONLY=retrieval-quality pnpm eval:harness
 ```
 
-- 1 batch embed of ~21 chunk texts + 12 query embeddings per configuration
-  (~33 embedding calls today), against the deployment's own 0.6B embedder —
-  negligible unless that endpoint sits on metered infrastructure.
+- One embed HTTP request per document ingest — 3 requests of 7 / 11 / 3 chunk
+  texts (the 64-text batch-size guard never splits these) — plus 12 query
+  embeddings per configuration (~15 embedding calls today), against the
+  deployment's own 0.6B embedder — negligible unless that endpoint sits on
+  metered infrastructure.
 - 2 Redis writes per chunk plus the document records, serial over the gateway
   — the slowest part of the run, in seconds to a couple of minutes.
 - **Zero BAML/chat calls.** The runner skips its preflight when the selected

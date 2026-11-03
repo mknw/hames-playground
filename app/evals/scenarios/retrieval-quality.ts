@@ -35,9 +35,10 @@
  *
  * NO CHAT MODEL IS CALLED. The only model work is query/chunk EMBEDDING, on
  * whatever `EMBEDDINGS_*` configures; latency sampling shows zero samples for
- * this scenario by design. One live run costs: ~21 chunk embeddings (2
- * batches) + 12 query embeddings per configuration, and the Redis writes
- * ingest needs (2 per chunk over the gateway, serial). The scenario cleans up
+ * this scenario by design. One live run costs: one embed call per document
+ * ingest (3 HTTP requests of 7 / 11 / 3 chunk texts — the 64-text batch-size
+ * guard never splits these) + one query embedding per question per
+ * configuration, and the Redis writes ingest needs (2 per chunk over the gateway,
  * after itself (`deleteSessionStash`); a run that crashes leaves its session
  * keys to the stash's 7-day TTL.
  *

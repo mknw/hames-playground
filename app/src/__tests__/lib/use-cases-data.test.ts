@@ -1,17 +1,21 @@
 /**
  * The use-cases snapshot (`lib/use-cases.ts`) against its own source.
  *
- * The page renders this module, never the catalogue, so the pin here is the
- * only thing keeping the two honest with each other: every question on the
- * page must exist in `evals/general-next/scenarios.catalogue.json` with
- * status "existing", and its priority must be the catalogue's verbatim.
- * The title and the question wording are the page's own, deliberately — the
- * audience is PMs, so the catalogue's graph vocabulary is rewritten (and the
- * rewrite is pinned below); nothing is invented: each rewritten sentence
- * still asks what its catalogue scenario asks. The results are the recorded
- * outcomes of eval run 10 (2026-10-30) — the dispatch's enumeration, held
- * here as data so a hand edit to one side fails loudly rather than quietly
- * disagreeing.
+ * The page renders this module, never the catalogue, so the pins here are the
+ * only thing keeping the two honest with each other. Two texts ride on every
+ * question (owner decision, #937 round 3), and each is pinned separately:
+ *
+ * - `turns` — the catalogue's questions VERBATIM, against
+ *   `evals/general-next/scenarios.catalogue.json`: this is what "Try this"
+ *   sends, the wording the eval round actually measured.
+ * - `pageTurns` — the page's own wording, pinned sentence by sentence in this
+ *   file: it is hand-written for PMs, so an accidental edit to a title or a
+ *   sentence fails here before it ships. Nothing is invented: each rewritten
+ *   sentence still asks what its catalogue scenario asks.
+ *
+ * The results are the recorded outcomes of eval run 10 (2026-10-30) — the
+ * dispatch's enumeration, held here as data so a hand edit to one side fails
+ * loudly rather than quietly disagreeing.
  *
  * Like `scenario-catalogue.test.ts`, the catalogue is read as text: src/ may
  * not import evals/.
@@ -21,6 +25,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  PLAIN_WORDS,
   QUESTION_DRAFT_PARAM,
   USE_CASES_TESTED_AT,
   USE_CASES_TESTED_ON,
@@ -43,6 +48,125 @@ const RUN_10 = {
   coming: ['15', '16'],
 }
 
+/** The page's own wording, pinned sentence by sentence: the PM text is
+ *  hand-written, so an accidental edit to a title or a sentence fails here
+ *  before it ships (the catalogue turns have their own verbatim pin below). */
+const PAGE_TEXT: Array<{ id: string; title: string; pageTurns: string[] }> = [
+  { id: '01-greeting', title: 'A quick hello', pageTurns: ['Hi! What can you help me with?'] },
+  {
+    id: '02-graph-count',
+    title: 'Count active projects',
+    pageTurns: ['How many projects are currently active in the organization?'],
+  },
+  {
+    id: '03-web-read',
+    title: 'Search the web',
+    pageTurns: ['Find the Next.js release notes and read the page. What changed in version 15.5?'],
+  },
+  {
+    id: '06-read-only',
+    title: 'Edit the org graph',
+    pageTurns: ['Add a project called Lantern to the org graph.'],
+  },
+  {
+    id: '09-upload-summary',
+    title: 'Summarize a document',
+    pageTurns: [
+      'I uploaded lantern-notes.md. Write a short Word summary called lantern-summary.docx and give me the download link.',
+    ],
+  },
+  {
+    id: '10-csv-analysis',
+    title: 'Analyze a spreadsheet',
+    pageTurns: [
+      'Use the uploaded lantern-sales.csv to total revenue by region. Save lantern-totals.csv and tell me the grand total.',
+    ],
+  },
+  {
+    id: '11-mail-to-file',
+    title: 'Turn an email into a document',
+    pageTurns: [
+      'Find the Lantern launch email in my inbox. Turn its checklist into lantern-launch.md and give me the file.',
+    ],
+  },
+  {
+    id: '12-retrieve-citation',
+    title: 'Answer with a citation',
+    pageTurns: [
+      'According to the uploaded lantern-notes.md, what is the release date? Please cite the document.',
+    ],
+  },
+  {
+    id: '13-two-sources',
+    title: 'Cross-check two sources',
+    pageTurns: [
+      'Compare the number of projects in the organization with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
+    ],
+  },
+  {
+    id: '17-mail-analysis-follow-up',
+    title: 'A multi-step analysis',
+    pageTurns: [
+      'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
+      'From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues.',
+    ],
+  },
+  {
+    id: '04-library-docs',
+    title: 'Look up developer docs',
+    pageTurns: ['Find the SolidJS createSignal docs and show me a tiny counter example.'],
+  },
+  {
+    id: '05-memory-lookup',
+    title: 'Recall what you told it',
+    pageTurns: [
+      'What do you remember about me?',
+      'And which release tag do you have noted for it?',
+    ],
+  },
+  {
+    id: '07-follow-up-success',
+    title: 'Build on a previous answer',
+    pageTurns: [
+      'How many projects are currently active in the organization?',
+      'Who is involved in the three projects with the most people working on them?',
+    ],
+  },
+  {
+    id: '08-follow-up-failure',
+    title: 'Retry a failed question',
+    pageTurns: [
+      'How many projects are currently active in the organization?',
+      'That failed earlier. Please try the same count again now.',
+    ],
+  },
+  {
+    id: '14-analysis-index-follow-up',
+    title: 'Analyze, save, then ask again',
+    pageTurns: [
+      'I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.',
+      // The catalogue's own word rides the page text here — `plainWords`
+      // replaces it at render, and the page test fails if it leaks through.
+      'I have indexed lantern-analysis.md from the Data Stash. Which region sold more and by how much? Cite that analysis.',
+    ],
+  },
+  {
+    id: '15-graph-file-summary',
+    title: 'From OneDrive to a summary',
+    pageTurns: [
+      'Find lantern-brief.docx in my OneDrive, read it, and write lantern-brief-summary.docx.',
+    ],
+  },
+  {
+    id: '16-graph-files-analysis',
+    title: 'From OneDrive files to analysis',
+    pageTurns: [
+      'Find the Lantern budget and actuals spreadsheets in my OneDrive. Compare them, create lantern-variance.md, index it, and let me ask questions about it.',
+      'Which item has the largest overspend in that report? Cite it.',
+    ],
+  },
+]
+
 describe('use-cases data', () => {
   it('carries exactly the 17 run-10 scenarios, each unique', () => {
     expect(flat).toHaveLength(17)
@@ -57,6 +181,18 @@ describe('use-cases data', () => {
     }
   })
 
+  it('carries the catalogue turns verbatim — "Try this" sends the catalogue question', () => {
+    for (const q of flat) {
+      expect(q.turns, q.id).toEqual(catalogueById.get(q.id)!.turns)
+    }
+  })
+
+  it('carries the page text exactly as written for PMs', () => {
+    expect(flat.map((q) => ({ id: q.id, title: q.title, pageTurns: q.pageTurns }))).toEqual(
+      PAGE_TEXT,
+    )
+  })
+
   it('carries a short title for every question', () => {
     for (const q of flat) {
       expect(q.title.length, `${q.id} title`).toBeGreaterThan(0)
@@ -66,7 +202,7 @@ describe('use-cases data', () => {
 
   it('words the questions for PMs: the graph is never named except the owned org-graph write', () => {
     for (const q of flat) {
-      for (const t of [q.title, ...q.turns]) {
+      for (const t of [q.title, ...q.pageTurns]) {
         expect(t).not.toMatch(/neo4j/i)
         expect(t).not.toMatch(/knowledge graph/i)
         // 'graph' survives only inside the owned phrase 'org graph'.
@@ -79,14 +215,14 @@ describe('use-cases data', () => {
     }
     // The write-shaped question is the one place the owner allows the org
     // graph to be named, and its title is the context that makes it clear.
-    const orgGraph = flat.filter((q) => q.turns.some((t) => t.includes('org graph')))
+    const orgGraph = flat.filter((q) => q.pageTurns.some((t) => t.includes('org graph')))
     expect(orgGraph.map((q) => q.id)).toEqual(['06-read-only'])
     expect(orgGraph[0]!.title).toBe('Edit the org graph')
-    expect(orgGraph[0]!.turns[0]).toBe('Add a project called Lantern to the org graph.')
+    expect(orgGraph[0]!.pageTurns[0]).toBe('Add a project called Lantern to the org graph.')
   })
 
   it('keeps the count questions in the audience’s own words', () => {
-    expect(flat.find((q) => q.id === '02-graph-count')!.turns[0]).toBe(
+    expect(flat.find((q) => q.id === '02-graph-count')!.pageTurns[0]).toBe(
       'How many projects are currently active in the organization?',
     )
   })
@@ -120,14 +256,25 @@ describe('use-cases data', () => {
     for (const q of flat) expect(['works', 'not-yet', 'coming']).toContain(q.result)
   })
 
-  it('keeps the multi-turn questions multi-turn, and the follow-ups verbatim', () => {
-    // The follow-up turns carried no graph vocabulary, so they stay the
-    // catalogue's own; only the first turns were rewritten for the audience.
-    for (const q of flat.filter((candidate) => candidate.turns.length > 1)) {
-      expect(q.turns.slice(1)).toEqual((catalogueById.get(q.id)!.turns as string[]).slice(1))
+  it('keeps the two texts the same shape, turn for turn', () => {
+    for (const q of flat) {
+      expect(q.pageTurns, q.id).toHaveLength(q.turns.length)
     }
     // Six of the seventeen carry follow-ups — the page's "then ask:" cases.
-    expect(flat.filter((q) => q.turns.length > 1)).toHaveLength(6)
+    expect(flat.filter((q) => q.pageTurns.length > 1)).toHaveLength(6)
+  })
+
+  it('maps exactly the developer terms the page would otherwise show', () => {
+    // Every key of the plain-words map must occur in what the page renders —
+    // the section labels the page maps, or the page text. A key that appears
+    // nowhere is a stale entry pretending to protect the reader.
+    const page = flat
+      .flatMap((q) => [q.title, ...q.pageTurns])
+      .concat(['Must', 'Should', 'Nice to have'])
+      .join('\n')
+    for (const term of Object.keys(PLAIN_WORDS)) {
+      expect(page, `no page text carries "${term}"`).toContain(term)
+    }
   })
 
   it('hands "Try this" its query parameter', () => {

@@ -2,16 +2,17 @@
  * The `/use-cases` page — a static snapshot plus markup, so everything here is
  * jsdom-cheap. What is asserted is the page's promise to its reader: plain
  * headings per priority, one plain line on how each section did, the data-updated
- * line, a short titled card per question in a tiled grid, a prefilled-never-sent
- * "Try this" per question, and NO eval jargon (ids, "gated", "P4") anywhere in
- * the rendered text.
+ * line, a short titled card per question in a tiled grid, "Try this" only where
+ * the result is Works (owner decision, #937 round 3), and NO eval jargon, no
+ * scenario ids, no "gated", no "P4" — and no developer term the plain-words map
+ * exists to translate — anywhere in the rendered text.
  */
 
 import { describe, it, expect } from 'vitest'
 import { render } from '@solidjs/testing-library'
 import { MemoryRouter, Route } from '@solidjs/router'
 import UseCases from '~/routes/use-cases'
-import { USE_CASE_SECTIONS, USE_CASES_TESTED_ON } from '~/lib/use-cases'
+import { PLAIN_WORDS, USE_CASE_SECTIONS, USE_CASES_TESTED_ON } from '~/lib/use-cases'
 
 function renderPage() {
   return render(() => (
@@ -42,7 +43,7 @@ describe('use-cases page', () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
     const headings = [...container.querySelectorAll('h2')].map((h) => h.textContent)
-    expect(headings).toEqual(['Must', 'Should', 'Nice to have'])
+    expect(headings).toEqual(['Works today', 'Nearly there', 'On the way'])
   })
 
   it('says plainly how each section did in the last test', async () => {
@@ -55,22 +56,34 @@ describe('use-cases page', () => {
     expect(container.textContent).toContain('Coming soon — these were not runnable')
   })
 
-  it('offers every question, prefilled and never sent', async () => {
+  it('offers "Try this" only where the result is Works, prefilled and never sent', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
+
+    const works = flat.filter((q) => q.result === 'works')
+    expect(works).toHaveLength(13)
 
     const tries = [...container.querySelectorAll('a')].filter((a) =>
       a.textContent?.includes('Try this'),
     )
-    expect(tries).toHaveLength(17)
+    expect(tries).toHaveLength(13)
 
-    // Each link opens a brand-new chat (bare `/`, no `?c=`) with the FIRST
-    // turn as the draft. A multi-turn question fills turn one and shows the
-    // rest as "then ask:" — never everything at once.
+    // Each link opens a brand-new chat (bare `/`, no `?c=`) with the catalogue's
+    // FIRST turn as the draft — the wording the eval round measured. A
+    // multi-turn question fills turn one and shows the rest as "then ask:".
     const hrefs = tries.map((a) => a.getAttribute('href')!)
-    for (let i = 0; i < flat.length; i++) {
-      expect(hrefs[i]).toBe(`/?q=${encodeURIComponent(flat[i].turns[0])}`)
+    for (let i = 0; i < works.length; i++) {
+      expect(hrefs[i]).toBe(`/?q=${encodeURIComponent(works[i].turns[0])}`)
       expect(hrefs[i]).not.toContain('c=')
+    }
+
+    // No button where it did not work — "Not yet reliable" and "Coming soon"
+    // carry the badge alone.
+    const cards = [...container.querySelectorAll('li')]
+    for (const q of flat.filter((candidate) => candidate.result !== 'works')) {
+      const card = cards.find((li) => li.textContent?.includes(q.title))
+      expect(card, q.id).toBeDefined()
+      expect(card!.querySelectorAll('a'), q.id).toHaveLength(0)
     }
   })
 
@@ -108,34 +121,49 @@ describe('use-cases page', () => {
   })
 
   it('gives every "Try this" link its question in the accessible name', () => {
-    // #937 review, SHOULD: 17 identical "Try this" entries are indistinguishable
+    // #937 review, SHOULD: identical "Try this" entries are indistinguishable
     // in a screen reader's link list. Each aria-label names the question by its
     // title and its words; the visible text stays "Try this".
     const { container } = renderPage()
+    const works = flat.filter((q) => q.result === 'works')
     const names = [...container.querySelectorAll('a')]
       .filter((a) => a.textContent?.includes('Try this'))
       .map((a) => a.getAttribute('aria-label')!)
-    expect(names).toHaveLength(17)
-    for (let i = 0; i < flat.length; i++) {
-      const suffix = flat[i].turns.length > 1 ? ' (then a follow-up question)' : ''
-      expect(names[i]).toBe(`Try this — ${flat[i].title}: ${flat[i].turns[0]}${suffix}`)
+    expect(names).toHaveLength(works.length)
+    for (let i = 0; i < works.length; i++) {
+      const suffix = works[i].turns.length > 1 ? ' (then a follow-up question)' : ''
+      expect(names[i]).toBe(`Try this — ${works[i].title}: ${works[i].turns[0]}${suffix}`)
     }
-    // Distinctness is the point: 02, 07 and 08 all open on the same question
-    // now, and their titles are what keep their link names apart.
-    expect(new Set(names).size).toBe(17)
+    // Distinctness is the point: 02 and 07 open on the same question now,
+    // and their titles are what keep their link names apart.
+    expect(new Set(names).size).toBe(works.length)
   })
 
   it('words every result plainly, with the word — not just colour', async () => {
     const { findByText, container } = renderPage()
     await findByText('Use cases')
+    // Counted by the badge glyph, not the word: the plain-words headings say
+    // "Works today", so a text count of "Works" would double-count.
+    const badges = (icon: string) => container.querySelectorAll(`.${icon}`).length
+    expect(badges('i-material-symbols-task-alt')).toBe(13)
+    expect(badges('i-material-symbols-error')).toBe(2)
+    expect(badges('i-material-symbols-schedule')).toBe(2)
     const text = container.textContent ?? ''
-    const count = (label: string) => text.split(label).length - 1
-    expect(count('Works')).toBe(13)
-    expect(count('Not yet reliable')).toBe(2)
-    // "Coming soon" also opens the nice-to-have summary line; the badge
-    // instances are what the count above the summary is checked against, so
-    // assert at least the two badges and never rely on an exact global total.
+    expect(text).toContain('Works')
+    expect(text).toContain('Not yet reliable')
     expect(text).toContain('Coming soon')
+  })
+
+  it('never shows a developer term the plain-words map exists to translate', async () => {
+    const { findByText, container } = renderPage()
+    await findByText('Use cases')
+    const text = container.textContent ?? ''
+    for (const term of Object.keys(PLAIN_WORDS)) {
+      expect(text, term).not.toContain(term)
+    }
+    // The mapped counterpart IS shown: the one question whose page text names
+    // the Data Stash reads as plain words instead.
+    expect(text).toContain('your uploaded files')
   })
 
   it('carries no eval jargon and no scenario ids', async () => {

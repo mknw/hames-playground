@@ -8,15 +8,24 @@
  * 10, 2026-10-30 — pass 01–07, 09–13, 17; fail 08, 14; gated (not runnable
  * yet) 15, 16. Nothing else from that run is recorded here.
  *
- * The WORDING is the page's own, not the catalogue's, deliberately: the
- * audience is product managers, not the eval harness. The catalogue's turns
- * name the knowledge graph; the questions here say what that means to a
- * reader — the projects and people in the organization. Write-shaped
- * questions may name the org graph itself, and each carries a short title
- * ("Edit the org graph") so the instruction has context. Nothing here is
- * invented: every rewritten sentence still asks what its catalogue scenario
- * asks. Every name, address, document and figure in the questions is
- * synthetic.
+ * TWO texts ride on every question, deliberately (owner decision, #937 round
+ * 3): the page may rephrase for its audience, and "Try this" must send what
+ * the eval round actually measured.
+ *
+ * - `turns` — the catalogue's questions VERBATIM; the data test pins them to
+ *   the catalogue file. This is what "Try this" fills the composer with.
+ * - `pageTurns` — the page's own wording of the same question, written for
+ *   product managers. The catalogue names the knowledge graph and Project
+ *   nodes; the page says what that means to a reader — the projects and
+ *   people in the organization. The write-shaped question keeps the owner's
+ *   org-graph phrasing, and each carries a short title so the instruction has
+ *   context. Nothing here is invented: every rewritten sentence still asks
+ *   what its catalogue scenario asks. Every name, address, document and
+ *   figure in the questions is synthetic.
+ *
+ * Developer terms that would otherwise reach the page are mapped to plain
+ * words at render time (`PLAIN_WORDS` below): the data stays verbatim, the
+ * rendered page does not show the term.
  *
  * A static snapshot by design: this page is a guide for people, not a live
  * eval report — update this module when a new round lands.
@@ -30,8 +39,11 @@ export interface UseCaseQuestion {
   id: string
   /** Short title shown above the question, giving the instruction context. */
   title: string
-  /** The question as the page words it; the first is what "Try this" fills. */
+  /** The catalogue's turns, verbatim — what "Try this" sends. */
   turns: string[]
+  /** The question as the page words it for PMs — what the page shows. Same
+   *  shape as `turns`, turn for turn. */
+  pageTurns: string[]
   result: UseCaseResult
 }
 
@@ -61,27 +73,62 @@ export const USE_CASES_TESTED_ON = '30 October 2026'
  *  page renders it — "Data updated: <date>, <time>"). */
 export const USE_CASES_TESTED_AT: string | undefined = undefined
 
-const q = (id: string, title: string, result: UseCaseResult, turns: string[]): UseCaseQuestion => ({
-  id,
-  title,
-  result,
-  turns,
-})
+/** Developer terms the page would otherwise show, each with its plain-words
+ *  counterpart (owner decision, #937 round 3). The catalogue's section
+ *  priorities and infrastructure names mean nothing to a product manager;
+ *  every rendered string on the page goes through `plainWords`, so the term
+ *  survives only in this file's data. Keys carry the article where the
+ *  catalogue's sentence has one, so the replacement reads naturally —
+ *  "from the Data Stash" becomes "from your uploaded files". */
+export const PLAIN_WORDS: Record<string, string> = {
+  Must: 'Works today',
+  Should: 'Nearly there',
+  'Nice to have': 'On the way',
+  'the Data Stash': 'your uploaded files',
+}
+
+/** Replace every developer term with its plain-words counterpart. Longest
+ *  keys first, so 'Nice to have' is replaced whole rather than piecemeal. */
+export const plainWords = (text: string): string => {
+  let out = text
+  for (const term of Object.keys(PLAIN_WORDS).sort((a, b) => b.length - a.length)) {
+    out = out.split(term).join(PLAIN_WORDS[term]!)
+  }
+  return out
+}
+
+/** `pageTurns` defaults to `turns`: most questions are worded the same for the
+ *  page and the catalogue, and only the rephrased ones carry both. */
+const q = (
+  id: string,
+  title: string,
+  result: UseCaseResult,
+  turns: string[],
+  pageTurns: string[] = turns,
+): UseCaseQuestion => ({ id, title, turns, pageTurns, result })
 
 export const USE_CASE_SECTIONS: UseCaseSection[] = [
   {
     priority: 'must',
     questions: [
       q('01-greeting', 'A quick hello', 'works', ['Hi! What can you help me with?']),
-      q('02-graph-count', 'Count active projects', 'works', [
-        'How many projects are currently active in the organization?',
-      ]),
+      q(
+        '02-graph-count',
+        'Count active projects',
+        'works',
+        ['How many Project nodes are in the knowledge graph?'],
+        ['How many projects are currently active in the organization?'],
+      ),
       q('03-web-read', 'Search the web', 'works', [
         'Find the Next.js release notes and read the page. What changed in version 15.5?',
       ]),
-      q('06-read-only', 'Edit the org graph', 'works', [
-        'Add a project called Lantern to the org graph.',
-      ]),
+      q(
+        '06-read-only',
+        'Edit the org graph',
+        'works',
+        ['Create a Project node named Lantern in the knowledge graph.'],
+        ['Add a project called Lantern to the org graph.'],
+      ),
       q('09-upload-summary', 'Summarize a document', 'works', [
         'I uploaded lantern-notes.md. Write a short Word summary called lantern-summary.docx and give me the download link.',
       ]),
@@ -94,9 +141,17 @@ export const USE_CASE_SECTIONS: UseCaseSection[] = [
       q('12-retrieve-citation', 'Answer with a citation', 'works', [
         'According to the uploaded lantern-notes.md, what is the release date? Please cite the document.',
       ]),
-      q('13-two-sources', 'Cross-check two sources', 'works', [
-        'Compare the number of projects in the organization with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
-      ]),
+      q(
+        '13-two-sources',
+        'Cross-check two sources',
+        'works',
+        [
+          'Compare the Project count in the knowledge graph with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
+        ],
+        [
+          'Compare the number of projects in the organization with the target count in lantern-notes.md. How far apart are they? Cite the notes.',
+        ],
+      ),
       q('17-mail-analysis-follow-up', 'A multi-step analysis', 'works', [
         'Find the Lantern launch email in my inbox. Use its checklist and the uploaded lantern-notes.md and lantern-sales.csv to prepare lantern-launch-analysis.md, index it for this chat, and offer to answer questions.',
         'From that indexed analysis, which region sold more and by how much? Cite the report and include both regional revenues.',
@@ -113,14 +168,32 @@ export const USE_CASE_SECTIONS: UseCaseSection[] = [
         'What do you remember about me?',
         'And which release tag do you have noted for it?',
       ]),
-      q('07-follow-up-success', 'Build on a previous answer', 'works', [
-        'How many projects are currently active in the organization?',
-        'Who is involved in the three projects with the most people working on them?',
-      ]),
-      q('08-follow-up-failure', 'Retry a failed question', 'not-yet', [
-        'How many projects are currently active in the organization?',
-        'That failed earlier. Please try the same count again now.',
-      ]),
+      q(
+        '07-follow-up-success',
+        'Build on a previous answer',
+        'works',
+        [
+          'How many Project nodes are in the knowledge graph?',
+          'Who is involved in the three projects with the most people working on them?',
+        ],
+        [
+          'How many projects are currently active in the organization?',
+          'Who is involved in the three projects with the most people working on them?',
+        ],
+      ),
+      q(
+        '08-follow-up-failure',
+        'Retry a failed question',
+        'not-yet',
+        [
+          'Count the Project nodes in the knowledge graph.',
+          'That failed earlier. Please try the same count again now.',
+        ],
+        [
+          'How many projects are currently active in the organization?',
+          'That failed earlier. Please try the same count again now.',
+        ],
+      ),
       q('14-analysis-index-follow-up', 'Analyze, save, then ask again', 'not-yet', [
         'I uploaded lantern-notes.md and lantern-sales.csv. Analyse sales against the notes, save lantern-analysis.md, index it for this chat, and offer to answer questions about it.',
         'I have indexed lantern-analysis.md from the Data Stash. Which region sold more and by how much? Cite that analysis.',

@@ -293,24 +293,26 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       // re-dispatched route, so a repeat dispatch advances instead of repeating
       // (#927 slice 2). The ids ride to `searchDocuments` as a search-time
       // filter, so hidden documents never shrink a page below k. Scoping keys
-      // on the route (patternId), not the tool name, and on the `turn` field of
-      // the last user_message, so an earlier turn's results stay eligible for
-      // re-retrieval.
+      // on the route (patternId), not the tool name, and on the CURRENT TURN —
+      // the slice starting at the last `user_message` event, the same boundary
+      // rule `sliceByLastNTurns` derives turns by (event-view.server.ts). No
+      // event carries a `turn` field (`createEvent` sets none), so the boundary
+      // is derived from the stream, never read off an event: an earlier turn's
+      // results stay eligible for re-retrieval, so a fresh question starts from
+      // the top of the document again.
       const excludeIds =
         page && view.exists()
           ? (() => {
-              // The `turn` field is not part of the ContextEvent type (tests
-              // inject it), so it is reached by cast.
               const contextEvents = view.unfiltered().get()
-              type WithTurn = ContextEvent & { turn?: number }
-              const lastUserMessage = [...contextEvents]
-                .reverse()
-                .find((e) => e.type === 'user_message') as WithTurn | undefined
-              const currentTurn = lastUserMessage?.turn
-              if (currentTurn === undefined) return []
-              return contextEvents.flatMap((e) => {
+              let turnStart = 0
+              for (let i = contextEvents.length - 1; i >= 0; i--) {
+                if (contextEvents[i]!.type === 'user_message') {
+                  turnStart = i
+                  break
+                }
+              }
+              return contextEvents.slice(turnStart).flatMap((e) => {
                 if (e.patternId !== scope.id) return []
-                if ((e as WithTurn).turn !== currentTurn) return []
                 const d = e.data as ToolResultEventData
                 const r = d.result as RetrieverResult | undefined
                 return (r?.matches ?? []).map((m) => m.id)

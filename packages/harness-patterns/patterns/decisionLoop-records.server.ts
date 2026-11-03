@@ -84,6 +84,13 @@ export interface RouteStats {
    * document carries no recorded count.
    */
   readonly chunks?: number
+  /**
+   * Retriever: the chunks this route has shown the turn so far — this
+   * dispatch's matches plus the same route's earlier records this turn (#927)
+   * — so a later dispatch's `k of N chunks seen` reads how much of the document
+   * remains, not just its own page.
+   */
+  readonly seen?: number
   /** Planner: steps in the plan. */
   readonly planSteps?: number
 }
@@ -522,6 +529,9 @@ export function computeStats(
   events: ContextEvent[],
   leafId: string,
   wallMs: number,
+  /** This turn's earlier records of the SAME route (#927): the retriever's
+   *  `seen` accumulates over them. */
+  sameRouteEarlier: readonly RouteOutput[] = [],
 ): RouteStats {
   const own = events.filter((e) => e.patternId === leafId)
   const actions = own.filter((e) => e.type === 'controller_action')
@@ -561,9 +571,15 @@ export function computeStats(
       )?.result as RetrieverResult | undefined
       const matches = result?.matches ?? []
       const chunks = chunkTotalOf(matches)
+      // `seen` is cumulative for the turn (#927): this dispatch's matches plus
+      // the same route's earlier records this turn, so the step line's
+      // `k of N chunks seen` tells the decider how much of the document
+      // remains — dispatch 2 reads `(10 of 84 chunks seen)`, not `(5 of 84)`.
+      const seen = matches.length + sameRouteEarlier.reduce((n, r) => n + (r.stats.matches ?? 0), 0)
       return {
         ...base,
         matches: matches.length,
+        seen,
         documents: new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size,
         backends: result?.backends ?? [],
         ...(chunks !== undefined ? { chunks } : {}),
@@ -670,10 +686,11 @@ export function formatStats(s: RouteStats): string {
     case 'retriever': {
       // `k of N chunks seen` rides only when every matched document reported its
       // total: a document ingested before the count was recorded renders no
-      // count, never a fabricated 0 (#927).
+      // count, never a fabricated 0 (#927). `k` is `seen` — cumulative over the
+      // route's records this turn, not this dispatch's matches.
       const chunks =
-        s.matches !== undefined && s.chunks !== undefined
-          ? ` (${s.matches} of ${s.chunks} chunks seen)`
+        s.seen !== undefined && s.chunks !== undefined
+          ? ` (${s.seen} of ${s.chunks} chunks seen)`
           : ''
       return `retriever: ${plural(s.matches ?? 0, 'match', 'matches')} in ${plural(s.documents ?? 0, 'document')}${chunks} from ${(s.backends ?? []).join(', ') || 'no backends'}, ${plural(s.errors, 'error')}, ${wall}`
     }

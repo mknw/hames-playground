@@ -2105,10 +2105,12 @@ time; a route that hit its bound reads differently from one that finished early;
 the retriever reports matches, distinct documents and backends (its excerpts are taken from the chunk, not from the guard's spotlight fence: `unspotlight` from `injection-guard.ts` strips it, and the extractor puts the same fence back around the block it quotes) — it does not
 record how many documents it _searched_ — and, when every matched document
 recorded its chunk count at ingest (#927), that combined count, rendered as
-`in 1 document (84 chunks)`; a document with no recorded count renders no
-count, never a fabricated 0) — then **Latest results**, the last
-`handoff.lastN` outputs in full. It is trimmed oldest-first to the decide
-window. Memory reaches it only through the memories block (below).
+`(10 of 84 chunks seen)` on the step line: `k` is cumulative — every chunk the
+route has shown the turn so far, this dispatch's matches plus its earlier records
+this turn — and `N` the combined total of the matched documents; a document with
+no recorded count renders no count, never a fabricated 0) — then **Latest
+results**, the last `handoff.lastN` outputs in full. It is trimmed oldest-first to
+the decide window. Memory reaches it only through the memories block (below).
 
 **The documents block (#507).** With `documents` configured, the state gains one
 block between the conversation and **This turn so far**, constant within a turn.

@@ -196,6 +196,20 @@ describe('renderDocumentsBlock — names (the private run)', () => {
     expect(types('')).toContain('(other,')
   })
 
+  // #927 slice 1: the recorded ingest chunk count renders as `N chunks` on the
+  // document's line — after `searchable`, only when the summary carries one.
+  it('a recorded ingest count renders as `N chunks`', () => {
+    const block = renderDocumentsBlock({ total: 1, names: [doc('a', { chunks: 84 })] })!
+    expect(block!.split('\n')[1]).toBe('- "a" (Markdown, 1.2 KB, searchable, 84 chunks)')
+  })
+
+  // MUTATION: render `0` for an absent count (``?? 0``) → this pin fails.
+  it('a legacy document (no recorded count) renders NO count, never a fabricated 0', () => {
+    const block = renderDocumentsBlock({ total: 1, names: [doc('legacy')] })!
+    expect(block!.split('\n')[1]).toBe('- "legacy" (Markdown, 1.2 KB, searchable)')
+    expect(block).not.toMatch(/\d+ chunks/)
+  })
+
   // Mutation: `base in TYPE_BY_MIME` for `Object.hasOwn(TYPE_BY_MIME, base)`: an
   // inherited member answers with a function, printed as source text.
   it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(

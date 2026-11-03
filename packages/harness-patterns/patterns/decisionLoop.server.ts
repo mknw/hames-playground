@@ -616,7 +616,16 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
   ): RouteOutput => {
     const kind = kinds.get(label)!
     const leafId = leafIds.get(label)!
-    const stats = computeStats(kind, childEvents, leafId, wallMs)
+    // #927: `seen` (the step line's `k of N chunks seen`) accumulates over this
+    // turn's earlier records of the SAME route, so the count is per-turn, not
+    // per-dispatch.
+    const stats = computeStats(
+      kind,
+      childEvents,
+      leafId,
+      wallMs,
+      earlier.filter((r) => r.route === label),
+    )
     const extracted =
       thrown !== undefined
         ? ({

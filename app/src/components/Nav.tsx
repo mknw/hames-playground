@@ -13,13 +13,13 @@ import { isPublicRoute, SHARE_ROUTE_PREFIX } from '~/lib/share-link'
  * warm state, global counters) and a row of icon controls on the right: the
  * metrics dashboard and use-cases pages, theme, user.
  *
- * The two page links read as one captioned group (owner, 2026-11-02): each
- * keeps its OWN icon in both states — the icon no longer flips to a chat glyph
- * on the page it opened — and each carries a tiny caption naming it
- * ("metrics", "use cases"), matched by the agent selector's "agent" caption on
- * the chat page. The way back to chat is the pressed state: the link whose
- * page is open renders active (`aria-current="page"`, filled background) and
- * clicking it again navigates to `/`.
+ * The two page links read as TAB HEADERS, not buttons (owner, round 4): icon
+ * followed by the label on ONE line, one shared height for every tab, no
+ * boxed border or solid fill. The page that is open is the selected tab
+ * (`aria-current="page"`, a subtle accent background on the ui-* tokens,
+ * both themes) and clicking it again navigates to `/`. At phone width the
+ * labels collapse to icons only — each tab keeps its accessible name either
+ * way.
  *
  * The bar itself is on the theme-aware `ui-*` tokens (#226 B8) — it houses the
  * theme control and it sits above the auth pages, so a dark bar over a light
@@ -63,68 +63,79 @@ export default function Nav() {
             <HitlInbox />
           </Show>
           <Show when={!onSharePage()}>
-            {/* One captioned link per page. `aria-current` marks the open one;
-                its label says what pressing it now does, because a control
-                that navigates somewhere unexpected under the same name is
-                the kind of surprise this bar should not spring on anyone. */}
-            <a
-              href={onDashboard() ? '/' : '/dashboard'}
-              flex="~ col"
-              items="center"
-              justify="center"
-              gap="0.5"
-              p="1"
-              rounded="lg"
-              bg={onDashboard() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
-              border={onDashboard() ? '1 ui-accent/60' : '1 cyber-700/50'}
-              transition="all"
-              aria-current={onDashboard() ? 'page' : undefined}
-              title={
-                onDashboard()
-                  ? 'Back to chat — metrics dashboard is open'
-                  : 'Metrics dashboard — tokens, cache, costs'
-              }
-              aria-label={
-                onDashboard() ? 'Back to chat — metrics dashboard is open' : 'Metrics dashboard'
-              }
-            >
-              <span
-                class="i-material-symbols-monitoring"
-                w="5"
-                h="5"
-                text="ui-accent"
-                aria-hidden="true"
-              />
-              <span text="2xs ui-text-primary">metrics</span>
-            </a>
-            <a
-              href={onUseCases() ? '/' : '/use-cases'}
-              flex="~ col"
-              items="center"
-              justify="center"
-              gap="0.5"
-              p="1"
-              rounded="lg"
-              bg={onUseCases() ? 'cyber-700/40' : 'cyber-800/20 hover:cyber-700/30'}
-              border={onUseCases() ? '1 ui-accent/60' : '1 cyber-700/50'}
-              transition="all"
-              aria-current={onUseCases() ? 'page' : undefined}
-              title={
-                onUseCases()
-                  ? 'Back to chat — use cases page is open'
-                  : 'Use cases — what you can ask'
-              }
-              aria-label={onUseCases() ? 'Back to chat — use cases page is open' : 'Use cases'}
-            >
-              <span
-                class="i-material-symbols-checklist"
-                w="5"
-                h="5"
-                text="ui-accent"
-                aria-hidden="true"
-              />
-              <span text="2xs ui-text-primary">use cases</span>
-            </a>
+            {/* The two page links, restyled as tab headers (owner, round 4):
+                icon + label on one line, one shared height, no boxed look.
+                `aria-current` marks the open one; its label says what pressing
+                it now does, because a control that navigates somewhere
+                unexpected under the same name is the kind of surprise this
+                bar should not spring on anyone. The label span collapses to
+                icons-only below md (`.nav-tab-label`, a preflight class — the
+                valueless `hidden` attribute is the native one and wind4's
+                preflight hides it with !important, so no display utility can
+                override it at md); the anchor's aria-label is then its only
+                name. */}
+            <div flex="~ items-center" gap="1">
+              <a
+                href={onDashboard() ? '/' : '/dashboard'}
+                flex="~ items-center"
+                gap="1.5"
+                h="11"
+                px="3"
+                rounded="md"
+                whitespace="nowrap"
+                text={onDashboard() ? 'sm ui-text-primary' : 'sm ui-text-secondary'}
+                font="medium"
+                bg={onDashboard() ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+                transition="colors"
+                aria-current={onDashboard() ? 'page' : undefined}
+                title={
+                  onDashboard()
+                    ? 'Back to chat — metrics dashboard is open'
+                    : 'Metrics dashboard — tokens, cache, costs'
+                }
+                aria-label={
+                  onDashboard() ? 'Back to chat — metrics dashboard is open' : 'Metrics dashboard'
+                }
+              >
+                <span
+                  class="i-material-symbols-monitoring"
+                  w="5"
+                  h="5"
+                  text={onDashboard() ? 'ui-accent' : 'ui-text-secondary'}
+                  aria-hidden="true"
+                />
+                <span class="nav-tab-label">metrics</span>
+              </a>
+              <a
+                href={onUseCases() ? '/' : '/use-cases'}
+                flex="~ items-center"
+                gap="1.5"
+                h="11"
+                px="3"
+                rounded="md"
+                whitespace="nowrap"
+                text={onUseCases() ? 'sm ui-text-primary' : 'sm ui-text-secondary'}
+                font="medium"
+                bg={onUseCases() ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
+                transition="colors"
+                aria-current={onUseCases() ? 'page' : undefined}
+                title={
+                  onUseCases()
+                    ? 'Back to chat — use cases page is open'
+                    : 'Use cases — what you can ask'
+                }
+                aria-label={onUseCases() ? 'Back to chat — use cases page is open' : 'Use cases'}
+              >
+                <span
+                  class="i-material-symbols-checklist"
+                  w="5"
+                  h="5"
+                  text={onUseCases() ? 'ui-accent' : 'ui-text-secondary'}
+                  aria-hidden="true"
+                />
+                <span class="nav-tab-label">use cases</span>
+              </a>
+            </div>
           </Show>
           <ThemeSwitcher />
           <Show when={!onSharePage()}>

@@ -7,12 +7,15 @@
  * chat with that question already filled in — not sent, so they can edit it or
  * just read what is there first. Two texts ride on every question (see
  * `lib/use-cases.ts`): the page shows its own PM wording, and "Try this" sends
- * the catalogue's question — the wording the eval round actually measured —
- * verbatim. "Try this" is offered only on questions marked Works.
- * Deliberately no scenario ids, no priorities vocabulary and no eval jargon on
- * the page; the sections carry the catalogue's priority with the developer
- * terms mapped to plain words at render (`PLAIN_WORDS`), and each opens with
- * one plain sentence about how its questions did in the last round.
+ * verbatim. "Try this" is offered only on questions marked Tested — never on
+ * "Not tested yet" (a question no eval round has run sends nothing). Cards
+ * carry one material-symbols icon each beside their title, decorative, and
+ * are ordered within a section by the snapshot's explicit `rank`, most
+ * relevant to a product manager first. Deliberately no scenario ids, no
+ * priorities vocabulary and no eval jargon on the page; the sections carry
+ * the catalogue's priority with the developer terms mapped to plain words at
+ * render (`PLAIN_WORDS`), and each opens with one plain sentence about how
+ * its questions did in the last round.
  *
  * Layout: tiled — one card per question in a responsive grid (one column at
  * phone width, two from md up), each card opening with its short title so an
@@ -53,67 +56,90 @@ type UseCaseSection = (typeof USE_CASE_SECTIONS)[number]
 
 /** One plain sentence on how the section's questions did in the last round.
  *  "Coming soon" is never read as a failure: a section whose misses are all
- *  not-runnable-yet says so instead of quoting a zero. */
+ *  not-runnable-yet says so instead of quoting a zero. A section holding an
+ *  `untested` question still counts the ones the round measured — the round
+ *  simply did not include the newcomer. */
 const sectionSummary = (questions: UseCaseQuestion[]): string => {
   const worked = questions.filter((q) => q.result === 'works').length
   const failed = questions.filter((q) => q.result === 'not-yet').length
+  const untested = questions.filter((q) => q.result === 'untested').length
+  const tested = questions.length - untested
+  if (untested > 0) {
+    const newcomer =
+      untested === 1 ? '1 is new and not tested yet' : `${untested} are new and not tested yet`
+    if (worked === tested)
+      return `All ${tested} tested questions worked in the last test; ${newcomer}.`
+    return `${worked} of ${tested} tested questions worked in the last test; ${newcomer}.`
+  }
   if (worked === questions.length) return `All ${questions.length} worked in the last test.`
-  if (failed > 0) return `${worked} of ${questions.length} worked in the last test.`
+  if (failed > 0 || worked > 0) return `${worked} of ${questions.length} worked in the last test.`
   return 'Coming soon — these were not runnable in the last test.'
 }
 
-/** The badge for one result. Three explicit branches rather than a lookup
+/** The badge for one result. Four explicit branches rather than a lookup
  *  table: the palette classes must be literal in the source for UnoCSS to
  *  extract them — a runtime-composed `bg-${tone}/10` emits no CSS at all.
  *  The word is the accessible content, the colour only reinforces it. The
- *  branches stay inside one returned element (no early returns: Solid
- *  components run once, and an early return reads as one). */
+ *  branches are sibling `Show`s inside one returned element (exactly one
+ *  matches; no early returns: Solid components run once, and an early
+ *  return reads as one). */
 const ResultBadge = (props: { result: UseCaseResult }) => (
-  <Show
-    when={props.result === 'works'}
-    fallback={
-      <Show
-        when={props.result === 'not-yet'}
-        fallback={
-          <span
-            flex="~ items-center gap-2"
-            p="x-3 y-1.5"
-            rounded="full"
-            bg="ui-accent/10"
-            text="base ui-accent"
-            font="medium"
-          >
-            <span class="i-material-symbols-schedule" w="5" h="5" aria-hidden="true" />
-            Coming soon
-          </span>
-        }
+  <>
+    <Show when={props.result === 'works'}>
+      <span
+        flex="~ items-center gap-2"
+        p="x-3 y-1.5"
+        rounded="full"
+        bg="ui-success/8"
+        text="base ui-success"
+        font="medium"
       >
-        <span
-          flex="~ items-center gap-2"
-          p="x-3 y-1.5"
-          rounded="full"
-          bg="ui-danger/10"
-          text="base ui-danger"
-          font="medium"
-        >
-          <span class="i-material-symbols-error" w="5" h="5" aria-hidden="true" />
-          Not yet reliable
-        </span>
-      </Show>
-    }
-  >
-    <span
-      flex="~ items-center gap-2"
-      p="x-3 y-1.5"
-      rounded="full"
-      bg="ui-success/8"
-      text="base ui-success"
-      font="medium"
-    >
-      <span class="i-material-symbols-task-alt" w="5" h="5" aria-hidden="true" />
-      Works
-    </span>
-  </Show>
+        <span class="i-material-symbols-task-alt" w="5" h="5" aria-hidden="true" />
+        Tested
+      </span>
+    </Show>
+    <Show when={props.result === 'not-yet'}>
+      <span
+        flex="~ items-center gap-2"
+        p="x-3 y-1.5"
+        rounded="full"
+        bg="ui-danger/10"
+        text="base ui-danger"
+        font="medium"
+      >
+        <span class="i-material-symbols-error" w="5" h="5" aria-hidden="true" />
+        Not yet reliable
+      </span>
+    </Show>
+    <Show when={props.result === 'coming'}>
+      <span
+        flex="~ items-center gap-2"
+        p="x-3 y-1.5"
+        rounded="full"
+        bg="ui-accent/10"
+        text="base ui-accent"
+        font="medium"
+      >
+        <span class="i-material-symbols-schedule" w="5" h="5" aria-hidden="true" />
+        Coming soon
+      </span>
+    </Show>
+    {/* No eval round has run this question yet (owner, round 4): a neutral
+        badge, and no "Try this" — the page only sends what a round measured. */}
+    <Show when={props.result === 'untested'}>
+      <span
+        flex="~ items-center gap-2"
+        p="x-3 y-1.5"
+        rounded="full"
+        bg="ui-bg-hover"
+        text="base ui-text-secondary"
+        font="medium"
+      >
+        <span class="i-material-symbols-pending" w="5" h="5" aria-hidden="true" />
+        Not tested yet
+      </span>
+    </Show>
+  </>
 )
 
 /** The link's accessible name. 02 and 07 open on the same first question,
@@ -137,8 +163,11 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
     border="1 ui-border-primary"
     h="full"
   >
-    {/* The short title — the context an instruction-shaped question needs. */}
-    <h3 text="base ui-text-secondary" font="medium" m="0">
+    {/* The short title — the context an instruction-shaped question needs —
+        with the card's own icon beside it (owner, round 4). Decorative: the
+        title carries the content, the glyph only marks the card. */}
+    <h3 flex="~ items-center gap-2" text="base ui-text-secondary" font="medium" m="0">
+      <span class={props.question.icon} w="5" h="5" text="ui-accent" aria-hidden="true" />
       {props.question.title}
     </h3>
     {/* The question as the page words it — the largest text on the card on purpose. */}
@@ -163,13 +192,13 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
         line up across a grid row whatever the questions' lengths. */}
     <div flex="~ wrap" items="center" justify="between" gap="3" mt="auto" pt="1">
       <ResultBadge result={props.question.result} />
-      {/* Owner decision, #937 round 3: only a question marked Works offers
-          "Try this" — not "Not yet reliable", not "Coming soon". In-app
-          navigation (router link, not an external link): it lands on a
-          brand-new chat — bare `/` with no `?c=` — with the catalogue's
-          question prefilled in the composer, never sent. The quiet tinted
-          button, not the chat app's cyber-button: this page is a guide, not
-          the product. */}
+      {/* Owner decision, #937 round 3: only a question the page offers "Try this" on
+          — marked Tested, never "Not yet reliable", "Coming soon" or "Not tested
+          yet" (no round has run it). In-app navigation (router link, not an
+          external link): it lands on a brand-new chat — bare `/` with no `?c=`
+          — with the catalogue's question prefilled in the composer, never sent.
+          The quiet tinted button, not the chat app's cyber-button: this page is
+          a guide, not the product. */}
       <Show when={props.question.result === 'works'}>
         <A
           href={`/?${QUESTION_DRAFT_PARAM}=${encodeURIComponent(props.question.turns[0])}`}
@@ -179,7 +208,7 @@ const QuestionCard = (props: { question: UseCaseQuestion }) => (
           text="lg ui-accent"
           font="medium"
           rounded="md"
-          bg="ui-accent/10 hover:ui-accent/20"
+          bg="ui-accent/10 hover:ui-accent/12"
           border="1 ui-border-accent"
           aria-label={tryThisLabel(props.question)}
         >
@@ -203,8 +232,8 @@ export default function UseCases() {
           </h1>
           <p text="lg ui-text-primary" leading="relaxed" m="0">
             This page shows what you can ask the assistant. Every question below is something you
-            can type straight into the chat — or press “Try this” on a question marked Works, and we
-            will put it in for you.
+            can type straight into the chat — or press “Try this” on a question marked Tested, and
+            we will put it in for you.
           </p>
           {/* The snapshot's own timestamp, never a build or render time: the
               line describes the data, not this deploy. */}

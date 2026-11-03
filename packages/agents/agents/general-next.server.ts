@@ -30,6 +30,7 @@ import {
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
+import { SCREEN_POLICY_BY_TIER } from '../types'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { getGraphSchema } from './graph-schema.server'
@@ -202,22 +203,26 @@ async function createPatterns(
   // two routes that read content from outside (office: mail, files and sandbox
   // results; info: web, library docs and the graph); the documents route declares
   // none, so the retriever's hits get the deterministic pass and the fence only.
-  // A deterministic finding forces the screen. The mode is per tier: on the
-  // Anthropic tier the screen runs on every external result and the gate is
-  // never asked (it would send every body to that tier's decisions host); on
-  // the self-deployed tier, and an absent or unknown one, the gate is asked in
-  // 'gated' mode and its answer controls whether the screen runs.
-  // That tier map is also the composition root's GUARD_* switch (slice 6):
-  // deps.guards.screenMode replaces it (GUARD_SCREEN, validated at boot
-  // against these defaults, and GUARD_SCREEN_ANTHROPIC accepted there only as
-  // 'off' or 'always'). The guard declares no `exempt`: nothing here is
+  // The mode is per tier, and both tiers' default is the shared SCREEN_POLICY_BY_TIER
+  // (revision 6, O35/O40): 'off', so with no switch set the ingress check is fully
+  // deterministic and no model call is made — a deterministic finding forces
+  // the screen only in a mode that already runs it, never past an 'off' (O41).
+  // The composition root's GUARD_SCREEN / GUARD_SCREEN_ANTHROPIC switches
+  // re-enable it, validated at boot against that same shared value, and accept
+  // only 'off' or 'always' per tier — a set 'gated' or 'shadow' refuses boot naming
+  // the change. The four core values stay reachable in a reviewed line of code.
+  // The guard declares no `exempt`: nothing here is
   // trusted by namespace. Only external content is gated in (ruling O): the
   // host's classifier marks the deployment's own content internal, which gets
   // the deterministic pass alone unless that pass finds something.
   const screenMode: ByTier<ScreenMode> =
-    deps.guards?.screenMode ?? ({ default: 'gated', anthropic: 'always' } as const)
-  // τi from the composition root's GUARD_GATE_THRESHOLD (#844), validated at
-  // boot; absent, the gate's own default.
+    deps.guards?.screenMode ??
+    ({
+      default: SCREEN_POLICY_BY_TIER.self_deployed,
+      anthropic: SCREEN_POLICY_BY_TIER.anthropic,
+    } as const)
+  // τi from the composition root's bag (#844); absent, the gate's own default —
+  // the env variable retired with revision 6 (#938), a still-set value refuses boot.
   const gate = createGuardGate(createDecideAdapter(), { threshold: deps.guards?.gateThreshold })
   const docGuard = {
     namespaces: ['graph'],

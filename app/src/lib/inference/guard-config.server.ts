@@ -1,10 +1,13 @@
-/** Host guard switches, validated before an agent is built. Unknown values and
- * the removed GUARD_EGRESS mode refuse rather than changing routing silently.
- * The three per-tool outgoing variables apply on both inference tiers.
+/** Host guard switches, validated before an agent is built. An unknown value,
+ *  the removed GUARD_EGRESS mode, a set retired GUARD_GATE_THRESHOLD, or a set
+ *  GUARD_SCREEN 'gated'/'shadow' (the retired gate's modes) refuses rather than
+ *  changing routing silently. The three per-tool outgoing variables apply on
+ *  both inference tiers.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier } from '@hames-ai/harness-patterns/types'
 import type { EgressDetectors, ScreenMode } from '@hames-ai/harness-patterns'
+import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
 import { GUARD_GATE_THRESHOLD } from '@hames-ai/harness-patterns/guard-gate.server'
 import {
   GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
@@ -13,26 +16,24 @@ import {
 
 assertServerOnImport()
 
-/** The declared per-tier defaults for the screen (general-next's, and the
- *  design's Settings table). Keep both maps in agreement. */
-const SCREEN_DEFAULTS = { self_deployed: 'gated', anthropic: 'always' } as const
 /** The declared default for the input pseudonymiser. */
 const PSEUDONYMISE_DEFAULT = false
-/** τi's and τe's defaults are the patterns' own; N's default is the patterns'
- *  constant too, the one spelling the egress gate and general-next share. */
+/** τe's and N's defaults are the patterns' own constants, the one spelling the
+ *  egress gate and general-next share. τi's constant stays as its code-owned
+ *  default: since revision 6 no env variable can set it, so the bag below
+ *  always carries the pattern's own value. */
 const GATE_THRESHOLD_DEFAULT = GUARD_GATE_THRESHOLD
 const EGRESS_THRESHOLD_DEFAULT = GUARD_EGRESS_THRESHOLD
 const TRIPWIRE_N_DEFAULT = GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
 
-const SCREEN_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>([
-  'off',
-  'shadow',
-  'gated',
-  'always',
-])
-/** The screen switches' order of protection, weakest first. */
-const SCREEN_ORDER: Record<ScreenMode, number> = { off: 0, gated: 1, shadow: 2, always: 3 }
-const ANTHROPIC_SCREEN_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>(['off', 'always'])
+/** Both screen switches' accepted values (revision 6): 'off' or 'always' per
+ *  tier. Both tiers' declared default is 'off' (SCREEN_POLICY_BY_TIER), so no
+ *  set value can be weaker than a tier's default and no screen warning
+ *  exists — the screen switches' weakening warnings died with the flip. */
+const SCREEN_SWITCH_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>(['off', 'always'])
+/** The screen modes that answered to the retired guard gate (revision 6): a
+ *  still-set GUARD_SCREEN value here refuses boot naming the change. */
+const RETIRED_SCREEN_MODES: ReadonlySet<string> = new Set(['gated', 'shadow'])
 const EGRESS_NAME_MATCHES: ReadonlySet<EgressDetectors['nameMatch']> = new Set([
   'off',
   'evidence',
@@ -48,7 +49,8 @@ export interface GuardSwitches {
   readonly egressDecide?: EgressDetectors['decide']
   /** The web route's input pseudonymiser switch; `false` omits the filter. */
   readonly pseudonymise: boolean
-  /** τi, as `createGuardGate`'s `threshold` takes it. */
+  /** τi — always the gate's own default: the env variable is retired (revision 6)
+   *  and a still-set value refuses boot. */
   readonly gateThreshold: number
   /** τe, as the egress gate's `threshold` takes it. */
   readonly egressThreshold: number
@@ -63,28 +65,28 @@ export interface GuardSwitches {
 function readGuards(): { switches: GuardSwitches; warnings: string[] } {
   const warnings: string[] = []
 
+  // The screen switches read the shared per-tier policy value
+  // (SCREEN_POLICY_BY_TIER, revision 6): 'off' on both tiers, so a deployment
+  // that sets no switch runs a fully deterministic ingress. 'gated' and
+  // 'shadow' answered to the guard gate, which is retired — a still-set one
+  // refuses boot naming the change, and no other value warns, because no
+  // accepted value is looser than the default.
   const screenRaw = process.env.GUARD_SCREEN
-  const selfDeployedScreen = screenRaw
-    ? parseMode('GUARD_SCREEN', screenRaw, SCREEN_MODES, 'off, shadow, gated, always')
-    : SCREEN_DEFAULTS.self_deployed
-  if (screenRaw && SCREEN_ORDER[selfDeployedScreen] < SCREEN_ORDER[SCREEN_DEFAULTS.self_deployed]) {
-    warnings.push(
-      `[guards] GUARD_SCREEN=${selfDeployedScreen} switches off part of the injection screen on the ` +
-        `self-deployed tier (the tier's default is ${SCREEN_DEFAULTS.self_deployed}): content the ` +
-        'deterministic layer passes keeps no model screen there. Restore the default by unsetting it.',
+  if (screenRaw && RETIRED_SCREEN_MODES.has(screenRaw.trim().toLowerCase())) {
+    throw new Error(
+      'GUARD_SCREEN no longer accepts gated or shadow: the guard gate they answered to ' +
+        'is retired, replaced by the injection-ingress-guard classification (revision 6). ' +
+        'Set off or always, or unset the variable.',
     )
   }
+  const selfDeployedScreen = screenRaw
+    ? parseMode('GUARD_SCREEN', screenRaw, SCREEN_SWITCH_MODES, 'off, always')
+    : SCREEN_POLICY_BY_TIER.self_deployed
 
   const anthropicRaw = process.env.GUARD_SCREEN_ANTHROPIC
   const anthropicScreen = anthropicRaw
-    ? parseMode('GUARD_SCREEN_ANTHROPIC', anthropicRaw, ANTHROPIC_SCREEN_MODES, 'off, always')
-    : SCREEN_DEFAULTS.anthropic
-  if (anthropicRaw && SCREEN_ORDER[anthropicScreen] < SCREEN_ORDER[SCREEN_DEFAULTS.anthropic]) {
-    warnings.push(
-      `[guards] GUARD_SCREEN_ANTHROPIC=${anthropicScreen} switches off the injection screen on the ` +
-        'Anthropic tier: content read there keeps no model screen. Restore the default by unsetting it.',
-    )
-  }
+    ? parseMode('GUARD_SCREEN_ANTHROPIC', anthropicRaw, SCREEN_SWITCH_MODES, 'off, always')
+    : SCREEN_POLICY_BY_TIER.anthropic
 
   if (process.env.GUARD_EGRESS !== undefined) {
     throw new Error(
@@ -123,15 +125,13 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
       )
   }
 
-  const gateRaw = process.env.GUARD_GATE_THRESHOLD
-  const gateThreshold = gateRaw
-    ? parseProbability('GUARD_GATE_THRESHOLD', gateRaw)
-    : GATE_THRESHOLD_DEFAULT
-  if (gateThreshold > GATE_THRESHOLD_DEFAULT) {
-    warnings.push(
-      `[guards] GUARD_GATE_THRESHOLD=${gateThreshold} raises the guard gate's threshold above its ` +
-        `default of ${GATE_THRESHOLD_DEFAULT}: where the injection screen is gated, more content the ` +
-        'gate scores as possibly manipulative skips the screen. Restore the default by unsetting it.',
+  // τi is code-owned since revision 6: the gate question is retired, and a
+  // stale threshold in the environment is a misconfiguration — refused here,
+  // the same posture as the removed GUARD_EGRESS, never silently applied.
+  if (process.env.GUARD_GATE_THRESHOLD !== undefined) {
+    throw new Error(
+      'GUARD_GATE_THRESHOLD is obsolete; the guard gate question is retired and the ' +
+        'injection-ingress-guard classification (GUARD_INGRESS) replaces it. Unset the variable.',
     )
   }
 
@@ -168,7 +168,7 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
       egressNameMatch,
       egressDecide,
       pseudonymise,
-      gateThreshold,
+      gateThreshold: GATE_THRESHOLD_DEFAULT,
       egressThreshold,
       maxOutgoingRetriesPostTripwire,
     },

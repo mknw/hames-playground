@@ -1,19 +1,16 @@
 // @vitest-environment node
-// The GUARD_* operator switches (boundary guards, slice 6): the design's two
-// unit rows, plus the wiring pins for each accepted value.
+// The GUARD_* operator switches (boundary guards, slices 6 and 16): the
+// design's unit rows, plus the wiring pins for each accepted value.
 //
-// The design's rows (New pins, marked 6):
-//   - "A weakening GUARD_* value logs the boot warning; an unknown value
-//     refuses boot" — here, in the same file as the parse they pin, because
-//     the warnings and the values come from the one `readGuards()` pass and a
-//     pin elsewhere could drift from a re-shape of this module.
-//   - "GUARD_SCREEN=gated leaves the Anthropic tier at 'always';
-//     GUARD_SCREEN_ANTHROPIC=gated or shadow refuses boot; GUARD_SCREEN=off
-//     while the self-deployed default is 'gated' logs the weakening warning
-//     (security delta N5)" — `guardConfig()`'s map and the refusal, here; the
-//     Anthropic tier's 'always' reaching the guards is the agent-side pin
-//     (`general-next.test.ts`, "the operator switch ..."), whose own mutation
-//     is the wiring.
+// Revision 6 (#938) inverted the screen rows: both tiers' declared default is
+//   'off', read from the ONE shared per-tier policy value
+//   (SCREEN_POLICY_BY_TIER) the agent's fallback also reads (O35/O40), so no
+//   accepted value can be weaker than a tier's default and the screen
+//   switches' weakening warnings have no case left; a still-set 'gated' or
+//   'shadow' (the retired gate's modes) REFUSES boot naming the change, and a
+//   still-set GUARD_GATE_THRESHOLD refuses boot naming the replacement (the
+//   GUARD_EGRESS posture). The warnings and the values come from the one
+//   `readGuards()` pass, so the pins live here beside the parse they pin.
 //
 // Env handling: the parse reads `process.env` per call (the same discipline as
 // `privateInferenceOnly()`), so each test stubs and unstub its own values and
@@ -22,6 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
 import { assertGuardsConfigured, guardConfig } from '../../../lib/inference/guard-config.server'
 
 // The boot validator is the warnings' only logger; the tests read the calls.
@@ -38,11 +36,16 @@ afterEach(() => {
 })
 
 describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
-  // Slice 15: retirement defaults off. MUTATION: default true, or warn on
-  // default off; the config and composition pins must turn red.
-  it('unset, every value is the declared default, per tier', () => {
+  // Slice 16 (O35/O40): both tiers' declared screen default is 'off', read
+  // from the shared SCREEN_POLICY_BY_TIER rather than a local literal. MUTATION:
+  // restore the old defaults (gated/always) in SCREEN_POLICY_BY_TIER or as local
+  // literals here: this pin and the composition pins must turn red.
+  it('unset, every value is the declared default, per tier, from the shared value', () => {
     expect(guardConfig()).toEqual({
-      screenMode: { default: 'gated', anthropic: 'always' },
+      screenMode: {
+        default: SCREEN_POLICY_BY_TIER.self_deployed,
+        anthropic: SCREEN_POLICY_BY_TIER.anthropic,
+      },
       egressTools: undefined,
       egressNameMatch: undefined,
       egressDecide: undefined,
@@ -53,30 +56,38 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
       egressThreshold: 0.3,
       maxOutgoingRetriesPostTripwire: 0,
     })
+    expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
     expect(warns).toEqual([])
   })
 
   it.each([
     ['off', 'off'],
-    ['shadow', 'shadow'],
-    ['gated', 'gated'],
     ['always', 'always'],
     ['  ALWAYS  ', 'always'],
   ])('GUARD_SCREEN=%j sets the self-deployed tier only (%j)', (raw, want) => {
     vi.stubEnv('GUARD_SCREEN', raw)
-    expect(guardConfig().screenMode).toEqual({ default: want, anthropic: 'always' })
+    expect(guardConfig().screenMode).toEqual({ default: want, anthropic: 'off' })
   })
 
-  it('GUARD_SCREEN=gated leaves the Anthropic tier at its own default (N5)', () => {
-    vi.stubEnv('GUARD_SCREEN', 'gated')
-    expect(guardConfig().screenMode).toMatchObject({ anthropic: 'always' })
-  })
+  // Revision 6: 'gated' and 'shadow' answered to the retired guard gate, so a
+  // still-set one REFUSES boot naming the change — never parsed, never a
+  // silent fall-back onto 'always' (the core's no-gate default for 'gated').
+  it.each(['gated', 'shadow', '  GATED  ', 'Shadow'])(
+    'GUARD_SCREEN=%j refuses boot naming the retired gate, never the value',
+    (value) => {
+      vi.stubEnv('GUARD_SCREEN', value)
+      expect(() => guardConfig()).toThrow(/GUARD_SCREEN no longer accepts gated or shadow/)
+      expect(() => guardConfig()).toThrow(
+        /retired, replaced by the injection-ingress-guard classification/,
+      )
+    },
+  )
 
   it('GUARD_SCREEN_ANTHROPIC accepts only off and always, and sets that tier only', () => {
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
-    expect(guardConfig().screenMode).toEqual({ default: 'gated', anthropic: 'off' })
+    expect(guardConfig().screenMode).toEqual({ default: 'off', anthropic: 'off' })
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
-    expect(guardConfig().screenMode).toEqual({ default: 'gated', anthropic: 'always' })
+    expect(guardConfig().screenMode).toEqual({ default: 'off', anthropic: 'always' })
   })
 
   // Security delta N5: gated and shadow on the Anthropic tier would send every
@@ -113,7 +124,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   })
 
   it.each([
-    ['GUARD_SCREEN', 'nonsense', 'off, shadow, gated, always'],
+    ['GUARD_SCREEN', 'nonsense', 'off, always'],
     ['GUARD_EGRESS_NAME_MATCH', 'by-hope', 'off, evidence, refuse'],
     ['GUARD_EGRESS_DECIDE', 'by-hope', 'off, on, shadow'],
     ['GUARD_PSEUDONYMISE', 'maybe', 'on, off'],
@@ -131,38 +142,32 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   // and silently fall back — the same unreadable-protection class O2 exists
   // to close.
   it('the screen map names the Anthropic tier and puts the self-deployed value under default', () => {
-    vi.stubEnv('GUARD_SCREEN', 'off')
+    vi.stubEnv('GUARD_SCREEN', 'always')
     const map = guardConfig().screenMode as Record<string, string>
-    expect(map.default).toBe('off')
-    expect(map.anthropic).toBe('always')
+    expect(map.default).toBe('always')
+    expect(map.anthropic).toBe('off')
     expect(Object.keys(map).filter((k) => k !== 'default')).toEqual(['anthropic'])
     expect(map.verda).toBeUndefined()
   })
 
-  // The boot warning for any value below a tier's default, in the order
-  // off < gated < shadow < always: only GUARD_SCREEN=off is below the
-  // self-deployed default 'gated'; shadow and always do not warn.
-  it('a value below a tier default logs ONE warning naming the variable; at or above logs none', () => {
+  // Revision 6: both screen defaults are 'off', so no accepted value is below
+  // a tier's default and the screen switches never warn — the weakening
+  // warnings died with the flip. (The egress rows below keep their warnings.)
+  it('no screen value logs a boot warning; unset logs none', () => {
     vi.stubEnv('GUARD_SCREEN', 'off')
     assertGuardsConfigured()
-    expect(warns).toHaveLength(1)
-    expect(warns[0]).toContain('GUARD_SCREEN')
-    warns = []
-    vi.stubEnv('GUARD_SCREEN', 'gated')
-    assertGuardsConfigured()
-    vi.stubEnv('GUARD_SCREEN', 'shadow')
-    assertGuardsConfigured()
     vi.stubEnv('GUARD_SCREEN', 'always')
+    assertGuardsConfigured()
+    vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
+    assertGuardsConfigured()
+    vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
     assertGuardsConfigured()
     vi.unstubAllEnvs()
     assertGuardsConfigured()
     expect(warns).toEqual([])
   })
 
-  it.each([
-    ['GUARD_SCREEN_ANTHROPIC', 'off'],
-    ['GUARD_EGRESS_DECIDE', 'off'],
-  ])(
+  it.each([['GUARD_EGRESS_DECIDE', 'off']])(
     '%s=%j logs its own boot warning, naming the variable and what it switches off',
     (variable, value) => {
       vi.stubEnv(variable, value)
@@ -173,14 +178,14 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   )
 
   it('the warnings are one per weakened value per boot, not per call', () => {
-    vi.stubEnv('GUARD_SCREEN', 'off')
+    vi.stubEnv('GUARD_SCREEN', 'always')
     vi.stubEnv('GUARD_EGRESS_DECIDE', 'off')
-    vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'off')
-    vi.stubEnv('GUARD_PSEUDONYMISE', 'off')
+    vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
+    vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
     assertGuardsConfigured()
-    expect(warns).toHaveLength(3)
+    expect(warns).toHaveLength(1)
     assertGuardsConfigured()
-    expect(warns).toHaveLength(6)
+    expect(warns).toHaveLength(2)
   })
 
   it.each([undefined, 'off', 'on'])('GUARD_PSEUDONYMISE=%j never warns at boot', (value) => {
@@ -190,7 +195,7 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   })
 
   it('valid values never refuse boot', () => {
-    vi.stubEnv('GUARD_SCREEN', 'gated')
+    vi.stubEnv('GUARD_SCREEN', 'off')
     vi.stubEnv('GUARD_SCREEN_ANTHROPIC', 'always')
     vi.stubEnv('GUARD_EGRESS_DECIDE', 'on')
     vi.stubEnv('GUARD_PSEUDONYMISE', 'on')
@@ -198,13 +203,14 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
   })
 })
 
-// #844: the guards' numbers as settings. Each variable's default is today's
-// value exactly (the unset pin above), each one takes effect, an invalid value
-// refuses boot naming the variable and its range and never the value, and a
-// value looser than the default warns once at boot, never per call.
+// #844: the guards' numbers as settings, and revision 6's retirement of
+// the gate threshold's variable. τe and the tripwire N keep their variables
+// (each defaults to today's value, takes effect, refuses invalid values
+// out of range and warns once when looser); τi's variable is RETIRED — the
+// gate question is gone, so a still-set value is a stale misconfiguration
+// that refuses boot naming the replacement.
 describe('the guard thresholds and the tripwire N as settings (#844)', () => {
   const NUMBERS = [
-    ['GUARD_GATE_THRESHOLD', 'gateThreshold', 'a number from 0 to 1'],
     ['GUARD_EGRESS_THRESHOLD', 'egressThreshold', 'a number from 0 to 1'],
     [
       'GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE',
@@ -213,13 +219,23 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     ],
   ] as const
 
+  // Revision 6: the gate question is retired and τi is code-owned, so ANY
+  // still-set GUARD_GATE_THRESHOLD refuses boot naming the replacement — the
+  // GUARD_EGRESS posture, never a silent parse into the bag. MUTATION: accept
+  // it silently (restore the parse into `gateThreshold`): this goes red.
+  it.each(['0.15', '0.4', '', '   '])(
+    'GUARD_GATE_THRESHOLD=%j refuses boot naming the replacement, never the value',
+    (value) => {
+      vi.stubEnv('GUARD_GATE_THRESHOLD', value)
+      expect(() => guardConfig()).toThrow(/GUARD_GATE_THRESHOLD is obsolete/)
+      expect(() => guardConfig()).toThrow(/injection-ingress-guard classification/)
+      expect(() => guardConfig()).toThrow(/Unset the variable/)
+    },
+  )
+
   // MUTATION: read the wrong variable for one setting (or drop its parse and
   // keep the default): that row goes red.
   it.each([
-    ['GUARD_GATE_THRESHOLD', '0.4', 'gateThreshold', 0.4],
-    ['GUARD_GATE_THRESHOLD', ' .05 ', 'gateThreshold', 0.05],
-    ['GUARD_GATE_THRESHOLD', '0', 'gateThreshold', 0],
-    ['GUARD_GATE_THRESHOLD', '1', 'gateThreshold', 1],
     ['GUARD_EGRESS_THRESHOLD', '0.5', 'egressThreshold', 0.5],
     ['GUARD_EGRESS_THRESHOLD', '1.0', 'egressThreshold', 1],
     ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '2', 'maxOutgoingRetriesPostTripwire', 2],
@@ -229,7 +245,8 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     expect(guardConfig()[field]).toBe(want)
   })
 
-  // Each setting moves its own field only.
+  // Each setting moves its own field only; τi stays at the pattern's own
+  // default now that nothing can set it.
   it('each variable sets its own field and leaves the others at their defaults', () => {
     vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.1')
     expect(guardConfig()).toMatchObject({
@@ -312,7 +329,6 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
   // silent): that row's count is 0, red. Warning on `>=` instead: the
   // at-default row below goes red.
   it.each([
-    ['GUARD_GATE_THRESHOLD', '0.16', 'skips the screen'],
     ['GUARD_EGRESS_THRESHOLD', '0.31', 'without a refusal or a prompt'],
     ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '1', 'closes at refusal 2'],
   ])('%s=%j (looser) logs ONE boot warning saying what it loosened', (variable, raw, loosened) => {
@@ -324,8 +340,6 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
   })
 
   it.each([
-    ['GUARD_GATE_THRESHOLD', '0.15'],
-    ['GUARD_GATE_THRESHOLD', '0.05'],
     ['GUARD_EGRESS_THRESHOLD', '0.3'],
     ['GUARD_EGRESS_THRESHOLD', '0'],
     ['GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '0'],
@@ -335,19 +349,14 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     expect(warns).toEqual([])
   })
 
-  // Once: the parse that builds the agents' bag never logs, so a bag built per
-  // agent registration cannot repeat a warning; only the boot assert does.
-  // MUTATION: log the warnings inside `readGuards()` itself: the guardConfig()
-  // calls here log and this goes red.
   it('a looser value warns once per boot, and building the bag logs nothing', () => {
-    vi.stubEnv('GUARD_GATE_THRESHOLD', '0.5')
     vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.5')
     vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '3')
     assertGuardsConfigured()
-    expect(warns).toHaveLength(3)
+    expect(warns).toHaveLength(2)
     guardConfig()
     guardConfig()
-    expect(warns).toHaveLength(3)
+    expect(warns).toHaveLength(2)
   })
 
   // The deployment template carries every guard variable the module reads

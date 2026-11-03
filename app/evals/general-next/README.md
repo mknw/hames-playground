@@ -168,11 +168,15 @@ declares no screen, so retrieved hits are never screened. The
 loop itself sanitises and screens nothing: a route record is built from committed events and
 capped, and a quoted tool body (an `actorCritic` result, a retriever excerpt) carries the
 fence it arrived in, so no call is made for a record at all and the counts below are ingress
-calls only. On the self-deployed tier, where this eval runs, the screen's mode is `'shadow'`:
-the gate is asked on every external result and its answer recorded, and the screen runs as
-well, so each screened result costs a gate call too until the eval bar moves the tier to
-`'gated'`. A deterministic finding forces the screen in every mode but `'off'`. The levers that
-move cost are the screen's scope, its mode per tier and the guards that declare it. On the
+calls only. Both tiers' declared screen default is `'off'` (revision 6, the shared
+SCREEN_POLICY_BY_TIER): the eval composes no `guards.screenMode` of its own, so
+by default NO screen call and NO gate question is made on either tier — the
+counts below are zero while the default holds, and the report columns stay built
+and idle (they read events; nothing fires). A deterministic finding forces the
+screen only in a mode that already runs it, never past an `'off'`. A switch that
+re-enables it (`GUARD_SCREEN` / `GUARD_SCREEN_ANTHROPIC`, `off | always` per tier;
+a set `gated` or `shadow` refuses boot naming the change) moves cost through the
+screen's scope, its mode per tier and the guards that declare it. On the
 private tier each screen call is large-model time and each gate call small-box time.
 Infrastructure and scale-down tail lines are scenario time, not attributable per function, so
 the share is of observer cost only (hermetic runs price every call at 0: calls are the signal).

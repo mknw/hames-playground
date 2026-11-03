@@ -1,10 +1,10 @@
 /**
- * Nav — the captioned page-link group in the top bar (metrics · use cases),
+ * Nav — the two page links in the top bar, restyled as tab headers (owner,
+ * round 4): icon and label on one line, one shared height, no boxed look,
  * and what each does on the page it opened.
  *
- * The links no longer flip their icon: each keeps its OWN glyph in both
- * states, carries a tiny caption naming it, and the pressed-in state marks
- * the page that is open — clicking that link again returns to the chat.
+ * Each tab keeps its OWN glyph in both states, and the pressed-in state marks
+ * the page that is open — clicking that tab again returns to the chat.
  * Everything else in the bar is delegated to ThemeSwitcher and UserMenu,
  * which have their own tests.
  */
@@ -96,25 +96,39 @@ describe('Nav', () => {
     expect(useCases.getAttribute('aria-current')).toBeNull()
   })
 
-  it('renders the captions small and readable: 2xs (11px), on ui-text-primary', () => {
-    // The #937 review's blocking finding: `text="2xs"` used to emit NO CSS
-    // (no theme entry below `xs`), so the captions silently rendered at the
-    // ambient 16px, and `ui-text-tertiary` measured below 4.5:1 on the pressed
-    // tint. jsdom applies no stylesheet, so what is pinned here is the class
-    // half of the chain; `uno-theme.test.ts` pins that `.text-2xs` actually
-    // emits font-size: 0.6875rem, and `ui-text-primary` is the one existing
-    // token the reviewer measured above 4.5:1 on the pressed tint in BOTH
-    // themes. Drop either half and one of the two tests goes red.
+  it('reads as a tab strip: one line, shared height, no boxed button look', () => {
+    // Owner, round 4: the links were boxed buttons of variable height (icon
+    // above a tiny caption). Now each tab is an icon followed by its label on
+    // ONE line at one shared height (h="9"), with no border attribute at all.
+    // The label span collapses below md via the `.nav-tab-label` preflight
+    // class — jsdom applies no stylesheet, so what is pinned here is the
+    // attribute/class half of the chain; the real render is the screenshots.
     const { container } = render(() => <Nav />)
-    const captions = [...container.querySelectorAll('nav a span')].filter((el) =>
-      ['metrics', 'use cases'].includes(el.textContent ?? ''),
+    const tabs = [...container.querySelectorAll('nav a')].filter((a) =>
+      ['Metrics dashboard', 'Use cases'].includes(a.getAttribute('aria-label') ?? ''),
     )
-    expect(captions).toHaveLength(2)
-    for (const caption of captions) {
-      expect(caption.getAttribute('text')).toContain('2xs')
-      expect(caption.getAttribute('text')).toContain('ui-text-primary')
-      expect(caption.getAttribute('text')).not.toContain('ui-text-tertiary')
+    expect(tabs).toHaveLength(2)
+    for (const tab of tabs) {
+      expect(tab.getAttribute('flex'), 'one line, not a column').toContain('items-center')
+      expect(tab.getAttribute('h'), 'every tab the same height').toBe('9')
+      expect(tab.getAttribute('border'), 'no boxed button look').toBeNull()
+      const label = [...tab.querySelectorAll('span')].find((el) =>
+        el.className.includes('nav-tab-label'),
+      )
+      expect(label, 'the label collapses below md').toBeDefined()
     }
+  })
+
+  it('marks the open page as the selected tab, on the ui tokens', () => {
+    setPathname('/use-cases')
+    const { container } = render(() => <Nav />)
+    const useCases = pageLink(container, 'Back to chat — use cases page is open')
+    // The selected tab is a subtle accent background on the themed tokens —
+    // the old cyber-* fixed hexes are graph-canvas data colours now.
+    expect(useCases.getAttribute('bg')).toContain('ui-accent/10')
+    expect(useCases.getAttribute('bg')).not.toContain('cyber-')
+    const metrics = pageLink(container, 'Metrics dashboard')
+    expect(metrics.getAttribute('bg')).toContain('transparent')
   })
 
   it('on the dashboard, the metrics link is pressed in and returns to chat', () => {

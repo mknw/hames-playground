@@ -32,6 +32,7 @@
 
 import { assertServerOnImport } from '../assert.server'
 import type {
+  ContextEvent,
   PatternScope,
   EventView,
   ConfiguredPattern,
@@ -291,18 +292,30 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       // in this turn: the decision loop exposes earlier same-route events to a
       // re-dispatched route, so a repeat dispatch advances instead of repeating
       // (#927 slice 2). The ids ride to `searchDocuments` as a search-time
-      // filter, so hidden documents never shrink a page below k.
+      // filter, so hidden documents never shrink a page below k. Scoping keys
+      // on the route (patternId), not the tool name, and on the `turn` field of
+      // the last user_message, so an earlier turn's results stay eligible for
+      // re-retrieval.
       const excludeIds =
         page && view.exists()
-          ? view
-              .ofType('tool_result')
-              .get()
-              .flatMap((e) => {
+          ? (() => {
+              // The `turn` field is not part of the ContextEvent type (tests
+              // inject it), so it is reached by cast.
+              const contextEvents = view.unfiltered().get()
+              type WithTurn = ContextEvent & { turn?: number }
+              const lastUserMessage = [...contextEvents]
+                .reverse()
+                .find((e) => e.type === 'user_message') as WithTurn | undefined
+              const currentTurn = lastUserMessage?.turn
+              if (currentTurn === undefined) return []
+              return contextEvents.flatMap((e) => {
+                if (e.patternId !== scope.id) return []
+                if ((e as WithTurn).turn !== currentTurn) return []
                 const d = e.data as ToolResultEventData
-                if (d.tool !== 'retriever') return []
                 const r = d.result as RetrieverResult | undefined
                 return (r?.matches ?? []).map((m) => m.id)
               })
+            })()
           : undefined
 
       // Fan out to all backends concurrently; a failing backend yields [] and an

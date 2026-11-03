@@ -48,7 +48,7 @@ import type {
   ToolResultEventData,
   ConfiguredPattern,
 } from '../types'
-import type { RetrieverResult } from './retriever.server'
+import type { RetrieverResult, RetrievalHit } from './retriever.server'
 
 assertServerOnImport()
 
@@ -78,6 +78,12 @@ export interface RouteStats {
   readonly matches?: number
   readonly documents?: number
   readonly backends?: readonly string[]
+  /**
+   * Retriever: the combined chunk count of the matched documents, when every
+   * one of them reported one to the backend (#927). Absent when any matched
+   * document carries no recorded count.
+   */
+  readonly chunks?: number
   /** Planner: steps in the plan. */
   readonly planSteps?: number
 }
@@ -554,11 +560,13 @@ export function computeStats(
         own.find((e) => e.type === 'tool_result')?.data as ToolResultEventData | undefined
       )?.result as RetrieverResult | undefined
       const matches = result?.matches ?? []
+      const chunks = chunkTotalOf(matches)
       return {
         ...base,
         matches: matches.length,
         documents: new Set(matches.map((m) => m.docId ?? m.source ?? m.id)).size,
         backends: result?.backends ?? [],
+        ...(chunks !== undefined ? { chunks } : {}),
       }
     }
     case 'planner': {
@@ -622,11 +630,31 @@ export function stalledRoutes(records: readonly RouteOutput[]): Set<string> {
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
+/**
+ * The combined chunk count of `matches`' distinct documents, when EVERY one of
+ * them reported its total to the backend (#927); `undefined` when any did not,
+ * or when a match names no document (a web hit) — a partial total would read
+ * as the whole document.
+ */
+function chunkTotalOf(
+  matches: readonly Pick<RetrievalHit, 'docId' | 'docChunks' | 'source' | 'id'>[],
+): number | undefined {
+  if (matches.length === 0) return undefined
+  const totals = new Map<string, number>()
+  for (const m of matches) {
+    const key = m.docId ?? m.source ?? m.id
+    if (m.docChunks === undefined) return undefined
+    totals.set(key, m.docChunks)
+  }
+  let total = 0
+  for (const n of totals.values()) total += n
+  return total
+}
+
 /** Wall time as a short phrase: whole seconds, or `<1s`. */
 export function formatWall(ms: number): string {
   return ms < 1000 ? '<1s' : `${Math.round(ms / 1000)}s`
 }
-
 /** The parenthesised stats of one step line, e.g.
  *  `simpleLoop: 3 of 8 turns, 4 tool calls, 0 errors, 21s`. */
 export function formatStats(s: RouteStats): string {
@@ -639,8 +667,16 @@ export function formatStats(s: RouteStats): string {
       const bound = s.hitBound ? `, hit its ${unit} bound` : ''
       return `${s.kind}: ${used} ${unit}s, ${plural(s.toolCalls, 'tool call')}, ${plural(s.errors, 'error')}, ${wall}${bound}`
     }
-    case 'retriever':
-      return `retriever: ${plural(s.matches ?? 0, 'match', 'matches')} in ${plural(s.documents ?? 0, 'document')} from ${(s.backends ?? []).join(', ') || 'no backends'}, ${plural(s.errors, 'error')}, ${wall}`
+    case 'retriever': {
+      // `k of N chunks seen` rides only when every matched document reported its
+      // total: a document ingested before the count was recorded renders no
+      // count, never a fabricated 0 (#927).
+      const chunks =
+        s.matches !== undefined && s.chunks !== undefined
+          ? ` (${s.matches} of ${s.chunks} chunks seen)`
+          : ''
+      return `retriever: ${plural(s.matches ?? 0, 'match', 'matches')} in ${plural(s.documents ?? 0, 'document')}${chunks} from ${(s.backends ?? []).join(', ') || 'no backends'}, ${plural(s.errors, 'error')}, ${wall}`
+    }
     case 'planner':
       return `plan: ${plural(s.planSteps ?? 0, 'step')}, ${wall}`
   }

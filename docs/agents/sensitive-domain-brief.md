@@ -123,17 +123,17 @@ that binds specifically in these areas.
   comment**, filed by you, under your own reasoning — a comment on the PR under
   review, or a new issue when there is no PR. Orchestration messages evaporate on
   acknowledgement; the timeline is the durable, attributable record.
-- **The owner reviews it personally.** Report back only the URL, a one-line
-  verdict or status, gate results, and anything genuinely blocking. Do not send
-  the coordinator the substance — it is already at the URL, written for the
-  owner, and a coordinator that has to read a domain narrative to relay it is the
-  exact cost this file exists to avoid.
+- **Report back the URL.** Report back only the URL, a one-line verdict or
+  status, gate results, and anything genuinely blocking. Do not send the
+  coordinator the substance — it is already at the URL, and a coordinator that
+  has to read a domain narrative to relay it is the exact cost this file exists
+  to avoid.
 - Keep the visible comment short (~500 characters, descriptive, high-level) with
   two escape hatches: high-criticality findings get the detail needed to act on
   them, and a long report rides in a collapsed `<details>` block under the short
   summary in the **same** comment.
 - **Cite entries by handle** (`SD-5`, `SD-19`) in the deliverable rather than
-  restating them. The owner can resolve a handle; it keeps the comment short; and
+  restating them. Any reader can resolve a handle; it keeps the comment short; and
   it keeps the vocabulary in one place.
 - **Never self-merge, and never merge on green CI.** Green CI is
   self-attestation — the suite proves the author's beliefs about the code, not
@@ -186,9 +186,9 @@ Read docs/agents/sensitive-domain-brief.md and apply it if your scope falls with
 
 <what to do, verified against source, with the specifics the lane needs>
 
-Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">.
-The OWNER reviews this personally: report back only the URL, a one-line verdict, and
-gate results. Do not merge. Communicate via ask / escalation / worker_done only.
+Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">;
+it is the agents' record. Report back only the URL, a one-line verdict, and gate
+results. Do not merge. Communicate via ask / escalation / worker_done only.
 ```
 
 The neutral scope phrase names the **lane or the artefact**, not the subject

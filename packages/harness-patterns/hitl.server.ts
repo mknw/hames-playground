@@ -484,6 +484,20 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(sort(plain)) ?? 'null'
 }
 
+/** The sha256 of a call's canonical tool and arguments: the digest an approved
+ * checklist row and a durable send claim carry — and a re-entered call
+ * recomputes — proving the three are the same call (N8). It has exactly one
+ * spelling, this function; a second hand-built copy is a canonicalisation
+ * drift that fails the joins closed, so every producer consumes this. */
+export function authorizationDigest(call: {
+  readonly tool: string
+  readonly args: unknown
+}): string {
+  return createHash('sha256')
+    .update(canonicalJson({ tool: call.tool, args: call.args }))
+    .digest('hex')
+}
+
 /** A held payload's lifetime, and its request's, when the request names none:
  *  the two always expire together. */
 export const HOLDING_EXPIRES_IN_MS = 24 * 60 * 60 * 1000

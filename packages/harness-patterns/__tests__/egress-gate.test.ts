@@ -9,8 +9,7 @@
  * process. No live endpoint is called.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHash } from 'node:crypto'
-import { canonicalJson } from '../hitl.server'
+import { authorizationDigest } from '../hitl.server'
 import { createContext, createEvent, createScope } from '../context.server'
 import { configurePattern, runChain } from '../patterns/chain.server'
 import { createEventView } from '../patterns/event-view.server'
@@ -233,9 +232,7 @@ async function verdictOf(
 
 it('keeps an unattended prepared batch refusal unlabeled while a person refusal is labeled', async () => {
   const args = { query: 'synthetic-private' }
-  const digest = createHash('sha256')
-    .update(canonicalJson({ tool: 'web_search', args }))
-    .digest('hex')
+  const digest = authorizationDigest({ tool: 'web_search', args })
   for (const byOwner of [false, true]) {
     let result: ToolCallResult | undefined
     await run(

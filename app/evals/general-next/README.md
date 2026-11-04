@@ -82,8 +82,10 @@ call. Per scenario row:
   8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
   `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
   call. The org-knowledge draft loop's calls are here too, under `patternId`
-  `org-knowledge-draft` with the serving `client`, by the same rule: the loop runs in a scratch
-  context, so the driver records them beside the org trace.
+  `org-knowledge-draft` with the serving `client`, recorded for EVERY scenario: the loop runs in a
+  scratch context, so the driver records them beside the org trace, and that recorder sees only
+  `completion` or `error`, never `recovery` (a validator-refused Return or unparseable `tool_args`
+  reads as a `completion`), so the error-only rule would drop the rounds worth reading.
 - `criticCalls`: every critic verdict and failed critic call, whether the scenario passed or not —
   a rejection on a passing scenario is exactly what the diagnosis reads. A verdict row carries the
   `verdict` (`is_sufficient`), the `reason` (`explanation`), `suggestedApproach`, and the raw
@@ -340,6 +342,8 @@ The graders read the graph before and after, and the proposal each turn raised; 
 - **Two negatives stop deterministically.** In 41 the scripted gate falls for a colleague's health, and the validator drops the fact (V7: `ABOUT` never ends at a `Member`). In 42 the scripted gate falls for an instruction inside a mail, and the validator drops the mail's project (V3: its evidence is not in the user's message).
 
 **No live run has been made.**
+
+**The draft reads the scenario's own graph, strictly.** The org rows' draft loop holds `read_neo4j_cypher` / `get_neo4j_schema`, served by `syntheticOrgDraftTransport` (`src/lib/eval-support/synthetic-org-graph.ts`) from the scenario's synthetic org graph, the graph its candidate is validated against. The read serves a Cypher subset as strictly as Neo4j would: `MATCH (v:Label {prop: 'x'})` patterns and a `WHERE` of `v.prop` / `toLower(v.prop)` with `=`, `CONTAINS`, `STARTS WITH` or `ENDS WITH` joined by `AND` / `OR`, with `$params` read from the call. A label is honoured, equality is exact and case-sensitive, and a pattern node that matches nothing empties the read. Anything outside the subset, or not Cypher, is a failed call naming the subset. So a lookup of `{name: 'Project Osprey'}` does not find a stored `Osprey` here either, and a row can fail by duplicating a node (LD-23). Not modelled: Neo4j's row shape (node rows are `{ label, ...properties }`, edge rows `{ from, type, to }`).
 
 **The members are a fixture, never a database.** The synthetic graph's ten members (`SYNTHETIC_MEMBERS`) are invented, with the fields the roster ingest writes on a `Member`. No eval path reads org or member data from any Neo4j, hermetic or live: the driver's synthetic transport owns every neo4j tool, so none falls through to the gateway. `src/__tests__/lib/eval-support/no-real-neo4j.test.ts` pins that, with the mutations that turn it red in its header. `src/lib/org-graph/scripts/seed-eval-members.ts` MERGEs the same ten into a Neo4j (`createdBy: 'eval-seed'`, idempotent, never deletes) for **local manual use only**, such as the dev UI and the Org.graph tab. It needs `--target <host:port>` equal to the resolved Neo4j, and it refuses a graph that holds any `Member` it did not write, i.e. any directory data. **No eval reads what it writes.**
 

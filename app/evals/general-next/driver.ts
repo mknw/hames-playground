@@ -757,7 +757,7 @@ async function orgSeams(live: boolean) {
   const { amendRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
   type ControllerFn = import('@hames-ai/harness-patterns').ControllerFn
   // The draft loop runs in a scratch context whose events the graded trace never
-  // holds, so its completions are recorded here for the capture (LD-22).
+  // holds, so its completions are recorded here for the capture (LD-23).
   let draftCalls: OrgDraftCall[] = []
   const baseController = createLoopControllerAdapter(undefined, { role: 'orgDraft' })
   const recordingController: ControllerFn = Object.assign(

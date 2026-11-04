@@ -183,7 +183,7 @@ template_string LoopMultiCalls(multi_call_mode: string?, with_reasoning: bool) #
 // specifies (the org-knowledge draft's verdict). Before it, such a loop could
 // only pick "answer", whose three "plain prose (not JSON)" lines contradicted
 // its own schema; on the first live private-tier run the draft replied in prose
-// with the verdict trailing outside the envelope (LD-22,
+// with the verdict trailing outside the envelope (LD-23,
 // docs/plan/org-knowledge-hook.md).
 //
 // "answer" restores the pre-#149 wording verbatim, for a loop whose Return

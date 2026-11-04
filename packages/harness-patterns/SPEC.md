@@ -740,7 +740,7 @@ turn) for a text nothing read.
   in `tool_args` like any other arguments, with nothing written outside the
   action; the system block, the catalog's Return line and the turn tail all
   say so, and none says "plain prose". For a loop whose caller parses the
-  `Return` (the org-knowledge draft, LD-22 in
+  `Return` (the org-knowledge draft, LD-23 in
   `docs/plan/org-knowledge-hook.md`). Prompt-only, like `'answer'`.
 
 **One exception: a Return-only turn (#610).** When the controller answers
@@ -3745,7 +3745,11 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
 - **The draft** (`createOrgDraftLoop`) is a `simpleLoop` holding exactly
   `ORG_DRAFT_TOOLS` (`read_neo4j_cypher`, `get_neo4j_schema`), inside a K1
   guard on those tools, in a scratch context holding only the user's message,
-  with `renderOrgSchema(ontology)` as its schema. Its `Return` answer is one
+  with `renderOrgSchema(ontology)` as its schema. That schema carries
+  `ORG_NEAR_MATCH_RULE` (LD-23): a node is proposed as new only after a
+  case-insensitive near-match search of its class finds nothing; a node it
+  finds is linked under its stored name. The validator refuses only exact-name
+  duplicates, so the search is what stops a name variant. Its `Return` answer is one
   JSON verdict: `{"verdict":"propose","assertions":[...]}` or
   `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
   answer stops with `no-proposal`; its reason stays in scratch context. The

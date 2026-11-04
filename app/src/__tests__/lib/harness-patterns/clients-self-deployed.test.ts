@@ -98,7 +98,7 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   // The public and private systemone clients.
   decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
   // The org-knowledge draft loop: LoopController under its own role (FRONT
-  // ruling A, 2026-11-04), on the 27B since LD-22 the same day.
+  // ruling A, 2026-11-04), on the 27B since LD-23 the same day.
   orgDraft: { from: 'ControllerAnthropic', to: 'LargeQwen' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:

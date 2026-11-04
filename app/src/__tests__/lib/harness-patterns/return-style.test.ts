@@ -124,7 +124,7 @@ describe('LoopController prompt — terminal-action guidance (#149)', () => {
     expect(answerTier1).toContain('- Return: Signal task completion (tool_args = final answer)')
   })
 
-  // LD-22: a loop whose Return is a JSON document its context specifies (the
+  // LD-23: a loop whose Return is a JSON document its context specifies (the
   // org-knowledge draft) must not be told "plain prose (not JSON)" anywhere —
   // on the first live private-tier run that contradiction produced a prose
   // reply with the verdict outside the envelope. Mutation: drop the `json`

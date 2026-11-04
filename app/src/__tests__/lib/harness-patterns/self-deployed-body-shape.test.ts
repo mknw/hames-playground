@@ -191,7 +191,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
 /**
  * A function a SECOND role also routes, rendered against that role's client.
  * Since FRONT's ruling A (2026-11-04) `orgDraft` reaches `LoopController` under
- * its own role; since LD-22 (same day) that role's client is the 27B, like
+ * its own role; since LD-23 (same day) that role's client is the 27B, like
  * `controller`'s (CALLS above). A function is still not one role's, so each
  * (role, function) pair is rendered against the map's own value for it.
  */

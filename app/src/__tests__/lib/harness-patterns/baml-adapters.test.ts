@@ -109,7 +109,7 @@ describe('createLoopControllerAdapter', () => {
   })
 
   // FRONT ruling A (2026-11-04, org-knowledge slice 3): the org-knowledge draft
-  // loop is LoopController under its own `orgDraft` role; since LD-22 (same day)
+  // loop is LoopController under its own `orgDraft` role; since LD-23 (same day)
   // that role's private client is the 27B, like `controller`'s, so the shipped
   // map cannot tell the roles apart. A consumer layer that maps only `orgDraft`
   // can. Mutation: make the adapter ignore `role` (always
@@ -134,7 +134,7 @@ describe('createLoopControllerAdapter', () => {
     expect(bagOf(mockLoopController.mock.calls[0]).client).toBeUndefined()
   })
 
-  // LD-22: on the private tier the draft runs, and is budgeted, on the 27B.
+  // LD-23: on the private tier the draft runs, and is budgeted, on the 27B.
   // Mutation: map `orgDraft` back to `SmallQwen` → the call names SmallQwen and
   // the window is the 4B's 32 768.
   it('puts the org-knowledge draft on the 27B on the private tier', async () => {

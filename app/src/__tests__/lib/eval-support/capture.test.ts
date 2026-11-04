@@ -182,9 +182,9 @@ describe('captureTrace controller and actor calls', () => {
   })
 })
 
-// LD-22: the org-knowledge draft loop runs in a scratch context, so on the first
+// LD-23: the org-knowledge draft loop runs in a scratch context, so on the first
 // live private-tier run the capture held none of its completions. The driver
-// records them on the org trace; the capture reads them by the controller rule.
+// records them on the org trace; the capture keeps every one of them.
 // MUTATION: drop the `trace.org` pass in capture.ts → red.
 describe('captureTrace org-knowledge draft calls', () => {
   const org = (
@@ -206,30 +206,39 @@ describe('captureTrace org-knowledge draft calls', () => {
       },
     }) as unknown as ConversationTrace
 
-  it('records a failed draft call always and every draft call for a failing scenario', () => {
+  // NIT 4 of the #991 review: draft calls carry no `recovery`, so a refused
+  // Return reads as a `completion`; every draft call is kept, passing or not.
+  // MUTATION: restore the error-only filter for a passing scenario → red.
+  it('records every draft call, passing scenario or failing', () => {
     const t = org([
       {
         outcome: 'completion',
         client: 'LargeQwen',
-        rawOutput: '{"tool_name":"read_neo4j_cypher"}',
+        rawOutput: '{"tool_name":"Return","tool_args":"refused by the validator"}',
       },
       { outcome: 'error', error: 'missing tool_name', client: 'LargeQwen', rawOutput: 'prose' },
     ])
-    expect(captureTrace(t, false).controllerCalls).toEqual([
-      {
-        turn: 0,
-        patternId: 'org-knowledge-draft',
-        functionName: 'LoopController',
-        outcome: 'error',
-        error: 'missing tool_name',
-        client: 'LargeQwen',
-        rawOutput: 'prose',
-      },
-    ])
-    expect(captureTrace(t, true).controllerCalls.map((c) => [c.patternId, c.outcome])).toEqual([
-      ['org-knowledge-draft', 'completion'],
-      ['org-knowledge-draft', 'error'],
-    ])
+    for (const failed of [false, true]) {
+      expect(captureTrace(t, failed).controllerCalls).toEqual([
+        {
+          turn: 0,
+          patternId: 'org-knowledge-draft',
+          functionName: 'LoopController',
+          outcome: 'completion',
+          client: 'LargeQwen',
+          rawOutput: '{"tool_name":"Return","tool_args":"refused by the validator"}',
+        },
+        {
+          turn: 0,
+          patternId: 'org-knowledge-draft',
+          functionName: 'LoopController',
+          outcome: 'error',
+          error: 'missing tool_name',
+          client: 'LargeQwen',
+          rawOutput: 'prose',
+        },
+      ])
+    }
   })
 
   it('caps a runaway draft completion and tolerates a turn with no draft calls', () => {

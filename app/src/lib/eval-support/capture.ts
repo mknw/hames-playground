@@ -261,11 +261,12 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
     }
   })
   // The org-knowledge draft loop runs in a scratch context, so its calls are on
-  // the org trace rather than in the turn's events (LD-22). Same rule as above:
-  // a failed call always, every call when the scenario failed.
+  // the org trace rather than in the turn's events (LD-23). Recorded ALWAYS:
+  // the recording controller sees only `completion` or `error`, never the
+  // loop's `recovery` (a validator-refused Return, unparseable tool_args), so
+  // the error-only rule above would drop exactly the rounds worth reading.
   trace.org?.turns.forEach((t, turn) => {
     for (const call of t.draftCalls ?? []) {
-      if (call.outcome !== 'error' && !failed) continue
       capture.controllerCalls.push({
         turn,
         patternId: ORG_DRAFT_PATTERN_ID,

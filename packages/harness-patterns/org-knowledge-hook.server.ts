@@ -131,7 +131,7 @@ export function createOrgDraftLoop(opts: {
       patternId: 'org-knowledge-draft',
       schema,
       // The verdict is JSON the hook parses: 'answer' would tell the model
-      // "plain prose (not JSON)" against the schema's own format (LD-22).
+      // "plain prose (not JSON)" against the schema's own format (LD-23).
       returnStyle: 'json',
       multiToolCalls: 'off',
       rememberPriorTurns: false,
@@ -178,12 +178,22 @@ export function renderOrgSchema(ontology: GraphOntology): string {
     'Relations:',
     ...relations,
     'Rules: every value must be copied from the user message; every element carries `evidence`, a span copied verbatim from the user message; use the stored name of a node that already exists; propose nothing for a question, hypothetical, opinion, rumour or anything about a person.',
-    // LD-22: the first live private-tier run declined a new project because the
-    // graph did not hold it yet, which is the case the hook exists for.
-    'A named node the graph does not hold yet is proposed as a new node, unless its class says Link only: not finding it is no reason for no-proposal.',
+    // LD-23: the first live private-tier run declined a new project because the
+    // graph did not hold it yet, which is the case the hook exists for. The
+    // near-match search comes first because the validator catches only an
+    // exact-name duplicate (same label and nameKey): "Project Osprey" against a
+    // stored "Osprey" would otherwise be proposed as a second node.
+    ORG_NEAR_MATCH_RULE,
     'Answer (Return) with JSON only: {"verdict":"propose","assertions":[{"nodes":[{"ref":"a","label":"Project","properties":{"name":"…"},"evidence":"…"}],"edges":[{"type":"…","from":"a","to":"b","evidence":"…"}]}]}. If nothing is worth proposing, answer {"verdict":"no-proposal","reason":"short reason"}. A propose answer is checked before the loop can finish: use validator feedback to repair it or conclude no-proposal, within the remaining turns. Never override a validator refusal.',
   ].join('\n')
 }
+
+/** The schema's new-node rule (LD-23). An exact-name read that finds nothing
+ *  is not evidence the node is new; only the tolerant search below is. The
+ *  validator refuses only exact-name duplicates, so this search is what keeps
+ *  a name variant from becoming a second node. */
+export const ORG_NEAR_MATCH_RULE =
+  "Do not duplicate nodes. Before proposing a node as new, search its class for a near-match, case-insensitively, on the name's most distinctive word without accents: MATCH (n:Label) WHERE toLower(n.name) CONTAINS 'word' RETURN n (use the class's own name property, e.g. displayName for Member). If that finds a node, it is the same node: use its stored name and link to it, never a second node. Only when that search finds nothing is the node proposed as new, unless its class says Link only; not finding it by its exact name is no reason for no-proposal."
 
 /** Most elements one draft may carry; a longer draft is not parsed. */
 export const MAX_DRAFT_ELEMENTS = 200

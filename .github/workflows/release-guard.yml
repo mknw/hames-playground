@@ -1,0 +1,36 @@
+name: Release guard
+
+# `release` accepts merges only from main (owner ruling, 2026-11-04). The
+# normal path is not a pull request at all: deploy/follow/promote.py
+# fast-forwards release to a commit already on main. This check is the guard
+# for the other path — a pull request into release fails unless its head is
+# this repository's own main. The release ruleset requires it by this name.
+# `pull_request_target`, not `pull_request`: the workflow file is read from
+# the BASE branch, so a pull request cannot edit this check into passing. That
+# is safe here because the job checks nothing out, runs no code from the pull
+# request and holds no permission.
+on:
+  pull_request_target:
+    branches: [release]
+
+permissions: {}
+
+jobs:
+  source:
+    name: release · source is main
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # Values pass through env, never interpolated into the script: a head
+      # ref is chosen by whoever opened the pull request.
+      - name: The head is this repository's main
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          if [ "$HEAD_REF" != "main" ] || [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::release accepts merges only from this repository's main"
+            exit 1
+          fi
+          echo "head is $BASE_REPO:main"

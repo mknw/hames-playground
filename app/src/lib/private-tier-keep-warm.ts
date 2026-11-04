@@ -41,7 +41,6 @@ export function startKeepWarm({ ask, onWarmed, doc = document }: KeepWarmOptions
   let timer: ReturnType<typeof setTimeout> | undefined
   let pending = false
   let disabled = false
-  let failed = false
   let disposed = false
 
   const visible = () => doc.visibilityState === 'visible'
@@ -52,7 +51,7 @@ export function startKeepWarm({ ask, onWarmed, doc = document }: KeepWarmOptions
 
   const run = async (): Promise<void> => {
     clear()
-    if (disposed || disabled || failed || pending || !visible()) return
+    if (disposed || disabled || pending || !visible()) return
     pending = true
     try {
       const answer = await ask()
@@ -63,7 +62,8 @@ export function startKeepWarm({ ask, onWarmed, doc = document }: KeepWarmOptions
       if (answer.warmed) onWarmed?.()
       if (!disposed && visible()) timer = setTimeout(() => void run(), answer.nextInMs)
     } catch (err) {
-      failed = true
+      // No next ask is scheduled: the loop stays stopped until the page is
+      // shown again (`onVisibility`), never retrying a broken box on a timer.
       console.warn(
         '[keep-warm] the private tier could not be kept warm; stopping until the page is shown again:',
         err,
@@ -78,7 +78,6 @@ export function startKeepWarm({ ask, onWarmed, doc = document }: KeepWarmOptions
       clear()
       return
     }
-    failed = false
     void run()
   }
 

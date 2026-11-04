@@ -481,31 +481,41 @@ async function sanitizeHits(hits: RetrievalHit[]): Promise<{
   const guard = currentRunFrame()?.guard
   if (!guard || hits.length === 0 || !guard.isUntrusted('retriever')) return { hits, ingress: [] }
 
+  // The hits are sanitized CONCURRENTLY (security review SHOULD-8): each
+  // classification can wait up to its own deadline, so one after another a
+  // k-hit retrieval would wait up to k × that deadline while the decisions
+  // host is slow or down. The results keep the hits' order.
+  const scanned = await Promise.all(
+    hits.map(async (hit) => {
+      // `content` gets the full treatment. `source` is a FILENAME, and it is
+      // scanned separately with the fence switched off: a benign document called
+      // "New instructions for expenses.docx" matches `instruction-new-directive`,
+      // and wrapping a filename in a multi-line spotlight fence would break the
+      // citation label AND the filename-to-docId match that drives the inline
+      // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
+      // poisoned filename is still neutralized without collateral damage. The
+      // content's fence names the hit's `docId` as its item id; a hit with none
+      // (a web hit) names no item, and the filename is never one (it is content).
+      // The classification follows the same split (`ingress: false` on the
+      // filename): ONE classification call per hit.
+      const [scannedContent, scannedSource] = await Promise.all([
+        guard.sanitize('retriever', hit.content, { item: hit.docId }),
+        hit.source === undefined
+          ? undefined
+          : guard.sanitize('retriever', hit.source, {
+              spotlight: 'off',
+              ingress: false,
+            }),
+      ])
+      return { hit, scannedContent, scannedSource }
+    }),
+  )
+
   const out: RetrievalHit[] = []
   const ingress: IngressMark[] = []
   let changed = false
-  for (const hit of hits) {
-    // `content` gets the full treatment. `source` is a FILENAME, and it is
-    // scanned separately with the fence switched off: a benign document called
-    // "New instructions for expenses.docx" matches `instruction-new-directive`,
-    // and wrapping a filename in a multi-line spotlight fence would break the
-    // citation label AND the filename-to-docId match that drives the inline
-    // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
-    // poisoned filename is still neutralized without collateral damage. The
-    // content's fence names the hit's `docId` as its item id; a hit with none
-    // (a web hit) names no item, and the filename is never one (it is content).
-    // The classification follows the same split (`ingress: false` on the
-    // filename): ONE classification call per hit.
-    const scannedContent = await guard.sanitize('retriever', hit.content, { item: hit.docId })
+  for (const { hit, scannedContent, scannedSource } of scanned) {
     if (scannedContent.ingress) ingress.push(scannedContent.ingress)
-    const scannedSource =
-      hit.source === undefined
-        ? undefined
-        : await guard.sanitize('retriever', hit.source, {
-            spotlight: 'off',
-            ingress: false,
-          })
-
     // Compare by REFERENCE, not by `summary` presence: `spotlight: 'always'`
     // fences a chunk on which nothing was detected, and that fence must reach
     // `scope.data.matches` even though there is no finding to annotate.

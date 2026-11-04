@@ -265,8 +265,10 @@ export type SpotlightMode = 'on-detection' | 'always' | 'off'
  *  - `'off'`: the deterministic layer only.
  *
  * The retired gate's `'shadow'` and `'gated'` values died with the gate
- * (revision 6, #938): a screen declaration carrying either now refuses
- * construction — they would read like a mode and act as `'always'`.
+ * (revision 6, #938). Both asked a gate, and before revision 6 a screen
+ * declaring either with no gate passed already refused construction; with
+ * the gate gone none can be passed, so a declaration carrying either refuses
+ * construction as a mode that is not one of the two.
  */
 export type ScreenMode = 'off' | 'always'
 
@@ -297,6 +299,9 @@ export interface IngressClassification {
   readonly abstained: boolean
   /** The `decision_made` event's id, when the recorder returned one. */
   readonly eventId?: string
+  /** The answer covers only a head of the content: the 20 000-character cut,
+   *  or a shorter one that fitted the state budget. */
+  readonly truncated?: boolean
 }
 
 /** The classification runner (`createIngressGuard` in
@@ -338,17 +343,40 @@ export interface InjectionIngressGuardConfig {
  *  same item id the provenance fence carries. Metadata only (SD-3): label
  *  ids, booleans and event ids — never state text or content — so it is safe
  *  anywhere a `tool_result` payload is JSON-dumped. */
-export interface IngressMark {
+export type IngressMark = IngressMarkLabelled | IngressMarkAbstained
+
+interface IngressMarkBase {
   readonly tool: string
   /** The fence's item id (`fenceItemId`-reduced): the call's id for a tool
    *  result, the hit's `docId` for a retrieved hit. */
   readonly item?: string
-  readonly label: IngressLabel
-  /** The safe line's pass (the presented label is `safe` exactly when true). */
-  readonly safe: boolean
   /** The `decision_made` event holding the full record (the three
    *  probabilities), for a reader that needs more than the label. */
   readonly eventId?: string
+  /** The label covers only the head the classification read — the first
+   *  20 000 characters, or a shorter head that fitted the state budget; text
+   *  after it was never read. A reader presents it (prompt review S6,
+   *  security S5). */
+  readonly truncated?: true
+}
+
+/** An answered classification. The label is FLOORED by the other layers: at
+ *  least `possible-instructions-for-ai` after a deterministic finding, and
+ *  `instructions-for-ai-detected` after a positive screen verdict. */
+export interface IngressMarkLabelled extends IngressMarkBase {
+  readonly label: IngressLabel
+  /** The safe line's pass (the presented label is `safe` exactly when true). */
+  readonly safe: boolean
+  readonly abstained?: never
+}
+
+/** A classification that RAN and gave no answer (a timeout, a seam error, an
+ *  unusable answer, a state with no head that fits, a runner that throws).
+ *  A reader presents it as unchecked, never as safe (security review MUST-2). */
+export interface IngressMarkAbstained extends IngressMarkBase {
+  readonly abstained: true
+  readonly safe: false
+  readonly label?: never
 }
 
 /** Where a payload came from, as far as the screen is concerned. */
@@ -596,9 +624,12 @@ export interface ActiveInjectionGuard {
      *  retriever's `source` filename is the one real case); `screen: false`
      *  skips only the model screen (deterministic sanitization, fencing and
      *  findings still apply), and no production caller sets it; `ingress:
-     *  false` skips the classification for the same reason as `screen: false`
-     *  — O37 pins ONE classification per tool result, so the error channel and
-     *  a hit's `source` filename opt out. */
+     *  false` skips the classification. Two callers set it. The error channel
+     *  (`callTool`): an error string is not content a reference surfaces, so
+     *  it gets no mark — a deliberate narrowing of the design's coverage claim
+     *  ("where K1 runs", SD-6's two enforcement points), named for the
+     *  security review (code review SHOULD-4). And a hit's `source` filename
+     *  (the retriever), a structural label rather than content. */
     call?: { item?: string; spotlight?: SpotlightMode; screen?: false; ingress?: false },
   ): Promise<{ data: unknown; summary?: SanitizeSummary; ingress?: IngressMark }>
 }

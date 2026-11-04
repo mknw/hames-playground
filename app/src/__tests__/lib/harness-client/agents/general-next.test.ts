@@ -3222,10 +3222,11 @@ describe('general-next: the injection-ingress-guard classification (revision 6, 
 
   // The design's named mutation for the stub: a NOUL answer to the choice
   // question (the retired gate's wire shape). The classification must abstain
-  // — recorded, unmarked, the content flowing (O38) — never mislabel.
-  // MUTATION: read a noul answer as a choice (or treat a missing label as
-  // `safe`): a mark appears, red.
-  it('a noul answer to the choice question abstains: recorded, no mark, the result still flows', async () => {
+  // — recorded, the content flowing (O38), and in 'on' the result carries an
+  // ABSTAINED mark (security review MUST-2) — never mislabel. MUTATION: read a
+  // noul answer as a choice (or treat a missing label as `safe`): a labelled
+  // mark appears, red.
+  it('a noul answer to the choice question abstains: recorded, an abstained mark, the result still flows', async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
     ingressAnswersNoul = true
@@ -3233,10 +3234,18 @@ describe('general-next: the injection-ingress-guard classification (revision 6, 
     expect(ingressStates).toHaveLength(1)
     const tool = searched(result.context.events)
     expect(tool).toBeDefined()
-    expect(tool).not.toHaveProperty('ingress')
     expect(JSON.stringify(tool)).toContain('CLEAN-WEB-SENTINEL')
     const [decision] = ingressDecisions(result.context.events)
     expect(decision.data).toMatchObject({ key: 'guard.ingress', abstained: true })
+    expect(tool?.ingress).toEqual([
+      expect.objectContaining({
+        tool: 'search',
+        abstained: true,
+        safe: false,
+        eventId: decision.id,
+      }),
+    ])
+    expect(tool?.ingress?.[0]).not.toHaveProperty('label')
   })
 
   // Ruling O carried over: internal content gets K1 only. MUTATION: classify

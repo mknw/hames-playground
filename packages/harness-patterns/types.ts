@@ -1107,8 +1107,10 @@ export interface ToolCallResult {
   sanitized?: import('./injection-guard').SanitizeSummary
   /** Set by `withInjectionGuard` (in `callTool`) when the injection-ingress-guard
    *  classified this result's content (revision 6, O37): one mark for the
-   *  `data` payload — the error channel opts out (O37 pins ONE classification
-   *  per tool result). Loop patterns copy this onto the `tool_result` event.
+   *  `data` payload. The error channel opts out: an error string is not
+   *  content a reference surfaces — a deliberate narrowing of the coverage
+   *  claim ("where K1 runs"), named for the security review (code review
+   *  SHOULD-4). Loop patterns copy this onto the `tool_result` event.
    *  Metadata by construction, like `sanitized`. */
   ingress?: import('./injection-guard').IngressMark
 }
@@ -2038,6 +2040,10 @@ export interface DecisionMadeEventData {
    *  fence's item id — the call's id for a tool result, the hit's `docId` —
    *  naming which payload of a result the classification answers for. */
   item?: string
+  /** `guard.ingress` events: the answer covers only a head of the content
+   *  (the 20 000-character cut, or a shorter head that fitted the state
+   *  budget); text after it was never read (prompt review S6). */
+  truncated?: boolean
 }
 
 // ============================================================================

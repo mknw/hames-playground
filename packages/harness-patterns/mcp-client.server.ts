@@ -522,9 +522,12 @@ async function applyGuard(
     }
   }
 
-  // The error channel opts the classification out (`ingress: false`): O37
-  // pins ONE classification per tool result, and an error string is a
-  // code-adjacent message, not the content a reference surfaces.
+  // The error channel opts the classification out (`ingress: false`). Not for
+  // O37 — the two branches are exclusive per call, so classifying the error
+  // would still be one classification per result — but because an error
+  // string is not content a reference surfaces. That is a deliberate
+  // narrowing of the design's coverage claim ("where K1 runs", SD-6's two
+  // enforcement points), named for the security review (code review SHOULD-4).
   if (typeof result.error !== 'string' || result.error.length === 0) return result
   const { data: cleanedError, summary } = await guard.sanitize(name, result.error, {
     item: id,

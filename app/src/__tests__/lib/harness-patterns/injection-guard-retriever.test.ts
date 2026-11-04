@@ -418,6 +418,64 @@ describe('retriever hits — the injection-ingress-guard classification', () => 
     ])
   })
 
+  // Security review SHOULD-8: hits are classified CONCURRENTLY, so a slow
+  // decisions host costs one deadline per retrieval, not one per hit.
+  // MUTATION: sanitize the hits one after another (a `for … await` loop in
+  // `sanitizeHits`): at most one classification is in flight and this reddens.
+  it('classifies the hits concurrently, and keeps their order', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    const run = vi.fn(async (input: { item?: string }) => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((r) => setTimeout(r, 30))
+      inFlight--
+      return {
+        label: 'safe' as const,
+        safe: true,
+        probs: {},
+        abstained: false,
+        eventId: `ev-${input.item}`,
+      }
+    })
+    const { resultEvent, matches } = await runRetriever(
+      [
+        hit(CLEAN_CHUNK, { id: 'c1', docId: 'doc-1' }),
+        hit(CLEAN_CHUNK, { id: 'c2', docId: 'doc-2' }),
+        hit(CLEAN_CHUNK, { id: 'c3', docId: 'doc-3' }),
+      ],
+      { tools: ['retriever'], ingressGuard: { run, mode: 'on' } } as never,
+    )
+    expect(maxInFlight).toBe(3)
+    expect(matches.map((m) => m.id)).toEqual(['c1', 'c2', 'c3'])
+    expect(
+      ((resultEvent?.data as { ingress?: Array<{ item?: string }> }).ingress ?? []).map(
+        (m) => m.item,
+      ),
+    ).toEqual(['doc-1', 'doc-2', 'doc-3'])
+  })
+
+  // Security review MUST-2, per hit: a classification that ran and gave no
+  // answer marks its hit abstained. MUTATION: attach nothing on abstain.
+  it('a hit whose classification abstains carries an abstained mark', async () => {
+    const run = vi.fn(async (input: { item?: string }) =>
+      input.item === 'doc-2'
+        ? { label: null, safe: false, probs: {}, abstained: true }
+        : { label: 'safe' as const, safe: true, probs: {}, abstained: false },
+    )
+    const { resultEvent } = await runRetriever(
+      [
+        hit(CLEAN_CHUNK, { id: 'c1', docId: 'doc-1' }),
+        hit(CLEAN_CHUNK, { id: 'c2', docId: 'doc-2' }),
+      ],
+      { tools: ['retriever'], ingressGuard: { run, mode: 'on' } } as never,
+    )
+    expect((resultEvent?.data as { ingress?: unknown }).ingress).toEqual([
+      { tool: 'retriever', item: 'doc-1', label: 'safe', safe: true },
+      { tool: 'retriever', item: 'doc-2', abstained: true, safe: false },
+    ])
+  })
+
   // The default is off: a declaration with no mode classifies nothing.
   // MUTATION: default `ingressGuard.mode` to 'on' in `sanitize`.
   it('a declaration with no mode classifies nothing and attaches no mark', async () => {

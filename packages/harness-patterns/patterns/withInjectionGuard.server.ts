@@ -52,6 +52,7 @@ import {
   type ActiveInjectionGuard,
   type IngressClassification,
   type IngressFlagPayload,
+  type IngressLabel,
   type IngressClass,
   type IngressClassifier,
   type IngressMark,
@@ -266,6 +267,10 @@ export function createInjectionGuard(
       // rule, no branches: a payload's findings never change whether either
       // runs), the original otherwise.
       const projection = report.findings.length > 0 ? out : data
+      // Recorded before the screen can add findings of its own: the label floor
+      // below needs to know which layer flagged the payload.
+      const deterministicFinding = report.findings.length > 0
+      let screenPositive = false
       const external =
         classifyIngress(options.screen?.classify, { tool, namespace, data }) === 'external'
       // Ruling L named the gate and the screen: an `exempt` namespace meets
@@ -277,13 +282,16 @@ export function createInjectionGuard(
       // external payload in `'on'`/`'shadow'`, beside the screen and reading
       // the same head, so a run that pays for both waits the slower of the two
       // rather than their sum. Label + friction, never withhold (O38): the
-      // answer attaches as metadata and changes no content. An unavailable
-      // answer (a timeout, a transport failure, a state it could not render)
-      // records an abstention and leaves the payload unmarked. A per-call
-      // `ingress: false` opts a payload out (O37: ONE classification per tool
-      // result — the error channel and a hit's filename), and a mode that is
-      // not `'on'` by its exact value — `'shadow'`, or a value construction
-      // never saw — records with `shadow: true` and attaches no mark.
+      // answer attaches as metadata and changes no content. In `'on'`, an
+      // unavailable answer (a timeout, a transport failure, a state it could
+      // not render, a runner that throws) attaches an ABSTAINED mark, so a
+      // reader can tell "classified and failed" from "never classified"
+      // (security review MUST-2). A per-call `ingress: false` opts a payload
+      // out — the error channel and a hit's filename: neither is content a
+      // reference surfaces, a deliberate narrowing of "where K1 runs" (code
+      // review SHOULD-4) — and a mode that is not `'on'` by its exact value —
+      // `'shadow'`, or a value construction never saw — records with
+      // `shadow: true` and attaches no mark.
       const ingressGuard = call?.ingress === false ? undefined : options.ingressGuard
       const ingressMode = ingressGuard ? resolveByTier(ingressGuard.mode ?? 'off') : 'off'
       const classification =
@@ -337,6 +345,7 @@ export function createInjectionGuard(
             },
           })
           if (verdict.injection_detected) {
+            screenPositive = true
             const screened = applyScreenVerdict(
               screenInput,
               verdict,
@@ -387,16 +396,39 @@ export function createInjectionGuard(
       // item id to correlate it): a mark a presentation reader could misread is
       // not attached at all, so "changes no presentation" holds by
       // construction rather than by every reader remembering a flag.
-      const ingress: IngressMark | undefined =
-        ingressMode === 'on' && classified && !classified.abstained && classified.label !== null
-          ? {
-              tool,
-              ...(fenceItemId(item) !== undefined ? { item: fenceItemId(item) } : {}),
-              label: classified.label,
-              safe: classified.safe,
-              ...(classified.eventId !== undefined ? { eventId: classified.eventId } : {}),
-            }
-          : undefined
+      //
+      // In `'on'` every classification that RAN attaches a mark:
+      //  - an answer: its label, FLOORED by what the other layers found
+      //    (security review SHOULD-4) — a deterministic finding is already a
+      //    positive, so the label is at least `possible-instructions-for-ai`,
+      //    and a positive screen verdict makes it `instructions-for-ai-detected`.
+      //    A floored label is never `safe`.
+      //  - no answer: an abstained mark (no label, `safe: false`), which a
+      //    reader presents as unchecked, never as safe (security MUST-2).
+      // `truncated` says the label covers only the head it read (prompt S6,
+      // security S5).
+      let ingress: IngressMark | undefined
+      if (ingressMode === 'on' && classification) {
+        const markItem = fenceItemId(item)
+        const base = {
+          tool,
+          ...(markItem !== undefined ? { item: markItem } : {}),
+          ...(classified?.truncated ? { truncated: true as const } : {}),
+          ...(classified?.eventId !== undefined ? { eventId: classified.eventId } : {}),
+        }
+        if (classified && !classified.abstained && classified.label !== null) {
+          const floor: IngressLabel = screenPositive
+            ? 'instructions-for-ai-detected'
+            : deterministicFinding
+              ? 'possible-instructions-for-ai'
+              : 'safe'
+          const label =
+            INGRESS_RANK[classified.label] >= INGRESS_RANK[floor] ? classified.label : floor
+          ingress = { ...base, label, safe: label === 'safe' && classified.safe }
+        } else {
+          ingress = { ...base, abstained: true, safe: false }
+        }
+      }
 
       if (report.findings.length === 0) {
         // Nothing was DETECTED. `out` may still differ from `data` — a bare
@@ -494,6 +526,13 @@ function classifyIngress(
   }
 }
 
+/** The classification's labels in order of severity, for the floor above. */
+const INGRESS_RANK: Readonly<Record<IngressLabel, number>> = {
+  safe: 0,
+  'possible-instructions-for-ai': 1,
+  'instructions-for-ai-detected': 2,
+}
+
 /** The two screen modes; any other value is refused at construction. */
 const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'always'])
 /** The classification's three modes. */
@@ -506,8 +545,9 @@ const INGRESS_MODES: ReadonlySet<unknown> = new Set<IngressMode>(['off', 'shadow
  *  - a `mode` that is not one of the two, on any tier, or a per-tier map with
  *    no own `default` (it would resolve to the map itself) — whatever it was
  *    meant to say, the guard would act on something else. The retired gate's
- *    `'shadow'`/`'gated'` die here: they would read like a mode and act as
- *    `'always'` (revision 6, #938);
+ *    `'shadow'`/`'gated'` are refused here because both asked a gate, and no
+ *    gate can be passed any more (revision 6, #938). On main they already
+ *    refused construction when no gate was passed;
  *  - an `onUnavailable` other than `'pass'` or `'withhold'`;
  *  - an `exempt` namespace the guard does not declare — it would match nothing
  *    while reading like a decision (#242 item 4's rule, applied here).

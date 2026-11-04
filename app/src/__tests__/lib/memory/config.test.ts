@@ -15,7 +15,10 @@ const stores = vi.hoisted(() => ({
 }))
 const createMemoryDbStore = vi.hoisted(() => vi.fn((_id: string) => stores))
 const getMemoryEnabled = vi.hoisted(() => vi.fn(async () => true))
-vi.mock('../../../lib/db/memories.server', () => ({ createMemoryDbStore }))
+vi.mock('../../../lib/db/memories.server', () => ({
+  createMemoryDbStore,
+  replaceMemoryGraphLinks: vi.fn(),
+}))
 vi.mock('../../../lib/db/user-prefs.server', () => ({ getMemoryEnabled }))
 const ensureMemoryAwake = vi.hoisted(() => vi.fn(async () => {}))
 const awaitMemoryWake = vi.hoisted(() => vi.fn(async () => 'awake' as 'awake' | 'skipped'))

@@ -1,4 +1,5 @@
 /** App policy for memory (#419 M5c). Constructing this bag performs no IO. */
+import { currentNodeNames } from '../org-graph/memory-links.server'
 import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ConfiguredPattern, MemoryConfig } from '@hames-ai/harness-patterns'
@@ -43,7 +44,7 @@ export function createHostMemoryConfig(): MemoryConfig {
   const store = () => {
     const id = owner()
     if (!id) throw new Error('Memory requires an owner')
-    return createMemoryDbStore(id)
+    return createMemoryDbStore(id, { linkedNames: currentNodeNames })
   }
   const decide = createDecideAdapter()
   return {

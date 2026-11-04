@@ -2048,6 +2048,11 @@ export interface MemoryCandidate {
   readonly embedSpace: string
   readonly distance: number
   readonly lastSeenAt: Date | string | number
+  /** Extra words the LEXICAL half matches this memory by, and nothing else
+   *  reads: never rendered, never embedded. The host supplies the current
+   *  names of the graph nodes the memory is linked to (org-knowledge slice 8),
+   *  so a memory about a project is recalled when the user names it. */
+  readonly terms?: readonly string[]
 }
 
 /**

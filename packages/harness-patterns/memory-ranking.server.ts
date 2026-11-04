@@ -79,6 +79,9 @@ const codePoints = (s: string): number => Array.from(s).length
 export interface RankInput {
   readonly id: string
   readonly content: string
+  /** Extra lexical terms (a linked node's name): counted with `content` by
+   *  BM25, read by nothing else. */
+  readonly terms?: readonly string[]
   /** `s_v = 1 − cosine distance`. */
   readonly semantic: number
   readonly lastSeenMs: number
@@ -160,7 +163,10 @@ export function rankMemories(
   const n = rows.length
   if (n === 0) return { ranked: [], considered: 0 }
 
-  const docs = rows.map((r) => ({ row: r, counts: termCounts(tokenize(r.content)) }))
+  const docs = rows.map((r) => ({
+    row: r,
+    counts: termCounts(tokenize([r.content, ...(r.terms ?? [])].join(' '))),
+  }))
   const lengths = docs.map((d) => Array.from(d.counts.values()).reduce((s, c) => s + c, 0))
   const avgdl = lengths.reduce((s, l) => s + l, 0) / n || 1
 

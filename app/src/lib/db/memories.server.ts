@@ -173,6 +173,16 @@ export const COLUMN_CLASSIFICATION = {
     conversation_id: 'plaintext',
     created_at: 'plaintext',
   },
+  // One row per (memory, graph node) the memory is about (org-knowledge slice
+  // 8, LD-15): identifiers only, like memory_sources. `node_id` is the graph
+  // node's stable `id`; its NAME is never stored here, it is read from the
+  // graph at recall, so a deleted or renamed node is never served stale.
+  memory_graph_links: {
+    user_id: 'plaintext',
+    memory_id: 'plaintext',
+    node_id: 'plaintext',
+    created_at: 'plaintext',
+  },
 } as const satisfies Record<
   string,
   Record<string, 'plaintext' | 'encrypted' | 'declared-exception'>
@@ -241,6 +251,18 @@ const MEMORY_DDL = `
   -- conversation_id leads (not spec §5's user_id): the FK check filters on it.
   CREATE INDEX IF NOT EXISTS memory_sources_conv_idx ON memory_sources (conversation_id, user_id);
   CREATE INDEX IF NOT EXISTS memory_sources_memory_idx ON memory_sources (memory_id);
+
+  -- Memory -> graph node, one way (org-knowledge slice 8, LD-15). Deleted with
+  -- its memory (the cascade), so erasing a memory erases what it pointed at;
+  -- the graph never points back.
+  CREATE TABLE IF NOT EXISTS memory_graph_links (
+    user_id    TEXT NOT NULL,
+    memory_id  TEXT NOT NULL REFERENCES memories (id) ON DELETE CASCADE,
+    node_id    TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (memory_id, node_id)
+  );
+  CREATE INDEX IF NOT EXISTS memory_graph_links_user_idx ON memory_graph_links (user_id);
 
   -- A source row must name a conversation ITS OWN owner owns (#531). NO ACTION, not
   -- CASCADE, and that is the design: a cascade would drop the source rows of a
@@ -704,6 +726,11 @@ export function createMemoryDbStore(
      *  It carries no SQL of this module's tables; the hitl proposal binding
      *  check is the one user (#579 review 2a). */
     readonly inTransaction?: (tx: TxQuery) => Promise<void>
+    /** The CURRENT names of graph nodes by id — the recheck at recall
+     *  (org-knowledge slice 8). An id it does not return is skipped; a throw
+     *  attaches no terms, and recall goes on without them. Absent: links are
+     *  not read into recall. */
+    readonly linkedNames?: (ids: readonly string[]) => Promise<ReadonlyMap<string, string>>
   } = {},
 ): MemoryStore & MemoryWriteStore {
   return {
@@ -723,12 +750,16 @@ export function createMemoryDbStore(
       // returned as it is; recall refuses it.
       const { rows } = await query<Record<string, unknown>>(
         `SELECT id, kind, tier, content, embed_space, last_seen_at,
-                embedding <=> $3::vector AS distance
+                embedding <=> $3::vector AS distance,
+                ARRAY(SELECT l.node_id FROM memory_graph_links l
+                       WHERE l.memory_id = memories.id AND l.user_id = $1) AS links
            FROM memories
           WHERE user_id = $1 AND tier = ANY($2)`,
         [userId, storedMemoryTiers(tiers), toVectorLiteral(embedding)],
       )
-      return rows.map((r) => ({
+      const linked = rows.map((r) => (r.links as string[] | null) ?? [])
+      const names = await currentNodeNames(linked.flat(), opts.linkedNames)
+      return rows.map((r, i) => ({
         id: r.id as string,
         kind: r.kind as MemoryKind,
         tier: memoryTier(r.tier),
@@ -736,6 +767,7 @@ export function createMemoryDbStore(
         embedSpace: r.embed_space as string,
         distance: Number(r.distance),
         lastSeenAt: r.last_seen_at as Date,
+        ...withTerms(linked[i], names),
       }))
     },
 
@@ -746,6 +778,63 @@ export function createMemoryDbStore(
       })
     },
   }
+}
+
+/** The names the graph holds NOW for `ids`; empty when there are none, when
+ *  no resolver is wired, or when it fails (recall never waits on the graph
+ *  failing). */
+async function currentNodeNames(
+  ids: readonly string[],
+  resolve: ((ids: readonly string[]) => Promise<ReadonlyMap<string, string>>) | undefined,
+): Promise<ReadonlyMap<string, string>> {
+  const unique = [...new Set(ids)]
+  if (!resolve || unique.length === 0) return new Map()
+  try {
+    return await resolve(unique)
+  } catch (err) {
+    console.warn(
+      '[memories] linked graph names unavailable; recall goes on without them:',
+      errorName(err),
+    )
+    return new Map()
+  }
+}
+
+/** A row's lexical terms: the current name of every linked node the graph
+ *  still holds. A link to a node that is gone contributes nothing. */
+export function withTerms(
+  links: readonly string[],
+  names: ReadonlyMap<string, string>,
+): { terms?: readonly string[] } {
+  const terms = links.map((id) => names.get(id)).filter((n): n is string => !!n)
+  return terms.length > 0 ? { terms } : {}
+}
+
+function errorName(e: unknown): string {
+  return e instanceof Error && e.name ? e.name : 'Error'
+}
+
+/**
+ * Replace the graph nodes one memory points at (org-knowledge slice 8). Owner
+ * scoped: a memory of another user is a no-op. The previous links go, so an
+ * `update` that changed the text re-links from the new text.
+ */
+export async function replaceMemoryGraphLinks(
+  userId: string,
+  memoryId: string,
+  nodeIds: readonly string[],
+): Promise<void> {
+  await ready()
+  await query(
+    `WITH gone AS (
+       DELETE FROM memory_graph_links WHERE user_id = $1 AND memory_id = $2
+     )
+     INSERT INTO memory_graph_links (user_id, memory_id, node_id)
+     SELECT $1, m.id, n FROM memories m, unnest($3::text[]) AS n
+      WHERE m.id = $2 AND m.user_id = $1
+     ON CONFLICT DO NOTHING`,
+    [userId, memoryId, [...new Set(nodeIds)]],
+  )
 }
 
 /** Shared owner lock for candidate writes and forget-all; lock failures rethrow. */
@@ -944,7 +1033,9 @@ export async function exportMemoryDataForUser(userId: string): Promise<Record<st
   await ready()
   const { rows } = await query<Record<string, unknown>>(
     `SELECT m.*, COALESCE((SELECT jsonb_agg(to_jsonb(s)) FROM memory_sources s
-       WHERE s.user_id = $1 AND s.memory_id = m.id), '[]'::jsonb) AS sources
+       WHERE s.user_id = $1 AND s.memory_id = m.id), '[]'::jsonb) AS sources,
+       COALESCE((SELECT jsonb_agg(l.node_id) FROM memory_graph_links l
+       WHERE l.user_id = $1 AND l.memory_id = m.id), '[]'::jsonb) AS graph_links
      FROM memories m WHERE m.user_id = $1 ORDER BY m.created_at`,
     [userId],
   )

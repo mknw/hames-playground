@@ -95,6 +95,48 @@ describe('judge', () => {
     expect(candidates[0].source).toBe('pattern1')
   })
 
+  // Security review S9 (#976): the injection-ingress-guard's mark is
+  // presentation metadata and must not reach the evaluator's model beside the
+  // content it ranks. MUTATION: stringify `c.data` whole in `judge` (drop
+  // `withoutIngressMark`): the evaluator's input carries `ingress` and
+  // `"label"`, red.
+  it('never passes the ingress mark to the evaluator', async () => {
+    const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
+    const { createContext } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } =
+      await import('@hames-ai/harness-patterns/patterns/event-view.server')
+
+    const evaluator = vi.fn().mockResolvedValue({
+      reasoning: 'r',
+      rankings: [{ source: 'pattern1', score: 0.9, reason: 'ok' }],
+      best: { source: 'pattern1', content: 'Best result' },
+    })
+    const ctx = createContext<{ input?: string }>('test query')
+    ctx.data = { input: 'test query' }
+    ctx.events.push({
+      type: 'tool_result',
+      ts: Date.now(),
+      patternId: 'pattern1',
+      data: {
+        tool: 'fetch',
+        result: 'First result',
+        success: true,
+        ingress: [{ tool: 'fetch', item: 'call-1', label: 'safe', safe: true, eventId: 'ev-1' }],
+      },
+    })
+    const pattern = judge(evaluator)
+    await pattern.fn(
+      { id: 'judge', data: ctx.data, events: [], startTime: Date.now() },
+      createEventView(ctx),
+    )
+    const [, candidates] = evaluator.mock.calls[0]
+    const sent = JSON.stringify(candidates)
+    expect(sent).toContain('First result')
+    expect(sent).not.toContain('ingress')
+    expect(sent).not.toContain('\\"label\\"')
+    expect(sent).not.toContain('"label"')
+  })
+
   it('should set best result as response', async () => {
     const { judge } = await import('@hames-ai/harness-patterns/patterns/judge.server')
     const { createContext } = await import('@hames-ai/harness-patterns/context.server')

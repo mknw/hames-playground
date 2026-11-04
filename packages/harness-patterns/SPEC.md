@@ -1303,7 +1303,7 @@ truncated? }` when it gave none (a timeout, a seam error, an unusable answer,
   `tool_result` event as `ingress: IngressMark[]` (one per sub-call), and the
   retriever puts one per classified hit on its own `tool_result`. Metadata only
   — label ids, booleans and an event id — and absent from the LLM-facing
-  `tool_result` projection. A held result's substitution drops a mark with the
+  `tool_result` projection and from what `judge` hands its evaluator. A held result's substitution drops a mark with the
   placeholder's other annotations.
 - **What a label covers.** A `safe` label covers the first 20 000 characters
   only; text after the head is never read. A head whose state would pass the
@@ -1317,9 +1317,14 @@ truncated? }` when it gave none (a timeout, a seam error, an unusable answer,
   code, no operator switch. Measured on the final wording before it claimed
   anything (2026-11-04, the private decision box's systemone endpoint, 68
   answers over 17 synthetic fixtures): choice answers are continuous — no
-  0.801/0.199-style clamp like the retired noul form's — the box's unconfident
-  shape topped out at p(safe) 0.5741 and the safe-criterion fixtures never
-  dipped below 0.7784; the line sits in that empty band. The line is
+  0.801/0.199-style clamp like the retired noul form's. The line sits between
+  two named populations (expectations re-derived from the final wording): the
+  fixtures written `safe` never dipped below p(safe) 0.7784, and the
+  argmax-`safe` answers on fixtures not written `safe` that fall below the line
+  topped out at 0.5741. Neither population lands in (0.5741, 0.7784); other
+  answers do — `instruction-to-automated-system`, written `possible`, read
+  0.7298–0.7903, three readings inside that range and one above it, all
+  presented `safe`. The line is
   PROVISIONAL: the Anthropic tier's decision host is unmeasured, and the design
   settles the line against the calibration scenario's distribution
   (`ingress-classification`, slice 19), which grades it on both tiers.

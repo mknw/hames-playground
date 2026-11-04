@@ -150,16 +150,18 @@ describe('the choice-flooring pin (the floored-noul pin dies with τi)', () => {
   // 17 synthetic fixtures × 4 repetitions = 68 `guard.ingress` choice calls,
   // 0 errors; the states built by `renderGuardGateState`, the question and
   // labels read from `GUARD_INGRESS`): choice answers came back CONTINUOUS —
-  // no recurring clamp, unlike the retired noul form's 0.801/0.199 — and the
-  // box's unconfident shape (argmax `safe`) topped out at p(safe) = 0.5741,
-  // while content the reviewed `safe` criterion covers never dipped below
-  // p(safe) = 0.7784. (The draft wording's run, 2026-11-03: 0.6294 / 0.7762.)
+  // no recurring clamp, unlike the retired noul form's 0.801/0.199. Two named
+  // populations (prompt review S10; expectations re-derived from the final
+  // wording, S11): the argmax-`safe` answers on fixtures NOT written `safe`
+  // that fall below the line topped out at p(safe) = 0.5741, and the fixtures
+  // written `safe` never dipped below p(safe) = 0.7784. (Not every answer: a
+  // `possible`-written fixture read 0.7298–0.7903 and presented `safe` — see
+  // the `GUARD_INGRESS_SAFE_LINE` doc, code review D2.) (The draft wording's
+  // run, 2026-11-03: 0.6294 / 0.7762.)
   //
-  // The safe line sits INSIDE that empty band: ABOVE every unconfident reading
-  // (so an unconfident answer never presents as safe — the τi-below-0.199 rule
-  // carried to the choice form) and BELOW every safe-criterion reading.
-  // MUTATION: `GUARD_INGRESS_SAFE_LINE = 0.5` — inside the measured
-  // unconfident band; the unconfident readings (0.48–0.57) present as safe.
+  // The safe line sits BETWEEN the two populations. MUTATION:
+  // `GUARD_INGRESS_SAFE_LINE = 0.5` — below the argmax-`safe` answers'
+  // top (0.48–0.57), which would then present as safe.
   it('the safe line sits outside the measured unconfident band, and inside the measured gap', () => {
     expect(GUARD_INGRESS_SAFE_LINE).toBeGreaterThan(0.5741)
     expect(GUARD_INGRESS_SAFE_LINE).toBeLessThan(0.7784)
@@ -459,6 +461,64 @@ describe('the classification runner', () => {
     expect(Buffer.byteLength(seen.state!, 'utf8')).toBeLessThanOrEqual(32_000)
     expect(verdict).toMatchObject({ abstained: false, truncated: true })
     expect(decisions(events)[0].data).toMatchObject({ truncated: true })
+  })
+
+  // Code review D1: a head of MIXED byte density — dense line breaks first,
+  // cheap ASCII after — fits after a cut, so it must be classified, never
+  // abstained. The reviewer's reproduction at `5717c1be`: N = 10 000 … 10 550
+  // line breaks then ASCII to 20 000 characters came back abstained with
+  // decide never called. MUTATION: restore the proportional rescale with its
+  // 16-pass cap (`chars = Math.min(chars - 1, Math.floor((chars * budget) /
+  // bytes))` in a `for (pass < 16)` loop): every row goes red.
+  it.each([10_000, 10_200, 10_400, 10_550])(
+    'a mixed-density head (%i line breaks, then ASCII) is cut to fit and classified, never abstained',
+    async (n) => {
+      const seen: Seen = { calls: 0 }
+      const runner = createIngressGuard(fakeDecide(SAFE, seen))
+      const verdict = await runner({
+        tool: 'fetch',
+        namespace: 'web',
+        content: '\n'.repeat(n) + 'a'.repeat(20_000 - n),
+      })
+      expect(seen.calls).toBe(1)
+      expect(Buffer.byteLength(seen.state!, 'utf8')).toBeLessThanOrEqual(32_000)
+      expect(verdict).toMatchObject({ abstained: false, truncated: true })
+    },
+  )
+
+  // Security review S10: empty content (a tool that returns '' or no data) is
+  // not an outage. It is rendered once and classified, so the abstention
+  // counts the report and slice 19 read stay true. MUTATION: restore an exit
+  // that refuses a zero-character head (`while (chars > 0)`-style, or throw
+  // when `hi === 0`): red.
+  it('empty content is rendered and classified once, not abstained', async () => {
+    const seen: Seen = { calls: 0 }
+    const events: ContextEvent[] = []
+    const runner = createIngressGuard(fakeDecide(SAFE, seen))
+    const verdict = await runner({
+      tool: 'fetch',
+      namespace: 'web',
+      content: '',
+      onDecision: (event) => {
+        events.push({ type: 'decision_made', ts: 0, patternId: 'guard', data: event })
+      },
+    })
+    expect(seen.calls).toBe(1)
+    expect(verdict).toMatchObject({ abstained: false, label: 'safe' })
+    expect(verdict.truncated).toBeUndefined()
+    expect(decisions(events)[0].data).toMatchObject({ abstained: false })
+  })
+
+  // The cut never splits a surrogate pair: a head of 4-byte characters cut to
+  // fit ends on a whole character. MUTATION: drop the high-surrogate check in
+  // `fitState`'s `renderAt`.
+  it('a cut through astral characters never leaves a lone surrogate', async () => {
+    const seen: Seen = { calls: 0 }
+    const runner = createIngressGuard(fakeDecide(SAFE, seen))
+    await runner({ tool: 'fetch', namespace: 'web', content: 'x' + '\u{1F600}'.repeat(9_999) })
+    expect(seen.calls).toBe(1)
+    expect(seen.state!).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/)
+    expect(Buffer.byteLength(seen.state!, 'utf8')).toBeLessThanOrEqual(32_000)
   })
 
   // Only a budget no head can fit abstains — recorded, the request never

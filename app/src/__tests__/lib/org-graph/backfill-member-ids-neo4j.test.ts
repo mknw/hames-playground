@@ -26,6 +26,7 @@ import {
 import {
   MEMBER_ID_CONSTRAINT,
   backfillMemberIds,
+  dryRunMemberIds,
 } from '../../../lib/org-graph/scripts/backfill-member-ids'
 
 // A real database applying two dozen schema changes: the 5s default is a
@@ -155,6 +156,28 @@ describe.skipIf(!ENABLED)(
         `MATCH (k:Knowledge {id: 'k1'}), (m:Member {entraId: 'old-1'}) CREATE (k)-[:ABOUT]->(m)`,
       )
       expect(await drift()).toEqual([{ kind: 'relation_endpoints', count: 1 }])
+
+      // A knowledge item about itself is about no node (review of #988, term 1).
+      await run(`MATCH (k:Knowledge {id: 'k1'}) CREATE (k)-[:ABOUT]->(k)`)
+      expect(await drift()).toEqual([
+        { kind: 'relation_endpoints', count: 1 },
+        { kind: 'relation_endpoints', count: 1 },
+      ])
+    })
+
+    it('dry-runs in one read transaction, counting a pre-v2 Knowledge node and writing nothing', async () => {
+      // A Knowledge node as v1 wrote it: keyed by `key`, named by `title`.
+      await run(`CREATE (:Knowledge {key: 'k-old', title: 'An old item'})`)
+      const total = async () =>
+        (await run('MATCH (n) RETURN count(n) AS n')).records[0].get('n').toNumber()
+      const before = await total()
+      expect(await dryRunMemberIds(driver)).toEqual({
+        counts: { members: 4, withId: 4 },
+        wouldAssign: 0,
+        legacyKnowledge: 1,
+        constraint: true,
+      })
+      expect(await total()).toBe(before)
     })
   },
 )

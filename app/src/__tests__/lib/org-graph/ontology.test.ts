@@ -99,6 +99,10 @@ describe('shape of the ontology', () => {
     })
     const about = RELATIONS.find((r) => r.type === 'ABOUT')!
     expect(about.from).toEqual(['Fact', 'Knowledge'])
+    // No ABOUT target is also an ABOUT source: the validator does not compare an
+    // edge's two ends, so an overlap admits an item about itself (review of #988).
+    // Mutation: put Knowledge back among the targets → red.
+    expect(about.to.filter((l) => about.from.includes(l))).toEqual([])
     expect(about.cardinality).toEqual({ side: 'from', min: 1, max: 1, onExisting: 'refuse' })
   })
 
@@ -319,11 +323,12 @@ describe('conformance query', () => {
   it('accepts a knowledge item and its ABOUT edge, never one about a person', () => {
     const { labels, relationEndpoints } = conformanceParams()
     expect(labels).toEqual(expect.arrayContaining(['Knowledge', 'Resource']))
-    for (const to of ['Project', 'Resource', 'Pillar', 'Knowledge']) {
+    for (const to of ['Project', 'Resource', 'Pillar']) {
       expect(relationEndpoints).toContainEqual({ type: 'ABOUT', from: 'Knowledge', to })
     }
-    expect(relationEndpoints).not.toContainEqual({ type: 'ABOUT', from: 'Knowledge', to: 'Member' })
-    expect(relationEndpoints).not.toContainEqual({ type: 'ABOUT', from: 'Knowledge', to: 'Fact' })
+    for (const to of ['Member', 'Fact', 'Knowledge']) {
+      expect(relationEndpoints).not.toContainEqual({ type: 'ABOUT', from: 'Knowledge', to })
+    }
   })
 
   it('counts a known type between the wrong labels, and only a known type', () => {

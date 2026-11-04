@@ -102,8 +102,13 @@ const named = (
   ...extra,
 })
 
-/** Every label that is not a person or a fact: what a fact may be about. */
-const ABOUTABLE: readonly NodeLabel[] = NODE_LABELS.filter((l) => l !== 'Member' && l !== 'Fact')
+/** What a fact or a knowledge item may be about: every label but a person, a
+ *  fact and a knowledge item. `Knowledge` is left out because `ABOUT` runs from
+ *  it too, and the validator does not compare an edge's ends, so a knowledge
+ *  item about itself — about no node — would otherwise satisfy `min: 1`. */
+const ABOUTABLE: readonly NodeLabel[] = NODE_LABELS.filter(
+  (l) => l !== 'Member' && l !== 'Fact' && l !== 'Knowledge',
+)
 
 export const ORG_ONTOLOGY: GraphOntology = defineOntology({
   classes: [
@@ -238,7 +243,7 @@ export const ORG_ONTOLOGY: GraphOntology = defineOntology({
       to: ABOUTABLE,
       cardinality: { side: 'from', min: 1, max: 1, onExisting: 'refuse' },
       proposable: true,
-      why: 'What a fact or a knowledge item is about: exactly one node, never a person and never a fact (A5, LD-22).',
+      why: 'What a fact or a knowledge item is about: exactly one node, never a person, a fact or a knowledge item (A5, LD-22).',
     },
     {
       type: 'PART_OF',
@@ -293,8 +298,10 @@ const PROVENANCE = ['id', 'createdBy', 'createdAt'] as const
  * - `Knowledge.key`, `Resource.key`: the pre-v2 identity, whose constraints
  *   `org_knowledge_key` and `org_resource_key` the live graphs still carry.
  *   Declared here, they stay this ontology's own rather than leftovers, and no
- *   constraint is dropped to amend it (owner, 2026-11-04; LD-22). Nothing in the
- *   app writes `key`.
+ *   constraint is dropped to amend it (owner, 2026-11-04; LD-22). They are
+ *   INERT: nothing in the app writes `key` and nothing can set it, so they bind
+ *   only nodes written before v2. A knowledge item's or a resource's identity is
+ *   its `id` and `nameKey`.
  */
 const LEGACY_UNIQUE: Partial<Record<NodeLabel, readonly string[]>> = {
   Team: ['entraId'],

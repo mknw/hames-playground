@@ -3,7 +3,13 @@
  * constraint — the ONE-OFF backfill for a graph the directory ingest filled
  * before members had ids.
  *
+ *   pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687 --dry-run
  *   pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687
+ *
+ * `--dry-run` writes nothing: one READ transaction reports the member counts,
+ * how many members would be given an id, how many `Knowledge` nodes predate v2
+ * (named by `title`, not `name`) and whether `org_member_id` exists. A real run
+ * prints the same report first, before any write.
  *
  * Since the ingest sets `ON CREATE SET m.id = randomUUID()`, a new member
  * arrives with an id; this gives one to every member that predates that. The
@@ -13,7 +19,8 @@
  * data write. `ensureOrgGraphSchema` applies the same constraint on its own
  * once no member lacks an id, so this script is needed once per such graph.
  *
- * Idempotent: an id is set only where none is (`WHERE m.id IS NULL`), never
+ * Idempotent: an id is set only where none is (`WHERE m.id IS NULL`, and
+ * `coalesce` so a concurrent run that committed first is not overwritten), never
  * overwritten, so a second run assigns 0. Nothing is deleted. `--target
  * <host:port>` is required and must equal the env's resolved Neo4j host, as for
  * the member seed. Prints counts only — never a name or an id. Run from `app/`.
@@ -35,15 +42,37 @@ export const MEMBER_ID_COUNTS_CYPHER = `
 /** The backfill itself: only where no id is, never overwriting one. */
 export const BACKFILL_MEMBER_IDS_CYPHER = `
   MATCH (m:Member) WHERE m.id IS NULL
-  SET m.id = randomUUID()
+  SET m.id = coalesce(m.id, randomUUID())
   RETURN count(m) AS assigned
 `
 
 export const MEMBER_ID_CONSTRAINT = constraintName('Member', 'id')
 
+/**
+ * `Knowledge` nodes from before v2, which were named by `title` and keyed by
+ * `key`. One has no `name`, so the hook's snapshot (which matches by name)
+ * never finds it and an accepted proposal would create a second node beside
+ * it. The data step reports this count before anything else. Read-only.
+ */
+export const LEGACY_KNOWLEDGE_CYPHER = `
+  MATCH (k:Knowledge) WHERE k.name IS NULL RETURN count(k) AS legacy
+`
+
+const MEMBER_ID_CONSTRAINT_SHOW = 'SHOW CONSTRAINTS YIELD name WHERE name = $name RETURN name'
+
 export interface MemberIdCounts {
   members: number
   withId: number
+}
+
+export interface DryRunReport {
+  counts: MemberIdCounts
+  /** Members a real run would give an id. */
+  wouldAssign: number
+  /** `Knowledge` nodes with no `name` (pre-v2). */
+  legacyKnowledge: number
+  /** Whether `org_member_id` exists now. */
+  constraint: boolean
 }
 
 export interface BackfillReport {
@@ -71,6 +100,29 @@ async function counts(run: Run): Promise<MemberIdCounts> {
   const row = (await run(MEMBER_ID_COUNTS_CYPHER)).records[0]
   if (!row) throw new BackfillRefused('the member count returned no row')
   return { members: toNumber(row.get('members')), withId: toNumber(row.get('withId')) }
+}
+
+/** The report a run starts from, in ONE read transaction: writes nothing. */
+export async function dryRunMemberIds(driver: Driver): Promise<DryRunReport> {
+  const read = driver.session({ defaultAccessMode: neo4j.session.READ })
+  try {
+    return await read.executeRead(async (tx) => {
+      const run: Run = (cypher, params) => tx.run(cypher, params)
+      const c = await counts(run)
+      const legacy = (await run(LEGACY_KNOWLEDGE_CYPHER)).records[0]
+      // No row is not "none": a report that understates is the one to refuse.
+      if (!legacy) throw new BackfillRefused('the legacy Knowledge count returned no row')
+      const shown = await run(MEMBER_ID_CONSTRAINT_SHOW, { name: MEMBER_ID_CONSTRAINT })
+      return {
+        counts: c,
+        wouldAssign: c.members - c.withId,
+        legacyKnowledge: toNumber(legacy.get('legacy')),
+        constraint: shown.records.length === 1,
+      }
+    })
+  } finally {
+    await read.close()
+  }
 }
 
 /**
@@ -110,9 +162,7 @@ export async function backfillMemberIds(driver: Driver): Promise<BackfillReport>
   }
   const read = driver.session({ defaultAccessMode: neo4j.session.READ })
   try {
-    const shown = await read.run('SHOW CONSTRAINTS YIELD name WHERE name = $name RETURN name', {
-      name: MEMBER_ID_CONSTRAINT,
-    })
+    const shown = await read.run(MEMBER_ID_CONSTRAINT_SHOW, { name: MEMBER_ID_CONSTRAINT })
     return { before, assigned, after, constraint: shown.records.length === 1 }
   } finally {
     await read.close()
@@ -123,14 +173,17 @@ async function main(): Promise<void> {
   const { getEndpoints } = await import('../../config/endpoints')
   const { composeSecret } = await import('../../config/compose-credentials.server')
   const url = getEndpoints().neo4j.bolt
-  checkTarget(process.argv.slice(2), new URL(url).host)
+  const argv = process.argv.slice(2)
+  checkTarget(argv, new URL(url).host)
   const driver = neo4j.driver(
     url,
     neo4j.auth.basic(process.env.NEO4J_USER || 'neo4j', composeSecret('NEO4J_PASSWORD') ?? ''),
   )
   try {
     console.log(`target: ${new URL(url).host}`)
-    console.log(JSON.stringify(await backfillMemberIds(driver)))
+    console.log('dry run:', JSON.stringify(await dryRunMemberIds(driver)))
+    if (argv.includes('--dry-run')) return
+    console.log('backfill:', JSON.stringify(await backfillMemberIds(driver)))
   } finally {
     await driver.close()
   }

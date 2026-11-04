@@ -45,7 +45,10 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/seed-eval-members.ts --ta
 
 # ONE-OFF: give every Member written before ids an id (one transaction, counts
 # before and after, never overwriting one), then apply Member.id's constraint.
-# Idempotent; --target as for the seed. Prints counts only.
+# Idempotent; --target as for the seed. Prints counts only. --dry-run writes
+# nothing: member counts, ids it would assign, pre-v2 Knowledge nodes (no name),
+# and whether the constraint exists. A real run prints that report first.
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687 --dry-run
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687
 ```
 

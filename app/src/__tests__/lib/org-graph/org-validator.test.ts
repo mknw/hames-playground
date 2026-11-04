@@ -775,6 +775,21 @@ describe('the amended classes: Knowledge and Resource (LD-22)', () => {
     expect(r.rejected).toEqual({ V7: 1 })
   })
 
+  // Review of #988, term 1: an item ABOUT itself is about no node, yet met
+  // `min: 1`. Mutation: put Knowledge back in ABOUTABLE → admitted, red.
+  it('drops a knowledge item about itself', () => {
+    const r = run(
+      [
+        knowledge({ name: 'the onboarding guide' }),
+        edge('ABOUT', 'k', 'k', 'as the onboarding guide'),
+      ],
+      MSG,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V7: 1 })
+  })
+
   it('drops a knowledge item whose name names a member, even when its evidence does not', () => {
     const r = run(
       [knowledge({ name: 'Dorrit Wexley handover notes' }), ...aboutOsprey],

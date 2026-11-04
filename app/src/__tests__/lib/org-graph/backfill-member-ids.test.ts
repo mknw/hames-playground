@@ -14,6 +14,8 @@ import type { Driver } from 'neo4j-driver'
 import {
   BACKFILL_MEMBER_IDS_CYPHER,
   BackfillRefused,
+  LEGACY_KNOWLEDGE_CYPHER,
+  dryRunMemberIds,
   MEMBER_ID_CONSTRAINT,
   MEMBER_ID_COUNTS_CYPHER,
   backfillMemberIds,
@@ -67,7 +69,7 @@ describe('backfill-member-ids', () => {
   it('sets an id only where none is, and never deletes, merges or creates', () => {
     const backfill = BACKFILL_MEMBER_IDS_CYPHER.replace(/\s+/g, ' ').trim()
     expect(backfill).toBe(
-      'MATCH (m:Member) WHERE m.id IS NULL SET m.id = randomUUID() RETURN count(m) AS assigned',
+      'MATCH (m:Member) WHERE m.id IS NULL SET m.id = coalesce(m.id, randomUUID()) RETURN count(m) AS assigned',
     )
     expect(MEMBER_ID_COUNTS_CYPHER).not.toMatch(/\b(SET|DELETE|DETACH|REMOVE|MERGE|CREATE)\b/i)
     expect(MEMBER_ID_CONSTRAINT).toBe('org_member_id')
@@ -128,5 +130,60 @@ describe('backfill-member-ids', () => {
     })
     expect(await backfillMemberIds(driver)).toMatchObject({ assigned: 2, constraint: false })
     expect(log.some((l) => l.includes('CREATE CONSTRAINT'))).toBe(false)
+  })
+})
+
+// Review of #988, terms 3 and 4: a read-only dry run that also counts pre-v2
+// Knowledge nodes. Mutations: open the session in WRITE mode, or run it through
+// executeWrite → red; report 0 when the legacy count returns no row → red.
+describe('backfill-member-ids --dry-run', () => {
+  function readDriver(legacy: Row[] = [{ legacy: 2 }], shown: Row[] = []) {
+    const modes: unknown[] = []
+    const log: string[] = []
+    const run = vi.fn(async (cypher: string) => {
+      log.push(cypher)
+      if (cypher === MEMBER_ID_COUNTS_CYPHER) return answer([{ members: 5, withId: 1 }])
+      if (cypher === LEGACY_KNOWLEDGE_CYPHER) return answer(legacy)
+      if (cypher.startsWith('SHOW CONSTRAINTS')) return answer(shown)
+      throw new Error(`unexpected statement: ${cypher}`)
+    })
+    const executeRead = vi.fn(async (work: (tx: unknown) => unknown) => work({ run }))
+    const executeWrite = vi.fn()
+    const close = vi.fn(async () => undefined)
+    const driver = {
+      session: (opts: { defaultAccessMode?: unknown }) => {
+        modes.push(opts?.defaultAccessMode)
+        return { executeRead, executeWrite, run: vi.fn(), close }
+      },
+    } as unknown as Driver
+    return { driver, modes, log, executeRead, executeWrite, close }
+  }
+
+  it('reports counts, ids it would assign, legacy Knowledge and the constraint, writing nothing', async () => {
+    const { driver, modes, log, executeRead, executeWrite, close } = readDriver()
+    expect(await dryRunMemberIds(driver)).toEqual({
+      counts: { members: 5, withId: 1 },
+      wouldAssign: 4,
+      legacyKnowledge: 2,
+      constraint: false,
+    })
+    expect(modes).toEqual(['READ'])
+    expect(executeRead).toHaveBeenCalledTimes(1)
+    expect(executeWrite).not.toHaveBeenCalled()
+    for (const cypher of log) {
+      expect(cypher).not.toMatch(/\b(SET|CREATE|MERGE|DELETE|DETACH|REMOVE|DROP)\b/i)
+    }
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts a Knowledge node with no name as pre-v2', () => {
+    expect(LEGACY_KNOWLEDGE_CYPHER.replace(/\s+/g, ' ').trim()).toBe(
+      'MATCH (k:Knowledge) WHERE k.name IS NULL RETURN count(k) AS legacy',
+    )
+  })
+
+  it('refuses rather than report no legacy Knowledge when the count returns no row', async () => {
+    const { driver } = readDriver([])
+    await expect(dryRunMemberIds(driver)).rejects.toThrow(BackfillRefused)
   })
 })

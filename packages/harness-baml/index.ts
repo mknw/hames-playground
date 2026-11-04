@@ -19,7 +19,7 @@ export {
   type MemoryCompactInput,
   type BamlPatterns,
 } from './baml-patterns.server'
-export { defaultSynthesize, defaultSelector } from './defaults.server'
+export { createSynthesizer, defaultSynthesize, defaultSelector } from './defaults.server'
 export {
   createLoopControllerAdapter,
   createActorControllerAdapter,

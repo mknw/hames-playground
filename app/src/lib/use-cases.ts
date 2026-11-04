@@ -78,6 +78,15 @@ export interface UseCaseSection {
   questions: UseCaseQuestion[]
 }
 
+/** Where this page lives — the route file is `routes/use-cases.tsx`. The agent
+ *  links it when someone asks what it can do (`AgentDeps.examplesPage`, built in
+ *  `session.server.ts`). The nav keeps its literal: `links-new-tab.test.ts`
+ *  allowlists that anchor by its exact text. */
+export const USE_CASES_PATH = '/use-cases'
+
+/** The page's name, as the agent's answer links it. */
+export const USE_CASES_LABEL = 'Use cases'
+
 /** Query parameter the "Try this" buttons ride on: `/?q=<first turn>`. The
  *  chat route reads it once to prefill the composer and strips it from the
  *  URL, so a reload does not re-prefill. */

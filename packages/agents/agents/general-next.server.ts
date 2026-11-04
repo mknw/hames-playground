@@ -28,11 +28,13 @@ import {
   createDecideAdapter,
   createInjectionScreen,
   createLoopControllerAdapter,
+  createSynthesizer,
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
 import { SCREEN_POLICY_BY_TIER } from '../types'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
+import { capabilityGuide } from './capability-guide'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
@@ -442,7 +444,21 @@ async function createPatterns(
       // Records of the previous turn too (`threadTurns`), but errors of this turn only.
       viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
       threadTurns: 2,
-      synthesize: baml.synthesize,
+      // "What can you do?" is answered from what this composition actually
+      // holds: the office route's Graph and sandbox tools, the info route's
+      // namespaces, the retriever route, memory if wired, and the host's page
+      // of example questions.
+      synthesize: createSynthesizer({
+        guide: capabilityGuide({
+          office: collectToolNames(office),
+          neo4j: tools.neo4j ?? [],
+          web: tools.web ?? [],
+          libraryDocs: docTools,
+          documents: true,
+          memory: deps.memory !== undefined,
+          examplesPage: deps.examplesPage,
+        }),
+      }),
       liveEvents: true,
     }),
   ]

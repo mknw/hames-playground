@@ -101,6 +101,7 @@ beforeEach(() => {
             errorMessage,
             memory,
             references,
+            null,
             OFFLINE,
           )
         ).body.json(),

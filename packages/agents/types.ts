@@ -172,6 +172,14 @@ export interface SandboxAttach {
  * over the way the factories used to close over the app catalog. Optional
  * members are omitted when a deployment does not compose that capability.
  */
+/** The host's page of example questions, e.g. the app's `/use-cases`. */
+export interface ExamplesPage {
+  /** Where the page lives, as the chat should link it (a path or a URL). */
+  href: string
+  /** The page's own name, used as the link text. */
+  label: string
+}
+
 export interface AgentDeps {
   /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
   graphFileIngest?: boolean
@@ -185,6 +193,13 @@ export interface AgentDeps {
    * host's, built where it settles; this is only whether to opt in.
    */
   orgKnowledge?: boolean
+  /**
+   * The host's page of example questions (the app's `/use-cases`). The agent
+   * links it when someone asks what it can do, for help, or how to start —
+   * beside the capabilities it derives from its own tools (`capabilityGuide`).
+   * Absent: the answer names the capabilities and links nothing.
+   */
+  examplesPage?: ExamplesPage
   /**
    * The guards' host settings (boundary guards, slice 6: the operator
    * switches). One object rather than one field per guard, so a guard added

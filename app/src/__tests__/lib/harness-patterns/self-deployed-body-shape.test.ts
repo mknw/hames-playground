@@ -150,7 +150,7 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ['Critic', () => b.request.Critic('i', [], SELF_DEPLOYED)],
   [
     'Synthesize',
-    () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, SELF_DEPLOYED),
+    () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, SELF_DEPLOYED),
   ],
   [
     'Router',
@@ -360,7 +360,7 @@ describe('private-tier request bodies', () => {
       ],
       [
         'Synthesize',
-        (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, SELF_DEPLOYED),
+        (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, null, SELF_DEPLOYED),
       ],
     ]
     for (const [name, render] of renders) {
@@ -391,7 +391,17 @@ describe('private-tier request bodies', () => {
   // move it out of the memory block.
   it('tells Synthesize to answer a "what do you remember" question from the memory block', async () => {
     const body = (
-      await b.request.Synthesize('q', 'i', TURNS, false, null, 'MEMTOKEN', null, SELF_DEPLOYED)
+      await b.request.Synthesize(
+        'q',
+        'i',
+        TURNS,
+        false,
+        null,
+        'MEMTOKEN',
+        null,
+        null,
+        SELF_DEPLOYED,
+      )
     ).body.json() as Body
     const messages = body.messages as { role: string; content: unknown }[]
     const memory = JSON.stringify(
@@ -403,7 +413,7 @@ describe('private-tier request bodies', () => {
     expect(memory.indexOf('One exception')).toBeLessThan(memory.indexOf('---BEGIN DATA---'))
     const absent = JSON.stringify(
       (
-        await b.request.Synthesize('q', 'i', TURNS, false, null, null, null, SELF_DEPLOYED)
+        await b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, SELF_DEPLOYED)
       ).body.json(),
     )
     expect(absent).not.toContain('One exception')

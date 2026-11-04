@@ -2603,6 +2603,226 @@
       "org": true
     },
     {
+      "id": "44-onboarding",
+      "title": "Say what it can do and where to start",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["answer"],
+        "sources": ["none"],
+        "intents": ["meta"],
+        "turnShape": "multi-turn",
+        "toolShape": "none",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en", "nl", "fr"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": [
+        "What can you do?",
+        "help",
+        "How do I start?",
+        "Wat kun je allemaal voor me doen?",
+        "Comment est-ce que je commence ?"
+      ],
+      "expected": "Each turn names a few concrete things this deployment can do, in the user's language, and links the Use cases page (/use-cases); no turn claims to send mail or schedule, move or cancel events. No tool is called.",
+      "grader": [
+        {
+          "check": "noTools",
+          "says": "module sets noTools: true"
+        },
+        {
+          "check": "answerMatches",
+          "says": "turn 1 links the use-cases page",
+          "turn": 1,
+          "pattern": "\\]\\((?:https?://[^\\s)]+)?/use-cases\\)",
+          "examples": {
+            "match": [
+              "Browse the [Use cases](/use-cases) page.",
+              "[Use cases](https://app.example.test/use-cases)"
+            ],
+            "noMatch": ["See the Use cases page.", "[Use cases](/)", "[start here](/use-cases-old)"]
+          }
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "turn 1 claims no Microsoft 365 write the deployment lacks",
+          "turn": 1,
+          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "examples": {
+            "match": [
+              "I can send emails for you.",
+              "I am able to schedule meetings.",
+              "Je peux envoyer des e-mails.",
+              "Ik kan e-mails versturen."
+            ],
+            "noMatch": [
+              "I can't send mail or change events.",
+              "I cannot send mail.",
+              "I am not able to send mail.",
+              "Je ne peux pas envoyer de mail.",
+              "Ik kan geen e-mails versturen.",
+              "I can read your mail and calendar.",
+              "I can create Word files you can download."
+            ]
+          }
+        },
+        {
+          "check": "answerMatches",
+          "says": "turn 2 links the use-cases page",
+          "turn": 2,
+          "pattern": "\\]\\((?:https?://[^\\s)]+)?/use-cases\\)",
+          "examples": {
+            "match": [
+              "Browse the [Use cases](/use-cases) page.",
+              "[Use cases](https://app.example.test/use-cases)"
+            ],
+            "noMatch": ["See the Use cases page.", "[Use cases](/)", "[start here](/use-cases-old)"]
+          }
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "turn 2 claims no Microsoft 365 write the deployment lacks",
+          "turn": 2,
+          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "examples": {
+            "match": [
+              "I can send emails for you.",
+              "I am able to schedule meetings.",
+              "Je peux envoyer des e-mails.",
+              "Ik kan e-mails versturen."
+            ],
+            "noMatch": [
+              "I can't send mail or change events.",
+              "I cannot send mail.",
+              "I am not able to send mail.",
+              "Je ne peux pas envoyer de mail.",
+              "Ik kan geen e-mails versturen.",
+              "I can read your mail and calendar.",
+              "I can create Word files you can download."
+            ]
+          }
+        },
+        {
+          "check": "answerMatches",
+          "says": "turn 3 links the use-cases page",
+          "turn": 3,
+          "pattern": "\\]\\((?:https?://[^\\s)]+)?/use-cases\\)",
+          "examples": {
+            "match": [
+              "Browse the [Use cases](/use-cases) page.",
+              "[Use cases](https://app.example.test/use-cases)"
+            ],
+            "noMatch": ["See the Use cases page.", "[Use cases](/)", "[start here](/use-cases-old)"]
+          }
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "turn 3 claims no Microsoft 365 write the deployment lacks",
+          "turn": 3,
+          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "examples": {
+            "match": [
+              "I can send emails for you.",
+              "I am able to schedule meetings.",
+              "Je peux envoyer des e-mails.",
+              "Ik kan e-mails versturen."
+            ],
+            "noMatch": [
+              "I can't send mail or change events.",
+              "I cannot send mail.",
+              "I am not able to send mail.",
+              "Je ne peux pas envoyer de mail.",
+              "Ik kan geen e-mails versturen.",
+              "I can read your mail and calendar.",
+              "I can create Word files you can download."
+            ]
+          }
+        },
+        {
+          "check": "answerMatches",
+          "says": "turn 4 links the use-cases page",
+          "turn": 4,
+          "pattern": "\\]\\((?:https?://[^\\s)]+)?/use-cases\\)",
+          "examples": {
+            "match": [
+              "Browse the [Use cases](/use-cases) page.",
+              "[Use cases](https://app.example.test/use-cases)"
+            ],
+            "noMatch": ["See the Use cases page.", "[Use cases](/)", "[start here](/use-cases-old)"]
+          }
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "turn 4 claims no Microsoft 365 write the deployment lacks",
+          "turn": 4,
+          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "examples": {
+            "match": [
+              "I can send emails for you.",
+              "I am able to schedule meetings.",
+              "Je peux envoyer des e-mails.",
+              "Ik kan e-mails versturen."
+            ],
+            "noMatch": [
+              "I can't send mail or change events.",
+              "I cannot send mail.",
+              "I am not able to send mail.",
+              "Je ne peux pas envoyer de mail.",
+              "Ik kan geen e-mails versturen.",
+              "I can read your mail and calendar.",
+              "I can create Word files you can download."
+            ]
+          }
+        },
+        {
+          "check": "answerMatches",
+          "says": "turn 5 links the use-cases page",
+          "turn": 5,
+          "pattern": "\\]\\((?:https?://[^\\s)]+)?/use-cases\\)",
+          "examples": {
+            "match": [
+              "Browse the [Use cases](/use-cases) page.",
+              "[Use cases](https://app.example.test/use-cases)"
+            ],
+            "noMatch": ["See the Use cases page.", "[Use cases](/)", "[start here](/use-cases-old)"]
+          }
+        },
+        {
+          "check": "answerNotMatches",
+          "says": "turn 5 claims no Microsoft 365 write the deployment lacks",
+          "turn": 5,
+          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "examples": {
+            "match": [
+              "I can send emails for you.",
+              "I am able to schedule meetings.",
+              "Je peux envoyer des e-mails.",
+              "Ik kan e-mails versturen."
+            ],
+            "noMatch": [
+              "I can't send mail or change events.",
+              "I cannot send mail.",
+              "I am not able to send mail.",
+              "Je ne peux pas envoyer de mail.",
+              "Ik kan geen e-mails versturen.",
+              "I can read your mail and calendar.",
+              "I can create Word files you can download."
+            ]
+          }
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "notes": "Owner, 2026-11-04: onboarding (“what can you do”) is answered correctly, with a reference to the /use-cases page. The answer comes from the synthesizer's capability guide, which general-next builds from the tools it was composed with (capability-guide.ts) plus the host's examples page (AgentDeps.examplesPage, the app's USE_CASES_PATH). Hermetically the scripted Synthesize answers from the guide its prompt carried (guideAnswer), so the checks grade the guide's wiring and content, not model behaviour; the answer's language is graded only live, by reading. The claim pattern lists positive claims to send or schedule in en, nl and fr; a refusal such as “I can’t send mail” passes."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",

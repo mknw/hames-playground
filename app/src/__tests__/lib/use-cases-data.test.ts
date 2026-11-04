@@ -28,13 +28,14 @@
  * Like `scenario-catalogue.test.ts`, the catalogue is read as text: src/ may
  * not import evals/.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   PLAIN_WORDS,
   QUESTION_DRAFT_PARAM,
+  USE_CASES_PATH,
   USE_CASES_TESTED_AT,
   USE_CASES_TESTED_ON,
   USE_CASE_SECTIONS,
@@ -344,5 +345,13 @@ describe('use-cases data', () => {
 
   it('hands "Try this" its query parameter', () => {
     expect(QUESTION_DRAFT_PARAM).toBe('q')
+  })
+})
+
+// The path the nav and the agent's onboarding answer link (`AgentDeps.examplesPage`)
+// is the page's own route file. MUTATION: change USE_CASES_PATH to '/use-case'.
+describe('USE_CASES_PATH', () => {
+  it('names the route file that renders the page', () => {
+    expect(existsSync(join(APP, 'src/routes', `${USE_CASES_PATH}.tsx`))).toBe(true)
   })
 })

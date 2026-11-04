@@ -143,6 +143,17 @@ describe('sanitizeMarkdownHtml', () => {
     expect(out).toContain('href="https://example.test/doc"')
   })
 
+  // The onboarding answer links the app's own `/use-cases` page by a relative
+  // href: it must survive and open in a new tab like any other link.
+  // MUTATION: return early from forceLinkTargetBlank for a relative href.
+  it('keeps an in-app relative link and points it at a new tab', () => {
+    const out = sanitizeMarkdownHtml('<p><a href="/use-cases">Use cases</a></p>')
+
+    expect(out).toContain('href="/use-cases"')
+    expect(out).toContain('target="_blank"')
+    expect(out).toContain('rel="noopener noreferrer"')
+  })
+
   it('replaces a target and rel written by the model with its own', () => {
     const out = sanitizeMarkdownHtml(
       '<a href="https://example.test/doc" target="_self" rel="opener">link</a>',

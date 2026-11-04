@@ -193,7 +193,9 @@ describe('the trailing memory_context slot of Router and Synthesize', () => {
     const args = synthesize.mock.calls[0]
     expect(args[5]).toBeNull()
     expect(args[6]).toBeNull()
-    expect((args[7] as { collector?: unknown }).collector).toBeDefined()
+    // `guide`, the trailing slot after references: null from defaultSynthesize.
+    expect(args[7]).toBeNull()
+    expect((args[8] as { collector?: unknown }).collector).toBeDefined()
   })
 })
 

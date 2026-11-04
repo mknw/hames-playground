@@ -23,7 +23,7 @@ export interface CapabilityGuideInput {
   libraryDocs: readonly string[]
   /** The agent searches this conversation's uploaded documents (its retriever route). */
   documents: boolean
-  /** Per-user memory is wired on this deployment. */
+  /** Per-user memory is wired on this deployment (each person still switches it on). */
   memory: boolean
   examplesPage?: ExamplesPage
 }
@@ -85,7 +85,10 @@ export function capabilityGuide(input: CapabilityGuideInput): string {
   const tools: Tools = { ...input, office: new Set(input.office) }
   const can = LINES.filter((l) => l.when(tools)).map((l) => l.line)
   if (input.documents) can.push('Search the documents uploaded to this conversation and cite them.')
-  if (input.memory) can.push('Remember what you tell it about yourself for later conversations.')
+  if (input.memory)
+    can.push(
+      'Remember what you tell it about yourself for later conversations, when memory is turned on for you.',
+    )
   const out = [
     'What the assistant can do here (and nothing else):',
     ...can.map((line) => `- ${line}`),

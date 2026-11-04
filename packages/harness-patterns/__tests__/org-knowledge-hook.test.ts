@@ -456,7 +456,7 @@ describe('the draft verdict and validator deliberation', () => {
     return { controller, draft: createOrgDraftLoop({ controller, maxTurns }) }
   }
 
-  // Mutation: replace the explicit no-proposal stop with nothing-valid.
+  // Mutation: emit a confirmation request on the no-proposal exit.
   it('ends a no-proposal verdict with no card and no graph read', async () => {
     const script = scripted([JSON.stringify({ verdict: 'no-proposal', reason: 'Nothing to add' })])
     const { cfg, held, store } = config({ draft: script.draft })

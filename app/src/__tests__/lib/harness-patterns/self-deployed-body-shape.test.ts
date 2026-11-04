@@ -140,24 +140,33 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
         null,
         null,
         null,
+        null,
         SELF_DEPLOYED,
       ),
   ],
   [
     'ActorController',
-    () => b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, SELF_DEPLOYED),
+    () =>
+      b.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, null, SELF_DEPLOYED),
   ],
   ['Critic', () => b.request.Critic('i', [], SELF_DEPLOYED)],
   [
     'Synthesize',
-    () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, SELF_DEPLOYED),
+    () => b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, null, SELF_DEPLOYED),
   ],
   [
     'Router',
     () =>
-      b.request.Router('q', [{ name: 'search', description: 'd' }], MESSAGES, null, SELF_DEPLOYED),
+      b.request.Router(
+        'q',
+        [{ name: 'search', description: 'd' }],
+        MESSAGES,
+        null,
+        null,
+        SELF_DEPLOYED,
+      ),
   ],
-  ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, SELF_DEPLOYED)],
+  ['Planner', () => b.request.Planner('q', 'i', TOOLS, null, null, SELF_DEPLOYED)],
   // The eight describe functions, on the 4B — the shipped route since the flip
   // (six of them at the flip, the two memory functions of #419 M9 since).
   ['ResultDescribe', () => b.request.ResultDescribe('search', '{}', 'r', 'rows', SMALL)],
@@ -211,6 +220,7 @@ const SHARED_CALLS: [string, string, () => Promise<{ body: { json(): unknown } }
         null,
         null,
         'json',
+        null,
         SELF_DEPLOYED,
       ),
   ],
@@ -368,12 +378,13 @@ describe('private-tier request bodies', () => {
         'Router',
         (m) =>
           m === undefined
-            ? b.request.Router('q', ROUTES, MESSAGES, undefined, SELF_DEPLOYED)
-            : b.request.Router('q', ROUTES, MESSAGES, m, SELF_DEPLOYED),
+            ? b.request.Router('q', ROUTES, MESSAGES, undefined, null, SELF_DEPLOYED)
+            : b.request.Router('q', ROUTES, MESSAGES, m, null, SELF_DEPLOYED),
       ],
       [
         'Synthesize',
-        (m) => b.request.Synthesize('q', 'i', TURNS, false, null, m, null, null, SELF_DEPLOYED),
+        (m) =>
+          b.request.Synthesize('q', 'i', TURNS, false, null, m, null, null, null, SELF_DEPLOYED),
       ],
     ]
     for (const [name, render] of renders) {
@@ -413,6 +424,7 @@ describe('private-tier request bodies', () => {
         'MEMTOKEN',
         null,
         null,
+        null,
         SELF_DEPLOYED,
       )
     ).body.json() as Body
@@ -426,7 +438,18 @@ describe('private-tier request bodies', () => {
     expect(memory.indexOf('One exception')).toBeLessThan(memory.indexOf('---BEGIN DATA---'))
     const absent = JSON.stringify(
       (
-        await b.request.Synthesize('q', 'i', TURNS, false, null, null, null, null, SELF_DEPLOYED)
+        await b.request.Synthesize(
+          'q',
+          'i',
+          TURNS,
+          false,
+          null,
+          null,
+          null,
+          null,
+          null,
+          SELF_DEPLOYED,
+        )
       ).body.json(),
     )
     expect(absent).not.toContain('One exception')
@@ -443,6 +466,7 @@ describe('private-tier request bodies', () => {
       'i',
       TOOLS,
       TURNS,
+      null,
       null,
       null,
       null,

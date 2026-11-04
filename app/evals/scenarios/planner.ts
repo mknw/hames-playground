@@ -204,12 +204,12 @@ async function evaluatePlan(ctx: ScenarioContext, client: string, registry?: Cli
   let parsed = true
   try {
     if (thinking) {
-      const answer = await b.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, opts)
+      const answer = await b.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, null, opts)
       const selected = collector.last?.calls.find((c) => c.selected)
       const trace = thinkingFrom(selected)
       plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
     } else {
-      plan = await b.Planner(REQUEST, INTENT, TOOLS, CONTEXT, opts)
+      plan = await b.Planner(REQUEST, INTENT, TOOLS, CONTEXT, null, opts)
     }
   } catch (error) {
     if (!registry) throw error
@@ -362,8 +362,8 @@ export const plannerScenario: Scenario = {
     const { b } = await import('@hames-ai/harness-baml/guarded-client.server')
     const collector = new Collector('eval-planner-template')
     const opts = ctx.opts('planner', collector)
-    const template = await b.request.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, opts)
-    const off = await b.request.Planner(REQUEST, INTENT, TOOLS, CONTEXT, {
+    const template = await b.request.PlannerThinking(REQUEST, INTENT, TOOLS, CONTEXT, null, opts)
+    const off = await b.request.Planner(REQUEST, INTENT, TOOLS, CONTEXT, null, {
       ...opts,
       client: 'LargeQwen',
     })

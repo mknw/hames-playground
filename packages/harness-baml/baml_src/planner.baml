@@ -29,7 +29,8 @@ template_string PlannerBody(
   intent: string,
   tools: ToolDescription[],
   context: string?,
-  with_reasoning: bool
+  with_reasoning: bool,
+  current_time: string?
 ) #"
     {{ _.role("system") }}
     You are a strategic planner for a tool-using agent. Given the user's intent
@@ -63,7 +64,9 @@ template_string PlannerBody(
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
 
+    {# After the tier-1 marker: the clock is per turn. #}
     {{ _.role("user") }}
+    {{ CurrentTime(current_time) }}
     INTENT: {{ intent }}
 
     ---
@@ -74,11 +77,13 @@ function Planner(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
-  context: string?
+  context: string?,
+  // The turn's clock block. Trailing and optional: the client is positional.
+  current_time: string?
 ) -> PlanResult {
   client PlannerAnthropic
   prompt #"
-    {{ PlannerBody(user_message, intent, tools, context, true) }}
+    {{ PlannerBody(user_message, intent, tools, context, true, current_time) }}
 
     {{ ctx.output_format }}
   "#
@@ -90,11 +95,12 @@ function PlannerThinking(
   user_message: string,
   intent: string,
   tools: ToolDescription[],
-  context: string?
+  context: string?,
+  current_time: string?
 ) -> PlanResultThinking {
   client LargeQwenThink
   prompt #"
-    {{ PlannerBody(user_message, intent, tools, context, false) }}
+    {{ PlannerBody(user_message, intent, tools, context, false, current_time) }}
 
     {{ ctx.output_format }}
   "#

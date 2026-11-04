@@ -101,6 +101,7 @@ export const reliabilityScenario: Scenario = {
           undefined,
           undefined,
           undefined,
+          null,
           ctx.opts('controller', collector),
         )
         // Parsing into the type is most of the result, but an action whose

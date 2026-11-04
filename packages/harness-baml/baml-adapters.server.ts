@@ -16,6 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
+import { currentTimeBlock } from './time-block.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   ControllerAction,
@@ -1212,6 +1213,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
+          currentTimeBlock(),
           baseOpts,
         )
         // The collector, not the routing intention, proves that this response
@@ -1244,6 +1246,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
+          currentTimeBlock(),
           baseOpts,
         )
       }
@@ -1337,6 +1340,7 @@ export function createLoopControllerAdapter(
               input.multiCallMode,
               input.planContext,
               input.returnStyle,
+              currentTimeBlock(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1367,6 +1371,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
+            currentTimeBlock(),
             retryOpts,
           )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
@@ -1414,6 +1419,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
+            currentTimeBlock(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -1571,7 +1577,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     let llmCall: LLMCallRecord | undefined
     try {
       if (requestedThinking) {
-        const answer = await b.PlannerThinking(user_message, intent, tools, context, baseOpts)
+        const answer = await b.PlannerThinking(
+          user_message,
+          intent,
+          tools,
+          context,
+          currentTimeBlock(),
+          baseOpts,
+        )
         const selected = selectedCall()
         // The collector, not the routing intention, proves that this response
         // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
@@ -1591,7 +1604,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         if (trace.kind !== 'trace') warning = 'no thinking trace'
         plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
       } else {
-        plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+        plan = await b.Planner(user_message, intent, tools, context, currentTimeBlock(), baseOpts)
       }
       llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
@@ -1662,6 +1675,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
               intent,
               tools,
               context,
+              currentTimeBlock(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1681,7 +1695,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
               )
             }
           }
-          plan = await b.Planner(user_message, intent, tools, context, retryOpts)
+          plan = await b.Planner(
+            user_message,
+            intent,
+            tools,
+            context,
+            currentTimeBlock(),
+            retryOpts,
+          )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
             throw new Error('Planner retry did not select the original private-tier client')
           }
@@ -1696,7 +1717,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
           ? [context, retry.guidance].filter(Boolean).join('\n\n')
           : context
         try {
-          plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          plan = await b.Planner(
+            user_message,
+            intent,
+            tools,
+            retryContext,
+            currentTimeBlock(),
+            baseOpts,
+          )
           llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
         } catch (retryError) {
           throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, collector)
@@ -1926,6 +1954,7 @@ export function createActorControllerAdapter(
         input.attemptNumber,
         input.maxAttempts,
         input.multiCallMode,
+        currentTimeBlock(),
         baseOpts,
       )
     } catch (e) {
@@ -1947,6 +1976,7 @@ export function createActorControllerAdapter(
             input.attemptNumber,
             input.maxAttempts,
             input.multiCallMode,
+            currentTimeBlock(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(

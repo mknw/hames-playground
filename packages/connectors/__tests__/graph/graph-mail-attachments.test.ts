@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildGraphHarness } from './harness'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { type GraphMailAttachmentsResult } from '../../graph/graph-tools.server'
 
 const h = buildGraphHarness()
@@ -104,6 +105,15 @@ describe('graph_mail_attachments', () => {
     expect(data.messages.map((m) => m.subject)).toEqual(['Desk booking', 'Joint review'])
     // App-side filtering inflates the request window.
     expect(lastPath()).toContain('$top=50')
+  })
+
+  // Mutation: keep UTC midnight inside a turn → the filter reads 2026-07-01T00:00:00Z.
+  it("since starts at the date's local midnight in the turn's zone", async () => {
+    await withRunFrame(
+      { clock: { instant: Date.parse('2026-07-02T09:00:00Z'), timeZone: 'Europe/Brussels' } },
+      () => runAppTool('graph_mail_attachments', { since: '2026-07-01' }),
+    )
+    expect(lastPath()).toContain('receivedDateTime ge 2026-06-30T22:00:00Z')
   })
 
   it('since composes a canonical date filter; garbage throws instead of widening', async () => {

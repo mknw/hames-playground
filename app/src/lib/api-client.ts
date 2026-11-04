@@ -85,6 +85,9 @@ export interface ChatTurnRequest {
   /** `resume` continues a paused run with the answers already recorded
    *  (`answerHitl`); the server reads them, never the body. */
   mode?: 'interactive' | 'resume'
+  /** The browser's IANA time zone, so the turn's "now" is the user's. The
+   *  server validates it; absent, it uses the user's last known zone. */
+  timeZone?: string
 }
 
 /**
@@ -292,4 +295,13 @@ export async function openPtyStream(sessionId: string, agentId?: string): Promis
  */
 export function ptyStreamUrl(ticket: string): string {
   return `${API.ptyStream}?ticket=${encodeURIComponent(ticket)}`
+}
+
+/** The browser's IANA time zone, or `undefined` where `Intl` cannot say. */
+export function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+  } catch {
+    return undefined
+  }
 }

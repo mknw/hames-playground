@@ -61,6 +61,10 @@ export interface ConversationScenario {
   noSandboxCommand?: { says: string; pattern: string }
   /** Per-scenario tool results that replace the driver's shared fixture for that tool. */
   toolData?: Record<string, unknown>
+  /** A FIXED turn clock for the whole scenario (the run frame's `clock` slot): the
+   * instant (ISO) and the user's IANA zone. Absent = no clock, as before, so no
+   * other scenario's prompts change. Graders compare against this, never the wall clock. */
+  clock?: { instant: string; timeZone: string }
   /** A must whose acceptance run is pending: the flip gate lists it in the report
    * (with this issue number) but does not block the flip on it. Pinned by PENDING_MUSTS
    * in flip-gate.ts and the pin test in flip-gate.test.ts. */

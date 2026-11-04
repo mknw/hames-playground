@@ -173,6 +173,8 @@ describe('runTurn — the request', () => {
       message: 'what nodes exist?',
       agentId: 'search',
       settings: { maxConcurrentRuns: 3 },
+      // The browser's zone rides every turn, so the agent's "now" is the user's.
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
   })
 
@@ -187,6 +189,7 @@ describe('runTurn — the request', () => {
       sessionId: 's1',
       settings: { maxConcurrentRuns: 3 },
       mode: 'resume',
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
   })
 

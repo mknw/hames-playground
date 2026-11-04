@@ -71,7 +71,7 @@ beforeEach(() => {
   // can dispatch to an original function's declared public chain.
   const original = b.Planner.bind(b)
   vi.spyOn(b, 'Planner').mockImplementation((...args) => {
-    expect(args[4]?.client).toBe('LargeQwen')
+    expect(args[5]?.client).toBe('LargeQwen')
     return original(...args)
   })
 })

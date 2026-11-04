@@ -316,6 +316,7 @@ async function controller(): Promise<void> {
     undefined, // multi_call_mode
     undefined, // plan_context
     undefined, // return_style
+    null,
     opts,
   )
   const llmCall = extractLLMCallData(
@@ -392,6 +393,7 @@ async function actorRetry(): Promise<void> {
     2, // attempt_n — 1-based, so this is the retry
     5, // max_attempts
     undefined, // multi_call_mode
+    null,
     opts,
   )
   const llmCall = extractLLMCallData(collector, 'ActorController', {}, t0, action)

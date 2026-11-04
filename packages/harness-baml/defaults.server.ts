@@ -17,6 +17,7 @@
  * carry over unchanged in kind."
  */
 
+import { currentTimeBlock } from './time-block.server'
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
@@ -178,6 +179,8 @@ async function synthesize(
       // `guide`: deployment-authored, so it renders in the leading system block
       // and is not fence-escaped; null renders nothing.
       guide,
+      // `current_time`: the turn's clock block (time-block.server.ts), or null.
+      currentTimeBlock(),
       synthOpts,
     )
   } catch (e) {

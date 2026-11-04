@@ -29,7 +29,8 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { currentRunFrame } from './run-frame.server'
+import { currentClock, currentRunFrame } from './run-frame.server'
+import { localDate } from './clock'
 import { proposeToHuman } from './hitl.server'
 import { setLivePatternEnabled } from './live-event-context.server'
 import { readStoreWindow, DEFAULT_PROPOSAL_TTL_MS } from './memory-store.server'
@@ -444,7 +445,8 @@ export interface OrgKnowledgeConfig {
   readonly wakeBudgetMs?: number
   /** Default: the run frame's `inference.tier`. */
   readonly tier?: () => string | undefined
-  /** The ISO day the message was said. Default: today, UTC. */
+  /** The ISO day the message was said. Default: the turn clock's local date
+   *  (the user's day, `RunFrame.clock`); with no clock, today in UTC. */
   readonly today?: () => string
   readonly maxAssertions?: number
 }
@@ -638,7 +640,7 @@ async function run(
     }
     const checked = validateOrgDraft(draft, snapshot, cfg.ontology, {
       userMessage,
-      today: cfg.today ? cfg.today() : new Date().toISOString().slice(0, 10),
+      today: cfg.today ? cfg.today() : todayForUser(),
       mentionsMember: cfg.mentionsMember,
       ...(cfg.maxAssertions !== undefined && { maxAssertions: cfg.maxAssertions }),
     })
@@ -777,4 +779,12 @@ export function withOrgKnowledge() {
     const [first, ...rest] = patterns
     return [{ ...first, capabilities: { ...first.capabilities, orgKnowledge: true } }, ...rest]
   }
+}
+
+/** The user's calendar day for this turn: the run frame's clock, read in its
+ *  own zone. A Brussels message said at 00:30 local is stated on the local
+ *  date, not on the UTC one that is still yesterday. */
+function todayForUser(): string {
+  const clock = currentClock()
+  return clock ? localDate(clock) : new Date().toISOString().slice(0, 10)
 }

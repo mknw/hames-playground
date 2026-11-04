@@ -127,7 +127,7 @@ describe('private-only: a function shared by two roles', () => {
   it('lets the generated LoopController through the guarded client on the 27B only', async () => {
     const native = vi.spyOn(generated, 'LoopController').mockResolvedValue({} as never)
     const call = (client: string) =>
-      b.LoopController('q', 'i', [], [], null, null, null, null, null, null, { client })
+      b.LoopController('q', 'i', [], [], null, null, null, null, null, null, null, { client })
     expect(() => call('ControllerAnthropic')).toThrow(/before any request/)
     expect(() => call('SmallQwen')).toThrow(/before any request/)
     expect(native).not.toHaveBeenCalled()

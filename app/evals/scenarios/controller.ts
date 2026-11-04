@@ -168,6 +168,7 @@ export const controllerToolCallScenario: Scenario = {
       undefined, // multi_call_mode
       undefined, // plan_context
       undefined, // return_style
+      null,
       opts,
     )
     const offered = new Set([...TOOLS.map((t) => t.name), 'Return', 'expandPreviousResult'])
@@ -230,6 +231,7 @@ export const controllerFinalAnswerScenario: Scenario = {
       undefined,
       undefined,
       undefined,
+      null,
       opts,
     )
     const returned = action.tool_name === 'Return'
@@ -296,6 +298,7 @@ export const controllerToolErrorScenario: Scenario = {
       undefined,
       undefined,
       undefined,
+      null,
       opts,
     )
     const repeated =
@@ -371,6 +374,7 @@ export const controllerWriteOnReadOnlyScenario: Scenario = {
       undefined, // multi_call_mode
       undefined, // plan_context
       undefined, // return_style
+      null,
       opts,
     )
     const calls = [action, ...(action.additional_calls ?? [])]
@@ -471,6 +475,7 @@ export const controllerUnparseableFeedbackScenario: Scenario = {
         undefined,
         undefined,
         undefined,
+        null,
         ctx.opts('controller', collector),
       )
       checks.push(

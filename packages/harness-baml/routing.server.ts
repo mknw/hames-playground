@@ -4,6 +4,7 @@
  * Routes user messages to appropriate tool namespaces.
  */
 
+import { currentTimeBlock } from './time-block.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import { Collector } from '@boundaryml/baml'
 import { extractLLMCallData, wrapAsLLMCallError } from './baml-adapters.server'
@@ -77,6 +78,8 @@ export async function routeMessageOp(
       // null; explicit because the options bag follows it positionally.
       // Escaped: the template renders it inside a DATA fence (data-fence.ts).
       extra?.memoryContext ? escapeDataFence(extra.memoryContext) : null,
+      // `current_time`: the turn's clock block (time-block.server.ts), or null.
+      currentTimeBlock(),
       routerOpts,
     )
   } catch (e) {

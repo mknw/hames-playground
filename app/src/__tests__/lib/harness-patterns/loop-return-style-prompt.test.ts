@@ -65,6 +65,7 @@ const render = async (style: string | null, which: keyof typeof CLIENTS) => {
     null,
     null,
     style,
+    null,
     CLIENTS[which],
   )
   return req.body.json() as Body

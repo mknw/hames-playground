@@ -50,7 +50,8 @@ describe('Synthesize never claims a save for later conversations', () => {
           null,
           memory,
           null, // references
-          null, // guide (#985): the options bag follows every optional slot
+          null, // guide (#985)
+          null, // current_time (#992): the options bag follows every optional slot
           { client, env: ENV },
         )
         const text = JSON.stringify(request.body.json())

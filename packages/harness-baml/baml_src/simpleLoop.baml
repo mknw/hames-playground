@@ -310,7 +310,8 @@ template_string LoopControllerBody(
   multi_call_mode: string?,
   plan_context: string?,
   return_style: string?,
-  with_reasoning: bool
+  with_reasoning: bool,
+  current_time: string?
 ) #"
     {# The terminal action is described HERE because the turn log can never show
        one: the loop breaks before pushing a final action, so `is_final` renders
@@ -359,7 +360,10 @@ template_string LoopControllerBody(
     {# 0-indexed to match the turn log and the `n` the next turn is recorded
        under: with one completed turn the log ends at "Turn 0 result" and this
        asks for turn 1. The previous `+ 1` skipped a number, inviting the model
-       to infer a turn it had never seen. #}
+       to infer a turn it had never seen.
+       The turn's clock renders first: per TURN, so it lives here, after every
+       cache marker, and never in tier 1 (agent-static) or tier 2 (run-static). #}
+    {{ CurrentTime(current_time) }}
     Turn {{ turns|length }}. Decide the next action.
     For Return, {% if return_style == "json" %}put the JSON answer in tool_args{% else %}use plain prose (not JSON){% endif %}, as your instructions describe.
 "#
@@ -385,11 +389,13 @@ function LoopController(
   // the generated client takes its arguments POSITIONALLY, so a new parameter
   // goes at the END (inserting one mid-signature silently shifts every later
   // argument and drops the trailing options object).
-  return_style: string?
+  return_style: string?,
+  // The turn's clock block, rendered in the volatile tail. Trailing, as above.
+  current_time: string?
 ) -> ControllerAction {
   client ControllerAnthropic
   prompt #"
-    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true) }}
+    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, true, current_time) }}
 
     {{ ctx.output_format }}
   "#
@@ -415,11 +421,12 @@ function ControllerThinking(
   few_shots: FewShot[]?,
   multi_call_mode: string?,
   plan_context: string?,
-  return_style: string?
+  return_style: string?,
+  current_time: string?
 ) -> ControllerActionThinking {
   client LargeQwenThink
   prompt #"
-    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, false) }}
+    {{ LoopControllerBody(user_message, intent, tools, turns, context, turns_previous_runs, few_shots, multi_call_mode, plan_context, return_style, false, current_time) }}
 
     {{ ctx.output_format }}
   "#

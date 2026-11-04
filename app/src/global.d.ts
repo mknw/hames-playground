@@ -20,6 +20,9 @@ declare namespace NodeJS {
     /** IANA timezone Graph renders calendar times in (#110). Defaults to the
      *  server's own zone. */
     GRAPH_TIMEZONE: string
+    /** Default IANA zone for a turn's "now" when the browser and the user's
+     *  stored zone supply none (`lib/time-zone.server.ts`). Unset: UTC. */
+    APP_DEFAULT_TIME_ZONE: string
     /** OIDC redirect URI; must match a registered Redirect URI. */
     AUTH_REDIRECT_URI: string
     /** Post-sign-out landing URI. */

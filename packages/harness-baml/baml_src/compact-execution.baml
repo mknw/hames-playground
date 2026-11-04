@@ -33,7 +33,11 @@ function Synthesize(
   error_message: string?,
   memory_context: string?,
   references: SynthesisReference[]?,
-  guide: string?
+  guide: string?,
+  // The turn's clock block, in the final user block. LAST and optional (after
+  // `guide`, #985): the generated client is positional, so the options bag
+  // follows this slot.
+  current_time: string?
 ) -> string {
   client SynthesizerAnthropic
   prompt #"
@@ -95,6 +99,7 @@ function Synthesize(
     {% endif %}
 
     {{ _.role("user") }}
+    {{ CurrentTime(current_time) }}
     Synthesize the above into a helpful response.
 
     FIDELITY — do not fabricate:
@@ -113,6 +118,11 @@ function Synthesize(
     {% if guide %}
     - The one exception: what you can do, and the link to the example-questions
       page, may come from the ASSISTANT GUIDE above, exactly as written there.
+    {% endif %}
+    {% if current_time %}
+    - The current date, weekday and time may come from CURRENT TIME above: it
+      is this turn's clock, not a tool result, and a question about today's
+      date needs no tool result to answer.
     {% endif %}
     - Whether anything is kept for later conversations is decided outside
       this reply, after it, so do not claim it either way. Nothing in the

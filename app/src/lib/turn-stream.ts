@@ -30,7 +30,7 @@ import {
   type DoneEventData,
   type WarmingEventData,
 } from '~/lib/sse-client'
-import { openChatStream } from '~/lib/api-client'
+import { browserTimeZone, openChatStream } from '~/lib/api-client'
 import type { Message } from '~/components/ark-ui/ChatMessages'
 import type { GraphElement } from '@hames-ai/agents'
 import type {
@@ -200,12 +200,18 @@ export async function runTurn(
   try {
     const response = await openChatStream(
       request.mode === 'resume'
-        ? { sessionId: request.sessionId, settings: request.settings, mode: 'resume' }
+        ? {
+            sessionId: request.sessionId,
+            settings: request.settings,
+            mode: 'resume',
+            timeZone: browserTimeZone(),
+          }
         : {
             sessionId: request.sessionId,
             message: request.message,
             agentId: request.agentId,
             settings: request.settings,
+            timeZone: browserTimeZone(),
           },
       request.signal,
     )

@@ -199,8 +199,9 @@ template_string ActorAttemptLog(attempts: Attempt[], attempt_n: int?, with_reaso
 // Volatile tail: changes every call, renders AFTER the last cache marker and
 // is never cached. ctx.output_format stays in the function prompt (kept out
 // of template_strings deliberately).
-template_string ActorClosing(attempts: Attempt[], attempt_n: int?, max_attempts: int?) #"
+template_string ActorClosing(attempts: Attempt[], attempt_n: int?, max_attempts: int?, current_time: string?) #"
   {{ _.role("user") }}
+  {{ CurrentTime(current_time) }}
   {% if attempts | selectattr("feedback") | list | length > 0 %}
   You MUST address the CRITIC FEEDBACK above. Do not repeat failed approaches.
   {% elif attempts|length > 0 %}
@@ -232,7 +233,8 @@ template_string ActorControllerBody(
   attempt_n: int?,
   max_attempts: int?,
   multi_call_mode: string?,
-  with_reasoning: bool
+  with_reasoning: bool,
+  current_time: string?
 ) #"
     {# ────────── SYSTEM · static requirements: role · tools · examples ────────── #}
     {{ _.role("system") }}
@@ -266,7 +268,7 @@ template_string ActorControllerBody(
     {{ ActorAttemptLog(attempts, attempt_n, with_reasoning) }}
 
     {# ────────── VOLATILE TAIL · feedback nudge · budget · counter — never cached ────────── #}
-    {{ ActorClosing(attempts, attempt_n, max_attempts) }}
+    {{ ActorClosing(attempts, attempt_n, max_attempts, current_time) }}
 "#
 
 function ActorController(
@@ -278,14 +280,17 @@ function ActorController(
   few_shots: FewShot[]?,
   attempt_n: int?,
   max_attempts: int?,
-  multi_call_mode: string?
+  multi_call_mode: string?,
+  // The turn's clock block, rendered in the volatile tail (ActorClosing).
+  // Trailing and optional: the generated client is positional.
+  current_time: string?
 ) -> ControllerAction {
   // ActorAnthropic, not ControllerAnthropic: same models, but thinking stays ON
   // here. #139 disabled it for the simpleLoop controller on measured evidence
   // that did not cover this pattern at all.
   client ActorAnthropic
   prompt #"
-    {{ ActorControllerBody(user_message, intent, tools, attempts, context, few_shots, attempt_n, max_attempts, multi_call_mode, true) }}
+    {{ ActorControllerBody(user_message, intent, tools, attempts, context, few_shots, attempt_n, max_attempts, multi_call_mode, true, current_time) }}
 
     {{ ctx.output_format }}
   "#

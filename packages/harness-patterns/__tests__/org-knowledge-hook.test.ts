@@ -976,3 +976,41 @@ describe('near-duplicate refusals: causes and wording', () => {
     expect(note).not.toContain('Osprey Osprey')
   })
 })
+
+describe("the default today() is the user's day (RunFrame.clock)", () => {
+  // A class whose stored properties include the day the message was said.
+  const DATED = defineOntology({
+    classes: [{ ...ONTOLOGY.classes[0], derived: { statedOn: 'today' } }],
+    relations: [],
+  })
+  const run = (clock: Parameters<typeof withRunFrame>[0]['clock']) => {
+    const { cfg, held } = config({ ontology: DATED, today: undefined })
+    return withRunFrame({ inference: { tier: 'self_deployed' }, clock }, () =>
+      settleOrgKnowledge(turn(), cfg, { conversationId: 'conv-1' }),
+    ).then(() => held[0]?.payload.assertions[0].nodes[0].properties)
+  }
+
+  // Mutation: restore `new Date().toISOString().slice(0, 10)` as the only default
+  // (with the system time faked to the same instant) → statedOn is 2026-11-04.
+  it('a Brussels message at 00:30 local is stated on the local date, not the UTC one', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-04T23:30:00Z'), toFake: ['Date'] })
+    try {
+      const props = await run({
+        instant: Date.parse('2026-11-04T23:30:00Z'),
+        timeZone: 'Europe/Brussels',
+      })
+      expect(props).toEqual({ name: 'Heron', statedOn: '2026-11-05' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('with no clock on the frame it keeps the UTC day', async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-04T23:30:00Z'), toFake: ['Date'] })
+    try {
+      expect(await run(undefined)).toEqual({ name: 'Heron', statedOn: '2026-11-04' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

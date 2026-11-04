@@ -190,9 +190,9 @@ export async function fixtureInference() {
                 ? guideAnswer(prompt)
                 : scenario.clock
                   ? timeAnswer(prompt)
-                : scenario.failFirstTurn && turnIndex === 0
-                  ? 'The lookup failed: synthetic service unavailable. No count is known.'
-                  : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
+                  : scenario.failFirstTurn && turnIndex === 0
+                    ? 'The lookup failed: synthetic service unavailable. No count is known.'
+                    : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
           case 'CompactIntent':

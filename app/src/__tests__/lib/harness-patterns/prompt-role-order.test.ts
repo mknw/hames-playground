@@ -227,7 +227,18 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   [
     'Synthesize',
     (o) => () =>
-      b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, 'GUIDE BLOCK', TIME, o),
+      b.request.Synthesize(
+        'q',
+        'i',
+        TURNS,
+        true,
+        'boom',
+        'MEMORY BLOCK',
+        null,
+        'GUIDE BLOCK',
+        TIME,
+        o,
+      ),
   ],
   ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', TIME, o)],
   [

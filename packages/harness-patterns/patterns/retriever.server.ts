@@ -59,8 +59,8 @@ assertServerOnImport()
 // Public contract — the backend interface + result shape
 // ============================================================================
 
-/** A normalized retrieval result. `score` is a distance (lower = closer) when
- *  the backend reports one; cross-backend comparability is best-effort. */
+/** A normalized retrieval result. `score` semantics depend on the backend and
+ *  on whether the multi-backend RRF merge ran — see the field's own comment. */
 export interface RetrievalHit {
   /** Persisted non-content origin of the source document, when promoted. */
   provenance?: 'sandbox-output'
@@ -72,7 +72,13 @@ export interface RetrievalHit {
   content: string
   /** Optional human-facing source label (filename, table, url, …). */
   source?: string
-  /** Distance (lower = closer) when available. */
+  /**
+   * Per-backend score. The vector backends report a distance (lower = closer);
+   * the keyword backend reports BM25 relevance (higher = more relevant). After
+   * the multi-backend RRF merge (#928 slice 1) a match's score is its RRF score
+   * (higher = better) — never comparable with a raw per-backend score, and
+   * never comparable ACROSS backends, which is why the merge is rank-based.
+   */
   score?: number
   /**
    * Locator into the source document, when the backend can provide one — char
@@ -182,6 +188,63 @@ export interface RetrieverData {
   intent?: string
   /** Output: the normalized matches (also emitted as a tool_result). */
   matches?: RetrievalHit[]
+}
+// ============================================================================
+// Reciprocal-rank fusion — the multi-backend merge (#928 slice 1)
+// ============================================================================
+
+/**
+ * Each backend's ranking contributes `1 / (K + rank)` per hit (rank is 1-based
+ * within that backend's list); a hit's fused score is the SUM of its
+ * contributions across the lists it appears in, and the merged order is by
+ * fused score, descending. Rank-based fusion needs no cross-backend score
+ * comparability — a vector backend reports a distance while a keyword one
+ * reports BM25 relevance — which is exactly why it replaces the distance-only
+ * sort the moment more than one backend is configured.
+ *
+ * Duplicate ids (the same chunk found by more than one backend) collapse into
+ * ONE merged hit that keeps the FIRST occurrence's fields (backend order is
+ * list order) and sums the rank contributions — agreement between backends
+ * raises a hit, it does not duplicate it. Ties in the fused score keep
+ * first-encountered order: `Array.prototype.sort` is stable, so a tie sorts by
+ * whichever hit appeared first across the backends in list order — a
+ * deterministic order, never a run-to-run coin flip.
+ *
+ * K — the classic constant, kept at its canonical value. Source: Cormack,
+ * Clarke & Buettcher (2009), "Reciprocal Rank Fusion Outperforms Condorcet and
+ * Individual Rank Learning Methods" (SIGIR), which reports its best results at
+ * k=60 and whose experiments showed ranking quality insensitive to k across
+ * 0 < k ≤ 60; the value is also the default `rank_constant` of the RRF
+ * rankers in Elasticsearch and OpenSearch. Larger k flattens the head of each
+ * list (one backend's rank-1 hit counts less against another list's rank-3).
+ *
+ * On the fused path each returned hit's `score` is its RRF score — higher is
+ * better, and NOT the per-backend distance it carried coming in.
+ */
+export const RRF_K = 60
+
+export function reciprocalRankFusion(
+  lists: RetrievalHit[][],
+  k: number,
+  constant: number = RRF_K,
+): RetrievalHit[] {
+  const byId = new Map<string, { hit: RetrievalHit; rrf: number }>()
+  for (const list of lists) {
+    for (let i = 0; i < list.length; i++) {
+      const hit = list[i]
+      const rrf = 1 / (constant + i + 1)
+      const seen = byId.get(hit.id)
+      if (seen) {
+        seen.rrf += rrf
+      } else {
+        byId.set(hit.id, { hit, rrf })
+      }
+    }
+  }
+  return [...byId.values()]
+    .sort((a, b) => b.rrf - a.rrf)
+    .slice(0, k)
+    .map(({ hit, rrf }) => ({ ...hit, score: rrf }))
 }
 
 // ============================================================================
@@ -341,11 +404,17 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
         }),
       )
 
-      // Merge, closest-first (hits without a score sort last), capped at k.
-      const merged = perBackend
-        .flat()
-        .sort((a, b) => (a.score ?? Infinity) - (b.score ?? Infinity))
-        .slice(0, k)
+      // Merge. One backend keeps the distance-only sort — the behaviour the
+      // single-backend case has always had, unchanged (#928 slice 1). More
+      // than one backend is fused by reciprocal rank, which needs no
+      // cross-backend score comparability; see {@link reciprocalRankFusion}.
+      const merged =
+        backends.length > 1
+          ? reciprocalRankFusion(perBackend, k)
+          : perBackend
+              .flat()
+              .sort((a, b) => (a.score ?? Infinity) - (b.score ?? Infinity))
+              .slice(0, k)
 
       // Injection guard, second coverage path. Retrieved chunks NEVER pass
       // through `callTool` — the backends are injected app-side objects called

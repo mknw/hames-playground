@@ -57,4 +57,22 @@ describe.skipIf(!RUN)('redis-direct integration (live redis-stack)', () => {
     expect(hits.map((h) => h.payload.content)).toContain('beta')
     expect(hits[0].id).toBe('docA:0') // _vid recovered from meta
   })
+
+  it('round-trips a BM25 keyword search over the full-text field (#928)', async () => {
+    // The plain `text` field the v2 schema declares; a chunk written without
+    // one is simply absent from keyword results.
+    await store.upsert('docC:0', [0, 0, 1, 0], { content: 'gamma' }, 300)
+    await store.upsert(
+      'docD:0',
+      [0, 0, 0, 1],
+      { content: 'delta', text: 'the quick brown fox jumps', doc_id: 'docD', chunk_index: 0 },
+      300,
+    )
+
+    const hits = await store.searchKeyword('quick fox', 5)
+    expect(hits.map((h) => h.id)).toEqual(['docD:0'])
+    expect(hits[0]!.payload.content).toBe('delta')
+    // BM25 relevance, higher = better.
+    expect(hits[0]!.score).toBeGreaterThan(0)
+  })
 })

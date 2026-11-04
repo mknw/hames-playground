@@ -100,6 +100,14 @@ export interface EmbeddingSpace {
   provider: EmbeddingProvider
   model: string
   dimensions: number
+  /**
+   * The stash-index SCHEMA version the corpus using this space was ingested
+   * under (#928 slice 1), recorded alongside the space in the stash. Absent on
+   * every space computed fresh from an embed call — it is a fact about a
+   * RECORDED corpus, not about the embedder — and on records written before
+   * the field existed; `spaceSchemaVersion` reads both as version 1.
+   */
+  schema?: number
 }
 
 /** Vectors plus the space they belong to. */

@@ -18,10 +18,11 @@
  * reach with one and three further pages. All of that arithmetic lives in
  * `src/lib/retrieval-metrics.ts` and is pinned by CI unit tests.
  *
- * Backend configurations are declared in {@link BACKEND_CONFIGS}. Today there
- * is exactly one — vector-only, the shipped redis KNN backend. When #928
- * slice 1 lands, a `vector+bm25+rrf` entry joins the list and the same run
- * reports both side by side; that comparison is the acceptance check.
+ * Backend configurations are declared in {@link BACKEND_CONFIGS}: today two —
+ * `vector-only`, the shipped redis KNN backend, and `vector+bm25+rrf` (#928
+ * slice 1), the vector backend plus the BM25 keyword backend fused by the
+ * retriever's own reciprocal-rank merge. The run reports both side by side;
+ * that comparison is the acceptance check.
  *
  * WHAT FAILS AND WHAT DOES NOT. The quality numbers are OBSERVATIONS, never
  * checks: a pass/fail bar on retrieval quality is an owner decision (the same
@@ -48,13 +49,18 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { RetrieverBackend } from '@hames-ai/harness-patterns/patterns/retriever.server'
+import type {
+  RetrieverBackend,
+  RetrievalHit,
+} from '@hames-ai/harness-patterns/patterns/retriever.server'
+import { reciprocalRankFusion } from '@hames-ai/harness-patterns/patterns/retriever.server'
 import {
   deleteSessionStash,
   ingestDocument,
 } from '@hames-ai/harness-patterns/stash/document-ingest.server'
 import { storeDocument } from '@hames-ai/harness-patterns/stash/document-store.server'
 import { createRedisBackend } from '@hames-ai/harness-patterns/retriever/redis-backend.server'
+import { createRedisKeywordBackend } from '@hames-ai/harness-patterns/retriever/redis-keyword-backend.server'
 import {
   DOCS,
   QUESTIONS,
@@ -86,13 +92,24 @@ const FIRST_PAGE_K = 5
 // Backend configurations
 // ============================================================================
 
-/** One ranked backend the questions are asked of. `run` returns the ranked
- *  hits; the grader reads only (docId, chunkIndex) off them. */
+/**
+ * The IO edges a configuration's `run` reads, injectable so the hermetic
+ * loopback proof grades the SAME composition the live run does — the two
+ * backends and the retriever's own RRF merge — over a fake transport instead
+ * of the real one. Defaults to the production wiring.
+ */
+export interface RetrievalIo {
+  vectorBackend(sessionId: string): RetrieverBackend
+  keywordBackend(sessionId: string): RetrieverBackend
+  /** The retriever's production multi-backend merge. */
+  fuse(lists: RetrievalHit[][], k: number): RetrievalHit[]
+}
+
 interface BackendConfig {
   name: string
   /** One line for the report: what this configuration is today. */
   note: string
-  run(sessionId: string, query: string, k: number): Promise<GradedHit[]>
+  run(sessionId: string, query: string, k: number, io: RetrievalIo): Promise<GradedHit[]>
 }
 
 /** Today's shipped configuration. The real redis KNN backend, exactly as the
@@ -101,21 +118,36 @@ interface BackendConfig {
 const vectorOnly: BackendConfig = {
   name: 'vector-only',
   note: 'redis KNN over the session index — the shipped backend (#928 baseline)',
-  async run(sessionId, query, k) {
-    const backend: RetrieverBackend = createRedisBackend(sessionId, { ensureIngested: false })
+  async run(sessionId, query, k, io) {
+    const backend = io.vectorBackend(sessionId)
     const hits = await backend.search({ text: query }, { k })
     return hits.map((h) => ({ docId: h.docId ?? '', chunkIndex: h.chunkIndex ?? -1 }))
   },
 }
 
-/**
- * The configurations a run measures. #928 slice 1 adds its entry HERE:
- *
- *   vectorBm25Rrf: { name: 'vector+bm25+rrf', ... } — built on the production
- *   keyword backend and the retriever's RRF merge once they exist, NOT on a
- *   locally-reimplemented merge; the eval grades what production runs.
- */
-const BACKEND_CONFIGS: BackendConfig[] = [vectorOnly]
+/** #928 slice 1: the shipped vector backend AND the BM25 keyword backend,
+ *  merged by the retriever's own reciprocal-rank fusion — the production
+ *  composition the retriever pattern runs when more than one backend is
+ *  configured, not a locally-reimplemented merge. */
+const vectorBm25Rrf: BackendConfig = {
+  name: 'vector+bm25+rrf',
+  note: 'redis KNN + redis keyword BM25, fused by the retriever’s RRF merge (#928 slice 1)',
+  async run(sessionId, query, k, io) {
+    const lists = await Promise.all(
+      [io.vectorBackend(sessionId), io.keywordBackend(sessionId)].map((backend) =>
+        backend.search({ text: query }, { k }),
+      ),
+    )
+    return io.fuse(lists, k).map((h) => ({ docId: h.docId ?? '', chunkIndex: h.chunkIndex ?? -1 }))
+  },
+}
+
+/** The configurations a run measures. The comparison between these two rows is
+ *  the acceptance check #928 slice 1 is graded on (owner decision, 2026-11-02). */
+const BACKEND_CONFIGS: BackendConfig[] = [vectorOnly, vectorBm25Rrf]
+
+/** Exported for the hermetic loopback proof's check-count arithmetic. */
+export { BACKEND_CONFIGS }
 
 // ============================================================================
 // Injectable seams (hermetic loopback proof — see retrieval-quality.hermetic.ts)
@@ -125,13 +157,9 @@ export interface RetrievalDeps {
   /** Store + ingest one fixture document. Defaults to the real stash pipeline
    *  (storeDocument + ingestDocument, default chunker + embedder). */
   ingest?: (doc: FixtureDoc, sessionId: string) => Promise<{ docId: string; chunks: number }>
-  /** Rank one query. Defaults to the real backend configuration's `run`. */
-  search?: (
-    config: BackendConfig,
-    sessionId: string,
-    query: string,
-    k: number,
-  ) => Promise<GradedHit[]>
+  /** The IO edges the configurations read. Defaults to the production wiring.
+   *  The hermetic loopback proof injects fake-transport backends here. */
+  io?: RetrievalIo
   /** Drop the session's stash. Defaults to the real `deleteSessionStash`. */
   cleanup?: (sessionId: string) => Promise<void>
 }
@@ -272,12 +300,11 @@ export function createRetrievalQualityScenario(deps: RetrievalDeps = {}): Scenar
         }
 
         // ── Search + grade ────────────────────────────────────────────────
+        const io = deps.io ?? productionIo
         for (const config of BACKEND_CONFIGS) {
           const grades = new Map<string, ReturnType<typeof gradeQuestion>>()
           for (const entry of answerKey) {
-            const hits = deps.search
-              ? await deps.search(config, sessionId, entry.question.text, SEARCH_K)
-              : await config.run(sessionId, entry.question.text, SEARCH_K)
+            const hits = await config.run(sessionId, entry.question.text, SEARCH_K, io)
             checks.push(
               check(
                 `${config.name} · ${entry.question.id}: non-empty ranking`,
@@ -321,6 +348,14 @@ export function createRetrievalQualityScenario(deps: RetrievalDeps = {}): Scenar
       return { checks, observations }
     },
   }
+}
+
+/** The production IO wiring — the real backends and the retriever's own RRF
+ *  merge, exactly as a configured agent runs them. */
+export const productionIo: RetrievalIo = {
+  vectorBackend: (sessionId) => createRedisBackend(sessionId, { ensureIngested: false }),
+  keywordBackend: (sessionId) => createRedisKeywordBackend(sessionId, { ensureIngested: false }),
+  fuse: reciprocalRankFusion,
 }
 
 /** The registered instance — no injected deps, the real stash pipeline and

@@ -72,22 +72,31 @@ describe('the quarantine is out of every agent\u2019s reach (A7)', () => {
       }
     }
     await walk(SRC)
-    expect(offenders.sort()).toEqual([
-      'lib/harness-client/turn.server.ts',
-      'lib/hitl/actions.server.ts',
-      // Decision-loop-agent slice 9: the blocking dialog's owner-scoped read of
-      // what waits and its held payloads — host code behind the gated RPC.
-      'lib/hitl/blocking.server.ts',
-      // Decision-loop-agent slice 8: the held payloads' store, purge and the
-      // resolve dispatch — host code the turn runner calls, taking an owner,
-      // never a 'use server' module.
-      'lib/hitl/payloads.server.ts',
-      // #419 M6: the memory proposals' payload rows, held and offered by host
-      // code behind its own gated RPC door (confirm-actions → proposals).
-      // M7's erase RPCs purge the pending proposals with the memories.
-      'lib/memory/actions.server.ts',
-      'lib/memory/confirm-actions.server.ts',
-      'lib/memory/proposals.server.ts',
-    ])
+    expect(offenders.sort()).toEqual(
+      [
+        'lib/harness-client/turn.server.ts',
+        'lib/hitl/actions.server.ts',
+        // Decision-loop-agent slice 9: the blocking dialog's owner-scoped read of
+        // what waits and its held payloads — host code behind the gated RPC.
+        'lib/hitl/blocking.server.ts',
+        // Decision-loop-agent slice 8: the held payloads' store, purge and the
+        // resolve dispatch — host code the turn runner calls, taking an owner,
+        // never a 'use server' module.
+        'lib/hitl/payloads.server.ts',
+        // #419 M6: the memory proposals' payload rows, held and offered by host
+        // code behind its own gated RPC door (confirm-actions → proposals).
+        // M7's erase RPCs purge the pending proposals with the memories.
+        'lib/memory/actions.server.ts',
+        'lib/memory/confirm-actions.server.ts',
+        'lib/memory/proposals.server.ts',
+        // Org-knowledge slice 4: the org proposals' payload rows, held by the
+        // post-reply hook (hook.server) and offered and answered by host code
+        // behind its own gated RPC door (confirm-actions → proposals). No agent
+        // tool reaches any of the three.
+        'lib/org-graph/confirm-actions.server.ts',
+        'lib/org-graph/hook.server.ts',
+        'lib/org-graph/proposals.server.ts',
+      ].sort(),
+    )
   })
 })

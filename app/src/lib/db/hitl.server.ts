@@ -279,6 +279,43 @@ export async function putHitlProposal(input: {
 }
 
 /**
+ * Hold an organizational-knowledge proposal's payload (org-knowledge slice 4).
+ * The memory switch's condition does NOT apply: the hook stores nothing of the
+ * user's, every write waits for their answer, and its own switch is the
+ * deployment's (`ORG_KNOWLEDGE_HOOK`), checked by the hook before it proposes.
+ * Owner, encryption and `DO NOTHING` are {@link putHitlProposal}'s. Only the
+ * `orgKnowledge.confirm` kind may be held this way, so a memory proposal can
+ * never be parked past the memory switch through it.
+ */
+export async function putOrgKnowledgeProposal(input: {
+  readonly requestId: string
+  readonly userId: string
+  readonly sessionId: string
+  readonly kind: 'orgKnowledge.confirm'
+  readonly runId: string | null
+  readonly expiresAt: Date
+  readonly payload: unknown
+}): Promise<void> {
+  if (input.kind !== 'orgKnowledge.confirm') throw new Error('[hitl] not an org-knowledge proposal')
+  const { rowCount } = await query(
+    `INSERT INTO hitl_requests
+       (request_id, user_id, session_id, run_id, kind, status, blocks_run, expires_at, payload)
+     VALUES ($1, $2, $3, $4, $5, 'pending', FALSE, $6, $7)
+     ON CONFLICT (request_id) DO NOTHING`,
+    [
+      input.requestId,
+      input.userId,
+      input.sessionId,
+      input.runId,
+      input.kind,
+      input.expiresAt,
+      encryptJson(input.payload),
+    ],
+  )
+  if (!rowCount) throw new Error('[hitl] the proposal was not held: its request id is already held')
+}
+
+/**
  * One OPEN proposal of the caller's: `pending`, not past `expires_at`, with its
  * payload still held. Owner-scoped, so someone else's request id is the same
  * `null` as an unknown one.

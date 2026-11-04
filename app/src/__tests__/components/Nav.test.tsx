@@ -45,6 +45,7 @@ vi.mock('~/lib/memory/confirm-actions.server', () => ({
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
   getPreviewHeaderState: () => new Promise(() => {}),
   setPreviewInferenceTier: () => new Promise(() => {}),
+  keepPrivateTierWarm: () => new Promise(() => {}),
 }))
 
 // The bar renders UserMenu, whose auth context is exercised elsewhere. The

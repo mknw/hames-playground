@@ -40,7 +40,11 @@ import {
   type VerdaControlPlaneProbe,
 } from '../inference/verda-control-plane.server'
 import { coldStartEstimate } from '../inference/cold-start.server'
-import { ensurePrivateTierAwake } from '../inference/wake.server'
+import {
+  ensurePrivateTierAwake,
+  keepWarmIntervalMs,
+  warmWhileOpenEnabled,
+} from '../inference/wake.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
 import { getUsageToday, type UsageToday } from '../metrics/preview-counters.server'
 import { tierLatency, type TierLatency } from '../metrics/call-latency.server'
@@ -264,4 +268,52 @@ export async function igniteSelfDeployedBox(): Promise<PreviewHeaderState> {
   }
   await ensurePrivateTierAwake()
   return getPreviewHeaderState()
+}
+
+/** What {@link keepPrivateTierWarm} tells the open app. */
+export interface KeepWarmAnswer {
+  /** False when this deployment will never keep the boxes warm — the setting is
+   *  off or the private tier is not configured — so the browser stops asking
+   *  for the rest of the page's life. */
+  enabled: boolean
+  /** Whether THIS call woke or touched the boxes: false on the Anthropic tier. */
+  warmed: boolean
+  /** When to ask again, or `null` when `enabled` is false. Sent even on the
+   *  Anthropic tier, because the switch can move back to private while the page
+   *  is open and the next ask is what notices. */
+  nextInMs: number | null
+}
+
+/**
+ * Wake the private tier when the app opens, and keep it from scaling down while
+ * the app stays open and visible (owner, 2026-11-04). The browser calls this on
+ * load, whenever the page becomes visible again, and every `nextInMs` while it
+ * stays visible (`lib/private-tier-keep-warm.ts`); a hidden or closed page stops
+ * calling, and the boxes then scale down after their own configured windows.
+ *
+ * It is the THIRD entry point to the one wake, after a turn and the header
+ * button, and it issues no wake of its own: `ensurePrivateTierAwake` keeps the
+ * dedupe (a load during a turn's poll joins it), the warm clocks and the
+ * cold-start recording gates. Like the button, it opens no cold-start watch, so
+ * nothing it waits for enters the estimate. Its `keepWarm` option changes only
+ * the short-circuit — see `wake.server.ts`, "KEEP WARM WHILE OPEN".
+ *
+ * Refusals, each before any request reaches a box: an unauthenticated caller
+ * (the gate, `SD-13`, first line); `PRIVATE_TIER_WARM_WHILE_OPEN=0`; an
+ * unconfigured private tier; and a user whose tier is Anthropic. The tier is the
+ * one a new chat starts on (`resolveTier(null, seed)`, as the strip reads it):
+ * every switch flip writes the seed, and `INFERENCE_TIERS=self_deployed` clamps
+ * it to private. A failed wake REJECTS, as the button's does; the browser then
+ * stops until the page is shown again, rather than retrying a broken box.
+ */
+export async function keepPrivateTierWarm(): Promise<KeepWarmAnswer> {
+  const user = await requireUser()
+  if (!warmWhileOpenEnabled() || !selfDeployedConfigured()) {
+    return { enabled: false, warmed: false, nextInMs: null }
+  }
+  const nextInMs = keepWarmIntervalMs()
+  const tier = resolveTier(null, await getStoredInferenceTier(user.id))
+  if (tier !== 'self_deployed') return { enabled: true, warmed: false, nextInMs }
+  await ensurePrivateTierAwake({ keepWarm: true })
+  return { enabled: true, warmed: true, nextInMs }
 }

@@ -71,6 +71,7 @@ vi.mock('../../../lib/inference/verda-control-plane.server', () => ({
 import {
   getPreviewHeaderState,
   igniteSelfDeployedBox,
+  keepPrivateTierWarm,
 } from '../../../lib/harness-client/preview-header.server'
 import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-latency.server'
 import {
@@ -80,6 +81,7 @@ import {
 import {
   resetSmallWake,
   resetLargeWake,
+  keepWarmIntervalMs,
   LARGE_LLM_WAKE_FAILED,
 } from '../../../lib/inference/wake.server'
 import {
@@ -106,6 +108,8 @@ const ENV_KEYS = [
   'LARGE_LLM_WAKE_TIMEOUT_MS',
   'LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS',
   'LARGE_LLM_WAKE_POLL_INTERVAL_MS',
+  'PRIVATE_TIER_WARM_WHILE_OPEN',
+  'INFERENCE_TIERS',
 ] as const
 let saved: Record<string, string | undefined>
 
@@ -507,4 +511,84 @@ it('uses the conversation resolver for a legacy public seed on a private-only se
   } finally {
     vi.unstubAllEnvs()
   }
+})
+
+// Keep warm while open (owner, 2026-11-04): the third entry point to the one
+// wake. The real `ensurePrivateTierAwake` runs behind a stubbed `fetch`, so a
+// case that says "no request reached a box" is about the network, not a mock.
+describe('keepPrivateTierWarm', () => {
+  const boxRequests = () =>
+    fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((u) => u.endsWith('/chat/completions') || u.endsWith('/health'))
+
+  it('refuses an unauthenticated caller before reading or waking anything', async () => {
+    configureSelfDeployed()
+    getAuthenticatedUser.mockRejectedValue(new Error('nope'))
+    await expect(keepPrivateTierWarm()).rejects.toThrow('nope')
+    expect(getStoredInferenceTier).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('takes no owner id', () => {
+    expect(keepPrivateTierWarm.length).toBe(0)
+  })
+
+  it('wakes both boxes for a user on the private tier, and says when to ask again', async () => {
+    configureSelfDeployed()
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    const answer = await keepPrivateTierWarm()
+    expect(answer).toEqual({ enabled: true, warmed: true, nextInMs: keepWarmIntervalMs() })
+    expect(boxRequests()).toHaveLength(2)
+    expect(getStoredInferenceTier).toHaveBeenCalledWith('user-1')
+  })
+
+  it('touches a box that is still warm but past the keep-warm fraction of its window', async () => {
+    // A turn or the button would skip both boxes here (proven warm); keep-warm
+    // must not, or a box answered 101s ago scales down 199s later under an open app.
+    configureSelfDeployed()
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    noteLargeCallCompleted(Date.now() - keepWarmIntervalMs() - 1_000)
+    noteSmallCallCompleted(Date.now() - keepWarmIntervalMs() - 1_000)
+    await keepPrivateTierWarm()
+    expect(boxRequests()).toHaveLength(2)
+  })
+
+  it('never wakes for a user on the Anthropic tier, but keeps the page asking', async () => {
+    configureSelfDeployed()
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    const answer = await keepPrivateTierWarm()
+    expect(answer).toEqual({ enabled: true, warmed: false, nextInMs: keepWarmIntervalMs() })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('honours INFERENCE_TIERS=self_deployed: a stored Anthropic seed is clamped to private', async () => {
+    configureSelfDeployed()
+    process.env.INFERENCE_TIERS = 'self_deployed'
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect((await keepPrivateTierWarm()).warmed).toBe(true)
+    expect(boxRequests()).toHaveLength(2)
+  })
+
+  it('is off, and touches nothing, when PRIVATE_TIER_WARM_WHILE_OPEN=0', async () => {
+    configureSelfDeployed()
+    process.env.PRIVATE_TIER_WARM_WHILE_OPEN = '0'
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    expect(await keepPrivateTierWarm()).toEqual({ enabled: false, warmed: false, nextInMs: null })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('is off when the private tier is not configured', async () => {
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    expect(await keepPrivateTierWarm()).toEqual({ enabled: false, warmed: false, nextInMs: null })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('REJECTS when the box does not come up, so the page stops rather than pretending', async () => {
+    configureSelfDeployed()
+    shortWakeBudget()
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    fetchMock.mockResolvedValue(new Response('nope', { status: 503 }))
+    await expect(keepPrivateTierWarm()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
+  })
 })

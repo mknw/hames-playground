@@ -143,8 +143,10 @@ import {
 import {
   getPreviewHeaderState,
   igniteSelfDeployedBox,
+  keepPrivateTierWarm,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
+import { startKeepWarm } from '~/lib/private-tier-keep-warm'
 import { COLD_START_HEADLINE, coldStartBasisHint } from '~/lib/cold-start-format'
 import {
   formatCompactNumber,
@@ -432,6 +434,13 @@ export const PreviewHeaderStrip = () => {
     void load()
     const tick = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS)
     onCleanup(() => clearInterval(tick))
+    // Wake the private tier on load and keep it warm while this page is open and
+    // visible (owner, 2026-11-04). Mounted here because the strip renders only on
+    // signed-in routes (`Nav`), and the server refuses every other case itself:
+    // no session, the setting off, or a user on the Anthropic tier
+    // (`keepPrivateTierWarm`). A warmed answer re-reads the box state so the
+    // indicator follows without waiting for its own poll.
+    onCleanup(startKeepWarm({ ask: keepPrivateTierWarm, onWarmed: () => void load() }))
   })
 
   // The poll's RATE is a function of what the last poll said, so the interval

@@ -532,6 +532,7 @@ interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
   returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined // Refuse a terminal answer with feedback; see below
   maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
 
@@ -589,6 +590,13 @@ type OnToolResult = (
   context: { callId?: string; args: unknown },
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
+
+`SimpleLoopConfig.validateReturn(action)` optionally checks a terminal action
+before exit. Returning a string refuses it and records `return_rejected`
+feedback in the turn log; returning undefined accepts it. Refusals consume
+`maxTurns` without counting as unusable model answers under
+`maxConsecutiveRecoveries`; a thrown check fails the loop. Other loops retain
+their existing behavior when the callback is absent.
 
 **Few-shot examples.** `fewShots` is a per-pattern config knob that injects an `EXAMPLES`
 block into the controller prompt. Best for routes with a narrow tool surface where the
@@ -3728,10 +3736,13 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   answer stops with `no-proposal`; its reason stays in scratch context. The
   `validateReturn` callback strictly parses each candidate (assertions use
   `parseOrgDraft`, with scoped refs and one optional JSON fence), reads the
-  snapshot and runs V1–V10 inside the loop. Any rejection becomes feedback for
+  snapshot and runs V1–V10 inside the loop. Feedback identifies rejected
+  assertions positionally (`a1: V4`) without copying their content; mixed
+  candidates are labelled partly-valid. Any rejection becomes feedback for
   another round within the same `maxTurns` budget (default 4). No extra model
   call runs outside the loop. Exhaustion preserves the final refusal and
-  proposes nothing; a graph-read failure stops immediately. The host routes its controller: in `@hames-ai/harness-baml`,
+  proposes nothing; a graph-read failure stops immediately. A later transport
+  failure reports draft-error, rather than an earlier validator refusal. The host routes its controller: in `@hames-ai/harness-baml`,
   `createLoopControllerAdapter(undefined, { role: 'orgDraft' })`.
 - **The validator** (`validateOrgDraft`, V1–V10) decides what survives; an
   assertion that only reinforces is not proposed (`onlyReinforces`). A
@@ -4399,10 +4410,3 @@ either package's — they live in `app/src/lib/inference/scripts/`.
 3. **Config injects metadata** - Optional config for things like schema injection
 4. **Server-only enforcement** - `.server.ts` files with runtime guards
 5. **Session persistence** - Full context serializable for multi-turn conversations
-
-`SimpleLoopConfig.validateReturn(action)` optionally checks a terminal action
-before exit. Returning a string refuses it and records `return_rejected`
-feedback in the turn log; returning undefined accepts it. Refusals consume
-`maxTurns` without counting as unusable model answers under
-`maxConsecutiveRecoveries`; a thrown check fails the loop. Other loops retain
-their existing behavior when the callback is absent.

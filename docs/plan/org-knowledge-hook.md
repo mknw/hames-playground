@@ -202,7 +202,8 @@ Nothing is written to the graph before the person answers.
 ### The validator
 
 Pure and I/O-free: `(draft, snapshot, userMessage, ontology, roster) →
-{ accepted, rejected }`. Each rule drops the element (and with it its
+{ accepted, rejected, rejectedAssertions }`. The positional diagnostics hold only
+an assertion index and its failed rule, never values or evidence. Each rule drops the element (and with it its
 assertion) and names itself; nothing is repaired.
 
 | Rule | Checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -499,6 +500,8 @@ Each slice is one PR, reviewable alone, in this order. "Pin" is the test;
 **LD-21 — Validate candidate returns inside the existing `simpleLoop`, and require an explicit verdict.** Owner ruling: “The proposal should be made only after the simpleLoop has deliberated there is actually a valid proposal.” Rationale: the loop can repair a rejected candidate on its remaining turns without a second model call outside that loop.
 
 This supersedes LD-10's one-attempt timing and pipeline steps 4–8: the loop returns either `{"verdict":"propose","assertions":[...]}` or `{"verdict":"no-proposal","reason":"short reason"}`. The latter stops as `no-proposal`, with no graph read or card; its reason stays in scratch context. The new `simpleLoop.validateReturn` callback strictly parses each candidate, reads the graph and runs V1–V10 before accepting a terminal answer. Refusals (stop code and rule counts) become that round's observation, so repair and graph-reading turns share the existing four-round `maxTurns` budget. A candidate with any rejected assertion must be repaired or declined; valid siblings are not silently proposed before deliberation finishes. Budget exhaustion preserves the final refusal (`draft-unparseable`, `nothing-valid` or `only-reinforces`) and raises no card; a graph-read failure stops immediately. A custom draft seam's final output is checked too. Only an explicit `propose` with a final validator pass and at least one writing assertion reaches `proposeToHuman`. The `orgDraft` role, tier routing and deployment switch are unchanged.
+
+**LD-21 review follow-up:** repair feedback now identifies the rejected assertion indexes and labels mixed candidates `partly-valid`; the terminal exhausted-budget stop remains `nothing-valid` with no salvaged siblings. Only actual budget exhaustion preserves the final validator refusal; a later connection failure is `draft-error`. Rationale: distinguish repairable model output from infrastructure failure and make each refusal actionable without echoing content.
 
 ## Not in this design
 

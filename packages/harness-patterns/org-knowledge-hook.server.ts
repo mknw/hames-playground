@@ -111,6 +111,9 @@ export type OrgDraftFn = (input: {
   readonly validate: (text: string) => Promise<string | undefined>
 }) => Promise<string>
 
+/** Only budget exhaustion may preserve the loop's last validator refusal. */
+class OrgDraftBudgetExhaustedError extends Error {}
+
 /**
  * The draft as a `simpleLoop` over the two read-only Neo4j tools, inside a K1
  * guard on those tools, in a scratch context that holds the user's message and
@@ -139,8 +142,14 @@ export function createOrgDraftLoop(opts: {
     const scratch = createContext<Record<string, unknown>>(userMessage)
     const done = await runChain(scratch, [pattern])
     const text = (done.data as { returnText?: unknown }).returnText
-    if (typeof text !== 'string' || text.trim() === '')
+    if (typeof text !== 'string' || text.trim() === '') {
+      const exhausted = done.events.some(
+        (event) =>
+          event.type === 'error' && (event.data as { kind?: string }).kind === 'budget_exhausted',
+      )
+      if (exhausted) throw new OrgDraftBudgetExhaustedError('the draft loop returned no answer')
       throw new Error('the draft loop returned no answer')
+    }
     return text
   }
 }
@@ -529,9 +538,13 @@ async function run(
         rejected: OrgKnowledgeReport['rejected']
       }
     | undefined
-  const refuse = (skipped: OrgKnowledgeSkip, rejected: OrgKnowledgeReport['rejected'] = {}) => {
+  const refuse = (
+    skipped: OrgKnowledgeSkip,
+    rejected: OrgKnowledgeReport['rejected'] = {},
+    summary: string = skipped,
+  ) => {
     failure = { skipped, rejected }
-    return `Validator: ${skipped}; rejected: ${JSON.stringify(rejected)}. Repair the draft using only the user's message, or Return no-proposal with a short reason.`
+    return `Validator: ${summary}; rejected: ${JSON.stringify(rejected)}. Repair the draft using only the user's message, or Return no-proposal with a short reason.`
   }
   const validate = async (text: string): Promise<string | undefined> => {
     validated = undefined
@@ -561,8 +574,15 @@ async function run(
       mentionsMember: cfg.mentionsMember,
       ...(cfg.maxAssertions !== undefined && { maxAssertions: cfg.maxAssertions }),
     })
-    if (checked.accepted.length === 0 || Object.keys(checked.rejected).length > 0)
-      return refuse('nothing-valid', checked.rejected)
+    if (checked.accepted.length === 0 || Object.keys(checked.rejected).length > 0) {
+      const label = checked.accepted.length > 0 ? 'partly-valid' : 'nothing-valid'
+      const assertions = checked.rejectedAssertions.map(({ index, rule }) => `a${index}: ${rule}`)
+      return refuse(
+        'nothing-valid',
+        checked.rejected,
+        `${label}; assertions: ${assertions.join(', ')}`,
+      )
+    }
     const writing = checked.accepted.filter((a) => !onlyReinforces(a))
     if (writing.length === 0) return refuse('only-reinforces', checked.rejected)
     validated = { text, checked, writing }
@@ -572,6 +592,11 @@ async function run(
   try {
     text = await cfg.draft({ userMessage, schema: renderOrgSchema(cfg.ontology), validate })
   } catch (err) {
+    // A later model/transport failure is not the previous round's verdict.
+    // Retain it only when the loop actually exhausted its repair budget (or
+    // the current validation itself failed to read the graph).
+    if (!(err instanceof OrgDraftBudgetExhaustedError) && failure?.skipped !== 'graph-read-error')
+      failure = undefined
     return failure
       ? stop(failure.skipped, undefined, failure.rejected)
       : stop('draft-error', errorKind(err))

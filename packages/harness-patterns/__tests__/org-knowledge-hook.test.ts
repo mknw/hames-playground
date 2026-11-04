@@ -441,13 +441,15 @@ describe('the draft verdict and validator deliberation', () => {
   const invalidCandidate = JSON.parse(DRAFT)
   invalidCandidate.assertions[0].nodes[0].properties.name = 'Unsupported placeholder'
   const invalid = JSON.stringify(invalidCandidate)
-  function scripted(answers: readonly string[], maxTurns = 4) {
+  function scripted(answers: readonly (string | Error)[], maxTurns = 4) {
     const controller = vi.fn<ControllerFn>(async (input) => {
       expect(input.tools).toEqual([...ORG_DRAFT_TOOLS])
+      const answer = answers[Math.min(input.turn, answers.length - 1)]
+      if (answer instanceof Error) throw answer
       return {
         action: {
           tool_name: 'Return',
-          tool_args: answers[Math.min(input.turn, answers.length - 1)],
+          tool_args: answer,
           reasoning: 'Checking the candidate',
           is_final: true,
         },
@@ -523,7 +525,41 @@ describe('the draft verdict and validator deliberation', () => {
     const ctx = turn()
     expect((await settle(ctx, cfg)).proposed).toBe(1)
     expect(script.controller).toHaveBeenCalledTimes(2)
-    expect(script.controller.mock.calls[1][0].turns[0].tool_result?.error).toContain('V4')
+    const feedback = script.controller.mock.calls[1][0].turns[0].tool_result?.error
+    expect(feedback).toContain('partly-valid')
+    expect(feedback).toContain('a1: V4')
+    expect(feedback).not.toContain('a0:')
+    expect(feedback).not.toContain(invalidCandidate.assertions[0].nodes[0].properties.name)
+  })
+
+  // Review term 1 mutation: retain a mixed refusal's accepted subset and
+  // salvage it in the draft catch when the budget expires.
+  it('never salvages the valid sibling of a mixed candidate at budget exhaustion', async () => {
+    const mixed = JSON.stringify({
+      verdict: 'propose',
+      assertions: [...JSON.parse(DRAFT).assertions, ...invalidCandidate.assertions],
+    })
+    const script = scripted([mixed])
+    const { cfg, held } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({
+      proposed: 0,
+      rejected: { V4: 1 },
+      skipped: 'nothing-valid',
+    })
+    expect(script.controller).toHaveBeenCalledTimes(4)
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
+  })
+
+  it('reports a connection failure after a validator refusal as draft-error', async () => {
+    const script = scripted([invalid, new Error('ECONNREFUSED')])
+    const { cfg, held } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({ proposed: 0, rejected: {}, skipped: 'draft-error' })
+    expect(script.controller).toHaveBeenCalledTimes(2)
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
   })
 
   it('stops a failed graph read without asking the model to repair infrastructure', async () => {

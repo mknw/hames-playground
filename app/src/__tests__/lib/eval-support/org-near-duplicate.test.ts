@@ -1,23 +1,24 @@
 /**
- * The near-duplicate of the #991 review (MUST 2), reproduced through the real
- * hook on the eval's synthetic graph and its strict read (LD-23). The graph
- * holds Project "Osprey"; the message says "The Project Osprey review is due on
- * 15 December". One scripted draft policy runs twice: read the graph, then
- * propose the Project under the stored name the read returned, else under the
- * message's name — and a Deadline on it.
+ * The near-duplicate of the #991 review (MUST 2), on the eval's synthetic graph
+ * and its strict read (LD-23), through the real hook — and, since LD-24, the
+ * validator's deterministic refusal (V11). The graph holds Project "Osprey";
+ * the message says "The Project Osprey review is due on 15 December". One
+ * scripted draft policy runs twice: read the graph, then propose the Project
+ * under the stored name the read returned, else under the name a validator
+ * refusal named, else under the message's name — and a Deadline on it.
  *
- *  - Searching by the exact name finds nothing, the draft proposes "Project
- *    Osprey", and the validator passes it as `new`: the card offers a second
- *    Osprey. The validator catches only an exact-name duplicate, so this is the
- *    gap the schema's near-match rule (`ORG_NEAR_MATCH_RULE`) closes.
- *  - Searching as that rule prescribes (`toLower(n.name) CONTAINS 'osprey'`)
- *    finds Osprey, and the proposal links the Deadline to the existing node.
+ *  - Searching by the exact name finds nothing, so the draft proposes "Project
+ *    Osprey". Before LD-24 the validator passed that as `new` and the card
+ *    offered a second Osprey. Now V11 refuses it and names the stored "Osprey";
+ *    the repair turn links to it, so the card offers the existing node.
+ *  - Searching as the schema's near-match rule prescribes
+ *    (`toLower(n.name) CONTAINS 'osprey'`) finds Osprey and links in one turn.
  *
- * Mutations that redden it: make the synthetic read lenient again (an inline
- * `{name: 'x'}` matched by substring either way) → the exact search finds
- * Osprey and the duplicate is not reproduced; make the validator refuse the
- * variant → the first case proposes no new Project (that red is the
- * deterministic fix's own pin to rewrite, not a regression).
+ * Mutations that redden it: drop the V11 check from the validator → the
+ * exact-name case proposes "Project Osprey" as `new`; drop the near match from
+ * the memory store's snapshot → the same; stop naming the stored node in the
+ * repair feedback → that case never links (no card); make the synthetic read
+ * lenient again → the exact search finds Osprey and no repair turn happens.
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { ControllerFn, UnifiedContext } from '@hames-ai/harness-patterns'
@@ -26,9 +27,15 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImpor
 
 const MESSAGE = 'The Project Osprey review is due on 15 December.'
 
-/** Read once with `query`, then propose under the name the read returned. */
+let calls = 0
+
+/** Read once with `query`, then propose under the name the read returned, or
+ *  the one a validator refusal named. */
 function scriptedDraft(query: string): ControllerFn {
-  return (async (input: { turns: readonly { tool_result?: { result?: unknown } }[] }) => {
+  return (async (input: {
+    turns: readonly { tool_result?: { result?: unknown; error?: string } }[]
+  }) => {
+    calls += 1
     if (input.turns.length === 0)
       return {
         action: {
@@ -44,7 +51,10 @@ function scriptedDraft(query: string): ControllerFn {
       name?: string
     }[]
     const stored = rows.find((r) => r.label === 'Project')?.name
-    const name = stored ?? 'Project Osprey'
+    const refusal = /a duplicate of Project "([^"]+)"/.exec(
+      input.turns.at(-1)?.tool_result?.error ?? '',
+    )
+    const name = stored ?? refusal?.[1] ?? 'Project Osprey'
     return {
       action: {
         reasoning: stored ? 'the graph holds it: link' : 'not found: propose it',
@@ -127,25 +137,34 @@ async function settleWith(query: string) {
     ),
   )
   const project = held[0]?.payload.assertions[0].nodes.find((n) => n.element.label === 'Project')
-  return { report, project }
+  return { report, project, calls }
 }
 
-describe('a near-duplicate Project, on the eval graph (LD-23)', () => {
-  it('is proposed as a second node when the draft searches only by the exact name', async () => {
-    const { report, project } = await settleWith(
-      "MATCH (p:Project {name: 'Project Osprey'}) RETURN p",
-    )
-    expect(report.proposed).toBe(1)
-    expect(project?.element.properties.name).toBe('Project Osprey')
-    expect(project?.verdict).toBe('new')
-  }, 30_000)
-
-  it('links to the stored node when the draft searches as the schema prescribes', async () => {
-    const { report, project } = await settleWith(
-      "MATCH (n:Project) WHERE toLower(n.name) CONTAINS 'osprey' RETURN n",
-    )
+describe('a near-duplicate Project, on the eval graph (LD-23, LD-24)', () => {
+  it('is refused and repaired into a link when the draft searches only by the exact name', async () => {
+    calls = 0
+    const {
+      report,
+      project,
+      calls: n,
+    } = await settleWith("MATCH (p:Project {name: 'Project Osprey'}) RETURN p")
+    // read, refused "Project Osprey", repaired "Osprey"
+    expect(n).toBe(3)
     expect(report.proposed).toBe(1)
     expect(project?.element.properties.name).toBe('Osprey')
     expect(project?.verdict).toBe('reinforces')
+  }, 30_000)
+
+  it('links to the stored node when the draft searches as the schema prescribes', async () => {
+    calls = 0
+    const {
+      report,
+      project,
+      calls: n,
+    } = await settleWith("MATCH (n:Project) WHERE toLower(n.name) CONTAINS 'osprey' RETURN n")
+    expect(report.proposed).toBe(1)
+    expect(project?.element.properties.name).toBe('Osprey')
+    expect(project?.verdict).toBe('reinforces')
+    expect(n).toBe(2)
   }, 30_000)
 })

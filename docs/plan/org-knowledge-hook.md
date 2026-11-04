@@ -206,7 +206,9 @@ Nothing is written to the graph before the person answers.
 
 Pure and I/O-free: `(draft, snapshot, userMessage, ontology, roster) →
 { accepted, rejected, rejectedAssertions }`. The positional diagnostics hold only
-an assertion index and its failed rule, never values or evidence. Each rule drops the element (and with it its
+an assertion index and its failed rule, never values or evidence; a V11 refusal
+also names the stored node it duplicates (**LD-24**), which is graph data, not
+the user's words. Each rule drops the element (and with it its
 assertion) and names itself; nothing is repaired.
 
 | Rule | Checks                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -221,6 +223,7 @@ assertion) and names itself; nothing is repaired.
 | V8   | `sanitizeUntrusted` (`packages/harness-patterns/injection-guard.ts:1071`) reports zero findings on every string value, because the value is replayed into other users' prompts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | V9   | A `Fact`'s `text` and `evidence` contain no literal of a `Member` from the roster (display names and their parts, addresses), using the roster matcher of SD-8 (**LD-5**)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | V10  | Verdict: a named node that exists by `nameKey` is `reinforces` when every drafted property equals the stored one and `updates` otherwise; a deadline that exists on its owner by `label` likewise; a fact is always `new`; a relation that exists is `reinforces`                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| V11  | No near-duplicate (**LD-24**): a new node of a creatable name-keyed class is dropped when its `nearNameKey` (accents folded, separators as space, the class's own label word dropped at either end) equals a stored node's of the **same label**, or another new node's of the same draft; the refusal names that node so the repair turn links to it. Repeated at the write, inside its transaction                                                                                                                                                                                                                                                                              |
 
 ### Acceptance and the write
 
@@ -594,12 +597,10 @@ the three positive rows (32–34) proposed nothing.
   nothing and proposes `Project Osprey` as `new` (review of #991, MUST 2,
   reproduced in `org-near-duplicate.test.ts`). The search keeps the draft
   reading the real graph for the near-match before it may call anything new.
-- **Open: the deterministic near-match refusal.** The rule is a prompt, so a
-  model can still skip the search, and a diacritic on the STORED name (`Ösprey`
-  against a message's `Osprey`) defeats `toLower … CONTAINS`. The deterministic
-  half is a validator refusal of a near-match per label (for example a
-  token-subset `nameKey` comparison, accents folded) fed back through LD-21's
-  repair turn. It is a follow-up, not part of this decision.
+- **Closed by LD-24: the deterministic near-match refusal.** The rule is a
+  prompt, so a model can still skip the search, and a diacritic on the STORED
+  name (`Ösprey` against a message's `Osprey`) defeats `toLower … CONTAINS`.
+  The validator's V11 (**LD-24**) is the deterministic half.
 - **Eval fidelity, not design.** The eval's draft reads now answer from the
   scenario's own synthetic org graph (`syntheticOrgDraftTransport`), the one its
   candidate is validated against; on the run they reached the route's miniature
@@ -616,6 +617,83 @@ the three positive rows (32–34) proposed nothing.
 What this does not settle: whether the 27B passes the rows. That is the
 targeted live re-run, after the merge, on FRONT's call. Row 42's only failure
 (the reply's read-only wording) is outside the hook and outside this record.
+
+### Decision record — 2026-11-04, the near-duplicate refusal
+
+**LD-24 — The validator refuses a near-duplicate of a stored node of the same
+label, names it, and the store returns such nodes with every snapshot.** Owner
+ruling: "do not duplicate nodes"; the #991 review held that the prompt rule
+(LD-23) is not a control, and that a deterministic refusal must land before
+`ORG_KNOWLEDGE_HOOK=on` is set in any deployment.
+
+- **The key.** `nearNameKey(name, label)` (`org-knowledge-ontology.ts`) is
+  `nameKey` with accents folded (NFKD, combining marks removed), every run of
+  separators (whitespace, dashes, dots, commas, quotes) read as one space, and
+  the class's own label word dropped when it
+  is the first or last of two or more words, so "Project Osprey", "Osprey.",
+  "Projet Ősprey" and "OSPREY" reach the stored "Osprey" / "Projet Osprey".
+  `nameKey` itself is not widened, and that is recorded here because the brief
+  preferred extending it: `nameKey` misses accent folding, but it is the stored
+  identity and the database's uniqueness key, so widening it would re-key every
+  stored node and change which writes `MERGE` together. `nearNameKey` is built
+  on it instead and used only for refusal. Not folded: letters that are not a
+  base letter plus marks (ø, ł, ß), and any difference beyond the label word —
+  "Osprey Labs" stays a different project, so a token-subset match was
+  rejected: it would refuse legitimately different names. Every other symbol is
+  kept (review of #994): "C++", "C#" and "C" stay three names, and a name of
+  separators only has the empty key, which is never a near-duplicate.
+- **V11.** A node of a `nameKey` class that matches no stored node by
+  `nameKey` is dropped when its near key equals a stored node's of the same
+  label. The refusal carries the stored node (`label`, stored `name`, `key`),
+  and the hook's repair feedback says "a duplicate of Project "Osprey" already
+  in the graph; link to it under that stored name, never a second node". The
+  stored name goes through `sanitizeUntrusted` first and is replaced by "an
+  existing Project" when the sanitizer finds anything (SD-1: graph data reaching
+  a prompt outside the K1 guard), or when it is longer than
+  `NOTE_NAME_MAX_CHARS` (120). Two new nodes of one draft that are near-twins
+  are refused the same way: the first in draft order stays, the later one
+  names it ("elsewhere in this draft"). Only a creatable class is checked: an
+  unmatched `Member` or `Pillar` is V1 already, and neither label is ever
+  scanned, so the directory-fed `Member` label can never fail a snapshot
+  closed. Owner-identified classes (`Deadline`) are out: their identity is per
+  owner, not per label.
+- **Per label, not across labels — an addition for the owner to confirm.** The
+  owner's sentence is "do not duplicate nodes"; reading it per label is the
+  lane's, not the owner's. "Osprey" as a `Project` and "Osprey" as a `Theme`
+  are two nodes. This follows the ontology's own `nameKey` uniqueness, which is
+  per label (A1 and its constraints); refusing across labels would make one
+  name unusable for a second kind of thing that legitimately shares it. What
+  it lets through: a model that labels the project "Osprey" as a `Team` writes
+  a second node for the same thing, which is a duplicate in the owner's sense.
+  The card shows the label, so a person can still discard it.
+- **The snapshot.** A refusal is only as good as what the validator is shown, and
+  the store's snapshot read only exact names, so a stored "Osprey" never
+  reached it for "Project Osprey". `OrgGraphStore.snapshot` now also returns
+  every node of a requested name's label whose near key matches, in both
+  adapters (pinned by the shared contract). The Neo4j adapter reads every name
+  of the label (Cypher cannot fold accents) up to `NEAR_SCAN_LIMIT` (10 000)
+  and **fails closed** above it: the snapshot throws `OrgSnapshotIncompleteError`,
+  the hook stops with its own reason, `graph-incomplete` (an outage stays
+  `graph-read-error`, and both log the error's kind), and nothing is proposed,
+  because a partial scan cannot prove there is no duplicate.
+- **Again at the write (review of #994).** V11 runs when a card is proposed, so
+  two cards proposed before either is accepted — "Osprey" on one turn, "the
+  Project Osprey review" on the next, or two users — both pass it. The write
+  re-checks inside its own transaction: the adapter's re-read includes each new
+  name-keyed node's name (`newNodeNames`), and `isStale` refuses, as `stale`,
+  a new node whose near-duplicate exists now (an equal near key under another
+  `nameKey`; an equal `nameKey` is the same node and MERGEs). The second card is
+  refused and writes nothing (LD-6). This covers accepts made one after the
+  other. Two accepts committing in the same instant are not serialised by the
+  re-read; only the exact `nameKey` constraint binds there.
+- **The validator stays the last word.** A candidate V11 refuses is fed back
+  within the loop's four rounds (LD-21); a draft that insists on the duplicate
+  exhausts the budget and stops `nothing-valid` with no card, and the final
+  answer is re-validated whatever the model's verdict says.
+
+Rationale: the owner's ruling is "for any reason", which only a deterministic
+check meets; naming the node turns the refusal into the link the person would
+have wanted; per-label identity is the ontology's own.
 
 ## Not in this design
 

@@ -38,14 +38,21 @@ import { runChain } from './patterns/chain.server'
 import { simpleLoop } from './patterns/simpleLoop.server'
 import { withInjectionGuard } from './patterns/withInjectionGuard.server'
 import { decide, defineChoice } from './patterns/typedDecision.server'
+import { sanitizeUntrusted } from './injection-guard'
 import { classOf, type GraphOntology } from './org-knowledge-ontology'
-import type { OrgActor, OrgApplyResult, OrgGraphStore } from './org-knowledge-store'
+import {
+  OrgSnapshotIncompleteError,
+  type OrgActor,
+  type OrgApplyResult,
+  type OrgGraphStore,
+} from './org-knowledge-store'
 import {
   validateOrgDraft,
   type CheckedAssertion,
   type DraftElement,
   type OrgDraft,
   type OrgRule,
+  type RejectedAssertion,
 } from './org-knowledge-validate.server'
 import type {
   ConfiguredPattern,
@@ -180,20 +187,51 @@ export function renderOrgSchema(ontology: GraphOntology): string {
     'Rules: every value must be copied from the user message; every element carries `evidence`, a span copied verbatim from the user message; use the stored name of a node that already exists; propose nothing for a question, hypothetical, opinion, rumour or anything about a person.',
     // LD-23: the first live private-tier run declined a new project because the
     // graph did not hold it yet, which is the case the hook exists for. The
-    // near-match search comes first because the validator catches only an
-    // exact-name duplicate (same label and nameKey): "Project Osprey" against a
-    // stored "Osprey" would otherwise be proposed as a second node.
+    // near-match search comes first so the draft links on its first answer; the
+    // validator's V11 (LD-24) refuses a near-duplicate it misses either way.
     ORG_NEAR_MATCH_RULE,
     'Answer (Return) with JSON only: {"verdict":"propose","assertions":[{"nodes":[{"ref":"a","label":"Project","properties":{"name":"…"},"evidence":"…"}],"edges":[{"type":"…","from":"a","to":"b","evidence":"…"}]}]}. If nothing is worth proposing, answer {"verdict":"no-proposal","reason":"short reason"}. A propose answer is checked before the loop can finish: use validator feedback to repair it or conclude no-proposal, within the remaining turns. Never override a validator refusal.',
   ].join('\n')
 }
 
 /** The schema's new-node rule (LD-23). An exact-name read that finds nothing
- *  is not evidence the node is new; only the tolerant search below is. The
- *  validator refuses only exact-name duplicates, so this search is what keeps
- *  a name variant from becoming a second node. */
+ *  is not evidence the node is new; only the tolerant search below is. It is a
+ *  prompt, not the control: the validator's V11 refusal (LD-24) is what keeps a
+ *  name variant from becoming a second node, and this rule saves the round a
+ *  refusal would cost. */
 export const ORG_NEAR_MATCH_RULE =
   "Do not duplicate nodes. Before proposing a node as new, search its class for a near-match, case-insensitively, on the name's most distinctive word without accents: MATCH (n:Label) WHERE toLower(n.name) CONTAINS 'word' RETURN n (use the class's own name property, e.g. displayName for Member). If that finds a node, it is the same node: use its stored name and link to it, never a second node. Only when that search finds nothing is the node proposed as new, unless its class says Link only; not finding it by its exact name is no reason for no-proposal."
+
+/**
+ * One refused assertion as repair feedback: its position and rule, and for a
+ * near-duplicate (V11, LD-24) the stored node to link to instead. The stored
+ * name is graph data reaching a prompt outside the K1 guard (SD-1), so it goes
+ * through the sanitizer first and is left out when the sanitizer finds
+ * anything; the drafted values and evidence are never echoed.
+ */
+export function rejectionNote({ index, rule, existing }: RejectedAssertion): string {
+  if (rule !== 'V11' || !existing || existing.length === 0) return `a${index}: ${rule}`
+  const named = existing.slice(0, 3).map(({ label, name, inDraft }) => {
+    const { report } = sanitizeUntrusted(
+      name,
+      { tool: 'org_knowledge', namespace: 'org_knowledge' },
+      { spotlight: 'off' },
+    )
+    const shown =
+      report.findings.length === 0 && name.length <= NOTE_NAME_MAX_CHARS
+        ? `${label} ${JSON.stringify(name)}`
+        : `an existing ${label}`
+    return { shown, inDraft: inDraft === true }
+  })
+  const names = named.map((n) => n.shown).join(' or ')
+  return named.every((n) => n.inDraft)
+    ? `a${index}: V11, a duplicate of ${names} elsewhere in this draft; name one node once, under one name`
+    : `a${index}: V11, a duplicate of ${names} already in the graph; link to it under that stored name, never a second node`
+}
+
+/** Longest stored name a repair note echoes (review of #994): a longer one is
+ *  named by its label only. */
+export const NOTE_NAME_MAX_CHARS = 120
 
 /** Most elements one draft may carry; a longer draft is not parsed. */
 export const MAX_DRAFT_ELEMENTS = 200
@@ -426,6 +464,8 @@ export type OrgKnowledgeSkip =
   | 'draft-unparseable'
   | 'no-proposal'
   | 'graph-read-error'
+  /** The store could not prove it showed every near-duplicate (LD-24). */
+  | 'graph-incomplete'
   | 'nothing-valid'
   | 'only-reinforces'
   | 'already-proposed'
@@ -438,6 +478,14 @@ export interface OrgKnowledgeReport {
 }
 
 const DEFAULT_WAKE_BUDGET_MS = 180_000
+
+/** The stop a failed graph read ends with. */
+function readStop(err: unknown): 'graph-incomplete' | 'graph-read-error' {
+  return err instanceof OrgSnapshotIncompleteError ? 'graph-incomplete' : 'graph-read-error'
+}
+
+const isReadStop = (s: OrgKnowledgeSkip | undefined): boolean =>
+  s === 'graph-read-error' || s === 'graph-incomplete'
 
 function errorKind(e: unknown): string {
   return e instanceof Error && e.name ? e.name : 'Error'
@@ -551,6 +599,8 @@ async function run(
     | {
         skipped: OrgKnowledgeSkip
         rejected: OrgKnowledgeReport['rejected']
+        /** The cause a read failure logs: an error kind, never a message. */
+        extra?: string
       }
     | undefined
   const refuse = (
@@ -578,9 +628,12 @@ async function run(
     let snapshot
     try {
       snapshot = await cfg.store.snapshot({ names, keys: [] })
-    } catch {
-      // An infrastructure failure cannot be repaired by a model.
-      refuse('graph-read-error')
+    } catch (err) {
+      // An infrastructure failure cannot be repaired by a model. The cause is
+      // kept (review of #994): a store too large to scan for near-duplicates
+      // has its own reason, and any other failure logs its error kind.
+      refuse(readStop(err))
+      failure = { ...failure!, extra: errorKind(err) }
       throw new Error('org graph snapshot unavailable')
     }
     const checked = validateOrgDraft(draft, snapshot, cfg.ontology, {
@@ -591,7 +644,7 @@ async function run(
     })
     if (checked.accepted.length === 0 || Object.keys(checked.rejected).length > 0) {
       const label = checked.accepted.length > 0 ? 'partly-valid' : 'nothing-valid'
-      const assertions = checked.rejectedAssertions.map(({ index, rule }) => `a${index}: ${rule}`)
+      const assertions = checked.rejectedAssertions.map(rejectionNote)
       return refuse(
         'nothing-valid',
         checked.rejected,
@@ -610,10 +663,10 @@ async function run(
     // A later model/transport failure is not the previous round's verdict.
     // Retain it only when the loop actually exhausted its repair budget (or
     // the current validation itself failed to read the graph).
-    if (!(err instanceof OrgDraftBudgetExhaustedError) && failure?.skipped !== 'graph-read-error')
+    if (!(err instanceof OrgDraftBudgetExhaustedError) && !isReadStop(failure?.skipped))
       failure = undefined
     return failure
-      ? stop(failure.skipped, undefined, failure.rejected)
+      ? stop(failure.skipped, failure.extra, failure.rejected)
       : stop('draft-error', errorKind(err))
   }
   const answer = parseOrgDraftAnswer(text)
@@ -623,8 +676,9 @@ async function run(
   if (validated?.text !== text) {
     try {
       await validate(text)
-    } catch {
-      return stop('graph-read-error')
+    } catch (err) {
+      // `validate` recorded the read's own cause before it rethrew.
+      return stop(failure?.skipped ?? readStop(err), failure?.extra ?? errorKind(err))
     }
   }
   if (!validated) return stop(failure?.skipped ?? 'nothing-valid', undefined, failure?.rejected)

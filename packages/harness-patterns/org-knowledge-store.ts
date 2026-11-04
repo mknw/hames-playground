@@ -8,7 +8,11 @@
  * - {@link OrgGraphStore.snapshot} reads what a draft references: the nodes it
  *   names (by label and name key) or keys, every edge touching them, and the
  *   nodes at the other end — what the validator's resolution, owner matching
- *   and cardinality checks read.
+ *   and cardinality checks read. A name also brings back every node of ITS
+ *   label whose {@link nearNameKey} equals the name's, so the validator's
+ *   near-duplicate refusal (V11, LD-24) can see a stored "Osprey" when the
+ *   draft says "Project Osprey". An adapter that cannot prove it has seen
+ *   every such node throws rather than return a snapshot missing one.
  * - {@link OrgGraphStore.apply} writes ONE validated assertion in ONE
  *   transaction, after re-reading what the preview read:
  *     1. every node the preview resolved still exists and still holds the
@@ -31,7 +35,10 @@
 
 import {
   classOf,
+  hasNearKey,
   nameKey,
+  nearChecked,
+  nearNameKey,
   relationOf,
   type GraphOntology,
   type OntologyClass,
@@ -43,6 +50,13 @@ import type {
   SnapshotEdge,
   SnapshotNode,
 } from './org-knowledge-validate.server'
+
+/** Thrown by an adapter that cannot prove a snapshot holds every near-duplicate
+ *  of a requested name (LD-24): the hook stops with its own reason,
+ *  `graph-incomplete`, so a permanent size limit never reads as an outage. */
+export class OrgSnapshotIncompleteError extends Error {
+  override readonly name = 'OrgSnapshotIncompleteError'
+}
 
 /** What a draft references: names by label, and node keys. */
 export interface OrgGraphRefs {
@@ -94,6 +108,25 @@ export const idKey = (id: string): string => `id:${id}`
 export interface StaleView {
   node(key: string): SnapshotNode | undefined
   edges(type: string, side: 'from' | 'to', key: string): readonly SnapshotEdge[]
+  /** Every node of `label` the re-read holds. An adapter's re-read must hold,
+   *  for each NEW name-keyed node of the assertion, every stored node of its
+   *  label whose near key matches (LD-24): that is what lets the write refuse
+   *  a near-duplicate another card created after this one was proposed. */
+  nodesOf(label: string): readonly SnapshotNode[]
+}
+
+/** The names a write's in-transaction re-read must snapshot: each NEW node of a
+ *  class V11 checks, by label and name (LD-24). */
+export function newNodeNames(
+  assertion: CheckedAssertion,
+  ontology: GraphOntology,
+): { label: string; name: string }[] {
+  return assertion.nodes.flatMap((n) => {
+    if (n.existing) return []
+    const cls = classOf(ontology, n.element.label)
+    const name = cls?.nameProperty ? n.properties[cls.nameProperty] : undefined
+    return cls && nearChecked(cls) && typeof name === 'string' ? [{ label: cls.label, name }] : []
+  })
 }
 
 const sameEdge = (a: SnapshotEdge, b: SnapshotEdge): boolean =>
@@ -109,7 +142,10 @@ export function isStale(
   view: StaleView,
 ): boolean {
   for (const n of assertion.nodes) {
-    if (!n.existing) continue
+    if (!n.existing) {
+      if (nearDuplicateNow(n, ontology, view)) return true
+      continue
+    }
     const now = view.node(n.existing.key)
     if (!now || now.label !== n.existing.label) return true
     for (const [prop, value] of Object.entries(n.existing.properties)) {
@@ -138,6 +174,27 @@ export function isStale(
     if (unexpected.length > 0) return true
   }
   return false
+}
+
+/** A NEW node of a class V11 checks whose near-duplicate exists NOW (LD-24,
+ *  review of #994): a node of its label with an equal near key and another
+ *  `nameKey`. The proposal-time check cannot see a node a second pending card
+ *  wrote after this card was proposed; this one, read inside the write's own
+ *  transaction, can. An equal `nameKey` is the same node, which the write
+ *  MERGEs onto, so it is not a duplicate. */
+function nearDuplicateNow(n: CheckedNode, ontology: GraphOntology, view: StaleView): boolean {
+  const cls = classOf(ontology, n.element.label)
+  if (!cls || !nearChecked(cls)) return false
+  const prop = cls.nameProperty!
+  const name = n.properties[prop]
+  if (typeof name !== 'string') return false
+  const near = nearNameKey(name, cls.label)
+  if (!hasNearKey(near)) return false
+  const key = nameKey(name)
+  return view.nodesOf(cls.label).some((m) => {
+    const v = m.properties[prop]
+    return typeof v === 'string' && nameKey(v) !== key && nearNameKey(v, cls.label) === near
+  })
 }
 
 /** The properties a node is stored with, provenance excluded. */
@@ -223,9 +280,15 @@ export function createMemoryOrgGraphStore(
         const cls = classOf(ontology, label)
         if (!cls?.nameProperty) continue
         const key = nameKey(name)
+        const near = nearChecked(cls) ? nearNameKey(name, label) : ''
         for (const n of nodes) {
           const v = n.properties[cls.nameProperty]
-          if (n.label === label && typeof v === 'string' && nameKey(v) === key) wanted.add(n.key)
+          if (
+            n.label === label &&
+            typeof v === 'string' &&
+            (nameKey(v) === key || (hasNearKey(near) && nearNameKey(v, label) === near))
+          )
+            wanted.add(n.key)
         }
       }
       const touching = edges.filter((e) => wanted.has(e.from) || wanted.has(e.to))
@@ -247,6 +310,7 @@ export function createMemoryOrgGraphStore(
         },
         edges: (type, side, key) =>
           es.filter((e) => e.type === type && e[side] === key).map(asSnapshotEdge),
+        nodesOf: (label) => ns.filter((x) => x.label === label).map(asSnapshotNode),
       }
       if (isStale(assertion, ontology, view)) return { status: 'stale' }
 

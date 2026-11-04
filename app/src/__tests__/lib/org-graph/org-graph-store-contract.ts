@@ -116,6 +116,75 @@ export function orgGraphStoreContract(adapter: string, make: MakeStore): void {
       await fresh()
     })
 
+    // LD-24 / V11: a name brings back the stored nodes of ITS label that are the
+    // same node under the near key, or the validator never sees the stored
+    // "Osprey" when a draft says "Project Osprey". Mutation: drop the near
+    // match from the adapter's snapshot → the first expectation reddens; match
+    // across labels → the Theme expectation reddens.
+    it('snapshots the near-duplicates of a requested name, of its label only', async () => {
+      const accented = seedNode('po', 'Project', {
+        name: 'Projet Ősprey',
+        nameKey: 'projet ősprey',
+      })
+      await fresh([OSPREY, accented])
+      const keysOf = (s: GraphSnapshot) => s.nodes.map((x) => x.key).sort()
+      expect(
+        keysOf(
+          await h.store.snapshot({
+            names: [{ label: 'Project', name: 'Project Osprey' }],
+            keys: [],
+          }),
+        ),
+      ).toEqual(['id:osprey'])
+      expect(
+        keysOf(
+          await h.store.snapshot({
+            names: [{ label: 'Project', name: 'Projet Osprey' }],
+            keys: [],
+          }),
+        ),
+      ).toEqual(['id:po'])
+      expect(
+        keysOf(await h.store.snapshot({ names: [{ label: 'Theme', name: 'Osprey' }], keys: [] })),
+      ).toEqual([])
+      expect(
+        keysOf(
+          await h.store.snapshot({ names: [{ label: 'Project', name: 'Osprey Labs' }], keys: [] }),
+        ),
+      ).toEqual([])
+    })
+
+    // Review of #994, MUST: V11 runs when a card is proposed, so two cards
+    // proposed before either is accepted both pass it. The write re-checks
+    // inside its own transaction: the second card's near-duplicate is refused
+    // as stale, and an exact twin still merges onto the first. Mutations: drop
+    // the near check from `isStale` → two Projects; (Neo4j) re-read with no
+    // names → two Projects.
+    it('refuses at write time a near-duplicate another card wrote after this one was proposed', async () => {
+      const first = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'Osprey' }, 'workstream is called Osprey')],
+        'Our new workstream is called Osprey.',
+      )
+      const second = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'Project Osprey' }, 'started the Project Osprey')],
+        'We have started the Project Osprey workstream.',
+      )
+      const twin = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'OSPREY' }, 'workstream is called OSPREY')],
+        'Our new workstream is called OSPREY.',
+      )
+      expect(first.nodes[0].verdict).toBe('new')
+      expect(second.nodes[0].verdict).toBe('new')
+      expect((await h.store.apply(first, A)).status).toBe('applied')
+      expect((await h.store.apply(second, B)).status).toBe('stale')
+      expect((await h.store.apply(twin, B)).status).toBe('applied')
+      const projects = (await h.read()).nodes.filter((x) => x.label === 'Project')
+      expect(projects.map((x) => x.properties.name)).toEqual(['Osprey'])
+    })
+
     it('creates a new node with id, nameKey, createdBy and createdAt', async () => {
       const a = await prepare(h.store, heronDraft, HERON_MSG)
       const r = await h.store.apply(a, A)

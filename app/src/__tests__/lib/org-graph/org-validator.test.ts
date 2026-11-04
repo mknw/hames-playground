@@ -825,3 +825,147 @@ describe('the amended classes: Knowledge and Resource (LD-22)', () => {
     expect(schema).not.toMatch(/\bkey\b \((required|optional)\)/)
   })
 })
+
+// LD-24: the owner's "do not duplicate nodes", deterministically. A new node of a
+// name-keyed class is refused when its near key (nameKey plus accents,
+// punctuation and the class's own label word folded) equals a stored node's of
+// the SAME label, and the refusal names that node for the repair turn.
+// Mutations: skip the V11 check in checkAssertion → every "refuses" case
+// reddens; compare near keys across labels → the cross-label case reddens;
+// drop `existing` from the refusal → the naming assertion reddens.
+describe('V11: no near-duplicate of a stored node of the same label', () => {
+  const near = (r: ReturnType<typeof run>) => r.rejectedAssertions[0]?.existing
+
+  it("refuses 'Project Osprey' beside a stored 'Osprey', naming it", () => {
+    const msg = 'The Project Osprey review is due on 15 December.'
+    const r = run(
+      [node('p', 'Project', { name: 'Project Osprey' }, 'The Project Osprey')],
+      msg,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)).toEqual([{ label: 'Project', name: 'Osprey', key: 'k:osprey' }])
+  })
+
+  it("refuses 'Projet Ősprey' beside a stored 'Projet Osprey'", () => {
+    const snap = graph([['k:po', 'Project', { name: 'Projet Osprey' }]])
+    const msg = 'We renamed the work Projet Ősprey this week.'
+    const r = run(
+      [node('p', 'Project', { name: 'Projet Ősprey' }, 'the work Projet Ősprey')],
+      msg,
+      snap,
+    )
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)?.[0].name).toBe('Projet Osprey')
+  })
+
+  it('links a case or whitespace variant (one node by nameKey) and refuses a punctuation variant', () => {
+    const msg = 'The  OSPREY  status is paused; the Osprey. work waits.'
+    const linked = run(
+      [node('p', 'Project', { name: 'OSPREY', status: 'paused' }, 'OSPREY  status is paused')],
+      msg,
+      OSPREY,
+    )
+    expect(linked.rejected).toEqual({})
+    expect(linked.accepted[0].nodes[0].verdict).not.toBe('new')
+    expect(linked.accepted[0].nodes[0].existing?.key).toBe('k:osprey')
+    const dotted = run(
+      [node('p', 'Project', { name: 'Osprey.' }, 'the Osprey. work waits')],
+      msg,
+      OSPREY,
+    )
+    expect(dotted.rejected).toEqual({ V11: 1 })
+  })
+
+  it('admits a legitimately different name as new', () => {
+    const msg = 'Osprey Labs is a new workstream we started today.'
+    const r = run(
+      [node('p', 'Project', { name: 'Osprey Labs' }, 'Osprey Labs is a new workstream')],
+      msg,
+      OSPREY,
+    )
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+
+  it('treats the same name under another label as another node (per-label identity)', () => {
+    const msg = 'Osprey is also the name of our new theme.'
+    const r = run([node('t', 'Theme', { name: 'Osprey' }, 'Osprey is also the name')], msg, OSPREY)
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+})
+
+// Review of #994: the terms on V11's reach.
+describe('V11 inside one draft, on symbols, and on classes it never checks', () => {
+  // SHOULD 2. Mutation: drop the draft-twin check in checkAssertion → both
+  // cases admit two new Projects.
+  it('refuses a near-twin of another new node of the same draft, naming it', () => {
+    const msg = 'We started Osprey, also called Project Osprey in the plan.'
+    const one = run(
+      [
+        node('a', 'Project', { name: 'Osprey' }, 'We started Osprey'),
+        node('b', 'Project', { name: 'Project Osprey' }, 'called Project Osprey', 1),
+      ],
+      msg,
+    )
+    expect(one.accepted.map((a) => a.index)).toEqual([0])
+    expect(one.rejectedAssertions).toEqual([
+      {
+        index: 1,
+        rule: 'V11',
+        existing: [{ label: 'Project', name: 'Osprey', key: 'draft:a', inDraft: true }],
+      },
+    ])
+    // An exact twin (one nameKey) is still one new node, not a refusal.
+    const exact = run(
+      [
+        node('a', 'Project', { name: 'Osprey' }, 'We started Osprey'),
+        node('b', 'Project', { name: 'OSPREY' }, 'We started Osprey', 1),
+      ],
+      msg,
+    )
+    expect(exact.rejected).toEqual({})
+  })
+
+  // SHOULD 3. Mutations: fold every non-alphanumeric character → the C++ and
+  // emoji cases are refused; drop the empty-key guard → the dash case is.
+  it('keeps names that differ by a symbol, and never matches an empty key', () => {
+    const snap = graph([
+      ['k:c', 'Team', { name: 'C' }],
+      ['k:eagle', 'Team', { name: 'Launch 🦅' }],
+      ['k:dashes', 'Team', { name: '--' }],
+    ])
+    for (const [name, msg, evidence] of [
+      ['C++', 'Our new team C++ owns the compiler.', 'team C++ owns'],
+      ['C#', 'Our new team C# owns the runtime.', 'team C# owns'],
+      ['Launch 🚀', 'Our new team Launch 🚀 owns the launches.', 'team Launch 🚀 owns'],
+    ]) {
+      const r = run([node('t', 'Team', { name }, evidence)], msg, snap)
+      expect(r.rejected, name).toEqual({})
+      expect(r.accepted[0].nodes[0].verdict, name).toBe('new')
+    }
+    // A name of separators only has the empty near key: V11 does not apply,
+    // and the value rule (V4) is what refuses it.
+    const dash = run(
+      [node('t', 'Team', { name: '—' }, 'team — owns the')],
+      'Our new team — owns the gaps.',
+      snap,
+    )
+    expect(dash.rejected).toEqual({ V4: 1 })
+  })
+
+  // SHOULD 6. A class the hook may not create is never near-checked: an
+  // unmatched member is V1, as before V11. Mutation: check non-creatable
+  // classes again → V11.
+  it('refuses an unmatched member under V1, not V11', () => {
+    const snap = graph([['m:t', 'Member', { displayName: 'Tamsin Orrin' }]])
+    const r = run(
+      [node('m', 'Member', { displayName: 'Tamsin Orrin.' }, 'Tamsin Orrin. leads')],
+      'Tamsin Orrin. leads the theme now.',
+      snap,
+    )
+    expect(r.rejected).toEqual({ V1: 1 })
+  })
+})

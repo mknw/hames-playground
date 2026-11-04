@@ -3748,14 +3748,18 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   with `renderOrgSchema(ontology)` as its schema. That schema carries
   `ORG_NEAR_MATCH_RULE` (LD-23): a node is proposed as new only after a
   case-insensitive near-match search of its class finds nothing; a node it
-  finds is linked under its stored name. The validator refuses only exact-name
-  duplicates, so the search is what stops a name variant. Its `Return` answer is one
+  finds is linked under its stored name. The validator also refuses a
+  near-duplicate of a stored node of the same label (V11, `nearNameKey`,
+  LD-24), or of another new node of the same draft, and names it, so a repair
+  turn links to it. The store repeats the check inside the write's transaction
+  (`isStale`, via `StaleView.nodesOf` and `newNodeNames`), so two pending cards
+  cannot both create one node. Its `Return` answer is one
   JSON verdict: `{"verdict":"propose","assertions":[...]}` or
   `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
   answer stops with `no-proposal`; its reason stays in scratch context. The
   `validateReturn` callback strictly parses each candidate (assertions use
   `parseOrgDraft`, with scoped refs and one optional JSON fence), reads the
-  snapshot and runs V1–V10 inside the loop. Feedback identifies rejected
+  snapshot and runs V1–V11 inside the loop. Feedback identifies rejected
   assertions positionally (`a1: V4`) without copying their content; mixed
   candidates are labelled partly-valid. Any rejection becomes feedback for
   another round within the same `maxTurns` budget (default 4). No extra model
@@ -3763,7 +3767,7 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   proposes nothing; a graph-read failure stops immediately. A later transport
   failure reports draft-error, rather than an earlier validator refusal. The host routes its controller: in `@hames-ai/harness-baml`,
   `createLoopControllerAdapter(undefined, { role: 'orgDraft' })`.
-- **The validator** (`validateOrgDraft`, V1–V10) decides what survives; an
+- **The validator** (`validateOrgDraft`, V1–V11) decides what survives; an
   assertion that only reinforces is not proposed (`onlyReinforces`). A
   candidate with any rejected assertion is repaired or declined. A final
   explicit propose verdict requires a validator pass and at least one writing

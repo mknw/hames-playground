@@ -2,8 +2,10 @@
  * retriever Pattern Tests
  *
  * The retriever forms ONE query (compacted intent → last message → last-N
- * turns), fans it out to injected backends, merges hits closest-first capped at
- * k, sets `scope.data.matches`, and emits a `tool_result` for the compactExecution.
+ * turns), fans it out to injected backends, and merges the hits capped at k —
+ * distance-only closest-first with ONE backend, reciprocal-rank fusion with
+ * more than one (see the multi-backend test below) — sets `scope.data.matches`,
+ * and emits a `tool_result` for the compactExecution.
  * Backends are mocked — this is the framework-pure pattern, no app deps.
  */
 
@@ -245,7 +247,14 @@ describe('retriever', () => {
     expect(warnings[0].data).toMatchObject({ task: 'query_rewrite', error: 'describe model down' })
   })
 
-  it('fans out to all backends and merges closest-first, capped at k', async () => {
+  // #928 slice 1: with more than one backend configured the merge is
+  // reciprocal-rank fusion (RRF_K = 60), NOT the distance-only sort — ranks
+  // need no cross-backend score comparability. Rank arithmetic (k = 60):
+  //   r1 rank 1 in redis,  s1 rank 1 in supabase → both 1/(60+1) = 1/61 (tie;
+  //   stable sort keeps backend list order, so r1 precedes s1)
+  //   r2 rank 2 in redis,  s2 rank 2 in supabase → both 1/(60+2) = 1/62
+  // So the fused order is r1, s1, r2, s2 — capped at k=3.
+  it('fans out to all backends and merges by rank fusion, capped at k', async () => {
     const redis = mockBackend('redis', [hit('redis', 'r1', 0.5), hit('redis', 'r2', 0.2)])
     const supa = mockBackend('supabase', [hit('supabase', 's1', 0.1), hit('supabase', 's2', 0.9)])
     const { result } = await run({ intent: 'q' }, [userMsg('q')], {
@@ -254,9 +263,22 @@ describe('retriever', () => {
     })
     const matches = (result.data as { matches: RetrievalHit[] }).matches
     expect(matches).toHaveLength(3) // capped at k=3 (4 hits available)
-    expect(matches.map((m) => m.id)).toEqual(['s1', 'r2', 'r1']) // 0.1 < 0.2 < 0.5
+    // 1/61 + 1/61 tie in backend list order, then 1/62 + 1/62 (capped)
+    expect(matches.map((m) => m.id)).toEqual(['r1', 's1', 'r2'])
+    // On the fused path each hit's score IS its RRF score, not its distance.
+    expect(matches[0].score).toBeCloseTo(1 / 61)
     expect(redis.calls[0].k).toBe(3)
     expect(supa.calls[0].k).toBe(3)
+  })
+
+  it('keeps the distance-only closest-first sort with a single backend', async () => {
+    const b = mockBackend('redis', [hit('redis', 'near', 0.1), hit('redis', 'far', 0.9)])
+    const { result } = await run({ intent: 'q' }, [userMsg('q')], {
+      backends: [b],
+      k: 3,
+    })
+    const matches = (result.data as { matches: RetrievalHit[] }).matches
+    expect(matches.map((m) => m.id)).toEqual(['near', 'far']) // 0.1 < 0.9
   })
 
   it('sorts hits without a score last', async () => {

@@ -689,6 +689,44 @@ describe('simpleLoop execution', () => {
     expect(result.events.filter((e) => e.type === 'error')).toEqual([])
   })
 
+  // #984 review: a tool's own failure text rides `error` since #440, so the
+  // turn log bounds it like `result`. MUTATION: drop the `truncateTo` on the
+  // single-call `error` → the 5000-char body reaches the controller whole.
+  it('bounds a failed call’s error text in the turn log by maxResultChars', async () => {
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { createScope } = await import('@hames-ai/harness-patterns/context.server')
+    const { createEventView } = await import('@hames-ai/harness-patterns/patterns')
+    const { DEFAULT_SETTINGS } = await import('../../../../lib/settings')
+
+    const body = 'E'.repeat(5000)
+    callToolMock.mockResolvedValueOnce({ success: false, data: null, error: body })
+    const mockController = vi
+      .fn()
+      .mockResolvedValueOnce({
+        action: mockAction({ tool_name: 'read_neo4j_cypher', tool_args: '{"query":"q"}' }),
+        llmCall: undefined,
+      })
+      .mockResolvedValueOnce({ action: mockFinalAction('done'), llmCall: undefined })
+
+    const pattern = simpleLoop(mockController, ['read_neo4j_cypher'], { patternId: 'test' })
+    await withRunFrame({ config: { ...DEFAULT_SETTINGS, maxResultChars: 600 } }, () =>
+      pattern.fn(
+        createScope('test', {}),
+        createEventView({
+          sessionId: 'test',
+          createdAt: Date.now(),
+          events: [],
+          status: 'running' as const,
+          data: {},
+          input: 'test',
+        }),
+      ),
+    )
+
+    const secondTurns = (mockController.mock.calls[1][0] as ControllerInput).turns
+    expect(secondTurns[0].tool_result?.error).toBe(`${'E'.repeat(600)}…[truncated]`)
+  })
+
   it('a failure on the last round leaves the budget marker, not a tool error', async () => {
     const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
     const { createScope } = await import('@hames-ai/harness-patterns/context.server')

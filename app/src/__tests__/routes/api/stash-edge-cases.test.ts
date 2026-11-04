@@ -276,8 +276,10 @@ describe('GET /api/stash/search', () => {
 
   // #707: a non-numeric k used to be ignored (the search ran on the default).
   // MUTATION: drop the `!Number.isFinite(kNum)` 400 in search.ts → red.
+  // MUTATION (#984 review NIT): drop the `kRaw.trim() === ''` check → `%20`
+  // becomes 0, clamps to 1 and answers 200.
   it('400s a non-numeric k and runs no search', async () => {
-    for (const k of ['lots', 'Infinity', 'NaN']) {
+    for (const k of ['lots', 'Infinity', 'NaN', '%20', '%20%20']) {
       const res = await search.GET(evt(new Request(`http://x/s?sessionId=s1&q=hi&k=${k}`)))
       expect(res.status).toBe(400)
     }
@@ -304,9 +306,14 @@ describe('GET /api/stash/search', () => {
     }
   })
 
-  it('leaves k to the library default when absent', async () => {
-    await search.GET(evt(new Request('http://x/s?sessionId=s1&q=hi')))
-    expect(searchDocuments).toHaveBeenCalledWith('s1', 'hi', { k: undefined })
+  // MUTATION: treat an empty `k=` as non-numeric → the second request 400s.
+  it('leaves k to the library default when absent or empty', async () => {
+    for (const query of ['sessionId=s1&q=hi', 'sessionId=s1&q=hi&k=']) {
+      searchDocuments.mockClear()
+      const res = await search.GET(evt(new Request(`http://x/s?${query}`)))
+      expect(res.status).toBe(200)
+      expect(searchDocuments).toHaveBeenCalledWith('s1', 'hi', { k: undefined })
+    }
   })
 
   it('500s with the backend’s reason when the embedding server is unreachable', async () => {

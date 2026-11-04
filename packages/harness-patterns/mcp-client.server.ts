@@ -572,13 +572,22 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
     // MCP's own failure flag (#440). A server that sets `isError` is reporting
     // a failed call whatever its text says, so it lands on the `error` channel
     // — the one every pattern records as a tool error and the guard above
-    // sanitizes — and never on `data`. The prefix heuristic below stays for
-    // servers that report a failure as plain text without the flag.
+    // sanitizes. This branch leaves `data` null: on a failure `applyGuard`
+    // sanitizes `error` only. (The in-VM sandbox transport also keeps a
+    // failure's payload on `data`, for its own plumbing.) A text-less failure
+    // falls back to its structured content, rendered as JSON. The prefix
+    // heuristic below stays for servers that report a failure as plain text
+    // without the flag.
     if (result.isError === true) {
+      const text = textItems.map((t) => t.text).join('\n')
       return {
         success: false,
         data: null,
-        error: textItems.map((t) => t.text).join('\n') || 'Tool reported an error with no message',
+        error:
+          text ||
+          (result.structuredContent !== undefined
+            ? JSON.stringify(result.structuredContent)
+            : 'Tool reported an error with no message'),
       }
     }
 

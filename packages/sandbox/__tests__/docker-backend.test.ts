@@ -350,7 +350,10 @@ describe('DockerBackend.connectMcp', () => {
     await transport.close()
   })
 
-  it('reports isError results as failures without losing the payload', async () => {
+  // #440 / #984 review: a failure's text rides the `error` channel, the one
+  // the turn log renders. MUTATION: drop `error` from the isError return →
+  // both cases below go red.
+  it('reports isError results as failures, text on error, without losing the payload', async () => {
     spawnPlan = () => ({ stdout: 'cid', code: 0 })
     callToolPlan = () => ({ content: [{ type: 'text', text: 'no such file' }], isError: true })
     const backend = await makeBackend()
@@ -359,6 +362,27 @@ describe('DockerBackend.connectMcp', () => {
     await expect(transport.callTool('sandbox_read', {})).resolves.toEqual({
       success: false,
       data: 'no such file',
+      error: 'no such file',
+    })
+    await transport.close()
+  })
+
+  // The in-VM shell's non-zero exit: `data` keeps the parsed result because
+  // work-sync's `bash()` reads `exit_code` from it.
+  it('keeps a failed shell call’s parsed result on data and its text on error', async () => {
+    spawnPlan = () => ({ stdout: 'cid', code: 0 })
+    const shell = { stdout: '', stderr: 'boom', exit_code: 2, timed_out: false }
+    callToolPlan = () => ({
+      content: [{ type: 'text', text: JSON.stringify(shell) }],
+      isError: true,
+    })
+    const backend = await makeBackend()
+    const transport = await backend.connectMcp(await backend.boot('base', {}))
+
+    await expect(transport.callTool('sandbox_bash', { command: 'false' })).resolves.toEqual({
+      success: false,
+      data: shell,
+      error: JSON.stringify(shell),
     })
     await transport.close()
   })

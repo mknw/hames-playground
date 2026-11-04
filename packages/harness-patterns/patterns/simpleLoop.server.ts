@@ -497,7 +497,9 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
         tool: action.tool_name,
         result: truncateTo(JSON.stringify(combined), p.maxResultChars),
         success: anySucceeded,
-        error: anySucceeded ? null : errors.join('; '),
+        // Bounded like the result: a tool's own failure text rides here (#440),
+        // and an unbounded one would fill every later controller prompt.
+        error: anySucceeded ? null : truncateTo(errors.join('; '), p.maxResultChars),
       },
       ...(expansions.length > 0 ? { expansions } : {}),
     }
@@ -516,7 +518,7 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
       tool: action.tool_name,
       result: truncateTo(resultStr, p.maxResultChars),
       success: result?.success ?? false,
-      error: result?.error ?? null,
+      error: result?.error == null ? null : truncateTo(result.error, p.maxResultChars),
     },
     ...(expansions.length > 0 ? { expansions } : {}),
   }

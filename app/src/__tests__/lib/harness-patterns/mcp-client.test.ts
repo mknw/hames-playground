@@ -346,14 +346,31 @@ describe('mcp-client', () => {
       })
     })
 
-    it('names an isError result that carries no text', async () => {
-      mockCallTool.mockResolvedValue({ content: [], structuredContent: { x: 1 }, isError: true })
+    // #984 review NIT: a text-less failure keeps its structured content as the
+    // message. MUTATION: drop the `structuredContent` fallback → the first goes
+    // red (the generic message instead of the JSON).
+    it('renders a text-less isError result’s structuredContent as its error', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [],
+        structuredContent: { code: 'E_LOCKED', path: '/data/x' },
+        isError: true,
+      })
 
       const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
 
-      const result = await callTool('some_tool', {})
+      expect(await callTool('some_tool', {})).toEqual({
+        success: false,
+        data: null,
+        error: '{"code":"E_LOCKED","path":"/data/x"}',
+      })
+    })
 
-      expect(result).toEqual({
+    it('names an isError result that carries neither text nor structured content', async () => {
+      mockCallTool.mockResolvedValue({ content: [], isError: true })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      expect(await callTool('some_tool', {})).toEqual({
         success: false,
         data: null,
         error: 'Tool reported an error with no message',

@@ -8,15 +8,19 @@
  *   pnpm dlx tsx scripts/lennys-data-sign-in.ts      # from app/
  *
  * It registers a public OAuth client (dynamic registration, PKCE), prints a
- * sign-in URL, waits on a loopback callback, and prints two lines to put in the
- * SERVER environment (`app/.env`, or the repo-root `.env` in production):
+ * sign-in URL and waits on a loopback callback. It then refreshes ONCE, the way
+ * the app will, and reports only whether the refresh token changed — if it did,
+ * the server rotates refresh tokens, and the env copy goes stale on the app's
+ * first refresh, so a restart would need a fresh sign-in. It prints three lines
+ * for the SERVER environment (`app/.env`, or the repo-root `.env` in production),
+ * the refresh token being the one it holds AFTER that refresh:
  *
  *   LENNYS_DATA_MCP_CLIENT_ID=...
  *   LENNYS_DATA_MCP_REFRESH_TOKEN=...
+ *   LENNYS_DATA_MCP_TOOLS=...       # the tool names, to pin; review before use
  *
- * Both are secrets. The script writes nothing to disk. Then, as a check that
- * sends no query, it lists the server's tool names — the names the app will
- * expose with the `lennys_` prefix.
+ * The first two are secrets. The script writes nothing to disk, and the tool
+ * listing sends no query.
  */
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
@@ -102,23 +106,37 @@ async function main(): Promise<void> {
   if (!client || !tokens?.refresh_token) {
     throw new Error('the server issued no refresh token; the app cannot keep a session')
   }
-  console.log('Add these to the server environment (secrets; never commit them):\n')
-  console.log(`LENNYS_DATA_MCP_CLIENT_ID=${client.client_id}`)
-  console.log(`LENNYS_DATA_MCP_REFRESH_TOKEN=${tokens.refresh_token}`)
-  console.log(
-    `\nAccess token lifetime: ${tokens.expires_in ?? 'not stated'} s; scope: ${tokens.scope ?? 'not stated'}`,
-  )
+  // One refresh, exactly as the app does it (auth() with a refresh token and no
+  // code). Only the boolean is reported; the values are never compared in print.
+  const before = tokens.refresh_token
+  if ((await auth(provider, { serverUrl: SERVER_URL })) !== 'AUTHORIZED') {
+    throw new Error('the refresh was refused')
+  }
+  const after = tokens.refresh_token
+  if (!after) throw new Error('the refresh returned no refresh token')
+  const rotated = after !== before
 
   const mcp = new Client({ name: 'hames-lennys-data-sign-in', version: '1.0.0' })
   await mcp.connect(
-    new StreamableHTTPClientTransport(new URL(SERVER_URL), { authProvider: provider }),
+    new StreamableHTTPClientTransport(new URL(SERVER_URL), {
+      requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
+    }),
   )
+  let names: string[]
   try {
-    const { tools } = await mcp.listTools()
-    console.log(`\nTools offered (${tools.length}): ${tools.map((t) => t.name).join(', ')}`)
+    names = (await mcp.listTools()).tools.map((t) => t.name)
   } finally {
     await mcp.close()
   }
+
+  console.log(`Refresh token rotated on refresh: ${rotated}`)
+  console.log(
+    `Access token lifetime: ${tokens.expires_in ?? 'not stated'} s; scope: ${tokens.scope ?? 'not stated'}`,
+  )
+  console.log('\nAdd these to the server environment (secrets; never commit them):\n')
+  console.log(`LENNYS_DATA_MCP_CLIENT_ID=${client.client_id}`)
+  console.log(`LENNYS_DATA_MCP_REFRESH_TOKEN=${after}`)
+  console.log(`LENNYS_DATA_MCP_TOOLS=${names.join(',')}`)
 }
 
 main().then(

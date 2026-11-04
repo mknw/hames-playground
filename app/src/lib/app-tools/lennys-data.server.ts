@@ -11,15 +11,24 @@
  * Auth is OAuth 2.1 with a public client (dynamic registration, PKCE). The app
  * cannot sign in by itself — sign-in is an email link — so the operator signs in
  * once with `scripts/lennys-data-sign-in.ts` and puts the client id and refresh
- * token it prints into the server environment. This module holds the access
- * token in memory only and lets the MCP SDK refresh it on a 401. When the
- * refresh is refused, the call fails with a fixed message naming the sign-in
- * script; it never starts an interactive flow and never logs SDK detail.
+ * token it prints into the server environment. The access token lives in memory
+ * only. ONE refresh is in flight at a time, shared by every concurrent call
+ * (`createTokenManager`): two calls that each refreshed with the same refresh
+ * token would, on a server that rotates refresh tokens, revoke the family or
+ * keep a superseded token. The SDK transport is therefore given a bearer header,
+ * never an auth provider of its own. When the refresh is refused, the call fails
+ * with a fixed message naming the sign-in script; nothing starts an interactive
+ * flow or logs SDK detail. A rotated refresh token is kept in memory and logged
+ * once, without its value, because the env copy is then stale.
  *
  * Remote tool names are exposed with `LENNYS_TOOL_PREFIX`, and the prefix is
  * stripped again on the way out: an unprefixed remote name such as `search`
  * would otherwise take over the gateway's tool of the same name, because a
  * process transport is consulted before the gateway (`tool-transport.server.ts`).
+ * Only the names the operator pinned in `LENNYS_DATA_MCP_TOOLS` (as the sign-in
+ * script printed them) are ever offered, so the server cannot add or rename a
+ * tool into the prompt. What the server says about a tool is not used verbatim:
+ * the description is a fixed line, and the input schema keeps only its structure.
  *
  * Per-user gate (owner ruling, 2026-11-04: personal use by the subscriber only).
  * Besides the switch, the signed-in user's verified email (the Entra claim the
@@ -34,11 +43,13 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import {
+  auth,
   UnauthorizedError,
   type OAuthClientProvider,
 } from '@modelcontextprotocol/sdk/client/auth.js'
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
 import { ErrorCode } from '@modelcontextprotocol/sdk/types.js'
+import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
 import { LENNYS_NAMESPACE, LENNYS_TOOL_PREFIX } from '@hames-ai/connectors/mcp-catalog'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
@@ -61,7 +72,7 @@ export const LENNYS_FAILURES = {
   unavailable: "Lenny's Data request unavailable",
 } as const
 
-function classifyFailure(err: unknown): string {
+export function classifyFailure(err: unknown): string {
   // A refused refresh surfaces as an OAuthError subclass (invalid_grant…).
   if (
     err instanceof UnauthorizedError ||
@@ -70,10 +81,7 @@ function classifyFailure(err: unknown): string {
   ) {
     return LENNYS_FAILURES.signIn
   }
-  const code =
-    typeof err === 'object' && err !== null && 'code' in err
-      ? (err as { code: unknown }).code
-      : undefined
+  const code = errorCode(err)
   if (code === 401 || code === 403) return LENNYS_FAILURES.signIn
   if (code === ErrorCode.RequestTimeout) return LENNYS_FAILURES.timeout
   if (code === 429) return LENNYS_FAILURES.rateLimit
@@ -82,19 +90,33 @@ function classifyFailure(err: unknown): string {
 
 class SignInRequired extends Error {}
 
+/** The numeric `code` the SDK's errors carry (McpError, StreamableHTTPError). */
+function errorCode(err: unknown): unknown {
+  return typeof err === 'object' && err !== null && 'code' in err
+    ? (err as { code: unknown }).code
+    : undefined
+}
+
 export interface LennysDataConfig {
   readonly clientId: string
   readonly refreshToken: string
   /** Normalised (trimmed, lower-cased) emails; never empty. */
   readonly users: ReadonlySet<string>
+  /** Remote tool names (unprefixed) the operator pinned; never empty. */
+  readonly tools: ReadonlySet<string>
 }
 
 const normaliseEmail = (email: string): string => email.trim().toLowerCase()
+const list = (value: string | undefined): string[] =>
+  (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
 
 /** The developer switch. Default OFF: nothing is discovered or sent unless the
  *  operator turns it on. `on` without both credentials, or any other value,
  *  refuses boot rather than offering a tool that fails every call. `on` with no
- *  listed user is off for everyone, with a boot warning. */
+ *  listed user or no pinned tool is off for everyone, with a boot warning. */
 export function lennysDataConfig(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): LennysDataConfig | null {
@@ -109,14 +131,17 @@ export function lennysDataConfig(
         '(run scripts/lennys-data-sign-in.ts)',
     )
   }
-  const users = new Set(
-    (env.LENNYS_DATA_MCP_USERS ?? '').split(',').map(normaliseEmail).filter(Boolean),
-  )
+  const users = new Set(list(env.LENNYS_DATA_MCP_USERS).map(normaliseEmail))
   if (!users.size) {
     console.warn("[lennys-data] LENNYS_DATA_MCP_USERS is empty; Lenny's Data is off for every user")
     return null
   }
-  return { clientId, refreshToken, users }
+  const tools = new Set(list(env.LENNYS_DATA_MCP_TOOLS))
+  if (!tools.size) {
+    console.warn("[lennys-data] LENNYS_DATA_MCP_TOOLS is empty; Lenny's Data offers no tool")
+    return null
+  }
+  return { clientId, refreshToken, users, tools }
 }
 
 /** The request user's verified email, or null outside a request or for a user
@@ -127,10 +152,13 @@ async function requestUserEmail(): Promise<string | null> {
   return (await getUser(id))?.email ?? null
 }
 
-/** A non-interactive OAuth provider over the operator's env credentials. The
- *  access token starts empty, so the first request's 401 is what fetches one;
- *  a rotated refresh token is kept for the life of the process. */
-export function envAuthProvider(config: LennysDataConfig): OAuthClientProvider {
+/** A non-interactive OAuth provider over the operator's env credentials, for
+ *  the SDK's `auth()` refresh. The access token starts empty; a rotated refresh
+ *  token is kept for the life of the process and reported once via `onRotate`. */
+export function envAuthProvider(
+  config: Pick<LennysDataConfig, 'clientId' | 'refreshToken'>,
+  onRotate: () => void = () => {},
+): OAuthClientProvider {
   let tokens: OAuthTokens = {
     access_token: '',
     token_type: 'Bearer',
@@ -152,6 +180,7 @@ export function envAuthProvider(config: LennysDataConfig): OAuthClientProvider {
     clientInformation: () => ({ client_id: config.clientId }),
     tokens: () => tokens,
     saveTokens: (next) => {
+      if (next.refresh_token && next.refresh_token !== tokens.refresh_token) onRotate()
       tokens = { ...next, refresh_token: next.refresh_token ?? tokens.refresh_token }
     },
     redirectToAuthorization: () => {
@@ -164,11 +193,107 @@ export function envAuthProvider(config: LennysDataConfig): OAuthClientProvider {
   }
 }
 
+/** Refresh slack: a token this close to its stated expiry is refreshed first. */
+const EXPIRY_SLACK_MS = 60_000
+
+export interface TokenManager {
+  /** A usable access token, refreshing when there is none or it is expiring.
+   *  Concurrent callers share ONE in-flight refresh. */
+  accessToken(): Promise<string>
+  /** Drop `stale` after the server refused it, unless a newer token already
+   *  replaced it (a concurrent call refreshed first). */
+  invalidate(stale: string): void
+}
+
+export function createTokenManager(
+  config: Pick<LennysDataConfig, 'clientId' | 'refreshToken'>,
+  fetchFn?: FetchLike,
+): TokenManager {
+  let rotationLogged = false
+  const provider = envAuthProvider(config, () => {
+    if (rotationLogged) return
+    rotationLogged = true
+    console.warn(
+      '[lennys-data] the refresh token rotated; the env value is now stale, so a restart needs a fresh sign-in',
+    )
+  })
+  let access = ''
+  let expiresAt = Infinity
+  let inFlight: Promise<string> | null = null
+
+  function refresh(): Promise<string> {
+    inFlight ??= (async () => {
+      const result = await auth(provider, { serverUrl: LENNYS_MCP_URL, fetchFn })
+      if (result !== 'AUTHORIZED') throw new SignInRequired()
+      const tokens = await provider.tokens()
+      if (!tokens?.access_token) throw new SignInRequired()
+      access = tokens.access_token
+      expiresAt =
+        typeof tokens.expires_in === 'number' ? Date.now() + tokens.expires_in * 1000 : Infinity
+      return access
+    })().finally(() => {
+      inFlight = null
+    })
+    return inFlight
+  }
+
+  return {
+    accessToken: () => {
+      if (inFlight) return inFlight
+      if (access && Date.now() < expiresAt - EXPIRY_SLACK_MS) return Promise.resolve(access)
+      return refresh()
+    },
+    invalidate: (stale) => {
+      if (access === stale) access = ''
+    },
+  }
+}
+
+/** JSON-schema keywords kept from a server-supplied input schema. Free-text
+ *  keywords (description, title, examples, default, …) are dropped: they are
+ *  model-visible and the injection guard never reads them. */
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+const SCHEMA_TYPES = new Set(['object', 'string', 'number', 'integer', 'boolean', 'array'])
+
+export function structuralSchema(schema: unknown, depth = 0): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (typeof schema !== 'object' || schema === null || depth > 3) return out
+  const src = schema as Record<string, unknown>
+  if (typeof src.type === 'string' && SCHEMA_TYPES.has(src.type)) out.type = src.type
+  if (Array.isArray(src.enum)) {
+    const values = src.enum.filter(
+      (v) => typeof v === 'number' || (typeof v === 'string' && IDENTIFIER.test(v)),
+    )
+    if (values.length) out.enum = values
+  }
+  if (src.items !== undefined) out.items = structuralSchema(src.items, depth + 1)
+  if (typeof src.properties === 'object' && src.properties !== null) {
+    const properties: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(src.properties)) {
+      if (IDENTIFIER.test(key)) properties[key] = structuralSchema(value, depth + 1)
+    }
+    out.properties = properties
+    if (Array.isArray(src.required)) {
+      out.required = src.required.filter(
+        (k): k is string => typeof k === 'string' && k in properties,
+      )
+    }
+  }
+  return out
+}
+
+const fixedDescription = (remote: string): string =>
+  `Lenny's Data archive tool "${remote}": a third-party product-management newsletter and podcast archive. Arguments follow the schema.`
+
+/** How long a failed discovery waits before the next attempt. */
+const DISCOVERY_RETRY_MS = 30_000
+
 export function createLennysDataTransport(
   config: LennysDataConfig | null = lennysDataConfig(),
   userEmail: () => Promise<string | null> = requestUserEmail,
+  fetchFn?: FetchLike,
 ): ToolTransport {
-  const auth = config ? envAuthProvider(config) : null
+  const tokens = config ? createTokenManager(config, fetchFn) : null
   /** Fail closed: no config, no user, an unlisted email or a failed lookup. */
   async function userAllowed(): Promise<boolean> {
     if (!config) return false
@@ -179,51 +304,82 @@ export function createLennysDataTransport(
       return false
     }
   }
-  // Prefixed names this process discovered; empty until discovery succeeds.
-  const discovered = new Set<string>()
-  const owns = (name: string): boolean => auth !== null && name.startsWith(LENNYS_TOOL_PREFIX)
+  const pinned = (name: string): boolean =>
+    config !== null &&
+    name.startsWith(LENNYS_TOOL_PREFIX) &&
+    config.tools.has(name.slice(LENNYS_TOOL_PREFIX.length))
 
   async function withClient<T>(run: (client: Client) => Promise<T>): Promise<T> {
-    const client = new Client({ name: 'hames-lennys-data', version: '1.0.0' })
-    try {
-      await client.connect(
-        new StreamableHTTPClientTransport(new URL(LENNYS_MCP_URL), { authProvider: auth! }),
-      )
-      return await run(client)
-    } finally {
+    for (let attempt = 0; ; attempt++) {
+      const token = await tokens!.accessToken()
+      const client = new Client({ name: 'hames-lennys-data', version: '1.0.0' })
       try {
-        await client.close()
-      } catch {
-        // Best effort after a failed request; never expose SDK error details.
+        await client.connect(
+          new StreamableHTTPClientTransport(new URL(LENNYS_MCP_URL), {
+            requestInit: { headers: { Authorization: `Bearer ${token}` } },
+            ...(fetchFn ? { fetch: fetchFn } : {}),
+          }),
+        )
+        return await run(client)
+      } catch (err) {
+        // One retry after the server refused the token (revoked or clock skew);
+        // the retry goes through the same shared refresh.
+        if (attempt === 0 && errorCode(err) === 401) {
+          tokens!.invalidate(token)
+          continue
+        }
+        throw err
+      } finally {
+        try {
+          await client.close()
+        } catch {
+          // Best effort after a failed request; never expose SDK error details.
+        }
       }
+    }
+  }
+
+  // The sanitised listing, kept once discovery succeeds (the pinned names and
+  // structural schemas do not depend on who asks), so a re-read is cheap.
+  let listing: MCPToolDescription[] | null = null
+  let lastFailure = -Infinity
+  async function discover(): Promise<MCPToolDescription[]> {
+    if (listing) return listing
+    if (Date.now() - lastFailure < DISCOVERY_RETRY_MS) {
+      throw new Error(`Lenny's Data tool discovery failed: ${LENNYS_FAILURES.unavailable}`)
+    }
+    try {
+      const { tools } = await withClient((client) => client.listTools())
+      listing = tools
+        .filter((tool) => config!.tools.has(tool.name))
+        .map((tool) => ({
+          name: `${LENNYS_TOOL_PREFIX}${tool.name}`,
+          description: fixedDescription(tool.name),
+          inputSchema: structuralSchema(tool.inputSchema),
+        }))
+      for (const name of config!.tools) {
+        if (!tools.some((tool) => tool.name === name)) {
+          console.warn(`[lennys-data] pinned tool ${name} is absent from the server's listing`)
+        }
+      }
+      return listing
+    } catch (err) {
+      lastFailure = Date.now()
+      // The shared catalog logs the transport id. Name the cause, never the SDK text.
+      throw new Error(`Lenny's Data tool discovery failed: ${classifyFailure(err)}`)
     }
   }
 
   return {
     id: 'lennys-data-hosted',
-    ownsTool: owns,
-    namespaceFor: (name) => (owns(name) ? LENNYS_NAMESPACE : undefined),
+    ownsTool: pinned,
+    namespaceFor: (name) => (pinned(name) ? LENNYS_NAMESPACE : undefined),
     listTools: async (): Promise<MCPToolDescription[]> => {
-      if (!auth || !(await userAllowed())) return []
-      try {
-        const { tools } = await withClient((client) => client.listTools())
-        discovered.clear()
-        return tools.map((tool) => {
-          const name = `${LENNYS_TOOL_PREFIX}${tool.name}`
-          discovered.add(name)
-          return {
-            name,
-            description: `Lenny's Data (third-party product-management archive): ${tool.description ?? ''}`,
-            inputSchema: tool.inputSchema,
-          }
-        })
-      } catch (err) {
-        // The shared catalog logs the transport id. Name the cause, never the SDK text.
-        throw new Error(`Lenny's Data tool discovery failed: ${classifyFailure(err)}`)
-      }
+      if (!config || !(await userAllowed())) return []
+      return discover()
     },
     callTool: async (name, args): Promise<ToolCallResult> => {
-      if (!auth || !discovered.has(name) || !(await userAllowed())) {
+      if (!pinned(name) || !(await userAllowed())) {
         return { success: false, data: null, error: "Lenny's Data tool unavailable" }
       }
       try {

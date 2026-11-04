@@ -67,22 +67,31 @@ put the key in `configs/mcp-config.yaml` or the Docker catalog snapshot.
 Lenny's Data (a third-party product-management newsletter and podcast archive)
 is a second app-side process transport, `app/src/lib/app-tools/lennys-data.server.ts`,
 reaching `https://mcp.lennysdata.com/mcp` over streamable HTTP. It is **off**
-unless `LENNYS_DATA_MCP=on`. Its tools are discovered at boot and exposed with a
-`lennys_` prefix in the `lennys` namespace, so a remote name such as `search`
-can never take over a gateway tool. Auth is OAuth 2.1 with a public client and an
-emailed sign-in link, which the server cannot follow, so the operator signs in
-once with `scripts/lennys-data-sign-in.ts` (from `app/`) and sets
-`LENNYS_DATA_MCP_CLIENT_ID` and `LENNYS_DATA_MCP_REFRESH_TOKEN` in the server
-environment; the access token lives in memory and is refreshed on a 401. What
-leaves the box is each call's arguments, i.e. the model-written query text. The
-egress gate treats every call as outgoing and gives it web search's default
-detector pair; results are fenced and screened as external content. The
-provider's terms limit access to personal, non-commercial use, so a second
-gate sits under the switch: only users whose verified email (the Entra claim
-the sign-in allow-list checks) is on `LENNYS_DATA_MCP_USERS` are offered the
-tools, matched exactly and case-insensitively, never by display name. The check
-runs per request, at discovery and at call time, and a routine is checked as
-its owning user. An empty or unset list is off for everyone.
+unless `LENNYS_DATA_MCP=on`. Nothing is discovered at boot, because no user is
+in scope there: the tools are listed when a listed user's conversation builds
+its tool set, in that user's scope. Only the names pinned in
+`LENNYS_DATA_MCP_TOOLS` are offered, each with a `lennys_` prefix in the
+`lennys` namespace, so a remote name such as `search` can never take over a
+gateway tool and the server cannot add or rename one. The model sees a fixed
+description and the structure of the server's input schema, never the server's
+own wording. Auth is OAuth 2.1 with a public client and an emailed sign-in link,
+which the server cannot follow, so the operator signs in once with
+`scripts/lennys-data-sign-in.ts` (from `app/`) and sets
+`LENNYS_DATA_MCP_CLIENT_ID`, `LENNYS_DATA_MCP_REFRESH_TOKEN` and
+`LENNYS_DATA_MCP_TOOLS` from what it prints. The access token lives in memory;
+one refresh is in flight at a time, shared by concurrent calls. The script also
+reports whether a refresh rotates the refresh token. If it does, the env copy is
+stale after the app's first refresh, so a restart needs a fresh sign-in; the app
+logs the rotation once, without the value. What leaves the box is each call's
+arguments, i.e. the model-written query text. The egress gate treats every call
+as outgoing and gives it web search's default detector pair; results are fenced
+and screened as external content. The provider's terms limit access to
+personal, non-commercial use, so a second gate sits under the switch: only users
+whose verified email (the Entra claim the sign-in allow-list checks) is on
+`LENNYS_DATA_MCP_USERS` are offered the tools, matched exactly and
+case-insensitively, never by display name. The check runs per request, at
+discovery and at call time, and a routine is checked as its owning user. An
+empty or unset list, or no pinned tool, is off for everyone.
 
 | Server                | Title           | Tools                                                                     | Auth                 | Backend                      |
 | --------------------- | --------------- | ------------------------------------------------------------------------- | -------------------- | ---------------------------- |

@@ -464,6 +464,48 @@ describe('createPlannerAdapter', () => {
     invalidateToolDescriptions()
   })
 
+  // PR #986 review, MUST 1. A process transport whose listing depends on the
+  // request scope (a per-user gated one) must not lose its descriptions for the
+  // whole process because another user's turn filled the shared cache first.
+  // MUTATION: drop the miss re-read in filterToolDescriptions (the holder is
+  // shown nothing), or drop its `ownsTool` condition (a scoped-only name such
+  // as a sandbox tool then re-reads, and the listTools count goes up).
+  it('re-reads the cache for a process-owned tool the first fill lacked, in the holder’s scope', async () => {
+    const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
+    const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    const { createPlannerAdapter, invalidateToolDescriptions } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const unregister = registerTransport({
+      id: 'scope-dependent',
+      ownsTool: (name) => name === 'gated_search',
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    })
+    try {
+      invalidateToolDescriptions()
+      // First fill, in a scope the gated transport does not serve.
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      // The holder's scope: the gated transport now lists its tool.
+      mockCatalog.names = [...MOCK_CATALOG_DEFAULT, 'gated_search']
+      await createPlannerAdapter(['read_neo4j_cypher', 'gated_search'])('msg', 'intent')
+      expect(
+        (mockPlanner.mock.calls.at(-1)![2] as Array<{ name: string }>).map((t) => t.name),
+        'the holder was shown the first fill, without its own tool',
+      ).toEqual(['read_neo4j_cypher', 'gated_search'])
+
+      // A name no process transport owns never re-reads.
+      invalidateToolDescriptions()
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      const reads = vi.mocked(listTools).mock.calls.length
+      await createPlannerAdapter(['read_neo4j_cypher', 'sandbox_bash'])('msg', 'intent')
+      expect(vi.mocked(listTools).mock.calls.length).toBe(reads)
+    } finally {
+      unregister()
+      mockCatalog.names = [...MOCK_CATALOG_DEFAULT]
+      invalidateToolDescriptions()
+    }
+  })
+
   it('propagates a non-recoverable failure as an LLMCallError', async () => {
     const { createPlannerAdapter, LLMCallError } =
       await import('@hames-ai/harness-baml/baml-adapters.server')

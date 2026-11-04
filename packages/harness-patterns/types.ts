@@ -1026,6 +1026,10 @@ export interface PatternCapabilities {
    *  host gates the memory wake and the post-reply store on — so an agent that
    *  never opted in never wakes the memory boxes. */
   memory?: true
+  /** This harness opted into the organizational-knowledge hook
+   *  (`withOrgKnowledge`); read by `harnessUsesOrgKnowledge`, the probe a host
+   *  gates the post-reply `settleOrgKnowledge` on. */
+  orgKnowledge?: true
   /** Tool names this pattern can call, by exact name: a loop's allowlist, or the
    *  in-VM tools a sandbox wrapper provides. Declared by `simpleLoop`,
    *  `actorCritic` and `withSandbox`; read by `collectToolNames` to build the

@@ -343,6 +343,11 @@ export type BamlRole =
   | 'screen' // ScreenUntrustedContent (withInjectionGuard's opt-in LLM layer)
   // The systemone decision transport.
   | 'decide'
+  // The organizational-knowledge hook's read-only draft loop (LoopController),
+  // its own role so the model it runs on is its own map line (FRONT ruling A,
+  // 2026-11-04, `docs/plan/org-knowledge-hook.md`). `draftModel: 'large'` uses
+  // `controller` instead.
+  | 'orgDraft'
 
 /** The BAML-declared client per role — the Anthropic-only chain each function
  *  declares in `baml_src/`. Keep in sync with the `client X` lines there.
@@ -393,6 +398,9 @@ const CLIENT_BY_ROLE: Record<BamlRole, string> = {
   screen: 'DescribeAnthropic', // injection-screen.baml's declared client
   // Public systemone transport; no BAML leaf.
   decide: 'JevDecide',
+  // LoopController's declared client: on the Anthropic tier the draft runs on
+  // the controller chain, unmoved.
+  orgDraft: 'ControllerAnthropic',
 }
 
 /**
@@ -536,6 +544,12 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   screen: 'LargeQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
   // Private systemone URL; never the public endpoint or its key.
   decide: 'PrivateSystemOne',
+  // The org-knowledge draft loop on the small box: the owner named the small
+  // model for it (2026-11-04), and it is its own line so moving it is never a
+  // side effect of moving `controller` or `describe`. The 4B's 32K window and
+  // 2K output cap size the loop's prompt through this entry. A private tier
+  // with no small box is refused, never descaled onto the 27B.
+  orgDraft: 'SmallQwen',
 }
 
 /** The only functions designated to consume each trace-exposing leaf (#637).
@@ -652,6 +666,10 @@ export const SWITCHED_FUNCTIONS_BY_ROLE: Partial<Record<BamlRole, readonly strin
   ],
   screen: ['ScreenUntrustedContent'],
   decide: ['Decide'],
+  // The same function as `controller`'s, under its own role: a function may be
+  // listed by more than one role, and the private-only check accepts the
+  // private client of any role that lists it.
+  orgDraft: ['LoopController'],
 }
 
 /**
@@ -929,12 +947,27 @@ function assertPrivateClient(role: BamlRole, options: unknown): void {
 /** Also guards missing/shifted options at the generated-client boundary. */
 export function assertBamlCallAllowed(name: string, options: unknown): void {
   if (!privateInferenceOnly()) return
-  const role = (Object.keys(SWITCHED_FUNCTIONS_BY_ROLE) as BamlRole[]).find((r) =>
+  // EVERY role that lists the function, read off the map (never a hard-coded
+  // set): `LoopController` is reached under `controller` and under `orgDraft`,
+  // so a call is allowed when its bag names the private client of ANY of them.
+  // Each candidate goes through `assertPrivateClient` unchanged, so a public
+  // client, a registry or env bag, or a private client that no listing role
+  // resolves to is still refused before any request.
+  const roles = (Object.keys(SWITCHED_FUNCTIONS_BY_ROLE) as BamlRole[]).filter((r) =>
     SWITCHED_FUNCTIONS_BY_ROLE[r]?.includes(name),
   )
-  if (!role)
+  if (roles.length === 0)
     throw new Error(
       `Private-only inference: unrecognised BAML function ${name}; no request was made.`,
     )
-  assertPrivateClient(role, options)
+  let refusal: unknown
+  for (const role of roles) {
+    try {
+      assertPrivateClient(role, options)
+      return
+    } catch (err) {
+      refusal = err
+    }
+  }
+  throw refusal
 }

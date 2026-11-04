@@ -188,10 +188,59 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
   ],
 ]
 
+/**
+ * A function a SECOND role also routes, rendered against that role's client.
+ * Since FRONT's ruling A (2026-11-04) `orgDraft` reaches `LoopController` on the
+ * 4B, while `controller` reaches it on the 27B (CALLS above); a function is
+ * therefore no longer one role's, and each (role, function) pair is rendered.
+ */
+const SHARED_CALLS: [string, string, () => Promise<{ body: { json(): unknown } }>][] = [
+  [
+    'orgDraft',
+    'LoopController',
+    () =>
+      b.request.LoopController('q', 'i', TOOLS, TURNS, null, null, null, null, null, null, SMALL),
+  ],
+]
+
 describe('private-tier request bodies', () => {
   it.each(CALLS)('%s disables the chat template’s thinking block', async (_name, render) => {
     const body = (await render()).body.json() as Body
     expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+  })
+
+  it.each(SHARED_CALLS)(
+    '%s → %s disables the thinking block and asks for no caching',
+    async (_role, _name, render) => {
+      const body = (await render()).body.json() as Body
+      expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+      expect(JSON.stringify(body)).not.toContain('cache_control')
+    },
+  )
+
+  it('renders a function shared by two roles against each role’s own client', async () => {
+    const { SELF_DEPLOYED_CLIENT_BY_ROLE, SWITCHED_FUNCTIONS_BY_ROLE } =
+      await import('@hames-ai/harness-baml/clients.server')
+    const MODEL_OF: Record<string, string> = {
+      LargeQwen: DEFAULT_LARGE_LLM_MODEL,
+      SmallQwen: 'qwen3.5-4b-instruct',
+    }
+    // Every function listed by more than one role has a render per extra role.
+    const owners = new Map<string, string[]>()
+    for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
+      for (const fn of fns as readonly string[]) owners.set(fn, [...(owners.get(fn) ?? []), role])
+    }
+    const shared = [...owners.entries()].filter(([, rs]) => rs.length > 1)
+    expect(shared.map(([fn]) => fn)).toEqual(['LoopController'])
+    for (const [role, name, render] of SHARED_CALLS) {
+      const client =
+        SELF_DEPLOYED_CLIENT_BY_ROLE[role as keyof typeof SELF_DEPLOYED_CLIENT_BY_ROLE]!
+      expect(owners.get(name)).toContain(role)
+      expect(((await render()).body.json() as Body).model).toBe(MODEL_OF[client])
+    }
+    expect(SHARED_CALLS.map(([role, fn]) => `${role}:${fn}`)).toEqual(
+      shared.flatMap(([fn, rs]) => rs.slice(1).map((r) => `${r}:${fn}`)),
+    )
   })
 
   it('renders each function against the client the tier routes it to', async () => {
@@ -207,12 +256,16 @@ describe('private-tier request bodies', () => {
       LargeQwen: DEFAULT_LARGE_LLM_MODEL,
       SmallQwen: 'qwen3.5-4b-instruct',
     }
+    // A function's FIRST listing role is the one CALLS renders it for; a second
+    // role reaching the same function is rendered in SHARED_CALLS (ruling A).
     const expected = new Map<string, string>()
     for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
       if (role === 'decide') continue // REST systemone, outside the BAML corpus.
       const client =
         SELF_DEPLOYED_CLIENT_BY_ROLE[role as keyof typeof SELF_DEPLOYED_CLIENT_BY_ROLE]!
-      for (const fn of fns as readonly string[]) expected.set(fn, MODEL_OF[client])
+      for (const fn of fns as readonly string[]) {
+        if (!expected.has(fn)) expected.set(fn, MODEL_OF[client])
+      }
     }
     // Every routed client has a model id here — a third one added to the tier
     // fails loudly rather than comparing against `undefined`.

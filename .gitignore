@@ -113,3 +113,6 @@ app/playwright-report/
 
 # The front-facing prose standards are kept local and unpublished.
 .claude/agents/public-copywriter.md
+
+# LLVM coverage artifacts written by native tooling, never source
+*.profraw

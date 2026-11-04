@@ -1098,7 +1098,14 @@ async function activeTransportToolDescriptions(): Promise<ToolDescription[]> {
  */
 export function createLoopControllerAdapter(
   contextPrefix?: string,
+  opts: {
+    /** The role the call is routed and budgeted by. `orgDraft` is the
+     *  organizational-knowledge hook's draft loop (its own map line); every
+     *  other loop is `controller`. */
+    readonly role?: 'controller' | 'orgDraft'
+  } = {},
 ): ControllerFn & LegacyControllerFn {
+  const role = opts.role ?? 'controller'
   const call = async (
     input: ControllerInput,
     passedCollector?: Collector,
@@ -1180,7 +1187,8 @@ export function createLoopControllerAdapter(
     // and the one corrective retry falls back to the non-thinking function on
     // the SAME route (the transport-equality check proves it). Mirrors
     // `createPlannerAdapter` below — read its branch for the full rationale.
-    const override = clientOverrideFor('controller')
+    const override =
+      role === 'orgDraft' ? clientOverrideFor('orgDraft') : clientOverrideFor('controller')
     const requestedThinking = THINKING_CLIENTS.has(override?.client ?? '')
     const functionName = requestedThinking ? 'ControllerThinking' : 'LoopController'
     const baseOpts = { ...override, collector }
@@ -1284,7 +1292,7 @@ export function createLoopControllerAdapter(
         // same box and credentials on the modal route, same OpenRouter
         // endpoint and model on the OR one. Never the original's Anthropic
         // default; no public fallback; no further corrective retry here.
-        const retryClient = selfDeployedNonThinkingClientFor('controller')
+        const retryClient = selfDeployedNonThinkingClientFor(role)
         if (!retryClient) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
         const retryCollector = new Collector('LoopController')
         try {
@@ -1469,7 +1477,7 @@ export function createLoopControllerAdapter(
       collector,
     )
   }) as ControllerFn & LegacyControllerFn
-  dispatch.limits = () => limitsFor('controller')
+  dispatch.limits = () => limitsFor(role)
   return dispatch
 }
 

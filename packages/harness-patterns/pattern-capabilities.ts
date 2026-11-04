@@ -111,6 +111,16 @@ export function harnessUsesMemory<T>(patterns: ConfiguredPattern<T>[] | undefine
   return patterns.some((p) => p.capabilities?.memory === true || harnessUsesMemory(p.children))
 }
 
+/** True when any pattern in the (nested) graph declared the
+ *  organizational-knowledge capability — the probe a host gates the post-reply
+ *  `settleOrgKnowledge` on. `withOrgKnowledge` declares it. */
+export function harnessUsesOrgKnowledge<T>(patterns: ConfiguredPattern<T>[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) return false
+  return patterns.some(
+    (p) => p.capabilities?.orgKnowledge === true || harnessUsesOrgKnowledge(p.children),
+  )
+}
+
 /** Whether a route consumes the roster-only input before its inner pattern. */
 export function harnessPseudonymisesInputs<T>(
   patterns: ConfiguredPattern<T>[] | undefined,

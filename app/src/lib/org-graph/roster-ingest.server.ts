@@ -200,7 +200,9 @@ function tally(violations: Violation[], counts: CountsByReason, ok: boolean): vo
  *
  * One `UNWIND` + `MERGE` in a single transaction: the whole roster is a few
  * dozen rows, and a per-row round trip would be slower and non-atomic for no
- * gain. `syncedAt` is stamped with `datetime()`, so it is on the **database**
+ * gain. A member the ingest creates gets a stable `id` (A7) on creation only;
+ * an existing one keeps its own, and one from before ids gets it from the
+ * one-off backfill (`scripts/backfill-member-ids.ts`), never from here. `syncedAt` is stamped with `datetime()`, so it is on the **database**
  * clock; {@link databaseNow} is what keeps the staleness threshold on that same
  * clock. Stamping here and thresholding from `new Date()` compares two clocks
  * and is the bug that reading is meant to prevent — not, as this comment used
@@ -213,6 +215,7 @@ export async function upsertMembers(members: MemberRecord[]): Promise<number> {
     const result = await session.run(
       `UNWIND $rows AS row
        MERGE (m:Member {entraId: row.entraId})
+       ON CREATE SET m.id = randomUUID()
        SET m.displayName = row.displayName,
            m.mail        = row.mail,
            m.department  = row.department,

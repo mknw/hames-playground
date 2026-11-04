@@ -45,7 +45,7 @@ export class SeedRefused extends Error {
 export const SEED_MEMBERS_CYPHER = `
   UNWIND $rows AS row
   MERGE (m:Member {entraId: row.entraId})
-  ON CREATE SET m.createdBy = $createdBy, m.createdAt = datetime()
+  ON CREATE SET m.id = randomUUID(), m.createdBy = $createdBy, m.createdAt = datetime()
   WITH m, row WHERE m.createdBy = $createdBy
   SET m.displayName = row.displayName, m.mail = row.mail, m.jobTitle = row.jobTitle
   RETURN count(m) AS written

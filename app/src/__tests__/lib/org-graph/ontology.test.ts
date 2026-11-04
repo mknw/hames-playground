@@ -12,6 +12,8 @@ import {
   CONSTRAINT_NAMES,
   CONSTRAINT_STATEMENTS,
   LABEL_SPECS,
+  MEMBERS_WITHOUT_ID_CYPHER,
+  MEMBER_ID_CONSTRAINT_STATEMENT,
   NODE_LABELS,
   NON_CONFORMING_CYPHER,
   ORG_ONTOLOGY,
@@ -33,7 +35,7 @@ const MEMBER = {
 }
 
 describe('shape of the ontology', () => {
-  it('admits exactly the ten labels of the org-knowledge ontology', () => {
+  it('admits exactly the eleven labels of the org-knowledge ontology', () => {
     expect([...NODE_LABELS]).toEqual([
       'Member',
       'Pillar',
@@ -44,6 +46,7 @@ describe('shape of the ontology', () => {
       'Deadline',
       'Partner',
       'Resource',
+      'Knowledge',
       'Fact',
     ])
     expect(ORG_ONTOLOGY.classes.map((c) => c.label)).toEqual([...NODE_LABELS])
@@ -74,10 +77,33 @@ describe('shape of the ontology', () => {
     expect(coordinates.cardinality).toEqual({ side: 'to', min: 0, max: 1, onExisting: 'replace' })
   })
 
-  it('retires the labels and relations nothing wrote (LD-2)', () => {
-    expect(NODE_LABELS).not.toContain('Knowledge')
+  it('retires the relations nothing wrote (LD-2), and keeps Knowledge and Resource (LD-22)', () => {
     expect(RELATION_TYPES).not.toContain('AUTHORED')
     expect(RELATION_TYPES).not.toContain('STEWARDS')
+    expect(NODE_LABELS).toContain('Knowledge')
+    expect(NODE_LABELS).toContain('Resource')
+  })
+
+  // The owner's amendment, 2026-11-04 (LD-22). Mutations: drop Knowledge from
+  // ABOUT's `from`; make it linked-only; set personFree false → red.
+  it('makes a knowledge item named, proposable, person-free and about exactly one node', () => {
+    const knowledge = ORG_ONTOLOGY.classes.find((c) => c.label === 'Knowledge')!
+    expect(knowledge).toMatchObject({
+      nameProperty: 'name',
+      required: ['name'],
+      optional: ['description'],
+      lines: ['name', 'description'],
+      identity: 'nameKey',
+      personFree: true,
+      creatable: true,
+    })
+    const about = RELATIONS.find((r) => r.type === 'ABOUT')!
+    expect(about.from).toEqual(['Fact', 'Knowledge'])
+    // No ABOUT target is also an ABOUT source: the validator does not compare an
+    // edge's two ends, so an overlap admits an item about itself (review of #988).
+    // Mutation: put Knowledge back among the targets → red.
+    expect(about.to.filter((l) => about.from.includes(l))).toEqual([])
+    expect(about.cardinality).toEqual({ side: 'from', min: 1, max: 1, onExisting: 'refuse' })
   })
 
   // Design pin: every relation has a cardinality row. "Any number" is written
@@ -167,6 +193,41 @@ describe('constraint statements', () => {
     expect(CONSTRAINT_NAMES).toContain('org_fact_id')
   })
 
+  // LD-22: the live graphs' `org_knowledge_key` and `org_resource_key` are this
+  // ontology's own, with the definition the live graphs carry, so none is
+  // orphaned and none is dropped. Mutation: drop `key` from LEGACY_UNIQUE → red.
+  it('keeps the live key constraints of Knowledge and Resource as declared constraints', () => {
+    expect(labelSpec('Knowledge').unique).toEqual(['key', 'id', 'nameKey'])
+    expect(labelSpec('Resource').unique).toEqual(['key', 'id', 'nameKey'])
+    expect(CONSTRAINT_STATEMENTS).toContain(
+      'CREATE CONSTRAINT org_knowledge_key IF NOT EXISTS FOR (n:`Knowledge`) REQUIRE n.`key` IS UNIQUE',
+    )
+    expect(CONSTRAINT_STATEMENTS).toContain(
+      'CREATE CONSTRAINT org_resource_key IF NOT EXISTS FOR (n:`Resource`) REQUIRE n.`key` IS UNIQUE',
+    )
+    // The legacy key is an identity, never a property a proposal or a hand edit sets.
+    for (const label of ['Knowledge', 'Resource']) {
+      const cls = ORG_ONTOLOGY.classes.find((c) => c.label === label)!
+      expect([...cls.required, ...cls.optional]).not.toContain('key')
+      expect(labelSpec(label as (typeof NODE_LABELS)[number]).hard).not.toContain('key')
+    }
+  })
+
+  // Plan step 4: Member.id's constraint is applied after the backfill, never
+  // with the rest. Mutation: add 'id' to Member's `unique` → red.
+  it('declares Member.id but keeps its constraint out of the unconditional list', () => {
+    expect(MEMBER_ID_CONSTRAINT_STATEMENT).toBe(
+      'CREATE CONSTRAINT org_member_id IF NOT EXISTS FOR (n:`Member`) REQUIRE n.`id` IS UNIQUE',
+    )
+    expect(CONSTRAINT_STATEMENTS).not.toContain(MEMBER_ID_CONSTRAINT_STATEMENT)
+    expect(CONSTRAINT_STATEMENTS.some((s) => s.includes('org_member_id'))).toBe(false)
+    expect(CONSTRAINT_NAMES).toContain('org_member_id')
+    expect(CONSTRAINT_NAMES).toHaveLength(CONSTRAINT_STATEMENTS.length + 1)
+    expect(MEMBERS_WITHOUT_ID_CYPHER).toBe(
+      'MATCH (m:Member) WHERE m.id IS NULL RETURN count(m) AS missing',
+    )
+  })
+
   it('covers Member identity on both entraId and mail', () => {
     // Two nodes for one person is the failure a re-run with a changed property
     // would otherwise produce, and it is the only integrity rule the database
@@ -254,6 +315,20 @@ describe('conformance query', () => {
     expect(conformanceParams().relationEndpoints).toEqual(expected)
     expect(RELATION_ENDPOINTS).toContainEqual({ type: 'USES', from: 'Project', to: 'Resource' })
     expect(RELATION_ENDPOINTS).not.toContainEqual({ type: 'USES', from: 'Member', to: 'Resource' })
+  })
+
+  // LD-22: the conformance count accepts the amended classes — a knowledge item
+  // ABOUT a project or a resource conforms; ABOUT a person does not. Mutation:
+  // drop Knowledge from NODE_LABELS or from ABOUT's `from` → red.
+  it('accepts a knowledge item and its ABOUT edge, never one about a person', () => {
+    const { labels, relationEndpoints } = conformanceParams()
+    expect(labels).toEqual(expect.arrayContaining(['Knowledge', 'Resource']))
+    for (const to of ['Project', 'Resource', 'Pillar']) {
+      expect(relationEndpoints).toContainEqual({ type: 'ABOUT', from: 'Knowledge', to })
+    }
+    for (const to of ['Member', 'Fact', 'Knowledge']) {
+      expect(relationEndpoints).not.toContainEqual({ type: 'ABOUT', from: 'Knowledge', to })
+    }
   })
 
   it('counts a known type between the wrong labels, and only a known type', () => {

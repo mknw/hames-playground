@@ -43,7 +43,7 @@ describe('seed-eval-members', () => {
   it('merges on the invented entraId and updates only what it created', () => {
     expect(SEED_MEMBERS_CYPHER).toMatch(/MERGE \(m:Member \{entraId: row\.entraId\}\)/)
     expect(SEED_MEMBERS_CYPHER).toMatch(
-      /ON CREATE SET m\.createdBy = \$createdBy[\s\S]*WITH m, row WHERE m\.createdBy = \$createdBy\s+SET /,
+      /ON CREATE SET m\.id = randomUUID\(\), m\.createdBy = \$createdBy[\s\S]*WITH m, row WHERE m\.createdBy = \$createdBy\s+SET /,
     )
     expect(EVAL_SEED_CREATED_BY).toBe('eval-seed')
   })

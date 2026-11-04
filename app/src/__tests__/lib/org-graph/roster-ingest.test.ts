@@ -191,9 +191,25 @@ describe('upsertMembers', () => {
     expect(written).toBe(2)
     const statement = cypher()[0]
     expect(statement).toContain('MERGE (m:Member {entraId: row.entraId})')
-    expect(statement).not.toMatch(/\bCREATE\b/)
+    expect(statement).not.toMatch(/\bCREATE\b(?! SET)/)
     // Values ride as parameters, never interpolated.
     expect(paramsOf(0).rows).toHaveLength(2)
+  })
+
+  // A new member gets a stable id (A7) on creation only; an existing one keeps
+  // its own. Mutations: move the id into the plain SET (every run re-mints it),
+  // or drop the ON CREATE line (new members arrive without an id) → red.
+  it('mints a member id on creation only, never overwriting one', async () => {
+    const { upsertMembers } = await mod()
+    queue.push([{ written: 1 }])
+    await upsertMembers([
+      { entraId: 'a', displayName: 'A', mail: 'a@x.test', department: null, jobTitle: null },
+    ])
+    const statement = cypher()[0]
+    expect(statement).toMatch(
+      /MERGE \(m:Member \{entraId: row\.entraId\}\)\s+ON CREATE SET m\.id = randomUUID\(\)\s+SET /,
+    )
+    expect(statement.match(/m\.id\b/g)).toHaveLength(1)
   })
 
   it('stamps syncedAt from the database clock, not the process clock', async () => {

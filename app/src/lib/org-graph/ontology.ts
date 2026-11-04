@@ -53,15 +53,17 @@ import {
 
 /**
  * The ontology as data, in the shape `@hames-ai/harness-patterns` checks a
- * proposal against (`docs/plan/org-knowledge-hook.md`, "The ontology"). Ten
- * classes; every name here is a vocabulary term, never organisation data — the
- * seeded pillars and themes come from configuration outside the repo.
+ * proposal against (`docs/plan/org-knowledge-hook.md`, "The ontology").
+ * Eleven classes; every name here is a vocabulary term, never organisation data
+ * — the seeded pillars and themes come from configuration outside the repo.
  *
  * `Member` [the design's Person] and `Pillar` are linked to and never created
  * by a proposal (axioms A3, A6). `Theme` is seeded AND proposable (amended A6).
  * `Team` [Group] is the directory's group and a proposal's group alike, so one
- * team cannot exist twice (LD-1). `Knowledge`, `AUTHORED` and `STEWARDS` are
- * retired (LD-2): declared, never written, in no ruling.
+ * team cannot exist twice (LD-1). `Knowledge` and `Resource` stay classes by
+ * the owner's amendment of 2026-11-04 (LD-22): a knowledge item is named
+ * know-how about exactly one node that is no person, as a fact is.
+ * `AUTHORED` and `STEWARDS` stay retired (LD-2).
  */
 export const NODE_LABELS = [
   'Member',
@@ -73,6 +75,7 @@ export const NODE_LABELS = [
   'Deadline',
   'Partner',
   'Resource',
+  'Knowledge',
   'Fact',
 ] as const
 export type NodeLabel = (typeof NODE_LABELS)[number]
@@ -99,8 +102,13 @@ const named = (
   ...extra,
 })
 
-/** Every label that is not a person or a fact: what a fact may be about. */
-const ABOUTABLE: readonly NodeLabel[] = NODE_LABELS.filter((l) => l !== 'Member' && l !== 'Fact')
+/** What a fact or a knowledge item may be about: every label but a person, a
+ *  fact and a knowledge item. `Knowledge` is left out because `ABOUT` runs from
+ *  it too, and the validator does not compare an edge's ends, so a knowledge
+ *  item about itself — about no node — would otherwise satisfy `min: 1`. */
+const ABOUTABLE: readonly NodeLabel[] = NODE_LABELS.filter(
+  (l) => l !== 'Member' && l !== 'Fact' && l !== 'Knowledge',
+)
 
 export const ORG_ONTOLOGY: GraphOntology = defineOntology({
   classes: [
@@ -140,6 +148,14 @@ export const ORG_ONTOLOGY: GraphOntology = defineOntology({
       required: ['name', 'kind'],
       optional: ['location'],
       closed: { kind: RESOURCE_KINDS },
+      creatable: true,
+    }),
+    // Person-free like a fact (V9 reads its name, description and evidence):
+    // otherwise a knowledge item would be the way round A5's "never about a person".
+    named('Knowledge', {
+      optional: ['description'],
+      lines: ['name', 'description'],
+      personFree: true,
       creatable: true,
     }),
     {
@@ -223,11 +239,11 @@ export const ORG_ONTOLOGY: GraphOntology = defineOntology({
     },
     {
       type: 'ABOUT',
-      from: ['Fact'],
+      from: ['Fact', 'Knowledge'],
       to: ABOUTABLE,
       cardinality: { side: 'from', min: 1, max: 1, onExisting: 'refuse' },
       proposable: true,
-      why: 'What a fact is about: exactly one node, never a person and never another fact (A5).',
+      why: 'What a fact or a knowledge item is about: exactly one node, never a person, a fact or a knowledge item (A5, LD-22).',
     },
     {
       type: 'PART_OF',
@@ -258,8 +274,9 @@ export const RELATION_TYPES: readonly string[] = RELATIONS.map((r) => r.type)
  * header explains, and the properties a uniqueness constraint is declared on.
  * Every class but `Member` carries a stable `id` (A7); every class keyed by
  * name carries `nameKey` (A1), so the database holds both axioms against every
- * writer. `Member` keeps its directory identity until the ingest gives it an
- * `id` (the ingest re-check, a data job).
+ * writer. `Member` keeps its directory identity; the ingest gives a new member
+ * an `id` and a one-off backfill gives the rest one, so `Member.id`'s
+ * constraint is applied apart from these ({@link MEMBER_ID_CONSTRAINT_STATEMENT}).
  */
 export interface LabelSpec {
   readonly label: NodeLabel
@@ -272,6 +289,25 @@ export interface LabelSpec {
 }
 
 const PROVENANCE = ['id', 'createdBy', 'createdAt'] as const
+
+/**
+ * Identities a class keeps unique besides `id` and `nameKey`, which no proposal
+ * and no canvas edit can set (neither class declares them as a property).
+ * - `Team.entraId`: a directory team keeps its directory identity; a proposed
+ *   one has none, and a uniqueness constraint admits any number of absent values.
+ * - `Knowledge.key`, `Resource.key`: the pre-v2 identity, whose constraints
+ *   `org_knowledge_key` and `org_resource_key` the live graphs still carry.
+ *   Declared here, they stay this ontology's own rather than leftovers, and no
+ *   constraint is dropped to amend it (owner, 2026-11-04; LD-22). They are
+ *   INERT: nothing in the app writes `key` and nothing can set it, so they bind
+ *   only nodes written before v2. A knowledge item's or a resource's identity is
+ *   its `id` and `nameKey`.
+ */
+const LEGACY_UNIQUE: Partial<Record<NodeLabel, readonly string[]>> = {
+  Team: ['entraId'],
+  Resource: ['key'],
+  Knowledge: ['key'],
+}
 
 export const LABEL_SPECS: readonly LabelSpec[] = NODE_LABELS.map((label): LabelSpec => {
   if (label === 'Member') {
@@ -289,9 +325,7 @@ export const LABEL_SPECS: readonly LabelSpec[] = NODE_LABELS.map((label): LabelS
     label,
     hard: [...PROVENANCE, ...stored, ...(byName ? ['nameKey'] : [])],
     soft: [],
-    // A directory team keeps its entraId identity; a proposed one has none,
-    // and a uniqueness constraint admits any number of absent values.
-    unique: [...(label === 'Team' ? ['entraId'] : []), 'id', ...(byName ? ['nameKey'] : [])],
+    unique: [...(LEGACY_UNIQUE[label] ?? []), 'id', ...(byName ? ['nameKey'] : [])],
   }
 })
 
@@ -308,12 +342,29 @@ export const labelSpec = (label: NodeLabel): LabelSpec =>
  * constraint this ontology no longer declares is identifiable as a leftover.
  */
 export const CONSTRAINT_STATEMENTS: readonly string[] = LABEL_SPECS.flatMap((spec) =>
-  spec.unique.map(
-    (prop) =>
-      `CREATE CONSTRAINT ${constraintName(spec.label, prop)} IF NOT EXISTS ` +
-      `FOR (n:\`${spec.label}\`) REQUIRE n.\`${prop}\` IS UNIQUE`,
-  ),
+  spec.unique.map((prop) => constraintStatement(spec.label, prop)),
 )
+
+/**
+ * `Member.id`'s uniqueness constraint (A7), kept OUT of
+ * {@link CONSTRAINT_STATEMENTS} on purpose: it is applied only once no `Member`
+ * lacks an `id` — at once on a graph whose members all came in with one, and
+ * after the one-off backfill (`scripts/backfill-member-ids.ts`) on a graph the
+ * ingest filled before members had ids. {@link MEMBERS_WITHOUT_ID_CYPHER} is the
+ * condition; `schema.server.ts` and the backfill both check it first.
+ */
+export const MEMBER_ID_CONSTRAINT_STATEMENT = constraintStatement('Member', 'id')
+
+/** How many `Member` nodes have no `id`. Read-only. */
+export const MEMBERS_WITHOUT_ID_CYPHER =
+  'MATCH (m:Member) WHERE m.id IS NULL RETURN count(m) AS missing'
+
+function constraintStatement(label: NodeLabel, prop: string): string {
+  return (
+    `CREATE CONSTRAINT ${constraintName(label, prop)} IF NOT EXISTS ` +
+    `FOR (n:\`${label}\`) REQUIRE n.\`${prop}\` IS UNIQUE`
+  )
+}
 
 /** `org_member_entra_id` — snake_cased label + property, `org_` namespaced so a
  *  leftover from the pre-ontology graph is distinguishable at a glance. */
@@ -328,10 +379,11 @@ function snake(s: string): string {
   return s.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
 }
 
-/** Every constraint name this ontology declares. */
-export const CONSTRAINT_NAMES: readonly string[] = LABEL_SPECS.flatMap((spec) =>
-  spec.unique.map((prop) => constraintName(spec.label, prop)),
-)
+/** Every constraint name this ontology declares, `Member.id`'s included. */
+export const CONSTRAINT_NAMES: readonly string[] = [
+  ...LABEL_SPECS.flatMap((spec) => spec.unique.map((prop) => constraintName(spec.label, prop))),
+  constraintName('Member', 'id'),
+]
 
 // ============================================================================
 // Validation — the presence half, which the database cannot do here

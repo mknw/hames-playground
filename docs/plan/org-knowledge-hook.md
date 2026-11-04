@@ -94,25 +94,26 @@ where they differ.
 
 ### Classes
 
-| Label             | Required properties                                                                                                                                              | Optional                | Who adds it                                                                 |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | --------------------------------------------------------------------------- |
-| `Member` [Person] | as today: `entraId`, `displayName`, `mail` (hard); `department`, `jobTitle` (soft)                                                                               | —                       | the directory ingest only; the hook links to a Member and never creates one |
-| `Pillar`          | `name`, `objective`                                                                                                                                              | —                       | the seed only; never proposed                                               |
-| `Theme`           | `name`                                                                                                                                                           | `discipline`            | the seed, **and** the hook on acceptance                                    |
-| `Team` [Group]    | `name`                                                                                                                                                           | `entraId`               | the directory ingest (with `entraId`) and the hook (without)                |
-| `Project`         | `name`                                                                                                                                                           | `status`, `description` | the hook                                                                    |
-| `Deliverable`     | `name`                                                                                                                                                           | `description`           | the hook                                                                    |
-| `Deadline`        | `date` (ISO 8601 day), `label`                                                                                                                                   | —                       | the hook                                                                    |
-| `Partner`         | `name`                                                                                                                                                           | —                       | the hook                                                                    |
-| `Resource`        | `name`, `kind` ∈ {`document`, `system`, `dataset`, `tool`}                                                                                                       | `location`              | the hook                                                                    |
-| `Fact`            | `text` (one line, ≤ 280 characters), `kind` ∈ {`budget`, `status`, `decision`, `risk`}, `evidence` (a verbatim span of the user's message), `statedOn` (ISO day) | —                       | the hook                                                                    |
+| Label             | Required properties                                                                                                                                              | Optional                 | Who adds it                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------- |
+| `Member` [Person] | as today: `entraId`, `displayName`, `mail` (hard); `department`, `jobTitle` (soft)                                                                               | —                        | the directory ingest only; the hook links to a Member and never creates one |
+| `Pillar`          | `name`, `objective`                                                                                                                                              | —                        | the seed only; never proposed                                               |
+| `Theme`           | `name`                                                                                                                                                           | `discipline`             | the seed, **and** the hook on acceptance                                    |
+| `Team` [Group]    | `name`                                                                                                                                                           | `entraId`                | the directory ingest (with `entraId`) and the hook (without)                |
+| `Project`         | `name`                                                                                                                                                           | `status`, `description`  | the hook                                                                    |
+| `Deliverable`     | `name`                                                                                                                                                           | `description`            | the hook                                                                    |
+| `Deadline`        | `date` (ISO 8601 day), `label`                                                                                                                                   | —                        | the hook                                                                    |
+| `Partner`         | `name`                                                                                                                                                           | —                        | the hook                                                                    |
+| `Resource`        | `name`, `kind` ∈ {`document`, `system`, `dataset`, `tool`}                                                                                                       | `location`               | the hook                                                                    |
+| `Knowledge`       | `name` (one line); never about a person (V9)                                                                                                                     | `description` (one line) | the hook (**LD-22**)                                                        |
+| `Fact`            | `text` (one line, ≤ 280 characters), `kind` ∈ {`budget`, `status`, `decision`, `risk`}, `evidence` (a verbatim span of the user's message), `statedOn` (ISO day) | —                        | the hook                                                                    |
 
 **On every node except `Member`**, and on every relationship the hook or the
 seed writes: `id` (a UUID v4 minted at acceptance, never the database's
 internal id; A7), `createdBy` (the accepting user's internal id; A8),
 `createdAt`; and, after a later accepted edit, `lastEditedBy` and
 `lastEditedAt`. Named classes (`Pillar`, `Theme`, `Team`, `Project`,
-`Deliverable`, `Partner`, `Resource`) also carry `nameKey`, the name under
+`Deliverable`, `Partner`, `Resource`, `Knowledge`) also carry `nameKey`, the name under
 NFKC, case folding and whitespace collapsing, on which a uniqueness constraint
 is declared per label; that puts A1 in the database, where it holds against
 every writer. `Member` keeps its directory identity (`entraId`); giving it an
@@ -123,42 +124,43 @@ visibility property.
 
 Arrows point from subject to object.
 
-| Type           | From → to                                  | Cardinality                                                            |
-| -------------- | ------------------------------------------ | ---------------------------------------------------------------------- |
-| `COORDINATES`  | `Member` → `Pillar` or `Theme`             | exactly one per pillar or theme; a member may coordinate several (A12) |
-| `MEMBER_OF`    | `Member` → `Theme` or `Team`               | any                                                                    |
-| `WORKS_ON`     | `Member` or `Team` → `Project`             | any                                                                    |
-| `IN_PILLAR`    | `Project` → `Pillar`                       | at most one per project (A2)                                           |
-| `PARTNERS_ON`  | `Partner` → `Project`                      | any                                                                    |
-| `DELIVERS`     | `Project` → `Deliverable`                  | each deliverable on exactly one project (**LD-3**)                     |
-| `HAS_DEADLINE` | `Project` or `Deliverable` → `Deadline`    | each deadline on exactly one project or deliverable (A4, **LD-3**)     |
-| `USES`         | `Project` → `Resource`                     | any; a resource may serve several projects                             |
-| `ABOUT`        | `Fact` → any label but `Member` and `Fact` | each fact about exactly one node (A5, **LD-4**)                        |
-| `PART_OF`      | `Team` → `Team`                            | ingest only (directory nesting); never proposed (**LD-2**)             |
+| Type           | From → to                                                              | Cardinality                                                                  |
+| -------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `COORDINATES`  | `Member` → `Pillar` or `Theme`                                         | exactly one per pillar or theme; a member may coordinate several (A12)       |
+| `MEMBER_OF`    | `Member` → `Theme` or `Team`                                           | any                                                                          |
+| `WORKS_ON`     | `Member` or `Team` → `Project`                                         | any                                                                          |
+| `IN_PILLAR`    | `Project` → `Pillar`                                                   | at most one per project (A2)                                                 |
+| `PARTNERS_ON`  | `Partner` → `Project`                                                  | any                                                                          |
+| `DELIVERS`     | `Project` → `Deliverable`                                              | each deliverable on exactly one project (**LD-3**)                           |
+| `HAS_DEADLINE` | `Project` or `Deliverable` → `Deadline`                                | each deadline on exactly one project or deliverable (A4, **LD-3**)           |
+| `USES`         | `Project` → `Resource`                                                 | any; a resource may serve several projects                                   |
+| `ABOUT`        | `Fact` or `Knowledge` → any label but `Member`, `Fact` and `Knowledge` | each fact or knowledge item about exactly one node (A5, **LD-4**, **LD-22**) |
+| `PART_OF`      | `Team` → `Team`                                                        | ingest only (directory nesting); never proposed (**LD-2**)                   |
 
-Retired from today's `ontology.ts` (**LD-2**): `Knowledge` (replaced by
-`Fact`), `AUTHORED` (replaced by `createdBy`, which records an approval and is
-not an edge to a person), and `STEWARDS` (in no ruling). All three are declared
-and never written today (`docs/org-graph.md` "Only `MEMBER_OF` is populated
-today"), so retiring them moves no data; the conformance count would report one
-that appeared.
+Retired from today's `ontology.ts` (**LD-2**): `AUTHORED` (replaced by
+`createdBy`, which records an approval and is not an edge to a person) and
+`STEWARDS` (in no ruling). LD-2 also retired `Knowledge`; the owner's amendment
+restores it as a class (**LD-22**). The two retired relations were declared and
+never written (`docs/org-graph.md` "Only `MEMBER_OF` is populated today"), so
+retiring them moves no data; the conformance count would report one that
+appeared.
 
 ### The axioms, as amended
 
-| Id  | Axiom                                                                                                                                                                       | Enforced by                                  |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| A1  | No two nodes of one named class share a `nameKey`; accepting a repeat merges onto the existing node                                                                         | uniqueness constraint + `MERGE` on `nameKey` |
-| A2  | A project belongs to one pillar or none                                                                                                                                     | validator V6                                 |
-| A3  | Coordinators, members and workers are existing `Member` nodes; the hook never creates one                                                                                   | validator V1, V5                             |
-| A4  | A deadline has a date and belongs to exactly one project or deliverable                                                                                                     | validator V2, V6                             |
-| A5  | A fact is about exactly one node that is not a `Member`, carries the user's words as evidence and the day they were said, and is one of four kinds                          | validator V2, V3, V6, V9                     |
-| A6  | Pillars are a fixed seeded list; the hook links to them and never proposes one. Themes are seeded **and** may be proposed, accepted like any entry (amended per ruling)     | validator V1                                 |
-| A7  | Every node gets a stable `id` at acceptance, never the database's internal id                                                                                               | the write                                    |
-| A8  | `createdBy` is set once, at acceptance, to the accepting user's internal id, never a name or email, and never edited; a later accepted edit sets `lastEditedBy`             | the write (`ON CREATE SET` only)             |
-| A9  | ~~Nothing public depends on anything private~~ — **struck**: there are no private nodes                                                                                     | —                                            |
-| A10 | No node is written without its required properties                                                                                                                          | validator V2                                 |
-| A11 | Every write comes from an accepted proposal or the seed; a proposal's values come only from the user's own latest message, never from a tool result or the assistant's text | validator V3, V4; the write path             |
-| A12 | A new coordinator replaces the old one in one proposal that shows both; a coordinator is never simply added                                                                 | validator V6 (replacement), acceptance view  |
+| Id  | Axiom                                                                                                                                                                                    | Enforced by                                  |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| A1  | No two nodes of one named class share a `nameKey`; accepting a repeat merges onto the existing node                                                                                      | uniqueness constraint + `MERGE` on `nameKey` |
+| A2  | A project belongs to one pillar or none                                                                                                                                                  | validator V6                                 |
+| A3  | Coordinators, members and workers are existing `Member` nodes; the hook never creates one                                                                                                | validator V1, V5                             |
+| A4  | A deadline has a date and belongs to exactly one project or deliverable                                                                                                                  | validator V2, V6                             |
+| A5  | A fact (and, by **LD-22**, a knowledge item) is about exactly one node that is not a `Member`, carries the user's words as evidence and the day they were said, and is one of four kinds | validator V2, V3, V6, V9                     |
+| A6  | Pillars are a fixed seeded list; the hook links to them and never proposes one. Themes are seeded **and** may be proposed, accepted like any entry (amended per ruling)                  | validator V1                                 |
+| A7  | Every node gets a stable `id` at acceptance, never the database's internal id                                                                                                            | the write                                    |
+| A8  | `createdBy` is set once, at acceptance, to the accepting user's internal id, never a name or email, and never edited; a later accepted edit sets `lastEditedBy`                          | the write (`ON CREATE SET` only)             |
+| A9  | ~~Nothing public depends on anything private~~ — **struck**: there are no private nodes                                                                                                  | —                                            |
+| A10 | No node is written without its required properties                                                                                                                                       | validator V2                                 |
+| A11 | Every write comes from an accepted proposal or the seed; a proposal's values come only from the user's own latest message, never from a tool result or the assistant's text              | validator V3, V4; the write path             |
+| A12 | A new coordinator replaces the old one in one proposal that shows both; a coordinator is never simply added                                                                              | validator V6 (replacement), acceptance view  |
 
 Two rules the page did not number are now axioms by ruling: a Fact's kind is
 one of budget, status, decision, risk; and a deliverable is on exactly one
@@ -395,7 +397,9 @@ backfill, the constraint changes, the seeded pillars and themes) and
 re-checking the directory ingest against it (`Member` gaining `id`, `Team`'s
 `entraId` becoming optional, `PART_OF`) is a **data job**: planned privately,
 executed only with a fresh backup and the owner's explicit go, never by a lane
-on its own and never on GitHub. Until it runs, the hook's validator treats a
+on its own and never on GitHub. `Member`'s `id` comes from the ingest for a new
+member and from a one-off backfill for the rest, and `Member.id`'s uniqueness
+constraint waits for the backfill (**LD-22**). Until it runs, the hook's validator treats a
 node without `id` as legacy (readable, reinforce-able, never duplicated by
 `nameKey` once the backfill lands). The schema statements this design adds are
 code in slice 1; applying them to the live database is part of that job.
@@ -475,7 +479,7 @@ Each slice is one PR, reviewable alone, in this order. "Pin" is the test;
 | Id    | Decision                                                                                                                                                                                                                                                                                  | Why                                                                                                                                                                                                                                                                                                      |
 | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LD-1  | Person is the existing `Member` label and Group is the existing `Team` label, with `Team.entraId` optional                                                                                                                                                                                | Two labels for one thing would let one team exist twice; the live graph already uses `Member`, and creating a `Member` is already refused (`decision-loop-agent.md:951`)                                                                                                                                 |
-| LD-2  | `Knowledge`, `AUTHORED` and `STEWARDS` retire; `PART_OF` stays, ingest-only                                                                                                                                                                                                               | The first three are declared and never written and appear in no ruling; `PART_OF` mirrors the directory's nesting                                                                                                                                                                                        |
+| LD-2  | `Knowledge`, `AUTHORED` and `STEWARDS` retire; `PART_OF` stays, ingest-only (`Knowledge` restored by **LD-22**)                                                                                                                                                                           | The first three are declared and never written and appear in no ruling; `PART_OF` mirrors the directory's nesting                                                                                                                                                                                        |
 | LD-3  | `DELIVERS` joins a deliverable to exactly one project, and a deadline may belong to a project or a deliverable                                                                                                                                                                            | The ruling made Deliverable a class without saying how it attaches; this is the smallest attachment that lets a deliverable have a deadline                                                                                                                                                              |
 | LD-4  | `ABOUT` may target any label but `Member` and `Fact`; evidence is stored only on a Fact, and other elements' evidence lives only in the encrypted proposal payload                                                                                                                        | The ruling's "or other object which is not a person"; the shared graph keeps the least of the user's words                                                                                                                                                                                               |
 | LD-5  | V9: a Fact's text and evidence may not name a `Member`                                                                                                                                                                                                                                    | Stricter than the ruling (a fact about a project that names its decider). It is deterministic and keeps people's names out of free text other users read; striking it removes pff04's expectation                                                                                                        |
@@ -502,6 +506,50 @@ Each slice is one PR, reviewable alone, in this order. "Pin" is the test;
 This supersedes LD-10's one-attempt timing and pipeline steps 4–8: the loop returns either `{"verdict":"propose","assertions":[...]}` or `{"verdict":"no-proposal","reason":"short reason"}`. The latter stops as `no-proposal`, with no graph read or card; its reason stays in scratch context. The new `simpleLoop.validateReturn` callback strictly parses each candidate, reads the graph and runs V1–V10 before accepting a terminal answer. Refusals (stop code and rule counts) become that round's observation, so repair and graph-reading turns share the existing four-round `maxTurns` budget. A candidate with any rejected assertion must be repaired or declined; valid siblings are not silently proposed before deliberation finishes. Budget exhaustion preserves the final refusal (`draft-unparseable`, `nothing-valid` or `only-reinforces`) and raises no card; a graph-read failure stops immediately. A custom draft seam's final output is checked too. Only an explicit `propose` with a final validator pass and at least one writing assertion reaches `proposeToHuman`. The `orgDraft` role, tier routing and deployment switch are unchanged.
 
 **LD-21 review follow-up:** repair feedback now identifies the rejected assertion indexes and labels mixed candidates `partly-valid`; the terminal exhausted-budget stop remains `nothing-valid` with no salvaged siblings. Only actual budget exhaustion preserves the final validator refusal; a later connection failure is `draft-error`. Rationale: distinguish repairable model output from infrastructure failure and make each refusal actionable without echoing content.
+
+### Decision record — 2026-11-04, the owner's ontology amendment
+
+**LD-22 — `Knowledge` and `Resource` stay classes; their live key constraints
+stay declared; `Member` gains `id` on creation, the rest by backfill.** Owner,
+verbatim, 2026-11-04: “Organizational knowledge and organizational resource can
+be kept in the ontology. Just amend it, merged pre-approved.” This supersedes
+LD-2 for `Knowledge` only; `AUTHORED` and `STEWARDS` stay retired.
+
+- **`Knowledge`** is a named class (`name` required, `description` optional,
+  identity `nameKey`, both one line), proposable through the hook, and attached
+  like a fact: `ABOUT` now runs from `Fact` or `Knowledge`, to exactly one node
+  that is not a `Member`, a `Fact` or a `Knowledge` item. `Knowledge` is left out
+  of the targets because the validator does not compare an edge's two ends, so
+  a knowledge item `ABOUT` itself, which is about no node, would otherwise meet
+  `min: 1` (review of #988). It is person-free as a fact is (V9
+  reads its name, description and evidence), because otherwise it would be the
+  way round A5. `Resource` is unchanged.
+- **The constraints.** The live graphs still carry `org_knowledge_key` and
+  `org_resource_key` (`key` unique on each label), which LD-2 and slice 1 left
+  undeclared. Of keeping them or migrating to `id`/`nameKey` and dropping them,
+  keeping is the smaller change: `key` joins `Team.entraId` as a unique identity
+  that no proposal and no canvas edit can set, both classes keep `id` and
+  `nameKey` as well, nothing is dropped on any graph, and no constraint is a
+  leftover against `CONSTRAINT_NAMES`. The two are **inert**: nothing in the app
+  writes `key`, so they bind only nodes written before v2, and a knowledge
+  item's or a resource's identity is its `id` and `nameKey`.
+- **`Member.id`.** The roster ingest sets `ON CREATE SET m.id = randomUUID()` and
+  never overwrites one (the member seed does the same); a one-off, idempotent
+  backfill (`scripts/backfill-member-ids.ts`) gives every older member one in a
+  single transaction with counts before and after. `Member.id`'s uniqueness
+  constraint is kept out of the unconditional list: `ensureOrgGraphSchema` and
+  the backfill apply it only once no member lacks an id, so on a graph filled
+  before ids it follows the backfill (the private plan's step 4). The script
+  has a read-only `--dry-run`, and a real run prints the same report first.
+- **The data step, before anything else**, reports the count of `Knowledge`
+  nodes with no `name` (pre-v2 ones were named by `title`), which the dry run
+  includes: the hook's snapshot matches by name, so an accepted proposal would
+  create a second node beside such a node. A proposal still pending when the
+  backfill runs goes stale, because its `Member` keys change from `entraId:` to
+  `id:`; it fails safe, refused as stale at write (**LD-6**), and writes nothing.
+
+Rationale: the amendment is the owner's; the constraint choice is the smaller
+of the two the brief allowed, and it is the one that changes no live schema.
 
 ## Not in this design
 

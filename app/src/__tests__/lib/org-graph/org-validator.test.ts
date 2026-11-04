@@ -13,6 +13,7 @@ import {
   type GraphSnapshot,
   type OrgValidateContext,
 } from '@hames-ai/harness-patterns/org-knowledge-validate.server'
+import { renderOrgSchema } from '@hames-ai/harness-patterns/org-knowledge-hook.server'
 import { ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
 
 const TODAY = '2026-11-04'
@@ -728,5 +729,99 @@ describe('assertions', () => {
     expect(r.accepted).toHaveLength(8)
     expect(r.rejected).toEqual({ cap: 2 })
     expect(run(elements, msg, EMPTY, { maxAssertions: 3 }).rejected).toEqual({ cap: 7 })
+  })
+})
+
+// The owner's amendment of 2026-11-04 (LD-22): organizational knowledge and
+// resources stay classes. Mutations that redden this block: drop `Knowledge`
+// from NODE_LABELS or its class (every admit case → V1); drop it from ABOUT's
+// `from` (→ V1/V7); set its `personFree` false, or drop `name` from its
+// `lines` (the V9 case is admitted); add `key` to its optional properties (the
+// V2 case is admitted); drop the Knowledge line from the schema render.
+describe('the amended classes: Knowledge and Resource (LD-22)', () => {
+  const MSG = 'For Osprey we keep the Dorrit Wexley handover notes as the onboarding guide.'
+  const knowledge = (properties: Record<string, string>, evidence = 'as the onboarding guide') =>
+    node('k', 'Knowledge', properties, evidence)
+  const aboutOsprey: DraftElement[] = [
+    node('p', 'Project', { name: 'Osprey' }, 'For Osprey we keep'),
+    edge('ABOUT', 'k', 'p', 'For Osprey we keep'),
+  ]
+  const mentionsMember = (t: string) => /dorrit wexley/i.test(t)
+
+  it('admits a knowledge item about a project, as a new node', () => {
+    const r = run([knowledge({ name: 'the onboarding guide' }), ...aboutOsprey], MSG, OSPREY, {
+      mentionsMember,
+    })
+    expect(r.rejected).toEqual({})
+    const k = r.accepted[0].nodes.find((n) => n.element.label === 'Knowledge')!
+    expect(k.verdict).toBe('new')
+    expect(r.accepted[0].edges.map((e) => e.element.type)).toEqual(['ABOUT'])
+  })
+
+  it('drops a knowledge item about nothing, and one about a person', () => {
+    expect(run([knowledge({ name: 'the onboarding guide' })], MSG, OSPREY).rejected).toEqual({
+      V6: 1,
+    })
+    const snap = graph([['k:dw', 'Member', { displayName: 'Dorrit Wexley' }]])
+    const r = run(
+      [
+        knowledge({ name: 'the onboarding guide' }),
+        node('m', 'Member', { displayName: 'Dorrit Wexley' }, 'the Dorrit Wexley handover'),
+        edge('ABOUT', 'k', 'm', 'the Dorrit Wexley handover'),
+      ],
+      MSG,
+      snap,
+    )
+    expect(r.rejected).toEqual({ V7: 1 })
+  })
+
+  // Review of #988, term 1: an item ABOUT itself is about no node, yet met
+  // `min: 1`. Mutation: put Knowledge back in ABOUTABLE → admitted, red.
+  it('drops a knowledge item about itself', () => {
+    const r = run(
+      [
+        knowledge({ name: 'the onboarding guide' }),
+        edge('ABOUT', 'k', 'k', 'as the onboarding guide'),
+      ],
+      MSG,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V7: 1 })
+  })
+
+  it('drops a knowledge item whose name names a member, even when its evidence does not', () => {
+    const r = run(
+      [knowledge({ name: 'Dorrit Wexley handover notes' }), ...aboutOsprey],
+      MSG,
+      OSPREY,
+      { mentionsMember },
+    )
+    expect(r.rejected).toEqual({ V9: 1 })
+  })
+
+  it('never lets a draft set the legacy key a uniqueness constraint holds', () => {
+    for (const label of ['Knowledge', 'Resource']) {
+      const props: Record<string, string> =
+        label === 'Knowledge'
+          ? { name: 'the onboarding guide', key: 'onboarding' }
+          : { name: 'the onboarding guide', kind: 'document', key: 'onboarding' }
+      const r = run(
+        [node('k', label, props, 'as the onboarding guide'), ...aboutOsprey],
+        MSG,
+        OSPREY,
+      )
+      expect(r.rejected).toEqual({ V2: 1 })
+    }
+  })
+
+  it('renders both classes, and Knowledge as an ABOUT subject, into the draft schema', () => {
+    const schema = renderOrgSchema(ORG_ONTOLOGY)
+    expect(schema).toContain('- Knowledge: name (required); description (optional).')
+    expect(schema).toContain(
+      '- Resource: name (required); kind (required); location (optional); kind one of document/system/dataset/tool.',
+    )
+    expect(schema).toMatch(/- \(Fact\|Knowledge\)-\[:ABOUT\]->\([^)]*\bResource\b[^)]*\)/)
+    expect(schema).not.toMatch(/\bkey\b \((required|optional)\)/)
   })
 })

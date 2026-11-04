@@ -36,6 +36,16 @@ const mod = () => import('../../../lib/org-graph/schema.server')
 
 const statements = (): string[] => sessionRun.mock.calls.map((c) => String(c[0]))
 
+/** Queue the answers one `ensureOrgGraphSchema` apply reads: one per declared
+ *  constraint, then the count of members without an id, then — only when that
+ *  is 0 — `Member.id`'s constraint. */
+const queueApply = async (missing: number | null = 0): Promise<void> => {
+  const { CONSTRAINT_STATEMENTS } = await import('../../../lib/org-graph/ontology')
+  for (const _ of CONSTRAINT_STATEMENTS) queue.push([])
+  queue.push(missing === null ? [] : [{ missing }])
+  if (missing === 0) queue.push([])
+}
+
 beforeEach(async () => {
   vi.clearAllMocks()
   queue.length = 0
@@ -43,27 +53,56 @@ beforeEach(async () => {
 })
 
 describe('ensureOrgGraphSchema', () => {
-  it('applies every declared constraint', async () => {
+  it('applies every declared constraint, Member.id last once no member lacks an id', async () => {
     const { ensureOrgGraphSchema } = await mod()
-    const { CONSTRAINT_STATEMENTS } = await import('../../../lib/org-graph/ontology')
+    const { CONSTRAINT_STATEMENTS, MEMBERS_WITHOUT_ID_CYPHER, MEMBER_ID_CONSTRAINT_STATEMENT } =
+      await import('../../../lib/org-graph/ontology')
+    await queueApply(0)
 
     await ensureOrgGraphSchema()
 
-    expect(statements()).toEqual([...CONSTRAINT_STATEMENTS])
+    expect(statements()).toEqual([
+      ...CONSTRAINT_STATEMENTS,
+      MEMBERS_WITHOUT_ID_CYPHER,
+      MEMBER_ID_CONSTRAINT_STATEMENT,
+    ])
     expect(sessionClose).toHaveBeenCalledTimes(1)
+  })
+
+  // Plan step 4's order: Member.id's constraint waits for the backfill.
+  // Mutation: drop the `=== 0` check (apply it unconditionally) → both cases red.
+  it('defers Member.id while a member lacks an id, or when the count returns no row', async () => {
+    const { MEMBER_ID_CONSTRAINT_STATEMENT, CONSTRAINT_STATEMENTS } =
+      await import('../../../lib/org-graph/ontology')
+    for (const missing of [5, null]) {
+      vi.resetModules()
+      sessionRun.mockClear()
+      queue.length = 0
+      const { ensureOrgGraphSchema } = await mod()
+      await queueApply(missing)
+      await ensureOrgGraphSchema()
+      expect(statements()).not.toContain(MEMBER_ID_CONSTRAINT_STATEMENT)
+      expect(statements()).toHaveLength(CONSTRAINT_STATEMENTS.length + 1)
+    }
   })
 
   it('never issues a write clause other than CREATE CONSTRAINT', async () => {
     // The guarantee in one assertion: this path may create schema and may not
     // touch data. A cleanup added here in future fails the test rather than
-    // deleting a graph.
+    // deleting a graph. The one other statement is the read that gates Member.id.
     const { ensureOrgGraphSchema } = await mod()
+    const { MEMBERS_WITHOUT_ID_CYPHER } = await import('../../../lib/org-graph/ontology')
+    await queueApply(0)
     await ensureOrgGraphSchema()
 
     for (const statement of statements()) {
+      if (statement === MEMBERS_WITHOUT_ID_CYPHER) continue
       expect(statement).toMatch(/^CREATE CONSTRAINT /)
       expect(statement).not.toMatch(/\b(DELETE|DETACH|REMOVE|DROP|MERGE|SET)\b/i)
     }
+    expect(MEMBERS_WITHOUT_ID_CYPHER).not.toMatch(
+      /\b(CREATE|DELETE|DETACH|REMOVE|DROP|MERGE|SET)\b/i,
+    )
   })
 
   it('is idempotent within a process — the second call runs nothing', async () => {
@@ -117,7 +156,7 @@ describe('wipeAndApplyOrgGraphSchema', () => {
     queue.push([]) // DROP change_id
     queue.push([{ deleted: 7 }]) // first delete batch
     queue.push([{ deleted: 0 }]) // drained
-    for (const _ of CONSTRAINT_NAMES) queue.push([]) // constraint applies
+    await queueApply(0) // constraint applies, the emptied graph has no member
     queue.push(CONSTRAINT_NAMES.map((name) => ({ name }))) // SHOW CONSTRAINTS again
 
     const report = await wipeAndApplyOrgGraphSchema(WIPE_CONFIRMATION)
@@ -136,20 +175,21 @@ describe('wipeAndApplyOrgGraphSchema', () => {
     // The memo would otherwise skip the re-create after the drop, leaving the
     // graph with no uniqueness guarantee and the report claiming success.
     const { ensureOrgGraphSchema, wipeAndApplyOrgGraphSchema, WIPE_CONFIRMATION } = await mod()
-    const { CONSTRAINT_STATEMENTS } = await import('../../../lib/org-graph/ontology')
+    const { CONSTRAINT_STATEMENTS, MEMBER_ID_CONSTRAINT_STATEMENT } =
+      await import('../../../lib/org-graph/ontology')
 
     await ensureOrgGraphSchema()
     sessionRun.mockClear()
 
     queue.push([]) // SHOW CONSTRAINTS → none
     queue.push([{ deleted: 0 }]) // nothing to delete
-    for (const _ of CONSTRAINT_STATEMENTS) queue.push([])
+    await queueApply(0)
     queue.push([])
 
     await wipeAndApplyOrgGraphSchema(WIPE_CONFIRMATION)
 
     const applied = statements().filter((s) => s.startsWith('CREATE CONSTRAINT'))
-    expect(applied).toEqual([...CONSTRAINT_STATEMENTS])
+    expect(applied).toEqual([...CONSTRAINT_STATEMENTS, MEMBER_ID_CONSTRAINT_STATEMENT])
   })
 
   it('reports a constraint the ontology does not declare as a leftover', async () => {
@@ -158,7 +198,7 @@ describe('wipeAndApplyOrgGraphSchema', () => {
 
     queue.push([]) // SHOW CONSTRAINTS → none to drop
     queue.push([{ deleted: 0 }])
-    for (const _ of CONSTRAINT_NAMES) queue.push([])
+    await queueApply(0)
     queue.push([...CONSTRAINT_NAMES.map((name) => ({ name })), { name: 'stray_thing' }])
 
     const report = await wipeAndApplyOrgGraphSchema(WIPE_CONFIRMATION)
@@ -167,12 +207,11 @@ describe('wipeAndApplyOrgGraphSchema', () => {
 
   it('escapes a backtick in a constraint name rather than breaking the quoting', async () => {
     const { wipeAndApplyOrgGraphSchema, WIPE_CONFIRMATION } = await mod()
-    const { CONSTRAINT_NAMES } = await import('../../../lib/org-graph/ontology')
 
     queue.push([{ name: 'we`ird' }])
     queue.push([])
     queue.push([{ deleted: 0 }])
-    for (const _ of CONSTRAINT_NAMES) queue.push([])
+    await queueApply(0)
     queue.push([])
 
     await wipeAndApplyOrgGraphSchema(WIPE_CONFIRMATION)

@@ -9,7 +9,8 @@
  *
  * What is asserted is what a person at 390px meets: the page does not scroll
  * sideways, the warm indicator is on screen, and the metrics are still
- * reachable (they scroll inside their own block rather than off the page).
+ * reachable — the last one can be scrolled into view from the keyboard, inside
+ * the metrics' own block rather than by scrolling the page.
  * Every wait is on a state, never a duration (#280).
  */
 import { test, expect } from '../lib/fixtures'
@@ -42,8 +43,37 @@ test('at 390px the header does not push the page into a horizontal scroll', asyn
   expect(indicator!.x).toBeGreaterThanOrEqual(0)
   expect(indicator!.x + indicator!.width).toBeLessThanOrEqual(widths.viewport)
 
-  // Given way, not thrown away: the metrics scroll within their own block, and
-  // that block can take keyboard focus so the scroll is not pointer-only.
-  await expect(metrics).toHaveAttribute('tabindex', '0')
-  await expect(metrics.getByText('active')).toBeAttached()
+  // Given way, not thrown away: the metrics scroll within their own block. A
+  // block that merely CLIPS them (`overflow: hidden`) passes everything above,
+  // so this half proves a person can reach the last metric — from the keyboard,
+  // which is the path the block's tab stop promises. Not by setting
+  // `scrollLeft`: a script can scroll an `overflow: hidden` box too, so that
+  // would not tell clipped from scrollable.
+  const overflow = await metrics.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }))
+  expect(overflow.scrollWidth, 'the metrics fit, so nothing here is tested').toBeGreaterThan(
+    overflow.clientWidth,
+  )
+  const last = metrics.locator(':scope > div').last()
+  const offscreen = await last.boundingBox()
+  expect(offscreen!.x + offscreen!.width).toBeGreaterThan(widths.viewport)
+
+  await metrics.focus()
+  await expect(metrics).toBeFocused()
+  // A keyboard scroll moves a fixed step per press; press until the block
+  // reports it is at its end, bounded so a block that never moves fails here
+  // rather than spinning.
+  for (let i = 0; i < 40; i++) {
+    const atEnd = await metrics.evaluate((el) => el.scrollLeft + el.clientWidth >= el.scrollWidth)
+    if (atEnd) break
+    await page.keyboard.press('ArrowRight')
+  }
+  await expect
+    .poll(async () => {
+      const box = await last.boundingBox()
+      return box !== null && box.x + box.width <= widths.viewport
+    }, 'the last metric cannot be scrolled into view')
+    .toBe(true)
 })

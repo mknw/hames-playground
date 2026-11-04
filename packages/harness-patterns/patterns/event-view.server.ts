@@ -370,10 +370,13 @@ export class EventViewImpl implements IEventView {
    * Older tool_result events render as compact pointers with ref IDs,
    * allowing the LLM to reference them via `ref:<eventId>`.
    *
-   * @param options.recentTurns - Number of recent user turns to show in full (default: 1)
+   * @param options.recentTurns - Number of recent user turns to show in full (default: 1;
+   *   floored; 0 or fewer shows none in full)
    */
   serializeCompact(options?: { recentTurns?: number }): string {
-    const recentTurns = options?.recentTurns ?? 1
+    // Floored: the count is used as an array offset, and a fraction (`1.5`)
+    // indexes between elements, reads `undefined` and throws (#499).
+    const recentTurns = Math.floor(options?.recentTurns ?? 1)
     const events = this.get()
     if (events.length === 0) return ''
 

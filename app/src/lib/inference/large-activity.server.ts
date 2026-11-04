@@ -95,7 +95,7 @@ export function largeScaledownSeconds(): number {
   const seconds = Math.floor(Number(raw))
   if (!Number.isFinite(seconds) || seconds <= 0) {
     console.warn(
-      `[self_deployed] LARGE_LLM_SCALEDOWN_SECONDS=${JSON.stringify(raw)} is not a positive number; ` +
+      `[self_deployed] LARGE_LLM_SCALEDOWN_SECONDS=${JSON.stringify(raw)} is not a positive whole number of seconds; ` +
         `falling back to ${DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS}s.`,
     )
     return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS

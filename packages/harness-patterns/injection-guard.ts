@@ -71,6 +71,7 @@
  */
 
 import type { ByTier, CallRecordSink, DecisionMadeEventData, LLMCallRecord } from './types'
+import { interpretUrlSpans } from './url-seam'
 
 // ============================================================================
 // Sentinels
@@ -443,6 +444,15 @@ const SINGLE_HTTPS_URL = /^https:\/\/[^\s)<>"'\\`]+$/
  * `sourceLinks` exempts. The exemption is bound to WHERE the value sits, never
  * to what it looks like: content can spell any URL, but it cannot make a
  * connector write it into its own `field` of its own namespace's result.
+ *
+ * URL parsing and host comparison read through the URL interpretation seam
+ * (`url-seam.ts`, `docs/plan/url-interpretation-seam.md` slice 4): the whole
+ * leaf is handed over as ONE span, and that span's parsed `url` decides —
+ * exact equality against its `hostname`, never a suffix or substring match,
+ * and a span the platform parser rejects (`url: null`) means no exemption.
+ * The whole-value lexical checks (`SINGLE_HTTPS_URL`, the second-scheme scan)
+ * and the namespace/field binding stay here: they are the exemption's
+ * identity, not parsing.
  */
 function isSourceLink(
   value: string,
@@ -456,12 +466,11 @@ function isSourceLink(
   // `exfil-data-url`'s pattern is unanchored, so without this a second scheme
   // inside the token would ride along under the exemption.
   if (/https?:\/\//i.test(value.slice('https://'.length))) return false
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    return false
-  }
+  // One span covering the ENTIRE value: a leaf the platform parser rejects
+  // comes back `url: null` and fails closed — no exemption, the leaf is
+  // scanned with the full corpus as before.
+  const url = interpretUrlSpans(value, [{ start: 0, end: value.length }]).spans[0]?.url
+  if (!url) return false
   if (url.username || url.password || url.port) return false
   return links.hosts.some((host) => host.toLowerCase() === url.hostname)
 }

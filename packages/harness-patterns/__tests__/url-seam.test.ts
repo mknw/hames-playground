@@ -51,8 +51,8 @@ describe('the URL interpretation seam (slice 1)', () => {
     const [span] = interpretUrlSpans(text, egressArgumentSpans(text)).spans
     expect(span?.url).toBeNull()
     expect(span?.raw).toBe('https://%')
-    // The reader keeps the verbatim address for the given-address comparison:
-    // an unparseable candidate is still an address, never dropped.
+    // The string projection keeps the verbatim address for comparisons that
+    // consume it: an unparseable candidate is still an address, never dropped.
     expect(addressesIn(text)).toEqual(['https://%'])
   })
 

@@ -3,8 +3,8 @@
  * (`docs/plan/url-interpretation-seam.md`, slice 1): when the seam cannot read
  * — it throws inside the reader's path — the reader REFUSES the call on both
  * of its URL channels, never passing content unread. The two channels are the
- * given-address/fetch-address comparison (`addressesIn`) and the
- * destination-hosts state (`destinationHosts` over `urlsIn`).
+ * given-address/fetch-address comparison (the gate's seam read, slice 3) and
+ * the destination-hosts state (`destinationHosts`).
  *
  * A pure seam throws on no real input, so the throw is injected by mocking the
  * seam module for THIS file only: `interpretUrlSpans` throws exactly when the
@@ -18,8 +18,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// MUTATION: swallow the seam's error inside the reader (wrap the
-// `interpretUrlSpans` call in `addressesIn`/`urlsIn` in a try/catch that
+// MUTATION: swallow the seam's error inside the reader (wrap the gate's
+// `addressSpans` seam read — and `destinationHosts` — in a try/catch that
 // returns no addresses): the unread call is dispatched instead of refused,
 // and both pins fail.
 vi.mock('../url-seam', async (importOriginal) => {

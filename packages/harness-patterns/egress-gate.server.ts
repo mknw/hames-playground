@@ -295,8 +295,10 @@ export function readOutgoing(args: Readonly<Record<string, unknown>>): ReadOutgo
  *  scheme occurrence starts one, so a URL inside another URL's query is found
  *  too. Unparsed, for a verbatim comparison. The scan and its offsets are the
  *  URL interpretation seam's (`url-seam.ts`); `raw` is the original spelling,
- *  never a canonical rewrite, so the given-address comparison never
- *  canonicalizes either.
+ *  never a canonical rewrite. The gate's given-address corpus reads the
+ *  seam's spans directly (slice 3, `patterns/withEgressGate.server.ts`);
+ *  this string projection of the same spans serves the app's conversation
+ *  checks, which compare verbatim too.
  */
 export function addressesIn(text: string): string[] {
   return interpretUrlSpans(text, egressArgumentSpans(text)).spans.map((span) => span.raw)

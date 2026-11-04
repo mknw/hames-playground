@@ -902,3 +902,69 @@ describe('Planner thinking mode', () => {
     expect(samples.at(-1)?.metrics).toMatchObject({ basis: 'time', attempts: 1 })
   })
 })
+
+// #981 review MUST: a ControllerThinking attempt that hits its cap falls back to
+// LoopController inside the adapter. The failed attempt must stay visible: priced
+// once (a usage sample of its own) and recorded as a `warning` carrying its call
+// record and parser trace, which is what the eval's `fallbacks` / `capHits` /
+// `thinkingCalls` read. Before the fix the retry's LoopController record was the
+// only trace of the turn.
+// MUTATIONS (each run red): drop `hooks?.onRetry?.(failedCall)` in the adapter; drop
+// `onRetry` from simpleLoop's controller call; replace the wrapped failure with
+// `undefined` (the attempt is no longer accounted).
+describe('Controller thinking fallback stays visible', () => {
+  it('records the cap-hit twin attempt as a warning and prices it once', async () => {
+    process.env.PRIVATE_REASONING_ROLES = 'controller'
+    replies.push(
+      { content: '', reasoning: TRACE, tokens: 4096 },
+      {
+        content: JSON.stringify({
+          reasoning: 'Written after the fallback.',
+          tool_name: 'Return',
+          tool_args: '{"response":"Synthetic answer"}',
+          is_final: true,
+        }),
+      },
+    )
+    const { simpleLoop } = await import('@hames-ai/harness-patterns/patterns/simpleLoop.server')
+    const { reasoningSummary } = await import('../../../lib/eval-support/thinking-mode')
+    const { scope, view } = scopeAndView()
+    const env = { LARGE_LLM_BASE_URL: endpoint, LARGE_LLM_API_KEY: 'synthetic-key' }
+    const result = await withRunFrame(
+      {
+        inference: {
+          tier: 'self_deployed',
+          clientOverride: (role) =>
+            role === 'controller' ? { client: 'LargeQwenThink', env } : undefined,
+        },
+      },
+      () =>
+        simpleLoop(createLoopControllerAdapter(), [], { patternId: 'loop-test' }).fn(scope, view),
+    )
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0].chat_template_kwargs).toEqual({ enable_thinking: true })
+    expect(requests[1].chat_template_kwargs).toEqual({ enable_thinking: false })
+    const warning = result.events.find((e) => e.type === 'warning')
+    expect(warning?.data).toMatchObject({ task: 'controller' })
+    expect(warning?.llmCall).toMatchObject({
+      functionName: 'ControllerThinking',
+      clientName: 'LargeQwenThink',
+      hitOutputCap: true,
+      parsedOutput: { reasoning: TRACE },
+    })
+    // Both attempts priced, each once.
+    expect(samples.map((s) => [s.functionName, s.clientName])).toEqual([
+      ['ControllerThinking', 'LargeQwenThink'],
+      ['LoopController', 'LargeQwen'],
+    ])
+    expect(reasoningSummary(result.events)).toMatchObject({
+      calls: 2,
+      thinkingCalls: 1,
+      fallbacks: 1,
+      capHits: 1,
+      maxChars: TRACE.length,
+      functions: { ControllerThinking: { calls: 1 }, LoopController: { calls: 1 } },
+    })
+  })
+})

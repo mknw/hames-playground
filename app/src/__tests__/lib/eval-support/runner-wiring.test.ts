@@ -95,7 +95,10 @@ it('connects the observer stop to synchronous exit, and checks wall-clock spend 
   const s = run()
   const stop = s.slice(s.indexOf('  const stop ='), s.indexOf('  const { observeLlmUsage }'))
   expect(stop).toMatch(/write\(\)[\s\S]*process.exit\(1\)/)
-  expect(s).toMatch(/createSpendObserver\(\{ budget, live, onStop: stop \}\)/)
+  // The allowlist is the package's PRIVATE_TIER_CLIENTS, never a copy (#981 review NIT).
+  expect(s).toMatch(
+    /createSpendObserver\(\{\s*budget,\s*live,\s*onStop: stop,\s*privateClients: clients\.PRIVATE_TIER_CLIENTS,\s*\}\)/,
+  )
   expect(s).toContain('observeLlmUsage(observer.observe)')
   expect(s).toMatch(
     /setInterval\(\(\) => \{\s*tick\(\)\s*if \(budget.stopped\) stop\(\)\s*\}, 100\)/,
@@ -477,5 +480,24 @@ it('the egress scenario records the slice 15 name-list observations', () => {
   )
   expect(read('evals/scenarios/egress-gate.ts')).toContain(
     'const observations: Observation[] = await measureNameListRecall(',
+  )
+})
+
+// EVAL_THINKING: the mode's reasoning setting is entered after the wake and left in a
+// `finally` around the attempts, so a throwing scenario cannot leak thinking into the
+// next one, and the flip gate reads only the shipped (thinking-off) configuration.
+// MUTATION: move `leaveThinking()` out of the `finally`, or pass unfiltered `rows` to
+// `flipGate` → red.
+it('scopes the thinking mode to the attempts and gates only on thinking off', () => {
+  const s = run()
+  const enter = s.indexOf('const leaveThinking = enterThinking(')
+  expect(s.indexOf('await ensurePrivateTierAwake()')).toBeLessThan(enter)
+  expect(enter).toBeLessThan(s.indexOf('await driver.run('))
+  expect(s).toMatch(/\} finally \{\s*leaveThinking\(\)\s*\}/)
+  expect(s.indexOf('leaveThinking()')).toBeGreaterThan(s.indexOf('await driver.run('))
+  expect(s).toMatch(/rows\.filter\(\(r\) => r\.thinking === 'off'\) as ConversationResult\[\]/)
+  // parseThinking runs after .env is merged, so an inherited reasoning setting refuses.
+  expect(s.indexOf('parseThinking(process.env)')).toBeGreaterThan(
+    s.indexOf('Object.assign(process.env, deployed)'),
   )
 })

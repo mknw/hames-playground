@@ -210,4 +210,17 @@ describe('per-function screen subtotal', () => {
     expect(budget.stopped).toBe(true)
     expect(screenShare(budget.row(key)).calls).toBe(1)
   })
+
+  // EVAL_THINKING=compare runs a scenario in both modes: two ledger rows, so the
+  // comparison's cost column never files thinking-on spend under thinking-off.
+  // MUTATION: drop the `thinking` term from `row()`'s match → one shared row, red.
+  it('keeps one ledger row per thinking mode', () => {
+    const budget = new SpendBudget(20, 0.8)
+    budget.observe({ ...key, thinking: 'off' }, { costEur: 0.8 }, 'LoopController')
+    budget.observe({ ...key, thinking: 'on' }, { costEur: 1.6 }, 'ControllerThinking')
+    expect(budget.rows).toHaveLength(2)
+    expect(budget.row({ ...key, thinking: 'off' }).observerUsd).toBeCloseTo(1)
+    expect(budget.row({ ...key, thinking: 'on' }).observerUsd).toBeCloseTo(2)
+    expect(budget.totalUsd).toBeCloseTo(3)
+  })
 })

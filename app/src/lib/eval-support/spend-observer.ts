@@ -5,10 +5,13 @@ export function createSpendObserver({
   budget,
   live,
   onStop,
+  privateClients,
 }: {
   budget: SpendBudget
   live: boolean
   onStop: () => void
+  /** `PRIVATE_TIER_CLIENTS` from `@hames-ai/harness-baml/clients.server`. */
+  privateClients: ReadonlySet<string>
 }) {
   let active: SpendKey | undefined
   return {
@@ -26,18 +29,13 @@ export function createSpendObserver({
         onStop()
         return
       }
-      // The private-tier clients a completed call may name. The OpenRouter route
-      // switch (`LARGE_LLM_ROUTE=openrouter`, packages/harness-baml/clients.server.ts
-      // `largeClientForRole`) renames the 27B's serving client to its declared OR
-      // twins — same endpoints contract, same no-caching posture, `zdr: true` on the
-      // wire — so those two names ARE the private tier serving a call. Any other
-      // unknown client is still the stop condition it always was: the allowlist must
-      // not become allow-everything.
-      if (
-        !['LargeQwen', 'LargeQwenOR', 'LargeQwenThinkOR', 'SmallQwen', 'PrivateSystemOne'].includes(
-          sample.clientName ?? '',
-        )
-      ) {
+      // The private-tier clients a completed call may name: the package's own
+      // `PRIVATE_TIER_CLIENTS` (the tier map's values, the thinking leaves and the
+      // OpenRouter twin), passed in by the runner rather than copied here — a hand
+      // copy is how the box route's `LargeQwenThink` went missing while its OR twin
+      // was admitted. Any other client is still the stop condition: the set is the
+      // private tier's, never allow-everything.
+      if (!privateClients.has(sample.clientName ?? '')) {
         budget.reason = 'Unexpected serving client on the private tier'
         onStop()
         return

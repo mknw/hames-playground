@@ -289,6 +289,57 @@ describe('createActorControllerAdapter', () => {
     const [, , , , context] = mockActorController.mock.calls[0]
     expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Factory protocol notes'))
   })
+
+  // The actor shares the `controller` ROLE but has no reasoning twin. With the
+  // `controller` PATTERN reasoning-configured the role resolves to the thinking
+  // leaf, which `ActorController` is not designated for: before this fix the call
+  // went out on it and was refused after accounting, so every actorCritic attempt
+  // died under `PRIVATE_REASONING_ROLES=controller` (and `EVAL_THINKING=on`).
+  // Staged on BOTH routes (#981 review SHOULD): a fix that checks only
+  // `client === 'LargeQwenThink'`, or hard-codes `client: 'LargeQwen'`, passes the
+  // box case and breaks actorCritic on the OpenRouter route. The OR route's boot
+  // check reads `LARGE_LLM_MODEL` as captured at module load, so that case sets it
+  // and re-imports the modules fresh.
+  // MUTATIONS (each run red): pass `clientOverrideFor('controller')` straight into
+  // the bag (both cases); test `resolved.client === 'LargeQwenThink'` instead of
+  // `THINKING_CLIENTS.has(...)` (openrouter case); hard-code `client: 'LargeQwen'`
+  // (openrouter case).
+  it.each([
+    ['modal', 'LargeQwen'],
+    ['openrouter', 'LargeQwenOR'],
+  ])(
+    'keeps ActorController off the thinking leaf when controller reasoning is on (%s route)',
+    async (route, expected) => {
+      process.env.PRIVATE_REASONING_ROLES = 'controller'
+      process.env.LARGE_LLM_ROUTE = route
+      process.env.LARGE_LLM_MODEL = 'synthetic/model'
+      vi.resetModules()
+      try {
+        const { createActorControllerAdapter } =
+          await import('@hames-ai/harness-baml/baml-adapters.server')
+        await withSelfDeployedTier(() =>
+          createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+        )
+      } finally {
+        delete process.env.PRIVATE_REASONING_ROLES
+        delete process.env.LARGE_LLM_ROUTE
+        delete process.env.LARGE_LLM_MODEL
+        vi.resetModules()
+      }
+      const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+      expect(bag.client).toBe(expected)
+    },
+  )
+
+  it('leaves the actor on the tier map when controller reasoning is off', async () => {
+    const { createActorControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    await withSelfDeployedTier(() =>
+      createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+    )
+    const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+    expect(bag.client).toBe('LargeQwen')
+  })
 })
 
 describe('createPlannerAdapter', () => {

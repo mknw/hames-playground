@@ -14,12 +14,15 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   catalogueGraders,
   resolveShared,
   type GraderCatalogue,
 } from '../../../lib/eval-support/catalogue-graders'
+// conversation-checks reads a server-only extractor; the repo's usual mock.
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
+import { answerNotMatchesCheck } from '../../../lib/eval-support/conversation-checks'
 
 const APP = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const catalogue = JSON.parse(
@@ -107,5 +110,30 @@ describe('catalogue graders', () => {
 
   it('an unknown row throws at module load', () => {
     expect(() => catalogueGraders(catalogue, 'p99-nothing')).toThrow(/No catalogue row/)
+  })
+
+  // #989 review: tn35's "no remember claim" is a memory-OFF grader. With memory on and a
+  // real write (the store step inserts, reinforces or updates), a reply that says the
+  // preference is saved is true, and no catalogue grader may fail it.
+  // MUTATION (red): add tn35's "no remember claim" answerNotMatches to 19-memory-save-recall.
+  it('memory-on rows that write never grade a "saved" reply as a false claim', () => {
+    const writes = rows.filter((r) =>
+      (catalogueGraders(catalogue, r.id).memoryExpect?.answered ?? []).some(
+        (a) => a.outcome === 'written',
+      ),
+    )
+    expect(writes.map((r) => r.id)).toContain('19-memory-save-recall')
+    for (const r of writes)
+      for (const p of catalogueGraders(catalogue, r.id).answerPatterns ?? [])
+        if (p.negate)
+          for (const reply of ['I have saved your preference.', 'Ik heb je voorkeur opgeslagen.'])
+            expect(answerNotMatchesCheck(reply, p.pattern).pass, `${r.id}: ${p.says}`).toBe(true)
+    // The same reply is exactly what tn35 (memory off) must fail.
+    const tn35 = catalogueGraders(catalogue, 'tn35-remember-preference').answerPatterns ?? []
+    expect(
+      tn35.some(
+        (p) => p.negate && !answerNotMatchesCheck('Ik heb je voorkeur opgeslagen.', p.pattern).pass,
+      ),
+    ).toBe(true)
   })
 })

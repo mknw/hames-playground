@@ -542,7 +542,7 @@
         "What do you remember about me?",
         "And which release tag do you have noted for it?"
       ],
-      "expected": "Turn 1 lists the confirmed memory (the person works on the Lantern project); turn 2 recalls its release tag, LANTERN-2, from the same memory. No tool is called, and nothing from another user’s memory appears.",
+      "expected": "Turn 1 names no remembered content, so relevance-gated recall attaches nothing and it is not graded on recall (#982). Turn 2 recalls the release tag, LANTERN-2, from the confirmed memory (the person works on the Lantern project). No tool is called, and nothing from another user’s memory appears.",
       "grader": [
         {
           "check": "noTools",
@@ -556,20 +556,14 @@
         {
           "check": "turnAnswerContains",
           "says": "module turnAnswerIncludes",
-          "turn": 1,
-          "facts": ["Lantern"]
-        },
-        {
-          "check": "turnAnswerContains",
-          "says": "module turnAnswerIncludes",
           "turn": 2,
           "facts": ["LANTERN-2"]
         },
         {
           "check": "memoryRecalled",
           "says": "recall attached the saved memory",
-          "turn": 1,
-          "facts": ["Lantern"]
+          "turn": 2,
+          "facts": ["LANTERN-2"]
         },
         {
           "check": "noForeignMemory",

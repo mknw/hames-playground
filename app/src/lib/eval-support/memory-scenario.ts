@@ -118,6 +118,14 @@ export interface MemoryTurnTrace {
   }
   /** The rows `memory_recalled` attached on this turn, read from the store then. */
   readonly recalled: readonly MemoryRowSnapshot[]
+  /** Why recall attached what it did: the event's counts, skip reason and gate label
+   *  (no content). Absent when the turn recorded no `memory_recalled`. */
+  readonly recall?: {
+    readonly considered: number
+    readonly survivors: number
+    readonly skipped?: string
+    readonly gate?: string
+  }
   /** Every memory decision state and extractor input sent while this turn ran
    *  (recall gate, store gate, merge question, extractor). */
   readonly inputs: readonly string[]

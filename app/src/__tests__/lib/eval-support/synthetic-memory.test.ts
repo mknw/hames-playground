@@ -11,7 +11,8 @@
  * - `addSource`: always return `{ inserted: true }` → "a repeated provenance key is a
  *   conflict" goes red.
  * - `DIMENSIONS` back to 512 → the update-band pin goes red (bullet/numbered collide).
- * - `USER_AXIS` to 0 → "a generic question reaches a memory" goes red.
+ * - `USER_AXIS` to 0 → "the recall queries clear the semantic floor" goes red; back to
+ *   2 → "a question that names no content stays under the floor" goes red (#982).
  */
 import { describe, expect, it, vi } from 'vitest'
 
@@ -168,10 +169,10 @@ describe('the hermetic embedder, at the similarities the scenarios rely on', () 
       sim('Which release tag do you have noted for me?', SEED_MEMORIES.kestrel.content),
     ).toBeGreaterThanOrEqual(0.5)
   })
-  it('a generic question reaches a memory, as the production query instruction lets it', () => {
-    expect(
-      sim('What do you remember about me?', SEED_MEMORIES.lantern.content),
-    ).toBeGreaterThanOrEqual(0.5)
+  // The production embedder scores this pair 0.139 (measured 2026-11-04 on :8090 with
+  // the memory query instruction): the double must not promise a recall it cannot make.
+  it('a question that names no content stays under the floor, as on production (#982)', () => {
+    expect(sim('What do you remember about me?', SEED_MEMORIES.lantern.content)).toBeLessThan(0.5)
   })
   it('unrelated texts stay below the floor', () => {
     expect(

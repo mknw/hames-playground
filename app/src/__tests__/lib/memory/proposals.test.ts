@@ -256,6 +256,13 @@ const storeFor = (opts?: { inTransaction?: (tx: never) => Promise<void> }): Memo
 vi.mock('../../../lib/db/memories.server', () => ({
   createMemoryDbStore: (_user: string, opts?: { inTransaction?: (tx: never) => Promise<void> }) =>
     storeFor(opts),
+  replaceMemoryGraphLinks: vi.fn(),
+}))
+// The memory -> graph link step (org-knowledge slice 8) is pinned in
+// `org-graph/memory-links.test.ts`; here it finds nothing.
+vi.mock('../../../lib/org-graph/memory-links.server', () => ({
+  findLinkableNodes: vi.fn(async () => []),
+  currentNodeNames: vi.fn(async () => new Map()),
 }))
 const switchReads = vi.fn()
 vi.mock('../../../lib/db/user-prefs.server', () => ({

@@ -295,6 +295,28 @@ describe('bm25-rrf-floors: BM25 and RRF', () => {
     expect(r.ranked).toEqual([])
   })
 
+  // Org-knowledge slice 8: a memory's linked node names are lexical terms. A
+  // memory whose text never names the project is recalled by it when it is
+  // linked to that project's node. Mutation: ignore `terms` in BM25 → the
+  // linked memory is not ranked.
+  it('matches a memory by its linked terms, which its text does not contain', () => {
+    const rows: RankInput[] = [
+      { ...row('linked', 'owns the release checklist', 0.1), terms: ['Osprey'] },
+      row('other', 'prefers short summaries', 0.1),
+      row('third', 'drives a blue car', 0.1),
+    ]
+    const r = rankMemories('what is happening on osprey', rows, P)
+    expect(r.ranked.map((x) => x.id)).toEqual(['linked'])
+    // Without the terms, nothing matches.
+    expect(
+      rankMemories(
+        'what is happening on osprey',
+        rows.map(({ terms: _t, ...x }) => x),
+        P,
+      ).ranked,
+    ).toEqual([])
+  })
+
   it('the lexical floor needs a RARE term: a common one alone does not pass', () => {
     const rows = ['a', 'b', 'c', 'd', 'e'].map((id) => row(id, 'metric thing' + id, 0.1))
     // `metric` is in all 5: idf ≈ 0.087 < 0.5, and every other word is unshared.

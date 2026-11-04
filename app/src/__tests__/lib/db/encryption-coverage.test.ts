@@ -93,7 +93,11 @@ const OWNER: Record<string, string> = {
  *  scan). The read-path test below iterates `migrate-encryption`'s own
  *  specs, which only name the content-bearing tables — so no OWNER entry
  *  exists or is needed for the companions. */
-const SEAM_SCAN_TABLES = [...ENCRYPTED_TABLES, 'memory_sources'] as const
+// `memory_graph_links` (org-knowledge slice 8) is the same kind of companion:
+// plaintext identifiers, personal (which nodes a user's memories are about),
+// owned by the memories seam alone. Mutation: query it from another module →
+// the seam scan names that module.
+const SEAM_SCAN_TABLES = [...ENCRYPTED_TABLES, 'memory_sources', 'memory_graph_links'] as const
 const SQL_REFERENCE = new RegExp(
   String.raw`\b(?:FROM|INTO|UPDATE|JOIN)\s+(${SEAM_SCAN_TABLES.join('|')})\b`,
   'i',

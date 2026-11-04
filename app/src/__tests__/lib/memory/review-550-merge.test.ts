@@ -16,6 +16,7 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
 }))
 vi.mock('../../../lib/db/memories.server', () => ({
   isMemoryAvailable: () => true,
+  replaceMemoryGraphLinks: vi.fn(),
   // The settle committed this candidate's source; its event is not saved yet.
   listMemorySourcesForConversation: async () => [
     { eventId: 'ev-user', ordinal: 0, memoryId: 'mem-1', tier: 'anthropic' },

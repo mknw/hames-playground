@@ -3123,6 +3123,14 @@ through five REQUIRED seams:
 Optional: `awaitWake` (below), `tier` (default: the run frame's `inference.tier`),
 `limits` (the responder's window, for the 5% ceiling) and `settings`.
 
+**Linked terms (org-knowledge slice 8).** A `MemoryCandidate` may carry
+`terms`: extra words the lexical half (BM25) counts with the memory's
+`content`, and nothing else reads — never rendered, never embedded. The app
+fills them with the CURRENT names of the graph nodes a memory is linked to
+(`memory_graph_links`, rechecked against the graph at every recall; a node
+that is gone contributes nothing), so a memory about a project is recalled
+when the user names the project.
+
 ### The pipeline
 
 1. **Clear** `data.memories` and `data.memoryContext` — FIRST, before anything

@@ -75,6 +75,7 @@ import { createMemoryDbStore } from '../db/memories.server'
 import { getMemoryEnabled } from '../db/user-prefs.server'
 import { displayText } from './display-text'
 import { createMemoryEmbedder } from './embedder.server'
+import { linkWrittenMemories } from './graph-links.server'
 
 assertServerOnImport()
 
@@ -377,6 +378,7 @@ export async function answerMemoryProposalFor(
   let written = 0
   let stale = 0
   if (decided.choice === MEMORY_CONFIRM_SAVE) {
+    const before = ctx.events.length
     const report = await applyMemoryProposal(
       ctx,
       {
@@ -426,6 +428,9 @@ export async function answerMemoryProposalFor(
       (i) => i.outcome === 'written' || i.outcome === 'duplicate',
     ).length
     stale = report.items.filter((i) => i.outcome === 'stale' || i.outcome === 'full').length
+    // Memory -> graph links (org-knowledge slice 8): best-effort, never fails
+    // the approval, and writes nothing into the context.
+    await linkWrittenMemories(userId, payload, ctx.events.slice(before))
   }
 
   // ONE save: the person's answer and the references to what it wrote.

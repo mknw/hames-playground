@@ -439,6 +439,7 @@ export function memoryRecall<T extends MemoryRecallData>(
         rows.map((r) => ({
           id: r.id,
           content: r.content,
+          ...(r.terms && r.terms.length > 0 && { terms: r.terms }),
           semantic: 1 - r.distance,
           lastSeenMs: toMs(r.lastSeenAt),
         })),

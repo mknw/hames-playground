@@ -87,7 +87,7 @@ function stalled(_url: string, init: RequestInit): Promise<Response> {
     )
   })
 }
-function quiet(p: Promise<void>): Promise<unknown> {
+function quiet(p: Promise<unknown>): Promise<unknown> {
   return p.catch((error) => error)
 }
 

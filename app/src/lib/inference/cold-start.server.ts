@@ -228,6 +228,12 @@ export function smallScaledownSeconds(): number {
 export function noteSmallCallCompleted(at = Date.now()): void {
   small.lastCompletedAt = at
 }
+/** When this process last saw the small box answer, or `null`. The small
+ *  sibling of `largeLastCallCompletedAt`, read by the keep-warm freshness check
+ *  (`wake.server.ts`). */
+export function smallLastCallCompletedAt(): number | null {
+  return small.lastCompletedAt
+}
 export function smallProvenWarm(now = Date.now()): boolean {
   return (
     small.lastCompletedAt !== null && now - small.lastCompletedAt < smallScaledownSeconds() * 1000

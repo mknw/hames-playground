@@ -177,12 +177,18 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   largeProvenWarm,
   smallProvenWarm,
+  smallLastCallCompletedAt,
+  smallScaledownSeconds,
   noteSmallCallCompleted,
   settleBoxColdStart,
   noteBoxCallStarting,
   type WakeBox,
 } from './cold-start.server'
-import { noteLargeCallCompleted } from './large-activity.server'
+import {
+  largeLastCallCompletedAt,
+  largeScaledownSeconds,
+  noteLargeCallCompleted,
+} from './large-activity.server'
 import { resampleSmallBoxGpu } from './small-gpu.server'
 import { WakeFailure } from './wake-failure'
 
@@ -356,6 +362,11 @@ interface WakeTarget {
   attemptTimeout: () => number
   interval: () => number
   provenWarm: (now: number) => boolean
+  /** When this process last saw the box answer, for the keep-warm freshness
+   *  check ({@link KEEP_WARM_FRACTION}). */
+  lastCompletedAt: () => number | null
+  /** The box's configured idle window: the keep-warm cadence is a fraction of it. */
+  scaledownSeconds: () => number
   completed: () => void
   /** Fire-and-forget bookkeeping for the SUCCESS path only, after `completed`
    *  — never awaited, never pricing. The small wake re-samples the box's
@@ -398,9 +409,11 @@ function createWake(target: WakeTarget) {
      * Inside a turn's watch, announce BEFORE the first attempt so the warming
      * frame lands inside the wait. Without a watch, remain silent and still wait.
      * Reject on refusal or budget expiry; the caller must end the turn visibly.
+     * Resolves `false` when the short-circuit skipped the box, `true` when this
+     * call started or joined a poll that reached it.
      */
-    async ensure(now = Date.now(), signal?: AbortSignal): Promise<void> {
-      if (target.provenWarm(now)) return
+    async ensure(now = Date.now(), signal?: AbortSignal, keepWarm = false): Promise<boolean> {
+      if (keepWarm ? keptWarm(target, now) : target.provenWarm(now)) return false
       noteBoxCallStarting(target.box, now)
       // The dedupe wraps the WHOLE loop, not one attempt: concurrent turns
       // share a single poll rather than hammering one replica. Creation and
@@ -440,17 +453,20 @@ function createWake(target: WakeTarget) {
           await flight.promise.catch(() => {})
         }
       }
+      return true
     },
   }
 }
 
-const largeWake = createWake({
+const largeWakeTarget: WakeTarget = {
   box: 'large',
   failed: `${LARGE_LLM_WAKE_FAILED} (the 27B, LARGE_LLM_BASE_URL)`,
   timeout: largeWakeTimeoutMs,
   attemptTimeout: largeWakeAttemptTimeoutMs,
   interval: largeWakePollIntervalMs,
   provenWarm: largeProvenWarm,
+  lastCompletedAt: largeLastCallCompletedAt,
+  scaledownSeconds: largeScaledownSeconds,
   completed: noteLargeCallCompleted,
   // Endpoint and key were checked at private-tier entry. Read them per call,
   // not at module load, so a script setting env before importing a pattern is
@@ -478,8 +494,8 @@ const largeWake = createWake({
       }),
     },
   }),
-})
-const smallWake = createWake({
+}
+const smallWakeTarget: WakeTarget = {
   box: 'small',
   failed: SMALL_LLM_WAKE_FAILED,
   timeout: () => wakeEnvMs('SMALL_LLM_WAKE_TIMEOUT_MS', DEFAULT_SMALL_LLM_WAKE_TIMEOUT_MS),
@@ -488,6 +504,8 @@ const smallWake = createWake({
   interval: () =>
     wakeEnvMs('SMALL_LLM_WAKE_POLL_INTERVAL_MS', DEFAULT_SMALL_LLM_WAKE_POLL_INTERVAL_MS),
   provenWarm: smallProvenWarm,
+  lastCompletedAt: smallLastCallCompletedAt,
+  scaledownSeconds: smallScaledownSeconds,
   completed: noteSmallCallCompleted,
   onUp: () => {
     resampleSmallBoxGpu()
@@ -502,7 +520,9 @@ const smallWake = createWake({
         : {},
     },
   }),
-})
+}
+const largeWake = createWake(largeWakeTarget)
+const smallWake = createWake(smallWakeTarget)
 
 export const ensureLargeAwake = largeWake.ensure
 export const resetLargeWake = largeWake.reset
@@ -515,20 +535,129 @@ export const resetSmallWake = smallWake.reset
  *  route switch, `LARGE_LLM_ROUTE=openrouter`): a public per-token API has
  *  no scale-to-zero box to wake, every poll attempt is a billed call, and the
  *  first real call answers on the first attempt anyway. The SMALL box keeps
- *  its poll untouched — `describe`/`decide` stay on it in every configuration. */
-export async function ensurePrivateTierAwake(): Promise<void> {
+ *  its poll untouched — `describe`/`decide` stay on it in every configuration.
+ *
+ *  Resolves whether any box was actually reached (polled or joined), which
+ *  keep-warm reports to the page; a turn and the button ignore it. */
+export async function ensurePrivateTierAwake(
+  options: { keepWarm?: boolean } = {},
+): Promise<boolean> {
   const group = new AbortController()
+  const keepWarm = options.keepWarm === true
   const wakes = [
-    ...(largeOnOpenRouter() ? [] : [ensureLargeAwake(Date.now(), group.signal)]),
-    ensureSmallAwake(Date.now(), group.signal),
+    ...(largeOnOpenRouter() ? [] : [ensureLargeAwake(Date.now(), group.signal, keepWarm)]),
+    ensureSmallAwake(Date.now(), group.signal, keepWarm),
   ]
   try {
-    await Promise.all(wakes)
+    return (await Promise.all(wakes)).some(Boolean)
   } catch (error) {
     group.abort(error)
     await Promise.allSettled(wakes)
     throw error
   }
+}
+
+// ============================================================================
+// KEEP WARM WHILE OPEN (owner, 2026-11-04)
+//
+// "Immediately boot up the GPU on release when someone opens the app. Wait for
+// cooldown delay after app is closed." An open, visible app calls
+// `ensurePrivateTierAwake({ keepWarm: true })` on load and then every
+// `keepWarmIntervalMs()` (`harness-client/preview-header.server.ts`,
+// `keepPrivateTierWarm`). It is the SAME wake as a turn's: the same request per
+// box (the 27B's 1-token completion, the small box's `GET /health`), the same
+// in-flight dedupe and the same warm clock. The one difference is the
+// short-circuit. A turn skips a box that is proven warm at all; keep-warm skips
+// it only when this process saw it answer within the last fraction of its idle
+// window, because a box answered 299s ago into a 300s window is "proven warm"
+// and one second from scaling down. When the app is hidden or closed the calls
+// stop and each box scales down after its own configured window — the owner's
+// "cooldown delay", with no extra timer here. A visible page with no input for
+// `warmIdleCapMs()` stops the same way (FRONT, 2026-11-04).
+//
+// The cost is the setting's whole reason to exist: GPU time is billed for every
+// hour ANY signed-in user has the app open, visible and in use on the private
+// tier, plus the scale-down window after the last one leaves or goes idle. The
+// cadence is derived from `*_SCALEDOWN_SECONDS`, so a value above the
+// deployment's real window lets a box scale down between touches.
+// ============================================================================
+
+/** Keep-warm touches a box once this fraction of its idle window has passed
+ *  without a completion, and the browser asks at the same cadence. The worst
+ *  case is a check that lands just inside the fraction, so the next touch comes
+ *  two intervals later: 2/3 of the window plus one request, leaving a third of
+ *  it (100s at the shipped 300s) as margin for a slow request or a late timer. */
+export const KEEP_WARM_FRACTION = 1 / 3
+
+/** Floor on the cadence, so a tiny or mistyped scale-down window cannot turn an
+ *  open tab into a request loop. Equal to the wake's own poll interval. */
+export const KEEP_WARM_MIN_INTERVAL_MS = 5_000
+
+function keepWarmWindowMs(target: WakeTarget): number {
+  return Math.max(
+    KEEP_WARM_MIN_INTERVAL_MS,
+    Math.floor(target.scaledownSeconds() * 1000 * KEEP_WARM_FRACTION),
+  )
+}
+
+/** Fresh enough to skip a keep-warm touch: proven warm AND answered within the
+ *  keep-warm fraction of the window. */
+function keptWarm(target: WakeTarget, now: number): boolean {
+  const last = target.lastCompletedAt()
+  return target.provenWarm(now) && last !== null && now - last < keepWarmWindowMs(target)
+}
+
+/** How long an open app waits between keep-warm calls: the shortest of the
+ *  boxes' cadences, so each box is asked at least as often as it needs. A 27B
+ *  served through OpenRouter is not ours to keep warm and does not count. */
+export function keepWarmIntervalMs(): number {
+  const boxes = largeOnOpenRouter() ? [smallWakeTarget] : [largeWakeTarget, smallWakeTarget]
+  return Math.min(...boxes.map(keepWarmWindowMs))
+}
+
+/** `PRIVATE_TIER_WARM_WHILE_OPEN`: keep the private tier's boxes warm while a
+ *  signed-in user has the app open. Default ON — the owner's release decision
+ *  (2026-11-04) — and `0` turns it off. An unreadable value warns and keeps the
+ *  default, the same rule `wakeEnvMs` applies to its numbers. */
+export function warmWhileOpenEnabled(): boolean {
+  const raw = process.env.PRIVATE_TIER_WARM_WHILE_OPEN
+  if (raw === undefined || raw === '') return true
+  const v = raw.trim().toLowerCase()
+  if (v === '1' || v === 'true') return true
+  if (v === '0' || v === 'false') return false
+  console.warn(
+    `[wake] PRIVATE_TIER_WARM_WHILE_OPEN=${JSON.stringify(raw)} is not 1/0/true/false; ` +
+      'keeping the default (on).',
+  )
+  return true
+}
+
+/** The shipped idle cap: 30 minutes (FRONT, 2026-11-04, delegated by the owner). */
+export const DEFAULT_PRIVATE_TIER_WARM_IDLE_MINUTES = 30
+
+/**
+ * `PRIVATE_TIER_WARM_IDLE_MINUTES`: how long a visible page with no pointer, key
+ * or focus event keeps the boxes warm. Past it the page stops asking, the boxes
+ * cool down after their scale-down windows, and the next interaction wakes them
+ * through the same shared wake. That bounds an abandoned tab at this cap plus one
+ * scale-down window of GPU time — 35 minutes of both boxes at the shipped 30
+ * and 300 s. A positive number of minutes; anything else warns and keeps the
+ * default. The page enforces it (`lib/private-tier-keep-warm.ts`), because only
+ * the page sees input; the server sends the value.
+ */
+export function warmIdleCapMs(): number {
+  const raw = process.env.PRIVATE_TIER_WARM_IDLE_MINUTES
+  const fallback = DEFAULT_PRIVATE_TIER_WARM_IDLE_MINUTES * 60_000
+  if (raw === undefined || raw === '') return fallback
+  const minutes = Number(raw)
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    console.warn(
+      `[wake] PRIVATE_TIER_WARM_IDLE_MINUTES=${JSON.stringify(raw)} is not a positive number ` +
+        `of minutes; keeping the default (${DEFAULT_PRIVATE_TIER_WARM_IDLE_MINUTES}).`,
+    )
+    return fallback
+  }
+  return Math.round(minutes * 60_000)
 }
 
 /** A failure that ends the poll on the spot rather than being retried — see

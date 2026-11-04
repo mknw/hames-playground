@@ -139,7 +139,8 @@ beforeAll(async () => {
     ActorController: () =>
       rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
     Critic: () => rq('Critic')('i', [attempt], via),
-    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, via),
+    // Eight positional parameters (the last, `guide`, since #985), then the bag.
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
       rq('ResultDescribeBatch')(

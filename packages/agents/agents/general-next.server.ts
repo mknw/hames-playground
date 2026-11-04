@@ -436,6 +436,22 @@ async function createPatterns(
       ),
     ),
   )
+  // "What can you do?" is answered from what this composition actually holds,
+  // read from the lists the routes run with (capability-guide.ts states the
+  // contract a per-user tool gate must keep): the office route's Graph and
+  // sandbox tools, the info route's tools under Tools()'s own namespaces, the
+  // retriever route, memory if wired, and the host's page of example questions.
+  const guided = createSynthesizer({
+    guide: capabilityGuide({
+      office: collectToolNames(office),
+      info: infoTools,
+      namespaceOf: (name) =>
+        Object.entries(tools).find(([ns, list]) => ns !== 'all' && list?.includes(name))?.[0],
+      documents: true,
+      memory: deps.memory !== undefined,
+      examplesPage: deps.examplesPage,
+    }),
+  })
   const patterns = [
     orchestrator,
     compactExecution<AgentData>({
@@ -444,21 +460,10 @@ async function createPatterns(
       // Records of the previous turn too (`threadTurns`), but errors of this turn only.
       viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
       threadTurns: 2,
-      // "What can you do?" is answered from what this composition actually
-      // holds: the office route's Graph and sandbox tools, the info route's
-      // namespaces, the retriever route, memory if wired, and the host's page
-      // of example questions.
-      synthesize: createSynthesizer({
-        guide: capabilityGuide({
-          office: collectToolNames(office),
-          neo4j: tools.neo4j ?? [],
-          web: tools.web ?? [],
-          libraryDocs: docTools,
-          documents: true,
-          memory: deps.memory !== undefined,
-          examplesPage: deps.examplesPage,
-        }),
-      }),
+      // The guide rides only a turn that ran no route (`stepsThisTurn` 0):
+      // onboarding is answered directly, and a turn with tool results does not
+      // pay ~400 uncached prompt tokens for a block it is told to ignore.
+      synthesize: (input) => (input.stepsThisTurn ? baml.synthesize(input) : guided(input)),
       liveEvents: true,
     }),
   ]

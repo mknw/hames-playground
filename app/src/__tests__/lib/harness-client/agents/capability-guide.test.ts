@@ -6,11 +6,21 @@ import {
   type CapabilityGuideInput,
 } from '@hames-ai/agents/agents/capability-guide'
 
+// The namespaces Tools() would group these names under (the app's mcp-catalog does).
+const NAMESPACE: Record<string, string> = {
+  read_neo4j_cypher: 'neo4j',
+  get_neo4j_schema: 'neo4j',
+  search: 'web',
+  fetch: 'web',
+  fetch_content: 'web',
+  web_search_exa: 'web',
+  'get-library-docs': 'context7',
+  'resolve-library-id': 'context7',
+}
 const NONE: CapabilityGuideInput = {
   office: [],
-  neo4j: [],
-  web: [],
-  libraryDocs: [],
+  info: [],
+  namespaceOf: (name) => NAMESPACE[name],
   documents: false,
   memory: false,
 }
@@ -25,10 +35,10 @@ describe('capabilityGuide gates every line on the tool that provides it', () => 
     ['profile', { office: ['graph_me'] }, 'Read your Microsoft 365 profile'],
     ['ingest', { office: ['graph_file_ingest'] }, 'Copy a OneDrive or SharePoint file'],
     ['sandbox', { office: ['sandbox_bash'] }, 'by running code'],
-    ['knowledge graph', { neo4j: ['read_neo4j_cypher'] }, "organization's knowledge graph"],
-    ['web search', { web: ['web_search_exa'] }, 'Search the public web.'],
-    ['web fetch', { web: ['fetch_content'] }, 'Read a public web page.'],
-    ['library docs', { libraryDocs: ['get-library-docs'] }, 'developer library documentation'],
+    ['knowledge graph', { info: ['read_neo4j_cypher'] }, "organization's knowledge graph"],
+    ['web search', { info: ['web_search_exa'] }, 'Search the public web.'],
+    ['web fetch', { info: ['fetch_content'] }, 'Read a public web page.'],
+    ['library docs', { info: ['get-library-docs'] }, 'developer library documentation'],
     ['documents', { documents: true }, 'Search the documents uploaded to this conversation'],
     ['memory', { memory: true }, 'Remember what you tell it'],
   ])('%s', (_name, has, line) => {
@@ -37,12 +47,20 @@ describe('capabilityGuide gates every line on the tool that provides it', () => 
   })
 
   it('a fetch-only web namespace is not advertised as search, nor a search-only one as reading pages', () => {
-    expect(capabilityGuide({ ...NONE, web: ['fetch'] })).not.toContain('Search the public web')
-    expect(capabilityGuide({ ...NONE, web: ['search'] })).not.toContain('Read a public web page')
+    expect(capabilityGuide({ ...NONE, info: ['fetch'] })).not.toContain('Search the public web')
+    expect(capabilityGuide({ ...NONE, info: ['search'] })).not.toContain('Read a public web page')
+  })
+
+  // MUTATION: classify by tool name instead of `namespaceOf` (e.g. treat any name
+  // containing 'search' as web) — the second case goes red.
+  it('reads namespaces from namespaceOf, so a tool in a namespace with no line is not advertised', () => {
+    const gated = { ...NONE, namespaceOf: (name: string) => NAMESPACE[name] ?? 'archive' }
+    expect(capabilityGuide({ ...gated, info: ['search'] })).toContain('Search the public web.')
+    expect(capabilityGuide({ ...gated, info: ['archive_search'] })).toBe(capabilityGuide(NONE))
   })
 
   it('a schema-only graph namespace is not a graph capability', () => {
-    expect(capabilityGuide({ ...NONE, neo4j: ['get_neo4j_schema'] })).not.toContain('graph')
+    expect(capabilityGuide({ ...NONE, info: ['get_neo4j_schema'] })).not.toContain('graph')
   })
 })
 

@@ -163,6 +163,14 @@ export interface SandboxAttach {
   lazy?: boolean
 }
 
+/** The host's page of example questions, e.g. the app's `/use-cases`. */
+export interface ExamplesPage {
+  /** Where the page lives, as the chat should link it (a path or a URL). */
+  href: string
+  /** The page's own name, used as the link text. */
+  label: string
+}
+
 /**
  * What the app's composition root supplies per agent — ONLY app-side things
  * (#225 decision (a): the BAML pieces are imported from @hames-ai/harness-baml
@@ -172,14 +180,6 @@ export interface SandboxAttach {
  * over the way the factories used to close over the app catalog. Optional
  * members are omitted when a deployment does not compose that capability.
  */
-/** The host's page of example questions, e.g. the app's `/use-cases`. */
-export interface ExamplesPage {
-  /** Where the page lives, as the chat should link it (a path or a URL). */
-  href: string
-  /** The page's own name, used as the link text. */
-  label: string
-}
-
 export interface AgentDeps {
   /** Host permits Graph file ingestion on this deployment; absent means unavailable. */
   graphFileIngest?: boolean

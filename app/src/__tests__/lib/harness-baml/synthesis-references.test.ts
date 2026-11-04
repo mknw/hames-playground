@@ -333,7 +333,8 @@ describe('defaultSynthesize reference projection', () => {
 // Onboarding: the agent's capability guide rides the LEADING system block, and the
 // FIDELITY list gains the one exception that lets the answer state it and link its page.
 // A null guide is covered above: the historical request bytes are unchanged.
-// MUTATION: move the `{% if guide %}` block below `{{ _.role("user") }}`, or drop
+// MUTATION: move the `{% if guide %}` block below `{{ _.role("user") }}` or below
+// `USER MESSAGE`, or drop
 // the guide's fidelity exception — the first case goes red; pass `null` for the
 // guide in defaults.server.ts — the second goes red.
 describe('Synthesize capability guide', () => {
@@ -350,6 +351,8 @@ describe('Synthesize capability guide', () => {
       const system = JSON.stringify(body.system ?? body.messages[0])
       if (!body.system) expect(body.messages[0].role).toBe('system')
       expect(system).toContain(GUIDE)
+      // Ahead of USER MESSAGE, so the stable guide is a cacheable prefix (#985 review NIT).
+      expect(system.indexOf(GUIDE)).toBeLessThan(system.indexOf('USER MESSAGE'))
       expect(system).toContain('link its example-questions page as the Markdown link')
       expect(system).toContain('Reply in the')
       // The FIDELITY list (user block) gains its one exception, only with a guide.

@@ -2,12 +2,21 @@
  * The capability guide general-next's synthesizer answers "what can you do?",
  * "help" and "how do I start?" from (`Synthesize`'s `guide`, compact-execution.baml).
  *
- * Built from the tool names the agent's routes were actually composed with, so
- * a line appears only when its tool is there: a deployment whose gateway offers
- * no web search never hears itself advertise one. A tool with no line below is
- * simply not advertised, which is the safe direction for drift. The limits
- * line is unconditional because it is true of every deployment: no Microsoft
- * 365 write tool ships (AGENTS.md, "Microsoft Graph tools read only").
+ * Built from the SAME tool lists the agent's routes run with, so a line appears
+ * only when its tool is there: a deployment whose gateway offers no web search
+ * never hears itself advertise one. A tool with no line below is simply not
+ * advertised, which is the safe direction for drift; a lane that adds a tool
+ * namespace adds its line here. The limits line is unconditional because it is
+ * true of every deployment: no Microsoft 365 write tool ships (AGENTS.md,
+ * "Microsoft Graph tools read only").
+ *
+ * CONTRACT for any per-user tool gate (an allowlist, an opt-in namespace): it
+ * must filter BEFORE the routes' tool lists are built — at discovery, so
+ * `Tools()` (or the namespace resolver it is given) never returns the tool for
+ * that user. The guide then cannot name it, because it reads those lists. A
+ * gate that filters only at execution (the executor, `callTool`) leaves the
+ * tool in the lists, and the guide would advertise a tool the user cannot run.
+ * `general-next.test.ts` pins that the guide and the info route read one list.
  *
  * Pure and client-safe: no tool call, no I/O.
  */
@@ -17,10 +26,10 @@ import type { ExamplesPage } from '../types'
 export interface CapabilityGuideInput {
   /** The office route's tools: the Microsoft Graph reads and the sandbox's in-VM tools. */
   office: readonly string[]
-  /** The information route's tools, by namespace, as `Tools()` grouped them. */
-  neo4j: readonly string[]
-  web: readonly string[]
-  libraryDocs: readonly string[]
+  /** The information route's tools: the exact list that route is composed with. */
+  info: readonly string[]
+  /** The namespace `Tools()` grouped a tool under (`neo4j`, `web`, `context7`, …). */
+  namespaceOf: (tool: string) => string | undefined
   /** The agent searches this conversation's uploaded documents (its retriever route). */
   documents: boolean
   /** Per-user memory is wired on this deployment (each person still switches it on). */
@@ -28,10 +37,12 @@ export interface CapabilityGuideInput {
   examplesPage?: ExamplesPage
 }
 
-type Tools = { office: ReadonlySet<string> } & Pick<
-  CapabilityGuideInput,
-  'neo4j' | 'web' | 'libraryDocs'
->
+type Tools = {
+  office: ReadonlySet<string>
+  neo4j: readonly string[]
+  web: readonly string[]
+  libraryDocs: readonly string[]
+}
 
 /** A web tool is a fetch when its name says so — general-next's own rule for its
  *  egress gate's `fetchTools`; every other web tool searches. */
@@ -82,7 +93,13 @@ const LINES: ReadonlyArray<{ when: (tools: Tools) => boolean; line: string }> = 
 ]
 
 export function capabilityGuide(input: CapabilityGuideInput): string {
-  const tools: Tools = { ...input, office: new Set(input.office) }
+  const inNamespace = (ns: string) => input.info.filter((name) => input.namespaceOf(name) === ns)
+  const tools: Tools = {
+    office: new Set(input.office),
+    neo4j: inNamespace('neo4j'),
+    web: inNamespace('web'),
+    libraryDocs: inNamespace('context7'),
+  }
   const can = LINES.filter((l) => l.when(tools)).map((l) => l.line)
   if (input.documents) can.push('Search the documents uploaded to this conversation and cite them.')
   if (input.memory)

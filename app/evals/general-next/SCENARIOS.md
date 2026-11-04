@@ -676,11 +676,11 @@ A live pass proves: the gate keeps this message out of the graph; that judgement
 
 User, five turns: “What can you do?” · “help” · “How do I start?” · “Wat kun je allemaal voor me doen?” · “Comment est-ce que je commence ?”
 
-Expected assistant: Each turn names a few concrete things this deployment can do, in the user’s language, and links the Use cases page (`/use-cases`, opening in a new tab like every chat link). No turn claims to send mail or to schedule, move or cancel events.
+Expected assistant: Each turn names a few concrete things this deployment can do, in the user’s language, and links the Use cases page (`/use-cases`, opening in a new tab like every chat link). No turn claims to send mail, to schedule, create, move or cancel events, or to edit files in Microsoft 365.
 
 Expected routes: `answer` directly. Expected tools: none.
 
-Pass: no tool is called; every turn’s answer links `/use-cases`; no turn claims, in English, Dutch or French, to send mail or schedule, book or cancel events; chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: no tool is called; every turn’s answer links `/use-cases`; no turn claims, in English, Dutch or French and in the first person, to send mail, to schedule, book, create, move or cancel events, or to edit files in Microsoft 365; chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
 A live pass proves: the synthesizer answers onboarding questions from the capability guide — the lines general-next builds from the tools it was composed with, plus the host’s examples page — and links that page. Hermetically the scripted synthesis answers from the guide its prompt carried, so a pass proves only that the guide reached the prompt with the link and without a write claim; the answer’s language is not graded hermetically.
 

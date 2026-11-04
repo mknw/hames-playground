@@ -10,7 +10,10 @@
 // deployment's own description of what the assistant can do, built by the
 // agent from its real tool list plus the host's example-questions page —
 // trusted text written by the deployment, never tool output — so it rides in
-// the LEADING system block (system-at-front rule, prompt-role-order.test.ts).
+// the LEADING system block (system-at-front rule, prompt-role-order.test.ts),
+// ahead of USER MESSAGE: it is stable per composition, so a provider's prefix
+// cache (vLLM's on the private tier) can reuse it. The agent passes it only on
+// a turn that ran no route (general-next.server.ts).
 // It answers "what can you do?", "help" and "how do I start?" in any language.
 
 // A projection of supplied locators, never document content. Numbered in the
@@ -37,9 +40,6 @@ function Synthesize(
     {{ _.role("system") }}
     Create a user-friendly response from tool execution results.
 
-    USER MESSAGE: {{ user_message }}
-    INTENT: {{ intent }}
-
     {% if guide %}
     --- ASSISTANT GUIDE (written by this deployment, not a tool result) ---
     {{ guide }}
@@ -53,6 +53,9 @@ function Synthesize(
     ignore this guide.
 
     {% endif %}
+    USER MESSAGE: {{ user_message }}
+    INTENT: {{ intent }}
+
     {% if has_error %}
     --- ERROR OCCURRED ---
     {{ error_message }}

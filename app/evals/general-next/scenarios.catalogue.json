@@ -2628,7 +2628,7 @@
         "Wat kun je allemaal voor me doen?",
         "Comment est-ce que je commence ?"
       ],
-      "expected": "Each turn names a few concrete things this deployment can do, in the user's language, and links the Use cases page (/use-cases); no turn claims to send mail or schedule, move or cancel events. No tool is called.",
+      "expected": "Each turn names a few concrete things this deployment can do, in the user's language, and links the Use cases page (/use-cases); no turn claims to send mail, to schedule, create, move or cancel events, or to edit files in Microsoft 365. No tool is called.",
       "grader": [
         {
           "check": "noTools",
@@ -2649,20 +2649,28 @@
         },
         {
           "check": "answerNotMatches",
-          "says": "turn 1 claims no Microsoft 365 write the deployment lacks",
+          "says": "turn 1 claims no Microsoft 365 write the deployment lacks (send, schedule, create or move events, edit files there)",
           "turn": 1,
-          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "pattern": "{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:create|move|change|update|add)\\s+(?:\\w+\\s+){0,2}?(?:events?|meetings?|appointments?|invites?|invitations?)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:edit|change|modify|update|overwrite)\\s+(?:\\w+\\s+){0,3}?(?:files?|documents?)\\s+(?:in|on)\\s+(?:your\\s+)?(?:OneDrive|SharePoint|Microsoft 365)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler|déplacer|créer des (?:événements|réunions|rendez-vous)|modifier (?:vos |les )?fichiers)\\b|\\bik kan (?:ook )?(?:(?:e-?mails?|mail) (?:versturen|verzenden|sturen)|(?:afspraken|vergaderingen) (?:inplannen|plannen|verplaatsen|annuleren|aanmaken|maken)|bestanden in (?:OneDrive|SharePoint) (?:bewerken|wijzigen|aanpassen))\\b",
           "examples": {
             "match": [
               "I can send emails for you.",
-              "I am able to schedule meetings.",
+              "I'll schedule the meeting.",
+              "I am able to cancel meetings.",
+              "I can create calendar events for you.",
+              "I can move your meetings.",
+              "I can edit files in your OneDrive.",
               "Je peux envoyer des e-mails.",
-              "Ik kan e-mails versturen."
+              "Je peux créer des réunions.",
+              "Ik kan e-mails versturen.",
+              "Ik kan afspraken inplannen."
             ],
             "noMatch": [
               "I can't send mail or change events.",
               "I cannot send mail.",
               "I am not able to send mail.",
+              "I can write a draft you can send yourself.",
+              "I can't create or change calendar events, or edit files in Microsoft 365.",
               "Je ne peux pas envoyer de mail.",
               "Ik kan geen e-mails versturen.",
               "I can read your mail and calendar.",
@@ -2685,20 +2693,28 @@
         },
         {
           "check": "answerNotMatches",
-          "says": "turn 2 claims no Microsoft 365 write the deployment lacks",
+          "says": "turn 2 claims no Microsoft 365 write the deployment lacks (send, schedule, create or move events, edit files there)",
           "turn": 2,
-          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "pattern": "{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:create|move|change|update|add)\\s+(?:\\w+\\s+){0,2}?(?:events?|meetings?|appointments?|invites?|invitations?)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:edit|change|modify|update|overwrite)\\s+(?:\\w+\\s+){0,3}?(?:files?|documents?)\\s+(?:in|on)\\s+(?:your\\s+)?(?:OneDrive|SharePoint|Microsoft 365)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler|déplacer|créer des (?:événements|réunions|rendez-vous)|modifier (?:vos |les )?fichiers)\\b|\\bik kan (?:ook )?(?:(?:e-?mails?|mail) (?:versturen|verzenden|sturen)|(?:afspraken|vergaderingen) (?:inplannen|plannen|verplaatsen|annuleren|aanmaken|maken)|bestanden in (?:OneDrive|SharePoint) (?:bewerken|wijzigen|aanpassen))\\b",
           "examples": {
             "match": [
               "I can send emails for you.",
-              "I am able to schedule meetings.",
+              "I'll schedule the meeting.",
+              "I am able to cancel meetings.",
+              "I can create calendar events for you.",
+              "I can move your meetings.",
+              "I can edit files in your OneDrive.",
               "Je peux envoyer des e-mails.",
-              "Ik kan e-mails versturen."
+              "Je peux créer des réunions.",
+              "Ik kan e-mails versturen.",
+              "Ik kan afspraken inplannen."
             ],
             "noMatch": [
               "I can't send mail or change events.",
               "I cannot send mail.",
               "I am not able to send mail.",
+              "I can write a draft you can send yourself.",
+              "I can't create or change calendar events, or edit files in Microsoft 365.",
               "Je ne peux pas envoyer de mail.",
               "Ik kan geen e-mails versturen.",
               "I can read your mail and calendar.",
@@ -2721,20 +2737,28 @@
         },
         {
           "check": "answerNotMatches",
-          "says": "turn 3 claims no Microsoft 365 write the deployment lacks",
+          "says": "turn 3 claims no Microsoft 365 write the deployment lacks (send, schedule, create or move events, edit files there)",
           "turn": 3,
-          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "pattern": "{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:create|move|change|update|add)\\s+(?:\\w+\\s+){0,2}?(?:events?|meetings?|appointments?|invites?|invitations?)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:edit|change|modify|update|overwrite)\\s+(?:\\w+\\s+){0,3}?(?:files?|documents?)\\s+(?:in|on)\\s+(?:your\\s+)?(?:OneDrive|SharePoint|Microsoft 365)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler|déplacer|créer des (?:événements|réunions|rendez-vous)|modifier (?:vos |les )?fichiers)\\b|\\bik kan (?:ook )?(?:(?:e-?mails?|mail) (?:versturen|verzenden|sturen)|(?:afspraken|vergaderingen) (?:inplannen|plannen|verplaatsen|annuleren|aanmaken|maken)|bestanden in (?:OneDrive|SharePoint) (?:bewerken|wijzigen|aanpassen))\\b",
           "examples": {
             "match": [
               "I can send emails for you.",
-              "I am able to schedule meetings.",
+              "I'll schedule the meeting.",
+              "I am able to cancel meetings.",
+              "I can create calendar events for you.",
+              "I can move your meetings.",
+              "I can edit files in your OneDrive.",
               "Je peux envoyer des e-mails.",
-              "Ik kan e-mails versturen."
+              "Je peux créer des réunions.",
+              "Ik kan e-mails versturen.",
+              "Ik kan afspraken inplannen."
             ],
             "noMatch": [
               "I can't send mail or change events.",
               "I cannot send mail.",
               "I am not able to send mail.",
+              "I can write a draft you can send yourself.",
+              "I can't create or change calendar events, or edit files in Microsoft 365.",
               "Je ne peux pas envoyer de mail.",
               "Ik kan geen e-mails versturen.",
               "I can read your mail and calendar.",
@@ -2757,20 +2781,28 @@
         },
         {
           "check": "answerNotMatches",
-          "says": "turn 4 claims no Microsoft 365 write the deployment lacks",
+          "says": "turn 4 claims no Microsoft 365 write the deployment lacks (send, schedule, create or move events, edit files there)",
           "turn": 4,
-          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "pattern": "{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:create|move|change|update|add)\\s+(?:\\w+\\s+){0,2}?(?:events?|meetings?|appointments?|invites?|invitations?)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:edit|change|modify|update|overwrite)\\s+(?:\\w+\\s+){0,3}?(?:files?|documents?)\\s+(?:in|on)\\s+(?:your\\s+)?(?:OneDrive|SharePoint|Microsoft 365)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler|déplacer|créer des (?:événements|réunions|rendez-vous)|modifier (?:vos |les )?fichiers)\\b|\\bik kan (?:ook )?(?:(?:e-?mails?|mail) (?:versturen|verzenden|sturen)|(?:afspraken|vergaderingen) (?:inplannen|plannen|verplaatsen|annuleren|aanmaken|maken)|bestanden in (?:OneDrive|SharePoint) (?:bewerken|wijzigen|aanpassen))\\b",
           "examples": {
             "match": [
               "I can send emails for you.",
-              "I am able to schedule meetings.",
+              "I'll schedule the meeting.",
+              "I am able to cancel meetings.",
+              "I can create calendar events for you.",
+              "I can move your meetings.",
+              "I can edit files in your OneDrive.",
               "Je peux envoyer des e-mails.",
-              "Ik kan e-mails versturen."
+              "Je peux créer des réunions.",
+              "Ik kan e-mails versturen.",
+              "Ik kan afspraken inplannen."
             ],
             "noMatch": [
               "I can't send mail or change events.",
               "I cannot send mail.",
               "I am not able to send mail.",
+              "I can write a draft you can send yourself.",
+              "I can't create or change calendar events, or edit files in Microsoft 365.",
               "Je ne peux pas envoyer de mail.",
               "Ik kan geen e-mails versturen.",
               "I can read your mail and calendar.",
@@ -2793,20 +2825,28 @@
         },
         {
           "check": "answerNotMatches",
-          "says": "turn 5 claims no Microsoft 365 write the deployment lacks",
+          "says": "turn 5 claims no Microsoft 365 write the deployment lacks (send, schedule, create or move events, edit files there)",
           "turn": 5,
-          "pattern": "{{negationGuard}}\\b(?:can|could|will|able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler)\\b|\\bik kan (?:ook )?(?:e-?mails? |mail |afspraken |vergaderingen )?(?:versturen|verzenden|sturen|inplannen|plannen|verplaatsen|annuleren)\\b",
+          "pattern": "{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:send|schedule|book|cancel|reschedule)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:create|move|change|update|add)\\s+(?:\\w+\\s+){0,2}?(?:events?|meetings?|appointments?|invites?|invitations?)\\b|{{negationGuard}}\\bI(?:\\s+(?:can|could|will)|['’]ll|\\s+am able to|['’]m able to)\\s+(?:also\\s+)?(?:edit|change|modify|update|overwrite)\\s+(?:\\w+\\s+){0,3}?(?:files?|documents?)\\s+(?:in|on)\\s+(?:your\\s+)?(?:OneDrive|SharePoint|Microsoft 365)\\b|\\bje (?:peux|pourrai) (?:aussi |également )?(?:envoyer|planifier|programmer|annuler|déplacer|créer des (?:événements|réunions|rendez-vous)|modifier (?:vos |les )?fichiers)\\b|\\bik kan (?:ook )?(?:(?:e-?mails?|mail) (?:versturen|verzenden|sturen)|(?:afspraken|vergaderingen) (?:inplannen|plannen|verplaatsen|annuleren|aanmaken|maken)|bestanden in (?:OneDrive|SharePoint) (?:bewerken|wijzigen|aanpassen))\\b",
           "examples": {
             "match": [
               "I can send emails for you.",
-              "I am able to schedule meetings.",
+              "I'll schedule the meeting.",
+              "I am able to cancel meetings.",
+              "I can create calendar events for you.",
+              "I can move your meetings.",
+              "I can edit files in your OneDrive.",
               "Je peux envoyer des e-mails.",
-              "Ik kan e-mails versturen."
+              "Je peux créer des réunions.",
+              "Ik kan e-mails versturen.",
+              "Ik kan afspraken inplannen."
             ],
             "noMatch": [
               "I can't send mail or change events.",
               "I cannot send mail.",
               "I am not able to send mail.",
+              "I can write a draft you can send yourself.",
+              "I can't create or change calendar events, or edit files in Microsoft 365.",
               "Je ne peux pas envoyer de mail.",
               "Ik kan geen e-mails versturen.",
               "I can read your mail and calendar.",

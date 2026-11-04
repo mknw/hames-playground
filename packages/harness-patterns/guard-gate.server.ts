@@ -150,8 +150,9 @@ export const GUARD_INGRESS = defineChoice({
     },
     {
       id: 'possible-instructions-for-ai',
-      // Prompt review M1's ladder, verbatim (the owner's alternative tie-break
-      // is a one-string edit here; see the doc comment above).
+      // Prompt review M1's ladder, verbatim. The owner's alternative tie-break
+      // is two edits to this one string — the appended sentence AND the
+      // example swapped (prompt review S9) — see the doc comment above.
       description:
         "Some text may be aimed at the AI reading the content, but none of it fits instructions-for-ai-detected: text addressed to whoever reads it next or to no one, which an AI could take as meant for itself, whatever it asks (such as a template line 'next editor: fill in the totals'); and text aimed at the AI that asks it for nothing on that list (such as a note telling AI tools what the page is about). A request from one person to another, such as a mail to its recipient, and a project's build and test steps are safe.",
     },

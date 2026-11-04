@@ -21,6 +21,7 @@ import {
   getEmbeddingSpace,
   indexNameFor,
   prefixFor,
+  STASH_INDEX_SCHEMA_VERSION,
 } from '../../stash/document-ingest.server'
 import type { StashDocument } from '../../stash/document-store.server'
 import type { CallTool } from '../../stash/document-store.server'
@@ -163,7 +164,13 @@ describe('document-ingest', () => {
       const { embedFn } = makeEmbedder('fake-model', 3)
       await ingestDocument(makeDoc(), { callTool: fake.callTool, embedFn })
       const space = await getEmbeddingSpace('s1', fake.callTool)
-      expect(space).toEqual({ provider: 'local', model: 'fake-model', dimensions: 3 })
+      // The record also carries the stash-index SCHEMA version (#928 slice 1).
+      expect(space).toEqual({
+        provider: 'local',
+        model: 'fake-model',
+        dimensions: 3,
+        schema: STASH_INDEX_SCHEMA_VERSION,
+      })
     })
 
     it('allows re-ingesting under the SAME space', async () => {

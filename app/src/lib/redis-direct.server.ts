@@ -207,6 +207,11 @@ export function makeDirectCallTool(injected?: Redis): CallTool {
             s(args.distance_metric ?? 'COSINE'),
             META_FIELD,
             'TEXT',
+            // The plain, full-text-indexed chunk text (#928 slice 1) — BM25
+            // scores this field. Must stay in step with the package's
+            // TEXT_FIELD ('text'): the stash writes it via plain `hset`.
+            'text',
+            'TEXT',
             // Dedup (later): append `'session_ids','TAG','SEPARATOR',','` here and
             // hset a session_ids field, to enable a per-session FT.SEARCH filter.
           )
@@ -227,6 +232,13 @@ export function makeDirectCallTool(injected?: Redis): CallTool {
         }
         case 'vector_search_hash':
           return ok(await knnSearch(redis, args))
+
+        case 'keyword_search_hash':
+          // {index_name, query, k} — RediSearch BM25 over the full-text field
+          // (#928 slice 1). Same hit shape as `vector_search_hash` so
+          // `parseHits` consumes it identically; the score is BM25 relevance
+          // (higher = more relevant).
+          return ok(await keywordSearch(redis, args))
 
         default:
           return fail(`redis-direct: unhandled tool "${name}"`)
@@ -278,6 +290,59 @@ async function knnSearch(
     const key = reply[i]
     const fields = reply[i + 1]
     const rec: Record<string, unknown> = { id: typeof key === 'string' ? key : s(key) }
+    if (Array.isArray(fields)) {
+      for (let j = 0; j + 1 < fields.length; j += 2) {
+        const val = fields[j + 1]
+        rec[s(fields[j])] = Buffer.isBuffer(val) ? val.toString('utf8') : val
+      }
+    }
+    rows.push(rec)
+  }
+  return rows
+}
+
+/**
+ * BM25 keyword search via native `FT.SEARCH` with `SCORER BM25` (#928 slice
+ * 1). The query is tokenized on non-alphanumerics and the terms are joined
+ * with `|` (union) — a question whose terms don't ALL appear in one document
+ * still matches, and BM25 ranks the documents containing more of the terms
+ * higher. WITHSCORES interleaves the score after each key:
+ * [total, key, score, [field,val,...], ...].
+ */
+async function keywordSearch(
+  redis: Redis,
+  args: Record<string, unknown>,
+): Promise<Array<Record<string, unknown>>> {
+  const k = Number(args.k) || 5
+  const terms = String(args.query ?? '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 0)
+  if (terms.length === 0) return []
+  const reply = (await redis.call(
+    'FT.SEARCH',
+    s(args.index_name),
+    terms.join(' | '),
+    'SCORER',
+    'BM25',
+    'WITHSCORES',
+    'LIMIT',
+    '0',
+    String(k),
+    'RETURN',
+    '1',
+    META_FIELD,
+  )) as unknown
+
+  if (!Array.isArray(reply) || reply.length < 2) return []
+  const rows: Array<Record<string, unknown>> = []
+  for (let i = 1; i + 2 < reply.length; i += 3) {
+    const key = reply[i]
+    const score = reply[i + 1]
+    const fields = reply[i + 2]
+    const rec: Record<string, unknown> = {
+      id: typeof key === 'string' ? key : s(key),
+      score: typeof score === 'number' ? score : Number(score),
+    }
     if (Array.isArray(fields)) {
       for (let j = 0; j + 1 < fields.length; j += 2) {
         const val = fields[j + 1]

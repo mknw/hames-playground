@@ -9,6 +9,10 @@
  *     session's ingested uploads). Live. Reaches Redis only through the
  *     `CallTool` seam — importing this subpath never opens a socket; whether a
  *     deployment HAS a stash is runtime configuration.
+ *   - {@link createRedisKeywordBackend} — the same stash, scored by RediSearch
+ *     BM25 over the index's full-text field (the keyword half of hybrid
+ *     retrieval, #928 slice 1). Live, on transports that implement
+ *     `keyword_search_hash` (the app's direct redis adapter).
  *   - {@link createSupabaseBackend} — company pgvector corpus via the Supabase
  *     MCP (text-in, server-side embed). Deferred stub (pending IT access).
  *
@@ -17,7 +21,8 @@
  * retriever pattern without the backends pulls neither the stash pipeline nor
  * its transport.
  *
- * Server-only: both re-exported modules call `assertServerOnImport()`.
+ * Server-only: every re-exported module calls `assertServerOnImport()`.
  */
 export { createRedisBackend } from './redis-backend.server'
+export { createRedisKeywordBackend } from './redis-keyword-backend.server'
 export { createSupabaseBackend, type SupabaseBackendConfig } from './supabase-backend.server'

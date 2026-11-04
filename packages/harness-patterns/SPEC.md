@@ -1871,10 +1871,12 @@ interface RetrieverBackend {
 2. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
    plus an `error` event (per-backend isolation) — one bad source never sinks
    the retrieval. A failed `RetrieveQuery` falls back to the raw message.
-3. **Merge**: flatten, sort closest-first (`score` ascending; un-scored last),
-   cap at `k`. Writes `scope.data.matches` and emits a `tool_result`
-   (`tool: 'retriever'`) — the same channel `compactExecution` reads via
-   `view.fromLastPattern()`.
+3. **Merge**: with ONE backend, flatten and sort closest-first (`score`
+   ascending; un-scored last); with more than one, reciprocal-rank fusion
+   (`reciprocalRankFusion`, constant k = 60 — the summed `1/(k+rank)` per hit,
+   no cross-backend score comparability needed). Cap at `k`. Writes
+   `scope.data.matches` and emits a `tool_result` (`tool: 'retriever'`) — the
+   same channel `compactExecution` reads via `view.fromLastPattern()`.
 
 A backend returns only what the agent may see. The `redis` backend (via
 `searchDocuments`) drops hits of documents the user hid or archived, judged by

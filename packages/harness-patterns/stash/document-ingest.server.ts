@@ -9,6 +9,8 @@
  * and answers queries:
  *
  *   embedOne(query)  →  vector store KNN  →  top-k chunks (with provenance)
+ *   query text       →  RediSearch BM25 → top-k chunks (the keyword half of
+ *                       hybrid retrieval, #928 slice 1)
  *
  * The Redis vector plumbing (index, upsert, KNN, payload encoding) lives in the
  * shared `vector-store.server.ts` — this module owns the document-specific
@@ -59,7 +61,7 @@ import {
   type EmbeddingSpace,
   type SingleEmbeddingResult,
 } from './embeddings.server'
-import { createVectorStore, sanitize, spaceTag } from './vector-store.server'
+import { createVectorStore, sanitize, spaceTag, type VectorHit } from './vector-store.server'
 
 assertServerOnImport()
 
@@ -99,7 +101,10 @@ export interface SearchHit {
   content: string
   startOffset?: number
   endOffset?: number
-  /** Vector distance (lower = closer) when the backend reports one. */
+  /** Relevance score. The vector path reports a distance (lower = closer);
+   *  the keyword path (#928 slice 1) reports BM25 relevance (higher = more
+   *  relevant). Not comparable across the two — which is exactly why the
+   *  multi-backend merge is rank-based (see `reciprocalRankFusion`). */
   score?: number
   /**
    * Total chunk count of this hit's source document, when the document record
@@ -130,12 +135,37 @@ export interface SearchOptions {
 
 const SPACE_KEY_PREFIX = 'stash:space'
 
+/**
+ * The stash index's SCHEMA version, suffixed onto the index name
+ * (`stash_idx_<session>_<space>_v<N>`). Bump it whenever the indexed chunk
+ * record gains or changes a field the index schema declares — v2 (2026-11,
+ * #928 slice 1) added the plain, full-text-indexed `text` field BM25 scores.
+ *
+ * An index name is only ever CREATED under the version that was current when
+ * it was written, so an old corpus's chunks stay in the old index and keep
+ * their 7-day TTL — the old index definition simply goes empty as its chunks
+ * expire and is never read again. A corpus recorded under an older schema is
+ * re-ingested LAZILY into the current index by the ingest safety net
+ * ({@link ensureSessionIngested}), which treats `indexed` documents as
+ * un-ingested while the recorded space's schema is behind.
+ */
+export const STASH_INDEX_SCHEMA_VERSION = 2
+
 export function indexNameFor(sessionId: string, space: EmbeddingSpace): string {
-  return `stash_idx_${sanitize(sessionId)}_${spaceTag(space)}`
+  return `stash_idx_${sanitize(sessionId)}_${spaceTag(space)}_v${STASH_INDEX_SCHEMA_VERSION}`
 }
 
 export function prefixFor(sessionId: string, space: EmbeddingSpace): string {
   return `stashvec:${sessionId}:${spaceTag(space)}:`
+}
+
+/**
+ * The schema version a recorded corpus was ingested under. A space recorded
+ * before the field existed (v1, pre-#928) reads as version 1 — never as
+ * current, so a legacy corpus is always eligible for the lazy re-ingest.
+ */
+export function spaceSchemaVersion(space: EmbeddingSpace): number {
+  return typeof space.schema === 'number' && Number.isFinite(space.schema) ? space.schema : 1
 }
 
 function spaceKey(sessionId: string): string {
@@ -180,7 +210,12 @@ export async function getEmbeddingSpace(
   if (value == null || typeof value !== 'object') return null
   const s = value as Partial<EmbeddingSpace>
   if (!s.provider || !s.model || typeof s.dimensions !== 'number') return null
-  return { provider: s.provider, model: s.model, dimensions: s.dimensions }
+  return {
+    provider: s.provider,
+    model: s.model,
+    dimensions: s.dimensions,
+    ...(typeof s.schema === 'number' ? { schema: s.schema } : {}),
+  }
 }
 
 async function recordSpace(
@@ -189,14 +224,15 @@ async function recordSpace(
   space: EmbeddingSpace,
   ttl: number,
 ): Promise<void> {
+  // The space record carries the stash-index SCHEMA version the corpus was
+  // ingested under (#928 slice 1) — the fact the lazy re-ingest reads.
   await callTool('json_set', {
     name: spaceKey(sessionId),
     path: '$',
-    value: JSON.stringify(space),
+    value: JSON.stringify({ ...space, schema: STASH_INDEX_SCHEMA_VERSION }),
     expire_seconds: ttl,
   })
 }
-
 // ============================================================================
 // Ingest
 // ============================================================================
@@ -232,28 +268,25 @@ export async function ingestDocument(
   const store = createVectorStore({ indexName, prefix, dim: space.dimensions, callTool })
   await store.ensureIndex()
 
-  // Sequential: the gateway runs the redis MCP over one serial stdio pipe, so
-  // concurrent writes only queue and time out. Each chunk is 2 Redis calls.
   for (let i = 0; i < chunks.length; i++) {
     const c = chunks[i]
-    await store.upsert(
-      `${doc.id}:${c.index}`,
-      vectors[i],
-      {
-        content: c.content,
-        doc_id: doc.id,
-        ...(doc.provenance ? { provenance: doc.provenance } : {}),
-        session_id: doc.sessionId,
-        source: doc.filename,
-        chunk_index: c.index,
-        start_offset: c.startOffset,
-        end_offset: c.endOffset,
-        model: space.model,
-        provider: space.provider,
-        dim: space.dimensions,
-      },
-      ttl,
-    )
+    await store.upsert(`${doc.id}:${c.index}`, vectors[i], {
+      content: c.content,
+      // The searchable plain text (#928 slice 1): written to its own hash
+      // field by `upsert`, full-text-indexed so BM25 can score it. The base64
+      // `meta` JSON is one opaque token to the index and cannot be scored.
+      text: c.content,
+      doc_id: doc.id,
+      ...(doc.provenance ? { provenance: doc.provenance } : {}),
+      session_id: doc.sessionId,
+      source: doc.filename,
+      chunk_index: c.index,
+      start_offset: c.startOffset,
+      end_offset: c.endOffset,
+      model: space.model,
+      provider: space.provider,
+      dim: space.dimensions,
+    })
   }
 
   await recordSpace(callTool, doc.sessionId, space, ttl)
@@ -503,7 +536,9 @@ async function markIngestStatus(
  * means "not chosen", not "the gate never fired". The net leaves it alone; a
  * CHOSEN sandbox output carries a status ('pending'/'indexed' skipped above,
  * 'failed' retried as for any other document).
- * Skips `'indexed'` (searchable), `'pending'` (the gate is actively ingesting
+ * Skips `'indexed'` (searchable — except while the recorded corpus's index
+ * schema is behind the current one, #928 slice 1: then it is re-ingested into
+ * the current-version index), `'pending'` (the gate is actively ingesting
  * it — re-ingesting would double the work and contend on the serial gateway),
  * and non-convertible `base64` binaries. A fully-indexed corpus costs
  * just one `listDocuments`.
@@ -520,14 +555,25 @@ export async function ensureSessionIngested(
 ): Promise<{ skippedFlagged: number }> {
   const callTool = opts.callTool ?? resolveStashCallTool()
   const metas = await listDocuments(sessionId, callTool)
+  // Lazy re-ingest (#928 slice 1): a corpus recorded under an older index
+  // schema lives in an old-version index the current search path never reads.
+  // While the recorded space is behind, `indexed` documents are re-ingested
+  // too — the re-ingest writes them into the current-version index and
+  // re-records the space at the current schema, so the next net run is a
+  // cheap no-op again. 'pending' stays skipped: that ingest is running right
+  // now and already writes the current schema.
+  const recorded = metas.length > 0 ? await getEmbeddingSpace(sessionId, callTool) : null
+  const recordedSchema = recorded ? spaceSchemaVersion(recorded) : STASH_INDEX_SCHEMA_VERSION
+  if (recordedSchema < STASH_INDEX_SCHEMA_VERSION) {
+    console.info(
+      `[ingest] session ${sessionId}'s corpus was indexed under stash index schema ` +
+        `v${recordedSchema} (current v${STASH_INDEX_SCHEMA_VERSION}) — re-ingesting into the current index.`,
+    )
+  }
   let skippedFlagged = 0
   for (const m of metas) {
-    if (m.ingestStatus === 'indexed' || m.ingestStatus === 'pending') continue
-    // A sandbox output is indexed only when the person chooses it (#836): the
-    // promotion path (`promoteOutputs`) stores no `ingestStatus`, so an absent
-    // one here means "not chosen" — indexing it anyway would bypass that
-    // choice. A chosen one carries a status and is handled by the rules above
-    // and below ('failed' is retried like any other document's).
+    if (m.ingestStatus === 'pending') continue
+    if (m.ingestStatus === 'indexed' && recordedSchema >= STASH_INDEX_SCHEMA_VERSION) continue
     if (m.provenance === 'sandbox-output' && !m.ingestStatus) continue
     // Skip binaries we can't turn into text; convertible ones (with conversion
     // enabled) fall through to ingestStashDocument, which converts them.
@@ -612,47 +658,18 @@ async function documentState(
 }
 
 /**
- * Embed `query` with the session's recorded model and KNN-search its index.
- * Returns [] when the session has no ingested corpus yet. The query is always
- * embedded with the *recorded* provider/model, and {@link assertSameSpace}
- * re-checks dimensionality — a search can never compare across embedding spaces.
- *
- * Hits of hidden or archived documents are dropped (see {@link documentState}):
- * hiding a document does not remove its chunks from the index, so the flags are
- * honoured here, at search time, which is also what makes un-hiding instant.
- * Since filtered hits would otherwise shrink the answer below `k` while visible
- * matches remain, the index is asked for a wider span until `k` visible hits are
- * found, the index runs out, or the span reaches {@link MAX_SEARCH_SPAN} chunks;
- * visible matches ranked beyond that ceiling are not returned.
+ * The visibility-widening search loop SHARED by {@link searchDocuments} and
+ * {@link searchDocumentsKeyword}: asks `fetchBatch(span)` for a ranking, drops
+ * excluded and invisible hits, and widens the span until `k` visible hits are
+ * found, the index runs out, or {@link MAX_SEARCH_SPAN} is reached.
  */
-export async function searchDocuments(
+async function visibleHits(
   sessionId: string,
-  query: string,
-  opts: SearchOptions = {},
+  k: number,
+  excludeSet: Set<string>,
+  callTool: CallTool,
+  fetchBatch: (span: number) => Promise<VectorHit[]>,
 ): Promise<SearchHit[]> {
-  const callTool = opts.callTool ?? resolveStashCallTool()
-  const embedOneFn = opts.embedOneFn ?? defaultEmbedOne
-
-  const recorded = await getEmbeddingSpace(sessionId, callTool)
-  if (!recorded) return []
-
-  const q = await embedOneFn(query, {
-    ...opts.embedding,
-    provider: recorded.provider,
-    model: recorded.model,
-    dimensions: recorded.dimensions,
-  })
-  assertSameSpace(recorded, { provider: q.provider, model: q.model, dimensions: q.dimensions })
-
-  const store = createVectorStore({
-    indexName: indexNameFor(sessionId, recorded),
-    prefix: prefixFor(sessionId, recorded),
-    dim: recorded.dimensions,
-    callTool,
-  })
-
-  const k = opts.k ?? 5
-  const excludeSet = new Set(opts.excludeIds ?? [])
   // One record read per document per search, however many spans are tried.
   const states = new Map<string, Promise<{ visible: boolean; chunks?: number }>>()
   const stateOf = (docId: string) => {
@@ -663,7 +680,7 @@ export async function searchDocuments(
 
   let span = k
   for (;;) {
-    const hits = await store.search(q.vector, span)
+    const hits = await fetchBatch(span)
 
     // Resolve this batch's distinct documents up front, a few at a time, so the
     // loop below only awaits settled answers.
@@ -708,6 +725,127 @@ export async function searchDocuments(
     if (out.length >= k || hits.length < span || span >= MAX_SEARCH_SPAN) return out
     span = Math.min(span * 2, MAX_SEARCH_SPAN)
   }
+}
+
+/**
+ * The lazy re-ingest of a corpus whose recorded index schema is behind the
+ * current one (#928 slice 1), deduped per session so concurrent searches share
+ * one run. Fire-and-forget from the search paths — never block a query on a
+ * multi-minute ingest (the same trade the retriever's background safety net
+ * makes): the search that triggered it still answers from the (still empty)
+ * current-version index, and the corpus becomes searchable there as the
+ * re-ingest lands. A failure is logged and retried by the next search.
+ */
+const staleSchemaReingest = new Map<string, Promise<void>>()
+
+function reingestStaleSchema(sessionId: string, fromSchema: number, callTool: CallTool): void {
+  if (staleSchemaReingest.has(sessionId)) return
+  console.info(
+    `[ingest] session ${sessionId}'s corpus was indexed under stash index schema ` +
+      `v${fromSchema}; re-ingesting it into v${STASH_INDEX_SCHEMA_VERSION} in the background`,
+  )
+  const run = ensureSessionIngested(sessionId, { callTool })
+    .then(() => undefined)
+    .catch((err: unknown) => {
+      console.warn(
+        `[ingest] lazy schema re-ingest failed for session ${sessionId} — the next search retries it:`,
+        err instanceof Error ? err.message : err,
+      )
+    })
+    .finally(() => staleSchemaReingest.delete(sessionId))
+  staleSchemaReingest.set(sessionId, run)
+}
+
+/**
+ * Embed `query` with the session's recorded model and KNN-search its index.
+ * Returns [] when the session has no ingested corpus yet. The query is always
+ * embedded with the *recorded* provider/model, and {@link assertSameSpace}
+ * re-checks dimensionality — a search can never compare across embedding spaces.
+ *
+ * Hits of hidden or archived documents are dropped (see {@link documentState}):
+ * hiding a document does not remove its chunks from the index, so the flags are
+ * honoured here, at search time, which is also what makes un-hiding instant.
+ * Since filtered hits would otherwise shrink the answer below `k` while visible
+ * matches remain, the index is asked for a wider span until `k` visible hits are
+ * found, the index runs out, or the span reaches {@link MAX_SEARCH_SPAN} chunks;
+ * visible matches ranked beyond that ceiling are not returned.
+ *
+ * A corpus recorded under an older index schema is not in the index this reads
+ * (v2, #928 slice 1); it triggers the lazy background re-ingest and answers []
+ * until that lands — the same fill-in behaviour the retriever's safety net has
+ * always had for a not-yet-indexed corpus.
+ */
+export async function searchDocuments(
+  sessionId: string,
+  query: string,
+  opts: SearchOptions = {},
+): Promise<SearchHit[]> {
+  const callTool = opts.callTool ?? resolveStashCallTool()
+  const embedOneFn = opts.embedOneFn ?? defaultEmbedOne
+
+  const recorded = await getEmbeddingSpace(sessionId, callTool)
+  if (!recorded) return []
+  if (spaceSchemaVersion(recorded) < STASH_INDEX_SCHEMA_VERSION) {
+    reingestStaleSchema(sessionId, spaceSchemaVersion(recorded), callTool)
+  }
+
+  const q = await embedOneFn(query, {
+    ...opts.embedding,
+    provider: recorded.provider,
+    model: recorded.model,
+    dimensions: recorded.dimensions,
+  })
+  assertSameSpace(recorded, { provider: q.provider, model: q.model, dimensions: q.dimensions })
+
+  const store = createVectorStore({
+    indexName: indexNameFor(sessionId, recorded),
+    prefix: prefixFor(sessionId, recorded),
+    dim: recorded.dimensions,
+    callTool,
+  })
+
+  const k = opts.k ?? 5
+  const excludeSet = new Set(opts.excludeIds ?? [])
+  return visibleHits(sessionId, k, excludeSet, callTool, (span) => store.search(q.vector, span))
+}
+
+/**
+ * BM25 keyword search over the session index's full-text field (#928 slice 1).
+ * The keyword half of hybrid retrieval: no embedding, no vector comparison —
+ * the query text goes to RediSearch's BM25 scorer against the plain `text`
+ * field every v2 ingest wrote. Same no-corpus, visibility, exclusion and
+ * widening contracts as {@link searchDocuments}, over the same index; the score
+ * each hit carries is BM25 relevance (HIGHER is more relevant — unlike the
+ * vector path's distance), which is why the multi-backend merge is rank-based.
+ *
+ * Requires a transport that implements `keyword_search_hash` (the app's direct
+ * redis adapter; the MCP gateway's redis server exposes no full-text search, so
+ * over the gateway transport this FAILS — loudly, as a backend error the
+ * retriever isolates, never as a silent empty result).
+ */
+export async function searchDocumentsKeyword(
+  sessionId: string,
+  query: string,
+  opts: SearchOptions = {},
+): Promise<SearchHit[]> {
+  const callTool = opts.callTool ?? resolveStashCallTool()
+
+  const recorded = await getEmbeddingSpace(sessionId, callTool)
+  if (!recorded) return []
+  if (spaceSchemaVersion(recorded) < STASH_INDEX_SCHEMA_VERSION) {
+    reingestStaleSchema(sessionId, spaceSchemaVersion(recorded), callTool)
+  }
+
+  const store = createVectorStore({
+    indexName: indexNameFor(sessionId, recorded),
+    prefix: prefixFor(sessionId, recorded),
+    dim: recorded.dimensions,
+    callTool,
+  })
+
+  const k = opts.k ?? 5
+  const excludeSet = new Set(opts.excludeIds ?? [])
+  return visibleHits(sessionId, k, excludeSet, callTool, (span) => store.searchKeyword(query, span))
 }
 
 function str(v: unknown): string | undefined {

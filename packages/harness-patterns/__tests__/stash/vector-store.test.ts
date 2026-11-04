@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
@@ -244,6 +245,99 @@ describe('vector-store', () => {
         'local_Qwen3_Embedding_0_6B_1024',
       )
       expect(sanitize('a/b.c:d')).toBe('a_b_c_d')
+    })
+
+    // CodeQL js/polynomial-redos (PR #967): the trim was /^_+|_+$/g, whose
+    // unbounded `_+` runs backtrack polynomially on strings of many "_". The
+    // fix keeps the collapse regex and trims by index loop; these tests pin
+    // (a) byte-identical output against the original regex implementation and
+    // (b) linear time on a pathological input.
+    describe('sanitize vs the original regex trim (ReDoS fix)', () => {
+      /** The pre-fix implementation, kept verbatim as the output oracle. */
+      const legacySanitize = (s: string): string =>
+        s.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+
+      const cases: string[] = [
+        '',
+        '   ',
+        '_',
+        '___',
+        'a',
+        'abc',
+        '_abc',
+        'abc_',
+        '_abc_',
+        '__abc__',
+        'a__b',
+        'a___b___c',
+        'a_b_c',
+        '_a__b_c__',
+        'a/b.c:d',
+        'a / b .. c!!d',
+        'Qwen3-Embedding-0.6B',
+        '///',
+        '///abc///',
+        'abc//',
+        '__',
+        '__a__',
+        '____a____',
+        'a_',
+        '_a',
+        '___a',
+        'a___',
+        "it's a test",
+        'model-v2 (final) [draft]',
+        '  spaced  out  ',
+      ]
+
+      it('matches the original regex output on every case', () => {
+        for (const input of cases) {
+          expect(sanitize(input)).toBe(legacySanitize(input))
+        }
+      })
+
+      it('matches the original regex output on generated separator permutations', () => {
+        // Deterministic sweep over separator classes, lengths and positions:
+        // leading/trailing/internal runs of different non-alnum characters,
+        // including unicode (both are non-alnum under the collapse regex).
+        const seps = ['_', '-', ' ', '/', '.', '__-', ' _/ ', '\u0301', 'é', '𝐀']
+        const alnum = ['a', 'Z', '5']
+        for (const lead of ['', ...seps]) {
+          for (const inner of ['', ...seps]) {
+            for (const tail of ['', ...seps]) {
+              for (const a of alnum) {
+                const input = `${lead}${a}${inner}${a}${tail}`
+                expect(sanitize(input)).toBe(legacySanitize(input))
+              }
+            }
+          }
+        }
+      })
+
+      it('stays linear on a 100k-character "_" run (timing belt)', () => {
+        const pathological = '_'.repeat(100_000) + 'x'
+        const started = performance.now()
+        const result = sanitize(pathological)
+        const elapsedMs = performance.now() - started
+        expect(result).toBe('x')
+        // Documents the loop's linear cost. NOTE: this pin alone cannot catch
+        // a regression — V8's irregexp happens to evaluate /^_+|_+$/g linearly
+        // (measured: 2.7 ms at 4M underscores), so the mutation-failing guard
+        // is the source scan below, which is deterministic across engines.
+        expect(elapsedMs).toBeLessThan(200)
+      })
+
+      it('source-scan: the backtracking _+ trim regex is gone (mutation pin)', () => {
+        // The timing test above cannot discriminate on V8, so this pin carries
+        // the regression guard: restoring ANY `_+`-quantified trim regex in the
+        // module fails here. Mutated back to /^_+|_+$/g, this test goes red.
+        const source = readFileSync(
+          new URL('../../stash/vector-store.server.ts', import.meta.url),
+          'utf8',
+        )
+        expect(source).not.toContain('_+')
+        expect(source).toContain('charCodeAt(start) === 95')
+      })
     })
   })
 })

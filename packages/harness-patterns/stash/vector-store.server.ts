@@ -60,7 +60,8 @@ export interface VectorStore {
   readonly prefix: string
   /** Create the HNSW index, tolerating "already exists". */
   ensureIndex(): Promise<void>
-  /** Store a vector + JSON payload at `${prefix}${id}` (2 Redis writes). */
+  /** Store a vector + JSON payload at `${prefix}${id}` (2 Redis writes; a 3rd
+   *  when the payload carries a `text` field — see {@link TEXT_FIELD}). */
   upsert(
     id: string,
     vector: number[],
@@ -69,11 +70,26 @@ export interface VectorStore {
   ): Promise<void>
   /** KNN search; returns hits with decoded payloads, closest first. */
   search(queryVector: number[], k?: number): Promise<VectorHit[]>
+  /**
+   * Full-text (BM25) search over the index's {@link TEXT_FIELD} — the keyword
+   * half of hybrid retrieval (#928 slice 1). Same contract as {@link search}:
+   * a FAILED search throws; only a genuinely empty result returns `[]`.
+   */
+  searchKeyword(query: string, k?: number): Promise<VectorHit[]>
 }
 
 const META_FIELD = 'meta'
 /** Internal payload key carrying the upsert id, so search can recover it. */
 const VID_KEY = '_vid'
+/**
+ * Hash field carrying a chunk's PLAIN text, full-text-indexed by the
+ * RediSearch schema so BM25 can score it (#928 slice 1). It sits BESIDE the
+ * base64 `meta` payload, not inside it — the gateway auto-parses JSON-looking
+ * strings and base64 would be one opaque token, so a TEXT field must be plain.
+ * Written only when the upsert payload carries a `text` string; the Semantic
+ * Cache, which shares this store, writes none and pays no extra write.
+ */
+export const TEXT_FIELD = 'text'
 
 // ============================================================================
 // Factory
@@ -117,6 +133,20 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
     })
     const mErr = redisWriteError(m)
     if (mErr) throw new Error(`Failed to store payload for "${id}": ${mErr}`)
+
+    // The searchable plain text rides beside the base64 meta, not inside it.
+    // Same TTL as the record it belongs to — it must never outlive its chunk.
+    const text = payload[TEXT_FIELD]
+    if (typeof text === 'string' && text.length > 0) {
+      const t = await callTool('hset', {
+        name: key,
+        key: TEXT_FIELD,
+        value: text,
+        ...(ttlSeconds ? { expire_seconds: ttlSeconds } : {}),
+      })
+      const tErr = redisWriteError(t)
+      if (tErr) throw new Error(`Failed to store searchable text for "${id}": ${tErr}`)
+    }
   }
 
   /**
@@ -144,15 +174,54 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
     return parseHits(res.data)
   }
 
-  return { indexName: opts.indexName, prefix: opts.prefix, ensureIndex, upsert, search }
+  /**
+   * Full-text (BM25) over the index's TEXT field. The same throw-on-failure
+   * contract as {@link search} — an unavailable keyword half is an outage,
+   * never "no matching documents" (sf-H2).
+   */
+  async function searchKeyword(query: string, k = 5): Promise<VectorHit[]> {
+    const res = await callTool('keyword_search_hash', {
+      index_name: opts.indexName,
+      query,
+      k,
+      return_fields: [META_FIELD],
+    })
+    if (!res.success) {
+      throw new Error(`Keyword search on ${opts.indexName} failed: ${res.error ?? 'unknown error'}`)
+    }
+    if (res.data == null) return []
+    return parseHits(res.data)
+  }
+
+  return {
+    indexName: opts.indexName,
+    prefix: opts.prefix,
+    ensureIndex,
+    upsert,
+    search,
+    searchKeyword,
+  }
 }
 
 // ============================================================================
 // Naming helpers (shared so one index never mixes embedding models)
 // ============================================================================
 
+/**
+ * Collapse runs of non-alphanumerics to a single underscore and trim
+ * leading/trailing underscores. The trim is an index loop, not a backtracking
+ * regex: an anchored unbounded underscore run is a polynomial-ReDoS hazard on
+ * strings of many underscores (CodeQL js/polynomial-redos) — the loop is
+ * linear. The source-scan test pins that no underscore-quantifier regex
+ * returns to this module.
+ */
 export function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const collapsed = s.replace(/[^a-zA-Z0-9]+/g, '_')
+  let start = 0
+  let end = collapsed.length
+  while (start < end && collapsed.charCodeAt(start) === 95 /* '_' */) start++
+  while (end > start && collapsed.charCodeAt(end - 1) === 95 /* '_' */) end--
+  return collapsed.slice(start, end)
 }
 
 /** `provider_model_dim` — equal tags ⇒ comparable vectors / same index. */

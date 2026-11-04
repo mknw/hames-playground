@@ -16,6 +16,7 @@ import {
   NON_CONFORMING_CYPHER,
   ORG_ONTOLOGY,
   RELATIONS,
+  RELATION_ENDPOINTS,
   RELATION_TYPES,
   conformanceParams,
   constraintName,
@@ -223,18 +224,57 @@ describe('conformance query', () => {
     expect(NON_CONFORMING_CYPHER).not.toMatch(/\b(CREATE|MERGE|SET|DELETE|REMOVE|DETACH)\b/i)
   })
 
-  it('parameterises the label and relation allowlists rather than interpolating', () => {
+  it('parameterises the label, relation and endpoint allowlists rather than interpolating', () => {
     expect(NON_CONFORMING_CYPHER).toContain('$labels')
     expect(NON_CONFORMING_CYPHER).toContain('$relationTypes')
+    expect(NON_CONFORMING_CYPHER).toContain('$relationEndpoints')
     expect(conformanceParams()).toEqual({
       labels: [...NODE_LABELS],
       relationTypes: [...RELATION_TYPES],
+      relationEndpoints: [...RELATION_ENDPOINTS],
     })
   })
 
-  it('checks nodes, relationships and hard-property presence', () => {
-    for (const kind of ['node_label', 'relation_type', 'member_missing_hard']) {
-      expect(NON_CONFORMING_CYPHER).toContain(kind)
+  it('checks nodes, relationship types, relationship endpoints and hard-property presence', () => {
+    for (const kind of [
+      'node_label',
+      'relation_type',
+      'relation_endpoints',
+      'member_missing_hard',
+    ]) {
+      expect(NON_CONFORMING_CYPHER).toContain(`'${kind}' AS kind`)
+    }
+  })
+
+  it('reads the endpoint pairs off the ontology, one triple per declared (from, to) pair', () => {
+    // The query restates no pair; this is the only place they come from.
+    const expected = RELATIONS.flatMap((r) =>
+      r.from.flatMap((from) => r.to.map((to) => ({ type: r.type, from, to }))),
+    )
+    expect(conformanceParams().relationEndpoints).toEqual(expected)
+    expect(RELATION_ENDPOINTS).toContainEqual({ type: 'USES', from: 'Project', to: 'Resource' })
+    expect(RELATION_ENDPOINTS).not.toContainEqual({ type: 'USES', from: 'Member', to: 'Resource' })
+  })
+
+  it('counts a known type between the wrong labels, and only a known type', () => {
+    // The endpoint branch, isolated from the others: it matches relationships
+    // whose type IS declared (an unknown type is the relation_type branch's, and
+    // counting it twice would inflate the total), and it flags one whose
+    // (start label, end label) pair matches no declared triple for that type.
+    const branch = NON_CONFORMING_CYPHER.split('UNION ALL').find((b) =>
+      b.includes("'relation_endpoints' AS kind"),
+    )
+    expect(branch).toBeDefined()
+    const where = branch!.replace(/\s+/g, ' ')
+    expect(where).toContain('MATCH (a)-[r]->(b)')
+    expect(where).toContain('WHERE type(r) IN $relationTypes')
+    expect(where).toContain(
+      'AND NOT any(e IN $relationEndpoints WHERE e.type = type(r) AND e.from IN labels(a) AND e.to IN labels(b))',
+    )
+    expect(where).toMatch(/\[type\(r\),.*labels\(a\).*labels\(b\).*\] AS detail/)
+    // The pairs ride the parameter; no label or type is restated in the text.
+    for (const name of [...NODE_LABELS, ...RELATION_TYPES]) {
+      expect(branch).not.toMatch(new RegExp(`\\b${name}\\b`))
     }
   })
 })

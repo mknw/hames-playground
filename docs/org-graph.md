@@ -198,10 +198,21 @@ org-knowledge hook's slice 6 the canvas is one of them:
 
 What is left is measured rather than enforced: a writer that routes through
 neither (a script, a future tool) is caught by `countNonConforming()`
-(`schema.server.ts`, over `NON_CONFORMING_CYPHER`), which returns every
-non-conforming label, every non-conforming relation type and every `Member`
-missing a hard property, as counts. Both live scripts print it, and both fail
-their exit code on a non-zero result.
+(`schema.server.ts`, over `NON_CONFORMING_CYPHER`), which returns, as counts:
+
+- every node with no ontology label (`node_label`);
+- every relationship whose type the ontology does not declare (`relation_type`);
+- every relationship of a declared type whose (start label, end label) pair is
+  not one the ontology declares for that type (`relation_endpoints`, with the
+  type and the label pair as the detail) — a `USES` edge between two labels
+  outside the ontology is drift the type check alone reads as conforming. The
+  pairs come from `RELATION_ENDPOINTS`, read off `ORG_ONTOLOGY`'s relations, and
+  reach the query as a parameter;
+- every `Member` missing a hard property (`member_missing_hard`).
+
+A node, or either end of a relationship, conforms when any one of its labels
+does. Both live scripts print the result, and both fail their exit code on a
+non-zero result.
 
 ## 4. The setup path, and the one authorised wipe
 

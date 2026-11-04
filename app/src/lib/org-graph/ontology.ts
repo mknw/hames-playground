@@ -386,17 +386,25 @@ export function validateMember(record: Partial<MemberRecord>): {
 // ============================================================================
 
 /**
- * Counts every node whose label set is outside {@link NODE_LABELS} and every
- * relationship whose type is outside {@link RELATION_TYPES}, plus nodes missing
- * a hard property.
+ * Counts every node whose label set is outside {@link NODE_LABELS}, every
+ * relationship whose type is outside {@link RELATION_TYPES}, every
+ * relationship of a declared type whose (start label, end label) pair is not
+ * one {@link RELATIONS} declares for that type, and every `Member` missing a
+ * hard property.
+ *
+ * The endpoint branch is separate from the type branch because a known type
+ * between the wrong labels is drift the type check cannot see: a `USES` edge
+ * between two nodes outside the ontology passes `type(r) IN $relationTypes`.
+ * A node, or either end of a relationship, conforms when ANY one of its labels
+ * does — the same reading the label branch uses for a node. The pairs come from
+ * {@link conformanceParams}, read off the ontology's own relations, and are
+ * never restated here.
  *
  * This exists because app-side validation binds only the callers that route
- * through it. `neo4j/graph-edit.server.ts` mints labels and relationship types
- * from free-text UI inputs, validating their *shape* and not their membership
- * in this ontology, so the browser can still create a node label or an edge
- * type nothing here declares — including a reporting edge. Rather than widen
- * that module (a behaviour change nobody asked for), the drift is made
- * countable: run this after any session of manual graph editing, and see
+ * through it. `neo4j/graph-edit.server.ts` checks the canvas's edits against
+ * the ontology, but a writer that routes through neither it nor the hook (a
+ * script, a future tool) is bound by nothing here, so the drift is made
+ * countable instead: run this after any such write, and see
  * `docs/org-graph.md` § "The gap app-side validation leaves".
  *
  * Read-only by construction — no write clause appears in it.
@@ -411,6 +419,17 @@ export const NON_CONFORMING_CYPHER = `
     WHERE NOT type(r) IN $relationTypes
     RETURN 'relation_type' AS kind, [type(r)] AS detail, count(*) AS count
     UNION ALL
+    MATCH (a)-[r]->(b)
+    WHERE type(r) IN $relationTypes
+      AND NOT any(e IN $relationEndpoints
+                  WHERE e.type = type(r) AND e.from IN labels(a) AND e.to IN labels(b))
+    RETURN 'relation_endpoints' AS kind,
+           [type(r),
+            coalesce(reduce(s = head(labels(a)), l IN tail(labels(a)) | s + ':' + l), ''),
+            coalesce(reduce(s = head(labels(b)), l IN tail(labels(b)) | s + ':' + l), '')]
+             AS detail,
+           count(*) AS count
+    UNION ALL
     MATCH (n:Member)
     WHERE n.entraId IS NULL OR n.displayName IS NULL OR n.mail IS NULL
     RETURN 'member_missing_hard' AS kind, [] AS detail, count(*) AS count
@@ -419,8 +438,25 @@ export const NON_CONFORMING_CYPHER = `
   RETURN kind, detail, count ORDER BY kind, count DESC
 `
 
+/** One (type, start label, end label) triple the ontology declares. */
+export interface RelationEndpoint {
+  type: string
+  from: string
+  to: string
+}
+
+/** Every endpoint pair {@link RELATIONS} declares, one triple per pair. */
+export const RELATION_ENDPOINTS: readonly RelationEndpoint[] = RELATIONS.flatMap((r) =>
+  r.from.flatMap((from) => r.to.map((to) => ({ type: r.type, from, to }))),
+)
+
 /** Parameters {@link NON_CONFORMING_CYPHER} expects. */
-export const conformanceParams = (): { labels: string[]; relationTypes: string[] } => ({
+export const conformanceParams = (): {
+  labels: string[]
+  relationTypes: string[]
+  relationEndpoints: RelationEndpoint[]
+} => ({
   labels: [...NODE_LABELS],
   relationTypes: [...RELATION_TYPES],
+  relationEndpoints: RELATION_ENDPOINTS.map((e) => ({ ...e })),
 })

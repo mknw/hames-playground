@@ -381,3 +381,52 @@ describe('retriever hits — no model screen without the retriever guard’s own
     expect(screen).toHaveBeenCalledTimes(2) // content, then filename
   })
 })
+
+// Revision 6, slice 17 (O37/O39): the documents guard declares the
+// injection-ingress-guard and NOT a screen, so each hit's CONTENT carries one
+// classification on the retriever's own `tool_result` — the citation chip is
+// the marking surface, and it reads the mark from here.
+describe('retriever hits — the injection-ingress-guard classification', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const answer = (label: 'safe' | 'instructions-for-ai-detected') =>
+    vi.fn(async (input: { item?: string; onDecision?: (e: never) => string | void }) => ({
+      label,
+      safe: label === 'safe',
+      probs: {},
+      abstained: false,
+      ...(input.item !== undefined && { eventId: `ev-${input.item}` }),
+    }))
+
+  // MUTATIONS: drop `ingress: false` from the filename's sanitize call (two
+  // calls per hit); or drop the `ingress` field from `emitMatches` (no marks
+  // reach the event).
+  it("classifies each hit's content once, never its filename, and marks the tool_result per docId", async () => {
+    const run = answer('safe')
+    const { resultEvent } = await runRetriever(
+      [hit(CLEAN_CHUNK), hit(CLEAN_CHUNK, { id: 'chunk-2', docId: 'doc-8', source: 'plan.docx' })],
+      { tools: ['retriever'], spotlight: 'always', ingressGuard: { run, mode: 'on' } } as never,
+    )
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(run.mock.calls.map(([i]) => i.item)).toEqual(['doc-7', 'doc-8'])
+    // The content it read is the hit's content, never the filename.
+    for (const [i] of run.mock.calls)
+      expect((i as { content: string }).content).toContain('Q3 revenue')
+    expect((resultEvent?.data as { ingress?: unknown }).ingress).toEqual([
+      { tool: 'retriever', item: 'doc-7', label: 'safe', safe: true, eventId: 'ev-doc-7' },
+      { tool: 'retriever', item: 'doc-8', label: 'safe', safe: true, eventId: 'ev-doc-8' },
+    ])
+  })
+
+  // The default is off: a declaration with no mode classifies nothing.
+  // MUTATION: default `ingressGuard.mode` to 'on' in `sanitize`.
+  it('a declaration with no mode classifies nothing and attaches no mark', async () => {
+    const run = answer('safe')
+    const { resultEvent } = await runRetriever([hit(CLEAN_CHUNK)], {
+      tools: ['retriever'],
+      ingressGuard: { run },
+    } as never)
+    expect(run).not.toHaveBeenCalled()
+    expect(resultEvent?.data).not.toHaveProperty('ingress')
+  })
+})

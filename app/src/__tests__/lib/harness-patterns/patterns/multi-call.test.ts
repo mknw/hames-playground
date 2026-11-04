@@ -36,6 +36,10 @@ const toolErrors: Record<string, string> = {}
 const toolDelays: Record<string, number> = {}
 let activeCount = 0
 let maxActive = 0
+/** Revision 6, slice 17: tools whose result comes back carrying an
+ *  injection-ingress-guard mark, as `callTool` returns it under a guard. */
+const ingressTools = new Set<string>()
+const markOf = (tool: string) => ({ tool, item: `call-${tool}`, label: 'safe', safe: true })
 
 const callToolMock = vi.fn(async (tool: string, _args?: Record<string, unknown>) => {
   callLog.push(tool)
@@ -45,7 +49,11 @@ const callToolMock = vi.fn(async (tool: string, _args?: Record<string, unknown>)
   if (delay) await new Promise((r) => setTimeout(r, delay))
   activeCount--
   if (toolErrors[tool]) return { success: false, data: null, error: toolErrors[tool] }
-  return { success: true, data: { tool, ok: true } }
+  return {
+    success: true,
+    data: { tool, ok: true },
+    ...(ingressTools.has(tool) && { ingress: markOf(tool) }),
+  }
 })
 
 vi.mock('@hames-ai/harness-patterns/mcp-client.server', () => ({
@@ -103,6 +111,7 @@ beforeEach(() => {
   for (const k of Object.keys(toolDelays)) delete toolDelays[k]
   activeCount = 0
   maxActive = 0
+  ingressTools.clear()
 })
 
 describe('simpleLoop multi-call turns', () => {
@@ -334,6 +343,22 @@ describe('actorCritic multi-call attempts', () => {
     })
   })
 
+  // Revision 6, slice 17: see the simpleLoop rows above. MUTATION: drop the
+  // `ingress` copy at actorCritic's single or batch tool_result site.
+  it('the ingress mark reaches the tool_result, single call and batch', async () => {
+    ingressTools.add('tool_a').add('tool_b')
+    const single = await runActor([mockAction({ tool_name: 'tool_a', tool_args: '{}' })])
+    const resultMarks = (events: Array<{ type: string; data: unknown }>) =>
+      events
+        .filter((e) => e.type === 'tool_result')
+        .map((e) => (e.data as { ingress?: unknown }).ingress)
+    expect(resultMarks(single.result.events)).toEqual([[markOf('tool_a')]])
+    const batch = await runActor([
+      batchAction({ tool: 'tool_a' }, [{ tool_name: 'tool_b', tool_args: '{}' }]),
+    ])
+    expect(resultMarks(batch.result.events)).toEqual([[markOf('tool_a')], [markOf('tool_b')]])
+  })
+
   it('all sub-calls failed: no critic call, next actor attempt sees the error', async () => {
     toolErrors.tool_a = 'down'
     toolErrors.tool_b = 'down too'
@@ -376,6 +401,35 @@ describe('actorCritic multi-call attempts', () => {
     )
     expect((actorOff.mock.calls[0][0] as ActorInput).multiCallMode).toBeUndefined()
     expect(callLog).toEqual(['tool_a', 'tool_b']) // still executed, serially
+  })
+})
+
+// Revision 6, slice 17 (O37): the classification's mark rides `callTool`'s
+// result and every loop path copies it onto its OWN tool_result event, one
+// mark per sub-call, so a batched turn keeps per-call fidelity. MUTATION:
+// drop the `ingress` copy at any of the four sites (simpleLoop single /
+// batch, actorCritic single / batch) or in `runBatch`: that row goes red.
+describe('the ingress mark reaches every loop path’s tool_result', () => {
+  const marks = (events: Array<{ type: string; data: unknown }>) =>
+    events
+      .filter((e) => e.type === 'tool_result')
+      .map((e) => (e.data as { tool: string; ingress?: unknown }).ingress)
+
+  it('simpleLoop, a single call', async () => {
+    ingressTools.add('tool_a')
+    const { result } = await runPattern([mockAction({ tool_name: 'tool_a', tool_args: '{}' })])
+    expect(marks(result.events)).toEqual([[markOf('tool_a')]])
+  })
+
+  it('simpleLoop, a batch: one mark per sub-call, none on an unmarked sibling', async () => {
+    ingressTools.add('tool_a').add('tool_c')
+    const { result } = await runPattern([
+      batchAction({ tool: 'tool_a' }, [
+        { tool_name: 'tool_b', tool_args: '{}' },
+        { tool_name: 'tool_c', tool_args: '{}' },
+      ]),
+    ])
+    expect(marks(result.events)).toEqual([[markOf('tool_a')], undefined, [markOf('tool_c')]])
   })
 })
 

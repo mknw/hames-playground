@@ -5,7 +5,7 @@ import {
   actorCritic,
   collectToolNames,
   compactExecution,
-  createGuardGate,
+  createIngressGuard,
   decisionLoop,
   planner,
   retriever,
@@ -31,7 +31,7 @@ import {
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
-import { SCREEN_POLICY_BY_TIER } from '../types'
+import { INGRESS_POLICY_DEFAULT, SCREEN_POLICY_BY_TIER } from '../types'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { getGraphSchema } from './graph-schema.server'
@@ -222,9 +222,20 @@ async function createPatterns(
       default: SCREEN_POLICY_BY_TIER.self_deployed,
       anthropic: SCREEN_POLICY_BY_TIER.anthropic,
     } as const)
-  // τi from the composition root's bag (#844); absent, the gate's own default —
-  // the env variable retired with revision 6 (#938), a still-set value refuses boot.
-  const gate = createGuardGate(createDecideAdapter(), { threshold: deps.guards?.gateThreshold })
+  // The injection-ingress-guard classification (revision 6, O36–O38): one Decide
+  // call per external payload in 'on'/'shadow', driving PRESENTATION only —
+  // label + friction, never withhold. The guard gate it replaced lived here;
+  // its composition is what slice 17 removed. ONE mode value on both tiers
+  // (ruling AE): GUARD_INGRESS sets it, and the default — INGRESS_POLICY_DEFAULT,
+  // 'off' (O35) — keeps a deployment that sets no switch fully deterministic.
+  // All three guards that cover external content declare it beside their screen:
+  // office (mail, files, sandbox results), info (web, library docs, the graph)
+  // and the documents route — where ONE classification call per hit replaces
+  // the two screen calls the screen would have cost, on a cheaper seam.
+  const ingressGuard = {
+    run: createIngressGuard(createDecideAdapter()),
+    mode: deps.guards?.ingressMode ?? INGRESS_POLICY_DEFAULT,
+  }
   const docGuard = {
     namespaces: ['graph'],
     tools: sandboxTools,
@@ -235,12 +246,12 @@ async function createPatterns(
     screen: {
       run: createInjectionScreen(),
       mode: screenMode,
-      gate,
       classify: deps.guards?.classifyIngress,
       // A finding goes to the person where the route can pause; the office
       // route cannot (actorCritic, the sandbox), so it says so instead (O14).
       askPerson: true,
     },
+    ingressGuard,
   }
   // The guard refuses a declared namespace that matches no catalog tool, so the
   // optional server is declared only when the gateway offers it.
@@ -251,12 +262,12 @@ async function createPatterns(
     screen: {
       run: createInjectionScreen(),
       mode: screenMode,
-      gate,
       classify: deps.guards?.classifyIngress,
       // A finding goes to the person where the route can pause; the office
       // route cannot (actorCritic, the sandbox), so it says so instead (O14).
       askPerson: true,
     },
+    ingressGuard,
   }
   const doc = withInjectionGuard(docGuard)(office)
   const infoLoop = withInfoDocumentReferences(
@@ -306,7 +317,11 @@ async function createPatterns(
   const pseudonymise = deps.guards?.pseudonymiseForWeb
   const infoRoute = pseudonymise ? withPseudonymisedInputs({ pseudonymise })(infoLoop) : infoLoop
   const info = withInjectionGuard(infoGuard)(infoRoute)
-  const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always' })(
+  // The documents guard declares `ingressGuard` and NOT `screen` (revision 6):
+  // the citation chip is the marking surface (O39), so the retriever's hits
+  // carry a classification — one Decide call per hit, where the screen would
+  // have been two (content and filename) — and no screen runs there (ruling 4).
+  const retrieve = withInjectionGuard({ tools: ['retriever'], spotlight: 'always', ingressGuard })(
     retriever<AgentData>({
       patternId: 'retriever',
       backends: [deps.createRedisBackend(sessionId)],

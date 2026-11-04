@@ -63,7 +63,7 @@ vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
 
 const { agentDeps } = await import('../../../lib/harness-client/session.server')
 const { guardConfig } = await import('../../../lib/inference/guard-config.server')
-const { SCREEN_POLICY_BY_TIER } = await import('@hames-ai/agents/types')
+const { INGRESS_POLICY_DEFAULT, SCREEN_POLICY_BY_TIER } = await import('@hames-ai/agents/types')
 const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
 const { harnessPseudonymisesInputs } = await import('@hames-ai/harness-patterns')
 const { mcpNamespace } = await import('@hames-ai/connectors/mcp-catalog')
@@ -78,6 +78,7 @@ beforeEach(() => {
   vi.stubEnv('GUARD_EGRESS_DECIDE', undefined)
   vi.stubEnv('GUARD_PSEUDONYMISE', undefined)
   vi.stubEnv('GUARD_GATE_THRESHOLD', undefined)
+  vi.stubEnv('GUARD_INGRESS', undefined)
   vi.stubEnv('GUARD_EGRESS_THRESHOLD', undefined)
   vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', undefined)
   vi.stubEnv('GRAPH_DOCUMENT_HOSTS', undefined)
@@ -102,11 +103,12 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slices 6 an
       egressTools: undefined,
       egressNameMatch: undefined,
       egressDecide: undefined,
-      gateThreshold: 0.15,
+      ingressMode: INGRESS_POLICY_DEFAULT,
       egressThreshold: 0.3,
       maxOutgoingRetriesPostTripwire: 0,
     })
     expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
+    expect(INGRESS_POLICY_DEFAULT).toBe('off')
     expect(guards!.classifyIngress).toBeTypeOf('function')
     expect(guards!.pseudonymiseForWeb).toBeUndefined()
     expect(egressRoster).toMatchObject({ SYNTHETIC_ROSTER: true })
@@ -124,6 +126,19 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slices 6 an
       vi.stubEnv('GUARD_SCREEN', retired)
       expect(() => agentDeps(), retired).toThrow(/no longer accepts gated or shadow/)
     }
+  })
+
+  // Revision 6, slice 17: GUARD_INGRESS is ONE value for both tiers, carried
+  // into the bag as `ingressMode`. MUTATION: omit `ingressMode` from
+  // agentDeps()'s bag (the agent keeps INGRESS_POLICY_DEFAULT whatever the
+  // operator set): red.
+  it('GUARD_INGRESS=off|shadow|on reaches the bag as one value for both tiers', () => {
+    for (const mode of ['off', 'shadow', 'on'] as const) {
+      vi.stubEnv('GUARD_INGRESS', mode)
+      expect(agentDeps().guards, mode).toMatchObject({ ingressMode: mode })
+    }
+    vi.stubEnv('GUARD_INGRESS', 'gated')
+    expect(() => agentDeps()).toThrow(/GUARD_INGRESS/)
   })
 
   // MUTATION: drop the `pseudonymise ? …` branch (build the filter whatever
@@ -153,16 +168,16 @@ describe('agentDeps() composes the GUARD_* switches (boundary guards slices 6 an
 
   // #844. MUTATION: omit one of the numbers from agentDeps()'s bag (the agent
   // then keeps its own default whatever the operator set): red. τi's variable is
-  // retired (revision 6): a still-set value refuses boot before a bag exists, so
-  // the bag's gateThreshold is pinned at the pattern's own default.
+  // retired (revision 6): a still-set value refuses boot before a bag exists,
+  // and the bag carries no τi field at all.
   it('the guard numbers in the bag are the ones guardConfig() parses; τi refuses its variable', () => {
     vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.2')
     vi.stubEnv('GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE', '2')
     expect(agentDeps().guards).toMatchObject({
-      gateThreshold: 0.15,
       egressThreshold: 0.2,
       maxOutgoingRetriesPostTripwire: 2,
     })
+    expect(agentDeps().guards).not.toHaveProperty('gateThreshold')
     vi.stubEnv('GUARD_GATE_THRESHOLD', '0.1')
     expect(() => agentDeps()).toThrow(/GUARD_GATE_THRESHOLD is obsolete/)
   })

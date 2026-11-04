@@ -14,7 +14,7 @@
  * slice. Every name, project, figure and host is synthetic: `.example` hosts,
  * invented people and projects; the library ids are public package names.
  */
-import { GUARD_SCREEN } from '@hames-ai/harness-patterns/guard-gate.server'
+import { GUARD_INGRESS } from '@hames-ai/harness-patterns/guard-gate.server'
 import {
   destinationHosts,
   EGRESS_TEXTS,
@@ -53,7 +53,9 @@ const ZWNJ = ch(0x200c)
 const NOTHING_PRIVATE_LABEL = GUARD_EGRESS.labels.find(
   (l) => l.id === 'nothing_private',
 )!.description
-const GATE_FALSE = GUARD_SCREEN.criteria.false
+// The retired gate question's `criteria.false` text — now the classification's
+// `safe` label description (revision 6).
+const GATE_FALSE = GUARD_INGRESS.labels.find((l) => l.id === 'safe')!.description
 
 /** A 6 000-character pasted synthetic mail in which "Kestrel Phase 2 budget"
  *  appears only after character 4 000 (the state quotes the first 4 000). */

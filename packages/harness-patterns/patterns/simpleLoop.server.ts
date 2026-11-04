@@ -973,6 +973,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           success: result.success,
           error: result.error,
           ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+          ...(result.ingress ? { ingress: [result.ingress] } : {}),
         }
         trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
         if (hitlPending()) return scope
@@ -1140,6 +1141,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                 result: result.data,
                 error: result.error,
                 ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+                ...(result.ingress ? { ingress: result.ingress } : {}),
               }
             },
           }
@@ -1166,6 +1168,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             success: o.success,
             error: o.error,
             ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+            ...(o.ingress ? { ingress: [o.ingress] } : {}),
             ...(o.skipped ? { skipped: true } : {}),
           }
         })
@@ -1471,6 +1474,7 @@ export function simpleLoop<T extends SimpleLoopData>(
                   result: result.data,
                   error: result.error,
                   ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+                  ...(result.ingress ? { ingress: result.ingress } : {}),
                 }
               },
             })
@@ -1647,6 +1651,7 @@ export function simpleLoop<T extends SimpleLoopData>(
             success: o.success,
             error: o.error,
             ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+            ...(o.ingress ? { ingress: [o.ingress] } : {}),
             ...(o.skipped ? { skipped: true } : {}),
           }))
           for (const data of resultData)
@@ -1839,6 +1844,7 @@ export function simpleLoop<T extends SimpleLoopData>(
           success: result.success,
           error: result.error,
           ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+          ...(result.ingress ? { ingress: [result.ingress] } : {}),
         }
         trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
 

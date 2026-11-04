@@ -512,13 +512,24 @@ async function applyGuard(
   // rewrite off `summary` would have thrown that fence away and forwarded the
   // raw payload.
   if (result.success) {
-    const { data, summary } = await guard.sanitize(name, result.data, { item: id })
-    if (data === result.data && !summary) return result
-    return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
+    const { data, summary, ingress } = await guard.sanitize(name, result.data, { item: id })
+    if (data === result.data && !summary && !ingress) return result
+    return {
+      ...result,
+      data,
+      ...(summary ? { sanitized: summary } : {}),
+      ...(ingress ? { ingress } : {}),
+    }
   }
 
+  // The error channel opts the classification out (`ingress: false`): O37
+  // pins ONE classification per tool result, and an error string is a
+  // code-adjacent message, not the content a reference surfaces.
   if (typeof result.error !== 'string' || result.error.length === 0) return result
-  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, { item: id })
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, {
+    item: id,
+    ingress: false,
+  })
   if (cleanedError === result.error && !summary) return result
   return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
 }

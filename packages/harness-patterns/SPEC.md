@@ -996,6 +996,7 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
   tools?: string[] // explicit per-tool opt-in, added to namespaces
   spotlight?: 'on-detection' | 'always' | 'off' // default 'on-detection'
   screen?: InjectionScreenConfig // optional model screen; OFF by default
+  ingressGuard?: InjectionIngressGuardConfig // optional classification; OFF by default
   rules?: InjectionRule[] // extra rules appended to the corpus
   disableRules?: string[] // corpus rule ids to switch off
   sourceLinks?: { namespace: string; field: string; hosts: readonly string[] } // a source's own links, exempt from `exfil-data-url` and no other rule (see below)
@@ -1003,11 +1004,15 @@ interface InjectionGuardConfig extends InjectionGuardOptions {
 
 interface InjectionScreenConfig {
   run: InjectionScreen // createInjectionScreen() in @hames-ai/harness-baml
-  mode?: ByTier<'off' | 'shadow' | 'gated' | 'always'> // default 'always'; 'shadow' with a gate
-  gate?: GuardGate // createGuardGate(decide); asked in 'shadow' and 'gated'
+  mode?: ByTier<'off' | 'always'> // default 'always'
   onUnavailable?: 'pass' | 'withhold' // a screen that throws; default 'pass'
-  exempt?: string[] // declared namespaces neither the gate nor the screen runs on
+  exempt?: string[] // declared namespaces neither the screen nor the classification runs on
   classify?: IngressClassifier // the host's; absent = every payload is external
+}
+
+interface InjectionIngressGuardConfig {
+  run: IngressGuardFn // createIngressGuard(decide)
+  mode?: ByTier<'off' | 'shadow' | 'on'> // default 'off'
 }
 ```
 
@@ -1188,7 +1193,7 @@ of them also read the header written before ruling F (`LEGACY_FENCE`:
 The screen's own prompt follows: its markers read `---BEGIN CONTENT UNDER REVIEW
 <code>---` / `---END CONTENT UNDER REVIEW <code>---`, where `<code>` is a per-call
 16-hex nonce (`ScreenUntrustedContent`'s `boundary` argument, drawn by
-`drawFenceNonce` like the gate's and the egress state's, again if the quoted text
+`drawFenceNonce` like the classification's and the egress state's, again if the quoted text
 holds it), and its system text says the content comes from a source outside the
 conversation and ends only at the END line carrying the same code.
 
@@ -1201,11 +1206,11 @@ at a cheaper model can never silently re-point prompt-injection screening with
 it (SA-M5). Whether it runs on a payload is decided in this order:
 
 1. a namespace in `exempt` (each must be one the guard declares, or the guard
-   refuses construction): never — neither the gate nor the screen, and the
-   deterministic layer still runs;
+   refuses construction): never — neither the screen nor the classification
+   below, and the deterministic layer still runs;
 2. `mode` resolved for this call's tier is `'off'`: never;
 3. **a deterministic finding: always**, on the sanitized projection and with no
-   gate call — a hit is already a positive, and asking a model whether to look
+   model call in between — a hit is already a positive, and asking a model whether to look
    closer would only add a way to talk the screen out of running. Applying the
    verdict preserves the original rule findings and neutralizations, with exactly
    one fence per string leaf and the original provenance label retained;
@@ -1213,25 +1218,20 @@ it (SA-M5). Whether it runs on a payload is decided in this order:
    only). It is handed the RAW result and may read only code-written provenance;
    a throw, or any other answer, is external, and with no classifier every
    payload is;
-5. `'always'`: always. `'shadow'`: the gate is asked and its answer recorded, and
-   the screen runs whatever it said, beside the gate rather than after it (the
-   result waits for the slower of the two, and the gate's decision is recorded
-   before it returns; a shadow gate that throws changes nothing). `'gated'`: the
-   gate decides, and a gate that
-   throws, times out or answers nothing usable runs the screen (the safe
-   direction).
+5. otherwise (`'always'`): always.
 
-The core default is `'always'` for a screen alone and `'shadow'` for a screen with
-a gate, so a library user's gate is measured before it skips anything; skipping
-takes an explicit `'gated'`, and a mode that asks a gate with none passed refuses
-construction. So does a declaration the guard would act on as something else: a
-`run` that is not a function, a mode that is not one of the four on any tier, a
-per-tier map with no own `default`, and an `onUnavailable` other than `'pass'` or
-`'withhold'`. The declaration is read on every call, so a value construction never
-saw fails safe: only `'off'` and `'gated'` skip the screen, each by its exact value
-(any other mode runs it, and records the gate's answer as a shadow one), and any
+`'off'` lets a deterministic finding force nothing (O41): ingress is then fully
+deterministic, and the classification below is what replaced a model triage of
+the finding-forces-a-call kind. The core default is `'always'` for a screen
+alone. Construction refuses a declaration the guard would act on as something
+else: a `run` that is not a function, a mode that is not `'off'` or `'always'`
+on any tier — the retired gate's `'shadow'` and `'gated'` included, which would
+read like a mode and act as `'always'` — a per-tier map with no own `default`,
+and an `onUnavailable` other than `'pass'` or `'withhold'`. The declaration is
+read on every call, so a value construction never saw fails safe: only `'off'`
+skips the screen, by its exact value, and any
 `onUnavailable` but `'pass'` withholds. `mode` is a `ByTier` setting: a bare value, or a map such as
-`{ default: 'shadow', anthropic: 'always' }` that `resolveByTier()` resolves per
+`{ default: 'off', anthropic: 'always' }` that `resolveByTier()` resolves per
 call against the registered `effectiveTier()`, the tier routing takes (with no
 tier module registered, the map's `default`). Like every option it governs the
 tools its declaring guard declares and no others. The reference host unfences
@@ -1246,38 +1246,85 @@ still emitted, because a silently degraded second layer must be visible);
 `'withhold'` replaces the payload with the fixed `SCREEN_WITHHELD` marker
 instead, which tells the controller to answer without it.
 
-**The guard gate.** `createGuardGate(decide, settings?)` (`guard-gate.server.ts`)
-is the cheap question in front of the screen: ONE `noul` decision,
-`GUARD_SCREEN` (key `guard.screen`), asked through the same `DecideFn` seam the
-decision loop uses, over the same 20 000-character head the screen reads. The
-screen runs when its pTrue is at or above `threshold` (τi, default
-`GUARD_GATE_THRESHOLD`, 0.15, an unmeasured placeholder; on the self-deployed
-tier it must stay below 0.199, where the decision box floors an unsure "no"). A
-host sets it per deployment; the reference app retired the variable (revision 6,
-#938): a still-set `GUARD_GATE_THRESHOLD` refuses boot, and τi is code-owned there.
-Its state quotes the head with every line
-prefixed `"> "` (a line starts after CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028
-or U+2029) between markers carrying a per-call 16-hex nonce from the platform's
-cryptographic source, drawn again if the quoted text contains it, after the
-shared fence neutraliser (`neutralizeFenceMarkers`, the screen's own); text
-written before the call cannot know the nonce, so it cannot close the quote. A
-state over `maxStateBytes` (default 32 000 UTF-8 bytes, the decision box's state
-budget in tokens, which it would otherwise meet by dropping the middle) is refused
-before any request, so the gate is unavailable and the screen runs. The
-transport accepts only a probability, so a manipulated gate can at worst answer
-"skip"; it cannot emit text. Its deadline (`timeoutMs`, default 3 000) aborts the
-request itself through `DecideInput.signal`, not only the wait for it. Each answer
-is a `decision_made` event keyed `guard.screen`, `shadow: true` whenever the
-answer is not obeyed, carrying the state's size and never its text (the call record
-is redacted as the screen's is); an unavailable answer, a state it could not render
-included, is an abstained one. A shadow event also carries `wouldRun` — what the
-gate WOULD have decided at its own configured threshold — and it is stamped before
-the event is emitted, because the live timeline row reads it instead of the argmax
-`label`, which can disagree with the threshold rule (#784 item 10); a gated event
-carries no `wouldRun`. So `guardGateSkipRate(events)` computes the skip
-rate from any run's events (a custom gate that throws records nothing, so it is not
-counted): a gate that is wrong rather than down is caught by measurement, never by
-`onUnavailable`.
+**The injection-ingress-guard classification (revision 6, #938).**
+`createIngressGuard(decide, settings?)` (`guard-gate.server.ts`) labels external
+content for PRESENTATION: ONE `choice` question, `GUARD_INGRESS` (key
+`guard.ingress`), asked through the same `DecideFn` seam the decision loop uses,
+over the same 20 000-character head the screen reads, with three labels —
+`safe`, `possible-instructions-for-ai`, `instructions-for-ai-detected`. The
+labels carry the retired screen question's reviewed definition forward:
+`safe` is its false criterion and `instructions-for-ai-detected` its true
+criterion, item for item; the middle label is text that could be read as
+addressed to the AI reader where the disallowed behaviours are absent or not
+clearly present. It is NOT the screen: it withholds nothing, rewrites nothing
+beyond the deterministic pass, and pauses nothing (O38).
+
+- **Where it runs.** On a guard that declares `ingressGuard`, on every payload
+  the guard sanitizes that is external by the guard's `screen.classify` (no
+  screen, or no classifier: every payload is external) and not in the screen's
+  `exempt` — at the shared tool-call function and on the retriever's hits.
+  A deterministic finding never changes whether it runs; it reads the
+  sanitized projection after one, so a known phrasing reaches it as the
+  rule's marker. ONE classification per tool result or hit: the per-call
+  `ingress: false` opts the error channel (`callTool`) and a hit's filename
+  (the retriever) out, and no other caller sets it.
+- **Mode.** `ByTier<'off' | 'shadow' | 'on'>`, default `'off'` — a guard that
+  declares `ingressGuard` with no mode classifies nothing. `'shadow'` asks and
+  records the answer (`shadow: true` on its `decision_made` event) and attaches
+  NO mark, so it changes no presentation. `'on'` attaches the mark. Construction
+  refuses a `run` that is not a function, a mode outside the three on any tier
+  and a per-tier map with no own `default`. A mode construction never saw reads
+  as `'shadow'` (records, marks nothing).
+- **The mark (O37).** In `'on'`, the result carries an `IngressMark` — `{ tool,
+item?, label, safe, eventId? }` — keyed by the same item id the provenance
+  fence names (the call's id, the hit's `docId`): `callTool` returns it as
+  `ToolCallResult.ingress`, the loops copy it onto the `tool_result` event as
+  `ingress: IngressMark[]` (one per sub-call), and the retriever puts one per
+  classified hit on its own `tool_result`. Metadata only — label ids, a boolean
+  and an event id — and absent from the LLM-facing `tool_result` projection. A
+  held result's substitution drops a mark with the placeholder's other
+  annotations.
+- **The safe line.** `GUARD_INGRESS_SAFE_LINE` (0.7): the presented label is
+  `safe` only when the argmax is `safe` AND p(safe) is at or above the line; an
+  argmax `safe` short of it presents as `possible-instructions-for-ai`, so
+  `label === 'safe'` and `safe === true` never disagree. A reviewed line of
+  code, no operator switch. Measured before it claimed anything (2026-11-03,
+  the private decision box's systemone endpoint, 52 answers): choice answers
+  are continuous — no 0.801/0.199-style clamp like the retired noul form's —
+  the box's unconfident shapes topped out at p(safe) 0.6294 and the safe-
+  criteria fixtures never dipped below 0.7762; the line sits in that empty
+  band. The calibration scenario (`ingress-classification`, slice 19) grades it
+  on both tiers.
+- **The state, and failure.** The retired gate's state, unchanged
+  (`renderGuardGateState`): every line prefixed `"> "` (a line starts after
+  CRLF, LF, CR, VT, FF, FS, GS, RS, NEL, U+2028 or U+2029) between markers
+  carrying a per-call 16-hex nonce from the platform's cryptographic source,
+  drawn again if the quoted text contains it, after the shared fence
+  neutraliser (`neutralizeFenceMarkers`); text written before the call cannot
+  know the nonce, so it cannot close the quote. A state over `maxStateBytes`
+  (default 32 000 UTF-8 bytes) is refused before any request. The transport
+  answers probabilities over the three ids, so a manipulated classification can
+  at worst mislabel; it cannot emit text. Its deadline (`timeoutMs`, default
+  3 000) aborts the request through `DecideInput.signal`. Every failure — a
+  throw, the deadline, an unusable or noul-shaped answer, an unrenderable state
+  — is an ABSTENTION: recorded, and the payload flows unmarked. A seam that
+  cannot serve `choice` questions is refused at construction.
+- **The record.** Each answer is one `decision_made` event keyed
+  `guard.ingress` — the three probabilities, the label, `shadow` where set,
+  the tool and the item id, the state's size and never its text (the call
+  record is redacted as the screen's is) — stamped before it is emitted, and
+  its id is the mark's `eventId`. Recall and false-marking rates are
+  computable from any run's events.
+
+**The guard gate (retired, revision 6).** Until slice 17 a `noul` question
+(`GUARD_SCREEN`, key `guard.screen`) sat in front of the screen with a threshold
+τi (0.15), asked in the screen's `'shadow'` and `'gated'` modes; the decision box
+floored an unsure answer to 0.801 or 0.199, so τi had to stay below 0.199.
+`createGuardGate`, `GUARD_SCREEN`, `GUARD_GATE_THRESHOLD`, `guardGateSkipRate`
+and the screen's `gate` option are gone; the classification replaced the triage
+(O41). Persisted conversations still hold `decision_made` events keyed
+`guard.screen` (some with `wouldRun`), and the observability projection still
+renders them as injection-guard rows.
 
 **On detection: neutralize + annotate + emit, never silently drop.**
 
@@ -2176,7 +2223,7 @@ characters removed (the documents block's own steps), and becomes one line
 prefixed `"> "` between `---BEGIN MEMORIES <nonce>---` and `---END MEMORIES
 <nonce>---`. The nonce is 16 hex characters from the platform's cryptographic
 source, drawn once per run (so the state stays append-only within the turn) and
-never one the quoted text contains (`drawFenceNonce`, as the guard gate's and the
+never one the quoted text contains (`drawFenceNonce`, as the classification's and the
 egress question's states). At most `DECISION_MEMORIES_MAX` (5) memories, in
 recall's order, and at most `DECISION_MEMORIES_MAX_CHARS` (2 000) characters,
 shed from the tail; a last line `(+K relevant memories not quoted)` counts the
@@ -2364,15 +2411,16 @@ in-VM tools by name while that box is booted `mcp-only`). The info route admits 
 `retriever` sibling plus its own results, excludes sandbox-promoted documents
 from references and expansions, and disables independent prior-turn results. Each guard declares its own options
 and none is inherited. The office and info route guards declare `spotlight: 'always'`
-and a role-resolved screen behind the guard gate, mode `{ default: 'shadow',
-anthropic: 'always' }`: on the Anthropic tier a screen call per external result and
-no gate call; on the self-deployed tier (and an absent or unknown one) a gate call,
-recorded and not obeyed, and the screen as well. A deterministic finding forces
-the screen on either. The host's classifier keeps the deployment's own content
+and a role-resolved screen whose mode is the shared per-tier policy value,
+`'off'` on both tiers since revision 6 (a host switch may set `'always'` per
+tier), and the injection-ingress-guard classification at the host's one
+`ingressMode` (`'off'` unless set). With both off, ingress is fully
+deterministic. The host's classifier keeps the deployment's own content
 (the graph, Microsoft 365 results whose every identity is on a home domain) to
 the deterministic pass (no agent declares the `exempt` option); the
-documents route's guard declares the fence and no screen, so the retriever's
-hits get the deterministic pass and the fence only. The loop itself sanitises and screens nothing: a route record is the
+documents route's guard declares the fence and the classification and no
+screen, so the retriever's hits get the deterministic pass, the fence and —
+when switched on — one classification per hit. The loop itself sanitises and screens nothing: a route record is the
 text the extractor built, and a quoted tool body carries the fence its result
 arrived in. A screen failure inside a route is recorded and fails
 open. Its thread synthesizer reads the `orchestrator` records of this turn and the previous one (`threadTurns: 2`), the user's message, and only this turn's errors: an earlier turn's failed record is not carried forward (it would read as an unmarked error), only its successful records are. `threadTurns` must be an integer >= 1 and is refused at construction unless `mode` is `'thread'` and `viewConfig.fromPatterns` is set.
@@ -3047,7 +3095,7 @@ specs; `defineDecisionSet` groups typed fields over one state. `DecideFn` is the
 single-question seam; `DecideAllFn` answers a set in one request. A
 `DecideInput.signal` (passed by `evaluateDecision`'s `signal`) aborts the request
 itself: the systemone transport hands it to its fetch beside its own timeout, so
-a caller with a deadline of its own (the guard gate) leaves nothing running.
+a caller with a deadline of its own (the injection-ingress-guard) leaves nothing running.
 `createDecideAdapter()` and `createDecideAllAdapter()` provide these seams.
 `evaluateDecision` evaluates without a scope, `decide` records on a scope, and
 `decideFields` returns the typed fields and records one `decision_made` per
@@ -4336,7 +4384,7 @@ packages/harness-patterns/               # CORE — zero baml_client / @boundary
 ├── loop-recovery.server.ts # The two loops' shared recovery rule (#437): isRecoverableLLMFailure(), the feedback texts, the consecutive-recovery cap (recoveryStreak()), trackLoopRecovery()
 ├── token-budget.server.ts  # trimToFit(), estimateTokens() — rolling context window (getContextWindow moved to harness-baml/clients.server with the model tables)
 ├── injection-guard.ts      # Deterministic prompt-injection sanitizer (pure): rule corpus, neutralization, spotlight fence, LLM-screen folding, the screen's config types (mode, gate, exempt, classify) and the shared fence neutraliser
-├── guard-gate.server.ts    # The guard gate (boundary guards slice 3): createGuardGate(decide) asks GUARD_SCREEN (`guard.screen`, one noul) over the screen's head, quoted line by line between nonce-carrying markers; its deadline aborts the request through DecideInput.signal; guardGateSkipRate() reads its decision_made events
+├── guard-gate.server.ts    # The injection-ingress-guard (revision 6, slice 17): createIngressGuard(decide) asks GUARD_INGRESS (`guard.ingress`, one three-label choice) over the screen's head, quoted line by line between nonce-carrying markers, and applies GUARD_INGRESS_SAFE_LINE; its deadline aborts the request through DecideInput.signal; the retired guard gate's state renderer, nonce draw and byte budget live on here
 ├── egress-gate.server.ts   # The egress question (boundary guards slice 4): GUARD_EGRESS (`guard.egress`, a choice), EGRESS_TEXTS, readOutgoing() (step 1's deterministic refusals), renderEgressState()
 │                           # (the guard's ALS scope was its own module until #374; it is now the run frame's `guard` slot, and `ActiveInjectionGuard` lives in injection-guard.ts beside the sanitizer it describes. Opposite nesting rule to transports — its COVERAGE unions and its options stay with the declaring guard, see SD-5; read by callTool + retriever)
 ├── json-repair.ts          # Lenient JSON parser for LLM output (unquoted keys, trailing commas, BAML-stringified single-key objects with comma-rich values). No step is super-linear (#461, #463), and the lenient regex chain refuses input over 16 384 chars: it throws, never truncates

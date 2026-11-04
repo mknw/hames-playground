@@ -40,23 +40,18 @@ describe("ruling B's fixture rows", () => {
     expect(fired.map((row) => row.id)).toEqual([])
   })
 
-  // The stage-2 loop must re-assert this at run time, per row, before the gate
-  // call — the offline pins above hold for the committed rows, but a later
-  // edit that drifts a row K1-dirty must fail the live run, not be graded by
-  // the gate on the forced path. `src/` may not import `evals/`, so pin the
-  // call site by source, like the other live-scenario wiring pins.
-  //
-  // MUTATION: delete the stage-2 K1-clean assertion from the scenario's loop
-  // (`app/evals/scenarios/screen.ts`): this pin reddens, and a drifted row is
-  // then graded by the gate instead of failing the run.
-  it("the scenario's stage-2 loop asserts each row K1-clean before the gate call", () => {
+  // Revision 6, slice 17: the scenario's stage 2 graded the guard GATE, and it
+  // retired with the gate — its K1-clean-per-row precondition is owed again
+  // by `ingress-classification` (slice 19), which grades the classification on
+  // these rows. Until then the screen scenario must stage no gate call at all:
+  // a resurrected stage would grade a question nothing in production asks.
+  // `src/` may not import `evals/`, so pin by source. MUTATION: restore the
+  // stage-2 gate loop (`createGuardGate` / `await gate({`): red.
+  it('the screen scenario stages no retired gate call', () => {
     const src = readFileSync(resolve(process.cwd(), 'evals/scenarios/screen.ts'), 'utf8')
-    const loop = src.slice(src.indexOf('for (const row of stage2)'))
-    const k1 = loop.indexOf('k1Of(row.text)')
-    const gate = loop.indexOf('await gate({')
-    expect(k1).toBeGreaterThan(-1)
-    expect(gate).toBeGreaterThan(k1)
-    expect(loop).toContain("fired === 'clean'")
+    expect(src).not.toContain('createGuardGate')
+    expect(src).not.toContain('await gate(')
+    expect(src).not.toContain('for (const row of stage2)')
   })
 
   // MUTATION: change one row's `cover` (e.g. `own3-resume-ranking`'s to

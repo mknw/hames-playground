@@ -588,9 +588,13 @@ export {
   type InjectionGuardOptions,
   type InjectionScreen,
   type InjectionScreenConfig,
+  type InjectionIngressGuardConfig,
   type ScreenMode,
-  type GuardGate,
-  type GuardGateVerdict,
+  type IngressLabel,
+  type IngressMode,
+  type IngressClassification,
+  type IngressGuardFn,
+  type IngressMark,
   type IngressClass,
   type IngressClassifier,
   type SanitizeFinding,
@@ -602,17 +606,21 @@ export {
   type SpotlightMode,
   type ActiveInjectionGuard,
 } from './injection-guard'
-// The guard gate (boundary guards slice 3): the cheap Decide question in front of
-// the screen, passed as `screen.gate`.
+// The injection-ingress-guard classification (boundary guards revision 6, O36):
+// the three-choice `guard.ingress` question at the Decide seam, passed as
+// `ingressGuard.run`. The guard gate it retired lived here; its shared
+// quote-state machinery still does.
 export {
-  createGuardGate,
-  GUARD_SCREEN,
-  GUARD_GATE_THRESHOLD,
-  GUARD_GATE_TIMEOUT_MS,
+  createIngressGuard,
+  GUARD_INGRESS,
+  GUARD_INGRESS_SAFE_LINE,
+  GUARD_INGRESS_TIMEOUT_MS,
   GUARD_GATE_MAX_CHARS,
   GUARD_GATE_MAX_STATE_BYTES,
-  guardGateSkipRate,
-  type GuardGateSettings,
+  drawFenceNonce,
+  renderGuardGateState,
+  LINE_BREAK,
+  type IngressGuardSettings,
 } from './guard-gate.server'
 // The egress gate's question, its fixed texts and its deterministic reads
 // (boundary guards slice 4); the wrapper is `withEgressGate` above.

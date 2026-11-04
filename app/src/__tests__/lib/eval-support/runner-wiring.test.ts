@@ -143,16 +143,17 @@ it('uses live production metadata, records refusing writes, and never returns a 
   }
 })
 it('wires the guards’ settings into the driver’s bag, one env read (#845 review finding 2)', () => {
-  // The driver’s bag carries `guardConfig()`’s three settings — the same
-  // numbers the runner counts against — so the eval’s gate runs at the env’s
-  // τi and its egress gate at the env’s τe and N, never the library defaults.
+  // The driver’s bag carries `guardConfig()`’s settings — the same values the
+  // runner counts against — so the eval’s classification runs at the env’s
+  // GUARD_INGRESS and its egress gate at the env’s τe and N, never the library
+  // defaults (revision 6: τi died with the gate).
   // Structural by necessity: nothing under src/ may import evals/
   // (`evals-not-in-ci.test.ts`), so a behavioural pin with
   // GUARD_EGRESS_THRESHOLD=0.4 stubbed cannot import the driver here; the
   // parse itself is pinned in `guard-config.test.ts`.
   const driver = read('evals/general-next/driver.ts')
   expect(driver).toMatch(/const guardNumbers = guardConfig\(\)/)
-  expect(driver).toMatch(/gateThreshold: guardNumbers\.gateThreshold/)
+  expect(driver).toMatch(/ingressMode: guardNumbers\.ingressMode/)
   expect(driver).toMatch(/egressThreshold: guardNumbers\.egressThreshold/)
   expect(driver).toMatch(
     /maxOutgoingRetriesPostTripwire: guardNumbers\.maxOutgoingRetriesPostTripwire/,
@@ -179,7 +180,7 @@ it('wires the guards’ settings into the driver’s bag, one env read (#845 rev
   // second read anywhere in code reddens. The runner counts against the same
   // bag, never a second env read.
   expect(driver.match(/(?<!`)guardConfig\(/g)).toHaveLength(1)
-  expect(run()).toMatch(/guardTurnCounts\(trace\.turns, driver\.guards\.gateThreshold\)/)
+  expect(run()).toMatch(/guardTurnCounts\(trace\.turns\)/)
   expect(run()).not.toContain('guardConfig()')
 })
 it('keeps 46 executable scenarios, 47 documented contracts, and an explicit proof per scenario', () => {
@@ -258,8 +259,8 @@ it('writes the computed flip gate, reserves configured tails, floors rates, and 
     'on the private tier only (owner amendment, 2026-10-15; #507 W4)',
   )
 })
-it('writes the screen subtotal beside every scenario row', () => {
-  expect(run()).toMatch(/return \{ \.\.\.r, spend, screen: screenShare\(spend\) \}/)
+it('writes the screen and classification subtotals beside every scenario row', () => {
+  expect(run()).toMatch(/return \{ \.\.\.r, spend, guardShare: guardShare\(spend\) \}/)
 })
 it('marks hermetic reports with the vacuous-pass caveat', () => {
   expect(run()).toMatch(/hermeticCaveat: live\s*\? undefined\s*: 'Hermetic passes are wiring only/)

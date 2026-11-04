@@ -67,40 +67,45 @@ search:
 
 ```typescript
 import {
-  createGuardGate,
+  createIngressGuard,
   withEgressGate,
   withInjectionGuard,
   type ConfiguredPattern,
-} from '@hames-ai/harness-patterns'
-import { createDecideAdapter, createInjectionScreen } from '@hames-ai/harness-baml'
+} from "@hames-ai/harness-patterns";
+import {
+  createDecideAdapter,
+  createInjectionScreen,
+} from "@hames-ai/harness-baml";
 
-type Data = Record<string, unknown>
+type Data = Record<string, unknown>;
 
 // A pattern you already have — any configured pattern wraps the same way.
-declare const loop: ConfiguredPattern<Data>
-
-const gate = createGuardGate(createDecideAdapter())
+declare const loop: ConfiguredPattern<Data>;
 
 const guarded = withEgressGate({
-  local: ['neo4j'], // its arguments reach only your own database
-  catalog: ['web_search', 'fetch_page'],
+  local: ["neo4j"], // its arguments reach only your own database
+  catalog: ["web_search", "fetch_page"],
   decide: createDecideAdapter(),
   askPerson: true,
 })(
   withInjectionGuard({
-    namespaces: ['web'],
-    catalog: ['web_search', 'fetch_page'],
-    spotlight: 'always',
+    namespaces: ["web"],
+    catalog: ["web_search", "fetch_page"],
+    spotlight: "always",
     screen: {
       run: createInjectionScreen(),
-      // Record the gate's answer and screen anyway, until measurements say
-      // the gate can be trusted to skip the screen.
-      mode: { default: 'shadow', anthropic: 'always' },
-      gate,
+      mode: "always",
       askPerson: true,
     },
+    // The injection-ingress-guard: label each external payload for
+    // presentation. 'shadow' records the answer and marks nothing, until
+    // measurements say the marks can be trusted.
+    ingressGuard: {
+      run: createIngressGuard(createDecideAdapter()),
+      mode: "shadow",
+    },
   })(loop),
-)
+);
 ```
 
 The decision seam is the same one the agent's own step decisions use —
@@ -116,8 +121,8 @@ and asks that tier's decisions endpoint: on the self-deployed tier it needs
 `/v1/systemone`) and `SMALL_LLM_API_KEY`; on the Anthropic tier it needs
 `JEV_DECISIONS_URL` and `JEV_DECISIONS_API_KEY`. A decision call on a tier
 whose variables are unset fails with a message naming the variable — nothing
-falls back to the other tier's endpoint. The guard gate and the egress gate
-ride this same seam, so one wiring serves both.
+falls back to the other tier's endpoint. The injection-ingress-guard and the
+egress gate ride this same seam, so one wiring serves both.
 
 `askPerson: true` changes what a refusal does only where a person can actually
 be reached. A run frame opened with `hitl: { attended: true }` is attended; a
@@ -199,6 +204,14 @@ phrasings. A novel injection phrased outside the corpus passes it, which is
 what the screen and the gate exist for.
 
 ## Ingress, layer 2: the guard gate and the screen
+
+> **Out of date since boundary guards revision 6 (#938).** The guard gate this
+> section describes is retired: the screen's modes are now `off` and `always`
+> (default `off` on both tiers), and the gate's triage is replaced by the
+> injection-ingress-guard classification (`ingressGuard`, `GUARD_INGRESS`),
+> which labels external content for presentation and withholds nothing. This
+> page's refresh is a separate pass; until it lands,
+> [`SPEC.md`](../../packages/harness-patterns/SPEC.md) is the current statement.
 
 The screen is a model call that reads a payload and reports whether it tries
 to direct the AI reading it, copying the offending spans verbatim so they can
@@ -494,19 +507,17 @@ deployment that sets none of them behaves exactly as before.
 
 | Variable                                 | Range                        | Sets                                                                                | Default (warned above)                  |
 | ---------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------- |
-| `GUARD_GATE_THRESHOLD`                   | a number from 0 to 1         | τi: the screen runs when the gate's probability is at or above it                   | `0.15`; only a `gated` screen obeys it  |
 | `GUARD_EGRESS_THRESHOLD`                 | a number from 0 to 1         | τe: a call is refused, or the person asked, when the private mass is at or above it | `0.3`, both tiers                       |
 | `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | a whole number, 0 or greater | N: refusal N + 1 on a route closes its outgoing calls for the turn                  | `0`: the first refusal closes the route |
 
-Lower is stricter for all three: a lower τi screens more, a lower τe asks
-more, and N = 0 is the strictest tripwire. Each is one value for both tiers:
-a threshold decides when a guard acts, never where a body is sent, so it
-cannot move content to another processor the way a per-tier screen mode
-could. On the self-deployed tier the decision box floors an unsure "no" at
-0.199, so a τi between 0.199 and 0.801 acts as 0.5 there. A library host sets
-the same three numbers on the patterns directly: `createGuardGate`'s
-`threshold`, and `withEgressGate`'s `threshold` and
-`maxOutgoingRetriesPostTripwire`.
+Lower is stricter for both: a lower τe asks more, and N = 0 is the
+strictest tripwire. Each is one value for both tiers: a threshold decides
+when a guard acts, never where a body is sent, so it cannot move content to
+another processor the way a per-tier screen mode could. A library host sets
+the egress numbers on the pattern directly: `withEgressGate`'s `threshold` and
+`maxOutgoingRetriesPostTripwire`. (τi and `GUARD_GATE_THRESHOLD` retired with
+the guard gate in boundary guards revision 6; a still-set variable refuses
+boot.)
 
 What has **no** switch, deliberately: the deterministic layers (the sanitiser,
 the integrity refusals, the roster check, the directory declaration) cost no
@@ -607,5 +618,5 @@ trusted-embedding set and the deterministic layers themselves.
   this page documents, including the owner's rulings behind every default
   stated here.
 - [`packages/harness-patterns/SPEC.md`](../../packages/harness-patterns/SPEC.md) —
-  the API-level specification of `withInjectionGuard`, `createGuardGate` and
+  the API-level specification of `withInjectionGuard`, `createIngressGuard` and
   `withEgressGate`.

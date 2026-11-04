@@ -3,9 +3,9 @@ import {
   SpendBudget,
   parseSpendCap,
   floorHourlyRate,
-  screenShare,
+  guardShare,
   SCREEN_FUNCTION,
-  GATE_FUNCTION_PREFIX,
+  INGRESS_FUNCTION,
   ledgerFunction,
   type SpendKey,
 } from '../../../lib/eval-support/spend-budget'
@@ -147,7 +147,7 @@ describe('rates and scale-down reservations', () => {
   })
 })
 
-describe('per-function screen subtotal', () => {
+describe('per-function screen and classification subtotals', () => {
   const fill = () => {
     const budget = new SpendBudget(20, 0.8)
     budget.observe(key, { costEur: 0.08 }, 'LoopController')
@@ -165,49 +165,61 @@ describe('per-function screen subtotal', () => {
     expect(Object.values(row.functions).reduce((n, f) => n + f.calls, 0)).toBe(row.calls)
   })
   it('reports the screen against everything else, per row', () => {
-    const share = screenShare(fill().row(key))
-    expect(share).toMatchObject({ calls: 2, otherCalls: 2 })
-    expect(share.callShare).toBeCloseTo(0.5)
-    expect(share.observerUsd).toBeCloseTo(0.1)
+    const share = guardShare(fill().row(key))
+    expect(share).toMatchObject({ screenCalls: 2, classificationCalls: 0, otherCalls: 2 })
+    expect(share.screenCallShare).toBeCloseTo(0.5)
+    expect(share.screenObserverUsd).toBeCloseTo(0.1)
     expect(share.otherObserverUsd).toBeCloseTo(0.15)
-    expect(share.observerUsdShare).toBeCloseTo(0.4)
+    expect(share.screenObserverUsdShare).toBeCloseTo(0.4)
   })
   it('is zero, not NaN, for a row with no screen call or no spend', () => {
-    expect(screenShare(new SpendBudget(20, 0.8).row(key))).toMatchObject({
-      calls: 0,
-      callShare: 0,
-      observerUsdShare: 0,
+    expect(guardShare(new SpendBudget(20, 0.8).row(key))).toMatchObject({
+      screenCalls: 0,
+      screenCallShare: 0,
+      screenObserverUsdShare: 0,
+      classificationCalls: 0,
+      classificationCallShare: 0,
+      classificationObserverUsdShare: 0,
     })
   })
   it('files a sample with no function name under unknown, never under the screen', () => {
     const budget = new SpendBudget(20, 0.8)
     budget.observe(key, { costEur: 0.01 })
-    expect(screenShare(budget.row(key)).calls).toBe(0)
+    expect(guardShare(budget.row(key)).screenCalls).toBe(0)
     expect(budget.row(key).functions.unknown.calls).toBe(1)
   })
-  // Boundary guards slice 3. MUTATION: drop the gate's prefix match in
-  // `screenShare` (count gate calls as "other"): the gate share reads 0 and
-  // `otherCalls` swallows it.
-  it('reports the guard gate (Decide calls keyed guard.*) on its own line, apart from the loop', () => {
+  // Revision 6, slice 17: the injection-ingress-guard classification's Decide
+  // calls (keyed `guard.ingress`) are their own line, apart from the loop's
+  // and from the egress gate's. MUTATION: drop the `INGRESS_FUNCTION` line in
+  // `guardShare` (the classification's calls go uncounted into "other"): the
+  // classification share reads 0 and `otherCalls` swallows it.
+  it('reports the classification (Decide calls keyed guard.ingress) on its own line', () => {
     const budget = fill()
-    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.screen'))
-    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.screen'))
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.ingress'))
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.ingress'))
     budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'next_step'))
-    const share = screenShare(budget.row(key))
-    expect(share).toMatchObject({ calls: 2, gateCalls: 2, otherCalls: 3 })
-    expect(share.gateObserverUsd).toBeCloseTo(0.02)
-    expect(share.gateCallShare).toBeCloseTo(2 / 7)
+    const share = guardShare(budget.row(key))
+    expect(share).toMatchObject({ screenCalls: 2, classificationCalls: 2, otherCalls: 3 })
+    expect(share.classificationObserverUsd).toBeCloseTo(0.02)
+    expect(share.classificationCallShare).toBeCloseTo(2 / 7)
     expect(budget.row(key).functions['Decide:next_step'].calls).toBe(1)
   })
+  // MUTATION: match the classification by the `Decide:guard.` prefix — the
+  // egress gate's calls are counted as the classification's.
+  it("does not count the egress gate's Decide calls as the classification's", () => {
+    const budget = fill()
+    budget.observe(key, { costEur: 0.008 }, ledgerFunction('Decide', 'guard.egress'))
+    expect(guardShare(budget.row(key))).toMatchObject({ classificationCalls: 0, otherCalls: 3 })
+  })
   it('names a ledger line by function, and a Decide line by its question key too', () => {
-    expect(ledgerFunction('Decide', 'guard.screen')).toBe(`${GATE_FUNCTION_PREFIX}screen`)
+    expect(ledgerFunction('Decide', 'guard.ingress')).toBe(INGRESS_FUNCTION)
     expect(ledgerFunction('LoopController')).toBe('LoopController')
-    expect(ledgerFunction(undefined, 'guard.screen')).toBeUndefined()
+    expect(ledgerFunction(undefined, 'guard.ingress')).toBeUndefined()
   })
   it('still counts a screen call of unknown cost, and stops the run on it', () => {
     const budget = new SpendBudget(20, 0.8)
     budget.observe(key, undefined, SCREEN_FUNCTION)
     expect(budget.stopped).toBe(true)
-    expect(screenShare(budget.row(key)).calls).toBe(1)
+    expect(guardShare(budget.row(key)).screenCalls).toBe(1)
   })
 })

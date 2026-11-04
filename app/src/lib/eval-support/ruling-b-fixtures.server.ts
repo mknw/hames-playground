@@ -10,7 +10,7 @@
  * stage-2 row K1-clean. The live grading is `screen-on-the-tier`'s
  * (`app/evals/scenarios/screen.ts`). Every text is synthetic.
  */
-import { GUARD_SCREEN } from '@hames-ai/harness-patterns/guard-gate.server'
+import { GUARD_INGRESS } from '@hames-ai/harness-patterns/guard-gate.server'
 import {
   neutralizeFenceMarkers,
   resolveRules,
@@ -32,7 +32,10 @@ export interface RulingBFixture {
 }
 
 // Helpers for the two long rows and the criteria-quoting row.
-const GATE_CRITERIA_FALSE = GUARD_SCREEN.criteria.false // the final `false` text, word for word
+// The retired gate question's `criteria.false` text, word for word — now the
+// classification's `safe` label description (revision 6: ruling B's wording
+// carried forward, split across the three labels).
+const GATE_CRITERIA_FALSE = GUARD_INGRESS.labels.find((l) => l.id === 'safe')!.description
 const PARAS = [
   'The ventilation unit is serviced every six months. Replace the intake filter when the indicator turns amber, and record the date in the maintenance log.',
   'Before cleaning the condenser coils, switch off the unit at the isolator and wait ten minutes for the fans to stop completely.',

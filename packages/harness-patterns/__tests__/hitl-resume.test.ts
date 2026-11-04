@@ -790,6 +790,27 @@ describe('H22b · a held result is never compacted, and substitution deletes its
     expect(results.find((d) => d.tool === 'gated_ingest')?.summary).toBeUndefined()
   })
 
+  // Revision 6 (#938): an `ingress` classification mark on the held event
+  // described the PLACEHOLDER, never the outcome that replaces it. MUTATION:
+  // drop `ingress: _ingress` from `substituteHeld`'s destructuring → the
+  // outcome carries a classification of content it never read → red.
+  it('after resume, the substituted event carries no classification mark of the placeholder', async () => {
+    const { patterns, frame } = loopRun([], [])
+    const { result, pending } = await pausedAt(patterns, frame)
+    ;(heldEvent(result.context).data as ToolResultEventData).ingress = [
+      { tool: 'gated_ingest', label: 'safe', safe: true },
+    ]
+    const resumed = await resume(
+      serializeContext(result.context),
+      patterns,
+      { [pending[0].requestId]: 'sanitize' },
+      { frame, resolve: async () => ({ documentId: 'doc-7', filename: 'offer.external.md' }) },
+    )
+    const substituted = heldEvent(resumed.context).data as ToolResultEventData
+    expect(substituted.heldBy).toBe(pending[0].requestId)
+    expect(substituted).not.toHaveProperty('ingress')
+  })
+
   // MUTATION: keep `summary` on the substituted event → the re-entered
   // controller and the next turn's controller both read the placeholder's
   // summary instead of the outcome → red.

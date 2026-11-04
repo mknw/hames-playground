@@ -1,14 +1,14 @@
 /** Host guard switches, validated before an agent is built. An unknown value,
  *  the removed GUARD_EGRESS mode, a set retired GUARD_GATE_THRESHOLD, or a set
- *  GUARD_SCREEN 'gated'/'shadow' (the retired gate's modes) refuses rather than
- *  changing routing silently. The three per-tool outgoing variables apply on
+ *  GUARD_SCREEN 'gated'/'shadow' (the retired gate's modes), or a GUARD_INGRESS
+ *  value outside off/shadow/on refuses rather than changing routing silently. The three per-tool outgoing variables apply on
  *  both inference tiers.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier } from '@hames-ai/harness-patterns/types'
 import type { EgressDetectors, ScreenMode } from '@hames-ai/harness-patterns'
-import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
-import { GUARD_GATE_THRESHOLD } from '@hames-ai/harness-patterns/guard-gate.server'
+import { INGRESS_POLICY_DEFAULT, SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
+import type { IngressMode } from '@hames-ai/harness-patterns'
 import {
   GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
   GUARD_EGRESS_THRESHOLD,
@@ -19,10 +19,9 @@ assertServerOnImport()
 /** The declared default for the input pseudonymiser. */
 const PSEUDONYMISE_DEFAULT = false
 /** τe's and N's defaults are the patterns' own constants, the one spelling the
- *  egress gate and general-next share. τi's constant stays as its code-owned
- *  default: since revision 6 no env variable can set it, so the bag below
- *  always carries the pattern's own value. */
-const GATE_THRESHOLD_DEFAULT = GUARD_GATE_THRESHOLD
+ *  egress gate and general-next share. τi's code-owned default died with the
+ *  gate (revision 6, #938): no env variable sets it, a still-set one refuses
+ *  boot below, and the bag carries no field for it. */
 const EGRESS_THRESHOLD_DEFAULT = GUARD_EGRESS_THRESHOLD
 const TRIPWIRE_N_DEFAULT = GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE
 
@@ -34,6 +33,8 @@ const SCREEN_SWITCH_MODES: ReadonlySet<ScreenMode> = new Set<ScreenMode>(['off',
 /** The screen modes that answered to the retired guard gate (revision 6): a
  *  still-set GUARD_SCREEN value here refuses boot naming the change. */
 const RETIRED_SCREEN_MODES: ReadonlySet<string> = new Set(['gated', 'shadow'])
+/** The classification's accepted values (revision 6): one value, both tiers. */
+const INGRESS_MODES: ReadonlySet<IngressMode> = new Set<IngressMode>(['off', 'shadow', 'on'])
 const EGRESS_NAME_MATCHES: ReadonlySet<EgressDetectors['nameMatch']> = new Set([
   'off',
   'evidence',
@@ -49,9 +50,9 @@ export interface GuardSwitches {
   readonly egressDecide?: EgressDetectors['decide']
   /** The web route's input pseudonymiser switch; `false` omits the filter. */
   readonly pseudonymise: boolean
-  /** τi — always the gate's own default: the env variable is retired (revision 6)
-   *  and a still-set value refuses boot. */
-  readonly gateThreshold: number
+  /** The injection-ingress-guard classification's mode, ONE value for both
+   *  tiers (ruling AE), as the agents' guards take it. */
+  readonly ingressMode: IngressMode
   /** τe, as the egress gate's `threshold` takes it. */
   readonly egressThreshold: number
   /** The egress tripwire's N, as `maxOutgoingRetriesPostTripwire`. */
@@ -135,6 +136,15 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
     )
   }
 
+  // The classification switch reads ONE value for both tiers (ruling AE; the
+  // egress detectors' convention). The declared default is 'off' (O35): no
+  // set value is looser than it, so no boot warning has a case — an unknown
+  // value refuses boot naming the variable below.
+  const ingressRaw = process.env.GUARD_INGRESS
+  const ingressMode = ingressRaw
+    ? parseMode('GUARD_INGRESS', ingressRaw, INGRESS_MODES, 'off, shadow, on')
+    : INGRESS_POLICY_DEFAULT
+
   const egressThresholdRaw = process.env.GUARD_EGRESS_THRESHOLD
   const egressThreshold = egressThresholdRaw
     ? parseProbability('GUARD_EGRESS_THRESHOLD', egressThresholdRaw)
@@ -164,11 +174,11 @@ function readGuards(): { switches: GuardSwitches; warnings: string[] } {
   return {
     switches: {
       screenMode: { default: selfDeployedScreen, anthropic: anthropicScreen },
+      ingressMode,
       egressTools,
       egressNameMatch,
       egressDecide,
       pseudonymise,
-      gateThreshold: GATE_THRESHOLD_DEFAULT,
       egressThreshold,
       maxOutgoingRetriesPostTripwire,
     },

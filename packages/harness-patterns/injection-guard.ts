@@ -21,19 +21,24 @@
  * User-typed input is TRUSTED and out of scope (the user is the principal).
  * Network egress from a sandbox is out of scope (#116).
  *
- * ## Why deterministic first, LLM screen second
+ * ## Why deterministic first, model steps second
  *
  * The default path contains NO LLM call. An LLM classifier placed in front of
  * every tool result is itself injectable (the content it screens can address
  * it too), costs a call and seconds of latency per tool result, and cannot be
  * pinned by a unit test. So the always-on layer is a bounded regex corpus plus
- * lossless control-character stripping, and the LLM screen
- * (`InjectionGuardOptions.screen`) is opt-in. A deterministic finding forces it
- * on the sanitized projection, preserving those neutralizations; on clean
- * content its `mode` decides, per tier, whether it runs always, behind the
- * cheap guard gate, or not at all. Both feed verdicts through the same
- * finding/event trail. Regexes catch known phrasings cheaply, the screen
- * catches novel ones when an agent opts into paying for it.
+ * lossless control-character stripping; the two model steps are opt-in
+ * (boundary guards revision 6, O35): the screen
+ * (`InjectionGuardOptions.screen`) and the injection-ingress-guard
+ * classification (`InjectionGuardOptions.ingressGuard`), both default `off`
+ * on every tier. The screen is opt-in per agent; the classification is the
+ * retired gate question's replacement, drives presentation only (O38) and
+ * attaches its label per payload (O37). A deterministic finding forces the
+ * screen on the sanitized projection in the mode that runs it, never past
+ * an `'off'` (O41); it never changes whether the classification runs — the
+ * classification labels the content, whatever K1 did to it. Both feed verdicts
+ * through the same finding/event trail. Regexes catch known phrasings cheaply,
+ * the model steps catch novel ones when an agent opts into paying for them.
  *
  * ## What "neutralize" means here
  *
@@ -249,46 +254,102 @@ export type SpotlightMode = 'on-detection' | 'always' | 'off'
 
 /**
  * How a guard's screen runs on an EXTERNAL payload the deterministic layer
- * passed clean. A deterministic finding forces the screen in every mode but
- * `'off'`, with no gate call: a hit is already a positive, and asking a model
+ * passed clean. A deterministic finding forces the screen in `'always'`, with
+ * no model call in between: a hit is already a positive, and asking a model
  * whether to look closer would only add a way to talk the screen out of running.
+ * (O41: `'off'` lets a finding force nothing — the classification is what
+ * replaced the finding-forces-model-call path, and `off` means ingress is
+ * fully deterministic.)
  *
- *  - `'always'`: the screen runs on every external payload; the gate is not asked.
- *  - `'shadow'`: the gate is asked and its answer recorded, and the screen runs
- *    whatever it said. How a gate is measured before it is trusted to skip.
- *  - `'gated'`: the screen runs when the gate says so, or when the gate is
- *    unavailable (the safe direction: the expensive guard runs).
+ *  - `'always'`: the screen runs on every external payload.
  *  - `'off'`: the deterministic layer only.
+ *
+ * The retired gate's `'shadow'` and `'gated'` values died with the gate
+ * (revision 6, #938): a screen declaration carrying either now refuses
+ * construction — they would read like a mode and act as `'always'`.
  */
-export type ScreenMode = 'off' | 'shadow' | 'gated' | 'always'
-
-/** The guard gate's answer: run the screen or not, and why. */
-export interface GuardGateVerdict {
-  readonly run: boolean
-  /** The gate's probability that the content tries to direct the AI reading
-   *  it; `null` when the gate gave no usable answer. */
-  readonly pTrue: number | null
-  /** `'gate'`: the gate answered. `'gate-unavailable'`: it threw, timed out or
-   *  answered nothing usable, and `run` is true. */
-  readonly why: 'gate' | 'gate-unavailable'
-}
+export type ScreenMode = 'off' | 'always'
 
 /**
- * The cheap question asked in front of the screen (`createGuardGate`). It sees
- * the same head of the payload the screen would, and answers with a
- * probability only: it cannot emit text.
+ * The injection-ingress-guard's three labels (`GUARD_INGRESS` in
+ * `guard-gate.server.ts`, key `guard.ingress`). The retired screen question's
+ * reviewed definition carried forward, split in three (ruling B is binding).
  */
-export type GuardGate = (input: {
-  tool: string
-  namespace: string
-  content: string
+export type IngressLabel = 'safe' | 'possible-instructions-for-ai' | 'instructions-for-ai-detected'
+
+/** How the classification runs: `'off'` (the default on every tier, O35),
+ * `'shadow'` (records the answer on its `decision_made` event with
+ * `shadow: true` and attaches NO mark, so it changes no presentation — the
+ * O8/O27 convention: measurement on real traffic first), or `'on'` (attaches
+ * the mark that drives presentation). */
+export type IngressMode = 'off' | 'shadow' | 'on'
+
+/** One classification answer, as `createIngressGuard` returns it: the
+ *  PRESENTED label (the safe line already applied — `label === 'safe'` and
+ *  `safe === true` never disagree), the three probabilities as returned, and
+ *  `abstained` for an unavailable answer. Never throws: a failed question is
+ *  an abstention, and content flows unmarked (O38). */
+export interface IngressClassification {
+  readonly label: IngressLabel | null
+  /** The safe line's pass: true exactly when the presented label is `safe`. */
+  readonly safe: boolean
+  readonly probs: Partial<Record<IngressLabel, number>>
+  readonly abstained: boolean
+  /** The `decision_made` event's id, when the recorder returned one. */
+  readonly eventId?: string
+}
+
+/** The classification runner (`createIngressGuard` in
+ *  `guard-gate.server.ts`). Mirrors the retired gate's shape: it never throws,
+ *  records its answer through `onDecision`, and answers with a label only —
+ *  it cannot emit text. */
+export type IngressGuardFn = (input: {
+  readonly tool: string
+  readonly namespace: string
+  readonly content: string
+  /** The payload's item id, as the fence carries it (`fenceItemId`). */
+  readonly item?: string
   /** A `'shadow'`-mode call: the answer is recorded and changes nothing. */
-  shadow?: boolean
-  /** Receives the gate's decision, as `decision_made` event data, and its call
-   *  record, so the guard records one `decision_made` event per gate call.
-   *  The event data carries the size of the gate's state, never its text. */
-  onDecision?: (event: DecisionMadeEventData, call?: LLMCallRecord) => void
-}) => Promise<GuardGateVerdict>
+  readonly shadow?: boolean
+  /** Receives the decision, as `decision_made` event data, and its call
+   *  record; may return the recorded event's id, which lands on the
+   *  attachment as the decision record's reference. The event data carries
+   *  the size of the state, never its text. */
+  readonly onDecision?: (event: DecisionMadeEventData, call?: LLMCallRecord) => string | void
+}) => Promise<IngressClassification>
+
+/** A guard's injection-ingress-guard declaration. The classification is NOT
+ *  the screen: it labels content for presentation (O38), one Decide call per
+ *  external payload, and it follows the external-content rule as the screen
+ *  does (ruling O — the guard's own `screen.classify`, when a screen is
+ *  declared; a guard with no screen treats every payload as external, the
+ *  safe default). A payload's K1 findings never change whether it runs: the
+ *  classification reads the sanitized projection, so K1's markers are part
+ *  of what it reads. */
+export interface InjectionIngressGuardConfig {
+  /** The classification itself (`createIngressGuard(decide)`). */
+  run: IngressGuardFn
+  /** Per tier. Default `'off'` on every tier (O35): a guard that declares
+   *  `ingressGuard` with no mode classifies nothing until a mode is set. */
+  mode?: ByTier<IngressMode>
+}
+
+/** One classification attached to a payload at ingress (O37), keyed by the
+ *  same item id the provenance fence carries. Metadata only (SD-3): label
+ *  ids, booleans and event ids — never state text or content — so it is safe
+ *  anywhere a `tool_result` payload is JSON-dumped. */
+export interface IngressMark {
+  readonly tool: string
+  /** The fence's item id (`fenceItemId`-reduced): the call's id for a tool
+   *  result, the hit's `docId` for a retrieved hit. */
+  readonly item?: string
+  readonly label: IngressLabel
+  /** The safe line's pass (the presented label is `safe` exactly when true). */
+  readonly safe: boolean
+  /** The `decision_made` event holding the full record (the three
+   *  probabilities), for a reader that needs more than the label. */
+  readonly eventId?: string
+}
 
 /** Where a payload came from, as far as the screen is concerned. */
 export type IngressClass = 'external' | 'internal'
@@ -309,17 +370,17 @@ export type IngressClassifier = (ctx: {
 export interface InjectionScreenConfig {
   /** The screen itself (`createInjectionScreen()` in `@hames-ai/harness-baml`). */
   run: InjectionScreen
-  /** Per tier. Default: `'always'`, or `'shadow'` when a `gate` is passed, so a
-   *  gate is measured before it skips anything; skipping takes an explicit
-   *  `'gated'`. A mode that asks the gate without one refuses construction. */
+  /** Per tier. Default: `'always'` — a screen alone runs on every external
+   *  payload. The retired gate's `'shadow'`/`'gated'` values refuse
+   * construction (see {@link ScreenMode}). */
   mode?: ByTier<ScreenMode>
-  /** The gate `'shadow'` and `'gated'` ask (`createGuardGate`). */
-  gate?: GuardGate
   /** A screen that throws: `'pass'` (default) keeps the deterministic result and
    *  records `screenUnavailable`; `'withhold'` replaces the payload with
    *  {@link SCREEN_WITHHELD}. */
   onUnavailable?: 'pass' | 'withhold'
-  /** Namespaces on which neither the gate nor the screen runs; the deterministic
+  /** Namespaces on which neither the screen nor the injection-ingress-guard
+   *  classification runs (ruling L named the retired gate and the screen; the
+   *  classification replaced the gate and inherits it); the deterministic
    *  layer still does. Each must be one the guard itself declares, or the guard
    *  refuses construction. */
   exempt?: string[]
@@ -416,10 +477,15 @@ export interface InjectionGuardOptions {
   /** Ids from the built-in corpus to disable (e.g. a false positive on a
    *  corpus this agent must read verbatim). */
   disableRules?: string[]
-  /** Opt-in model screen, its mode per tier and its gate. Off by default. Like
+  /** Opt-in model screen, its mode per tier. Off by default. Like
    *  every option it applies to the tools the declaring guard declares, and to
    *  no others. */
   screen?: InjectionScreenConfig
+  /** Opt-in injection-ingress-guard classification (revision 6, O36–O38):
+   *  labels each external payload for presentation, one Decide call per
+   *  payload in `'on'`/`'shadow'`. Default `off` on every tier (O35). Like
+   *  `screen` it governs the tools this guard declares, and to no others. */
+  ingressGuard?: InjectionIngressGuardConfig
   /**
    * Links a source writes itself, exempt from `exfil-data-url` and from no
    * other rule (#784 item 6: the tenant's own SharePoint/OneDrive `webUrl`s).
@@ -525,13 +591,16 @@ export interface ActiveInjectionGuard {
     /** Per call. `item` is the payload's code-generated id, which every fence
      *  this call writes names (`fenceItemId` reduces it): `callTool` passes its
      *  invocation's id, the retriever a hit's `docId`, and nothing passes a
-     *  filename. Two overrides: `spotlight: 'off'` is for fields where a
+     *  filename. Three overrides: `spotlight: 'off'` is for fields where a
      *  multi-line fence would corrupt a structural value the UI depends on (the
      *  retriever's `source` filename is the one real case); `screen: false`
-     *  skips only the model second opinion (deterministic sanitization, fencing
-     *  and findings still apply), and no production caller sets it. */
-    call?: { item?: string; spotlight?: SpotlightMode; screen?: false },
-  ): Promise<{ data: unknown; summary?: SanitizeSummary }>
+     *  skips only the model screen (deterministic sanitization, fencing and
+     *  findings still apply), and no production caller sets it; `ingress:
+     *  false` skips the classification for the same reason as `screen: false`
+     *  — O37 pins ONE classification per tool result, so the error channel and
+     *  a hit's `source` filename opt out. */
+    call?: { item?: string; spotlight?: SpotlightMode; screen?: false; ingress?: false },
+  ): Promise<{ data: unknown; summary?: SanitizeSummary; ingress?: IngressMark }>
 }
 
 // ============================================================================
@@ -932,7 +1001,7 @@ const FENCE_MARKER_RE =
 /**
  * Neutralize the review fences' marker words in text about to be quoted between
  * them. ONE function for every model-facing quote of content under review — the
- * screen's body (`createInjectionScreen`), the guard gate's state and the egress
+ * screen's body (`createInjectionScreen`), the classification's state and the egress
  * state — so there is one regex and one ReDoS review (SD-2).
  *
  * The guard escapes its `⟦⟧` sentinels out of content so data cannot forge a
@@ -942,8 +1011,8 @@ const FENCE_MARKER_RE =
  * reviewing model directly — the hole `sentinel-escape` exists to close, one
  * layer up. It catches plain spellings only (an underscored, hyphenated or
  * homoglyph marker passes it), so it is defence in depth: what quoted text
- * cannot forge is a per-call nonce on the markers, which the gate's and the
- * egress question's states carry.
+ * cannot forge is a per-call nonce on the markers, which the classification's and
+ * the egress question's states carry.
  *
  * It replaces the MARKER WORDS and nothing else: both forms, old
  * (`BEGIN|END UNTRUSTED CONTENT`) and new (`BEGIN|END CONTENT UNDER REVIEW`),

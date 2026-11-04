@@ -304,6 +304,89 @@ describe('mcp-client', () => {
       expect(result.success).toBe(false)
       expect(result.error).toMatch(/^Error: something went wrong/)
     })
+
+    // #440: MCP's own failure flag. Text with no "Error:" prefix used to be
+    // recorded as success:true, so the controller spent rounds on a failure as
+    // if it were data. MUTATION: delete the `result.isError === true` branch in
+    // dispatchTool — all three go red (success:true, data holds the text).
+    it('records an isError result as a failure even without an "Error:" prefix', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: "EACCES: permission denied, open '/data/x'" }],
+        isError: true,
+      })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      const result = await callTool('read_text_file', { path: '/data/x' })
+
+      expect(result).toEqual({
+        success: false,
+        data: null,
+        error: "EACCES: permission denied, open '/data/x'",
+      })
+    })
+
+    it('keeps every text block of a multi-block isError result on the error channel', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [
+          { type: 'text', text: 'query failed' },
+          { type: 'text', text: 'detail: index missing' },
+        ],
+        isError: true,
+      })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      const result = await callTool('search', {})
+
+      expect(result).toEqual({
+        success: false,
+        data: null,
+        error: 'query failed\ndetail: index missing',
+      })
+    })
+
+    // #984 review NIT: a text-less failure keeps its structured content as the
+    // message. MUTATION: drop the `structuredContent` fallback → the first goes
+    // red (the generic message instead of the JSON).
+    it('renders a text-less isError result’s structuredContent as its error', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [],
+        structuredContent: { code: 'E_LOCKED', path: '/data/x' },
+        isError: true,
+      })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      expect(await callTool('some_tool', {})).toEqual({
+        success: false,
+        data: null,
+        error: '{"code":"E_LOCKED","path":"/data/x"}',
+      })
+    })
+
+    it('names an isError result that carries neither text nor structured content', async () => {
+      mockCallTool.mockResolvedValue({ content: [], isError: true })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      expect(await callTool('some_tool', {})).toEqual({
+        success: false,
+        data: null,
+        error: 'Tool reported an error with no message',
+      })
+    })
+
+    it('leaves an explicit isError:false result a success', async () => {
+      mockCallTool.mockResolvedValue({
+        content: [{ type: 'text', text: '{"ok":true}' }],
+        isError: false,
+      })
+
+      const { callTool } = await import('@hames-ai/harness-patterns/mcp-client.server')
+
+      expect(await callTool('some_tool', {})).toEqual({ success: true, data: { ok: true } })
+    })
   })
 
   describe('listTools', () => {

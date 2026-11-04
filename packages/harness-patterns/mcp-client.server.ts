@@ -562,37 +562,59 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
     // blocks: a single block keeps its scalar shape (unchanged — preserves
     // `json_get` and every existing single-value tool); multiple blocks become
     // an array. Only the previously-lossy multi-block case changes behavior.
-    if (result.content && Array.isArray(result.content)) {
-      const textItems = result.content.filter(
-        (c): c is { type: 'text'; text: string } =>
-          c.type === 'text' && typeof (c as { text?: unknown }).text === 'string',
-      )
+    const textItems = Array.isArray(result.content)
+      ? result.content.filter(
+          (c): c is { type: 'text'; text: string } =>
+            c.type === 'text' && typeof (c as { text?: unknown }).text === 'string',
+        )
+      : []
 
-      if (textItems.length === 1) {
-        const { text } = textItems[0]
-        const demoted = demoteErrorString(text)
-        if (demoted) return demoted
+    // MCP's own failure flag (#440). A server that sets `isError` is reporting
+    // a failed call whatever its text says, so it lands on the `error` channel
+    // — the one every pattern records as a tool error and the guard above
+    // sanitizes. This branch leaves `data` null: on a failure `applyGuard`
+    // sanitizes `error` only. (The in-VM sandbox transport also keeps a
+    // failure's payload on `data`, for its own plumbing.) A text-less failure
+    // falls back to its structured content, rendered as JSON. The prefix
+    // heuristic below stays for servers that report a failure as plain text
+    // without the flag.
+    if (result.isError === true) {
+      const text = textItems.map((t) => t.text).join('\n')
+      return {
+        success: false,
+        data: null,
+        error:
+          text ||
+          (result.structuredContent !== undefined
+            ? JSON.stringify(result.structuredContent)
+            : 'Tool reported an error with no message'),
+      }
+    }
+
+    if (textItems.length === 1) {
+      const { text } = textItems[0]
+      const demoted = demoteErrorString(text)
+      if (demoted) return demoted
+      try {
+        return { success: true, data: JSON.parse(text) }
+      } catch {
+        return { success: true, data: text }
+      }
+    }
+
+    if (textItems.length > 1) {
+      // A failure is still reported as a single leading block in practice, so
+      // check the first block before treating this as a multi-value success.
+      const demoted = demoteErrorString(textItems[0].text)
+      if (demoted) return demoted
+      const data = textItems.map((t) => {
         try {
-          return { success: true, data: JSON.parse(text) }
+          return JSON.parse(t.text)
         } catch {
-          return { success: true, data: text }
+          return t.text
         }
-      }
-
-      if (textItems.length > 1) {
-        // A failure is still reported as a single leading block in practice, so
-        // check the first block before treating this as a multi-value success.
-        const demoted = demoteErrorString(textItems[0].text)
-        if (demoted) return demoted
-        const data = textItems.map((t) => {
-          try {
-            return JSON.parse(t.text)
-          } catch {
-            return t.text
-          }
-        })
-        return { success: true, data }
-      }
+      })
+      return { success: true, data }
     }
 
     // Structured content or raw result

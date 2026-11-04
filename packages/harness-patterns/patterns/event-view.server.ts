@@ -385,9 +385,13 @@ export class EventViewImpl implements IEventView {
       }
     }
 
-    // Determine the timestamp cutoff: events from the last N user turns are "recent"
+    // Determine the timestamp cutoff: events from the last N user turns are "recent".
+    // Zero (or fewer) recent turns means nothing is recent: indexing at
+    // `length - 0` would read one past the end and throw (#499).
     let recentCutoffTs = 0
-    if (userMessageIndices.length > recentTurns) {
+    if (recentTurns <= 0) {
+      recentCutoffTs = Infinity
+    } else if (userMessageIndices.length > recentTurns) {
       const cutoffIdx = userMessageIndices[userMessageIndices.length - recentTurns]
       recentCutoffTs = this.ctx.events[cutoffIdx].ts
     }

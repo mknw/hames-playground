@@ -175,6 +175,34 @@ describe('serializeCompact pointers', () => {
   })
 })
 
+// #499: `recentTurns: 0` indexed one past the last user_message and threw.
+// Mutation: drop the `recentTurns <= 0` branch → the first test throws a
+// TypeError; set the cutoff to 0 instead of Infinity → the latest turn's
+// tool_result renders in full and the second assertion goes red.
+describe('serializeCompact({ recentTurns: 0 })', () => {
+  const events = () => [
+    ev('user_message', 'h', { content: 'q1' }),
+    ev('tool_result', 'p', { tool: 't', success: true, result: 'older' }),
+    ev('user_message', 'h', { content: 'q2' }),
+    ev('tool_result', 'p', { tool: 't', success: true, result: 'latest' }),
+  ]
+
+  it('does not throw when the view holds a user_message', () => {
+    const view = createEventView(ctxOf(events()), { fromLast: false })
+    expect(() => view.serializeCompact({ recentTurns: 0 })).not.toThrow()
+  })
+
+  it('treats no turn as recent: every tool_result renders as a pointer', () => {
+    const view = createEventView(ctxOf(events()), { fromLast: false })
+    const results = view
+      .serializeCompact({ recentTurns: 0 })
+      .split('\n')
+      .filter((line) => line.startsWith('<tool_result'))
+    expect(results).toHaveLength(2)
+    for (const line of results) expect(line).toContain('compact="true"')
+  })
+})
+
 // #420: `compactExecution` hands `hasErrors()` / `lastError()` to the
 // synthesizer, which then apologises in the answer. A side task's warning must
 // never reach that — it is a separate TYPE so no error reader can match it.

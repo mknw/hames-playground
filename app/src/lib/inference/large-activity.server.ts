@@ -90,15 +90,17 @@ export const DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS = 300
 export function largeScaledownSeconds(): number {
   const raw = inferenceEnv('LARGE_LLM_SCALEDOWN_SECONDS')
   if (raw === undefined) return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  // Floor BEFORE the check, as `wakeEnvMs` does: validating the raw parse let
+  // `'0.5'` pass and then floor to the very `0` this guard refuses (#308).
+  const seconds = Math.floor(Number(raw))
+  if (!Number.isFinite(seconds) || seconds <= 0) {
     console.warn(
       `[self_deployed] LARGE_LLM_SCALEDOWN_SECONDS=${JSON.stringify(raw)} is not a positive number; ` +
         `falling back to ${DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS}s.`,
     )
     return DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS
   }
-  return Math.floor(parsed)
+  return seconds
 }
 
 /** Process-local state. Parked on a `globalThis` symbol for the same reason the

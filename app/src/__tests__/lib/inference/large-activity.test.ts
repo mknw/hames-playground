@@ -53,7 +53,8 @@ describe('largeScaledownSeconds', () => {
 
   it('falls back rather than rendering "scaling down now, forever"', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    for (const bad of ['0', '-5', 'soon', '']) {
+    // '0.5' is the #308 case: positive as parsed, `0` once floored.
+    for (const bad of ['0', '-5', 'soon', '', '0.5']) {
       process.env.LARGE_LLM_SCALEDOWN_SECONDS = bad
       expect(largeScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
     }
@@ -61,6 +62,11 @@ describe('largeScaledownSeconds', () => {
     // plausible countdown.
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it('floors a fractional window rather than refusing every fraction', () => {
+    process.env.LARGE_LLM_SCALEDOWN_SECONDS = '1.5'
+    expect(largeScaledownSeconds()).toBe(1)
   })
 })
 

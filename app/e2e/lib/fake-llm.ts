@@ -437,14 +437,28 @@ export async function startFakeLlm(port = 0): Promise<FakeLlm> {
       // S3's graph-count conversation: choose the knowledge route once per
       // turn, then answer from its record. Earlier turns are in the state too.
       const thisTurnState = String(body.state).split('This turn so far:')[1] ?? ''
-      const chosen =
-        name === 'next_step' && options.includes('info-retrieval')
+      // The org-knowledge gate reads the user's message alone (LD-8): it adds for
+      // the org scenarios' own message and for nothing else, so a suite that runs
+      // with the hook on (the browser suite) gains one decision per other turn
+      // and no draft.
+      const orgGate =
+        name === 'orgKnowledge.gate'
           ? options.indexOf(
-              thisTurnState.includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
+              String(body.state).includes(FAKE_ORG_MESSAGE)
+                ? 'add_to_organizational_kg'
+                : 'no_organizational_knowledge',
             )
-          : q.instructions?.includes('Should a person confirm')
-            ? confirmIndex
-            : 0
+          : -1
+      const chosen =
+        orgGate >= 0
+          ? orgGate
+          : name === 'next_step' && options.includes('info-retrieval')
+            ? options.indexOf(
+                thisTurnState.includes('1. info-retrieval —') ? 'answer' : 'info-retrieval',
+              )
+            : q.instructions?.includes('Should a person confirm')
+              ? confirmIndex
+              : 0
       const rest = options.length > 1 ? 0.1 / (options.length - 1) : 0
       answers[name] = {
         type: 'choice',

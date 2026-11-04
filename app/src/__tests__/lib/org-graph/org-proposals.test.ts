@@ -10,6 +10,10 @@
  *  - another user's proposal is an unknown one (mutation: load the conversation
  *    without its owner);
  *  - discard writes nothing; `createdBy` is the answering user.
+ *  - slice 5: an acceptance returns what the tab draws, its own elements
+ *    flagged `added` and named by who added them (mutation: drop `graph` from
+ *    the outcome); the card names a merge's existing node and a removed edge's
+ *    ends (mutation: pass the removed edges' keys through unresolved).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -53,7 +57,19 @@ vi.mock('../../../lib/db/hitl.server', async (importActual) => ({
       : null,
   claimHitlProposalAnswer: async () => ({ claimed: true }),
   closeHitlRows: async () => 1,
-  listHitlProposals: async () => [],
+  listHitlProposals: async () =>
+    [...held].map(([requestId, payload]) => ({
+      requestId,
+      sessionId: 'conv-1',
+      kind: 'orgKnowledge.confirm',
+      payload,
+      status: 'pending',
+      answer: null,
+      expiresAt: null,
+    })),
+}))
+vi.mock('../../../lib/auth/users.server', () => ({
+  getUser: async (id: string) => (id === 'alice' ? { id, displayName: 'Alice Example' } : null),
 }))
 
 import { createContext, serializeContext } from '@hames-ai/harness-patterns/context.server'
@@ -65,7 +81,7 @@ import {
 } from '@hames-ai/harness-patterns/org-knowledge-validate.server'
 import { createMemoryOrgGraphStore } from '@hames-ai/harness-patterns/org-knowledge-store'
 import { configureOrgGraphStore } from '../../../lib/org-graph/hook.server'
-import { answerOrgProposalFor } from '../../../lib/org-graph/proposals.server'
+import { answerOrgProposalFor, listOrgProposalsFor } from '../../../lib/org-graph/proposals.server'
 import { ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
 
 const MSG = "We've started Project Heron, and Project Osprey's status is active."
@@ -91,29 +107,38 @@ const node = (
   assertion,
 })
 
-async function proposal() {
-  const store = createMemoryOrgGraphStore(ORG_ONTOLOGY, { nodes: SEED, edges: [] })
+async function proposal(
+  msg = MSG,
+  seed: { nodes: typeof SEED; edges: { type: string; from: string; to: string }[] } = {
+    nodes: SEED,
+    edges: [],
+  },
+  elements?: DraftElement[],
+) {
+  const store = createMemoryOrgGraphStore(ORG_ONTOLOGY, seed)
   configureOrgGraphStore(store)
   const snapshot = await store.snapshot({
     names: [
       { label: 'Project', name: 'Heron' },
       { label: 'Project', name: 'Osprey' },
+      { label: 'Member', name: 'Tamsin Orrin' },
+      { label: 'Theme', name: 'Theme 1' },
     ],
     keys: [],
   })
   const v = validateOrgDraft(
     {
-      elements: [
+      elements: elements ?? [
         node('h', 'Heron', {}, 'started Project Heron', 0),
         node('o', 'Osprey', { status: 'active' }, "Project Osprey's status is active", 1),
       ],
     },
     snapshot,
     ORG_ONTOLOGY,
-    { userMessage: MSG, today: '2026-11-04', mentionsMember: () => false },
+    { userMessage: msg, today: '2026-11-04', mentionsMember: () => false },
   )
   expect(v.rejected).toEqual({})
-  const ctx = createContext(MSG)
+  const ctx = createContext(msg)
   const eventId = ctx.events[0].id!
   const outcome = proposeToHuman(ctx, orgKnowledgeConfirmRequest(v.accepted, eventId), {
     attended: true,
@@ -203,5 +228,109 @@ describe('answerOrgProposalFor', () => {
     })
     expect(r.outcome).toBe('invalid-flag')
     expect(store.dump()).toEqual(before)
+  })
+})
+
+describe('slice 5: what the card shows and what the tab draws', () => {
+  const COORD = 'Tamsin Orrin has taken over as coordinator of Theme 1.'
+  const coordinator = () =>
+    proposal(
+      COORD,
+      {
+        nodes: [
+          {
+            key: 'id:m-dorrit',
+            label: 'Member',
+            properties: { id: 'm-dorrit', displayName: 'Dorrit Wexley' },
+          } as never,
+          {
+            key: 'id:m-tamsin',
+            label: 'Member',
+            properties: { id: 'm-tamsin', displayName: 'Tamsin Orrin' },
+          } as never,
+          {
+            key: 'id:t-1',
+            label: 'Theme',
+            properties: { id: 't-1', name: 'Theme 1', nameKey: 'theme 1' },
+          } as never,
+        ],
+        edges: [{ type: 'COORDINATES', from: 'id:m-dorrit', to: 'id:t-1' }],
+      },
+      [
+        {
+          kind: 'node',
+          ref: 'm',
+          label: 'Member',
+          properties: { displayName: 'Tamsin Orrin' },
+          evidence: 'Tamsin Orrin',
+          assertion: 0,
+        },
+        {
+          kind: 'node',
+          ref: 't',
+          label: 'Theme',
+          properties: { name: 'Theme 1' },
+          evidence: 'coordinator of Theme 1',
+          assertion: 0,
+        },
+        {
+          kind: 'edge',
+          type: 'COORDINATES',
+          from: 'm',
+          to: 't',
+          evidence: COORD.slice(0, -1),
+          assertion: 0,
+        },
+      ],
+    )
+
+  it('names a merge’s existing node and a removed edge’s ends', async () => {
+    await coordinator()
+    const [view] = await listOrgProposalsFor('alice', 'conv-1')
+    const els = view.items[0].elements
+    expect(els.find((e) => e.label === 'Theme')).toMatchObject({
+      verdict: 'reinforces',
+      existing: 'Theme 1',
+    })
+    expect(els.find((e) => e.kind === 'edge')).toMatchObject({
+      from: 'Tamsin Orrin',
+      to: 'Theme 1',
+      removes: [{ type: 'COORDINATES', from: 'Dorrit Wexley', to: 'Theme 1' }],
+    })
+  })
+
+  it('an acceptance returns its elements flagged added, named by who added them, and their neighbours', async () => {
+    const { store, requestId } = await proposal()
+    const r = await answerOrgProposalFor('alice', 'conv-1', requestId, {
+      choice: 'add',
+      flags: { a0: true, a1: false },
+    })
+    if (r.outcome !== 'added') throw new Error(r.outcome)
+    const heron = r.graph?.find((e) => e.data?.label === 'Heron')
+    expect(heron?.data).toMatchObject({
+      added: true,
+      createdByName: 'Alice Example',
+      type: 'Project',
+    })
+    // Keyed by the stored node's id, the key the extractor gives the same node from a read.
+    const stored = store.dump().nodes.find((n) => n.properties.name === 'Heron')!
+    expect(heron?.data?.id).toBe(stored.properties.id)
+    // Osprey was not selected: neither written nor drawn.
+    expect(r.graph?.some((e) => e.data?.label === 'Osprey')).toBe(false)
+  })
+
+  it('a replacement draws the new edge added and leaves the old one undrawn', async () => {
+    const { requestId } = await coordinator()
+    const r = await answerOrgProposalFor('alice', 'conv-1', requestId, {
+      choice: 'add',
+      flags: { a0: true },
+    })
+    if (r.outcome !== 'added') throw new Error(r.outcome)
+    const edges = (r.graph ?? []).filter((e) => e.data?.kind === 'edge')
+    expect(edges.map((e) => [e.data?.source, e.data?.target, e.data?.added])).toEqual([
+      ['m-tamsin', 't-1', true],
+    ])
+    // Reinforced nodes are drawn, unmarked.
+    expect(r.graph?.find((e) => e.data?.id === 't-1')?.data?.added).toBeUndefined()
   })
 })

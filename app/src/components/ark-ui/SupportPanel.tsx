@@ -2,7 +2,7 @@
  * Support Panel Component
  *
  * Tabbed interface for knowledge graph visualization and observability tools
- * Tabs: Neo4j | Memory | Context manager | Data | Sandbox
+ * Tabs: Org.graph | Memory | Context manager | Data | Sandbox
  */
 
 import { MemoryPanel } from './MemoryPanel'
@@ -41,6 +41,35 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
     },
   },
 ]
+
+/** What the person's last acceptance added to the org graph
+ *  (`docs/plan/org-knowledge-hook.md`, "The Org.graph tab"): `data.added`, set
+ *  by the answer's elements and moved by the next acceptance (`graph-merge.ts`).
+ *  A graph-data colour, because Cytoscape reads no CSS variable; the legend's
+ *  swatch reads the same constant, so the two cannot disagree. */
+export const ADDED_COLOUR = '#ff6600'
+const ADDED_STYLES: StylesheetJsonBlock[] = [
+  {
+    selector: 'node[?added]',
+    style: {
+      'background-color': ADDED_COLOUR,
+      'border-color': ADDED_COLOUR,
+      'border-width': 4,
+      // A node an earlier query highlighted keeps that class; its cyan overlay
+      // would blend the added colour into something the legend does not show.
+      'overlay-opacity': 0,
+    },
+  },
+  {
+    selector: 'edge[?added]',
+    style: {
+      'line-color': ADDED_COLOUR,
+      'target-arrow-color': ADDED_COLOUR,
+      width: 4,
+    },
+  },
+]
+const ORG_GRAPH_STYLES = [...TOUCHED_NODE_STYLES, ...ADDED_STYLES]
 
 // ============================================================================
 // Types
@@ -189,7 +218,7 @@ export const SupportPanel = (props: SupportPanelProps) => {
               }}
             >
               <span class="i-material-symbols-database-outline" w="4" h="4" aria-hidden="true" />
-              Neo4j
+              Org.graph
             </Tabs.Trigger>
 
             <Tabs.Trigger
@@ -314,8 +343,8 @@ export const SupportPanel = (props: SupportPanelProps) => {
               elements={neo4jElements()}
               highlightedIds={props.highlightedIds}
               onClearGraph={props.onClearGraph}
-              extraStyles={TOUCHED_NODE_STYLES}
-              emptyMessage="No Neo4j graph data yet. Query your knowledge base to see results."
+              extraStyles={ORG_GRAPH_STYLES}
+              emptyMessage="No Org.graph data yet. Query your knowledge base to see results."
               emptyIconClass="i-material-symbols-database-outline"
             />
           </Tabs.Content>
@@ -393,6 +422,8 @@ const GraphTabContent = (props: GraphTabContentProps) => {
   // `source` key (which is also a legitimate node property).
   const nodeCount = () => effectiveElements().filter(isNodeElement).length
   const edgeCount = () => effectiveElements().filter(isEdgeElement).length
+  /** The legend names a highlight only while something on the canvas carries it. */
+  const hasAdded = () => effectiveElements().some((e) => e.data?.added === true)
 
   /**
    * Clearing has to leave the freeze, not just empty the source. While sync is
@@ -429,8 +460,22 @@ const GraphTabContent = (props: GraphTabContentProps) => {
           bg="ui-bg-tertiary"
           border="b ui-border-primary"
         >
-          <div text="xs ui-text-secondary">
-            {nodeCount()} nodes, {edgeCount()} edges
+          <div flex="~" items="center" gap="3" text="xs ui-text-secondary">
+            <span>
+              {nodeCount()} nodes, {edgeCount()} edges
+            </span>
+            <Show when={hasAdded()}>
+              <span data-testid="graph-legend-added" flex="~" items="center" gap="1">
+                <span
+                  w="2.5"
+                  h="2.5"
+                  rounded="full"
+                  style={{ 'background-color': ADDED_COLOUR }}
+                  aria-hidden="true"
+                />
+                added
+              </span>
+            </Show>
           </div>
           <div flex="~" items="center" gap="2">
             <button

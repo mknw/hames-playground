@@ -177,7 +177,7 @@ describe('SupportPanel — per-source graph split', () => {
     const elements = [node('a'), node('b', 'neo4j')]
     const { container } = render(() => <SupportPanel graphElements={elements} />)
 
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     expect(container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')).toBe(
       '2',
     )
@@ -201,10 +201,36 @@ describe('SupportPanel — per-source graph split', () => {
     await clickTab(container, 'Memory')
     expect(container.querySelector('[data-testid="memory-panel"]')).toBeTruthy()
 
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     const neo4jViz = container.querySelector('[data-testid="graph-viz"]')!
     expect(neo4jViz.getAttribute('data-count')).toBe('1')
-    expect(neo4jViz.getAttribute('data-empty-message')).toContain('No Neo4j graph data yet')
+    expect(neo4jViz.getAttribute('data-empty-message')).toContain('No Org.graph data yet')
+  })
+})
+
+// The org-knowledge hook (docs/plan/org-knowledge-hook.md, "The Org.graph tab").
+// Mutation, verified red: render the legend unconditionally → "names nothing" goes red.
+describe('SupportPanel — the Org.graph tab', () => {
+  it('is labelled Org.graph and keeps its tab id (LD-17)', () => {
+    const { container } = render(() => <SupportPanel graphElements={[]} />)
+    const trigger = [...container.querySelectorAll('[data-part="trigger"]')].find((el) =>
+      el.textContent?.includes('Org.graph'),
+    )
+    expect(trigger?.getAttribute('data-value')).toBe('neo4j-graph')
+    expect(container.textContent).not.toContain('Neo4j')
+  })
+
+  it('names "added" in the legend while an element carries the flag', async () => {
+    const added: GraphElement = { data: { id: 'h', label: 'Heron', added: true } }
+    const { container } = render(() => <SupportPanel graphElements={[added, node('o')]} />)
+    await clickTab(container, 'Org.graph')
+    expect(container.querySelector('[data-testid="graph-legend-added"]')?.textContent).toBe('added')
+  })
+
+  it('names nothing when no element was added', async () => {
+    const { container } = render(() => <SupportPanel graphElements={[node('o')]} />)
+    await clickTab(container, 'Org.graph')
+    expect(container.querySelector('[data-testid="graph-legend-added"]')).toBeNull()
   })
 })
 
@@ -216,7 +242,7 @@ describe('SupportPanel — graph controls bar', () => {
 
   it('counts nodes and edges for the visible source', async () => {
     const { container } = render(() => <SupportPanel graphElements={mixed} />)
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     expect(container.textContent).toContain('2 nodes, 1 edges')
   })
 
@@ -227,20 +253,20 @@ describe('SupportPanel — graph controls bar', () => {
       data: { id: 'chunk-1', label: 'chunk-1', source: 'report.pdf', kind: 'node' },
     }
     const { container } = render(() => <SupportPanel graphElements={[chunk, node('n1')]} />)
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     expect(container.textContent).toContain('2 nodes, 0 edges')
   })
 
   it('hides the controls bar entirely when the tab has no elements', async () => {
     const { container } = render(() => <SupportPanel graphElements={[]} />)
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     expect(container.textContent).not.toContain('Sync')
   })
 
   it('freezes the rendered graph while sync is paused and catches up on resume', async () => {
     const [elements, setElements] = createSignal<GraphElement[]>(mixed)
     const { container } = render(() => <SupportPanel graphElements={elements()} />)
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
 
     const count = () =>
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')
@@ -268,7 +294,7 @@ describe('SupportPanel — graph controls bar', () => {
     const { container, getByText } = render(() => (
       <SupportPanel graphElements={[]} onClearGraph={onClearGraph} />
     ))
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
 
     expect(
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-has-clear'),
@@ -279,7 +305,7 @@ describe('SupportPanel — graph controls bar', () => {
 
   it('offers no clear when nothing owns the elements', async () => {
     const { container } = render(() => <SupportPanel graphElements={mixed} />)
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
     expect(
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-has-clear'),
     ).toBe('no')
@@ -295,7 +321,7 @@ describe('SupportPanel — graph controls bar', () => {
     const { container, getByText } = render(() => (
       <SupportPanel graphElements={elements()} onClearGraph={() => setElements([])} />
     ))
-    await clickTab(container, 'Neo4j')
+    await clickTab(container, 'Org.graph')
 
     const count = () =>
       container.querySelector('[data-testid="graph-viz"]')!.getAttribute('data-count')

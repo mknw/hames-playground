@@ -16,10 +16,11 @@
  * rather than an extension of either, for the reason the first of them states:
  * the three protect different directories, and a shared helper would make a red
  * one ambiguous about which suite leaked. What is genuinely different here is
- * the last two blocks — a second runner (Playwright, with its own config and
- * its own browser download) and the dev-only seam in `src/` that the suite
- * reaches through, which is the one thing in this PR that could affect
- * production if its gates ever came off.
+ * the last blocks — a second runner (Playwright, with its own config and its
+ * own browser download) and the TWO dev-only seams in `src/` that the suite
+ * reaches through (the inference redirect, and since org-knowledge slice 5 the
+ * in-memory org graph), the only things here that could affect production if
+ * their gates ever came off.
  *
  * Like its siblings, this is an ORDINARY test under `src/__tests__/`, so the
  * guard runs in the very job it protects.
@@ -161,8 +162,9 @@ describe('the browser e2e suite is not reachable from CI', () => {
 })
 
 /**
- * The seam is the only thing in this suite that lives in `src/`, so it is the
- * only thing that could reach production. Both of its gates are pinned by
+ * The two seams are the only things in this suite that live in `src/`, so they
+ * are the only things that could reach production. This block is the first,
+ * the inference redirect; the next is the in-memory org graph. Both of its gates are pinned by
  * reading the source, because one of them (`import.meta.env.DEV`) is a
  * compile-time constant that no runtime test can exercise —
  * `lib/inference/dev-fake-inference.test.ts` pins the behaviour of the other.
@@ -276,5 +278,51 @@ describe('the dev-only inference redirect cannot be enabled in production', () =
       .filter((f) => f !== 'src/lib/inference/dev-fake-inference.server.ts')
       .filter((f) => /installDevFakeInference/.test(readFileSync(path.join(APP, f), 'utf8')))
     expect(callers).toEqual(['src/middleware.ts'])
+  })
+})
+
+/**
+ * The SECOND seam (org-knowledge slice 5, FRONT's ruling A): with both gates,
+ * the dev server's org-knowledge hook writes to an in-memory graph instead of
+ * Neo4j, so the acceptance scenario needs no database the suite does not run.
+ * Same two gates as the first seam, pinned the same way;
+ * `lib/org-graph/dev-memory-org-graph.test.ts` pins the opt-in's behaviour.
+ */
+describe('the dev-only in-memory org graph cannot be enabled in production', () => {
+  const file = 'src/lib/org-graph/dev-memory-org-graph.server.ts'
+  const seam = readFileSync(path.join(APP, file), 'utf8')
+  const middleware = readFileSync(path.join(APP, 'src/middleware.ts'), 'utf8')
+
+  it('gates the store on import.meta.env.DEV', () => {
+    // Anchored to the RETURN, as the first seam's pin is: the module also names
+    // `import.meta.env.DEV` in its production-leak warning.
+    expect(seam).toMatch(/if \(import\.meta\.env\.DEV !== true\) return null/)
+  })
+
+  it('additionally requires the explicit opt-in E2E_ORG_GRAPH=memory', () => {
+    expect(seam).toMatch(/if \(process\.env\.E2E_ORG_GRAPH\?\.trim\(\) !== 'memory'\) return null/)
+  })
+
+  it('is consulted only by orgGraphStore(), and never by the middleware', () => {
+    // Off the middleware's import graph, it adds nothing to the server entry
+    // chunk and needs no top-level await (the first seam's two boot traps).
+    const callers = walk(path.join(APP, 'src'))
+      .filter((f) => /\.(ts|tsx)$/.test(f))
+      .filter((f) => !f.startsWith('src/__tests__/'))
+      .filter((f) => f !== file)
+      .filter((f) =>
+        /devMemoryOrgGraph|dev-memory-org-graph/.test(readFileSync(path.join(APP, f), 'utf8')),
+      )
+    expect(callers).toEqual(['src/lib/org-graph/hook.server.ts'])
+    expect(middleware).not.toMatch(/dev-memory-org-graph|org-graph\/hook\.server/)
+  })
+
+  it('imports nothing native: the in-memory store and the ontology only', () => {
+    const imports = [...seam.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort()
+    expect(imports).toEqual([
+      './ontology',
+      '@hames-ai/harness-patterns/assert.server',
+      '@hames-ai/harness-patterns/org-knowledge-store',
+    ])
   })
 })

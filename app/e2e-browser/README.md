@@ -51,8 +51,8 @@ That separation is structural, not just conventional:
 | `src/**`                           | imports nothing from `e2e-browser/`. The allowed direction is e2e-browser → src.                                        |
 
 [`src/__tests__/browser-e2e-not-in-ci.test.ts`](../src/__tests__/browser-e2e-not-in-ci.test.ts)
-pins every row of that table — plus both gates on the one seam this suite needed
-in `src/` — and is itself an ordinary test, so the guard runs in the job it
+pins every row of that table — plus both gates on each of the two seams this
+suite needed in `src/` — and is itself an ordinary test, so the guard runs in the job it
 protects. **If you widen a vitest glob, add a `pretest` hook, name a scenario
 `*.test.ts`, or import an e2e-browser module from `src/`, that test goes red.**
 Do not fix it by loosening the guard. Four such mutations were checked against
@@ -192,6 +192,25 @@ again, so scenarios still start from the default a preview user gets.
 the port before spawning and throws naming the collision. Without that the boot
 probe was satisfied by whatever answered `/api/health` first and the run failed
 two steps later, blaming the redirect for a stale vinxi.
+
+### The second seam: an in-memory org graph
+
+The org-knowledge hook writes through the app's own Neo4j driver, never an agent
+tool, and this suite runs no Neo4j. So a second dev-only module,
+[`lib/org-graph/dev-memory-org-graph.server.ts`](../src/lib/org-graph/dev-memory-org-graph.server.ts),
+gives the dev server an empty in-memory org graph. It has the first seam's shape
+and both of its gates: `import.meta.env.DEV`, and the opt-in `E2E_ORG_GRAPH=memory`,
+which global setup sets together with `ORG_KNOWLEDGE_HOOK=on`.
+
+It is consulted from `orgGraphStore()`, not from `middleware.ts`, so it adds
+nothing to the server entry chunk and needs no `await` at boot. The store lives
+on a `globalThis` symbol, because the dev server loads the module once per
+router, and a proposal and its acceptance must read one graph.
+
+With the hook on for the whole suite, the shared fake answers the org gate
+`add_to_organizational_kg` only for the org scenario's own message, and
+`no_organizational_knowledge` for every other turn. Every other scenario's turn
+gains one decision call and nothing else.
 
 ## Knobs
 

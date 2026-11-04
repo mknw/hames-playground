@@ -1512,30 +1512,38 @@ O24 to O28, O30 to O32 and O34 have owner answers recorded verbatim above. O29 a
 
 ### O42: the guard gate deleted from core
 
+O42 to O44 were ruled together on the board (2026-11-04, 13:35:26Z). The owner's note, verbatim:
+
+> 1 - (b)<br>
+> 2 - (a)<br>
+> 3 - (a) as recommended.
+
+Item 1 is O42, item 2 is O43 and item 3 is O44. Everything under each RULED line beyond the option chosen is the author's reading, labelled as such.
+
 - **In plain words:** slice 17 deletes the guard gate from `@hames-ai/harness-patterns`, not only from `general-next`'s composition. The deletion covers `createGuardGate`, `GUARD_SCREEN`, `GUARD_GATE_THRESHOLD`, `GUARD_GATE_TIMEOUT_MS`, `guardGateSkipRate`, the `GuardGate` and `GuardGateVerdict` types, `InjectionScreenConfig.gate` and the screen's `'shadow'` and `'gated'` modes. That is a breaking change to the core npm API, and O35 said "nothing is deleted".
 - **Options:**
   - (a) Narrow the removal. Keep the generic gate seam in core and delete only what O36 names, plus what cannot exist without it.
   - (b) Keep the full deletion.
-- **RULED (2026-11-04, board): (b), the full deletion stays.** This supersedes O35's "nothing is deleted" for this case.
-  - **Why:** the classification ([O36](#o36-the-triage-re-engineered-as-the-injection-ingress-guard)) replaces the gate. It does not sit beside it, so a gate seam kept in core would be a switch with nothing left behind it. A breaking change to the core npm API is within the owner's ruled scope.
-  - **What still has a switch:** the screen keeps `off | always`, and the classification has `GUARD_INGRESS`.
+- **RULED (2026-11-04, board): (b), the full deletion stays.** The owner's note, recorded: "1 - (b)". This supersedes O35's "nothing is deleted" for this case.
+  - **Why (the author's reading):** the classification ([O36](#o36-the-triage-re-engineered-as-the-injection-ingress-guard)) replaces the gate, and a breaking change to the core npm API is within the owner's ruled scope.
+  - **What still has a switch (the author's reading):** the screen keeps `off | always`, and the classification has `GUARD_INGRESS`.
 - **A correction, recorded with the ruling.** [The screen's narrowed value set](#settings-revision-6-rows) says the code's own fallback would make a no-gate `'gated'` or `'shadow'` screen behave as `'always'`. It would not. On `main` at `d25830ca`, construction already refused that declaration (`withInjectionGuard.server.ts:497-503`), so the fallback at `:231` could not be reached. Slice 17's changeset, SPEC and source comments state the refusal.
-- **Blocks:** slice 17's merge (its code review, MUST-1).
+- **Blocks:** none (ruled); it blocked slice 17's merge (its code review, MUST-1).
 
 ### O43: the classification's flow to the Anthropic tier's decisions host
 
 - **In plain words:** with `GUARD_INGRESS` at `on` or `shadow`, the classification sends a head of each external payload to the decisions host of the run's tier.
-  - **What is sent:** up to 20 000 characters (`GUARD_GATE_MAX_CHARS`, `packages/harness-patterns/guard-gate.server.ts:233`), in a state of at most 32 000 bytes (`:247`). That covers mail, file contents, web pages and every retrieved chunk of an uploaded document.
+  - **What is sent:** up to 20 000 characters (`GUARD_GATE_MAX_CHARS`, `packages/harness-patterns/guard-gate.server.ts:236`), in a state of at most 32 000 bytes (`:250`). That covers mail, file contents, web pages and every retrieved chunk of an uploaded document.
   - **Where it goes on the Anthropic tier:** to `JevDecide`, the host `JEV_DECISIONS_URL` names, as the request body's `state` (`packages/harness-baml/jev-decide.server.ts:543-544`). That host is a processor other than Anthropic (SD-12).
   - **Why it needed a ruling:** O4 kept the gate off that tier for exactly this reason ([Why the two tiers differ on K2](#settings)). #701's Q2 ruled that not even an uploaded file's name goes there ([`decide-document-context.md`](decide-document-context.md#owner-rulings)).
 - **Options:**
   - (a) The flow is acceptable. Record it, and make both env templates say what is sent and to whom.
   - (b) The Anthropic tier does not classify (`mode: { default: ingressMode, anthropic: 'off' }`) until the owner rules.
-- **RULED (2026-11-04, board): (a), the flow is acceptable.** This supersedes O4 and #701's Q2 for this flow only.
-  - **What it allows:** with `GUARD_INGRESS` at `on` or `shadow`, content heads of up to 20 000 characters go to the Anthropic tier's decisions host. Mail, file and document bodies are included. `shadow` sends the same bytes as `on`.
-  - **What it leaves alone:** the default, `off`, sends nothing. O4 still governs the screen: `GUARD_SCREEN_ANTHROPIC` accepts only `off | always`. Q2 still governs the Decide route's own state, which carries a document count only.
+- **RULED (2026-11-04, board): (a), the flow is acceptable.** The owner's note, recorded: "2 - (a)". This supersedes O4 and #701's Q2 for this flow only.
+  - **What it allows (the author's reading):** with `GUARD_INGRESS` at `on` or `shadow`, content heads of up to 20 000 characters go to the Anthropic tier's decisions host. Mail, file and document bodies are included. `shadow` sends the same bytes as `on`.
+  - **What it leaves alone (the author's reading):** the default, `off`, sends nothing. O4 still governs the screen: `GUARD_SCREEN_ANTHROPIC` accepts only `off | always`. Q2 still governs the Decide route's own state, which carries a document count only.
   - **Where it is stated:** one value covers both tiers (ruling AE), and both env templates (`app/.env.example`, `.env.production.example`) say what is sent and to whom.
-- **Blocks:** slice 17's merge (its security review, MUST-1).
+- **Blocks:** none (ruled); it blocked slice 17's merge (its security review, MUST-1).
 
 ### O44: the middle label's tie-break
 
@@ -1543,7 +1551,8 @@ O24 to O28, O30 to O32 and O34 have owner answers recorded verbatim above. O29 a
 - **Options:**
   - (a) The prescribed ladder stands.
   - (b) Carry the tie-break exactly, so that text is `detected`. That takes two edits to the middle description: an appended sentence, and a swapped example.
-- **RULED (2026-11-04, board): (a), the prescribed ladder stands.** There is no tie-break change. The alternative is documented beside `GUARD_INGRESS` (`packages/harness-patterns/guard-gate.server.ts`) as not adopted. Slice 19 sets an unclear-addressee fixture's expectation at `possible`.
+- **RULED (2026-11-04, board): (a), the prescribed ladder stands.** The owner's note, recorded: "3 - (a) as recommended". There is no tie-break change. The alternative is documented beside `GUARD_INGRESS` (`packages/harness-patterns/guard-gate.server.ts`) as not adopted.
+  - **For slice 19 (the author's reading):** slice 19 sets an unclear-addressee fixture's expectation at `possible`.
 - **Blocks:** none (ruled).
 
 ### Historical and remaining low-stakes notes

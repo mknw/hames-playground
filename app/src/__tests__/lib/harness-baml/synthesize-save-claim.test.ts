@@ -9,8 +9,8 @@
  *
  * MUTATIONS (red): delete the "Whether anything is kept…" bullet from `Synthesize` in
  * `packages/harness-baml/baml_src/compact-execution.baml` and regenerate — every client
- * goes red; drop its last sentence (the WHAT YOU REMEMBER carve-out) — red, with and
- * without a memory block; put back "for the rest of this conversation and say so" — red. */
+ * goes red; drop its last sentence (the WHAT YOU REMEMBER carve-out) — the memory-on
+ * case goes red; render it unconditionally — the memory-off case goes red; put back "for the rest of this conversation and say so" — red. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { b } from '@hames-ai/harness-baml/baml_client'
 
@@ -59,8 +59,13 @@ describe('Synthesize never claims a save for later conversations', () => {
         expect(text).toContain('so do not claim it either way')
         expect(text).toContain('Nothing in the\\n  TOOL EXECUTION results is a memory of the user')
         expect(text).toContain('a file saved to this\\n  conversation')
-        // The carve-out: a stored memory the block shows may be reported as noted.
-        expect(text).toContain('This does not limit answering from the WHAT YOU REMEMBER')
+        // The carve-out: a stored memory the block shows may be reported as noted. It
+        // renders only beside a memory block, so a memory-less prompt names no block.
+        if (memory)
+          expect(text).toContain(
+            'This does not limit answering from the\\n  WHAT YOU REMEMBER block above.',
+          )
+        else expect(text).not.toContain('WHAT YOU REMEMBER')
         // Never understate retention the store step may still perform.
         expect(text).not.toContain('for the rest of this conversation')
         if (memory) expect(text).toContain(memory)

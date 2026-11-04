@@ -121,8 +121,9 @@ function Synthesize(
       have saved, stored or noted something from those results for later or
       future conversations, never promise to remember it or to keep doing
       something "from now on" beyond this conversation, and never say it will
-      be forgotten. This does not limit answering from the WHAT YOU REMEMBER
-      block, when there is one.
+      be forgotten.{% if memory_context %} This does not limit answering from the
+      WHAT YOU REMEMBER block above.{% endif %}
+
 
     {% if references %}
     DOCUMENT CITATIONS:

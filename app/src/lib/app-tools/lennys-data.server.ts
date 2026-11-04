@@ -27,8 +27,11 @@
  * process transport is consulted before the gateway (`tool-transport.server.ts`).
  * Only the names the operator pinned in `LENNYS_DATA_MCP_TOOLS` (as the sign-in
  * script printed them) are ever offered, so the server cannot add or rename a
- * tool into the prompt. What the server says about a tool is not used verbatim:
- * the description is a fixed line, and the input schema keeps only its structure.
+ * tool into the prompt. The pin also names each tool's arguments and enum
+ * values (`name(arg,arg=v1|v2)`), so the server chooses none of the schema text
+ * the model sees: the description is a fixed line, the schema is built from the
+ * pin (`pinnedSchema`), and a call sends only pinned arguments with pinned values
+ * (`pinnedArguments`).
  *
  * Per-user gate (owner ruling, 2026-11-04: personal use by the subscriber only).
  * Besides the switch, the signed-in user's verified email (the Entra claim the
@@ -102,8 +105,63 @@ export interface LennysDataConfig {
   readonly refreshToken: string
   /** Normalised (trimmed, lower-cased) emails; never empty. */
   readonly users: ReadonlySet<string>
-  /** Remote tool names (unprefixed) the operator pinned; never empty. */
-  readonly tools: ReadonlySet<string>
+  /** The operator's pinned surface (unprefixed remote name → its pinned
+   *  arguments → the argument's pinned enum values, or null); never empty. */
+  readonly tools: PinnedTools
+}
+
+/** Pinned arguments of one tool: name → allowed values, or null for any. */
+export type PinnedArgs = ReadonlyMap<string, ReadonlySet<string> | null>
+export type PinnedTools = ReadonlyMap<string, PinnedArgs>
+
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+const ENUM_VALUE = /^[A-Za-z0-9_.-]{1,40}$/
+
+/**
+ * Parse `LENNYS_DATA_MCP_TOOLS`: `name(arg,arg=v1|v2),name2(arg)`, as the
+ * sign-in script prints it. Tool names, argument names and enum values are all
+ * operator-pinned, so nothing the server says chooses them. A malformed spec
+ * refuses boot — a typo must not silently drop a tool or widen one.
+ */
+export function parsePinnedTools(value: string | undefined): PinnedTools {
+  const tools = new Map<string, PinnedArgs>()
+  const groups: string[] = []
+  let depth = 0
+  let current = ''
+  for (const ch of value ?? '') {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (depth < 0 || depth > 1) throw new Error('LENNYS_DATA_MCP_TOOLS is malformed')
+    if (ch === ',' && depth === 0) {
+      groups.push(current)
+      current = ''
+    } else current += ch
+  }
+  if (depth !== 0) throw new Error('LENNYS_DATA_MCP_TOOLS is malformed')
+  groups.push(current)
+  for (const group of groups.map((g) => g.trim()).filter(Boolean)) {
+    const match = /^([A-Za-z_][A-Za-z0-9_]{0,63})\(([^()]*)\)$/.exec(group)
+    if (!match || tools.has(match[1])) throw new Error('LENNYS_DATA_MCP_TOOLS is malformed')
+    const args = new Map<string, ReadonlySet<string> | null>()
+    for (const arg of match[2]
+      .split(',')
+      .map((a) => a.trim())
+      .filter(Boolean)) {
+      const [name, values, ...rest] = arg.split('=').map((part) => part.trim())
+      const allowed = values === undefined ? null : values.split('|').map((v) => v.trim())
+      if (
+        rest.length ||
+        !IDENTIFIER.test(name) ||
+        args.has(name) ||
+        (allowed !== null && !allowed.every((v) => ENUM_VALUE.test(v)))
+      ) {
+        throw new Error('LENNYS_DATA_MCP_TOOLS is malformed')
+      }
+      args.set(name, allowed && new Set(allowed))
+    }
+    tools.set(match[1], args)
+  }
+  return tools
 }
 
 const normaliseEmail = (email: string): string => email.trim().toLowerCase()
@@ -136,7 +194,7 @@ export function lennysDataConfig(
     console.warn("[lennys-data] LENNYS_DATA_MCP_USERS is empty; Lenny's Data is off for every user")
     return null
   }
-  const tools = new Set(list(env.LENNYS_DATA_MCP_TOOLS))
+  const tools = parsePinnedTools(env.LENNYS_DATA_MCP_TOOLS)
   if (!tools.size) {
     console.warn("[lennys-data] LENNYS_DATA_MCP_TOOLS is empty; Lenny's Data offers no tool")
     return null
@@ -249,35 +307,74 @@ export function createTokenManager(
   }
 }
 
-/** JSON-schema keywords kept from a server-supplied input schema. Free-text
- *  keywords (description, title, examples, default, …) are dropped: they are
- *  model-visible and the injection guard never reads them. */
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+/** The input schema the model sees, built from the operator's pin. Only pinned
+ *  argument names the server also declares appear, each with the server's
+ *  primitive `type` and the PINNED enum values; nothing else of the server's
+ *  schema is copied — no description, title or default, no server-chosen enum
+ *  value, and no nested property name (an array keeps only its items' type). */
 const SCHEMA_TYPES = new Set(['object', 'string', 'number', 'integer', 'boolean', 'array'])
 
-export function structuralSchema(schema: unknown, depth = 0): Record<string, unknown> {
+function typeOnly(schema: unknown): Record<string, unknown> {
+  const src = (typeof schema === 'object' && schema !== null ? schema : {}) as Record<
+    string,
+    unknown
+  >
   const out: Record<string, unknown> = {}
-  if (typeof schema !== 'object' || schema === null || depth > 3) return out
-  const src = schema as Record<string, unknown>
   if (typeof src.type === 'string' && SCHEMA_TYPES.has(src.type)) out.type = src.type
-  if (Array.isArray(src.enum)) {
-    const values = src.enum.filter(
-      (v) => typeof v === 'number' || (typeof v === 'string' && IDENTIFIER.test(v)),
-    )
-    if (values.length) out.enum = values
+  if (out.type === 'array' && typeof src.items === 'object' && src.items !== null) {
+    const items = (src.items as Record<string, unknown>).type
+    if (typeof items === 'string' && SCHEMA_TYPES.has(items) && items !== 'object') {
+      out.items = { type: items }
+    }
   }
-  if (src.items !== undefined) out.items = structuralSchema(src.items, depth + 1)
-  if (typeof src.properties === 'object' && src.properties !== null) {
-    const properties: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries(src.properties)) {
-      if (IDENTIFIER.test(key)) properties[key] = structuralSchema(value, depth + 1)
+  return out
+}
+
+export function pinnedSchema(server: unknown, args: PinnedArgs): Record<string, unknown> {
+  const src = (typeof server === 'object' && server !== null ? server : {}) as Record<
+    string,
+    unknown
+  >
+  const declared = (
+    typeof src.properties === 'object' && src.properties !== null ? src.properties : {}
+  ) as Record<string, unknown>
+  const properties: Record<string, unknown> = {}
+  for (const [name, values] of args) {
+    if (!Object.hasOwn(declared, name)) continue
+    const prop = typeOnly(declared[name])
+    if (values) {
+      const numeric = prop.type === 'number' || prop.type === 'integer'
+      const allowed = [...values]
+      if (prop.type === 'array') {
+        prop.items = { ...(prop.items as object), enum: allowed }
+      } else {
+        prop.enum = numeric ? allowed.map(Number) : allowed
+      }
     }
-    out.properties = properties
-    if (Array.isArray(src.required)) {
-      out.required = src.required.filter(
-        (k): k is string => typeof k === 'string' && k in properties,
-      )
+    properties[name] = prop
+  }
+  const required = Array.isArray(src.required)
+    ? src.required.filter((k): k is string => typeof k === 'string' && k in properties)
+    : []
+  return { type: 'object', properties, ...(required.length ? { required } : {}) }
+}
+
+/** The arguments that may leave: pinned names only, and a pinned argument's
+ *  value (or each array element) must be one of its pinned values. Null means
+ *  refuse the call. */
+export function pinnedArguments(
+  args: Record<string, unknown>,
+  pinnedArgs: PinnedArgs,
+): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {}
+  for (const [name, value] of Object.entries(args)) {
+    if (!pinnedArgs.has(name)) continue
+    const allowed = pinnedArgs.get(name)
+    if (allowed) {
+      const values = Array.isArray(value) ? value : [value]
+      if (!values.every((v) => allowed.has(String(v)))) return null
     }
+    out[name] = value
   }
   return out
 }
@@ -355,9 +452,9 @@ export function createLennysDataTransport(
         .map((tool) => ({
           name: `${LENNYS_TOOL_PREFIX}${tool.name}`,
           description: fixedDescription(tool.name),
-          inputSchema: structuralSchema(tool.inputSchema),
+          inputSchema: pinnedSchema(tool.inputSchema, config!.tools.get(tool.name)!),
         }))
-      for (const name of config!.tools) {
+      for (const name of config!.tools.keys()) {
         if (!tools.some((tool) => tool.name === name)) {
           console.warn(`[lennys-data] pinned tool ${name} is absent from the server's listing`)
         }
@@ -382,10 +479,14 @@ export function createLennysDataTransport(
       if (!pinned(name) || !(await userAllowed())) {
         return { success: false, data: null, error: "Lenny's Data tool unavailable" }
       }
+      const remote = name.slice(LENNYS_TOOL_PREFIX.length)
+      const sent = pinnedArguments(args, config!.tools.get(remote)!)
+      if (!sent) {
+        return { success: false, data: null, error: "Lenny's Data argument value not allowed" }
+      }
       try {
-        const remote = name.slice(LENNYS_TOOL_PREFIX.length)
         const result = await withClient((client) =>
-          client.callTool({ name: remote, arguments: args }),
+          client.callTool({ name: remote, arguments: sent }),
         )
         const content = (Array.isArray(result.content) ? result.content : [])
           .filter(

@@ -506,6 +506,43 @@ describe('createPlannerAdapter', () => {
     }
   })
 
+  // PR #986 delta review, D2. A process-owned tool that stays missing (its
+  // transport is down) costs one catalog re-read per 30 s window, not one per
+  // call. MUTATION: drop the window check (`Date.now() - lastMissReread >=
+  // MISS_REREAD_MS`): the second miss inside the window reads again.
+  it('throttles the miss re-read to one catalog read per window', async () => {
+    const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
+    const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    const { createPlannerAdapter, invalidateToolDescriptions } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const unregister = registerTransport({
+      id: 'down',
+      ownsTool: (name) => name === 'gated_search',
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      invalidateToolDescriptions()
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      const reads = () => vi.mocked(listTools).mock.calls.length
+      const start = reads()
+      const holder = ['read_neo4j_cypher', 'gated_search']
+      await createPlannerAdapter(holder)('msg', 'intent') // first miss: one re-read
+      expect(reads()).toBe(start + 1)
+      now.mockReturnValue(1_000_000 + 29_999)
+      await createPlannerAdapter(holder)('msg', 'intent') // inside the window: none
+      expect(reads()).toBe(start + 1)
+      now.mockReturnValue(1_000_000 + 30_000)
+      await createPlannerAdapter(holder)('msg', 'intent') // window over: one more
+      expect(reads()).toBe(start + 2)
+    } finally {
+      now.mockRestore()
+      unregister()
+      invalidateToolDescriptions()
+    }
+  })
+
   it('propagates a non-recoverable failure as an LLMCallError', async () => {
     const { createPlannerAdapter, LLMCallError } =
       await import('@hames-ai/harness-baml/baml-adapters.server')

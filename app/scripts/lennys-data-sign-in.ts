@@ -17,7 +17,7 @@
  *
  *   LENNYS_DATA_MCP_CLIENT_ID=...
  *   LENNYS_DATA_MCP_REFRESH_TOKEN=...
- *   LENNYS_DATA_MCP_TOOLS=...       # the tool names, to pin; review before use
+ *   LENNYS_DATA_MCP_TOOLS=...       # name(arg,arg=v1|v2),… to pin; review before use
  *
  * The first two are secrets. The script writes nothing to disk, and the tool
  * listing sends no query.
@@ -96,6 +96,32 @@ function waitForCode(): Promise<string> {
   })
 }
 
+const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+const ENUM_VALUE = /^[A-Za-z0-9_.-]{1,40}$/
+
+/** One tool's pin in the app's `name(arg,arg=v1|v2)` form, from what the server
+ *  lists. Names or values the app's parser would refuse are left out and
+ *  reported, so the printed line always parses; the operator reviews it. */
+function pinFor(tool: { name: string; inputSchema?: unknown }): string | null {
+  if (!IDENTIFIER.test(tool.name)) {
+    console.warn(`left out a tool whose name the app cannot pin`)
+    return null
+  }
+  const schema = (tool.inputSchema ?? {}) as { properties?: Record<string, { enum?: unknown[] }> }
+  const args: string[] = []
+  for (const [arg, prop] of Object.entries(schema.properties ?? {})) {
+    if (!IDENTIFIER.test(arg)) {
+      console.warn(`${tool.name}: left out an argument whose name the app cannot pin`)
+      continue
+    }
+    const values = (Array.isArray(prop?.enum) ? prop.enum : []).map(String)
+    const kept = values.filter((v) => ENUM_VALUE.test(v))
+    if (kept.length < values.length) console.warn(`${tool.name}.${arg}: left out enum values`)
+    args.push(kept.length ? `${arg}=${kept.join('|')}` : arg)
+  }
+  return `${tool.name}(${args.join(',')})`
+}
+
 async function main(): Promise<void> {
   const codePromise = waitForCode()
   if ((await auth(provider, { serverUrl: SERVER_URL })) !== 'REDIRECT') {
@@ -122,9 +148,9 @@ async function main(): Promise<void> {
       requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
     }),
   )
-  let names: string[]
+  let pins: string[]
   try {
-    names = (await mcp.listTools()).tools.map((t) => t.name)
+    pins = (await mcp.listTools()).tools.map(pinFor).filter((pin): pin is string => pin !== null)
   } finally {
     await mcp.close()
   }
@@ -136,7 +162,7 @@ async function main(): Promise<void> {
   console.log('\nAdd these to the server environment (secrets; never commit them):\n')
   console.log(`LENNYS_DATA_MCP_CLIENT_ID=${client.client_id}`)
   console.log(`LENNYS_DATA_MCP_REFRESH_TOKEN=${after}`)
-  console.log(`LENNYS_DATA_MCP_TOOLS=${names.join(',')}`)
+  console.log(`LENNYS_DATA_MCP_TOOLS=${pins.join(',')}`)
 }
 
 main().then(

@@ -40,7 +40,9 @@ import {
   createTokenManager,
   LENNYS_FAILURES,
   lennysDataConfig,
-  structuralSchema,
+  parsePinnedTools,
+  pinnedArguments,
+  pinnedSchema,
 } from '../../../lib/app-tools/lennys-data.server'
 
 const SENTINEL = 'SERVER-TEXT-SENTINEL'
@@ -49,7 +51,7 @@ const CONFIG = {
   clientId: 'synthetic-client',
   refreshToken: 'r0',
   users: new Set([OWNER]),
-  tools: new Set(['search', 'get_post']),
+  tools: parsePinnedTools('search(query,kind=newsletter|podcast|interview),get_post(id)'),
 }
 const asOwner = async (): Promise<string | null> => OWNER
 const ON = {
@@ -57,7 +59,7 @@ const ON = {
   LENNYS_DATA_MCP_CLIENT_ID: 'c',
   LENNYS_DATA_MCP_REFRESH_TOKEN: 'r',
   LENNYS_DATA_MCP_USERS: OWNER,
-  LENNYS_DATA_MCP_TOOLS: 'search',
+  LENNYS_DATA_MCP_TOOLS: 'search(query)',
 }
 
 /** A fake of the provider's two hosts: the OAuth metadata + token endpoint,
@@ -84,10 +86,14 @@ function fakeServer() {
           description: SENTINEL,
           properties: {
             query: { type: 'string', description: SENTINEL },
-            kind: { type: 'string', enum: ['newsletter', 'podcast', `${SENTINEL} with spaces`] },
+            kind: {
+              type: 'string',
+              enum: ['newsletter', 'podcast', 'server_chosen', `${SENTINEL} with spaces`],
+            },
+            server_extra: { type: 'string', description: SENTINEL },
             'bad key!': { type: 'string' },
           },
-          required: ['query', 'bad key!'],
+          required: ['query', 'server_extra', 'bad key!'],
         },
       },
       { name: 'get_post', inputSchema: { type: 'object' } },
@@ -222,13 +228,22 @@ describe('the LENNYS_DATA_MCP switch (default OFF)', () => {
       lennysDataConfig({
         ...ON,
         LENNYS_DATA_MCP_USERS: ' Subscriber@Example.com ,',
-        LENNYS_DATA_MCP_TOOLS: ' search , get_post,',
+        LENNYS_DATA_MCP_TOOLS: ' search( query , kind = a|b ) , get_post(id),',
       }),
     ).toEqual({
       clientId: 'c',
       refreshToken: 'r',
       users: new Set([OWNER]),
-      tools: new Set(['search', 'get_post']),
+      tools: new Map([
+        [
+          'search',
+          new Map<string, Set<string> | null>([
+            ['query', null],
+            ['kind', new Set(['a', 'b'])],
+          ]),
+        ],
+        ['get_post', new Map([['id', null]])],
+      ]),
     })
   })
 
@@ -262,26 +277,77 @@ describe('names, namespace and what the server may say', () => {
     expect(await transport.callTool('lennys_surprise_tool', {})).toMatchObject({ success: false })
     expect(server.state.calls).toEqual([])
     expect(JSON.stringify(tools)).not.toContain(SENTINEL)
+    // Only pinned argument names, only pinned enum values: `server_extra` and
+    // `server_chosen` are the server's and never appear; `interview` is the
+    // operator's and does.
     expect(tools[0].inputSchema).toEqual({
       type: 'object',
       properties: {
         query: { type: 'string' },
-        kind: { type: 'string', enum: ['newsletter', 'podcast'] },
+        kind: { type: 'string', enum: ['newsletter', 'podcast', 'interview'] },
       },
       required: ['query'],
     })
     expect(tools[0].description).toMatch(/^Lenny's Data archive tool "search"/)
   })
 
-  it('structuralSchema keeps structure only, bounded in depth', () => {
-    expect(structuralSchema('not a schema')).toEqual({})
+  // D3. MUTATION: copy the server's enum values or nested property names into
+  // the schema, or emit server-declared arguments that are not pinned.
+  it('pinnedSchema copies only types from the server; names and values come from the pin', () => {
+    const args = parsePinnedTools('t(tags=a|b,count=1|2,filter,labels,rows,missing)').get('t')!
     expect(
-      structuralSchema({
-        type: 'array',
-        title: SENTINEL,
-        items: { type: 'object', properties: { a: { type: 'evil' } } },
-      }),
-    ).toEqual({ type: 'array', items: { type: 'object', properties: { a: {} } } })
+      pinnedSchema(
+        {
+          properties: {
+            tags: { type: 'array', items: { type: 'string', enum: ['server'] } },
+            count: { type: 'integer', enum: [99] },
+            filter: { type: 'object', properties: { server_named: { type: 'string' } } },
+            labels: { type: 'array', items: { type: 'string', enum: ['server'] } },
+            rows: { type: 'array', items: { type: 'object', properties: { server_named: {} } } },
+            unpinned: { type: 'string' },
+          },
+          required: ['filter', 'unpinned'],
+        },
+        args,
+      ),
+    ).toEqual({
+      type: 'object',
+      properties: {
+        tags: { type: 'array', items: { type: 'string', enum: ['a', 'b'] } },
+        count: { type: 'integer', enum: [1, 2] },
+        filter: { type: 'object' },
+        labels: { type: 'array', items: { type: 'string' } },
+        rows: { type: 'array' },
+      },
+      required: ['filter'],
+    })
+    expect(pinnedSchema('not a schema', args)).toEqual({ type: 'object', properties: {} })
+  })
+
+  // MUTATION: accept a bare name, a duplicate, or a value outside ENUM_VALUE.
+  it.each([
+    'search',
+    'search(',
+    'search(query))',
+    'search(query=)',
+    'search(a=b=c)',
+    'bad name(x)',
+    'search(q),search(q)',
+    'search(q,q)',
+    'search(q=has space)',
+  ])('a malformed pin refuses boot: %s', (spec) => {
+    expect(() => parsePinnedTools(spec)).toThrow(/malformed/)
+  })
+
+  it('pinnedArguments keeps pinned names and refuses an unpinned value', () => {
+    const args = parsePinnedTools('t(q,kind=a|b,tags=x|y)').get('t')!
+    expect(pinnedArguments({ q: 'free', kind: 'a', other: 'dropped' }, args)).toEqual({
+      q: 'free',
+      kind: 'a',
+    })
+    expect(pinnedArguments({ kind: 'c' }, args)).toBeNull()
+    expect(pinnedArguments({ tags: ['x', 'y'] }, args)).toEqual({ tags: ['x', 'y'] })
+    expect(pinnedArguments({ tags: ['x', 'z'] }, args)).toBeNull()
   })
 
   // MUTATION: change LENNYS_NAMESPACE to 'lennys-data' (inferServer reads it
@@ -306,6 +372,21 @@ describe('calls', () => {
       data: 'synthetic archive result',
     })
     expect(server.state.calls).toEqual([{ name: 'search', arguments: { query: 'synthetic' } }])
+  })
+
+  // D3. MUTATION: forward `args` instead of the pinned arguments, or skip the
+  // enum check.
+  it('sends only pinned arguments, and refuses a value outside a pinned enum before any request', async () => {
+    const transport = transportAsOwner()
+    await transport.callTool('lennys_search', { query: 'q', kind: 'podcast', server_extra: 'x' })
+    expect(server.state.calls).toEqual([
+      { name: 'search', arguments: { query: 'q', kind: 'podcast' } },
+    ])
+    const before = server.state.requests
+    expect(
+      await transport.callTool('lennys_search', { query: 'q', kind: 'server_chosen' }),
+    ).toEqual({ success: false, data: null, error: "Lenny's Data argument value not allowed" })
+    expect(server.state.requests).toBe(before)
   })
 
   // MUTATION: return `String(err)` from classifyFailure.

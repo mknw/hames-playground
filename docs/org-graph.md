@@ -154,44 +154,54 @@ read off a feature matrix:
 
 So enforcement splits:
 
-| Rule                                         | Enforced by                                              | Strength                                                                   |
-| -------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `Member.entraId` unique                      | Neo4j uniqueness constraint `org_member_entra_id`        | **Database.** Holds against every writer, including the browser edit UI.   |
-| `Member.mail` unique                         | Neo4j uniqueness constraint `org_member_mail`            | **Database.**                                                              |
-| `Team.entraId`; `id` and `nameKey` per label | Neo4j uniqueness constraints                             | **Database.** One node per name per label (A1) holds against every writer. |
-| Hard properties present                      | `validateMember` in `ontology.ts`, at the write boundary | **App-side.** Holds only for callers that route through the ingest.        |
-| Soft properties present                      | `validateMember`, reported not rejected                  | **App-side, advisory.** Counted in the ingest report.                      |
-| Only the ten labels exist                    | nothing, at write time                                   | **Measured, not enforced** — see below.                                    |
-| Only the ten relation types exist            | nothing, at write time                                   | **Measured, not enforced** — see below.                                    |
-| Relation endpoint labels                     | the ingest's own Cypher, which matches on label          | **App-side.**                                                              |
+| Rule                                         | Enforced by                                                                | Strength                                                                   |
+| -------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `Member.entraId` unique                      | Neo4j uniqueness constraint `org_member_entra_id`                          | **Database.** Holds against every writer, including the browser edit UI.   |
+| `Member.mail` unique                         | Neo4j uniqueness constraint `org_member_mail`                              | **Database.**                                                              |
+| `Team.entraId`; `id` and `nameKey` per label | Neo4j uniqueness constraints                                               | **Database.** One node per name per label (A1) holds against every writer. |
+| Hard properties present                      | `validateMember` in `ontology.ts`, at the write boundary                   | **App-side.** Holds only for callers that route through the ingest.        |
+| Soft properties present                      | `validateMember`, reported not rejected                                    | **App-side, advisory.** Counted in the ingest report.                      |
+| Only the ten labels exist                    | the canvas ops and the org-knowledge validator; nothing else at write time | **App-side** for those writers, **measured** for any other — see below.    |
+| Only the ten relation types exist            | the canvas ops and the org-knowledge validator; nothing else at write time | **App-side** for those writers, **measured** for any other — see below.    |
+| Relation endpoint labels                     | the ingest's own Cypher, which matches on label                            | **App-side.**                                                              |
 
 ### The gap app-side validation leaves
 
-App-side validation binds the callers that route through it. Two do not:
+App-side validation binds the callers that route through it. Since the
+org-knowledge hook's slice 6 the canvas is one of them:
 
 1. **`neo4j/graph-edit.server.ts`** — the graph visualisation's edit
-   affordances. `createGraphNode` and `linkGraphNodes` validate a label or
-   relationship type by **shape** (`/^[A-Za-z_][A-Za-z0-9_]*$/`), not by
-   membership in this ontology, and they do so deliberately: the UI legitimately
-   mints new labels, so a catalog check would reject the first node of every new
-   one. Consequence: the browser can create a `Concept` node or a `REPORTS_TO`
-   edge, and nothing stops it.
+   affordances — checks every edit against `ORG_ONTOLOGY` (the owner's "any
+   change to the graph must adhere to the ontology", 2026-11-04, which answers
+   the question this section used to leave open, LD-16). **This changed the
+   canvas's behaviour:** it used to accept any label or relation type of the
+   right shape, so the browser could create a `Concept` node or a `REPORTS_TO`
+   edge. Now:
+   - a node is created only for a label a person may create by hand (`Theme`,
+     `Team`, `Project`, `Partner` — a member, a pillar, or a class that needs
+     more than a name, such as a deliverable owed its project, is refused with a
+     message), and it is MERGEd on its `nameKey`, so a repeated name is the same
+     node;
+   - a relation is added only for an ontology type between nodes of its declared
+     labels, and a bounded relation that already has its one edge (a theme's
+     coordinator, a project's pillar) is refused rather than doubled — a
+     replacement is proposed in a conversation;
+   - a property is set only when the node's class declares it, and never on a
+     member or a pillar;
+   - every write stamps `createdBy` / `createdAt` where it creates and
+     `lastEditedBy` / `lastEditedAt` where it changes a value. The actor is the
+     session user, read after the wrapper's gate, which stays gate-only (#225
+     PR-C1).
 2. **`neo4j/queries.ts` → `runManualCypher`** cannot write at all (READ-mode
    session and transaction), so it is not a path here — noted only because it is
    the other place query text reaches the graph.
 
-That gap is **not closed in this change**, because closing it means changing UI
-behaviour nobody asked to change. Instead it is made countable:
-`countNonConforming()` (`schema.server.ts`, over `NON_CONFORMING_CYPHER`) returns
-every non-conforming label, every non-conforming relation type and every `Member`
+What is left is measured rather than enforced: a writer that routes through
+neither (a script, a future tool) is caught by `countNonConforming()`
+(`schema.server.ts`, over `NON_CONFORMING_CYPHER`), which returns every
+non-conforming label, every non-conforming relation type and every `Member`
 missing a hard property, as counts. Both live scripts print it, and both fail
-their exit code on a non-zero result. Run it after any session of manual graph
-editing.
-
-**Open for the owner:** whether `graph-edit.server.ts` should reject labels and
-relation types outside `NODE_LABELS` / `RELATION_TYPES`. It would make the
-ontology enforced rather than measured, at the cost of the UI's ability to mint
-a new label ad hoc. Not decided here.
+their exit code on a non-zero result.
 
 ## 4. The setup path, and the one authorised wipe
 

@@ -218,13 +218,13 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     sourceId: string
     sourceLabel: string
   } | null>(null)
-  const [newRelationType, setNewRelationType] = createSignal('RELATES_TO')
+  const [newRelationType, setNewRelationType] = createSignal('WORKS_ON')
   // Visibility tracking (for deferred rendering when tab is inactive)
   const [visible, setVisible] = createSignal(false)
   // Create node form state
   const [showCreateNode, setShowCreateNode] = createSignal(false)
   const [newNodeName, setNewNodeName] = createSignal('')
-  const [newNodeLabel, setNewNodeLabel] = createSignal('Concept')
+  const [newNodeLabel, setNewNodeLabel] = createSignal('Project')
   const [newNodeDescription, setNewNodeDescription] = createSignal('')
 
   // ========================================
@@ -668,7 +668,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     const name = newNodeName().trim()
     if (!name) return
 
-    const label = newNodeLabel().trim() || 'Concept'
+    const label = newNodeLabel().trim() || 'Project'
     const description = newNodeDescription().trim()
 
     // Add to Cytoscape locally
@@ -898,7 +898,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
               <input
                 value={newNodeLabel()}
                 onInput={(e) => setNewNodeLabel(e.currentTarget.value)}
-                placeholder="e.g. Concept"
+                placeholder="e.g. Project"
                 p="x-2 y-1.5"
                 w="28"
                 bg="ui-bg-tertiary"

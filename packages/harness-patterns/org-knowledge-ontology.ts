@@ -155,3 +155,94 @@ export function valueTokens(text: string): string[] {
     .split(/[^\p{L}\p{N}]+/u)
     .filter((t) => t.length > 0)
 }
+
+// ============================================================================
+// One property, and what a hand edit may do
+// ============================================================================
+
+const LINE_BREAK = /[\r\n\u2028\u2029\u0085]/u
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/
+
+/** A real calendar day written `YYYY-MM-DD`. */
+export function isIsoDay(value: string): boolean {
+  const m = ISO_DAY.exec(value)
+  if (!m) return false
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const date = new Date(Date.UTC(y, mo - 1, d))
+  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d
+}
+
+/**
+ * Why `key = value` may not be stored on a node of `cls`, or `null`. The one
+ * property rule the validator (V2) and a hand edit on the canvas share: the
+ * key is one the class declares as required or optional (never derived, never
+ * provenance), the value is a non-empty string, a closed-set value is in its
+ * set, a day is an ISO day, and a one-line text is one line of at most
+ * {@link MAX_TEXT_CHARS}.
+ */
+export function propertyRefusal(cls: OntologyClass, key: string, value: unknown): string | null {
+  if (![...cls.required, ...cls.optional].includes(key)) {
+    return `${cls.label} has no property ${key} (it has ${[...cls.required, ...cls.optional].join(', ')})`
+  }
+  if (typeof value !== 'string' || value.trim() === '') return `${cls.label}.${key} needs a value`
+  const closed = cls.closed[key]
+  if (closed && !closed.includes(value)) return `${cls.label}.${key} is one of ${closed.join(', ')}`
+  if (cls.dates.includes(key) && !isIsoDay(value)) return `${cls.label}.${key} is a day, YYYY-MM-DD`
+  if (
+    cls.lines.includes(key) &&
+    (LINE_BREAK.test(value) || Array.from(value).length > MAX_TEXT_CHARS)
+  ) {
+    return `${cls.label}.${key} is one line of at most ${MAX_TEXT_CHARS} characters`
+  }
+  return null
+}
+
+/** The labels a person may create by hand on the canvas: creatable, keyed by
+ *  name, needing nothing but a name, and owed no edge at creation (a
+ *  deliverable needs its project, so it is proposed in a conversation). */
+export function canvasCreatableLabels(ontology: GraphOntology): string[] {
+  return ontology.classes
+    .filter((c) => canvasCreateRefusal(ontology, c.label) === null)
+    .map((c) => c.label)
+}
+
+/** Why a node of `label` may not be created by hand on the canvas, or `null`. */
+export function canvasCreateRefusal(ontology: GraphOntology, label: string): string | null {
+  const cls = classOf(ontology, label)
+  const allowed = () =>
+    ontology.classes
+      .filter((c) => c.label !== label && canvasCreateRefusal(ontology, c.label) === null)
+      .map((c) => c.label)
+  if (!cls)
+    return `${label} is not a label of the ontology (create one of: ${allowed().join(', ')})`
+  if (!cls.creatable) return `${label} nodes are linked to, never created here`
+  const needsMore =
+    cls.identity !== 'nameKey' ||
+    cls.required.some((p) => p !== cls.nameProperty) ||
+    ontology.relations.some(
+      (r) =>
+        r.cardinality?.min === 1 && (r.cardinality.side === 'from' ? r.from : r.to).includes(label),
+    )
+  if (needsMore) return `a ${label} needs more than a name; state it in a conversation instead`
+  return null
+}
+
+/** Why an edge of `type` between nodes carrying `fromLabels` and `toLabels` may
+ *  not be added by hand, or `null`. Cardinality needs the graph, so the caller
+ *  checks it; this is the vocabulary half. */
+export function canvasLinkRefusal(
+  ontology: GraphOntology,
+  type: string,
+  fromLabels: readonly string[],
+  toLabels: readonly string[],
+): string | null {
+  const rel = relationOf(ontology, type)
+  if (!rel || !rel.proposable) {
+    const allowed = ontology.relations.filter((r) => r.proposable).map((r) => r.type)
+    return `${type} is not a relation of the ontology (use one of: ${allowed.join(', ')})`
+  }
+  if (!fromLabels.some((l) => rel.from.includes(l)) || !toLabels.some((l) => rel.to.includes(l))) {
+    return `${type} joins ${rel.from.join(' or ')} to ${rel.to.join(' or ')}`
+  }
+  return null
+}

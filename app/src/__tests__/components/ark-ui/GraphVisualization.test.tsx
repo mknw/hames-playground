@@ -668,9 +668,9 @@ describe('GraphVisualization — node creation and editing', () => {
     await tick()
 
     expect(added.at(-1)).toMatchObject({
-      data: { id: 'GraphQL', label: 'GraphQL', type: 'Concept', description: 'A query language' },
+      data: { id: 'GraphQL', label: 'GraphQL', type: 'Project', description: 'A query language' },
     })
-    expect(createGraphNode).toHaveBeenCalledWith('Concept', 'GraphQL', 'A query language')
+    expect(createGraphNode).toHaveBeenCalledWith('Project', 'GraphQL', 'A query language')
     expect(container.textContent, 'the form closes again').not.toContain('Create Node')
   })
 
@@ -688,7 +688,7 @@ describe('GraphVisualization — node creation and editing', () => {
     button(container, 'Create').click()
     await tick()
 
-    expect(createGraphNode).toHaveBeenCalledWith('Concept', 'REST', undefined)
+    expect(createGraphNode).toHaveBeenCalledWith('Project', 'REST', undefined)
   })
 
   it('closes the create form without touching the graph', async () => {

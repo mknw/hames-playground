@@ -1,159 +1,250 @@
 /**
- * Intent-shaped graph edit OPS (#226 C2) — moved co-located with the module
- * from the host app's `graph-edit.test.ts` (#225 PR-C2).
+ * Intent-shaped graph edit OPS (#226 C2), checked against the host's ontology
+ * since org-knowledge slice 6 (LD-16: "any change to the graph must adhere to
+ * the ontology"). The auth gate stays with the host's `'use server'` wrapper;
+ * these pin the ops' own contract — every operation owns its Cypher (values
+ * ride as parameters), admits only the ontology's labels, relation types and
+ * properties, merges a repeated name onto one node, stamps provenance, and
+ * closes the session even on failure.
  *
- * The auth-gate half of the old suite stayed with the host's `'use server'`
- * wrapper (that is what the gate now belongs to); these pin the OPS' own
- * contract — every operation owns its Cypher (values ride as parameters),
- * rejects identifiers that could smuggle query syntax, and closes the
- * session even on failure.
+ * A small ontology stands in for the host's; names are synthetic.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import {
+  defineOntology,
+  type OntologyClass,
+} from '@hames-ai/harness-patterns/org-knowledge-ontology'
 
-const sessionRun = vi.fn(async (..._a: unknown[]) => ({ records: [] as unknown[] }))
-
-/** Make the mocked session look like it matched `n` rows — the value of the
- *  final `RETURN count(*)` column the ops read to detect a zero match. */
-const matchedRows = (n: number) => sessionRun.mockResolvedValueOnce({ records: [{ get: () => n }] })
+type Call = { q: string; p: Record<string, unknown> }
+const calls: Call[] = []
+/** Rows the next tx.run answers with, in order; an empty answer when none is queued. */
+const answers: Record<string, unknown>[][] = []
+const txRun = vi.fn(async (q: string, p: Record<string, unknown> = {}) => {
+  calls.push({ q, p })
+  const rows = answers.shift() ?? []
+  return { records: rows.map((r) => ({ get: (k: string) => r[k] })) }
+})
 const sessionClose = vi.fn(async () => undefined)
-const driverSession = vi.fn(() => ({ run: sessionRun, close: sessionClose }))
+const driverSession = vi.fn(() => ({
+  executeWrite: async (fn: (tx: { run: typeof txRun }) => unknown) => fn({ run: txRun }),
+  close: sessionClose,
+}))
 
 vi.mock('../../neo4j/client', () => ({
   getNeo4jDriver: () => ({ session: driverSession }),
 }))
 
-const lastCypher = () => String(sessionRun.mock.calls.at(-1)![0])
-const lastParams = () => sessionRun.mock.calls.at(-1)![1]
-
 const repo = () => import('../../neo4j/graph-edit.server')
+
+const cls = (label: string, extra: Partial<OntologyClass> = {}): OntologyClass => ({
+  label,
+  nameProperty: 'name',
+  required: ['name'],
+  optional: [],
+  derived: {},
+  closed: {},
+  dates: [],
+  lines: [],
+  identity: 'nameKey',
+  personFree: false,
+  creatable: true,
+  ...extra,
+})
+
+const ONTOLOGY = defineOntology({
+  classes: [
+    cls('Member', { nameProperty: 'displayName', required: ['displayName'], creatable: false }),
+    cls('Pillar', { required: ['name', 'objective'], creatable: false }),
+    cls('Theme', { optional: ['discipline'] }),
+    cls('Project', { optional: ['status', 'description'] }),
+    cls('Deliverable', { optional: ['description'] }),
+  ],
+  relations: [
+    {
+      type: 'COORDINATES',
+      from: ['Member'],
+      to: ['Pillar', 'Theme'],
+      cardinality: { side: 'to', min: 0, max: 1, onExisting: 'replace' },
+      proposable: true,
+      why: 'w',
+    },
+    {
+      type: 'WORKS_ON',
+      from: ['Member'],
+      to: ['Project'],
+      cardinality: null,
+      proposable: true,
+      why: 'w',
+    },
+    {
+      type: 'DELIVERS',
+      from: ['Project'],
+      to: ['Deliverable'],
+      cardinality: { side: 'to', min: 1, max: 1, onExisting: 'refuse' },
+      proposable: true,
+      why: 'w',
+    },
+  ],
+})
+
+const ACTOR = { userId: 'user-a', now: '2026-11-04T10:00:00.000Z' }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  calls.length = 0
+  answers.length = 0
 })
 
-describe('identifier validation', () => {
-  it('rejects an injected relationship type without running any query', async () => {
-    const { linkGraphNodes } = await repo()
-
-    await expect(
-      linkGraphNodes('Alpha', 'Beta', 'X]->(b) MATCH (n) DETACH DELETE n //'),
-    ).rejects.toThrow(/Invalid relationship type/)
-    expect(sessionRun).not.toHaveBeenCalled()
-  })
-
-  it('rejects a label that escapes its backtick quoting', async () => {
+describe('the ontology decides what may be written', () => {
+  // Design pin: an unknown label is refused. Mutation: restore the shape-only
+  // check (drop canvasCreateRefusal) → `Concept` reaches a query.
+  it('refuses a label the ontology does not declare, before any query', async () => {
     const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('X` {a:1}) MATCH (n) DETACH DELETE n //', 'name')).rejects.toThrow(
-      /Invalid label/,
+    await expect(createGraphNode(ONTOLOGY, ACTOR, 'Concept', 'GraphQL')).rejects.toThrow(
+      /Concept is not a label of the ontology \(create one of: Theme, Project\)/,
     )
-    expect(sessionRun).not.toHaveBeenCalled()
+    expect(txRun).not.toHaveBeenCalled()
   })
 
-  it('rejects a property key with query syntax', async () => {
-    const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('Alpha', 'k = 1 WITH n MATCH (m)', 'v')).rejects.toThrow(
-      /Invalid property key/,
+  it('never creates a member or a pillar, nor a node that needs more than a name', async () => {
+    const { createGraphNode } = await repo()
+    await expect(createGraphNode(ONTOLOGY, ACTOR, 'Member', 'Halyard Pruitt')).rejects.toThrow(
+      /linked to, never created/,
     )
-    expect(sessionRun).not.toHaveBeenCalled()
+    await expect(createGraphNode(ONTOLOGY, ACTOR, 'Pillar', 'Pillar D')).rejects.toThrow(
+      /linked to, never created/,
+    )
+    await expect(createGraphNode(ONTOLOGY, ACTOR, 'Deliverable', 'guide')).rejects.toThrow(
+      /needs more than a name/,
+    )
+    await expect(
+      createGraphNode(ONTOLOGY, ACTOR, 'Theme', 'Theme 9', 'stewardship'),
+    ).rejects.toThrow(/Theme has no property description/)
+    expect(txRun).not.toHaveBeenCalled()
+  })
+
+  it('refuses a relation type outside the ontology, and an injected one, before any query', async () => {
+    const { linkGraphNodes } = await repo()
+    for (const type of ['RELATES_TO', 'X]->(b) MATCH (n) DETACH DELETE n //']) {
+      await expect(linkGraphNodes(ONTOLOGY, ACTOR, 'e1', 'e2', type)).rejects.toThrow(
+        /is not a relation of the ontology/,
+      )
+    }
+    expect(txRun).not.toHaveBeenCalled()
+  })
+
+  it('refuses an injected property key before any query', async () => {
+    const { setGraphNodeProperty } = await repo()
+    await expect(
+      setGraphNodeProperty(ONTOLOGY, ACTOR, 'e1', 'k = 1 WITH n MATCH (m)', 'v'),
+    ).rejects.toThrow(/Invalid property key/)
+    expect(txRun).not.toHaveBeenCalled()
   })
 })
 
 describe('createGraphNode', () => {
-  it('creates a node with description, values as parameters, and returns its elementId', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:99' }] })
+  // Design pins: creating an existing name merges (mutation: CREATE again →
+  // the statement no longer merges on the name key); createdBy is the session
+  // user (mutation: omit it → no createdBy in the statement or its params).
+  it('merges on the name key, stamps createdBy on creation only, and returns the elementId', async () => {
+    answers.push([{ elementId: '4:abc:99' }])
     const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('Concept', 'GraphQL', 'A query language')).resolves.toBe(
-      '4:abc:99',
-    )
-
-    expect(lastCypher()).toBe(
-      'CREATE (n:`Concept` {name: $name, description: $description}) RETURN elementId(n) AS elementId',
-    )
-    expect(lastParams()).toEqual({ name: 'GraphQL', description: 'A query language' })
+    await expect(
+      createGraphNode(ONTOLOGY, ACTOR, 'Project', 'Project  Heron', 'A logistics workstream'),
+    ).resolves.toBe('4:abc:99')
+    const [{ q, p }] = calls
+    expect(
+      q.startsWith(
+        'MERGE (n:`Project` {nameKey: $nameKey}) ON CREATE SET n += $props, n.id = $id, n.createdBy = $actor, n.createdAt = $now ',
+      ),
+    ).toBe(true)
+    expect(q).toContain('SET n.lastEditedBy = $actor, n.lastEditedAt = $now')
+    expect(q.split('createdBy').length - 1).toBe(1)
+    expect(p).toMatchObject({
+      nameKey: 'project heron',
+      props: { name: 'Project  Heron', description: 'A logistics workstream' },
+      update: { description: 'A logistics workstream' },
+      actor: 'user-a',
+      now: ACTOR.now,
+    })
+    expect(p.id).toMatch(/^[0-9a-f-]{36}$/)
     expect(sessionClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('resolves with the created node\u2019s elementId when no description is given (#323 B1)', async () => {
-    sessionRun.mockResolvedValueOnce({ records: [{ get: () => '4:abc:7' }] })
-    const { createGraphNode } = await repo()
-
-    await expect(createGraphNode('Concept', 'REST')).resolves.toBe('4:abc:7')
-    expect(lastCypher()).toBe('CREATE (n:`Concept` {name: $name}) RETURN elementId(n) AS elementId')
-    expect(lastParams()).toEqual({ name: 'REST' })
   })
 })
 
 describe('linkGraphNodes', () => {
-  it('creates a typed edge between elementId-matched nodes (the normal UI path)', async () => {
-    matchedRows(1)
+  it('reads both ends, checks them, and merges the edge with provenance', async () => {
+    answers.push([{ labels: ['Member'] }], [{ labels: ['Project'] }])
     const { linkGraphNodes } = await repo()
-
-    await linkGraphNodes('4:abc:11', '4:abc:12', 'DEPENDS_ON')
-
-    expect(lastCypher()).toBe(
-      'MATCH (a), (b) WHERE elementId(a) = $sourceId AND elementId(b) = $targetId MERGE (a)-[:`DEPENDS_ON`]->(b) RETURN count(*) AS linked',
+    await linkGraphNodes(ONTOLOGY, ACTOR, 'e1', 'e2', 'WORKS_ON')
+    const merge = calls.at(-1)!
+    expect(merge.q).toContain(
+      'MERGE (a)-[r:`WORKS_ON`]->(b) ON CREATE SET r.id = $id, r.createdBy = $actor, r.createdAt = $now',
     )
-    expect(lastParams()).toEqual({ sourceId: '4:abc:11', targetId: '4:abc:12' })
-    expect(sessionClose).toHaveBeenCalledTimes(1)
+    expect(merge.p).toMatchObject({ sourceId: 'e1', targetId: 'e2', actor: 'user-a' })
   })
 
-  it('node ids are parameters — a hostile id cannot reach the query text', async () => {
-    matchedRows(1)
+  it('refuses ends of the wrong labels without writing', async () => {
+    answers.push([{ labels: ['Project'] }], [{ labels: ['Project'] }])
     const { linkGraphNodes } = await repo()
-
-    const hostile = `"}) MATCH (n) DETACH DELETE n //`
-    await linkGraphNodes(hostile, '4:abc:12', 'RELATES_TO')
-
-    expect(lastCypher()).not.toContain('DETACH')
-    expect(lastParams()).toEqual({ sourceId: hostile, targetId: '4:abc:12' })
+    await expect(linkGraphNodes(ONTOLOGY, ACTOR, 'e1', 'e2', 'WORKS_ON')).rejects.toThrow(
+      /WORKS_ON joins Member to Project/,
+    )
+    expect(calls.some((c) => c.q.includes('MERGE'))).toBe(false)
   })
 
-  it('rejects when an endpoint matches no node instead of resolving as success (#314)', async () => {
-    matchedRows(0)
+  it('refuses a second coordinator rather than doubling it', async () => {
+    answers.push([{ labels: ['Member'] }], [{ labels: ['Theme'] }], [{ taken: 1 }])
     const { linkGraphNodes } = await repo()
-
-    await expect(linkGraphNodes('4:abc:404', '4:abc:12', 'RELATES_TO')).rejects.toThrow(
-      /no graph node/i,
+    await expect(linkGraphNodes(ONTOLOGY, ACTOR, 'm2', 't1', 'COORDINATES')).rejects.toThrow(
+      /COORDINATES allows 1 per node/,
     )
-    expect(sessionClose).toHaveBeenCalledTimes(1)
+    expect(calls.some((c) => c.q.includes('MERGE'))).toBe(false)
+  })
+
+  it('refuses when an endpoint matches no node instead of resolving as success (#314)', async () => {
+    const { linkGraphNodes } = await repo()
+    await expect(linkGraphNodes(ONTOLOGY, ACTOR, 'gone', 'e2', 'WORKS_ON')).rejects.toThrow(
+      /matched no graph node/,
+    )
   })
 })
 
 describe('setGraphNodeProperty', () => {
-  it('sets one property on the elementId-matched node, key backtick-quoted, value as a parameter', async () => {
-    matchedRows(1)
+  it('sets a declared property, the name key with a name, and lastEditedBy where it changes', async () => {
+    answers.push([{ labels: ['Project'] }])
     const { setGraphNodeProperty } = await repo()
-
-    await setGraphNodeProperty('4:abc:11', 'summary', 'new summary')
-
-    expect(lastCypher()).toBe(
-      'MATCH (n) WHERE elementId(n) = $nodeId SET n.`summary` = $value RETURN count(n) AS matched',
-    )
-    expect(lastParams()).toEqual({ nodeId: '4:abc:11', value: 'new summary' })
+    await setGraphNodeProperty(ONTOLOGY, ACTOR, 'e1', 'name', 'Heron')
+    const update = calls.at(-1)!
+    expect(update.q).toContain('SET n += $props')
+    expect(update.q).toContain('SET n.lastEditedBy = $actor, n.lastEditedAt = $now')
+    expect(update.q).not.toContain('createdBy')
+    expect(update.p).toMatchObject({
+      nodeId: 'e1',
+      props: { name: 'Heron', nameKey: 'heron' },
+      actor: 'user-a',
+    })
   })
 
-  it('rejects when the node matches nothing instead of resolving as success (#314)', async () => {
-    // A display label that is not a `name` property (e.g. an org-graph GUID)
-    // used to issue MATCH ... matching zero nodes and still resolve — the edit
-    // reported success and the canvas fabricated the result.
-    matchedRows(0)
+  it('refuses an undeclared property and an edit to a member', async () => {
     const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('4:abc:404', 'summary', 'v')).rejects.toThrow(
-      /no graph node/i,
+    answers.push([{ labels: ['Project'] }])
+    await expect(setGraphNodeProperty(ONTOLOGY, ACTOR, 'e1', 'owner', 'x')).rejects.toThrow(
+      /Project has no property owner/,
     )
-    expect(sessionClose).toHaveBeenCalledTimes(1)
+    answers.push([{ labels: ['Member'] }])
+    await expect(setGraphNodeProperty(ONTOLOGY, ACTOR, 'e2', 'displayName', 'x')).rejects.toThrow(
+      /Member nodes are not edited here/,
+    )
+    expect(calls.some((c) => c.q.includes('SET'))).toBe(false)
   })
 
-  it('closes the session even when the query throws', async () => {
-    sessionRun.mockRejectedValueOnce(new Error('neo4j down'))
+  it('refuses when the node matches nothing (#314), and closes the session on a throw', async () => {
     const { setGraphNodeProperty } = await repo()
-
-    await expect(setGraphNodeProperty('Alpha', 'summary', 'v')).rejects.toThrow('neo4j down')
+    await expect(setGraphNodeProperty(ONTOLOGY, ACTOR, 'gone', 'status', 'active')).rejects.toThrow(
+      /matched no graph node/,
+    )
     expect(sessionClose).toHaveBeenCalledTimes(1)
   })
 })

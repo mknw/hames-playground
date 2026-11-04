@@ -90,6 +90,7 @@ function render(client: string, result: unknown, references: SynthesisReference[
     null,
     references,
     null,
+    null,
     { client, env: ENV },
   )
 }
@@ -347,10 +348,21 @@ describe('Synthesize capability guide', () => {
     '%s renders the guide and its fidelity exception in the system text',
     async (client) => {
       const body = (
-        await b.request.Synthesize('What can you do?', 'i', [], false, null, null, null, GUIDE, {
-          client,
-          env: ENV,
-        })
+        await b.request.Synthesize(
+          'What can you do?',
+          'i',
+          [],
+          false,
+          null,
+          null,
+          null,
+          GUIDE,
+          null,
+          {
+            client,
+            env: ENV,
+          },
+        )
       ).body.json() as { system?: unknown; messages: { role: string; content: unknown }[] }
       const system = JSON.stringify(body.system ?? body.messages[0])
       if (!body.system) expect(body.messages[0].role).toBe('system')

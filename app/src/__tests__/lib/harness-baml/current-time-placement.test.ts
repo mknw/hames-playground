@@ -120,7 +120,9 @@ const FUNCTIONS: [string, Render, object][] = [
   ['PlannerThinking', (t, o) => request.PlannerThinking('q', 'i', TOOLS, 'CTX', t, o), THINK],
   [
     'Synthesize',
-    (t, o) => request.Synthesize('q', 'i', TURNS, false, null, 'MEMORY', null, t, o),
+    // references, guide (#985), then current_time: the two string slots are
+    // adjacent, so a swap typechecks — the guide slot stays null here.
+    (t, o) => request.Synthesize('q', 'i', TURNS, false, null, 'MEMORY', null, null, t, o),
     ANTHROPIC,
   ],
 ]

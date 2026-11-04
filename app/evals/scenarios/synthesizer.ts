@@ -69,6 +69,7 @@ export const synthesizerGroundedScenario: Scenario = {
       null,
       null,
       null,
+      null,
       ctx.opts('compactExecution', collector),
     )
     const checks: Check[] = []

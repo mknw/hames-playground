@@ -134,6 +134,7 @@ function Synthesize(
       be forgotten.{% if memory_context %} This does not limit answering from the
       WHAT YOU REMEMBER block above.{% endif %}
 
+
     {% if references %}
     DOCUMENT CITATIONS:
     - For each fact drawn from a reference below, name its source file and add

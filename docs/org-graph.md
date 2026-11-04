@@ -31,14 +31,32 @@ Two rules that shape everything below:
 
 ## 1. Node labels
 
-Four, and nothing else is conforming data.
+Ten, and nothing else is conforming data. The set is the organizational-knowledge
+hook's ontology ([`docs/plan/org-knowledge-hook.md`](plan/org-knowledge-hook.md),
+"The ontology"); `ORG_ONTOLOGY` in `ontology.ts` is its machine-readable form, and
+`@hames-ai/harness-patterns`' validator checks every proposal against it. Every name
+here is a vocabulary term: the seeded pillars and themes come from configuration
+outside the repo.
 
-| Label       | What it is                                       | Unique key        | Required (hard)                  | Required (soft)          |
-| ----------- | ------------------------------------------------ | ----------------- | -------------------------------- | ------------------------ |
-| `Member`    | A person in the tenant directory                 | `entraId`, `mail` | `entraId`, `displayName`, `mail` | `department`, `jobTitle` |
-| `Team`      | A named group people belong to (an Entra group)  | `entraId`         | `entraId`, `name`                | —                        |
-| `Resource`  | A system, tool or asset the organisation runs    | `key`             | `key`, `name`                    | —                        |
-| `Knowledge` | A documented item — a note, a decision, a how-to | `key`             | `key`, `title`                   | —                        |
+| Label         | What it is                                                          | Unique key                 | Required as stored                                                       | Who writes it                               |
+| ------------- | ------------------------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------ | ------------------------------------------- |
+| `Member`      | A person in the tenant directory                                    | `entraId`, `mail`          | `entraId`, `displayName`, `mail` (hard); `department`, `jobTitle` (soft) | the directory ingest only                   |
+| `Pillar`      | One of the organisation's fixed objectives                          | `id`, `nameKey`            | `name`, `objective`                                                      | the seed only                               |
+| `Theme`       | A horizontal group with a discipline in common                      | `id`, `nameKey`            | `name`                                                                   | the seed and accepted proposals             |
+| `Team`        | A named group people belong to (an Entra group, or a proposed one)  | `entraId`, `id`, `nameKey` | `name`                                                                   | the directory ingest and accepted proposals |
+| `Project`     | A project or workstream                                             | `id`, `nameKey`            | `name`                                                                   | accepted proposals                          |
+| `Deliverable` | What a project produces                                             | `id`, `nameKey`            | `name`                                                                   | accepted proposals                          |
+| `Deadline`    | A dated milestone of one project or deliverable                     | `id`                       | `label`, `date` (ISO day)                                                | accepted proposals                          |
+| `Partner`     | An external organisation a project is run with                      | `id`, `nameKey`            | `name`                                                                   | accepted proposals                          |
+| `Resource`    | A document, system, dataset or tool a project uses                  | `id`, `nameKey`            | `name`, `kind`                                                           | accepted proposals                          |
+| `Fact`        | A budget, status, decision or risk about one node that is no person | `id`                       | `text`, `kind`, `evidence`, `statedOn`                                   | accepted proposals                          |
+
+Every class but `Member` also carries `id` (a UUID minted at acceptance),
+`createdBy` (the accepting user's internal id) and `createdAt`; every class keyed by
+name carries `nameKey`, the name under NFKC, lower case and collapsed whitespace,
+which its uniqueness constraint holds to one node per name. `Member` keeps its
+directory identity until the ingest gives it an `id` (a data job, planned outside
+the repo). `Knowledge` is retired: declared, never written, and replaced by `Fact`.
 
 `Member` also carries `syncedAt`, stamped with `datetime()` on every ingest and
 therefore on the **database** clock. It is not part of the ontology's contract;
@@ -78,24 +96,33 @@ is filled in.
 
 ## 2. Relation types
 
-`MEMBER_OF` was confirmed and `COORDINATES` was wanted. The other four are the
-minimum that lets resources and knowledge attach to anything at all. One line of
-rationale each, as asked:
+Ten types, each with its cardinality. `MEMBER_OF` was confirmed by the owner;
+the rest are the org-knowledge ontology's. A bounded relation counts on one end:
+a pillar or theme has one coordinator, a project one pillar, a deliverable one
+project, a deadline one owner, a fact one subject.
 
-| Relation      | Shape                                                | Why                                                                                                                           |
-| ------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `MEMBER_OF`   | `(:Member)-[:MEMBER_OF]->(:Team)`                    | Who belongs to which team — the one relation the roster ingest exists for. **Confirmed.**                                     |
-| `COORDINATES` | `(:Member)-[:COORDINATES]->(:Team)`                  | Who convenes a team, as its own edge so coordination is stated rather than inferred from membership. **Wanted.**              |
-| `PART_OF`     | `(:Team)-[:PART_OF]->(:Team)`                        | Team nesting: Entra groups nest and `MEMBER_OF` cannot express a sub-team. Structural only — explicitly not a reporting line. |
-| `STEWARDS`    | `(:Team)-[:STEWARDS]->(:Resource)`                   | Which team is accountable for a resource, so "who do I ask about X" is one hop from the resource.                             |
-| `ABOUT`       | `(:Knowledge)-[:ABOUT]->(:Member\|:Team\|:Resource)` | What a knowledge item documents — one polymorphic attach edge instead of three near-identical typed ones.                     |
-| `AUTHORED`    | `(:Member)-[:AUTHORED]->(:Knowledge)`                | Provenance of a knowledge item, and the reason `Knowledge` needs no author property of its own.                               |
+| Relation       | Shape                                                   | At most                                     | Why                                                                                                |
+| -------------- | ------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `COORDINATES`  | `(:Member)-[:COORDINATES]->(:Pillar\|:Theme)`           | one per pillar or theme; a new one replaces | Who coordinates a pillar or a theme.                                                               |
+| `MEMBER_OF`    | `(:Member)-[:MEMBER_OF]->(:Theme\|:Team)`               | any                                         | Who belongs to which theme or team — the one relation the roster ingest exists for. **Confirmed.** |
+| `WORKS_ON`     | `(:Member\|:Team)-[:WORKS_ON]->(:Project)`              | any                                         | Which people and teams work on a project.                                                          |
+| `IN_PILLAR`    | `(:Project)-[:IN_PILLAR]->(:Pillar)`                    | one per project; a new one replaces         | The one objective a project serves.                                                                |
+| `PARTNERS_ON`  | `(:Partner)-[:PARTNERS_ON]->(:Project)`                 | any                                         | Which external organisations a project is run with.                                                |
+| `DELIVERS`     | `(:Project)-[:DELIVERS]->(:Deliverable)`                | exactly one project per deliverable         | What a project produces.                                                                           |
+| `HAS_DEADLINE` | `(:Project\|:Deliverable)-[:HAS_DEADLINE]->(:Deadline)` | exactly one owner per deadline              | When it is due.                                                                                    |
+| `USES`         | `(:Project)-[:USES]->(:Resource)`                       | any                                         | The documents, systems, datasets and tools a project relies on.                                    |
+| `ABOUT`        | `(:Fact)-[:ABOUT]->(any label but Member and Fact)`     | exactly one subject per fact                | What a fact is about — never a person.                                                             |
+| `PART_OF`      | `(:Team)-[:PART_OF]->(:Team)`                           | any; written by the ingest only             | Team nesting: Entra groups nest. Structural only — explicitly not a reporting line.                |
+
+`STEWARDS` and `AUTHORED` are retired: declared, never written, in no ruling.
+`AUTHORED` was an edge to a person; `createdBy` records who approved a node without
+one.
 
 ### There is deliberately no reports-to
 
 No `REPORTS_TO`, `MANAGES`, `LEADS` or `SUPERVISES` edge exists, and
-`COORDINATES` is not a stand-in for one: it points at a **team**, never at a
-person. The decision takes a structural form — **nothing in this ontology joins
+`COORDINATES` is not a stand-in for one: it points at a **pillar or a theme**,
+never at a person. The decision takes a structural form — **nothing in this ontology joins
 one `Member` to another** — so a hierarchy is not merely absent, it is
 unexpressible in the declared relation set.
 
@@ -104,14 +131,12 @@ ingest does not read it, and `$select` never asks for it. Two tests pin this: on
 asserts the forbidden type names are absent, one asserts no relation has `Member`
 at both ends.
 
-### Only `MEMBER_OF` is populated today
+### Only `MEMBER_OF` is populated by the ingest
 
-`COORDINATES`, `PART_OF`, `STEWARDS`, `ABOUT` and `AUTHORED` are **declared and
-constrained, not written**. Nothing in the ingest creates them: coordination,
-resources and knowledge have no source feed yet, and inventing one would have
-been the scaffolding this repo's own rules tell you not to build. They are in the
-ontology so the shape is fixed before data arrives, and so the conformance check
-below does not flag them as drift the day something does write one.
+The directory ingest writes `Member` and (once groups are readable) `Team`,
+`MEMBER_OF` and `PART_OF`. Everything else arrives through the
+organizational-knowledge hook, as a proposal a person accepts, or through the seed;
+nothing in the ingest invents it.
 
 ## 3. What enforces each rule — honestly
 
@@ -129,16 +154,16 @@ read off a feature matrix:
 
 So enforcement splits:
 
-| Rule                                                   | Enforced by                                              | Strength                                                                 |
-| ------------------------------------------------------ | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `Member.entraId` unique                                | Neo4j uniqueness constraint `org_member_entra_id`        | **Database.** Holds against every writer, including the browser edit UI. |
-| `Member.mail` unique                                   | Neo4j uniqueness constraint `org_member_mail`            | **Database.**                                                            |
-| `Team.entraId`, `Resource.key`, `Knowledge.key` unique | Neo4j uniqueness constraints                             | **Database.**                                                            |
-| Hard properties present                                | `validateMember` in `ontology.ts`, at the write boundary | **App-side.** Holds only for callers that route through the ingest.      |
-| Soft properties present                                | `validateMember`, reported not rejected                  | **App-side, advisory.** Counted in the ingest report.                    |
-| Only the four labels exist                             | nothing, at write time                                   | **Measured, not enforced** — see below.                                  |
-| Only the six relation types exist                      | nothing, at write time                                   | **Measured, not enforced** — see below.                                  |
-| Relation endpoint labels                               | the ingest's own Cypher, which matches on label          | **App-side.**                                                            |
+| Rule                                         | Enforced by                                              | Strength                                                                   |
+| -------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `Member.entraId` unique                      | Neo4j uniqueness constraint `org_member_entra_id`        | **Database.** Holds against every writer, including the browser edit UI.   |
+| `Member.mail` unique                         | Neo4j uniqueness constraint `org_member_mail`            | **Database.**                                                              |
+| `Team.entraId`; `id` and `nameKey` per label | Neo4j uniqueness constraints                             | **Database.** One node per name per label (A1) holds against every writer. |
+| Hard properties present                      | `validateMember` in `ontology.ts`, at the write boundary | **App-side.** Holds only for callers that route through the ingest.        |
+| Soft properties present                      | `validateMember`, reported not rejected                  | **App-side, advisory.** Counted in the ingest report.                      |
+| Only the ten labels exist                    | nothing, at write time                                   | **Measured, not enforced** — see below.                                    |
+| Only the ten relation types exist            | nothing, at write time                                   | **Measured, not enforced** — see below.                                    |
+| Relation endpoint labels                     | the ingest's own Cypher, which matches on label          | **App-side.**                                                              |
 
 ### The gap app-side validation leaves
 
@@ -356,12 +381,11 @@ unchanged by this work.
 A later enrichment lane owns crawling the company website and M365 content, and
 these seams are left for it deliberately:
 
-- **`Resource` and `Knowledge` are declared, constrained and empty.** Their
-  unique keys are `key`, a caller-chosen slug rather than an Entra id, precisely
-  because their sources are not the directory.
-- **`STEWARDS`, `ABOUT` and `AUTHORED` are declared and unwritten**, so an
-  enrichment writer has a fixed shape to target and `countNonConforming` will not
-  flag its first edge as drift.
+- **Everything but `Member` and `Team` arrives through the org-knowledge hook**
+  ([`docs/plan/org-knowledge-hook.md`](plan/org-knowledge-hook.md)), checked
+  against the ontology before a person accepts it, so an enrichment writer has a
+  fixed shape to target and `countNonConforming` will not flag its first edge as
+  drift.
 - **`ensureOrgGraphSchema` is idempotent and safe to call from any new ingest**,
   which is the intended entry point for one — not the wipe.
 - **`graphAppFetch` is the app-only transport** for anything else that must read

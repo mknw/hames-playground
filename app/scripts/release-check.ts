@@ -41,7 +41,7 @@
  * silently becomes a zero — "0 tests passed" and "I could not read the output"
  * are different facts and only one of them is a reason to ship.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -278,6 +278,15 @@ async function main(): Promise<void> {
   rmSync(SCRATCH, { recursive: true, force: true })
   mkdirSync(SCRATCH, { recursive: true })
   const startedAt = new Date().toISOString()
+  // The commit this run tested, read BEFORE the layers run. A GO is recorded
+  // against it for a release promotion (deploy/follow/promote.py record-go),
+  // which refuses a report whose tree had uncommitted changes: that run tested
+  // no commit at all.
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: APP_DIR }).toString().trim()
+  const dirty =
+    execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: APP_DIR })
+      .toString()
+      .trim() !== ''
   const runs: LayerRun[] = LAYERS.map((layer) => ({
     layer,
     status: 'not attempted',
@@ -306,7 +315,7 @@ async function main(): Promise<void> {
   }
 
   const partial = Boolean(only || from)
-  const report = renderReport({ startedAt, runs, selected, stoppedAt, partial })
+  const report = renderReport({ startedAt, commit, dirty, runs, selected, stoppedAt, partial })
   mkdirSync(REPORT_DIR, { recursive: true })
   const file = path.join(REPORT_DIR, `${startedAt.replace(/[:.]/g, '-')}-release-check.md`)
   writeFileSync(file, report)
@@ -330,6 +339,8 @@ function valueOf(args: string[], flag: string): string | undefined {
 
 interface ReportInput {
   startedAt: string
+  commit: string
+  dirty: boolean
   runs: LayerRun[]
   selected: readonly Layer[]
   stoppedAt?: Layer
@@ -338,7 +349,7 @@ interface ReportInput {
 
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)}s`
 
-function verdict(input: Omit<ReportInput, 'startedAt'>): string {
+function verdict(input: Pick<ReportInput, 'stoppedAt' | 'partial'>): string {
   if (input.stoppedAt) return `NO-GO — ${input.stoppedAt.title} failed`
   if (input.partial) return 'PARTIAL — the layers named on the command line passed'
   return 'GO — every hermetic layer passed'
@@ -365,7 +376,7 @@ function countsCell(entry: LayerRun): string {
 
 /** The terminal half: short enough to read without scrolling, and it names the
  *  file rather than restating it. */
-function terminalSummary(input: Omit<ReportInput, 'startedAt'>): string {
+function terminalSummary(input: Omit<ReportInput, 'startedAt' | 'commit' | 'dirty'>): string {
   const lines = [`RELEASE CHECK: ${verdict(input)}`, '']
   for (const entry of input.runs) {
     const mark = entry.status === 'passed' ? '✓' : entry.status === 'failed' ? '✗' : '·'
@@ -387,6 +398,10 @@ function renderReport(input: ReportInput): string {
   out.push('')
   out.push(`- **Verdict:** ${verdict(input)}`)
   out.push(`- **Run:** ${input.startedAt} · ${seconds(total)}`)
+  out.push(
+    `- **Commit:** ${input.commit}` +
+      (input.dirty ? ' (working tree had uncommitted changes)' : ''),
+  )
   // "selected", not "attempted": on a NO-GO the layers above the failure were
   // selected and never run, and the table below says so per row. A header line
   // claiming they were attempted contradicts it, in the one report whose whole

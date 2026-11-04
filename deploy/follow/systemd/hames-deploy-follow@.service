@@ -1,0 +1,20 @@
+# One tick of the branch-following deploy for environment %i (dev | release).
+# docs/deployment/branch-deploys.md. Installed with a drop-in that sets User=
+# to the deployment user: the script refuses to run as root, so without the
+# drop-in every tick fails instead of moving a checkout as root.
+[Unit]
+Description=Branch-following deploy tick (%i)
+Wants=network-online.target
+After=network-online.target docker.service
+ConditionPathExists=/etc/hames-deploy-follow/%i.conf
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /usr/local/lib/hames-deploy-follow/deploy-follow.py tick --config /etc/hames-deploy-follow/%i.conf
+# A cold build plus a health wait; a hung tick is killed, and the next one
+# finds the in-flight record and rolls back.
+TimeoutStartSec=45min
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077

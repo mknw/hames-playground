@@ -1,0 +1,13 @@
+# Polls for a new head every few minutes (owner ruling 2026-11-04). The
+# interval counts from the end of the previous tick, so ticks never overlap;
+# both environments' ticks also share one host lock.
+[Unit]
+Description=Branch-following deploy poll (%i)
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target

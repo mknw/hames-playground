@@ -1,0 +1,130 @@
+/**
+ * One-time operator sign-in for the Lenny's Data MCP (`LENNYS_DATA_MCP=on`).
+ *
+ * Lenny's Data authenticates with OAuth 2.1 and an emailed sign-in link, which
+ * the app server cannot follow by itself. Run this once, on a machine with a
+ * browser, as the subscriber whose access the deployment will use:
+ *
+ *   pnpm dlx tsx scripts/lennys-data-sign-in.ts      # from app/
+ *
+ * It registers a public OAuth client (dynamic registration, PKCE), prints a
+ * sign-in URL, waits on a loopback callback, and prints two lines to put in the
+ * SERVER environment (`app/.env`, or the repo-root `.env` in production):
+ *
+ *   LENNYS_DATA_MCP_CLIENT_ID=...
+ *   LENNYS_DATA_MCP_REFRESH_TOKEN=...
+ *
+ * Both are secrets. The script writes nothing to disk. Then, as a check that
+ * sends no query, it lists the server's tool names — the names the app will
+ * expose with the `lennys_` prefix.
+ */
+import { createServer } from 'node:http'
+import { randomBytes } from 'node:crypto'
+import { auth, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import type {
+  OAuthClientInformationMixed,
+  OAuthTokens,
+} from '@modelcontextprotocol/sdk/shared/auth.js'
+
+const SERVER_URL = 'https://mcp.lennysdata.com/mcp'
+const PORT = Number(process.env.LENNYS_SIGN_IN_PORT ?? 8976)
+const REDIRECT = `http://127.0.0.1:${PORT}/callback`
+const WAIT_MS = 15 * 60_000
+
+const state = randomBytes(16).toString('hex')
+let client: OAuthClientInformationMixed | undefined
+let tokens: OAuthTokens | undefined
+let verifier = ''
+
+const provider: OAuthClientProvider = {
+  redirectUrl: REDIRECT,
+  clientMetadata: {
+    client_name: 'hames (self-hosted)',
+    redirect_uris: [REDIRECT],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+  },
+  state: () => state,
+  clientInformation: () => client,
+  saveClientInformation: (info) => {
+    client = info
+  },
+  tokens: () => tokens,
+  saveTokens: (t) => {
+    tokens = t
+  },
+  redirectToAuthorization: (url) => {
+    console.log('\nOpen this URL, enter the subscriber email and follow the emailed link:\n')
+    console.log(url.toString(), '\n')
+  },
+  saveCodeVerifier: (v) => {
+    verifier = v
+  },
+  codeVerifier: () => verifier,
+}
+
+function waitForCode(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      server.close()
+      reject(new Error('no sign-in within 15 minutes'))
+    }, WAIT_MS)
+    const server = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', REDIRECT)
+      if (url.pathname !== '/callback') {
+        res.writeHead(404).end()
+        return
+      }
+      const code = url.searchParams.get('code')
+      const ok = code && url.searchParams.get('state') === state
+      res
+        .writeHead(ok ? 200 : 400, { 'content-type': 'text/plain' })
+        .end(ok ? 'Signed in. You can close this tab.' : 'Sign-in failed; see the terminal.')
+      clearTimeout(timer)
+      server.close()
+      if (ok) resolve(code)
+      else reject(new Error(url.searchParams.get('error') ?? 'callback state mismatch'))
+    })
+    server.listen(PORT, '127.0.0.1')
+  })
+}
+
+async function main(): Promise<void> {
+  const codePromise = waitForCode()
+  if ((await auth(provider, { serverUrl: SERVER_URL })) !== 'REDIRECT') {
+    throw new Error('expected a sign-in redirect')
+  }
+  const code = await codePromise
+  await auth(provider, { serverUrl: SERVER_URL, authorizationCode: code })
+  if (!client || !tokens?.refresh_token) {
+    throw new Error('the server issued no refresh token; the app cannot keep a session')
+  }
+  console.log('Add these to the server environment (secrets; never commit them):\n')
+  console.log(`LENNYS_DATA_MCP_CLIENT_ID=${client.client_id}`)
+  console.log(`LENNYS_DATA_MCP_REFRESH_TOKEN=${tokens.refresh_token}`)
+  console.log(
+    `\nAccess token lifetime: ${tokens.expires_in ?? 'not stated'} s; scope: ${tokens.scope ?? 'not stated'}`,
+  )
+
+  const mcp = new Client({ name: 'hames-lennys-data-sign-in', version: '1.0.0' })
+  await mcp.connect(
+    new StreamableHTTPClientTransport(new URL(SERVER_URL), { authProvider: provider }),
+  )
+  try {
+    const { tools } = await mcp.listTools()
+    console.log(`\nTools offered (${tools.length}): ${tools.map((t) => t.name).join(', ')}`)
+  } finally {
+    await mcp.close()
+  }
+}
+
+main().then(
+  () => process.exit(0),
+  (err: unknown) => {
+    console.error(`Sign-in failed: ${err instanceof Error ? err.message : String(err)}`)
+    process.exit(1)
+  },
+)

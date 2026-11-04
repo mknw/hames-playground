@@ -24,19 +24,17 @@ export interface SyntheticMember {
   readonly entraId: string
   readonly displayName: string
   readonly mail: string
-  /** Soft in the ontology: the tenant decides whether it is set, and mostly it is not. */
+  /** Soft in the ontology: may be absent, and is then left absent. */
   readonly department?: string
   readonly jobTitle?: string
 }
 
 /**
- * The Eval's member directory: ten records pseudonymised by hand (2026-11-04).
- * Every value is invented — names, addresses (example.com), ids (fresh random
- * UUIDs) and generic role titles. Only the shape is kept: the mix of roles, and
- * which soft fields are present (a job title on every record, a department on
- * none). No mapping to any real person exists anywhere. Members exist; the hook
- * links to them, never creates them. The Eval reads no live or local graph for
- * them (`no-real-neo4j.test.ts`).
+ * The Eval's member directory: ten invented members. Every value is invented —
+ * names, addresses (example.com), ids (random v4 UUIDs) and generic role titles.
+ * Each carries a job title and no department, so the missing-soft-field path is
+ * exercised. Members exist; the hook links to them, never creates them. The Eval
+ * reads no live or local graph for them (`no-real-neo4j.test.ts`).
  */
 export const SYNTHETIC_MEMBERS: readonly SyntheticMember[] = [
   {
@@ -66,7 +64,7 @@ export const SYNTHETIC_MEMBERS: readonly SyntheticMember[] = [
   {
     entraId: '1aa2b6a1-09cf-4ff9-a5ba-6fcca05b204e',
     displayName: 'Yvaine Rocholl',
-    mail: 'yrocholl@example.com',
+    mail: 'yvaine.rocholl@example.com',
     jobTitle: 'Project Lead',
   },
   {
@@ -78,12 +76,12 @@ export const SYNTHETIC_MEMBERS: readonly SyntheticMember[] = [
   {
     entraId: 'fa35ecbc-8683-45b7-a287-d1a04107bed2',
     displayName: 'Osric Thelwall',
-    mail: 'osric@example.com',
+    mail: 'osric.thelwall@example.com',
     jobTitle: 'Executive Director',
   },
   {
     entraId: 'b23924fe-38a0-46ce-9fc1-c5c13af160c3',
-    displayName: 'Liesel Annick Brunvoll',
+    displayName: 'Liesel Brunvoll',
     mail: 'liesel.brunvoll@example.com',
     jobTitle: 'Project Lead',
   },
@@ -136,7 +134,8 @@ const memberId = (m: SyntheticMember) => `m-${m.displayName.split(' ')[0].toLowe
 const member = (m: SyntheticMember): SnapshotNode => ({
   key: `id:${memberId(m)}`,
   label: 'Member',
-  // A missing soft field stays absent, as the ingest leaves it.
+  // The ingest's fields, plus the synthetic store's node `id` (the ingest writes
+  // none; the seeds' edges address nodes by it). A missing soft field stays absent.
   properties: { id: memberId(m), ...m },
 })
 const edge = (type: string, from: string, to: string): SnapshotEdge => ({

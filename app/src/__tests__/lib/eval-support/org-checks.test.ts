@@ -275,7 +275,7 @@ describe('the synthetic org graph', () => {
     expect(syntheticMentionsMember('a cedar tree')).toBe(false)
     expect(syntheticMentionsMember('Admiration')).toBe(false)
   })
-  it('holds the ten invented directory members, in the shape the ingest writes', () => {
+  it('holds ten invented members: the ingest’s Member fields, plus the store’s node id', () => {
     expect(SYNTHETIC_MEMBERS).toHaveLength(10)
     const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
     expect(new Set(SYNTHETIC_MEMBERS.map((m) => m.entraId)).size).toBe(10)
@@ -287,8 +287,10 @@ describe('the synthetic org graph', () => {
     expect(new Set(nodes.map((n) => n.key)).size).toBe(10)
     for (const n of nodes) {
       expect(n.label).toBe('Member')
+      // The ingest writes the first four (`upsertMembers`) and never `id`; the
+      // synthetic store adds `id` so the seeds' edges can address the node.
       expect(Object.keys(n.properties).sort()).toEqual(
-        ['displayName', 'entraId', 'id', 'jobTitle', 'mail'].sort(),
+        ['displayName', 'entraId', 'jobTitle', 'mail', 'id'].sort(),
       )
     }
   })

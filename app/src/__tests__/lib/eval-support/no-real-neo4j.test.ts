@@ -4,22 +4,32 @@
  * synthetic graph and its member directory is `SYNTHETIC_MEMBERS`
  * (`synthetic-org-graph.ts`), a fresh in-memory store per scenario.
  *
- * Two halves:
+ * Three parts:
  *  1. A source scan over every module under `evals/` and `src/lib/eval-support/`:
- *     none imports a module that opens the Neo4j driver (computed, not listed), and
- *     every call of the two roster factories whose DEFAULT reads the directory out
- *     of the graph passes `directory: 'none'`.
- *  2. A runtime proof with the driver trapped: the factories as the Eval calls them,
+ *     none imports a module that opens the Neo4j driver (computed, not listed) by
+ *     any literal form — `import`/`from`/`import()`, quoted or backtick, `require()`,
+ *     `createRequire(…)(…)` — and every call of the two roster factories whose
+ *     DEFAULT reads the directory out of the graph passes `directory: 'none'`.
+ *  2. The tool-dispatch path: a tool no registered transport owns falls through to
+ *     the MCP gateway, whose `neo4j-cypher` reads the real graph. So the general-next
+ *     driver's synthetic transport must own every tool the gateway catalog maps to
+ *     `neo4j` — checked by running the driver's own `ownsTool` predicate.
+ *  3. A runtime proof with the driver trapped: the factories as the Eval calls them,
  *     and the synthetic graph, never reach `getNeo4jDriver` — while the factories'
  *     default does, so the trap is shown to sit on the real path.
  *
  * Mutations that redden it: drop `{ directory: 'none' }` from either factory call in
  * `evals/general-next/driver.ts`; import `org-graph/roster-source.server` (or
- * `neo4j-driver`) from any eval module; make `createEgressRoster` ignore `'none'`.
+ * `neo4j-driver`) from any eval module, including as ``import(`…`)`` or
+ * `createRequire(import.meta.url)('neo4j-driver')`; let the driver's `ownsTool`
+ * disown a neo4j tool (`&& !name.includes('neo4j')`) or drop one from `NAMESPACES`;
+ * make `createEgressRoster` ignore `'none'`.
  */
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MCP_TOOL_CATALOG } from '@hames-ai/connectors/mcp-catalog'
 
 const opened = vi.hoisted(() => ({ count: 0 }))
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
@@ -38,11 +48,12 @@ const walk = (dir: string): string[] =>
     return /\.(ts|tsx|mts)$/.test(name) ? [path] : []
   })
 
-/** Static and dynamic import specifiers of a module. */
-const specifiers = (source: string): string[] =>
-  [...source.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"]([^'"]+)['"]/g)].map(
-    (m) => m[1],
-  )
+/** Every literal module specifier of a module: static and dynamic imports,
+ *  `require()` and `createRequire(…)(…)`, quoted or in a backtick literal without
+ *  an interpolation. */
+const SPECIFIER =
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bcreateRequire\s*\([^)]*\)\s*\(\s*)(['"`])([^'"`$]+)\1/g
+const specifiers = (source: string): string[] => [...source.matchAll(SPECIFIER)].map((m) => m[2])
 
 /** A specifier as an absolute file under `app/`, or undefined for a package. */
 function resolveLocal(from: string, spec: string): string | undefined {
@@ -125,6 +136,52 @@ describe('the Eval reads no real Neo4j for org data (source scan)', () => {
     // The driver builds both, and the egress-gate scenario one more.
     expect(calls.length).toBeGreaterThanOrEqual(3)
     expect(calls.filter((c) => !c.none).map((c) => c.where)).toEqual([])
+  })
+})
+
+describe('the Eval reads no real Neo4j for org data (tool dispatch)', () => {
+  /** The driver's real `NAMESPACES`, `isSandboxTool` and `ownsTool`, executed as written
+   *  (types stripped). src/ may not import evals/, so the blocks are read, not imported. */
+  function driverOwnsTool(): {
+    owns: (name: string) => boolean
+    namespaces: Record<string, string>
+  } {
+    const src = readFileSync(join(APP, 'evals/general-next/driver.ts'), 'utf8')
+    const pick = (re: RegExp, what: string) => {
+      const m = re.exec(src)?.[1]
+      if (!m) throw new Error(`driver.ts: cannot find ${what}`)
+      return m.replace(/:\s*(string|Record<string, string>)\b/g, '')
+    }
+    const namespaces = pick(/const NAMESPACES[^=]*=\s*(\{[\s\S]*?\n\})/, 'NAMESPACES')
+    const sandbox = pick(/const isSandboxTool\s*=\s*([^\n]+)/, 'isSandboxTool')
+    const owns = pick(/\bownsTool:\s*(\([^)]*\)\s*=>[^\n]*?),?\n/, 'ownsTool')
+    return runInNewContext(
+      `const NAMESPACES = ${namespaces}; const isSandboxTool = ${sandbox};
+       ({ owns: ${owns}, namespaces: NAMESPACES })`,
+    )
+  }
+
+  it('the gateway catalog names neo4j tools (the check is not vacuous)', () => {
+    const neo4jTools = Object.keys(MCP_TOOL_CATALOG).filter((t) => MCP_TOOL_CATALOG[t] === 'neo4j')
+    expect(neo4jTools).toEqual(
+      expect.arrayContaining(['get_neo4j_schema', 'read_neo4j_cypher', 'write_neo4j_cypher']),
+    )
+  })
+
+  it('the synthetic transport owns every neo4j tool, so none falls through to the gateway', () => {
+    const { owns, namespaces } = driverOwnsTool()
+    const neo4jTools = Object.keys(MCP_TOOL_CATALOG).filter((t) => MCP_TOOL_CATALOG[t] === 'neo4j')
+    expect(neo4jTools.filter((t) => !owns(t))).toEqual([])
+    expect(neo4jTools.filter((t) => namespaces[t] !== 'neo4j')).toEqual([])
+    // The predicate is live, not a constant: it disowns what the driver does not serve.
+    expect(owns('sandbox_bash')).toBe(false)
+    expect(owns('not_a_tool')).toBe(false)
+  })
+
+  it('the driver registers that transport', () => {
+    const src = readFileSync(join(APP, 'evals/general-next/driver.ts'), 'utf8')
+    expect(src).toMatch(/\bconst dispose = registerTransport\(transport\)/)
+    expect(src).toMatch(/id: 'general-eval-synthetic-only'/)
   })
 })
 

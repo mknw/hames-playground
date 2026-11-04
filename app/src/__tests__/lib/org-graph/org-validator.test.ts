@@ -394,7 +394,7 @@ describe('V6: cardinalities', () => {
   // Review F1: two draft refs naming one NEW node are one node, so the
   // draft-wide count sees both of its edges. Mutation: identify an unresolved
   // node by its ref again → both cases are accepted with `rejected: {}`.
-  it('counts two refs naming one new node as one node', () => {
+  it('counts two refs naming one new deliverable as one deliverable', () => {
     const projects = graph([
       ['k:heron', 'Project', { name: 'Heron' }],
       ['k:osprey', 'Project', { name: 'Osprey' }],
@@ -419,7 +419,9 @@ describe('V6: cardinalities', () => {
     )
     expect(deliverables.accepted).toEqual([])
     expect(deliverables.rejected).toEqual({ V6: 2 })
+  })
 
+  it('counts two refs naming one new theme as one theme, so it keeps one coordinator', () => {
     const members = graph([
       ['k:to', 'Member', { displayName: 'Tamsin Orrin' }],
       ['k:dw', 'Member', { displayName: 'Dorrit Wexley' }],

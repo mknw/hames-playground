@@ -175,7 +175,12 @@ says why), and these functions should not be handed to one either. They carry
 no identity of their own — your host must gate them the way it gates its other
 server actions — the caller sends intent (a label, a name, two element ids),
 never Cypher text, and every identifier is validated against a character-set
-allowlist before it is interpolated:
+allowlist before it is interpolated. Each op also takes your graph's ontology
+(a `defineOntology()` value from `@hames-ai/harness-patterns/org-knowledge-ontology`)
+and an actor: a label, relation type or property the ontology does not declare
+is refused, a repeated name merges onto the existing node, and every write
+records the actor as `createdBy` where it creates and `lastEditedBy` where it
+changes a value. The actor is provenance only; it authorizes nothing:
 
 ```typescript
 import { configureNeo4j, resetDriver } from '@hames-ai/connectors/neo4j/client'
@@ -184,6 +189,7 @@ import {
   linkGraphNodes,
   setGraphNodeProperty,
 } from '@hames-ai/connectors/neo4j/graph-edit.server'
+import type { GraphOntology } from '@hames-ai/harness-patterns/org-knowledge-ontology'
 
 configureNeo4j({
   url: 'bolt://localhost:7687',
@@ -191,11 +197,13 @@ configureNeo4j({
   password: process.env.NEO4J_PASSWORD ?? 'password',
 })
 
+declare const ontology: GraphOntology // your graph's classes and relations (defineOntology)
 declare const someOtherNodeId: string // an elementId from an earlier read
+const actor = { userId: 'user-123', now: new Date().toISOString() } // who made the edit, and when
 
-const id = await createGraphNode('Concept', 'Hames', 'supports of a harness') // → the new node's elementId
-await linkGraphNodes(id, someOtherNodeId, 'RELATES_TO') // MERGE: a second call does not stack a duplicate edge
-await setGraphNodeProperty(id, 'status', 'published')
+const id = await createGraphNode(ontology, actor, 'Project', 'Hames', 'a harness') // → the node's elementId
+await linkGraphNodes(ontology, actor, someOtherNodeId, id, 'WORKS_ON') // MERGE: never a duplicate edge
+await setGraphNodeProperty(ontology, actor, id, 'status', 'published')
 
 await resetDriver()
 ```

@@ -281,7 +281,12 @@ async function main() {
     process.exit(1)
   }
   const { observeLlmUsage } = await import('@hames-ai/harness-patterns/llm-usage-observer.server')
-  const observer = createSpendObserver({ budget, live, onStop: stop })
+  const observer = createSpendObserver({
+    budget,
+    live,
+    onStop: stop,
+    privateClients: clients.PRIVATE_TIER_CLIENTS,
+  })
   const unobserve = observeLlmUsage(observer.observe)
   const timer = setInterval(() => {
     tick()

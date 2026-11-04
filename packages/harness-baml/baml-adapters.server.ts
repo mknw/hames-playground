@@ -25,6 +25,7 @@ import type {
   EventMetrics,
   ReturnStyle,
   ControllerInput,
+  ControllerHooks,
   ActorInput,
   PlannerFn,
   PlanCallResult,
@@ -1109,6 +1110,7 @@ export function createLoopControllerAdapter(
   const call = async (
     input: ControllerInput,
     passedCollector?: Collector,
+    hooks?: ControllerHooks,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
@@ -1294,6 +1296,23 @@ export function createLoopControllerAdapter(
         // default; no public fallback; no further corrective retry here.
         const retryClient = selfDeployedNonThinkingClientFor(role)
         if (!retryClient) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        // Keep the failed thinking attempt and the retry in separate collectors,
+        // each accounted once (the planner's rule): wrapping the failure prices
+        // the attempt the retry replaces, and `onRetry` hands its record — with
+        // the parser trace it produced — to the loop, which records it as a
+        // `warning`. Without this a cap-hit twin left no event and no usage
+        // sample, so the retry's `LoopController` record was all anyone saw.
+        const failedCall = wrapAsLLMCallError(
+          e,
+          functionName,
+          variables,
+          startTime,
+          collector,
+        ).llmCall
+        const failedTrace = thinkingFrom(selected)
+        if (failedCall && failedTrace.kind === 'trace')
+          failedCall.parsedOutput = { reasoning: failedTrace.text }
+        hooks?.onRetry?.(failedCall)
         const retryCollector = new Collector('LoopController')
         try {
           const retryOpts = { ...override, collector: retryCollector, client: retryClient }
@@ -1431,7 +1450,7 @@ export function createLoopControllerAdapter(
     first: ControllerInput | string,
     ...rest: unknown[]
   ): Promise<ControllerCallResult> => {
-    if (typeof first !== 'string') return call(first)
+    if (typeof first !== 'string') return call(first, undefined, rest[0] as ControllerHooks)
     // Legacy positional form — see the overload doc on `ControllerFn`.
     const [
       intent,

@@ -495,6 +495,18 @@ export interface ControllerInput {
   returnStyle?: ReturnStyle
 }
 
+/** Callbacks the loop hands the controller beside its input. They are kept out of
+ *  {@link ControllerInput} on purpose: the input is plain data that consumers clone,
+ *  record and replay, and a function in it would break each of those. */
+export interface ControllerHooks {
+  /** Called before a same-endpoint retry of a thinking attempt, with the failed
+   *  attempt's record. The pattern records it as a `warning`, so the attempt the
+   *  retry replaced stays visible (and priced) even when the retry succeeds. The
+   *  same contract as {@link PlannerFn}'s `onRetry`. A controller that never retries
+   *  a thinking attempt never calls it. */
+  onRetry?: (failedCall: LLMCallRecord | undefined) => void
+}
+
 /** The actor seam's one named input (#225 Lane A4) — replaces the positional
  *  tail of the actor seam. `previousAttempts` was already a typed array;
  *  nothing here is stringified or re-parsed. The live callable is
@@ -568,7 +580,7 @@ export interface ModelLimits {
  *  provide it, and a seam without one falls back to the conservative 16K
  *  window (the same default `getContextWindow` carried). */
 export type ControllerFn = {
-  (input: ControllerInput): Promise<ControllerCallResult>
+  (input: ControllerInput, hooks?: ControllerHooks): Promise<ControllerCallResult>
   /** Per-call model budgets (Lane A5). Optional: a custom injected
    *  implementation may not know them — the adapter implementations always
    *  provide it, and a seam without one falls back to the conservative 16K
@@ -1434,6 +1446,9 @@ export type WarningTask =
   | 'skills_mount'
   /** The planner retried without thinking or accepted a plan with no trace (#625). */
   | 'planner'
+  /** A thinking loop controller hit its cap or produced no answer and was retried
+   *  once without thinking (#625; the attempt rides the warning's call record). */
+  | 'controller'
   /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
   | 'decision_documents'
   /** `decisionLoop` could not quote this turn's recalled memories to its decisions

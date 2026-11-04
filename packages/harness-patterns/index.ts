@@ -648,6 +648,7 @@ export type {
   ControllerFn,
   ActorFn,
   ControllerInput,
+  ControllerHooks,
   ActorInput,
   PlannerFn,
   PlanCallResult,

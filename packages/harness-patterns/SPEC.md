@@ -591,6 +591,15 @@ type OnToolResult = (
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
 
+The controller seam takes an optional second argument, `ControllerHooks`, kept out
+of `ControllerInput` so the input stays plain, cloneable data. Its `onRetry(failedCall)`
+has the same contract as the planner's. Before retrying a thinking controller attempt (`ControllerThinking`) without
+thinking on the same endpoint, after the attempt hit its output cap or produced no
+answer, the BAML adapter prices the failed attempt and calls `onRetry` with its record
+and parser trace. `simpleLoop` records a `warning` (`task: 'controller'`) with that call
+attached. So the attempt the retry replaced stays visible and priced even when the retry
+succeeds. A controller that never retries a thinking attempt never calls it.
+
 `SimpleLoopConfig.validateReturn(action)` optionally checks a terminal action
 before exit. Returning a string refuses it and records `return_rejected`
 feedback in the turn log; returning undefined accepts it. Refusals consume

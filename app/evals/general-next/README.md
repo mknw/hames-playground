@@ -142,15 +142,34 @@ How it switches, and why production is untouched:
 What the report adds. Every graded row carries `thinking` (`off` / `on`), `durationMs`
 (the attempt's `driver.run` wall-clock, wake excluded) and `reasoning`. `reasoning` counts
 the calls, how many were twin calls, and the total and largest `reasoning` length, per
-function. A twin that fails takes its one corrective retry on the original function, so it
-shows as a twin call plus an original. The ledger keeps one spend row per
-(scenario, mode). The top-level `thinking.comparison` has one line per scenario and one
-cell per mode, each with the graded status (the MUST 2-of-3 rule included), attempts,
-latency, USD and reasoning characters and calls.
+function. It also counts `fallbacks` and `capHits`:
+
+- `fallbacks` is twin attempts replaced by a retry without thinking. A `ControllerThinking`
+  or `PlannerThinking` attempt that hits its cap or produces no answer is retried once on
+  the original function, on the same endpoint. The adapter prices the failed attempt
+  once, and the pattern records it as a `warning` (`task: 'controller'` or `'planner'`)
+  carrying its call record and trace. So the attempt counts as a twin call plus the
+  original's retry, and its trace length is in `maxChars`.
+- `capHits` is twin attempts whose record says they hit the output cap.
+
+These two are the numbers the shipped 4 096-token twin cap is judged by.
+`planner-thinking.test.ts` ("Controller thinking fallback stays visible") pins the
+controller half. The ledger keeps one spend row per (scenario, mode). The top-level
+`thinking.comparison` has one line per scenario and one cell per mode, each with the
+graded status (the MUST 2-of-3 rule included), attempts, latency, USD, reasoning
+characters and calls, `fallbacks` and `capHits`.
 
 Hermetic `EVAL_THINKING=compare` passes all 44 runnable scenarios in both modes. That is
-wiring only: the fixture returns a synthetic trace for a thinking request, and no scripted
-scenario reaches the planner, so `PlannerThinking` gets live evidence only.
+wiring only: the fixture returns a synthetic trace for a thinking request.
+
+**This eval leaves the planner unmeasured, live runs included.** No scenario selects the
+`think` route: it was dropped by owner verdict (`unusedValues["routes:think"]` in
+`scenarios.catalogue.json`). So a run reaches `PlannerThinking` only when the decider
+misroutes, and that run also fails the scenario. The planner is the role whose
+private-tier output cut (32 768 → 4 096 tokens) is still unmeasured. That measurement
+belongs to `pnpm eval:harness`'s `planner-plan-shape` scenario, not to this eval. The
+planner's routing move is pinned in `eval-thinking.test.ts`, and its twin adapter has its
+own pins (`planner-thinking*.test.ts`).
 
 ### Live run (needs the owner's go and a spend cap)
 

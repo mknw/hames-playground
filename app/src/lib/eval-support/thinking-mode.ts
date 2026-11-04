@@ -22,7 +22,7 @@
  *
  * Pure: no I/O and no package import, so the runner and the hermetic unit tests share
  * it without either importing the other (`evals-not-in-ci.test.ts`). */
-import type { ContextEvent } from '@hames-ai/harness-patterns'
+import type { ContextEvent, LLMCallRecord } from '@hames-ai/harness-patterns'
 
 export const THINKING_ENV = 'EVAL_THINKING'
 /** The production reasoning switch's name; `eval-thinking.test.ts` pins it equal
@@ -104,8 +104,10 @@ export function enterThinking(
 export interface ReasoningCounts {
   /** Calls of a reasoning-producing function. */
   calls: number
-  /** Of those, calls of a thinking twin. A twin that failed and took its one
-   *  corrective retry on the original shows as one twin call plus one original. */
+  /** Of those, calls of a thinking twin. A twin that hit its cap or produced no
+   *  answer and took its one corrective retry on the original shows as one twin
+   *  call (its record rides the loop's or the planner's `warning` event) plus one
+   *  original. */
   thinkingCalls: number
   /** Characters of `reasoning` across those calls: the parser trace for a twin,
    *  the model-written field for an original. */
@@ -114,6 +116,12 @@ export interface ReasoningCounts {
 }
 
 export interface ReasoningSummary extends ReasoningCounts {
+  /** Twin attempts that were replaced by a retry without thinking: a `warning`
+   *  event carrying the failed twin's record. The fallback rate the shipped
+   *  4096-token cap has to be judged by. */
+  fallbacks: number
+  /** Twin attempts whose record says they hit the output cap. */
+  capHits: number
   functions: Record<string, ReasoningCounts>
 }
 
@@ -130,7 +138,7 @@ function add(into: ReasoningCounts, thinking: boolean, chars: number) {
  *  already carry (`llmCall.functionName` / `parsedOutput.reasoning`). A call record
  *  attached to more than one event is counted once. */
 export function reasoningSummary(events: readonly ContextEvent[]): ReasoningSummary {
-  const total: ReasoningSummary = { ...empty(), functions: {} }
+  const total: ReasoningSummary = { ...empty(), fallbacks: 0, capHits: 0, functions: {} }
   const seen = new Set<unknown>()
   for (const event of events) {
     const call = event.llmCall
@@ -141,6 +149,8 @@ export function reasoningSummary(events: readonly ContextEvent[]): ReasoningSumm
     const thinking = THINKING_TWINS.includes(call.functionName)
     add(total, thinking, chars)
     add((total.functions[call.functionName] ??= empty()), thinking, chars)
+    if (thinking && event.type === 'warning') total.fallbacks++
+    if (thinking && (call as LLMCallRecord).hitOutputCap === true) total.capHits++
   }
   return total
 }
@@ -158,6 +168,8 @@ export interface ThinkingCell {
   maxReasoningChars: number
   thinkingCalls: number
   reasoningCalls: number
+  fallbacks: number
+  capHits: number
 }
 
 export interface ThinkingRow {
@@ -198,6 +210,8 @@ export function thinkingComparison(
         maxReasoningChars: Math.max(0, ...mine.map((r) => r.reasoning?.maxChars ?? 0)),
         thinkingCalls: mine.reduce((sum, r) => sum + (r.reasoning?.thinkingCalls ?? 0), 0),
         reasoningCalls: mine.reduce((sum, r) => sum + (r.reasoning?.calls ?? 0), 0),
+        fallbacks: mine.reduce((sum, r) => sum + (r.reasoning?.fallbacks ?? 0), 0),
+        capHits: mine.reduce((sum, r) => sum + (r.reasoning?.capHits ?? 0), 0),
       }
     }
     return line

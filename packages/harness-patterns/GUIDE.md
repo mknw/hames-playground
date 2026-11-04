@@ -201,6 +201,9 @@ A planner caps the reasoning handed to downstream executors with
 plan text. Its `plan_created` event and LLM call record retain the full trace.
 A `PlannerFn` may call its optional fourth `onRetry(failedCall)` argument before
 a same-endpoint retry; the pattern records a warning even if that retry fails.
+A controller's optional second argument `hooks.onRetry(failedCall)` (`ControllerHooks`)
+follows the same contract:
+`simpleLoop` records the replaced thinking attempt as a `warning` (`task: 'controller'`).
 See SPEC's [planner](SPEC.md#plannerplanfn-tools-config) for the full contract.
 
 ### Protecting the web route's earlier inputs

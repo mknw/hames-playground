@@ -203,8 +203,34 @@ describe('reasoningSummary and the comparison', () => {
     })
     expect(s.functions.Synthesize).toBeUndefined()
   })
+  // #981 review MUST: the failed twin of a fallback rides a `warning` event.
+  // MUTATION: drop the `event.type === 'warning'` count → fallbacks 0, red; drop the
+  // hitOutputCap count → capHits 0, red.
+  it('counts a fallback twin attempt carried by a warning, and its cap hit', () => {
+    const failed = { ...call('ControllerThinking', 'z'.repeat(50)), hitOutputCap: true }
+    const events = [
+      { type: 'warning', data: { task: 'controller' }, llmCall: failed },
+      { type: 'controller_action', llmCall: call('LoopController', 'abc') },
+      { type: 'warning', data: { task: 'title' }, llmCall: call('GenerateConversationTitle') },
+    ] as unknown as ContextEvent[]
+    expect(reasoningSummary(events)).toMatchObject({
+      calls: 2,
+      thinkingCalls: 1,
+      fallbacks: 1,
+      capHits: 1,
+      maxChars: 50,
+    })
+  })
   it('lays out one cell per mode with status, latency, cost and reasoning', () => {
-    const reasoning = { calls: 2, thinkingCalls: 1, chars: 7, maxChars: 5, functions: {} }
+    const reasoning = {
+      calls: 2,
+      thinkingCalls: 1,
+      chars: 7,
+      maxChars: 5,
+      fallbacks: 1,
+      capHits: 1,
+      functions: {},
+    }
     const table = thinkingComparison(
       ['a', 'b'],
       ['off', 'on'],
@@ -228,6 +254,8 @@ describe('reasoningSummary and the comparison', () => {
         maxReasoningChars: 5,
         thinkingCalls: 1,
         reasoningCalls: 2,
+        fallbacks: 1,
+        capHits: 1,
       },
       on: {
         status: 'pass',
@@ -238,6 +266,8 @@ describe('reasoningSummary and the comparison', () => {
         maxReasoningChars: 5,
         thinkingCalls: 2,
         reasoningCalls: 4,
+        fallbacks: 2,
+        capHits: 2,
       },
     })
     expect(table[1]).toMatchObject({ scenario: 'b', off: { status: 'gated', attempts: 0 } })

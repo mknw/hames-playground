@@ -283,14 +283,25 @@ function checkAssertion(index: number, els: readonly DraftElement[], env: Env): 
     resolved.set(node.ref, matchUnderOwner(cls, node, edges, resolved, env))
   }
 
-  const keyOf = (ref: string): string => resolved.get(ref)?.key ?? `ref:${ref}`
+  // An unresolved node of a name-keyed class is identified by its label and
+  // name key, not its ref: two refs naming one new node are one node, so the
+  // draft-wide cardinality count below sees both of its edges.
+  const unresolvedKey = (ref: string): string => {
+    const n = env.draftNodes.get(ref)
+    const cls = n ? classOf(ontology, n.label) : undefined
+    const name = n && cls?.nameProperty ? n.properties[cls.nameProperty] : undefined
+    return cls?.identity === 'nameKey' && typeof name === 'string'
+      ? `new:${cls.label}:${nameKey(name)}`
+      : `ref:${ref}`
+  }
+  const keyOf = (ref: string): string => resolved.get(ref)?.key ?? unresolvedKey(ref)
   const draftKeyOf = (ref: string): string => {
     const n = env.draftNodes.get(ref)
     if (!n) return `ref:${ref}`
     const cls = classOf(ontology, n.label)
     if (!cls) return `ref:${ref}`
     const m = cls.identity === 'nameKey' ? matchByName(cls, n, snapshot) : []
-    return m.length === 1 ? m[0].key : `ref:${ref}`
+    return m.length === 1 ? m[0].key : unresolvedKey(ref)
   }
 
   // --- V6: cardinalities ---------------------------------------------------------
@@ -517,7 +528,8 @@ const MONTHS = [
 /**
  * An ISO day passes value closure when the message says it: the day of the
  * month as a token (`15`, `15th`), the month by English name, three-letter
- * abbreviation or number, and the year as a token. When the message names no
+ * abbreviation or number, and the year as a token within five years of the day
+ * it was said (a stray four-digit figure is not a year). When the message names no
  * four-digit year, the year must be the one the day next falls in, on or after
  * the day it was said — the only year the user can have meant without saying
  * it. A message naming a different year fails.
@@ -540,8 +552,10 @@ function dayIsInMessage(value: string, tokens: readonly string[], today: string)
   const hasMonth = tokens.some((t) => monthForms.has(t))
   if (!hasDay || !hasMonth) return false
   const years = tokens.filter((t) => /^\d{4}$/u.test(t)).map(Number)
-  if (years.length > 0) return years.includes(year)
   const [ty, tm, td] = today.split('-').map(Number)
+  // A stated year must be near the day it was said: a stray four-digit figure
+  // (a budget, a count) is not a year.
+  if (years.length > 0) return years.includes(year) && Math.abs(year - ty) <= 5
   const implied = month > tm || (month === tm && day >= td) ? ty : ty + 1
   return year === implied
 }

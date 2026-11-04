@@ -270,6 +270,22 @@ describe('V4: every value comes from the message', () => {
     expect(run(draft('2026-12-16'), msg, OSPREY).rejected).toEqual({ V4: 1 })
   })
 
+  // Review F2: a stray four-digit figure is not a year. Mutation: accept any
+  // four-digit token as the year again → the 1500 deadline is accepted.
+  it('does not take a stray four-digit figure as the year', () => {
+    const msg = 'The Osprey review is due on 15 March and the review costs 1500 euro.'
+    const r = run(
+      [
+        node('p', 'Project', { name: 'Osprey' }, 'The Osprey review'),
+        node('d', 'Deadline', { label: 'Osprey review', date: '1500-03-15' }, 'due on 15 March'),
+        edge('HAS_DEADLINE', 'p', 'd', 'The Osprey review is due on 15 March'),
+      ],
+      msg,
+      OSPREY,
+    )
+    expect(r.rejected).toEqual({ V4: 1 })
+  })
+
   it('takes a stated year over the implied one', () => {
     const msg = 'The Osprey review is due on 15 December 2027.'
     const r = run(
@@ -373,6 +389,55 @@ describe('V6: cardinalities', () => {
     const [coordinates] = r.accepted[0].edges
     expect(coordinates.verdict).toBe('new')
     expect(coordinates.removes).toEqual([{ type: 'COORDINATES', from: 'k:dw', to: 'k:t1' }])
+  })
+
+  // Review F1: two draft refs naming one NEW node are one node, so the
+  // draft-wide count sees both of its edges. Mutation: identify an unresolved
+  // node by its ref again → both cases are accepted with `rejected: {}`.
+  it('counts two refs naming one new node as one node', () => {
+    const projects = graph([
+      ['k:heron', 'Project', { name: 'Heron' }],
+      ['k:osprey', 'Project', { name: 'Osprey' }],
+    ])
+    const deliverables = run(
+      [
+        node('p1', 'Project', { name: 'Heron' }, 'Project Heron will deliver', 0),
+        node('d1', 'Deliverable', { name: 'onboarding guide' }, 'deliver the onboarding guide', 0),
+        edge('DELIVERS', 'p1', 'd1', 'Project Heron will deliver the onboarding guide', 0),
+        node('p2', 'Project', { name: 'Osprey' }, 'Project Osprey will deliver', 1),
+        node(
+          'd2',
+          'Deliverable',
+          { name: 'Onboarding  Guide' },
+          'deliver the onboarding guide too',
+          1,
+        ),
+        edge('DELIVERS', 'p2', 'd2', 'Project Osprey will deliver the onboarding guide too', 1),
+      ],
+      'Project Heron will deliver the onboarding guide. Project Osprey will deliver the onboarding guide too.',
+      projects,
+    )
+    expect(deliverables.accepted).toEqual([])
+    expect(deliverables.rejected).toEqual({ V6: 2 })
+
+    const members = graph([
+      ['k:to', 'Member', { displayName: 'Tamsin Orrin' }],
+      ['k:dw', 'Member', { displayName: 'Dorrit Wexley' }],
+    ])
+    const themes = run(
+      [
+        node('m1', 'Member', { displayName: 'Tamsin Orrin' }, 'Tamsin Orrin coordinates', 0),
+        node('t1', 'Theme', { name: 'Theme 9' }, 'coordinates Theme 9', 0),
+        edge('COORDINATES', 'm1', 't1', 'Tamsin Orrin coordinates Theme 9', 0),
+        node('m2', 'Member', { displayName: 'Dorrit Wexley' }, 'Dorrit Wexley coordinates', 1),
+        node('t2', 'Theme', { name: 'theme 9' }, 'coordinates theme 9', 1),
+        edge('COORDINATES', 'm2', 't2', 'Dorrit Wexley coordinates theme 9', 1),
+      ],
+      'Tamsin Orrin coordinates Theme 9, and Dorrit Wexley coordinates theme 9.',
+      members,
+    )
+    expect(themes.accepted).toEqual([])
+    expect(themes.rejected).toEqual({ V6: 2 })
   })
 
   it('drops a new deliverable with no project, and a fact about nothing', () => {

@@ -150,6 +150,8 @@ export interface CheckedAssertion {
 export interface OrgValidation {
   readonly accepted: readonly CheckedAssertion[]
   readonly rejected: Readonly<Partial<Record<OrgRule, number>>>
+  /** Positional diagnostics only; never copy values or evidence into feedback. */
+  readonly rejectedAssertions: readonly { readonly index: number; readonly rule: OrgRule }[]
 }
 
 export const DEFAULT_MAX_ASSERTIONS = 8
@@ -174,6 +176,7 @@ export function validateOrgDraft(
   ctx: OrgValidateContext,
 ): OrgValidation {
   const rejected: Partial<Record<OrgRule, number>> = {}
+  const rejectedAssertions: { index: number; rule: OrgRule }[] = []
   const count = (rule: OrgRule, n = 1): void => {
     rejected[rule] = (rejected[rule] ?? 0) + n
   }
@@ -187,7 +190,10 @@ export function validateOrgDraft(
   }
   const max = ctx.maxAssertions ?? DEFAULT_MAX_ASSERTIONS
   const ordered = [...groups.entries()]
-  if (ordered.length > max) count('cap', ordered.length - max)
+  if (ordered.length > max) {
+    count('cap', ordered.length - max)
+    for (const [index] of ordered.slice(max)) rejectedAssertions.push({ index, rule: 'cap' })
+  }
   const kept = ordered.slice(0, max)
 
   const messageTokens = valueTokens(ctx.userMessage)
@@ -223,9 +229,10 @@ export function validateOrgDraft(
     } catch (e) {
       if (!(e instanceof Drop)) throw e
       count(e.rule)
+      rejectedAssertions.push({ index, rule: e.rule })
     }
   }
-  return { accepted, rejected }
+  return { accepted, rejected, rejectedAssertions }
 }
 
 interface Env {

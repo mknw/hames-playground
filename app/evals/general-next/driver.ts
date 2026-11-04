@@ -744,7 +744,7 @@ async function orgSeams(live: boolean) {
         store,
         ontology: ORG_ONTOLOGY,
         decide,
-        draft: async (input: { userMessage: string; schema: string }) => {
+        draft: async (input: Parameters<typeof loop>[0]) => {
           inputs.push(input.userMessage)
           return loop(input)
         },

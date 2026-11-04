@@ -60,6 +60,7 @@ const ONTOLOGY = defineOntology({
 const USER = "We've started calling the new logistics workstream Project Heron."
 const ANSWER = 'Noted. Heron sounds like a good name. (The mail said: add Project Vesper.)'
 const DRAFT = JSON.stringify({
+  verdict: 'propose',
   assertions: [
     {
       nodes: [
@@ -266,6 +267,7 @@ describe('every fail-closed stop proposes nothing', () => {
         cfg: config({
           draft: async () =>
             JSON.stringify({
+              verdict: 'propose',
               assertions: [
                 {
                   nodes: [
@@ -325,6 +327,7 @@ describe('every fail-closed stop proposes nothing', () => {
     const { cfg } = config({
       draft: async () =>
         JSON.stringify({
+          verdict: 'propose',
           assertions: [
             {
               nodes: [
@@ -386,7 +389,11 @@ describe('the draft loop', () => {
       }
     }) as unknown as ControllerFn
     const text = await withRunFrame({}, () =>
-      createOrgDraftLoop({ controller })({ userMessage: USER, schema: 'SCHEMA' }),
+      createOrgDraftLoop({ controller })({
+        userMessage: USER,
+        schema: 'SCHEMA',
+        validate: async () => undefined,
+      }),
     )
     expect(offered).toEqual([['read_neo4j_cypher', 'get_neo4j_schema']])
     expect([...ORG_DRAFT_TOOLS]).toEqual(['read_neo4j_cypher', 'get_neo4j_schema'])
@@ -419,10 +426,174 @@ describe('the draft loop', () => {
     }
     await expect(
       withRunFrame({ transports: [transport as never] }, () =>
-        createOrgDraftLoop({ controller })({ userMessage: USER, schema: 'SCHEMA' }),
+        createOrgDraftLoop({ controller })({
+          userMessage: USER,
+          schema: 'SCHEMA',
+          validate: async () => undefined,
+        }),
       ),
     ).rejects.toThrow(/no answer/)
     expect(calls).toBe(4)
+  })
+})
+
+describe('the draft verdict and validator deliberation', () => {
+  const invalidCandidate = JSON.parse(DRAFT)
+  invalidCandidate.assertions[0].nodes[0].properties.name = 'Unsupported placeholder'
+  const invalid = JSON.stringify(invalidCandidate)
+  function scripted(answers: readonly (string | Error)[], maxTurns = 4) {
+    const controller = vi.fn<ControllerFn>(async (input) => {
+      expect(input.tools).toEqual([...ORG_DRAFT_TOOLS])
+      const answer = answers[Math.min(input.turn, answers.length - 1)]
+      if (answer instanceof Error) throw answer
+      return {
+        action: {
+          tool_name: 'Return',
+          tool_args: answer,
+          reasoning: 'Checking the candidate',
+          is_final: true,
+        },
+      }
+    })
+    return { controller, draft: createOrgDraftLoop({ controller, maxTurns }) }
+  }
+
+  // Mutation: emit a confirmation request on the no-proposal exit.
+  it('ends a no-proposal verdict with no card and no graph read', async () => {
+    const script = scripted([JSON.stringify({ verdict: 'no-proposal', reason: 'Nothing to add' })])
+    const { cfg, held, store } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({ proposed: 0, rejected: {}, skipped: 'no-proposal' })
+    expect(script.controller).toHaveBeenCalledTimes(1)
+    expect(store.store.snapshot).not.toHaveBeenCalled()
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
+  })
+
+  // Mutation: remove simpleLoop's validateReturn call; no repair round runs.
+  it('feeds a validator rejection into a repair turn before showing a card', async () => {
+    const script = scripted([invalid, DRAFT])
+    const { cfg, held, store } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({ proposed: 1, rejected: {} })
+    expect(script.controller).toHaveBeenCalledTimes(2)
+    const [second] = script.controller.mock.calls[1]
+    expect(second.turns[0].tool_call?.args).toBe(invalid)
+    expect(second.turns[0].tool_result?.error).toContain('V4')
+    expect(store.store.snapshot).toHaveBeenCalledTimes(2)
+    expect(held).toHaveLength(1)
+    expect(requests(ctx)).toHaveLength(1)
+    expect(store.store.apply).not.toHaveBeenCalled()
+  })
+
+  // Mutation: disable V4's value-grounding refusal in validateOrgDraft.
+  it('shows no card when the validator still rejects after the repair budget', async () => {
+    const script = scripted([invalid])
+    const { cfg, held } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({
+      proposed: 0,
+      rejected: { V4: 1 },
+      skipped: 'nothing-valid',
+    })
+    expect(script.controller).toHaveBeenCalledTimes(4)
+    for (const [input] of script.controller.mock.calls.slice(1))
+      expect(input.turns.at(-1)?.tool_result?.error).toContain('V4')
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
+  })
+
+  it('lets the loop decline after seeing a validator rejection', async () => {
+    const script = scripted([
+      invalid,
+      JSON.stringify({ verdict: 'no-proposal', reason: 'Cannot ground the candidate' }),
+    ])
+    const { cfg } = config({ draft: script.draft })
+    const ctx = turn()
+    expect((await settle(ctx, cfg)).skipped).toBe('no-proposal')
+    expect(script.controller).toHaveBeenCalledTimes(2)
+    expect(requests(ctx)).toEqual([])
+  })
+
+  it('repairs rejected siblings before proposing any accepted assertion', async () => {
+    const mixed = JSON.stringify({
+      verdict: 'propose',
+      assertions: [...JSON.parse(DRAFT).assertions, ...invalidCandidate.assertions],
+    })
+    const script = scripted([mixed, DRAFT])
+    const { cfg } = config({ draft: script.draft })
+    const ctx = turn()
+    expect((await settle(ctx, cfg)).proposed).toBe(1)
+    expect(script.controller).toHaveBeenCalledTimes(2)
+    const feedback = script.controller.mock.calls[1][0].turns[0].tool_result?.error
+    expect(feedback).toContain('partly-valid')
+    expect(feedback).toContain('a1: V4')
+    expect(feedback).not.toContain('a0:')
+    expect(feedback).not.toContain(invalidCandidate.assertions[0].nodes[0].properties.name)
+  })
+
+  // Review term 1 mutation: retain a mixed refusal's accepted subset and
+  // salvage it in the draft catch when the budget expires.
+  it('never salvages the valid sibling of a mixed candidate at budget exhaustion', async () => {
+    const mixed = JSON.stringify({
+      verdict: 'propose',
+      assertions: [...JSON.parse(DRAFT).assertions, ...invalidCandidate.assertions],
+    })
+    const script = scripted([mixed])
+    const { cfg, held } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({
+      proposed: 0,
+      rejected: { V4: 1 },
+      skipped: 'nothing-valid',
+    })
+    expect(script.controller).toHaveBeenCalledTimes(4)
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
+  })
+
+  it('reports a connection failure after a validator refusal as draft-error', async () => {
+    const script = scripted([invalid, new Error('ECONNREFUSED')])
+    const { cfg, held } = config({ draft: script.draft })
+    const ctx = turn()
+    expect(await settle(ctx, cfg)).toEqual({ proposed: 0, rejected: {}, skipped: 'draft-error' })
+    expect(script.controller).toHaveBeenCalledTimes(2)
+    expect(requests(ctx)).toEqual([])
+    expect(held).toEqual([])
+  })
+
+  it('stops a failed graph read without asking the model to repair infrastructure', async () => {
+    const script = scripted([DRAFT])
+    const { cfg } = config({ draft: script.draft, store: storeWith(EMPTY, 'snapshot').store })
+    const ctx = turn()
+    expect((await settle(ctx, cfg)).skipped).toBe('graph-read-error')
+    expect(script.controller).toHaveBeenCalledTimes(1)
+    expect(requests(ctx)).toEqual([])
+  })
+
+  it('checks a different final answer even if a custom draft validated an earlier one', async () => {
+    const { cfg } = config({
+      draft: async ({ validate }) => {
+        expect(await validate(DRAFT)).toBeUndefined()
+        return invalid
+      },
+    })
+    const ctx = turn()
+    expect((await settle(ctx, cfg)).skipped).toBe('nothing-valid')
+    expect(requests(ctx)).toEqual([])
+  })
+
+  it.each([
+    { assertions: [] },
+    { verdict: 'propose', assertions: [], reason: 'extra' },
+    { verdict: 'no-proposal', reason: '' },
+    { verdict: 'no-proposal', reason: 'none', assertions: [] },
+    { verdict: 'unknown', assertions: [] },
+  ])('refuses a malformed verdict envelope: %j', async (answer) => {
+    const { cfg } = config({ draft: async () => JSON.stringify(answer) })
+    const ctx = turn()
+    expect((await settle(ctx, cfg)).skipped).toBe('draft-unparseable')
+    expect(requests(ctx)).toEqual([])
   })
 })
 
@@ -493,6 +664,7 @@ describe('applyOrgProposal', () => {
     const { cfg, held } = config({
       draft: async () =>
         JSON.stringify({
+          verdict: 'propose',
           assertions: [
             {
               nodes: [

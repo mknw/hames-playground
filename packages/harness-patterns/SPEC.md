@@ -532,6 +532,7 @@ interface SimpleLoopConfig extends PatternConfig {
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
   returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined // Refuse a terminal answer with feedback; see below
   maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
 
@@ -589,6 +590,13 @@ type OnToolResult = (
   context: { callId?: string; args: unknown },
 ) => Promise<{ data?: unknown } | void> | { data?: unknown } | void
 ```
+
+`SimpleLoopConfig.validateReturn(action)` optionally checks a terminal action
+before exit. Returning a string refuses it and records `return_rejected`
+feedback in the turn log; returning undefined accepts it. Refusals consume
+`maxTurns` without counting as unusable model answers under
+`maxConsecutiveRecoveries`; a thrown check fails the loop. Other loops retain
+their existing behavior when the callback is absent.
 
 **Few-shot examples.** `fewShots` is a per-pattern config knob that injects an `EXAMPLES`
 block into the controller prompt. Best for routes with a narrow tool surface where the
@@ -3713,7 +3721,7 @@ continuation's one save; it never throws, writes into `ctx.events` directly
 (never the live transcript) and logs a stop by reason code, never the user's
 words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
 `no-pair`, `no-event-id`, `no-confirmation`, `waking`, `gate-error`, `gate`,
-`draft-error`, `draft-unparseable`, `graph-read-error`, `nothing-valid`,
+`draft-error`, `draft-unparseable`, `no-proposal`, `graph-read-error`, `nothing-valid`,
 `only-reinforces`, `already-proposed`, `error`.
 
 - **The gate** is `ORG_KNOWLEDGE_GATE`, choices exactly
@@ -3723,12 +3731,24 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   `ORG_DRAFT_TOOLS` (`read_neo4j_cypher`, `get_neo4j_schema`), inside a K1
   guard on those tools, in a scratch context holding only the user's message,
   with `renderOrgSchema(ontology)` as its schema. Its `Return` answer is one
-  JSON draft, parsed once by `parseOrgDraft` (closed shape, refs scoped to
-  their assertion, one optional ```json fence); anything else proposes
-  nothing. The host routes its controller: in `@hames-ai/harness-baml`,
+  JSON verdict: `{"verdict":"propose","assertions":[...]}` or
+  `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
+  answer stops with `no-proposal`; its reason stays in scratch context. The
+  `validateReturn` callback strictly parses each candidate (assertions use
+  `parseOrgDraft`, with scoped refs and one optional JSON fence), reads the
+  snapshot and runs V1–V10 inside the loop. Feedback identifies rejected
+  assertions positionally (`a1: V4`) without copying their content; mixed
+  candidates are labelled partly-valid. Any rejection becomes feedback for
+  another round within the same `maxTurns` budget (default 4). No extra model
+  call runs outside the loop. Exhaustion preserves the final refusal and
+  proposes nothing; a graph-read failure stops immediately. A later transport
+  failure reports draft-error, rather than an earlier validator refusal. The host routes its controller: in `@hames-ai/harness-baml`,
   `createLoopControllerAdapter(undefined, { role: 'orgDraft' })`.
 - **The validator** (`validateOrgDraft`, V1–V10) decides what survives; an
-  assertion that only reinforces is not proposed (`onlyReinforces`).
+  assertion that only reinforces is not proposed (`onlyReinforces`). A
+  candidate with any rejected assertion is repaired or declined. A final
+  explicit propose verdict requires a validator pass and at least one writing
+  assertion; a custom draft seam's output cannot bypass the final check.
 - **The proposal** is `orgKnowledgeConfirmRequest`: kind
   `orgKnowledge.confirm`, key the user message's event id, options `add` (one
   flag per assertion, `a<index>`, labelled "Item N"; no rule may pick it) and

@@ -29,7 +29,7 @@ export type OrgSeedName =
  *  empty. A hermetic pass therefore proves the plumbing, never the gate. */
 export interface ScriptedOrgModel {
   readonly gate?: 'add_to_organizational_kg' | 'no_organizational_knowledge'
-  /** The draft loop's final answer (the JSON `parseOrgDraft` reads). */
+  /** Scripted assertions JSON; the fixture endpoint adds verdict: propose. */
   readonly draft?: string
 }
 

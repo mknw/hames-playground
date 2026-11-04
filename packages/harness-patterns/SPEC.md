@@ -3750,7 +3750,10 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   case-insensitive near-match search of its class finds nothing; a node it
   finds is linked under its stored name. The validator also refuses a
   near-duplicate of a stored node of the same label (V11, `nearNameKey`,
-  LD-24) and names it, so a repair turn links to it. Its `Return` answer is one
+  LD-24), or of another new node of the same draft, and names it, so a repair
+  turn links to it. The store repeats the check inside the write's transaction
+  (`isStale`, via `StaleView.nodesOf` and `newNodeNames`), so two pending cards
+  cannot both create one node. Its `Return` answer is one
   JSON verdict: `{"verdict":"propose","assertions":[...]}` or
   `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
   answer stops with `no-proposal`; its reason stays in scratch context. The

@@ -154,6 +154,37 @@ export function orgGraphStoreContract(adapter: string, make: MakeStore): void {
       ).toEqual([])
     })
 
+    // Review of #994, MUST: V11 runs when a card is proposed, so two cards
+    // proposed before either is accepted both pass it. The write re-checks
+    // inside its own transaction: the second card's near-duplicate is refused
+    // as stale, and an exact twin still merges onto the first. Mutations: drop
+    // the near check from `isStale` → two Projects; (Neo4j) re-read with no
+    // names → two Projects.
+    it('refuses at write time a near-duplicate another card wrote after this one was proposed', async () => {
+      const first = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'Osprey' }, 'workstream is called Osprey')],
+        'Our new workstream is called Osprey.',
+      )
+      const second = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'Project Osprey' }, 'started the Project Osprey')],
+        'We have started the Project Osprey workstream.',
+      )
+      const twin = await prepare(
+        h.store,
+        [n('p', 'Project', { name: 'OSPREY' }, 'workstream is called OSPREY')],
+        'Our new workstream is called OSPREY.',
+      )
+      expect(first.nodes[0].verdict).toBe('new')
+      expect(second.nodes[0].verdict).toBe('new')
+      expect((await h.store.apply(first, A)).status).toBe('applied')
+      expect((await h.store.apply(second, B)).status).toBe('stale')
+      expect((await h.store.apply(twin, B)).status).toBe('applied')
+      const projects = (await h.read()).nodes.filter((x) => x.label === 'Project')
+      expect(projects.map((x) => x.properties.name)).toEqual(['Osprey'])
+    })
+
     it('creates a new node with id, nameKey, createdBy and createdAt', async () => {
       const a = await prepare(h.store, heronDraft, HERON_MSG)
       const r = await h.store.apply(a, A)

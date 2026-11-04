@@ -20,6 +20,7 @@ import {
   renderOrgSchema,
   ORG_NEAR_MATCH_RULE,
   rejectionNote,
+  NOTE_NAME_MAX_CHARS,
   settleOrgKnowledge,
   withOrgKnowledge,
   type OrgKnowledgeConfig,
@@ -886,5 +887,92 @@ describe('a near-duplicate is refused and repaired into a link (V11)', () => {
     expect(hostile).toContain('a duplicate of an existing Project already in the graph')
     expect(hostile).not.toContain('Ignore')
     expect(rejectionNote({ index: 1, rule: 'V4' })).toBe('a1: V4')
+  })
+})
+
+// Review of #994: the stop's cause, the in-draft wording and the name cap.
+describe('near-duplicate refusals: causes and wording', () => {
+  // SHOULD 4. Mutations: map every read failure to graph-read-error → the
+  // first case reads graph-read-error; drop the error kind → the log line
+  // loses "(Error)".
+  it('stops a store too large to check with its own reason, and logs a read failure’s kind', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const { OrgSnapshotIncompleteError } = await import('../org-knowledge-store')
+      const failing = (err: Error): OrgKnowledgeStore => ({
+        snapshot: async () => {
+          throw err
+        },
+        apply: async () => ({ status: 'stale' as const }),
+      })
+      const big = config({
+        store: failing(new OrgSnapshotIncompleteError('more than 10000 nodes of one label')),
+      })
+      expect((await settle(turn(), big.cfg)).skipped).toBe('graph-incomplete')
+      expect(warn).toHaveBeenLastCalledWith(
+        '[org-knowledge] proposed nothing: graph-incomplete (OrgSnapshotIncompleteError)',
+      )
+      const down = config({ store: failing(new Error('connection refused')) })
+      expect((await settle(turn(), down.cfg)).skipped).toBe('graph-read-error')
+      expect(warn).toHaveBeenLastCalledWith(
+        '[org-knowledge] proposed nothing: graph-read-error (Error)',
+      )
+      // The log never carries the error's message.
+      expect(warn.mock.calls.flat().join(' ')).not.toContain('connection refused')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // The same through the draft loop, where `validate` throws mid-loop.
+  // Mutation: drop `isReadStop` (keep only graph-read-error) → draft-error.
+  it('keeps the incomplete-store reason when the loop itself hits it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const { OrgSnapshotIncompleteError } = await import('../org-knowledge-store')
+      const controller = vi.fn<ControllerFn>(async () => ({
+        action: { reasoning: 'r', tool_name: 'Return', tool_args: DRAFT, is_final: true },
+      }))
+      const { cfg } = config({
+        draft: createOrgDraftLoop({ controller }),
+        store: {
+          snapshot: async () => {
+            throw new OrgSnapshotIncompleteError('too many')
+          },
+          apply: async () => ({ status: 'stale' as const }),
+        },
+      })
+      expect((await settle(turn(), cfg)).skipped).toBe('graph-incomplete')
+      expect(controller).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // SHOULD 2's wording. Mutation: use the stored-node wording for a draft twin
+  // → it tells the model the twin is "already in the graph".
+  it('names a near-twin of the same draft as such', () => {
+    expect(
+      rejectionNote({
+        index: 1,
+        rule: 'V11',
+        existing: [{ label: 'Project', name: 'Osprey', key: 'draft:a', inDraft: true }],
+      }),
+    ).toBe(
+      'a1: V11, a duplicate of Project "Osprey" elsewhere in this draft; name one node once, under one name',
+    )
+  })
+
+  // NIT 8. Mutation: drop the length cap → the long name is echoed.
+  it('names a stored node longer than the cap by its label only', () => {
+    const long = 'Osprey '.repeat(30).trim()
+    expect(long.length).toBeGreaterThan(NOTE_NAME_MAX_CHARS)
+    const note = rejectionNote({
+      index: 0,
+      rule: 'V11',
+      existing: [{ label: 'Project', name: long, key: 'id:long' }],
+    })
+    expect(note).toContain('a duplicate of an existing Project already in the graph')
+    expect(note).not.toContain('Osprey Osprey')
   })
 })

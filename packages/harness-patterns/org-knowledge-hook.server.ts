@@ -40,7 +40,12 @@ import { withInjectionGuard } from './patterns/withInjectionGuard.server'
 import { decide, defineChoice } from './patterns/typedDecision.server'
 import { sanitizeUntrusted } from './injection-guard'
 import { classOf, type GraphOntology } from './org-knowledge-ontology'
-import type { OrgActor, OrgApplyResult, OrgGraphStore } from './org-knowledge-store'
+import {
+  OrgSnapshotIncompleteError,
+  type OrgActor,
+  type OrgApplyResult,
+  type OrgGraphStore,
+} from './org-knowledge-store'
 import {
   validateOrgDraft,
   type CheckedAssertion,
@@ -206,18 +211,27 @@ export const ORG_NEAR_MATCH_RULE =
  */
 export function rejectionNote({ index, rule, existing }: RejectedAssertion): string {
   if (rule !== 'V11' || !existing || existing.length === 0) return `a${index}: ${rule}`
-  const names = existing.slice(0, 3).map(({ label, name }) => {
+  const named = existing.slice(0, 3).map(({ label, name, inDraft }) => {
     const { report } = sanitizeUntrusted(
       name,
       { tool: 'org_knowledge', namespace: 'org_knowledge' },
       { spotlight: 'off' },
     )
-    return report.findings.length === 0
-      ? `${label} ${JSON.stringify(name)}`
-      : `an existing ${label}`
+    const shown =
+      report.findings.length === 0 && name.length <= NOTE_NAME_MAX_CHARS
+        ? `${label} ${JSON.stringify(name)}`
+        : `an existing ${label}`
+    return { shown, inDraft: inDraft === true }
   })
-  return `a${index}: V11, a duplicate of ${names.join(' or ')} already in the graph; link to it under that stored name, never a second node`
+  const names = named.map((n) => n.shown).join(' or ')
+  return named.every((n) => n.inDraft)
+    ? `a${index}: V11, a duplicate of ${names} elsewhere in this draft; name one node once, under one name`
+    : `a${index}: V11, a duplicate of ${names} already in the graph; link to it under that stored name, never a second node`
 }
+
+/** Longest stored name a repair note echoes (review of #994): a longer one is
+ *  named by its label only. */
+export const NOTE_NAME_MAX_CHARS = 120
 
 /** Most elements one draft may carry; a longer draft is not parsed. */
 export const MAX_DRAFT_ELEMENTS = 200
@@ -450,6 +464,8 @@ export type OrgKnowledgeSkip =
   | 'draft-unparseable'
   | 'no-proposal'
   | 'graph-read-error'
+  /** The store could not prove it showed every near-duplicate (LD-24). */
+  | 'graph-incomplete'
   | 'nothing-valid'
   | 'only-reinforces'
   | 'already-proposed'
@@ -462,6 +478,14 @@ export interface OrgKnowledgeReport {
 }
 
 const DEFAULT_WAKE_BUDGET_MS = 180_000
+
+/** The stop a failed graph read ends with. */
+function readStop(err: unknown): 'graph-incomplete' | 'graph-read-error' {
+  return err instanceof OrgSnapshotIncompleteError ? 'graph-incomplete' : 'graph-read-error'
+}
+
+const isReadStop = (s: OrgKnowledgeSkip | undefined): boolean =>
+  s === 'graph-read-error' || s === 'graph-incomplete'
 
 function errorKind(e: unknown): string {
   return e instanceof Error && e.name ? e.name : 'Error'
@@ -575,6 +599,8 @@ async function run(
     | {
         skipped: OrgKnowledgeSkip
         rejected: OrgKnowledgeReport['rejected']
+        /** The cause a read failure logs: an error kind, never a message. */
+        extra?: string
       }
     | undefined
   const refuse = (
@@ -602,9 +628,12 @@ async function run(
     let snapshot
     try {
       snapshot = await cfg.store.snapshot({ names, keys: [] })
-    } catch {
-      // An infrastructure failure cannot be repaired by a model.
-      refuse('graph-read-error')
+    } catch (err) {
+      // An infrastructure failure cannot be repaired by a model. The cause is
+      // kept (review of #994): a store too large to scan for near-duplicates
+      // has its own reason, and any other failure logs its error kind.
+      refuse(readStop(err))
+      failure = { ...failure!, extra: errorKind(err) }
       throw new Error('org graph snapshot unavailable')
     }
     const checked = validateOrgDraft(draft, snapshot, cfg.ontology, {
@@ -634,10 +663,10 @@ async function run(
     // A later model/transport failure is not the previous round's verdict.
     // Retain it only when the loop actually exhausted its repair budget (or
     // the current validation itself failed to read the graph).
-    if (!(err instanceof OrgDraftBudgetExhaustedError) && failure?.skipped !== 'graph-read-error')
+    if (!(err instanceof OrgDraftBudgetExhaustedError) && !isReadStop(failure?.skipped))
       failure = undefined
     return failure
-      ? stop(failure.skipped, undefined, failure.rejected)
+      ? stop(failure.skipped, failure.extra, failure.rejected)
       : stop('draft-error', errorKind(err))
   }
   const answer = parseOrgDraftAnswer(text)
@@ -647,8 +676,9 @@ async function run(
   if (validated?.text !== text) {
     try {
       await validate(text)
-    } catch {
-      return stop('graph-read-error')
+    } catch (err) {
+      // `validate` recorded the read's own cause before it rethrew.
+      return stop(failure?.skipped ?? readStop(err), failure?.extra ?? errorKind(err))
     }
   }
   if (!validated) return stop(failure?.skipped ?? 'nothing-valid', undefined, failure?.rejected)

@@ -26,13 +26,17 @@ import neo4j, { type Driver, type ManagedTransaction } from 'neo4j-driver'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   classOf,
+  hasNearKey,
   nameKey,
+  nearChecked,
   nearNameKey,
   relationOf,
   type GraphOntology,
 } from '@hames-ai/harness-patterns/org-knowledge-ontology'
 import {
   isStale,
+  newNodeNames,
+  OrgSnapshotIncompleteError,
   storedProperties,
   updatedProperties,
   type OrgGraphStore,
@@ -138,9 +142,13 @@ async function readSnapshot(
   const nearByLabel = new Map<string, Set<string>>()
   for (const { label, name } of names) {
     const cls = classOf(ontology, label)
-    if (!cls?.nameProperty) continue
+    // A class the hook may not create is never scanned (LD-24), and an empty
+    // near key matches nothing.
+    if (!cls || !nearChecked(cls)) continue
+    const near = nearNameKey(name, label)
+    if (!hasNearKey(near)) continue
     const set = nearByLabel.get(label) ?? new Set<string>()
-    set.add(nearNameKey(name, label))
+    set.add(near)
     nearByLabel.set(label, set)
   }
   for (const [label, near] of nearByLabel) {
@@ -151,7 +159,7 @@ async function readSnapshot(
     )
     const rows = res.records as unknown as Row[]
     if (rows.length > NEAR_SCAN_LIMIT) {
-      throw new Error(
+      throw new OrgSnapshotIncompleteError(
         'org graph snapshot: more than ' +
           String(NEAR_SCAN_LIMIT) +
           ' nodes of one label; the near-duplicate check cannot be complete',
@@ -218,6 +226,7 @@ function viewOf(snapshot: GraphSnapshot): StaleView {
   return {
     node: (key) => snapshot.nodes.find((n) => n.key === key),
     edges: (type, side, key) => snapshot.edges.filter((e) => e.type === type && e[side] === key),
+    nodesOf: (label) => snapshot.nodes.filter((n) => n.label === label),
   }
 }
 
@@ -265,7 +274,9 @@ export function createNeo4jOrgGraphStore(opts: Neo4jOrgGraphStoreOptions): OrgGr
     const watched = new Set<string>()
     for (const n of assertion.nodes) if (n.existing) watched.add(n.existing.key)
     for (const e of assertion.edges) for (const r of e.removes) watched.add(r.from)
-    const now = await readSnapshot(tx, ontology, [], [...watched])
+    // Each new name-keyed node's name too, so the re-read holds any
+    // near-duplicate written since the preview (LD-24): `isStale` refuses it.
+    const now = await readSnapshot(tx, ontology, newNodeNames(assertion, ontology), [...watched])
     if (isStale(assertion, ontology, viewOf(now))) return { status: 'stale' as const }
 
     const keys: Record<string, string> = {}

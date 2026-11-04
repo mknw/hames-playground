@@ -151,19 +151,24 @@ export function nameKey(name: string): string {
 /**
  * The key two names of one class are the SAME NODE under, though not the same
  * string (V11, LD-24): {@link nameKey}, then accents folded (NFKD with every
- * combining mark removed, so "Ősprey" is "osprey"), every run of
- * non-alphanumeric characters read as one space, and the class's own label
- * word dropped when it is the first or last of two or more words ("Project
- * Osprey" and "Osprey project" are the Project "Osprey"). Built on `nameKey`
- * rather than changing it: `nameKey` is the stored identity and the database's
- * uniqueness key, so widening it would re-key every stored node. A letter that
- * is not a base letter plus marks (ø, ł, ß) is not folded.
+ * combining mark removed, so "Ősprey" is "osprey"), every run of SEPARATORS —
+ * whitespace, dashes, dots, commas and quotes — read as one space, and the
+ * class's own label word dropped when it is the first or last of two or more
+ * words ("Project Osprey" and "Osprey project" are the Project "Osprey").
+ * Every other character is kept, so "C++", "C#" and "C" stay three names and
+ * "🚀" is not "🦅" (review of #994). A name made only of separators has the
+ * empty key, and an empty key is never a near-duplicate of anything
+ * ({@link hasNearKey}).
+ *
+ * Built on `nameKey` rather than changing it: `nameKey` is the stored identity
+ * and the database's uniqueness key, so widening it would re-key every stored
+ * node. A letter that is not a base letter plus marks (ø, ł, ß) is not folded.
  */
 export function nearNameKey(name: string, label: string): string {
   const tokens = nameKey(name)
     .normalize('NFKD')
     .replace(/\p{M}+/gu, '')
-    .split(/[^\p{L}\p{N}]+/u)
+    .split(NEAR_SEPARATORS)
     .filter((t) => t.length > 0)
   const word = label.toLowerCase()
   const stripped =
@@ -171,6 +176,22 @@ export function nearNameKey(name: string, label: string): string {
       ? tokens.filter((t, i) => !(t === word && (i === 0 || i === tokens.length - 1)))
       : tokens
   return (stripped.length > 0 ? stripped : tokens).join(' ')
+}
+
+/** The separators {@link nearNameKey} folds: whitespace, dash punctuation, dots,
+ *  commas, and straight, curly and angle quotes. */
+const NEAR_SEPARATORS = /[\s\p{Pd}.,'"`´‘’‚‛“”„‟‹›«»]+/u
+
+/** Whether a near key can name a duplicate at all: the empty key cannot. */
+export const hasNearKey = (key: string): boolean => key !== ''
+
+/** Whether V11 checks a class, and so whether a store's snapshot looks for its
+ *  near-duplicates: name-keyed and creatable (LD-24). A class the hook may not
+ *  create (a `Member`, a `Pillar`) that matches nothing is refused by V1
+ *  already, so it is never scanned — the directory-fed `Member` label is the
+ *  one most likely to outgrow a store's scan bound. */
+export function nearChecked(cls: OntologyClass): boolean {
+  return cls.identity === 'nameKey' && cls.nameProperty !== null && cls.creatable
 }
 
 /** `text` under {@link nameKey}, split on runs of non-alphanumeric characters

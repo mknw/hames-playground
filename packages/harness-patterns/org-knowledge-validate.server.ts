@@ -36,8 +36,12 @@
  *       no stored node by `nameKey` is dropped when its {@link nearNameKey}
  *       (accents, punctuation and the class's own label word folded too)
  *       equals a stored node's OF THE SAME LABEL. The refusal names that node,
- *       so a repair turn can link to it under its stored name. Checked right
- *       after the exact match, before properties
+ *       so a repair turn can link to it under its stored name. Two NEW nodes
+ *       of one draft that are near-twins (equal near key, different `nameKey`)
+ *       are refused the same way: the first in draft order is kept and the
+ *       later one names it. Only a creatable class is checked (a `Member` or
+ *       `Pillar` that matches nothing is V1 already), and an empty near key
+ *       never matches. Checked right after the exact match, before properties
  *
  * At most `maxAssertions` (default 8) assertions are checked, in draft order;
  * the rest are counted under `cap`.
@@ -49,7 +53,9 @@ import { MIN_EVIDENCE_CHARS } from './memory-acceptance.server'
 import {
   classOf,
   isIsoDay,
+  hasNearKey,
   nameKey,
+  nearChecked,
   nearNameKey,
   propertyRefusal,
   relationOf,
@@ -137,7 +143,10 @@ export interface NearDuplicate {
   /** The stored name, verbatim from the graph — graph data, never the
    *  user's words; a consumer that puts it in a prompt sanitizes it first. */
   readonly name: string
+  /** The stored node's key; for a node of this same draft, `draft:<ref>`. */
   readonly key: string
+  /** True when the duplicate is another node of this draft, not a stored one. */
+  readonly inDraft?: true
 }
 
 /** One refused assertion, positionally. */
@@ -239,6 +248,14 @@ export function validateOrgDraft(
   const draftNodes = new Map<string, DraftNode>()
   for (const [, els] of kept)
     for (const el of els) if (el.kind === 'node') draftNodes.set(el.ref, el)
+  // V11 within the draft: the first node, in draft order, of each label and
+  // near key. A later node with the same near key and another `nameKey` is a
+  // second node for the same thing.
+  const firstNear = new Map<string, DraftNode>()
+  for (const node of draftNodes.values()) {
+    const k = draftNearKey(ontology, node)
+    if (k !== undefined && !firstNear.has(k)) firstNear.set(k, node)
+  }
 
   const accepted: CheckedAssertion[] = []
   for (const [index, els] of kept) {
@@ -253,6 +270,7 @@ export function validateOrgDraft(
           refCounts,
           draftEdges,
           draftNodes,
+          firstNear,
         }),
       )
     } catch (e) {
@@ -277,6 +295,7 @@ interface Env {
   readonly refCounts: ReadonlyMap<string, number>
   readonly draftEdges: readonly DraftEdge[]
   readonly draftNodes: ReadonlyMap<string, DraftNode>
+  readonly firstNear: ReadonlyMap<string, DraftNode>
 }
 
 function checkAssertion(index: number, els: readonly DraftElement[], env: Env): CheckedAssertion {
@@ -295,6 +314,8 @@ function checkAssertion(index: number, els: readonly DraftElement[], env: Env): 
     if (matches.length === 0) {
       const near = nearDuplicates(cls, node, snapshot)
       if (near.length > 0) throw new Drop('V11', near)
+      const twin = draftTwin(cls, node, env)
+      if (twin) throw new Drop('V11', [twin])
     }
     if (!cls.creatable) {
       if (matches.length === 0) throw new Drop('V1')
@@ -456,11 +477,12 @@ function nearDuplicates(
   node: DraftNode,
   snapshot: GraphSnapshot,
 ): NearDuplicate[] {
-  if (cls.identity !== 'nameKey' || cls.nameProperty === null) return []
-  const prop = cls.nameProperty
+  if (!nearChecked(cls)) return []
+  const prop = cls.nameProperty!
   const name = node.properties[prop]
   if (typeof name !== 'string' || name.trim() === '') return []
   const key = nearNameKey(name, cls.label)
+  if (!hasNearKey(key)) return []
   return snapshot.nodes
     .filter(
       (n) =>
@@ -469,6 +491,29 @@ function nearDuplicates(
         nearNameKey(n.properties[prop], cls.label) === key,
     )
     .map((n) => ({ label: n.label, name: n.properties[prop], key: n.key }))
+}
+
+/** A draft node's `label|nearKey`, or undefined when V11 does not check it. */
+function draftNearKey(ontology: GraphOntology, node: DraftNode): string | undefined {
+  const cls = classOf(ontology, node.label)
+  if (!cls || !nearChecked(cls)) return undefined
+  const name = node.properties[cls.nameProperty!]
+  if (typeof name !== 'string' || name.trim() === '') return undefined
+  const key = nearNameKey(name, cls.label)
+  return hasNearKey(key) ? `${cls.label}|${key}` : undefined
+}
+
+/** V11 within the draft: the earlier node this one is a near-twin of. An exact
+ *  `nameKey` twin is the same new node (see `unresolvedKey`), not a refusal. */
+function draftTwin(cls: OntologyClass, node: DraftNode, env: Env): NearDuplicate | undefined {
+  const k = draftNearKey(env.ontology, node)
+  const first = k === undefined ? undefined : env.firstNear.get(k)
+  if (!first || first.ref === node.ref) return undefined
+  const prop = cls.nameProperty!
+  const mine = node.properties[prop]
+  const theirs = first.properties[prop]
+  if (nameKey(mine) === nameKey(theirs)) return undefined
+  return { label: cls.label, name: theirs, key: `draft:${first.ref}`, inDraft: true }
 }
 
 /** A node identified under its owner: the same name on a node the owner

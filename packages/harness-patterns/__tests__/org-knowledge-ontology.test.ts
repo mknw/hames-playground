@@ -6,7 +6,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   defineOntology,
+  hasNearKey,
   nameKey,
+  nearChecked,
   nearNameKey,
   valueTokens,
   type GraphOntology,
@@ -102,11 +104,33 @@ describe('nearNameKey', () => {
   })
 
   it('folds case, surrounding and internal whitespace, and punctuation', () => {
-    for (const v of ['  OSPREY ', 'osprey', 'Osprey.', '“Osprey”', 'Osprey!']) {
+    for (const v of ['  OSPREY ', 'osprey', 'Osprey.', '“Osprey”', "'Osprey',", '«Osprey»']) {
       expect(nearNameKey(v, 'Project')).toBe('osprey')
     }
     expect(nearNameKey('Gannet  –  North', 'Team')).toBe(nearNameKey('gannet north', 'Team'))
     expect(nearNameKey('Gannet-North', 'Team')).toBe('gannet north')
+  })
+
+  // Review of #994, SHOULD 3: only separators fold. Mutation: split on every
+  // non-alphanumeric again → "C++" / "C#" / "C" and the two emoji collide.
+  it('keeps symbols, so C++, C# and C are three names and two emoji are two', () => {
+    const keys = ['C++', 'C#', 'C'].map((v) => nearNameKey(v, 'Team'))
+    expect(new Set(keys).size).toBe(3)
+    expect(nearNameKey('R&D', 'Team')).toBe('r&d')
+    expect(nearNameKey('🚀', 'Team')).not.toBe(nearNameKey('🦅', 'Team'))
+  })
+
+  it('gives a name made only of separators the empty key, which matches nothing', () => {
+    expect(nearNameKey('—', 'Team')).toBe('')
+    expect(nearNameKey(' -- ', 'Team')).toBe('')
+    expect(hasNearKey('')).toBe(false)
+    expect(hasNearKey('osprey')).toBe(true)
+  })
+
+  it('checks only a creatable, name-keyed class', () => {
+    expect(nearChecked(cls('Project'))).toBe(true)
+    expect(nearChecked(cls('Member', { creatable: false }))).toBe(false)
+    expect(nearChecked(cls('Deadline', { identity: 'owner' }))).toBe(false)
   })
 
   it('keeps a legitimately different name different', () => {

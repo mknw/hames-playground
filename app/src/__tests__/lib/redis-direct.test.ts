@@ -347,3 +347,71 @@ describe('redis-direct adapter', () => {
     expect(args[1]).toBe('*=>[KNN 5 @vector $BLOB AS score]')
   })
 })
+
+/**
+ * Escaping pin for the BM25 keyword path (RV967, #928 slice 1).
+ *
+ * `keywordSearch` reduces user text to `[\p{L}\p{N}]+` tokens joined by ` | `
+ * before the string reaches RediSearch's query syntax. Raw text is a syntax
+ * error today (RediSearch: `Syntax error at offset 5 near hello`) and a bare
+ * `*` returns the WHOLE corpus, so the composition is the control. This pin
+ * holds exactly that: every hostile input either makes NO `FT.SEARCH` call
+ * (empty / all-punctuation query) or composes a query whose every
+ * ` | `-separated term is letters and numbers only — no operators, `@field`,
+ * wildcards, braces, quotes, comments, bidi or control characters survive.
+ * Deleting the tokenize-and-join in `redis-direct.server.ts` turns this
+ * describe red (verified by mutation).
+ */
+describe('keyword_search_hash — user text is tokenized before RediSearch sees it', () => {
+  const HOSTILE_QUERIES = [
+    '*@meta:secret', // wildcard + @field:term
+    'hello) | (malicious', // group + union injection
+    '%GP%',
+    '" OR "1', // quoted operator injection
+    '; --', // terminator + comment
+    '{a | b}', // braces
+    '*) AND (*', // wildcard pair with boolean
+    'secret\u200Flabel\u202Eevil', // RTL override + mark (bidi)
+    'q\u0007uery\u0001ctrl', // BEL + control character
+    ' caf\u00e9 世界 ', // accented + CJK are LEGITIMATE tokens and must survive
+    'hello world', // ordinary text still splits into unioned tokens
+    // Punctuation-only / empty: no term survives, so NO FT.SEARCH call at all.
+    '*',
+    '!!!???',
+    '%%%.%',
+    '',
+  ]
+
+  const isPlainToken = (t: string) => /^[\p{L}\p{N}]+$/u.test(t)
+
+  it('composes only [\\p{L}\\p{N}]+ tokens joined by " | " — or no FT.SEARCH at all', async () => {
+    for (const query of HOSTILE_QUERIES) {
+      const fake = makeFakeIoredis()
+      const ct = makeDirectCallTool(asRedis(fake))
+
+      const res = await ct('keyword_search_hash', { index_name: 'idx', query, k: 5 })
+      expect(res.success).toBe(true)
+
+      const searches = fake.ops.filter(([m]) => m === 'call:FT.SEARCH')
+      if (searches.length === 0) continue // empty / all-punctuation: nothing sent
+
+      expect(searches).toHaveLength(1)
+      const composed = (searches[0]![1] as unknown[])[1] as string
+      const terms = composed.split(' | ')
+      expect(terms.length).toBeGreaterThan(0)
+      for (const term of terms) {
+        expect(isPlainToken(term)).toBe(true)
+      }
+    }
+  })
+
+  it('sends the user terms verbatim as the FT.SEARCH query argument (no raw pass-through)', async () => {
+    const fake = makeFakeIoredis()
+    const ct = makeDirectCallTool(asRedis(fake))
+
+    await ct('keyword_search_hash', { index_name: 'idx', query: 'hello world', k: 5 })
+
+    const args = fake.ops.find(([m]) => m === 'call:FT.SEARCH')![1] as unknown[]
+    expect(args[1]).toBe('hello | world')
+  })
+})

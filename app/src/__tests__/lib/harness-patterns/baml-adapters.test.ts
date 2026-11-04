@@ -383,7 +383,7 @@ describe('createPlannerAdapter', () => {
       await import('@hames-ai/harness-baml/baml-adapters.server')
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     mockPlannerThinking.mockImplementation(async (...args: unknown[]) => {
-      const { collector } = args[4] as { collector: object }
+      const { collector } = args[5] as { collector: object }
       Object.defineProperty(collector, 'last', {
         value: {
           rawLlmResponse: JSON.stringify({ plan: '1. Search', n_steps: 1 }),
@@ -1819,5 +1819,53 @@ describe('extractPromptTemplates', () => {
     extractPromptTemplates(source, cache)
 
     expect(cache.Planner).toBe('plan it')
+  })
+})
+
+// The turn clock (`RunFrame.clock`) reaches every time-reasoning call as its
+// trailing `current_time` argument — the slot just before the options bag.
+// Mutation: pass `null` instead of `currentTimeBlock()` at any one call site
+// (e.g. the loop controller's first call) → that adapter's pin goes red.
+describe('current_time from the run frame clock', () => {
+  const CLOCK = { instant: Date.parse('2026-11-04T23:30:00Z'), timeZone: 'Europe/Brussels' }
+  const slot = (mock: ReturnType<typeof vi.fn>) => {
+    const call = mock.mock.calls.at(-1)!
+    return call[call.length - 2]
+  }
+  const inTurn = async <T>(fn: () => Promise<T>) => {
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    return withRunFrame({ clock: CLOCK }, fn)
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+    mockActorController.mockResolvedValue(mockFinalAction())
+    mockPlanner.mockResolvedValue({ reasoning: 'r', plan: '1. search', n_steps: 1 })
+  })
+
+  it('every adapter passes the same block, rendered once per turn', async () => {
+    const { formatTimeBlock } = await import('@hames-ai/harness-patterns/clock')
+    const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const expected = formatTimeBlock(CLOCK)
+    expect(expected).toContain('Thursday, 2026-11-05, 00:30 UTC+01:00 (Europe/Brussels)')
+    await inTurn(async () => {
+      await adapters.createLoopControllerAdapter()('msg', 'intent', '[]', 0)
+      expect(slot(mockLoopController)).toBe(expected)
+      await adapters.createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], [])
+      expect(slot(mockActorController)).toBe(expected)
+      await adapters.createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent', 'Node: Person')
+      expect(slot(mockPlanner)).toBe(expected)
+    })
+  })
+
+  it('outside a clocked frame each adapter passes null (the prompt is unchanged)', async () => {
+    const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
+    await adapters.createLoopControllerAdapter()('msg', 'intent', '[]', 0)
+    expect(slot(mockLoopController)).toBeNull()
+    await adapters.createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], [])
+    expect(slot(mockActorController)).toBeNull()
+    await adapters.createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent', 'Node: Person')
+    expect(slot(mockPlanner)).toBeNull()
   })
 })

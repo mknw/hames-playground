@@ -30,6 +30,7 @@
  */
 import { normalizeStoredInferenceTier } from '../inference/tier-value'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { validTimeZone } from '@hames-ai/harness-patterns/clock'
 import { query } from './client.server'
 import {
   type InferenceTier,
@@ -51,6 +52,11 @@ const SCHEMA_SQL = `
   -- lifted flags. No backfill: nobody has opted in to a feature that did not
   -- exist. The toggle itself is M7's.
   ALTER TABLE user_prefs ADD COLUMN IF NOT EXISTS memory_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+  -- The user's last known IANA time zone, as their browser reported it on a
+  -- turn. NULLABLE: NULL is "never seen", and the turn falls back to the
+  -- deployment default. A lifted plaintext value like inference_tier (a zone
+  -- name, not user content), so a triggered run or a routine can read it.
+  ALTER TABLE user_prefs ADD COLUMN IF NOT EXISTS time_zone TEXT;
 `
 
 let _schemaReady: Promise<void> | null = null
@@ -157,5 +163,32 @@ export async function setMemoryEnabledForUser(userId: string, enabled: boolean):
     `INSERT INTO user_prefs (user_id, memory_enabled) VALUES ($1, $2)
      ON CONFLICT (user_id) DO UPDATE SET memory_enabled = EXCLUDED.memory_enabled, updated_at = NOW()`,
     [userId, enabled],
+  )
+}
+
+/**
+ * The user's last known time zone, or `null` when no turn has reported one. A
+ * stored value this runtime does not accept as an IANA zone reads as `null`
+ * too: it is a fallback, and a bad fallback must not reach the run's clock.
+ */
+export async function getStoredTimeZone(userId: string): Promise<string | null> {
+  await ensureSchema()
+  const { rows } = await query<{ time_zone: string | null }>(
+    `SELECT time_zone FROM user_prefs WHERE user_id = $1`,
+    [userId],
+  )
+  return validTimeZone(rows[0]?.time_zone)
+}
+
+/** Record the zone a turn's browser reported. Upsert; the caller validates. */
+export async function setStoredTimeZone(userId: string, timeZone: string): Promise<void> {
+  await ensureSchema()
+  await query(
+    `INSERT INTO user_prefs (user_id, time_zone)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET
+       time_zone  = EXCLUDED.time_zone,
+       updated_at = NOW()`,
+    [userId, timeZone],
   )
 }

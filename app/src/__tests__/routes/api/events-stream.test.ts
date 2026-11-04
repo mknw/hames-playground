@@ -157,6 +157,24 @@ describe('POST /api/events', () => {
     })
   })
 
+  // The browser's zone rides the body to the turn, on both modes. The route does
+  // not judge it — `resolveTurnClock` is the one validator, and refuses junk —
+  // so a junk value arrives as-is and a 400 is never the answer to a bad zone.
+  // Mutation: drop `browserTimeZone` from either request shape → red.
+  it('forwards the browser time zone, unjudged, on interactive and resume turns', async () => {
+    await POST(evt({ sessionId: 's1', message: 'hi', timeZone: 'Europe/Brussels' })).then((r) =>
+      r.text(),
+    )
+    await POST(evt({ sessionId: 's1', mode: 'resume', timeZone: 'Mars/Olympus' })).then((r) =>
+      r.text(),
+    )
+    expect(runTurnAndPersist.mock.calls[0][0]).toMatchObject({ browserTimeZone: 'Europe/Brussels' })
+    expect(runTurnAndPersist.mock.calls[1][0]).toMatchObject({
+      mode: 'resume',
+      browserTimeZone: 'Mars/Olympus',
+    })
+  })
+
   // `settings` is request-body data that every pattern reads at execution time,
   // so the route clamps it rather than forwarding it. See
   // `sanitizeHarnessSettings`.

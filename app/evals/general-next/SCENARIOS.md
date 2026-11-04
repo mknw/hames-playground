@@ -684,6 +684,20 @@ Pass: no tool is called; every turn’s answer links `/use-cases`; no turn claim
 
 A live pass proves: the synthesizer answers onboarding questions from the capability guide — the lines general-next builds from the tools it was composed with, plus the host’s examples page — and links that page. Hermetically the scripted synthesis answers from the guide its prompt carried, so a pass proves only that the guide reached the prompt with the link and without a write claim; the answer’s language is not graded hermetically.
 
+### 45-today-calendar-afternoon — Today’s date and this afternoon’s meetings, in the user’s time zone
+
+**RUNNABLE NOW · should** · candidate only (no recorded `general` baseline) · fixed turn clock
+
+User: “What’s today’s date and what’s on my calendar this afternoon?”
+
+Expected assistant: Today is Thursday 2026-11-05, and the afternoon has the 14:00 Design review. The scenario's turn clock is fixed at 2026-11-04T23:30:00Z in `Europe/Brussels` (the run frame's `clock` slot), which is 00:30 on Thursday locally and still Wednesday in UTC. The calendar result is the row's own `toolData` and carries no date and no time zone, so the turn clock is the only source of the date in the prompt.
+
+Expected routes: `office-data`. Expected tools: `graph_calendar_today` with `day_offset` absent or 0.
+
+Pass: all listed tools occur successfully in order; candidate only: the route completes before its turn's `answer`; the final answer carries 2026-11-05, Thursday and Design review, and never the UTC date 2026-11-04; within 6 decisions per turn; no terminal error, empty response or ignored required check.
+
+A live pass proves: the model states the user's local date and weekday, which only the CURRENT TIME block holds, rather than the UTC date, a date from its training or one copied from a tool result. It does not prove a no-tool date question is answered: `general-next` routes through the decision loop, whose step gets no clock. Hermetically the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves only that the turn clock reaches synthesis in the user's zone.
+
 ### tn35-remember-preference — Never claim to remember across conversations
 
 **RUNNABLE NOW · should** · candidate only (no recorded `general` baseline) · memory wired, switch off
@@ -757,7 +771,7 @@ Reports compute `flipGate: { eligible, reasons[] }`. Eligibility requires a live
 
 > **Status: DRAFT, iteration 2, 2026-10-21. Nothing below is implemented or run.** The owner asked for a way to review the questions this Eval uses, for evidence that the question space is saturated, and for true negatives: requests where the correct behaviour is to _not_ do something. Iteration 1 covered the system space (every route, source, turn shape, tool shape, output and guard path). The owner then asked: "Does it cover anything one could possibly be wanting to ask the general-next agent? If not reiterate." Iteration 2 adds the user's side: what people come to ask (intent), the language they write in, the time expressions they use and the scale of what they ask about. It also adds a saturation method the validator enforces, so "saturated" is a checked claim rather than an opinion. The machine-readable source is [`scenarios.catalogue.json`](scenarios.catalogue.json), checked by `src/__tests__/lib/eval-support/scenario-catalogue.test.ts`. Every table in this section is generated from that file, and the test fails if one drifts. The scenario matrix above stays the implemented contract. No live run was made (Modal is billed).
 
-**Counts.** 47 existing (25 positive, 22 negative): the 17 memory rows of 2026-11-04 — 19–31 new, tn35, tn36, tn41 and tn58 built from this list — joined the 18, and the 12 runnable organizational-knowledge rows (32–43: the nine true negatives and three positives of the hook's design) joined them. 99 proposed positive and 56 proposed negative, 155 proposed in all (recomputed from the catalogue); the other 22 org rows are among them, p88–p101 and tn59–tn66. Iteration 1 proposed 14 positive and 30 negative; every id it used is unchanged, so verdicts already given carry over. 14 proposed rows are `must` (the rule is in "For the owner to rule"). Today's gate runs 13 `must` rows: 18 is written down only, with no module and no run.
+**Counts.** 49 existing (27 positive, 22 negative): 44-onboarding (the capability guide) and 45-today-calendar-afternoon (the turn clock) are the newest; the 17 memory rows of 2026-11-04 — 19–31 new, tn35, tn36, tn41 and tn58 built from this list — joined the 18, and the 12 runnable organizational-knowledge rows (32–43: the nine true negatives and three positives of the hook's design) joined them. 99 proposed positive and 56 proposed negative, 155 proposed in all (recomputed from the catalogue); the other 22 org rows are among them, p88–p101 and tn59–tn66. Iteration 1 proposed 14 positive and 30 negative; every id it used is unchanged, so verdicts already given carry over. 14 proposed rows are `must` (the rule is in "For the owner to rule"). Today's gate runs 13 `must` rows: 18 is written down only, with no module and no run.
 
 ### The dimensions
 
@@ -791,7 +805,7 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 
 | dimension       | value                | existing | proposed + | proposed − |
 | --------------- | -------------------- | -------- | ---------- | ---------- |
-| routes          | `office-data`        | 9        | 44         | 14         |
+| routes          | `office-data`        | 10       | 44         | 14         |
 | routes          | `info-retrieval`     | 8        | 24         | 11         |
 | routes          | `read-documents`     | 6        | 11         | 6          |
 | routes          | `think`              | **0**    | 0          | 0          |
@@ -801,7 +815,7 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | sources         | `library-docs`       | 1        | 1          | 0          |
 | sources         | `uploads`            | 6        | 23         | 8          |
 | sources         | `mail`               | 3        | 11         | 12         |
-| sources         | `calendar`           | **0**    | 8          | 5          |
+| sources         | `calendar`           | 1        | 8          | 5          |
 | sources         | `m365-files`         | 3        | 8          | 5          |
 | sources         | `m365-profile`       | **0**    | 2          | 1          |
 | sources         | `conversation`       | 1        | 14         | 2          |
@@ -810,22 +824,22 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | sources         | `pasted-text`        | **0**    | 10         | 0          |
 | sources         | `unreachable-system` | **0**    | 0          | 4          |
 | sources         | `none`               | 2        | 5          | 5          |
-| turnShape       | `single`             | 38       | 81         | 52         |
+| turnShape       | `single`             | 39       | 81         | 52         |
 | turnShape       | `follow-up`          | 8        | 14         | 3          |
 | turnShape       | `failure-recovery`   | 1        | 1          | 1          |
 | turnShape       | `multi-turn`         | 1        | 3          | 0          |
 | toolShape       | `none`               | 30       | 27         | 29         |
-| toolShape       | `one`                | 9        | 55         | 16         |
+| toolShape       | `one`                | 10       | 55         | 16         |
 | toolShape       | `several`            | 4        | 10         | 8          |
 | toolShape       | `several-routes`     | 5        | 7          | 3          |
-| output          | `answer`             | 38       | 89         | 34         |
+| output          | `answer`             | 39       | 89         | 34         |
 | output          | `citation`           | 7        | 15         | 4          |
 | output          | `created-file`       | 8        | 11         | 1          |
 | output          | `refusal`            | 3        | 0          | 23         |
 | output          | `clarification`      | **0**    | 1          | 1          |
-| tier            | `self_deployed`      | 48       | 99         | 56         |
+| tier            | `self_deployed`      | 49       | 99         | 56         |
 | tier            | `anthropic`          | **0**    | 0          | 0          |
-| guardPaths      | `none`               | 33       | 92         | 21         |
+| guardPaths      | `none`               | 34       | 92         | 21         |
 | guardPaths      | `structural-absence` | 14       | 0          | 17         |
 | guardPaths      | `ingress-finding`    | **0**    | 0          | 11         |
 | guardPaths      | `ingress-clean`      | **0**    | 3          | 0          |
@@ -833,7 +847,7 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | guardPaths      | `fetch-address-rule` | 1        | 2          | 1          |
 | guardPaths      | `unattended-default` | **0**    | 0          | 11         |
 | guardPaths      | `hitl-prompt`        | **0**    | 0          | 0          |
-| intents         | `lookup-fact`        | 9        | 22         | 15         |
+| intents         | `lookup-fact`        | 10       | 22         | 15         |
 | intents         | `find-person`        | **0**    | 7          | 7          |
 | intents         | `triage`             | **0**    | 6          | 3          |
 | intents         | `prepare`            | **0**    | 1          | 0          |
@@ -850,18 +864,18 @@ How many scenarios use each value. **0** in the Existing column is a gap in toda
 | intents         | `meta`               | 14       | 4          | 0          |
 | intents         | `repair`             | 1        | 5          | 0          |
 | intents         | `act-on-system`      | 12       | 14         | 20         |
-| languages       | `en`                 | 48       | 97         | 55         |
+| languages       | `en`                 | 49       | 97         | 55         |
 | languages       | `nl`                 | 1        | 5          | 1          |
 | languages       | `fr`                 | 1        | 5          | 0          |
 | languages       | `cross-language`     | **0**    | 3          | 0          |
 | timeExpressions | `none`               | 43       | 72         | 41         |
-| timeExpressions | `relative-day`       | **0**    | 7          | 6          |
+| timeExpressions | `relative-day`       | 1        | 7          | 6          |
 | timeExpressions | `relative-week`      | 2        | 7          | 2          |
 | timeExpressions | `period`             | 1        | 3          | 2          |
 | timeExpressions | `absolute`           | 2        | 7          | 2          |
 | timeExpressions | `vague`              | **0**    | 3          | 3          |
-| timeExpressions | `time-zone`          | **0**    | 1          | 0          |
-| scale           | `small`              | 48       | 94         | 53         |
+| timeExpressions | `time-zone`          | 1        | 1          | 0          |
+| scale           | `small`              | 49       | 94         | 53         |
 | scale           | `many-results`       | **0**    | 1          | 2          |
 | scale           | `paginated`          | **0**    | 1          | 1          |
 | scale           | `long-document`      | **0**    | 2          | 0          |
@@ -873,7 +887,7 @@ The number of scenarios exercising each cell (their `cells` pairs); `–` not me
 
 | Intent               | `knowledge-graph` | `web` | `library-docs` | `uploads` | `mail` | `calendar` | `m365-files` | `m365-profile` | `conversation` | `app-database` | `user-memory` | `pasted-text` | `unreachable-system` | `none` |
 | -------------------- | ----------------- | ----- | -------------- | --------- | ------ | ---------- | ------------ | -------------- | -------------- | -------------- | ------------- | ------------- | -------------------- | ------ |
-| `lookup-fact`        | 11                | 1     | 1              | 8         | 5      | 6          | 4            | 1              | =              | 1              | 4             | –             | 3                    | 1      |
+| `lookup-fact`        | 11                | 1     | 1              | 8         | 5      | 7          | 4            | 1              | =              | 1              | 4             | –             | 3                    | 1      |
 | `find-person`        | 5                 | 5     | –              | 2         | 2      | 1          | 2            | 1              | 1              | 1              | d             | –             | =                    | –      |
 | `triage`             | –                 | –     | –              | –         | 3      | 1          | 4            | –              | –              | =              | d             | –             | 1                    | –      |
 | `prepare`            | 1                 | d     | –              | =         | 1      | 1          | 1            | –              | =              | =              | d             | –             | =                    | –      |
@@ -971,6 +985,7 @@ Positive and negative cases per tool, derived the way the validator derives them
 | `42-org-mail-injection`                 | −    | should   | existing | office       | mail, knowledge-graph                       | summarise                                        | single           | one            | answer                         | structural-absence                     | en                     | none                    | small         |
 | `43-org-rumour`                         | −    | should   | existing | answer       | knowledge-graph                             | act-on-system                                    | single           | none           | answer                         | none                                   | en                     | none                    | small         |
 | `44-onboarding`                         | +    | should   | existing | answer       | none                                        | meta                                             | multi-turn       | none           | answer                         | none                                   | en, nl, fr             | none                    | small         |
+| `45-today-calendar-afternoon`           | +    | should   | existing | office       | calendar                                    | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | relative-day, time-zone | small         |
 | `p01-calendar-today`                    | +    | should   | proposed | office       | calendar                                    | triage, find-person                              | single           | one            | answer                         | none                                   | en                     | relative-day            | small         |
 | `p02-profile-title`                     | +    | should   | proposed | office       | m365-profile                                | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | none                    | small         |
 | `p03-mail-attachments-list`             | +    | should   | proposed | office       | mail                                        | lookup-fact                                      | single           | one            | answer                         | none                                   | en                     | none                    | small         |

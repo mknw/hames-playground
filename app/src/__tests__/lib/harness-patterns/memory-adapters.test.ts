@@ -177,7 +177,9 @@ describe('the trailing memory_context slot of Router and Synthesize', () => {
     await routeMessageOp('q', [], [{ name: 'neo4j', description: 'd' }])
     const args = router.mock.calls[0]
     expect(args[3]).toBeNull()
-    expect((args[4] as { collector?: unknown }).collector).toBeDefined()
+    // `current_time` (no clock on this run), then the bag.
+    expect(args[4]).toBeNull()
+    expect((args[5] as { collector?: unknown }).collector).toBeDefined()
   })
 
   it('defaultSynthesize passes null in the slot and the bag after it', async () => {
@@ -193,9 +195,11 @@ describe('the trailing memory_context slot of Router and Synthesize', () => {
     const args = synthesize.mock.calls[0]
     expect(args[5]).toBeNull()
     expect(args[6]).toBeNull()
-    // `guide`, the trailing slot after references: null from defaultSynthesize.
+    // `guide`, the slot after references: null from defaultSynthesize.
     expect(args[7]).toBeNull()
-    expect((args[8] as { collector?: unknown }).collector).toBeDefined()
+    // `current_time` (no clock on this run), then the bag.
+    expect(args[8]).toBeNull()
+    expect((args[9] as { collector?: unknown }).collector).toBeDefined()
   })
 })
 
@@ -242,7 +246,7 @@ describe('M5a: the recalled block reaches the trailing memory_context slot', () 
     // Mutation (always null): not a string. Mutation (unescaped): marker present.
     expect(slot).toContain('[preference]')
     expect(slot).not.toMatch(/\b(BEGIN|END)\s+DATA\b/i)
-    expect((router.mock.calls[0][4] as { collector?: unknown }).collector).toBeDefined()
+    expect((router.mock.calls[0][5] as { collector?: unknown }).collector).toBeDefined()
   })
 
   it('defaultSynthesize passes input.memoryContext, escaped, in the slot', async () => {

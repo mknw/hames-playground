@@ -154,19 +154,21 @@ export async function fixtureInference() {
                   ? {
                       command: `python3 -c "# lantern-notes.md lantern-sales.csv ${scenario.artifacts.join(' ')}"`,
                     }
-                  : name?.startsWith('graph_')
-                    ? { limit: 10 }
-                    : {
-                        query:
-                          name === 'read_neo4j_cypher'
-                            ? 'MATCH (p:Project) RETURN count(p) AS count'
-                            : 'Next.js release notes',
-                        url: 'https://nextjs.org/blog/next-15-5',
-                        // A message that names a page is read at that page (28's fetch).
-                        ...(given ? { url: given } : {}),
-                        libraryName: 'solid-js',
-                        context7CompatibleLibraryID: '/solidjs/solid',
-                      },
+                  : name === 'graph_calendar_today'
+                    ? { day_offset: 0 }
+                    : name?.startsWith('graph_')
+                      ? { limit: 10 }
+                      : {
+                          query:
+                            name === 'read_neo4j_cypher'
+                              ? 'MATCH (p:Project) RETURN count(p) AS count'
+                              : 'Next.js release notes',
+                          url: 'https://nextjs.org/blog/next-15-5',
+                          // A message that names a page is read at that page (28's fetch).
+                          ...(given ? { url: given } : {}),
+                          libraryName: 'solid-js',
+                          context7CompatibleLibraryID: '/solidjs/solid',
+                        },
               ),
               // The actor cannot exit actorCritic itself: is_final only summons the critic,
               // which is the exit authority, so the actor sets it on its LAST scripted tool.
@@ -186,6 +188,8 @@ export async function fixtureInference() {
               ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
               : scenario.guideAnswer
                 ? guideAnswer(prompt)
+                : scenario.clock
+                  ? timeAnswer(prompt)
                 : scenario.failFirstTurn && turnIndex === 0
                   ? 'The lookup failed: synthetic service unavailable. No count is known.'
                   : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
@@ -325,4 +329,21 @@ function guideAnswer(prompt: string): string {
   return end < 0
     ? 'I can help with many things.'
     : `Here is what I can do. ${prompt.slice(begin, end).trim()}`
+}
+
+/**
+ * The scripted Synthesize of a clocked scenario (45) answers from the CURRENT TIME block it
+ * was HANDED and from the tool results in the same prompt, and from nothing else — so "the
+ * answer carries the user's local date" is decided by what the run's clock put in the prompt.
+ * No block, no date: the answer says it does not know.
+ */
+function timeAnswer(prompt: string): string {
+  const at = prompt.indexOf('CURRENT TIME')
+  const line = at < 0 ? undefined : prompt.slice(at).split('\n')[1]?.trim()
+  return [
+    line ? `Today is ${line.replace(/,\s*\d{2}:\d{2}.*$/, '')}.` : "I don't know today's date.",
+    prompt.includes('Design review')
+      ? 'This afternoon: Design review at 14:00.'
+      : 'I could not read your calendar.',
+  ].join(' ')
 }

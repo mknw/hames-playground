@@ -36,12 +36,15 @@ async function requireUserId(): Promise<string> {
 
 export async function POST(event: APIEvent) {
   const body = await event.request.json()
-  const { sessionId, message, agentId, mode, settings } = body as {
+  const { sessionId, message, agentId, mode, settings, timeZone } = body as {
     sessionId: string
     message?: string
     agentId?: string
     mode?: string
     settings?: unknown
+    /** The browser's IANA zone. Request data: passed through unvalidated and
+     *  validated by `resolveTurnClock`, which refuses anything but a zone name. */
+    timeZone?: unknown
   }
   // `settings` is request-body data, and every pattern reads it at execution
   // time — so it is clamped here, at the only place it enters the server, rather
@@ -115,6 +118,7 @@ export async function POST(event: APIEvent) {
             sessionId,
             userId,
             settings: safeSettings,
+            browserTimeZone: timeZone,
           }
         : {
             mode: 'interactive' as const,
@@ -123,6 +127,7 @@ export async function POST(event: APIEvent) {
             agentId: resolvedAgentId,
             message: message as string,
             settings: safeSettings,
+            browserTimeZone: timeZone,
           }
       try {
         await runTurnAndPersist({

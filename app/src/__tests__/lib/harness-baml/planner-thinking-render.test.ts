@@ -31,7 +31,7 @@ const tools = [
 
 describe('dormant Planner thinking twin', () => {
   it('enables thinking with its own model-card sampling on the same endpoint, without caching', async () => {
-    const req = await b.request.PlannerThinking('q', 'i', tools, 'schema', opts)
+    const req = await b.request.PlannerThinking('q', 'i', tools, 'schema', null, opts)
     expect(req.url).toBe('https://example.invalid/v1/chat/completions')
     const body = req.body.json() as Record<string, unknown>
     expect(body).toMatchObject({
@@ -57,10 +57,17 @@ describe('dormant Planner thinking twin', () => {
     'shares exact request bytes except reasoning guidance and schema (context %j)',
     async (context) => {
       const original = (
-        await b.request.Planner('Find "sample"\nfile', 'Find sample', tools, context, opts)
+        await b.request.Planner('Find "sample"\nfile', 'Find sample', tools, context, null, opts)
       ).body.text()
       const twin = (
-        await b.request.PlannerThinking('Find "sample"\nfile', 'Find sample', tools, context, opts)
+        await b.request.PlannerThinking(
+          'Find "sample"\nfile',
+          'Find sample',
+          tools,
+          context,
+          null,
+          opts,
+        )
       ).body.text()
       // Exact edits, not whitespace/JSON normalization: everything else must match.
       const expected = original
@@ -133,6 +140,7 @@ describe('controller and critic reasoning twins', () => {
       tools,
       turns,
       'schema',
+      null,
       null,
       null,
       null,

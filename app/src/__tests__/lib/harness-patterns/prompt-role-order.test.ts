@@ -165,6 +165,8 @@ const attempt = (n: number): Attempt => ({
 const ATTEMPTS: Attempt[] = [attempt(1), attempt(2), attempt(3)]
 const PRIOR: PriorResult[] = [{ ref_id: 'r0', tool: 'search', summary: 'earlier rows' }]
 const FEW_SHOTS = [{ user: 'u', reasoning: 'r', tool: 'search', args: '{}' }]
+/** A populated `current_time` (the turn clock block): worst case, like the memory block. */
+const TIME = 'CURRENT TIME BLOCK'
 const ROUTES: RouteOption[] = [{ name: 'graph', description: 'Graph questions' }]
 const CANDIDATES: ReferenceCandidate[] = [
   { ref_id: 'r0', tool: 'search', summary: 's', tool_args: '{}', ts_offset_s: 12 },
@@ -195,6 +197,7 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         4,
         5,
         'parallel',
+        TIME,
         o,
       ),
   ],
@@ -212,6 +215,7 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         'parallel',
         'PLAN',
         'answer',
+        TIME,
         o,
       ),
   ],
@@ -223,13 +227,13 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
   [
     'Synthesize',
     (o) => () =>
-      b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, 'GUIDE BLOCK', o),
+      b.request.Synthesize('q', 'i', TURNS, true, 'boom', 'MEMORY BLOCK', null, 'GUIDE BLOCK', TIME, o),
   ],
-  ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', o)],
+  ['Planner', (o) => () => b.request.Planner('q', 'i', TOOLS, 'CONTEXT BLOCK', TIME, o)],
   [
     'PlannerThinking',
     (o) => () =>
-      b.request.PlannerThinking('q', 'i', TOOLS, 'CONTEXT BLOCK', {
+      b.request.PlannerThinking('q', 'i', TOOLS, 'CONTEXT BLOCK', TIME, {
         ...o,
         client: 'LargeQwenThink',
       }),
@@ -248,10 +252,11 @@ const FUNCTIONS: [string, (opts: object) => Render][] = [
         'parallel',
         'PLAN',
         'answer',
+        TIME,
         { ...o, client: 'LargeQwenThink' },
       ),
   ],
-  ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', o)],
+  ['Router', (o) => () => b.request.Router('q', ROUTES, HISTORY, 'MEMORY BLOCK', TIME, o)],
   ['CompactIntent', (o) => () => b.request.CompactIntent(HISTORY, 'latest', o)],
   ['RetrieveQuery', (o) => () => b.request.RetrieveQuery(HISTORY, 'latest', o)],
   ['ReferenceSelector', (o) => () => b.request.ReferenceSelector('i', HISTORY, CANDIDATES, o)],
@@ -331,10 +336,12 @@ describe('system-role placement on an OpenAI-compatible wire', () => {
   })
 })
 
-/** The first text of the volatile tail that follows the last result block. */
+/** The first text of the volatile tail that follows the last result block: the
+ *  turn's clock block, which renders there and only there (it changes every
+ *  turn, so it must sit after the last cache marker), then the tail's own text. */
 const VOLATILE_TAIL_HEAD: Record<string, string> = {
-  ActorController: 'You MUST address the CRITIC FEEDBACK above.',
-  LoopController: 'Turn 2. Decide the next action.',
+  ActorController: `${TIME}\n\nYou MUST address the CRITIC FEEDBACK above.`,
+  LoopController: `${TIME}\n\nTurn 2. Decide the next action.`,
 }
 
 describe('the controller prompts end in two content parts, joined by the server', () => {
@@ -438,9 +445,21 @@ describe('the Anthropic path is unchanged by the reorder', () => {
     // keeps them as separate blocks within one message, and the marker still
     // lands on the block that ENDS the run-static prefix.
     const render = () =>
-      b.request.ActorController('QQ', 'i', TOOLS, [], 'CONTEXT BLOCK', FEW_SHOTS, 1, 5, null, {
-        ...ANTHROPIC,
-      })
+      b.request.ActorController(
+        'QQ',
+        'i',
+        TOOLS,
+        [],
+        'CONTEXT BLOCK',
+        FEW_SHOTS,
+        1,
+        5,
+        null,
+        null,
+        {
+          ...ANTHROPIC,
+        },
+      )
     const { text, cache, markedAt } = chunks(
       (await render()).body.json() as Record<string, unknown>,
     )

@@ -304,12 +304,15 @@ describe('defaultSynthesize reference projection', () => {
         defaultSynthesize({ ...input(RECORD), memoryContext: 'Remember metric units' }),
       )
       const args = synth.mock.calls[0]
-      expect(args).toHaveLength(9)
+      expect(args).toHaveLength(10)
       expect(args[5]).toBe('Remember metric units')
       expect(args[6]).toEqual([REFERENCE])
+      // `guide` (no guide on this input), then `current_time` (no clock on this
+      // frame), then the bag.
       expect(args[7]).toBeNull()
-      expect(args[8]?.collector).toBeDefined()
-      expect(args[8]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
+      expect(args[8]).toBeNull()
+      expect(args[9]?.collector).toBeDefined()
+      expect(args[9]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
       // Render exactly those arguments, with synthetic env values only.
       const body = (
         await b.request.Synthesize(
@@ -321,7 +324,8 @@ describe('defaultSynthesize reference projection', () => {
           args[5],
           args[6],
           args[7],
-          { ...args[8], env: ENV },
+          args[8],
+          { ...args[9], env: ENV },
         )
       ).body.text()
       expect(body).toContain('Remember metric units')
@@ -413,7 +417,18 @@ describe('scripted synthesis replay through the real eval check', () => {
     async (_name, answer, passes) => {
       let body = ''
       vi.spyOn(b, 'Synthesize').mockImplementation(
-        async (message, intent, turns, error, errorMessage, memory, references, guide, options) => {
+        async (
+          message,
+          intent,
+          turns,
+          error,
+          errorMessage,
+          memory,
+          references,
+          guide,
+          currentTime,
+          options,
+        ) => {
           body = (
             await b.request.Synthesize(
               message,
@@ -424,6 +439,7 @@ describe('scripted synthesis replay through the real eval check', () => {
               memory,
               references,
               guide,
+              currentTime,
               { ...options, env: ENV },
             )
           ).body.text()

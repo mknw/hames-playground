@@ -26,3 +26,17 @@ template_string ToolCatalog(tools: ToolDescription[]) #"
   {% endif %}
   {% endfor %}
 "#
+
+// --- Current time (per turn) -------------------------------------------------
+// The turn's clock block (`formatTimeBlock` in harness-patterns' `clock.ts`:
+// weekday, ISO date, local time, UTC offset, zone name), or nothing. Callers
+// render it ONLY inside per-turn user-role content AFTER their last cache
+// marker: it changes every turn, so inside a cached prefix it would turn every
+// cache read into a write (#122), and it is never a system block, because a
+// system block after a message breaks the system-at-front rule
+// (`prompt-role-order.test.ts`). A null one renders nothing.
+template_string CurrentTime(current_time: string?) #"
+  {% if current_time %}
+  {{ current_time }}
+  {% endif %}
+"#

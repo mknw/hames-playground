@@ -110,12 +110,12 @@ beforeAll(async () => {
   vi.stubEnv('ANTHROPIC_API_KEY', 'offline-render-test')
   vi.stubEnv('USE_SELF_DEPLOYED_INFERENCE', '0')
   const { b } = await import('@hames-ai/harness-baml/baml_client')
-  // Render what the adapter would send (its first nine arguments; the tenth is
-  // the options bag), then answer with a final action so the loop ends.
+  // Render what the adapter would send (its first ten arguments; the eleventh
+  // is the options bag), then answer with a final action so the loop ends.
   vi.spyOn(b, 'ActorController').mockImplementation((async (...args: unknown[]) => {
     for (const client of ['AnthropicSonnet5', 'LargeQwen']) {
-      const renderArgs = args.slice(0, 9) as Parameters<typeof b.request.ActorController>
-      renderArgs[9] = { client, env: ENV }
+      const renderArgs = args.slice(0, 10) as Parameters<typeof b.request.ActorController>
+      renderArgs[10] = { client, env: ENV }
       const request = await b.request.ActorController(...renderArgs)
       const body = request.body.json() as {
         system?: { text: string }[]
@@ -343,8 +343,8 @@ it.each(['anthropic', 'self_deployed'])(
     const { b } = await import('@hames-ai/harness-baml/baml_client')
     const prompts: string[] = []
     const spy = vi.spyOn(b, 'LoopController').mockImplementation((async (...args: unknown[]) => {
-      const requestArgs = args.slice(0, 10) as Parameters<typeof b.request.LoopController>
-      requestArgs[10] = { client: (args[10] as { client?: string }).client }
+      const requestArgs = args.slice(0, 11) as Parameters<typeof b.request.LoopController>
+      requestArgs[11] = { client: (args[11] as { client?: string }).client }
       const request = await b.request.LoopController(...requestArgs)
       prompts.push(JSON.stringify(request.body.json()))
       return { reasoning: 'done', tool_name: 'Return', tool_args: 'synthetic', is_final: true }

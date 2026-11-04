@@ -214,6 +214,7 @@ export {
   amendRunFrame,
   activeRunFrame,
   currentRunFrame,
+  currentClock,
   resolveByTier,
   type RunFrame,
   type ActiveRunFrame,
@@ -226,6 +227,9 @@ export {
   type StashWriteObserver,
   type AfterToolCallHook,
 } from './run-frame.server'
+
+// The turn's clock: one instant and one zone per turn (`RunFrame.clock`).
+export { formatTimeBlock, localDate, validTimeZone, type TurnClock } from './clock'
 
 // ============================================================================
 // Router

@@ -57,6 +57,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertServerOnImport } from './assert.server'
 import { DEFAULT_RUNTIME_CONFIG, type HarnessRuntimeConfig } from './runtime-config'
 import type { ActiveInjectionGuard } from './injection-guard'
+import type { TurnClock } from './clock'
 import type { ToolTransport } from './tool-transport.server'
 import type {
   ByTier,
@@ -275,6 +276,12 @@ export interface RunFrame {
   live?: LiveEventListener
   /** Which tier this run's model calls take. */
   inference?: InferenceSlot
+  /** When this turn started and the user's time zone (`clock.ts`). Supplied
+   *  once, by the host, where the turn's frame opens; every prompt that reasons
+   *  about time and every tool that means "today" reads it, so a turn agrees
+   *  with itself. Absent: no time block is rendered and tools keep their own
+   *  zone fallback. */
+  clock?: TurnClock
   /** Whether a person is there to answer `askHuman` (#433). Supplied by the
    *  host's amend around its MAIN run only, never below it — a sidecar (a title
    *  agent, a detached compaction) has none, so it can never pause the user's
@@ -357,6 +364,7 @@ export interface ActiveRunFrame {
   readonly config: HarnessRuntimeConfig
   readonly live?: LiveEventSlot
   readonly inference?: InferenceSlot
+  readonly clock?: TurnClock
   /** Frozen, and nothing but `attended` (#477 F1). The run's HITL bookkeeping
    *  is not here: it is in a store of its own that the owning `runChain`
    *  opens (`hitl.server.ts`), so nothing that can read the frame can write
@@ -518,6 +526,7 @@ function build(frame: RunFrame): ActiveRunFrame {
       ? { listener: frame.live, emittedIds: new Set<string>(), enabled: false }
       : undefined,
     inference: frame.inference,
+    clock: frame.clock,
     hitl: frame.hitl ? hitlSlot(frame.hitl) : undefined,
     stashWriteObservers: frame.stashWriteObservers
       ? Object.freeze([...frame.stashWriteObservers])
@@ -654,6 +663,7 @@ export function amendRunFrame<T>(partial: RunFrame, fn: () => Promise<T>): Promi
       ? { listener: partial.live, emittedIds: new Set<string>(), enabled: false }
       : open.live,
     inference: partial.inference ?? open.inference,
+    clock: partial.clock ?? open.clock,
     hitl: partial.hitl ? hitlSlot(partial.hitl) : open.hitl,
     stashWriteObservers: partial.stashWriteObservers
       ? Object.freeze([...partial.stashWriteObservers, ...open.stashWriteObservers])
@@ -721,4 +731,11 @@ export function activeRunFrame(): ActiveRunFrame {
  */
 export function currentRunFrame(): ActiveRunFrame | undefined {
   return store.getStore()
+}
+
+/** The open run's {@link TurnClock}, or `undefined` outside a frame or when the
+ *  host supplied none. A convenience over {@link currentRunFrame}: the readers
+ *  (the BAML adapters, the org hook, date-relative tools) all ask only this. */
+export function currentClock(): TurnClock | undefined {
+  return store.getStore()?.clock
 }

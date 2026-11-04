@@ -13,7 +13,10 @@ function Router(
   message: string,
   routes: RouteOption[],
   history: Message[],
-  memory_context: string?
+  memory_context: string?,
+  // The turn's clock block (prompt-sections.baml `CurrentTime`). LAST and
+  // optional for the positional reason above; a null one renders nothing.
+  current_time: string?
 ) -> RoutingResult {
   client RouterAnthropic
   prompt #"
@@ -74,6 +77,10 @@ function Router(
     ---END DATA---
     {% endif %}
 
+    {% if current_time %}
+    {{ _.role("user") }}
+    {{ CurrentTime(current_time) }}
+    {% endif %}
     {{ _.role("user") }}
     {{ message }}
 

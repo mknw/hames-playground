@@ -229,6 +229,9 @@ const NAMESPACES: Record<string, string> = {
   'resolve-library-id': 'context7',
   'get-library-docs': 'context7',
   graph_mail_recent: 'graph',
+  // Owned by the synthetic transport, with NO shared fixture: a row that calls it
+  // brings its own payload in `toolData` (45 does), so no row reads another's day.
+  graph_calendar_today: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
   sandbox_read: 'sandbox',
@@ -458,7 +461,19 @@ export async function createDriver(
       for (const [name, content] of UPLOADS) documents.set(name, content)
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame(
-        { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
+        {
+          inference: { tier: 'self_deployed' },
+          hitl: { attended: false },
+          // A scenario's fixed clock (45): the host's per-turn slot, held for the scenario.
+          ...(next.clock
+            ? {
+                clock: {
+                  instant: Date.parse(next.clock.instant),
+                  timeZone: next.clock.timeZone,
+                },
+              }
+            : {}),
+        },
         async () => {
           // Per-user memory is wired for the scenarios that name it and for no other one,
           // so no other scenario pays a recall or a store step.

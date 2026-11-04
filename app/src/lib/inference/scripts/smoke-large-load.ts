@@ -269,6 +269,7 @@ async function oneCall(i: number): Promise<CallResult> {
       undefined, // multi_call_mode
       undefined, // plan_context
       undefined, // return_style
+      null,
       opts,
     )
     return { ms: Date.now() - t0, ...usage(collector) }

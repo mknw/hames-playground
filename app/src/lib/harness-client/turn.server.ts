@@ -101,6 +101,7 @@ import { DEFAULT_SETTINGS } from '../settings'
 import { bamlPatterns } from '@hames-ai/harness-baml'
 import type { InferenceTier } from '../inference/config.server'
 import { resolveConversationTier } from '../inference/tier.server'
+import { resolveTurnClock } from '../time-zone.server'
 import { claimSessionOwnership, userOwnsSession } from '../stash/ownership.server'
 import { beginSelfDeployedTurn, endSelfDeployedTurn } from '../inference/large-activity.server'
 import { runWithColdStartWatch, type ColdStartEstimate } from '../inference/cold-start.server'
@@ -165,6 +166,10 @@ interface TurnBase extends TurnHooks {
   /** Request-scoped settings. Absent off the request path (a triggered run),
    *  where the scope resolves `DEFAULT_SETTINGS`. */
   settings?: HarnessSettings
+  /** The IANA zone the user's browser reported with this turn, UNVALIDATED —
+   *  `resolveTurnClock` validates it and refuses junk. Absent off the request
+   *  path (a triggered run, a routine), where the owner's stored zone applies. */
+  browserTimeZone?: unknown
 }
 
 /**
@@ -217,6 +222,9 @@ export async function runTurnAndPersist(
   req: TurnRequest,
 ): Promise<HarnessResultScoped<SessionData>> {
   const { sessionId, userId } = req
+  // The turn's start instant — the one "now" every prompt and tool in this turn
+  // reads (`clock` below). Captured first, before any await.
+  const startedAt = Date.now()
   // ---------------------------------------------------------------------------
   // Inference tier — the per-CONVERSATION switch, resolved ONCE per turn.
   //
@@ -265,6 +273,16 @@ export async function runTurnAndPersist(
   // which cannot know what 'self_deployed' means, so the fail-closed gate stayed in
   // `@hames-ai/harness-baml` and the host calls it (issue #374, D1).
   assertInferenceTier(tier)
+  // The turn's clock: its start instant in the user's zone (browser, else the
+  // stored zone, else the deployment default, else UTC — `time-zone.server.ts`
+  // owns that order). ONE value per turn on the run frame, so the router, the
+  // planner, the controllers, the synthesizer, the calendar tools and the org
+  // hook's "today" all agree, including across a midnight inside the turn.
+  const { clock } = await resolveTurnClock({
+    userId,
+    browserTimeZone: req.browserTimeZone,
+    instant: startedAt,
+  })
 
   // Establish the request scope so pattern closures and app-side tools that
   // need per-conversation context at runtime (a per-conversation allowlist
@@ -330,6 +348,7 @@ export async function runTurnAndPersist(
       {
         config: req.settings ?? DEFAULT_SETTINGS,
         inference: { tier },
+        clock,
       },
       async () => {
         // The header's warm indicator and the global counters both learn about

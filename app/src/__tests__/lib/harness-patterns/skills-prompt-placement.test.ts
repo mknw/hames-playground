@@ -145,7 +145,7 @@ async function capture(skills: SandboxSkill[] | undefined) {
       ...(skills ? { skills: () => skills } : {}),
     })(inner).fn(scope, {} as never),
   )
-  const actorArgs = actorSpy.mock.calls[0]!.slice(0, 9) as unknown[]
+  const actorArgs = actorSpy.mock.calls[0]!.slice(0, 10) as unknown[]
   const loopArgs = loopSpy.mock.calls[0]!.slice(0, 11) as unknown[]
   actorSpy.mockRestore()
   loopSpy.mockRestore()

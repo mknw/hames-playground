@@ -163,6 +163,7 @@ vi.mock('@hames-ai/harness-patterns', async () => {
 type OpenedFrame = {
   config?: { maxResultForSummary?: number }
   inference?: { tier?: string }
+  clock?: { instant: number; timeZone: string }
   live?: unknown
   /** The host's one `hitl` slot (#433 F7/m8): supplied around the main run
    *  only, carrying the turn's `attended`. */
@@ -195,6 +196,18 @@ const tierScopes = {
     return openedFrames.map((f) => f.inference?.tier)
   },
 }
+
+// The turn clock's resolver (`lib/time-zone.server.ts`, pinned on its own in
+// `time-zone.test.ts`): faked here so the turn's use of it is observable.
+const resolveTurnClock = vi.fn(
+  async (input: { userId: string; browserTimeZone?: unknown; instant: number }) => ({
+    clock: { instant: input.instant, timeZone: 'Europe/Brussels' },
+    source: 'stored' as const,
+  }),
+)
+vi.mock('../../../lib/time-zone.server', () => ({
+  resolveTurnClock: (input: never) => resolveTurnClock(input),
+}))
 
 const resolveConversationTier = vi.fn<
   (sessionId: string, userId: string) => Promise<'self_deployed' | 'anthropic'>
@@ -2947,5 +2960,42 @@ describe('session ownership on the turn path', () => {
 
       expectNothingRan()
     })
+  })
+})
+
+// The turn's clock: resolved ONCE, before the frame opens, and carried on it.
+// Mutation: drop `clock` from `runTurnAndPersist`'s `withRunFrame` bag → the
+// frame has none; pass the request's zone to nothing → the claim is not seen.
+describe('the turn clock', () => {
+  it("puts the resolved clock on the turn's one frame, with the browser's claim", async () => {
+    vi.useFakeTimers({ now: Date.parse('2026-11-04T23:30:00Z'), toFake: ['Date'] })
+    try {
+      await runTurnAndPersist(interactive({ browserTimeZone: 'Europe/Brussels' }))
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(resolveTurnClock).toHaveBeenCalledTimes(1)
+    expect(resolveTurnClock.mock.calls[0][0]).toEqual({
+      userId: 'user-1',
+      browserTimeZone: 'Europe/Brussels',
+      instant: Date.parse('2026-11-04T23:30:00Z'),
+    })
+    expect(openedFrames[0].clock).toEqual({
+      instant: Date.parse('2026-11-04T23:30:00Z'),
+      timeZone: 'Europe/Brussels',
+    })
+  })
+
+  it("a triggered run carries no browser zone, so the owner's stored zone applies", async () => {
+    await runTurnAndPersist({
+      mode: 'triggered',
+      sessionId: 'run-1',
+      userId: 'user-1',
+      agentId: 'general-next',
+      message: 'do the thing',
+      claimVersion: 'v-trig',
+    })
+    expect(resolveTurnClock.mock.calls[0][0].browserTimeZone).toBeUndefined()
+    expect(openedFrames[0].clock?.timeZone).toBe('Europe/Brussels')
   })
 })

@@ -98,7 +98,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
 
         
         async ActorController(
-        user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,
+        user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.ControllerAction> {
           try {
@@ -112,7 +112,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.ActorController(
-          user_message,intent,tools,attempts,context,few_shots,attempt_n,max_attempts,multi_call_mode,
+          user_message,intent,tools,attempts,context,few_shots,attempt_n,max_attempts,multi_call_mode,current_time,
           __baml_options__
           );
 
@@ -136,7 +136,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "ActorController",
             {
-            "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context?? null,"few_shots": few_shots?? null,"attempt_n": attempt_n?? null,"max_attempts": max_attempts?? null,"multi_call_mode": multi_call_mode?? null
+            "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context?? null,"few_shots": few_shots?? null,"attempt_n": attempt_n?? null,"max_attempts": max_attempts?? null,"multi_call_mode": multi_call_mode?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -266,7 +266,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async ControllerThinking(
-        user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+        user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.ControllerActionThinking> {
           try {
@@ -280,7 +280,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.ControllerThinking(
-          user_message,intent,tools,turns,context,turns_previous_runs,few_shots,multi_call_mode,plan_context,return_style,
+          user_message,intent,tools,turns,context,turns_previous_runs,few_shots,multi_call_mode,plan_context,return_style,current_time,
           __baml_options__
           );
 
@@ -304,7 +304,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "ControllerThinking",
             {
-            "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null
+            "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -546,7 +546,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async LoopController(
-        user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+        user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.ControllerAction> {
           try {
@@ -560,7 +560,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.LoopController(
-          user_message,intent,tools,turns,context,turns_previous_runs,few_shots,multi_call_mode,plan_context,return_style,
+          user_message,intent,tools,turns,context,turns_previous_runs,few_shots,multi_call_mode,plan_context,return_style,current_time,
           __baml_options__
           );
 
@@ -584,7 +584,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "LoopController",
             {
-            "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null
+            "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -602,7 +602,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async Planner(
-        user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+        user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.PlanResult> {
           try {
@@ -616,7 +616,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.Planner(
-          user_message,intent,tools,context,
+          user_message,intent,tools,context,current_time,
           __baml_options__
           );
 
@@ -640,7 +640,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "Planner",
             {
-            "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null
+            "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -658,7 +658,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async PlannerThinking(
-        user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+        user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.PlanResultThinking> {
           try {
@@ -672,7 +672,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.PlannerThinking(
-          user_message,intent,tools,context,
+          user_message,intent,tools,context,current_time,
           __baml_options__
           );
 
@@ -696,7 +696,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "PlannerThinking",
             {
-            "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null
+            "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -938,7 +938,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async Router(
-        message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,
+        message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<types.RoutingResult> {
           try {
@@ -952,7 +952,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.Router(
-          message,routes,history,memory_context,
+          message,routes,history,memory_context,current_time,
           __baml_options__
           );
 
@@ -976,7 +976,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "Router",
             {
-            "message": message,"routes": routes,"history": history,"memory_context": memory_context?? null
+            "message": message,"routes": routes,"history": history,"memory_context": memory_context?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -1050,7 +1050,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async Synthesize(
-        user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,
+        user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,current_time?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<string> {
           try {
@@ -1064,7 +1064,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.Synthesize(
-          user_message,intent,turns,has_error,error_message,memory_context,references,guide,
+          user_message,intent,turns,has_error,error_message,memory_context,references,guide,current_time,
           __baml_options__
           );
 
@@ -1088,7 +1088,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "Synthesize",
             {
-            "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null,"guide": guide?? null
+            "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null,"guide": guide?? null,"current_time": current_time?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -1120,7 +1120,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
 
             
             ActorController(
-            user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,
+            user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.ControllerAction, types.ControllerAction>
               {
@@ -1169,7 +1169,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "ActorController",
                 {
-                "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context ?? null,"few_shots": few_shots ?? null,"attempt_n": attempt_n ?? null,"max_attempts": max_attempts ?? null,"multi_call_mode": multi_call_mode ?? null
+                "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context ?? null,"few_shots": few_shots ?? null,"attempt_n": attempt_n ?? null,"max_attempts": max_attempts ?? null,"multi_call_mode": multi_call_mode ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1342,7 +1342,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             ControllerThinking(
-            user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+            user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.ControllerActionThinking, types.ControllerActionThinking>
               {
@@ -1391,7 +1391,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "ControllerThinking",
                 {
-                "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context ?? null,"turns_previous_runs": turns_previous_runs ?? null,"few_shots": few_shots ?? null,"multi_call_mode": multi_call_mode ?? null,"plan_context": plan_context ?? null,"return_style": return_style ?? null
+                "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context ?? null,"turns_previous_runs": turns_previous_runs ?? null,"few_shots": few_shots ?? null,"multi_call_mode": multi_call_mode ?? null,"plan_context": plan_context ?? null,"return_style": return_style ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1712,7 +1712,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             LoopController(
-            user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+            user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.ControllerAction, types.ControllerAction>
               {
@@ -1761,7 +1761,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "LoopController",
                 {
-                "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context ?? null,"turns_previous_runs": turns_previous_runs ?? null,"few_shots": few_shots ?? null,"multi_call_mode": multi_call_mode ?? null,"plan_context": plan_context ?? null,"return_style": return_style ?? null
+                "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context ?? null,"turns_previous_runs": turns_previous_runs ?? null,"few_shots": few_shots ?? null,"multi_call_mode": multi_call_mode ?? null,"plan_context": plan_context ?? null,"return_style": return_style ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1786,7 +1786,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             Planner(
-            user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+            user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.PlanResult, types.PlanResult>
               {
@@ -1835,7 +1835,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "Planner",
                 {
-                "user_message": user_message,"intent": intent,"tools": tools,"context": context ?? null
+                "user_message": user_message,"intent": intent,"tools": tools,"context": context ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -1860,7 +1860,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             PlannerThinking(
-            user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+            user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.PlanResultThinking, types.PlanResultThinking>
               {
@@ -1909,7 +1909,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "PlannerThinking",
                 {
-                "user_message": user_message,"intent": intent,"tools": tools,"context": context ?? null
+                "user_message": user_message,"intent": intent,"tools": tools,"context": context ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -2230,7 +2230,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             Router(
-            message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,
+            message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<partial_types.RoutingResult, types.RoutingResult>
               {
@@ -2279,7 +2279,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "Router",
                 {
-                "message": message,"routes": routes,"history": history,"memory_context": memory_context ?? null
+                "message": message,"routes": routes,"history": history,"memory_context": memory_context ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),
@@ -2378,7 +2378,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             Synthesize(
-            user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,
+            user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,current_time?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<string, string>
               {
@@ -2427,7 +2427,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "Synthesize",
                 {
-                "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message ?? null,"memory_context": memory_context ?? null,"references": references ?? null,"guide": guide ?? null
+                "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message ?? null,"memory_context": memory_context ?? null,"references": references ?? null,"guide": guide ?? null,"current_time": current_time ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),

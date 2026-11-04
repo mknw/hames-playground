@@ -209,6 +209,8 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
     labels: string[]
     properties: Record<string, unknown> | null
     position: { x: number; y: number }
+    /** Who added it to the org graph, resolved server-side (LD-18). */
+    addedBy?: string
   } | null>(null)
   const [isLoadingProps, setIsLoadingProps] = createSignal(false)
 
@@ -296,6 +298,12 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         'type',
         'labels',
         'properties',
+        // The org-knowledge highlight and provenance (slice 5): `createdBy` is an
+        // internal user id, shown only as the name the server resolved for it.
+        'added',
+        'createdBy',
+        'createdByName',
+        'lastEditedBy',
       ])
       const inlineProps: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(data)) {
@@ -315,6 +323,7 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
         labels: (data.labels as string[]) || (data.type ? [data.type as string] : []),
         properties: Object.keys(mergedProps).length > 0 ? mergedProps : null,
         position: { x: renderedPos.x, y: renderedPos.y },
+        ...(typeof data.createdByName === 'string' ? { addedBy: data.createdByName } : {}),
       })
 
       props.onNodeClick?.(nodeId, data)
@@ -1347,6 +1356,13 @@ export const GraphVisualization = (props: GraphVisualizationProps) => {
                   <div text="sm ui-text-primary" font="semibold">
                     {node().label}
                   </div>
+                  <Show when={node().addedBy}>
+                    {(name) => (
+                      <div text="xs ui-text-secondary" data-testid="node-added-by">
+                        Added by {name()}
+                      </div>
+                    )}
+                  </Show>
                   <Show when={node().labels.length > 0}>
                     <div flex="~ wrap" gap="1" m="t-1">
                       <For each={node().labels}>

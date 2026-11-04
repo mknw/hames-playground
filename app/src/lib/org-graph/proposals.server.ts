@@ -42,7 +42,10 @@ import {
   listHitlProposals,
   type HitlAnswerValue,
 } from '../db/hitl.server'
+import { getUser } from '../auth/users.server'
 import { displayText } from '../memory/display-text'
+import type { GraphElement } from '@hames-ai/agents'
+import { acceptedGraph } from './accepted-graph.server'
 import { orgGraphStore } from './hook.server'
 
 assertServerOnImport()
@@ -60,12 +63,14 @@ export interface OrgProposalElementView {
   /** A node's name (or a deadline's label); a fact's text. */
   readonly name: string
   readonly verdict: 'new' | 'reinforces' | 'updates'
+  /** The existing node a merge reinforces or updates, by name. */
+  readonly existing?: string
   /** A fact's evidence span, verbatim (the design's acceptance card). */
   readonly evidence?: string
   /** An edge's ends, by the name of each node in its assertion. */
   readonly from?: string
   readonly to?: string
-  /** Edges a replacement removes, by stored key (slice 5 resolves names). */
+  /** Edges a replacement removes, each end by its node's name. */
   readonly removes?: readonly {
     readonly type: string
     readonly from: string
@@ -84,18 +89,47 @@ export interface OrgProposalView {
   }[]
 }
 
-function viewOf(payload: OrgProposalPayload): OrgProposalView['items'] {
+const nodeName = (p: Readonly<Record<string, string>>): string =>
+  p.name ?? p.label ?? p.displayName ?? p.text ?? ''
+
+/** Each removed edge's end, key → name, read once for the whole payload. A
+ *  read that fails names nothing: the card says "an existing node" instead. */
+async function removedEndNames(payload: OrgProposalPayload): Promise<Map<string, string>> {
+  const keys = [
+    ...new Set(
+      payload.assertions.flatMap((a) =>
+        a.edges.flatMap((e) => e.removes.flatMap((r) => [r.from, r.to])),
+      ),
+    ),
+  ]
+  const names = new Map<string, string>()
+  if (keys.length === 0) return names
+  try {
+    const snap = await orgGraphStore().snapshot({ names: [], keys })
+    for (const n of snap.nodes) names.set(n.key, displayText(nodeName(n.properties)))
+  } catch (err) {
+    console.warn('[org-knowledge] removed-edge names not read:', err)
+  }
+  return names
+}
+
+function viewOf(
+  payload: OrgProposalPayload,
+  ends: ReadonlyMap<string, string>,
+): OrgProposalView['items'] {
+  const end = (key: string) => ends.get(key) || 'an existing node'
   return payload.assertions.map((a) => {
     const nameOf = new Map<string, string>()
     const nodes = a.nodes.map((n): OrgProposalElementView => {
       const p = n.properties
-      const name = displayText(p.name ?? p.label ?? p.displayName ?? p.text ?? '')
+      const name = displayText(nodeName(p))
       nameOf.set(n.element.ref, name)
       return {
         kind: 'node',
         label: n.element.label,
         name,
         verdict: n.verdict,
+        ...(n.existing ? { existing: displayText(nodeName(n.existing.properties)) || name } : {}),
         ...(p.evidence !== undefined && n.element.label === 'Fact'
           ? { evidence: displayText(p.evidence) }
           : {}),
@@ -108,7 +142,9 @@ function viewOf(payload: OrgProposalPayload): OrgProposalView['items'] {
       verdict: e.verdict,
       from: nameOf.get(e.element.from) ?? '',
       to: nameOf.get(e.element.to) ?? '',
-      ...(e.removes.length > 0 ? { removes: e.removes } : {}),
+      ...(e.removes.length > 0
+        ? { removes: e.removes.map((r) => ({ type: r.type, from: end(r.from), to: end(r.to) })) }
+        : {}),
     }))
     return { flag: `a${a.index}`, elements: [...nodes, ...edges] }
   })
@@ -139,7 +175,7 @@ export async function listOrgProposalsFor(
         ? { recorded: { choice: row.answer.choice, flags: row.answer.flags ?? {} } }
         : {}),
       expiresAt: row.expiresAt ? row.expiresAt.getTime() : null,
-      items: viewOf(payload),
+      items: viewOf(payload, await removedEndNames(payload)),
     })
   }
   return views
@@ -160,6 +196,10 @@ export type OrgAnswerOutcome =
       readonly failed: number
       /** The stored key of every node written, by draft ref. */
       readonly keys: Readonly<Record<string, string>>
+      /** What the Org.graph tab draws: the accepted elements (`added`) and
+       *  their one-hop neighbourhood. Absent when that read failed; the write
+       *  stands either way. */
+      readonly graph?: readonly GraphElement[]
     }
   | { readonly outcome: 'discarded' }
   | {
@@ -272,5 +312,25 @@ export async function answerOrgProposalFor(
   await closeHitlRows([requestId], userId, 'applied').catch((err: unknown) =>
     console.warn('[org-knowledge] answered proposal row not closed:', err),
   )
+  if (result.outcome === 'added' && result.written > 0) {
+    try {
+      const graph = await acceptedGraph({
+        store: orgGraphStore(),
+        payload,
+        selected: Object.entries(decided.flags)
+          .filter(([, chosen]) => chosen === true)
+          .map(([flag]) => flag),
+        keys: result.keys,
+        // A user with no display name is still a user; only an unknown id is "former user".
+        displayName: async (id) => {
+          const user = await getUser(id)
+          return user ? (user.displayName ?? 'a colleague') : null
+        },
+      })
+      result = { ...result, graph }
+    } catch (err) {
+      console.warn('[org-knowledge] accepted graph not read:', err)
+    }
+  }
   return result
 }

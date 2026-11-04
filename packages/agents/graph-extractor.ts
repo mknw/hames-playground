@@ -124,6 +124,18 @@ function nodeElement(
   }
 }
 
+/**
+ * A node's stable key: its `id` property when that is a non-empty string (the
+ * org-knowledge graph gives every node one, `docs/plan/org-knowledge-hook.md`,
+ * "The Org.graph tab"), so a node read once as a plain object and once as a
+ * driver node is ONE element. A node without one (legacy, or a numeric `id`)
+ * keeps the key it had before.
+ */
+function stableId(props: Record<string, unknown> | undefined): string | undefined {
+  const id = props?.id
+  return typeof id === 'string' && id.trim() !== '' ? id : undefined
+}
+
 /** Build an edge element. Same two invariants as {@link nodeElement}. */
 function edgeElement(
   id: string,
@@ -197,7 +209,13 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
     const all = [...fromRows, ...fromNeighborhood]
     for (const el of all) {
       if (!el.data) continue
-      if (isNodeElement(el) && el.data.id !== undefined && touched.has(String(el.data.id))) {
+      // `_touched` holds names; a node keyed by its stable id is still touched by name.
+      const name = el.data.name
+      if (
+        isNodeElement(el) &&
+        el.data.id !== undefined &&
+        (touched.has(String(el.data.id)) || (typeof name === 'string' && touched.has(name)))
+      ) {
         el.data.touched = true
       }
     }
@@ -206,6 +224,9 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
 
   // Handle array of records (typical Cypher result)
   const records = Array.isArray(parsed) ? parsed : [parsed]
+  // A driver node keyed by its stable id is still the end its relationships
+  // name by identity or elementId: those are rewritten to the key below.
+  const aliases = new Map<string, string>()
 
   for (const record of records) {
     if (!record || typeof record !== 'object') continue
@@ -229,12 +250,14 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         const relType = value[1] as string
         const endNode = value[2] as Record<string, unknown>
 
-        const startId = String(startNode.name ?? startNode.id ?? `node-${key}-start`)
-        const endId = String(endNode.name ?? endNode.id ?? `node-${key}-end`)
+        const startName = String(startNode.name ?? startNode.id ?? `node-${key}-start`)
+        const endName = String(endNode.name ?? endNode.id ?? `node-${key}-end`)
+        const startId = stableId(startNode) ?? startName
+        const endId = stableId(endNode) ?? endName
 
         // Add start and end nodes
-        elements.push(nodeElement(startId, startId, 'Node', startNode, source))
-        elements.push(nodeElement(endId, endId, 'Node', endNode, source))
+        elements.push(nodeElement(startId, startName, 'Node', startNode, source))
+        elements.push(nodeElement(endId, endName, 'Node', endNode, source))
         // Add relationship edge
         elements.push(
           edgeElement(`${startId}-${relType}-${endId}`, startId, endId, relType, undefined, source),
@@ -251,22 +274,32 @@ function parseNeo4jResult(result: unknown, source: GraphElement['source']): Grap
         if (looksLikeSchemaInfo(obj)) continue
         const idSource = obj.name ?? obj.id ?? obj.title
         if (typeof idSource !== 'string' || idSource.length === 0) continue
-        const id = idSource
-        elements.push(nodeElement(id, id, 'Node', obj, source))
+        elements.push(nodeElement(stableId(obj) ?? idSource, idSource, 'Node', obj, source))
         continue
       }
 
       // Neo4j driver format (identity, labels, properties)
-      const extracted = extractGraphEntities(value, source)
+      const extracted = extractGraphEntities(value, source, aliases)
       elements.push(...extracted)
     }
   }
 
+  for (const el of elements) {
+    if (!isEdgeElement(el) || !el.data) continue
+    const from = aliases.get(String(el.data.source))
+    const to = aliases.get(String(el.data.target))
+    if (from) el.data.source = from
+    if (to) el.data.target = to
+  }
   return deduplicateElements(elements)
 }
 
 /** Extract graph entities from a value (recursive) */
-function extractGraphEntities(value: unknown, source: GraphElement['source']): GraphElement[] {
+function extractGraphEntities(
+  value: unknown,
+  source: GraphElement['source'],
+  aliases: Map<string, string>,
+): GraphElement[] {
   const elements: GraphElement[] = []
 
   if (!value || typeof value !== 'object') return elements
@@ -274,9 +307,15 @@ function extractGraphEntities(value: unknown, source: GraphElement['source']): G
   // Check if it's a Neo4j Node
   if (isNeo4jNode(value)) {
     const node = value as Neo4jNode
+    const native = String(node.identity ?? node.elementId ?? `node-${Date.now()}`)
+    const key = stableId(node.properties) ?? native
+    if (key !== native) {
+      aliases.set(native, key)
+      if (node.elementId !== undefined) aliases.set(String(node.elementId), key)
+    }
     elements.push(
       nodeElement(
-        String(node.identity ?? node.elementId ?? `node-${Date.now()}`),
+        key,
         String(node.properties?.name ?? node.labels?.[0] ?? 'Node'),
         node.labels?.[0] ?? 'Node',
         node.properties,
@@ -305,9 +344,9 @@ function extractGraphEntities(value: unknown, source: GraphElement['source']): G
     const path = value as Neo4jPath
     if (path.segments) {
       for (const segment of path.segments) {
-        elements.push(...extractGraphEntities(segment.start, source))
-        elements.push(...extractGraphEntities(segment.relationship, source))
-        elements.push(...extractGraphEntities(segment.end, source))
+        elements.push(...extractGraphEntities(segment.start, source, aliases))
+        elements.push(...extractGraphEntities(segment.relationship, source, aliases))
+        elements.push(...extractGraphEntities(segment.end, source, aliases))
       }
     }
   }
@@ -315,7 +354,7 @@ function extractGraphEntities(value: unknown, source: GraphElement['source']): G
   // Recurse into arrays
   if (Array.isArray(value)) {
     for (const item of value) {
-      elements.push(...extractGraphEntities(item, source))
+      elements.push(...extractGraphEntities(item, source, aliases))
     }
   }
 

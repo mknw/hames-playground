@@ -37,6 +37,7 @@ import { getRequestUserId } from '../harness-client/request-user.server'
 import { ORG_ONTOLOGY } from './ontology'
 import { createNeo4jOrgGraphStore } from './org-graph-store.server'
 import { loadMemberMentions } from './member-mentions.server'
+import { devMemoryOrgGraph } from './dev-memory-org-graph.server'
 
 assertServerOnImport()
 
@@ -59,10 +60,14 @@ export function configureOrgGraphStore(store: OrgGraphStore | undefined): void {
   storeOverride = store
 }
 
-/** The graph store in force. */
+/** The graph store in force: a test's override, else the browser suite's
+ *  dev-only in-memory graph (`dev-memory-org-graph.server.ts`, both gates),
+ *  else the Neo4j adapter. */
 export function orgGraphStore(): OrgGraphStore {
   return (
-    storeOverride ?? createNeo4jOrgGraphStore({ ontology: ORG_ONTOLOGY, driver: getNeo4jDriver })
+    storeOverride ??
+    devMemoryOrgGraph() ??
+    createNeo4jOrgGraphStore({ ontology: ORG_ONTOLOGY, driver: getNeo4jDriver })
   )
 }
 

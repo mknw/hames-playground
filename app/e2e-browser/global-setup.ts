@@ -250,6 +250,11 @@ export function browserServerEnv(
     // preference read.
     USE_SELF_DEPLOYED_INFERENCE: undefined,
 
+    // The org-knowledge hook on, writing to the dev-only in-memory graph: the
+    // suite runs no Neo4j. See `src/lib/org-graph/dev-memory-org-graph.server.ts`.
+    ORG_KNOWLEDGE_HOOK: 'on',
+    E2E_ORG_GRAPH: 'memory',
+
     BAML_LOG: process.env.BAML_LOG ?? 'warn',
     EXA_TOOLS: 'off', // The browser suite is hermetic: no hosted MCP discovery.
   }

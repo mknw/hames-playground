@@ -71,6 +71,58 @@ describe('mergeGraphElements', () => {
   })
 })
 
+// The org-knowledge acceptance (docs/plan/org-knowledge-hook.md, "The Org.graph tab").
+// Mutations, each verified red:
+// - never strip `added` → "a second acceptance moves the added flag" goes red.
+// - append unconditionally → "neighbours already drawn are not re-added" goes red.
+describe('mergeGraphElements — the added flag', () => {
+  const added = (els: GraphElement[]) =>
+    els.filter((e) => (e.data as Record<string, unknown>).added === true).map((e) => e.data?.id)
+
+  it('a second acceptance moves the added flag', () => {
+    const first = mergeGraphElements([], [node('Heron', { added: true }), node('Osprey')])
+    const second = mergeGraphElements(first, [node('Alder', { added: true }), node('Heron')])
+    expect(added(second)).toEqual(['Alder'])
+  })
+
+  it('an accepted element already drawn is flagged in place', () => {
+    const out = mergeGraphElements([node('Osprey', { x: 1 })], [node('Osprey', { added: true })])
+    expect(out).toEqual([node('Osprey', { x: 1, added: true })])
+  })
+
+  it('neighbours already drawn are not re-added, and drawn elements keep their place', () => {
+    const drawn = [node('Osprey'), node('Pillar A')]
+    const out = mergeGraphElements(drawn, [
+      node('Heron', { added: true }),
+      node('Pillar A'),
+      node('Osprey'),
+    ])
+    expect(out.map((e) => e.data?.id)).toEqual(['Osprey', 'Pillar A', 'Heron'])
+  })
+
+  it('a batch carrying neither flag leaves both alone', () => {
+    const prev = [node('A', { added: true, touched: true })]
+    expect(mergeGraphElements(prev, [node('B')])[0].data).toMatchObject({
+      added: true,
+      touched: true,
+    })
+  })
+
+  it('a touched batch strips touched but keeps added, and the other way round', () => {
+    const prev = [node('A', { added: true, touched: true })]
+    expect(mergeGraphElements(prev, [node('B', { touched: true })])[0].data).toEqual({
+      id: 'A',
+      label: 'A',
+      added: true,
+    })
+    expect(mergeGraphElements(prev, [node('B', { added: true })])[0].data).toEqual({
+      id: 'A',
+      label: 'A',
+      touched: true,
+    })
+  })
+})
+
 function touchedIds(elements: readonly GraphElement[]): string[] {
   return elements
     .filter((e) => (e.data as Record<string, unknown> | undefined)?.touched === true)

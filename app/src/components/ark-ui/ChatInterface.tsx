@@ -29,6 +29,7 @@ import { AgentSelector } from './AgentSelector'
 import { ConversationTierSwitch } from './ConversationTierSwitch'
 import { ShareConversationButton } from './ShareConversationButton'
 import { MemoryProposalPrompt } from './MemoryProposalPrompt'
+import { OrgProposalPrompt } from './OrgProposalPrompt'
 import { BlockingRequestPrompt } from './BlockingRequestPrompt'
 import { LiveProgressBar } from './LiveProgressBar'
 import {
@@ -642,6 +643,13 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       />
 
       <MemoryProposalPrompt sessionId={props.sessionId} settledTick={settledTick()} />
+      <OrgProposalPrompt
+        sessionId={props.sessionId}
+        settledTick={settledTick()}
+        // Not `pushGraph`: an acceptance carries its own highlight (`added`), and
+        // moving the query highlight onto its neighbours would mark them too.
+        onAccepted={(sid, elements) => void registry.mergeGraph(sid, elements)}
+      />
       <BlockingRequestPrompt
         sessionId={props.sessionId}
         settledTick={settledTick()}

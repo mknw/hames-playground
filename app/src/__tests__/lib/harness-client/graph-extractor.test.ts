@@ -229,12 +229,72 @@ describe('graph-extractor — element identity (SA-H9)', () => {
 
   it('keeps the derived label on a driver-shaped node with a label property', () => {
     const result = [
-      { n: { identity: 7, labels: ['Concept'], properties: { name: 'Graphs', id: 'nope' } } },
+      { n: { identity: 7, labels: ['Concept'], properties: { name: 'Graphs', id: 99 } } },
     ]
     const [node] = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
     expect(node.data?.id).toBe('7')
     expect(node.data?.label).toBe('Graphs')
     expect(node.data?.type).toBe('Concept')
+  })
+})
+
+// The org-knowledge graph gives every node a stable string `id`
+// (docs/plan/org-knowledge-hook.md, "The Org.graph tab"): one key per node.
+// Mutations, each verified red:
+// - key the driver format by identity again → "both result formats" goes red.
+// - stop rewriting a relationship's ends → "a driver relationship" goes red.
+// - match `_touched` by id only → "still touched by name" goes red.
+describe('graph-extractor — one key per node (org-knowledge slice 5)', () => {
+  const plain = { n: { id: 'p-osprey', name: 'Osprey' } }
+  const driver = {
+    n: { identity: 7, labels: ['Project'], properties: { id: 'p-osprey', name: 'Osprey' } },
+  }
+
+  it('a node in both result formats yields one element, keyed by its id', () => {
+    const elements = extractGraphElements([
+      toolResultEvent('read_neo4j_cypher', [plain]),
+      toolResultEvent('read_neo4j_cypher', [driver]),
+    ])
+    expect(elements.map((e) => e.data?.id)).toEqual(['p-osprey'])
+    expect(elements[0].data?.label).toBe('Osprey')
+  })
+
+  it('a driver relationship names its ends by their stable keys', () => {
+    const result = [
+      {
+        n: driver.n,
+        rels: [{ identity: 31, type: 'IN_PILLAR', start: 7, end: 8 }],
+        m: { identity: 8, labels: ['Pillar'], properties: { id: 'pl-A', name: 'Pillar A' } },
+      },
+    ]
+    const edges = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)]).filter(
+      isEdgeElement,
+    )
+    expect(edges.map((e) => [e.data?.source, e.data?.target])).toEqual([['p-osprey', 'pl-A']])
+  })
+
+  it('an MCP relationship triple keys its ends by id, labelled by name', () => {
+    const result = [{ r: [plain.n, 'IN_PILLAR', { id: 'pl-A', name: 'Pillar A' }] }]
+    const elements = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+    expect(elements.filter(isNodeElement).map((n) => [n.data?.id, n.data?.label])).toEqual([
+      ['p-osprey', 'Osprey'],
+      ['pl-A', 'Pillar A'],
+    ])
+    expect(elements.filter(isEdgeElement)[0].data?.id).toBe('p-osprey-IN_PILLAR-pl-A')
+  })
+
+  it('an enriched read: a node keyed by id is still touched by name', () => {
+    const result = { rows: [plain], _neighborhood: { rows: [] }, _touched: ['Osprey'] }
+    const [node] = extractGraphElements([toolResultEvent('read_neo4j_cypher', result)])
+    expect(node.data?.id).toBe('p-osprey')
+    expect(node.data?.touched).toBe(true)
+  })
+
+  it('a legacy node without a string id keeps its name key', () => {
+    const [node] = extractGraphElements([
+      toolResultEvent('read_neo4j_cypher', [{ n: { name: 'Lantern' } }]),
+    ])
+    expect(node.data?.id).toBe('Lantern')
   })
 })
 

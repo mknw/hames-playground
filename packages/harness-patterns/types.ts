@@ -186,8 +186,11 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
  *    `tool_args`. Prompt-only: the loop still sets no `data.response`, so a
  *    downstream `compactExecution` remains the author (passthrough is #149
  *    Option B, not built). For a loop whose Return prose is itself the
- *    deliverable — e.g. under a custom `synthesize` that reads the action. */
-export type ReturnStyle = 'summary' | 'answer'
+ *    deliverable — e.g. under a custom `synthesize` that reads the action.
+ *  - 'json' — the answer is the one JSON object the loop's context specifies,
+ *    in `tool_args` like any other arguments, with no prose around the action.
+ *    For a loop whose caller parses the Return (the org-knowledge draft). */
+export type ReturnStyle = 'summary' | 'answer' | 'json'
 
 /** Max concurrently in-flight sub-calls of a 'parallel' multi-call turn. Also
  *  the batch-size guidance rendered into the controller prompts (keep in sync

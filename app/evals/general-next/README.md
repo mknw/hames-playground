@@ -81,7 +81,9 @@ call. Per scenario row:
 - `controllerCalls`: the raw completion of `LoopController` / `ActorController` calls, capped at
   8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
   `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
-  call.
+  call. The org-knowledge draft loop's calls are here too, under `patternId`
+  `org-knowledge-draft` with the serving `client`, by the same rule: the loop runs in a scratch
+  context, so the driver records them beside the org trace.
 - `criticCalls`: every critic verdict and failed critic call, whether the scenario passed or not —
   a rejection on a passing scenario is exactly what the diagnosis reads. A verdict row carries the
   `verdict` (`is_sufficient`), the `reason` (`explanation`), `suggestedApproach`, and the raw

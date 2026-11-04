@@ -12,7 +12,7 @@
  *   swaps in the in-memory adapter here, as it swaps the inference endpoint.
  * - {@link createHostOrgKnowledgeConfig}: the core hook's configuration for the
  *   request's owner — the ontology, the decision seam, the draft loop on the
- *   `orgDraft` role (the small box on the private tier), the member matcher (V9)
+ *   `orgDraft` role (the 27B on the private tier), the member matcher (V9)
  *   and the hold.
  */
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'

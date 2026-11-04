@@ -124,6 +124,31 @@ describe('LoopController prompt — terminal-action guidance (#149)', () => {
     expect(answerTier1).toContain('- Return: Signal task completion (tool_args = final answer)')
   })
 
+  // LD-22: a loop whose Return is a JSON document its context specifies (the
+  // org-knowledge draft) must not be told "plain prose (not JSON)" anywhere —
+  // on the first live private-tier run that contradiction produced a prose
+  // reply with the verdict outside the envelope. Mutation: drop the `json`
+  // branch of LoopReturnStyle, of the catalog line or of the tail → red.
+  it("'json' asks for the context's JSON in tool_args and never for prose", async () => {
+    const body = await render('json')
+    const blocks = userBlocks(body)
+    expect(systemText(body)).toContain('put the answer in tool_args as the ONE')
+    expect(systemText(body)).toContain('Write nothing outside the action')
+    expect(blocks[0].text ?? '').toContain(
+      '- Return: Signal task completion (tool_args = the JSON answer your context specifies)',
+    )
+    expect(blocks[blocks.length - 1].text ?? '').toContain(
+      'For Return, put the JSON answer in tool_args',
+    )
+    expect(wholePrompt(body)).not.toContain('plain prose')
+    expect(wholePrompt(body)).not.toContain(SUMMARY_SENTENCE)
+    // The other styles keep their prose tail.
+    for (const style of [undefined, 'answer']) {
+      const tail = userBlocks(await render(style)).at(-1)!.text ?? ''
+      expect(tail).toContain('For Return, use plain prose (not JSON)')
+    }
+  })
+
   it('the guidance stays in the cacheable head — never in the volatile tail', async () => {
     const blocks = userBlocks(await render())
     // The tail is the last block: "Turn N. Decide the next action." + the

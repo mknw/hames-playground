@@ -11,7 +11,7 @@
 //   multi_call_mode     — "parallel" | "sequential" | null; agent-static (from
 //                         pattern config). Gates the LoopMultiCalls tier-1
 //                         section advertising ControllerAction.additional_calls
-//   return_style        — "answer" | "summary" | null; agent-static (from
+//   return_style        — "answer" | "summary" | "json" | null; agent-static (from
 //                         pattern config). Picks the terminal-action guidance:
 //                         null defaults to "summary" (#149)
 //
@@ -179,6 +179,13 @@ template_string LoopMultiCalls(multi_call_mode: string?, with_reasoning: bool) #
 // model volunteering it against "NOT the user-facing answer". An
 // `expandPreviousResult` records a real tool_result, so it stays a summary.
 //
+// "json" is for a loop whose Return answer is a JSON document the CONTEXT
+// specifies (the org-knowledge draft's verdict). Before it, such a loop could
+// only pick "answer", whose three "plain prose (not JSON)" lines contradicted
+// its own schema; on the first live private-tier run the draft replied in prose
+// with the verdict trailing outside the envelope (LD-22,
+// docs/plan/org-knowledge-hook.md).
+//
 // "answer" restores the pre-#149 wording verbatim, for a loop whose Return
 // prose IS the deliverable. It is prompt-only: the loop still writes no
 // `data.response`, so a downstream compactExecution remains the author — the
@@ -193,6 +200,12 @@ template_string LoopReturnStyle(return_style: string?) #"
   To finish, set tool_name to "Return", put the complete answer in tool_args as
   plain prose (not JSON), and set is_final to true. That turn makes no tool
   call, so there is no progress to report and `status` may be omitted.
+  {% elif return_style == "json" %}
+
+  To finish, set tool_name to "Return", put the answer in tool_args as the ONE
+  JSON object your context specifies — a string, like every other tool_args —
+  and set is_final to true. Write nothing outside the action: no prose before
+  or after it. That turn makes no tool call, so `status` may be omitted.
   {% else %}
 
   To finish, set tool_name to "Return" and set is_final to true, and put a
@@ -321,7 +334,7 @@ template_string LoopControllerBody(
     {% endif %}
     AVAILABLE TOOLS:
     {{ ToolCatalog(tools) }}
-    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% else %}brief completion summary, or the complete answer if no tool returned a result{% endif %})
+    - Return: Signal task completion (tool_args = {% if return_style == "answer" %}final answer{% elif return_style == "json" %}the JSON answer your context specifies{% else %}brief completion summary, or the complete answer if no tool returned a result{% endif %})
     {{ LoopMultiCalls(multi_call_mode, with_reasoning) }}
     {{ LoopFewShots(few_shots, with_reasoning) }}
 
@@ -348,7 +361,7 @@ template_string LoopControllerBody(
        asks for turn 1. The previous `+ 1` skipped a number, inviting the model
        to infer a turn it had never seen. #}
     Turn {{ turns|length }}. Decide the next action.
-    For Return, use plain prose (not JSON), as your instructions describe.
+    For Return, {% if return_style == "json" %}put the JSON answer in tool_args{% else %}use plain prose (not JSON){% endif %}, as your instructions describe.
 "#
 
 function LoopController(

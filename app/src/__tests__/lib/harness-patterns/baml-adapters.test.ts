@@ -109,33 +109,47 @@ describe('createLoopControllerAdapter', () => {
   })
 
   // FRONT ruling A (2026-11-04, org-knowledge slice 3): the org-knowledge draft
-  // loop is LoopController under its own `orgDraft` role, the small box on the
-  // private tier; every other loop keeps `controller`, the 27B. Mutation: make
-  // the adapter ignore `role` (always `clientOverrideFor('controller')`) → the
-  // orgDraft call names LargeQwen.
+  // loop is LoopController under its own `orgDraft` role; since LD-22 (same day)
+  // that role's private client is the 27B, like `controller`'s, so the shipped
+  // map cannot tell the roles apart. A consumer layer that maps only `orgDraft`
+  // can. Mutation: make the adapter ignore `role` (always
+  // `clientOverrideFor('controller')`) → the orgDraft call carries no client.
   it('routes LoopController by the role it was built with', async () => {
     const { createLoopControllerAdapter } =
       await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
     const bagOf = (call: unknown[]) => call[call.length - 1] as Record<string, unknown>
-    await withSelfDeployedTier(async () => {
+    configureConsumerClients((role) => (role === 'orgDraft' ? { client: 'SmallQwen' } : undefined))
+    try {
       await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
       await createLoopControllerAdapter()('m', 'i', '[]', 0)
-    })
+    } finally {
+      configureConsumerClients(undefined)
+    }
     expect(bagOf(mockLoopController.mock.calls[0])).toMatchObject({ client: 'SmallQwen' })
-    expect(bagOf(mockLoopController.mock.calls[1])).toMatchObject({ client: 'LargeQwen' })
-    // Budgeting follows the same role: the 4B's window, not the 27B's.
-    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
-    await withSelfDeployedTier(async () => {
-      expect(resolveClientForRole('orgDraft')).toBe('SmallQwen')
-      expect(
-        createLoopControllerAdapter(undefined, { role: 'orgDraft' }).limits!().contextWindow,
-      ).toBe(32_768)
-      expect(createLoopControllerAdapter().limits!().contextWindow).toBe(131_072)
-    })
-    // On the Anthropic tier the draft rides the controller chain, unmoved.
+    expect(bagOf(mockLoopController.mock.calls[1]).client).toBeUndefined()
+    // On the Anthropic tier, unlayered, the draft rides the controller chain.
     mockLoopController.mockClear()
     await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
     expect(bagOf(mockLoopController.mock.calls[0]).client).toBeUndefined()
+  })
+
+  // LD-22: on the private tier the draft runs, and is budgeted, on the 27B.
+  // Mutation: map `orgDraft` back to `SmallQwen` → the call names SmallQwen and
+  // the window is the 4B's 32 768.
+  it('puts the org-knowledge draft on the 27B on the private tier', async () => {
+    const { createLoopControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
+    const bagOf = (call: unknown[]) => call[call.length - 1] as Record<string, unknown>
+    await withSelfDeployedTier(async () => {
+      await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
+      expect(resolveClientForRole('orgDraft')).toBe('LargeQwen')
+      expect(
+        createLoopControllerAdapter(undefined, { role: 'orgDraft' }).limits!().contextWindow,
+      ).toBe(131_072)
+    })
+    expect(bagOf(mockLoopController.mock.calls[0])).toMatchObject({ client: 'LargeQwen' })
   })
 
   it('should return action and llmCall data', async () => {

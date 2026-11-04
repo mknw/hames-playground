@@ -28,7 +28,11 @@ import type {
 } from '../../src/lib/eval-support/memory-scenario'
 import { fetchEnvelope, fetchRefusal } from '../../src/lib/eval-support/fetch-envelope'
 import type { fixtureInference } from './fixture-inference'
-import type { OrgScenario, OrgTurnTrace } from '../../src/lib/eval-support/org-scenario'
+import type {
+  OrgDraftCall,
+  OrgScenario,
+  OrgTurnTrace,
+} from '../../src/lib/eval-support/org-scenario'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
@@ -750,9 +754,36 @@ async function orgSeams(live: boolean) {
   }) as unknown as typeof baseDecide
   Object.defineProperty(decide, 'supportedTypes', { get: () => baseDecide.supportedTypes })
   if (baseDecide.limits) Object.assign(decide, { limits: baseDecide.limits })
-  const loop = hook.createOrgDraftLoop({
-    controller: createLoopControllerAdapter(undefined, { role: 'orgDraft' }),
-  })
+  const { amendRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+  type ControllerFn = import('@hames-ai/harness-patterns').ControllerFn
+  // The draft loop runs in a scratch context whose events the graded trace never
+  // holds, so its completions are recorded here for the capture (LD-22).
+  let draftCalls: OrgDraftCall[] = []
+  const baseController = createLoopControllerAdapter(undefined, { role: 'orgDraft' })
+  const recordingController: ControllerFn = Object.assign(
+    async (input: Parameters<ControllerFn>[0]) => {
+      try {
+        const result = await baseController(input)
+        draftCalls.push({
+          outcome: 'completion',
+          ...(result.llmCall?.clientName !== undefined && { client: result.llmCall.clientName }),
+          ...(result.llmCall?.rawOutput !== undefined && { rawOutput: result.llmCall.rawOutput }),
+        })
+        return result
+      } catch (err) {
+        const llmCall = (err as { llmCall?: { clientName?: string; rawOutput?: string } }).llmCall
+        draftCalls.push({
+          outcome: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          ...(llmCall?.clientName !== undefined && { client: llmCall.clientName }),
+          ...(llmCall?.rawOutput !== undefined && { rawOutput: llmCall.rawOutput }),
+        })
+        throw err
+      }
+    },
+    { limits: baseController.limits },
+  )
+  const loop = hook.createOrgDraftLoop({ controller: recordingController })
   const mentionsMember = synthetic.syntheticMentionsMember
   const owners = { $userA: EVAL_OWNER, $userB: 'eval-other-user', $driverUserId: EVAL_OWNER }
 
@@ -767,9 +798,13 @@ async function orgSeams(live: boolean) {
         store,
         ontology: ORG_ONTOLOGY,
         decide,
+        // The draft reads the scenario's own synthetic org graph, the one its
+        // candidate is validated against — never the route's project graph.
         draft: async (input: Parameters<typeof loop>[0]) => {
           inputs.push(input.userMessage)
-          return loop(input)
+          return amendRunFrame({ transports: [synthetic.syntheticOrgDraftTransport(store)] }, () =>
+            loop(input),
+          )
         },
         owner: () => owner,
         enabled: () => true,
@@ -793,6 +828,7 @@ async function orgSeams(live: boolean) {
         beginTurn(as?: MemoryOwnerId) {
           if (as) owner = as
           inputs = []
+          draftCalls = []
           held = undefined
         },
         async endTurn(
@@ -880,6 +916,7 @@ async function orgSeams(live: boolean) {
             ...(proposal ? { proposal: { requestId: proposal.requestId, elements } } : {}),
             ...(answer ? { answer } : {}),
             inputs: [...inputs],
+            draftCalls: [...draftCalls],
           })
         },
         trace: () => ({ seed, final: synthetic.orgGraphSnapshot(store), turns, owners }),

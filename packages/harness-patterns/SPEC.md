@@ -531,7 +531,7 @@ interface SimpleLoopConfig extends PatternConfig {
   onToolResult?: OnToolResult // Enrich/transform tool results before they're committed (see "Hooks" below)
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
-  returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  returnStyle?: 'summary' | 'answer' | 'json' // What the terminal `Return` carries (default: 'summary'; see below)
   validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined // Refuse a terminal answer with feedback; see below
   maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
@@ -736,6 +736,12 @@ turn) for a text nothing read.
   the deliverable — e.g. a custom `synthesize` that reads
   `loopHistory.iterations[].action`. Making the loop's answer _suppress_
   synthesis is #149 Option B and is deliberately not built.
+- `'json'` — the answer is the ONE JSON object the loop's context specifies,
+  in `tool_args` like any other arguments, with nothing written outside the
+  action; the system block, the catalog's Return line and the turn tail all
+  say so, and none says "plain prose". For a loop whose caller parses the
+  `Return` (the org-knowledge draft, LD-22 in
+  `docs/plan/org-knowledge-hook.md`). Prompt-only, like `'answer'`.
 
 **One exception: a Return-only turn (#610).** When the controller answers
 WITHOUT calling a tool, the terminal `Return` is the only content the turn
@@ -4070,7 +4076,7 @@ BAML Inputs:
   multi_call_mode       : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls
                                              ('off' → null: no affordance rendered)
   plan_context          : string?          ← formatted plan from an upstream `planner` (#27)
-  return_style          : string?          ← "summary" | "answer", from config.returnStyle
+  return_style          : string?          ← "summary" | "answer" | "json", from config.returnStyle
                                              (null renders as "summary": brief terminal Return)
 
 BAML Return → ControllerAction:

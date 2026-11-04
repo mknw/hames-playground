@@ -97,9 +97,9 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   screen: { from: 'DescribeAnthropic', to: 'LargeQwen' },
   // The public and private systemone clients.
   decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
-  // The org-knowledge draft loop: LoopController under its own role, on the 4B
-  // (FRONT ruling A, 2026-11-04). `controller` keeps the 27B.
-  orgDraft: { from: 'ControllerAnthropic', to: 'SmallQwen' },
+  // The org-knowledge draft loop: LoopController under its own role (FRONT
+  // ruling A, 2026-11-04), on the 27B since LD-22 the same day.
+  orgDraft: { from: 'ControllerAnthropic', to: 'LargeQwen' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:
  *  every test below iterates it, so a future exception is added in one place

@@ -182,6 +182,69 @@ describe('captureTrace controller and actor calls', () => {
   })
 })
 
+// LD-22: the org-knowledge draft loop runs in a scratch context, so on the first
+// live private-tier run the capture held none of its completions. The driver
+// records them on the org trace; the capture reads them by the controller rule.
+// MUTATION: drop the `trace.org` pass in capture.ts → red.
+describe('captureTrace org-knowledge draft calls', () => {
+  const org = (
+    ...draftCalls: NonNullable<ConversationTrace['org']>['turns'][number]['draftCalls'][]
+  ) =>
+    ({
+      ...trace([]),
+      org: {
+        seed: { nodes: [], edges: [] },
+        final: { nodes: [], edges: [] },
+        owners: {},
+        turns: draftCalls.map((calls) => ({
+          owner: 'u',
+          userMessage: 'm',
+          settle: { proposed: 0, rejected: {} },
+          inputs: [],
+          draftCalls: calls,
+        })),
+      },
+    }) as unknown as ConversationTrace
+
+  it('records a failed draft call always and every draft call for a failing scenario', () => {
+    const t = org([
+      {
+        outcome: 'completion',
+        client: 'LargeQwen',
+        rawOutput: '{"tool_name":"read_neo4j_cypher"}',
+      },
+      { outcome: 'error', error: 'missing tool_name', client: 'LargeQwen', rawOutput: 'prose' },
+    ])
+    expect(captureTrace(t, false).controllerCalls).toEqual([
+      {
+        turn: 0,
+        patternId: 'org-knowledge-draft',
+        functionName: 'LoopController',
+        outcome: 'error',
+        error: 'missing tool_name',
+        client: 'LargeQwen',
+        rawOutput: 'prose',
+      },
+    ])
+    expect(captureTrace(t, true).controllerCalls.map((c) => [c.patternId, c.outcome])).toEqual([
+      ['org-knowledge-draft', 'completion'],
+      ['org-knowledge-draft', 'error'],
+    ])
+  })
+
+  it('caps a runaway draft completion and tolerates a turn with no draft calls', () => {
+    const long = 'x'.repeat(CAPTURE_OUTPUT_MAX_CHARS + 7)
+    const [captured] = captureTrace(
+      org(undefined, [{ outcome: 'completion', rawOutput: long }]),
+      true,
+    ).controllerCalls
+    expect(captured.turn).toBe(1)
+    expect(captured.rawOutput).toHaveLength(
+      CAPTURE_OUTPUT_MAX_CHARS + '…[truncated, 7 more characters]'.length,
+    )
+  })
+})
+
 describe('captureTrace decision output cap', () => {
   // MUTATION: drop `cap()` from the decision's rawOutput in capture.ts: red.
   it('caps a runaway Decide response body like a controller completion', () => {

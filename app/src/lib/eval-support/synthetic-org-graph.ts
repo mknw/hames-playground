@@ -190,3 +190,67 @@ export function orgGraphSnapshot(store: MemoryOrgGraphStore): OrgGraphSnapshot {
     edges: g.edges.map((e) => ({ type: e.type, from: e.from, to: e.to })),
   }
 }
+
+/** Node properties a graph read never shows: the store's own bookkeeping and the
+ *  member fields the draft has no use for. */
+const HIDDEN_PROPERTIES = new Set(['id', 'nameKey', 'createdBy', 'entraId', 'mail'])
+
+const nodeName = (n: { properties: Record<string, string> }) =>
+  n.properties.name ?? n.properties.displayName ?? n.properties.label ?? n.properties.text ?? ''
+
+/**
+ * What the org rows' draft loop reads for `read_neo4j_cypher` (LD-22): the
+ * scenario's OWN synthetic org graph, the one its candidate is validated
+ * against. Before this the draft's reads reached the route's miniature project
+ * graph (`evals/general-next/driver.ts`), so a live draft looked for Theme 1
+ * and was shown Alder and Dune. Canned rather than Cypher: a query that quotes
+ * a literal gets the nodes whose name contains one (or is contained in one),
+ * case-insensitively, with the edges touching them; a query that quotes none
+ * gets the whole graph. Node rows are `{ label, ...properties }`, edge rows
+ * `{ from, type, to }` by name.
+ */
+export function syntheticOrgGraphRead(store: MemoryOrgGraphStore, query: string): unknown[] {
+  const g = store.dump()
+  const literals = [...query.matchAll(/'([^']+)'|"([^"]+)"/g)]
+    .map((m) => (m[1] ?? m[2]).toLowerCase())
+    .filter((l) => l.trim() !== '')
+  const named = (name: string) => {
+    const n = name.toLowerCase()
+    return n !== '' && literals.some((l) => n.includes(l) || l.includes(n))
+  }
+  const nodes = literals.length === 0 ? g.nodes : g.nodes.filter((n) => named(nodeName(n)))
+  const keys = new Set(nodes.map((n) => n.key))
+  const byKey = new Map(g.nodes.map((n) => [n.key, nodeName(n)]))
+  return [
+    ...nodes.map((n) => ({
+      label: n.label,
+      ...Object.fromEntries(
+        Object.entries(n.properties).filter(([k]) => !HIDDEN_PROPERTIES.has(k)),
+      ),
+    })),
+    ...g.edges
+      .filter((e) => keys.has(e.from) || keys.has(e.to))
+      .map((e) => ({ from: byKey.get(e.from) ?? '', type: e.type, to: byKey.get(e.to) ?? '' })),
+  ]
+}
+
+/** The two read-only tools the draft holds, served from `store` — a run-scoped
+ *  transport, so it outranks the route's process-wide synthetic transport. */
+export function syntheticOrgDraftTransport(store: MemoryOrgGraphStore) {
+  return {
+    id: 'general-eval-synthetic-org-graph',
+    ownsTool: (name: string) => name === 'read_neo4j_cypher' || name === 'get_neo4j_schema',
+    namespaceFor: () => 'neo4j',
+    listTools: async () => [],
+    callTool: async (name: string, args: Record<string, unknown>) => ({
+      success: true,
+      data:
+        name === 'get_neo4j_schema'
+          ? {
+              labels: ORG_ONTOLOGY.classes.map((c) => c.label),
+              relationships: ORG_ONTOLOGY.relations.map((r) => r.type),
+            }
+          : syntheticOrgGraphRead(store, typeof args.query === 'string' ? args.query : ''),
+    }),
+  }
+}

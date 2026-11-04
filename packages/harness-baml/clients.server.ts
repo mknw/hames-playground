@@ -345,8 +345,7 @@ export type BamlRole =
   | 'decide'
   // The organizational-knowledge hook's read-only draft loop (LoopController),
   // its own role so the model it runs on is its own map line (FRONT ruling A,
-  // 2026-11-04, `docs/plan/org-knowledge-hook.md`). `draftModel: 'large'` uses
-  // `controller` instead.
+  // 2026-11-04, `docs/plan/org-knowledge-hook.md`, LD-20 and LD-22).
   | 'orgDraft'
 
 /** The BAML-declared client per role — the Anthropic-only chain each function
@@ -544,12 +543,18 @@ export const SELF_DEPLOYED_CLIENT_BY_ROLE: Readonly<Partial<Record<BamlRole, str
   screen: 'LargeQwen', // ScreenUntrustedContent — owner decision 2026-08-26, above
   // Private systemone URL; never the public endpoint or its key.
   decide: 'PrivateSystemOne',
-  // The org-knowledge draft loop on the small box: the owner named the small
-  // model for it (2026-11-04), and it is its own line so moving it is never a
-  // side effect of moving `controller` or `describe`. The 4B's 32K window and
-  // 2K output cap size the loop's prompt through this entry. A private tier
-  // with no small box is refused, never descaled onto the 27B.
-  orgDraft: 'SmallQwen',
+  // The org-knowledge draft loop on the 27B, the controller's client (FRONT,
+  // 2026-11-04, LD-22 in `docs/plan/org-knowledge-hook.md`). It started on the
+  // 4B; the first live private-tier run proposed nothing on any positive row:
+  // the 4B wrote malformed `tool_args`, and replied in prose with the verdict
+  // trailing outside the envelope. A read-only tool loop with a structured
+  // answer is controller work. It stays its own line, so moving it is never a
+  // side effect of moving `controller` or `describe`. Through this entry the
+  // loop is budgeted at the 27B's window and output cap, priced by time at
+  // `LARGE_LLM_EUR_PER_HOUR`, and takes the 27B's route twin under
+  // `LARGE_LLM_ROUTE=openrouter`. It does not follow `controller` onto a
+  // thinking twin: `PRIVATE_REASONING_ROLES` names patterns, not this role.
+  orgDraft: 'LargeQwen',
 }
 
 /** The only functions designated to consume each trace-exposing leaf (#637).

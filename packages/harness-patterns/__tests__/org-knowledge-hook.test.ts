@@ -370,6 +370,7 @@ describe('the draft loop', () => {
       userMessage: string
       context?: string
       multiCallMode?: string
+      returnStyle?: string
     }) => {
       offered.push([...input.tools])
       expect(input.userMessage).toBe(USER)
@@ -377,6 +378,9 @@ describe('the draft loop', () => {
       // Review F1(a): `multiToolCalls: 'off'` reaches the controller as no
       // multi-call mode. Mutation: 'parallel' → the mode is 'parallel'.
       expect(input.multiCallMode).toBeUndefined()
+      // LD-22: the verdict is JSON, so the Return style is 'json'; 'answer'
+      // tells the model "plain prose (not JSON)". Mutation: 'answer' → red.
+      expect(input.returnStyle).toBe('json')
       return {
         action: {
           tool_name: 'Return',
@@ -594,6 +598,19 @@ describe('the draft verdict and validator deliberation', () => {
     const ctx = turn()
     expect((await settle(ctx, cfg)).skipped).toBe('draft-unparseable')
     expect(requests(ctx)).toEqual([])
+  })
+})
+
+describe('renderOrgSchema', () => {
+  // LD-22: a draft that cannot find a creatable node must propose it, not
+  // decline. Mutation: drop the rule line → red.
+  it('says a node the graph lacks is proposed new, unless its class is link-only', () => {
+    const text = renderOrgSchema(ONTOLOGY)
+    expect(text).toContain(
+      'A named node the graph does not hold yet is proposed as a new node, unless its class says Link only: not finding it is no reason for no-proposal.',
+    )
+    // The rule sits before the answer format, which stays the last line.
+    expect(text.split('\n').at(-1)).toMatch(/^Answer \(Return\) with JSON only/)
   })
 })
 

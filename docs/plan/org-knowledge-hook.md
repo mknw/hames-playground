@@ -19,8 +19,9 @@ the repo; this document only says that it exists and what gates it
 
 After each reply, a post-reply hook asks one Decide choice question of the
 user's latest message: `add_to_organizational_kg` or
-`no_organizational_knowledge`. On `add`, a `simpleLoop` on the small model, with
-a read-only Neo4j tool, drafts what the message asserts as nodes, properties
+`no_organizational_knowledge`. On `add`, a `simpleLoop` (on the private
+tier's 27B since **LD-22**; first designed on the small model), with a
+read-only Neo4j tool, drafts what the message asserts as nodes, properties
 and edges of the ontology below, as a dry run. A deterministic validator then
 checks every drafted element against the ontology, the current graph and the
 user's own words, and drops anything that does not fit. What survives is shown
@@ -188,9 +189,9 @@ deployment switch (see [Settings](#settings)).
 | #   | Step                                                                                                                                                                                                                                                                                                                                                                                                                     | Stops with                                                                           |
 | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | 1   | Preconditions: an owner, the tier to stamp, a turn that did not fail or pause, a final answer, the user message's event id, the switch on                                                                                                                                                                                                                                                                                | `no-user` `no-tier` `turn-failed` `no-pair` `no-event-id` `disabled`                 |
-| 2   | On the private tier, await the small box's wake (both boxes when the draft runs on the 27B), under the memory store's wake budget                                                                                                                                                                                                                                                                                        | `waking` — and nothing goes to a public provider instead                             |
+| 2   | On the private tier, await both boxes' wake (the gate is on the small box, the draft on the 27B since **LD-22**), under the memory store's wake budget                                                                                                                                                                                                                                                                   | `waking` — and nothing goes to a public provider instead                             |
 | 3   | **The gate.** One `defineChoice` question, key `orgKnowledge.gate`, choices exactly `add_to_organizational_kg` and `no_organizational_knowledge`, over a state that is the current user message alone (**LD-8**). One `decision_made` is recorded (metadata and `stateChars` only)                                                                                                                                       | `gate-error` (a failed call stores nothing); `gate` on `no_organizational_knowledge` |
-| 4   | **The draft (dry run).** A `simpleLoop` whose allowlist is exactly `read_neo4j_cypher` and `get_neo4j_schema`, `returnStyle: 'answer'`, `multiToolCalls: 'off'`, a small `maxTurns` (4), the ontology rendered as its `schema`, run in a scratch context holding only the user message, inside a K1 guard on `neo4j`, on the per-run client below. Its `Return` answer is one JSON draft                                 | `draft-error` (the loop failed or ran out of budget)                                 |
+| 4   | **The draft (dry run).** A `simpleLoop` whose allowlist is exactly `read_neo4j_cypher` and `get_neo4j_schema`, `returnStyle: 'json'` (**LD-22**), `multiToolCalls: 'off'`, a small `maxTurns` (4), the ontology rendered as its `schema`, run in a scratch context holding only the user message, inside a K1 guard on `neo4j`, on the per-run client below. Its `Return` answer is one JSON draft                       | `draft-error` (the loop failed or ran out of budget)                                 |
 | 5   | Parse the draft with a strict parser: a closed shape, every element carrying its `evidence` span and an `assertion` index (**LD-10**)                                                                                                                                                                                                                                                                                    | `draft-unparseable`                                                                  |
 | 6   | Read the current graph for every name and id the draft references (one code-owned, parameterized read query; never the model's Cypher)                                                                                                                                                                                                                                                                                   | `graph-read-error`                                                                   |
 | 7   | **Validate** every element ([below](#the-validator)). Only the first `maxAssertions` (default 8) drafted assertions, in draft order, are validated; the rest are counted under `rejected` as `cap`, so a long message cannot produce an unbounded card. An assertion with any failing element is dropped whole, so no half-assertion survives. Each surviving element gets its verdict: `new`, `reinforces` or `updates` | `nothing-valid` (with `rejected` counts by rule id)                                  |
@@ -266,24 +267,23 @@ has no erasure path; this design adds no personal data to it).
 
 ### Tier and model per step
 
-| Step                   | Private tier (`self_deployed`)                                                                                                     | Anthropic tier                                     |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Gate (step 3)          | `PrivateSystemOne` on the small box                                                                                                | `JevDecide` (SD-12's one exception, as for memory) |
-| Draft (step 4)         | `SmallQwen` (the `orgDraft` role) by default, `LargeQwen` (the `controller` role) when `draftModel: 'large'` (**LD-9**, **LD-20**) | the role's own chain, `ControllerAnthropic`        |
-| Graph reads (4, 6)     | Neo4j, local                                                                                                                       | Neo4j, local                                       |
-| Validator, write, link | no model                                                                                                                           | no model                                           |
+| Step                   | Private tier (`self_deployed`)                                                                  | Anthropic tier                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Gate (step 3)          | `PrivateSystemOne` on the small box                                                             | `JevDecide` (SD-12's one exception, as for memory) |
+| Draft (step 4)         | `LargeQwen` (the `orgDraft` role; `SmallQwen` until **LD-22**) (**LD-9**, **LD-20**, **LD-22**) | the role's own chain, `ControllerAnthropic`        |
+| Graph reads (4, 6)     | Neo4j, local                                                                                    | Neo4j, local                                       |
+| Validator, write, link | no model                                                                                        | no model                                           |
 
 The draft runs `LoopController` under its own role, `orgDraft`, which
-`SELF_DEPLOYED_CLIENT_BY_ROLE` maps to `SmallQwen` and whose Anthropic-tier
-mirror is `ControllerAnthropic` (`draftModel: 'large'` uses the existing
-`controller` role instead). Moving the draft model is therefore its own map
-line, the pattern the injection screen's role set (**LD-20**, decided by
+`SELF_DEPLOYED_CLIENT_BY_ROLE` maps to `LargeQwen` (to `SmallQwen` until
+**LD-22**) and whose Anthropic-tier mirror is `ControllerAnthropic`. Moving the
+draft model is therefore its own map line, the pattern the injection screen's role set (**LD-20**, decided by
 FRONT, 2026-11-04: a per-run override of the `controller` role, as first
 designed, would be refused by the private-only check, which admits only that
 role's own private client). Under `INFERENCE_TIERS=self_deployed` the check now
 accepts the private client of any role that lists the called function, so
-`LoopController` takes `LargeQwen` (or its twins) for `controller` and
-`SmallQwen` for `orgDraft`, and nothing public. So a private-tier turn's hook
+`LoopController` takes `LargeQwen` (or its twins) under either role, and
+nothing public. So a private-tier turn's hook
 sends nothing to a public provider: the gate refuses a public endpoint on that
 tier, the draft's role resolves to a private client, and the remaining steps
 call no model.
@@ -380,12 +380,12 @@ guard code stops for the owner's OK before merge and says so in its PR.
 
 ## Settings
 
-| Setting                           | Values           | Default | Why                                                                                                               |
-| --------------------------------- | ---------------- | ------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ORG_KNOWLEDGE_HOOK` (deployment) | `on`, `off`      | `off`   | Off until the eval's `must` rows pass on the private tier; flipping it is FRONT's or the owner's call (**LD-12**) |
-| `maxAssertions` (composition)     | integer ≥ 1      | 8       | Bounds the proposal card and the validator's work per turn; the overflow is counted, never silently dropped       |
-| `draftModel` (composition)        | `small`, `large` | `small` | The owner's "small (or larger) model"; applies to the private tier                                                |
-| `expiresInMs` (composition)       | milliseconds     | 7 days  | As the memory proposal                                                                                            |
+| Setting                           | Values           | Default | Why                                                                                                                                                         |
+| --------------------------------- | ---------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ORG_KNOWLEDGE_HOOK` (deployment) | `on`, `off`      | `off`   | Off until the eval's `must` rows pass on the private tier; flipping it is FRONT's or the owner's call (**LD-12**)                                           |
+| `maxAssertions` (composition)     | integer ≥ 1      | 8       | Bounds the proposal card and the validator's work per turn; the overflow is counted, never silently dropped                                                 |
+| `draftModel` (composition)        | `small`, `large` | `large` | The owner's "small (or larger) model"; applies to the private tier. Not built: today the `orgDraft` map line is the lever, and it names the 27B (**LD-22**) |
+| `expiresInMs` (composition)       | milliseconds     | 7 days  | As the memory proposal                                                                                                                                      |
 
 The hook does not read the user's memory switch: it stores nothing personal,
 and every write needs the person's acceptance.
@@ -486,7 +486,7 @@ Each slice is one PR, reviewable alone, in this order. "Pin" is the test;
 | LD-6  | Verdicts are computed deterministically from the graph; an assertion that only reinforces is not proposed; the stale refusal applies at write                                                                                                                                             | Q1's recommendation stands; a proposal that writes nothing is noise                                                                                                                                                                                                                                      |
 | LD-7  | Moving a project to another pillar is a replacement shown like A12; two pillars in one message drop                                                                                                                                                                                       | A2 forbids two; the owner has not said how a move reads, and a replacement keeps it visible                                                                                                                                                                                                              |
 | LD-8  | The gate reads the current user message alone                                                                                                                                                                                                                                             | The target is shared; reading the reply would let tool text the reply quotes steer the gate (pftn08)                                                                                                                                                                                                     |
-| LD-9  | `draftModel: 'small'` by default; on the Anthropic tier the draft runs on `ControllerAnthropic`                                                                                                                                                                                           | The owner named the small model; the Anthropic tier has no measured small-model controller, and its turns already go to that provider                                                                                                                                                                    |
+| LD-9  | `draftModel: 'small'` by default (the private-tier half superseded by **LD-22**); on the Anthropic tier the draft runs on `ControllerAnthropic`                                                                                                                                                                        | The owner named the small model; the Anthropic tier has no measured small-model controller, and its turns already go to that provider                                                                                                                                                                    |
 | LD-10 | The draft is JSON in the loop's `Return` answer, parsed strictly once, failing closed                                                                                                                                                                                                     | The owner named `simpleLoop`; a separate typed BAML function would add a prompt, a client mirror and pins for the same output. If the eval shows parse failures, that function is the fallback                                                                                                           |
 | LD-11 | The mechanism is in core with the ontology as data; the org ontology and adapters are the app's                                                                                                                                                                                           | The memory store's split; the store seam has two adapters (Neo4j, in-memory), so it is a real seam                                                                                                                                                                                                       |
 | LD-12 | The hook is independent of the memory switch and the memory store's org label; `ORG_KNOWLEDGE_HOOK` defaults off until the `must` rows pass                                                                                                                                               | Nothing personal is stored, every write is accepted by a person, and a default-on hook before its eval would ship an ungraded detector                                                                                                                                                                   |
@@ -497,7 +497,7 @@ Each slice is one PR, reviewable alone, in this order. "Pin" is the test;
 | LD-17 | The tab's label changes, its id does not                                                                                                                                                                                                                                                  | No saved selection breaks                                                                                                                                                                                                                                                                                |
 | LD-18 | Other users see `createdBy` as a display name, or "former user"                                                                                                                                                                                                                           | The owner's "to show who approved it"                                                                                                                                                                                                                                                                    |
 | LD-19 | Acceptance is per conversation owner (the knowledge-edit design's H2 carried over): "anybody may accept" is read as "any allow-listed user, in their own conversation"                                                                                                                    | The owner ruled that anybody may accept; a proposal lives in one conversation's blob and its answer is bound and gated per owner (SD-13), so another user cannot answer it without a cross-conversation surface this design does not add. The narrowing is a reading of the ruling, so it is listed here |
-| LD-20 | The draft runs `LoopController` under its own `orgDraft` role (private tier `SmallQwen`, Anthropic tier `ControllerAnthropic`); under `INFERENCE_TIERS=self_deployed` the private-only check accepts the private client of any role that lists the called function, computed from the map | Decided by FRONT, 2026-11-04, replacing the per-run override first designed, which the private-only check would refuse. Moving the draft model is its own map line, as the screen's role made moving the screen; no public client can pass either way                                                    |
+| LD-20 | The draft runs `LoopController` under its own `orgDraft` role (private tier `SmallQwen`, `LargeQwen` since **LD-22**; Anthropic tier `ControllerAnthropic`); under `INFERENCE_TIERS=self_deployed` the private-only check accepts the private client of any role that lists the called function, computed from the map | Decided by FRONT, 2026-11-04, replacing the per-run override first designed, which the private-only check would refuse. Moving the draft model is its own map line, as the screen's role made moving the screen; no public client can pass either way                                                    |
 
 ### Decision record — 2026-11-04 follow-up
 
@@ -551,6 +551,48 @@ LD-2 for `Knowledge` only; `AUTHORED` and `STEWARDS` stay retired.
 Rationale: the amendment is the owner's; the constraint choice is the smaller
 of the two the brief allowed, and it is the one that changes no live schema.
 
+### Decision record — 2026-11-04 first live run
+
+**LD-22 — The draft runs on the 27B, asks for its JSON answer as JSON, and
+proposes a node the graph lacks.** Decided by FRONT (a routing decision FRONT
+owns), 2026-11-04, on the first live private-tier run of the eval's org rows:
+the three positive rows (32–34) proposed nothing.
+
+- **Model.** `SELF_DEPLOYED_CLIENT_BY_ROLE.orgDraft` is `LargeQwen`, the
+  controller's client, not `SmallQwen`. Rationale: a read-only tool loop with a
+  structured answer is controller work, and on that run the 4B wrote malformed
+  `tool_args` (an escaped brace after the closing quote), then answered in prose
+  with the verdict trailing outside the action envelope, which fails the parse.
+  The move goes through the map, never the BAML chain; the role stays its own
+  line. Budgeting (131 072 window, 4 096 output cap), time pricing at
+  `LARGE_LLM_EUR_PER_HOUR` and the OpenRouter route twin follow from the map
+  value. The Anthropic tier is unchanged (`ControllerAnthropic`).
+- **Envelope.** The loop's `returnStyle` is `'json'`, a new style: the Return
+  answer is the one JSON object the context specifies, in `tool_args` like any
+  other arguments, with nothing outside the action. `'answer'` told the model
+  "plain prose (not JSON)" twice (system block and turn tail) against the
+  schema's "Answer (Return) with JSON only", and the run's prose-then-verdict
+  reply is what that contradiction produces. Rationale: a prompt must not
+  disagree with itself; the fix is the same for any model.
+- **New nodes.** The schema's rules say a named node the graph does not hold yet
+  is proposed as new unless its class is link-only, and that not finding it is
+  no reason for no-proposal. Rationale: row 32 ("We've started calling the new
+  logistics workstream Project Heron") ended `no-proposal`, and row 34's draft
+  reasoned "I cannot find the named nodes … I cannot propose": declining a node
+  because it is new inverts what the hook is for. The row expects a proposal, so
+  the verdict was too conservative, not right.
+- **Eval fidelity, not design.** The eval's draft reads now answer from the
+  scenario's own synthetic org graph (`syntheticOrgDraftTransport`), the one its
+  candidate is validated against; on the run they reached the route's miniature
+  project graph, so row 34's draft asked for Theme 1 and was shown Alder and
+  Dune. The capture records the draft's completions (`patternId`
+  `org-knowledge-draft`), which it could not see before: the loop runs in a
+  scratch context.
+
+What this does not settle: whether the 27B passes the rows. That is the
+targeted live re-run, after the merge, on FRONT's call. Row 42's only failure
+(the reply's read-only wording) is outside the hook and outside this record.
+
 ## Not in this design
 
 - The `knowledge-edit` route of `decision-loop-agent.md` (free Cypher behind an
@@ -569,4 +611,5 @@ the live graph, run Neo4j, or call any model; the eval rows are not run. The
 SmallQwen context window (32 768) and output cap (2 048) are read from
 `app/src/lib/settings.ts:162,228`; whether a `LoopController` prompt with the
 ontology schema and a JSON draft fits that cap is measured by the eval, not
-assumed here.
+assumed here. (Since **LD-22** the draft is on the 27B, so those two figures
+describe the original design only.)

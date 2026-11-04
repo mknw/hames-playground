@@ -117,8 +117,8 @@ class OrgDraftBudgetExhaustedError extends Error {}
 /**
  * The draft as a `simpleLoop` over the two read-only Neo4j tools, inside a K1
  * guard on those tools, in a scratch context that holds the user's message and
- * nothing else. Its client is the `controller`'s: the host routes it (the tier
- * decides which model answers).
+ * nothing else. The host routes its controller (in the reference host, the
+ * `orgDraft` role; the tier decides which model answers).
  */
 export function createOrgDraftLoop(opts: {
   readonly controller: ControllerFn
@@ -130,7 +130,9 @@ export function createOrgDraftLoop(opts: {
     const loop = simpleLoop(opts.controller, [...ORG_DRAFT_TOOLS], {
       patternId: 'org-knowledge-draft',
       schema,
-      returnStyle: 'answer',
+      // The verdict is JSON the hook parses: 'answer' would tell the model
+      // "plain prose (not JSON)" against the schema's own format (LD-22).
+      returnStyle: 'json',
       multiToolCalls: 'off',
       rememberPriorTurns: false,
       maxTurns: opts.maxTurns ?? 4,
@@ -176,6 +178,9 @@ export function renderOrgSchema(ontology: GraphOntology): string {
     'Relations:',
     ...relations,
     'Rules: every value must be copied from the user message; every element carries `evidence`, a span copied verbatim from the user message; use the stored name of a node that already exists; propose nothing for a question, hypothetical, opinion, rumour or anything about a person.',
+    // LD-22: the first live private-tier run declined a new project because the
+    // graph did not hold it yet, which is the case the hook exists for.
+    'A named node the graph does not hold yet is proposed as a new node, unless its class says Link only: not finding it is no reason for no-proposal.',
     'Answer (Return) with JSON only: {"verdict":"propose","assertions":[{"nodes":[{"ref":"a","label":"Project","properties":{"name":"…"},"evidence":"…"}],"edges":[{"type":"…","from":"a","to":"b","evidence":"…"}]}]}. If nothing is worth proposing, answer {"verdict":"no-proposal","reason":"short reason"}. A propose answer is checked before the loop can finish: use validator feedback to repair it or conclude no-proposal, within the remaining turns. Never override a validator refusal.',
   ].join('\n')
 }

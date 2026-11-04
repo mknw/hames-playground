@@ -54,6 +54,8 @@ export interface ControllerCapture {
    * recoverable unparseable, refused or invalid-args answer), `completion` for any other call. */
   outcome: 'error' | 'recovery' | 'completion'
   error?: string
+  /** The client that served an org-knowledge draft call, when it carried a record. */
+  client?: string
   rawOutput?: string
 }
 
@@ -114,6 +116,8 @@ const cap = (text: string | undefined): string | undefined =>
     : text
 
 const CONTROLLER_FUNCTIONS = new Set(['LoopController', 'ActorController'])
+/** The org-knowledge draft loop's `patternId` (`createOrgDraftLoop`). */
+const ORG_DRAFT_PATTERN_ID = 'org-knowledge-draft'
 // The critic's BAML function and its reasoning twin (the twin the private tier can resolve the
 // critic role onto); `Synthesize` is the only synthesis function.
 const CRITIC_FUNCTIONS = new Set(['Critic', 'CriticThinking'])
@@ -254,6 +258,23 @@ export function captureTrace(trace: ConversationTrace, failed: boolean): Scenari
         capture.synthesizeCalls.push(synthesizeOf(event, turn))
         continue
       }
+    }
+  })
+  // The org-knowledge draft loop runs in a scratch context, so its calls are on
+  // the org trace rather than in the turn's events (LD-22). Same rule as above:
+  // a failed call always, every call when the scenario failed.
+  trace.org?.turns.forEach((t, turn) => {
+    for (const call of t.draftCalls ?? []) {
+      if (call.outcome !== 'error' && !failed) continue
+      capture.controllerCalls.push({
+        turn,
+        patternId: ORG_DRAFT_PATTERN_ID,
+        functionName: 'LoopController',
+        outcome: call.outcome,
+        ...(call.error !== undefined && { error: call.error }),
+        ...(call.client !== undefined && { client: call.client }),
+        ...(call.rawOutput !== undefined && { rawOutput: cap(call.rawOutput) }),
+      })
     }
   })
   return capture

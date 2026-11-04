@@ -68,12 +68,32 @@ CONFIG_KEYS = {
     "FOLLOW_IMAGE": None, "FOLLOW_RUNTIME_ENV": None, "FOLLOW_STATE_DIR": None,
     "FOLLOW_LOCK": None,
     "FOLLOW_REF_KEY": "", "FOLLOW_MANAGED_FILES": "",
-    "FOLLOW_REQUIRED_CHECKS": "typecheck · lint · test · build|changeset · version intent",
+    # main's ruleset checks plus the job that boots the image this deploys
+    # (FRONT, 2026-11-04). promote.py reads the same default, so the promote
+    # path and the host cannot disagree about which checks a head needs.
+    "FOLLOW_REQUIRED_CHECKS": "typecheck · lint · test · build|changeset · version intent|docker image · build · boot",
     "FOLLOW_SKIP_OK_CHECKS": "changeset · version intent",
     "FOLLOW_REQUIRED_STATUSES": "",
     "FOLLOW_HEALTH_TIMEOUT": "600",
     "FOLLOW_DOCKER": "docker",
+    # The environment's own Postgres database, dumped before every deploy.
+    # Required for release (FRONT, 2026-11-04): the RELEASE timer cannot run
+    # without it. Dumps live in <FOLLOW_STATE_DIR>/dumps; the newest
+    # FOLLOW_DUMP_KEEP are kept.
+    "FOLLOW_DB_NAME": "", "FOLLOW_DB_USER": "postgres", "FOLLOW_DB_SERVICE": "postgres",
+    "FOLLOW_DUMP_KEEP": "5",
 }
+
+# Each environment's branch, and what a release config must also carry.
+BRANCH = {"dev": "main", "release": "release"}
+RELEASE_STATUS = "release-check"
+# Held reasons no tick can resolve: the same head is not re-evaluated.
+STICKY = ("infra", "not-fast-forward", "not-on-main")
+# Failed reasons: the same head is not retried until it changes or `clear`.
+FAILED = ("build", "health", "deploy", "interrupted")
+DUMP_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}\.dump$")
+DB_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+RUN_URL_RE = re.compile(r"/actions/runs/(\d+)(?:/|$)")
 
 
 class Refusal(Exception):
@@ -107,7 +127,48 @@ def parse_config(text):
         raise Refusal("FOLLOW_REF_KEY must be an env key name")
     if not values["FOLLOW_HEALTH_TIMEOUT"].isdigit():
         raise Refusal("FOLLOW_HEALTH_TIMEOUT must be whole seconds")
+    # A setting that can only weaken the gate is a refusal, never a default.
+    if not split_list(values["FOLLOW_REQUIRED_CHECKS"]):
+        raise Refusal("FOLLOW_REQUIRED_CHECKS must name at least one check")
+    if values["FOLLOW_BRANCH"] != BRANCH[values["FOLLOW_ENV"]]:
+        raise Refusal("FOLLOW_BRANCH must be %s for %s" % (BRANCH[values["FOLLOW_ENV"]], values["FOLLOW_ENV"]))
+    if values["FOLLOW_ENV"] == "release":
+        if RELEASE_STATUS not in split_list(values["FOLLOW_REQUIRED_STATUSES"]):
+            raise Refusal("FOLLOW_REQUIRED_STATUSES must include %s for release" % RELEASE_STATUS)
+        if not values["FOLLOW_DB_NAME"]:
+            raise Refusal("FOLLOW_DB_NAME is required for release: every deploy dumps its database first")
+    if values["FOLLOW_DB_NAME"] and not DB_NAME_RE.match(values["FOLLOW_DB_NAME"]):
+        raise Refusal("FOLLOW_DB_NAME must be a plain database name")
+    if not values["FOLLOW_DUMP_KEEP"].isdigit() or int(values["FOLLOW_DUMP_KEEP"]) < 1:
+        raise Refusal("FOLLOW_DUMP_KEEP must be 1 or more")
+    if values["FOLLOW_REF_KEY"] and backup_name(values["FOLLOW_RUNTIME_ENV"]) == backup_name(".env"):
+        # Both would be backed up to the same file, and a rollback would write
+        # one file's content into the other.
+        raise Refusal("FOLLOW_RUNTIME_ENV must not be named like the root .env")
     return values
+
+
+def backup_name(path):
+    return "backup-" + Path(path).name.lstrip(".")
+
+
+def push_check_runs(check_runs, workflow_runs):
+    """Only the check runs of `push` workflow runs. A pull request whose head
+    is this commit re-runs CI on it with PR-only jobs; those newer runs must
+    not decide a verdict about the pushed commit."""
+    push = {run.get("id") for run in workflow_runs if run.get("event") == "push"}
+    kept = []
+    for run in check_runs:
+        match = RUN_URL_RE.search(run.get("details_url") or "")
+        if match and int(match.group(1)) in push:
+            kept.append(run)
+    return kept
+
+
+def dumps_to_prune(names, keep):
+    """The dumps beyond the newest `keep`; names that are not ours are never touched."""
+    ours = sorted((name for name in names if DUMP_RE.match(name)), reverse=True)
+    return ours[keep:]
 
 
 def split_list(value):
@@ -265,11 +326,11 @@ class Host:
             raise Refusal("%s exited %d%s" % (argv[0] if argv[0] != "sudo" else argv[1], result.returncode, detail))
         return result.stdout
 
-    def _git(self, *args):
-        return self._run(["git", "-C", self.config["FOLLOW_CHECKOUT"], *args]).strip()
+    def _git(self, *args, repo=None):
+        return self._run(["git", "-C", repo or self.config["FOLLOW_CHECKOUT"], *args]).strip()
 
-    def _compose(self, *args):
-        return self._run([*self.docker, "compose", *args], cwd=self.config["FOLLOW_COMPOSE_DIR"], quiet=True)
+    def _compose(self, *args, cwd=None):
+        return self._run([*self.docker, "compose", *args], cwd=cwd or self.config["FOLLOW_COMPOSE_DIR"], quiet=True)
 
     def _api(self, path):
         request = urllib.request.Request("https://api.github.com/repos/%s/%s" % (self.config["FOLLOW_REPO"], path),
@@ -281,13 +342,15 @@ class Host:
     def remote_head(self):
         out = self._run(["git", "ls-remote", "https://github.com/%s.git" % self.config["FOLLOW_REPO"],
                          "refs/heads/" + self.config["FOLLOW_BRANCH"]])
-        sha = out.split()[0] if out.split() else ""
-        if not SHA_RE.match(sha):
+        fields = out.split()
+        if len(fields) != 2 or fields[1] != "refs/heads/" + self.config["FOLLOW_BRANCH"] or not SHA_RE.match(fields[0]):
             raise Refusal("branch %s not found on the remote" % self.config["FOLLOW_BRANCH"])
-        return sha
+        return fields[0]
 
     def check_runs(self, sha):
-        return self._api("commits/%s/check-runs?per_page=100" % sha).get("check_runs", [])
+        runs = self._api("commits/%s/check-runs?per_page=100" % sha).get("check_runs", [])
+        pushes = self._api("actions/runs?head_sha=%s&event=push&per_page=100" % sha).get("workflow_runs", [])
+        return push_check_runs(runs, pushes)
 
     def statuses(self, sha):
         return self._api("commits/%s/statuses?per_page=100" % sha)
@@ -300,8 +363,17 @@ class Host:
         self._git("cat-file", "-e", sha + "^{commit}")
 
     def is_ancestor(self, older, newer):
-        return subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
-                               older, newer]).returncode == 0
+        """Fail closed: git's exit 1 is "no", anything but 0 or 1 is an error."""
+        code = subprocess.run(["git", "-C", self.config["FOLLOW_CHECKOUT"], "merge-base", "--is-ancestor",
+                               older, newer], capture_output=True).returncode
+        if code not in (0, 1):
+            raise Refusal("git merge-base exited %d" % code)
+        return code == 0
+
+    def on_main(self, sha):
+        """Whether sha is main's head or an ancestor of it, against a fresh fetch."""
+        self._git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")
+        return self.is_ancestor(sha, "refs/remotes/origin/main")
 
     def changed_paths(self, old, new):
         return self._git("diff", "--name-only", old, new).splitlines()
@@ -311,18 +383,22 @@ class Host:
                                 capture_output=True, text=True)
         return result.stdout if result.returncode == 0 else None
 
-    def switch(self, sha):
+    def switch(self, sha, keep_dir):
         """Detach the checkout at sha. A skip-worktree file the host manages
         (the release checkout's gateway config) is set aside, the tree moved,
         and the host's copy put back: the same dance bootstrap's checkout does,
-        minus re-rendering, so the running gateway's input is unchanged."""
+        minus re-rendering, so the running gateway's input is unchanged. The
+        host's copy is persisted in keep_dir BEFORE the tracked template
+        overwrites it, so a kill mid-switch (which skips `finally`) cannot lose
+        it: the next switch, the recovery's, finds and restores it."""
         managed = split_list(self.config["FOLLOW_MANAGED_FILES"])
         root = Path(self.config["FOLLOW_CHECKOUT"])
-        saved = {}
+        kept = {rel: Path(keep_dir) / ("managed-" + rel.replace("/", "_")) for rel in managed}
         old_umask = os.umask(0o022)
         try:
             for rel in managed:
-                saved[rel] = (root / rel).read_bytes()
+                if not kept[rel].exists():
+                    write_atomic(kept[rel], (root / rel).read_bytes(), 0o600)
                 self._git("update-index", "--no-skip-worktree", rel)
                 self._git("checkout", "--quiet", "--", rel)
             if self._git("status", "--porcelain", "--untracked-files=no"):
@@ -330,9 +406,56 @@ class Host:
             self._git("checkout", "--quiet", "--detach", sha)
         finally:
             os.umask(old_umask)
-            for rel, data in saved.items():
-                write_atomic(root / rel, data, 0o644)
+            for rel in managed:
+                write_atomic(root / rel, kept[rel].read_bytes(), 0o644)
                 self._git("update-index", "--skip-worktree", rel)
+                kept[rel].unlink()
+
+    def render_hashes(self, shas):
+        """The Compose render of each commit, from ONE scratch worktree path
+        and the live project's own .env, so the hashes compare with each other
+        and the live checkout never moves. Never printed."""
+        path = Path(self.config["FOLLOW_STATE_DIR"]) / "render"
+        env_file = str(Path(self.config["FOLLOW_COMPOSE_DIR"]) / ".env")
+        repo = self.config["FOLLOW_COMPOSE_DIR"]
+        subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", str(path)], capture_output=True)
+        shutil.rmtree(path, ignore_errors=True)
+        self._git("worktree", "prune", repo=repo)
+        self._git("worktree", "add", "--quiet", "--detach", "--force", str(path), shas[0], repo=repo)
+        try:
+            out = []
+            for sha in shas:
+                self._git("checkout", "--quiet", "--force", "--detach", sha, repo=str(path))
+                out.append(parse_hashes(self._compose("--project-directory", str(path), "--env-file", env_file,
+                                                      "config", "--hash", "*", cwd=str(path))))
+            return out
+        finally:
+            subprocess.run(["git", "-C", repo, "worktree", "remove", "--force", str(path)], capture_output=True)
+
+    def dump(self, target):
+        """pg_dump of the environment's own database to target (0600), then
+        `pg_restore --list` over it. A failure leaves no partial file and shows
+        no output."""
+        cfg = self.config
+        exec_ = [*self.docker, "compose", "exec", "-T", cfg["FOLLOW_DB_SERVICE"]]
+        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                code = subprocess.run([*exec_, "pg_dump", "-U", cfg["FOLLOW_DB_USER"], "-d", cfg["FOLLOW_DB_NAME"],
+                                       "--format=custom"], cwd=cfg["FOLLOW_COMPOSE_DIR"], stdout=stream,
+                                      stderr=subprocess.DEVNULL).returncode
+            if code != 0:
+                raise Refusal("pg_dump exited %d" % code)
+            if Path(target).stat().st_size == 0:
+                raise Refusal("pg_dump wrote nothing")
+            with open(target, "rb") as stream:
+                code = subprocess.run([*exec_, "pg_restore", "--list"], cwd=cfg["FOLLOW_COMPOSE_DIR"], stdin=stream,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+            if code != 0:
+                raise Refusal("pg_restore --list exited %d: the dump is unreadable" % code)
+        except BaseException:
+            Path(target).unlink(missing_ok=True)
+            raise
 
     def read(self, path):
         return Path(path).read_text()
@@ -409,11 +532,21 @@ class Journal:
                 stream.write(line + "\n")
 
 
+class Stop(Exception):
+    """Ends a deploy that has started: everything is put back, then the head is
+    held (kind in STICKY or "env") or failed (kind in FAILED)."""
+
+    def __init__(self, kind, reasons):
+        super().__init__("%s: %s" % (kind, "; ".join(reasons)))
+        self.kind, self.reasons = kind, reasons
+
+
 class Follower:
     def __init__(self, config, host, journal):
         self.config, self.host, self.log = config, host, journal
         self.env = config["FOLLOW_ENV"]
-        self.state_path = Path(config["FOLLOW_STATE_DIR"]) / "state.json"
+        self.state_dir = Path(config["FOLLOW_STATE_DIR"])
+        self.state_path = self.state_dir / "state.json"
 
     # -- state ---------------------------------------------------------------
     def load(self):
@@ -430,7 +563,7 @@ class Follower:
         is recorded once, and the same head is not acted on again until it
         changes, the reason clears (held), or an operator runs `clear`."""
         record = {"sha": sha, "kind": kind, "reasons": reasons}
-        key = "failed" if kind in ("build", "health", "interrupted") else "held"
+        key = "failed" if kind in FAILED else "held"
         if state.get(key) != record:
             state[key] = record
             self.log(level, "ASK" if key == "held" else "FAILED",
@@ -469,10 +602,9 @@ class Follower:
         if state.get("failed", {}).get("sha") == head:
             return "failed-earlier"
         held = state.get("held", {})
-        if held.get("sha") == head and held.get("kind") in ("infra", "not-fast-forward"):
-            # Nothing a tick can change resolves these, and re-checking a
-            # Compose change means moving the live checkout again: wait for a
-            # new head, or for an operator's upgrade or `clear`.
+        if held.get("sha") == head and held.get("kind") in STICKY:
+            # Nothing a tick can change resolves these: wait for a new head, or
+            # for an operator's upgrade or `clear`.
             return "held"
 
         verdict, reasons = ci_verdict(self.host.check_runs(head), self.host.statuses(head),
@@ -486,6 +618,10 @@ class Follower:
             return self.stop(state, head, "ci", reasons)
 
         self.host.fetch(head)
+        # release only ever takes a commit already on main (owner ruling): the
+        # host checks it itself rather than trusting how the branch moved.
+        if self.env == "release" and not self.host.on_main(head):
+            return self.stop(state, head, "not-on-main", ["%s is not on main" % head])
         if not self.host.is_ancestor(deployed, head):
             return self.stop(state, head, "not-fast-forward",
                              ["%s is not a descendant of the deployed %s" % (head, deployed)])
@@ -505,7 +641,33 @@ class Follower:
         if infra:
             self.log("warning", "INFRA", "%s changes %s; an app-only deploy does not apply them"
                      % (head, ", ".join(infra)))
+        if self.moves_project():
+            # The checkout IS the Compose project: compare renders in a scratch
+            # worktree, so a hold never moves the live tree.
+            before, after = self.host.render_hashes([deployed, head])
+            drift = hash_drift(before, after, self.config["FOLLOW_SERVICE"])
+            if drift:
+                return self.stop(state, head, "infra", ["changes the Compose definition of " + ", ".join(drift)])
+        if self.config["FOLLOW_DB_NAME"]:
+            try:
+                self.dump_database(deployed)
+            except (Refusal, OSError) as error:
+                return self.stop(state, head, "dump", [str(error)], level="err")
         return self.deploy(state, head, deployed, plan, remove, add, env_reasons)
+
+    def moves_project(self):
+        return os.path.realpath(self.config["FOLLOW_CHECKOUT"]) == os.path.realpath(self.config["FOLLOW_COMPOSE_DIR"])
+
+    def dump_database(self, deployed):
+        directory = self.state_dir / "dumps"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        target = directory / ("%s-%s.dump" % (stamp, deployed[:12]))
+        self.host.dump(target)
+        self.log("info", "DUMP", "database dumped to %s before the deploy; UNDO: none needed (read-only)" % target)
+        for name in dumps_to_prune([path.name for path in directory.iterdir()], int(self.config["FOLLOW_DUMP_KEEP"])):
+            (directory / name).unlink()
+            self.log("info", "DUMP", "removed %s (keeping the newest %s)" % (name, self.config["FOLLOW_DUMP_KEEP"]))
 
     def deploy(self, state, head, deployed, plan, remove, add, env_reasons):
         cfg, host = self.config, self.host
@@ -519,42 +681,41 @@ class Follower:
         inflight = {"sha": head, "prev": deployed, "had_image": bool(image), "backups": backups}
         state["inflight"] = inflight
         self.save(state)
-
-        before = host.compose_hashes()
-        host.switch(head)
-        self.log("info", "CHECKOUT", "%s -> %s; UNDO: checkout %s" % (deployed, head, deployed))
-        if cfg["FOLLOW_REF_KEY"]:
-            root_env = str(Path(cfg["FOLLOW_COMPOSE_DIR"]) / ".env")
-            backups[root_env] = self.backup(root_env)
-            host.write(root_env, set_env_value(host.read(root_env), cfg["FOLLOW_REF_KEY"], head))
-            self.log("info", "REF", "%s set to %s; UNDO: restore the backup" % (cfg["FOLLOW_REF_KEY"], head))
-        if plan == "apply":
-            runtime_env = cfg["FOLLOW_RUNTIME_ENV"]
-            backups[runtime_env] = self.backup(runtime_env)
-            host.write(runtime_env, rewrite_env(host.read(runtime_env), remove, add))
-            self.log("notice", "ENV", "%s; UNDO: restore the backup" % "; ".join(env_reasons))
-        self.save(state)
-
-        drift = hash_drift(before, host.compose_hashes(), cfg["FOLLOW_SERVICE"])
-        if drift:
-            self.rollback(inflight)
-            state.pop("inflight")
-            return self.stop(state, head, "infra", ["changes the Compose definition of " + ", ".join(drift)])
-
         try:
-            host.build()
-        except Refusal as error:
-            self.log("err", "BUILD", "%s: %s" % (head, error))
-            self.rollback(inflight)
-            state.pop("inflight")
-            return self.stop(state, head, "build", [str(error)], level="err")
-        built = host.image_id(cfg["FOLLOW_IMAGE"])
-        self.log("info", "BUILD", "%s built as %s" % (head, built))
-        host.up()
-        self.log("info", "UP", "recreated %s only; UNDO: retag %s and recreate" % (cfg["FOLLOW_SERVICE"], tag))
-        status = self.wait_healthy(expect_image=built)
-        if status != "healthy":
-            self.log("err", "HEALTH", "%s is %s; rolling back to %s" % (head, status, deployed))
+            before = None if self.moves_project() else host.compose_hashes()
+            host.switch(head, str(self.state_dir))
+            self.log("info", "CHECKOUT", "%s -> %s; UNDO: checkout %s" % (deployed, head, deployed))
+            if cfg["FOLLOW_REF_KEY"]:
+                root_env = str(Path(cfg["FOLLOW_COMPOSE_DIR"]) / ".env")
+                backups[root_env] = self.backup(root_env)
+                self.save(state)  # recovery must know the backup before the file changes
+                host.write(root_env, set_env_value(host.read(root_env), cfg["FOLLOW_REF_KEY"], head))
+                self.log("info", "REF", "%s set to %s; UNDO: restore the backup" % (cfg["FOLLOW_REF_KEY"], head))
+            if plan == "apply":
+                runtime_env = cfg["FOLLOW_RUNTIME_ENV"]
+                backups[runtime_env] = self.backup(runtime_env)
+                self.save(state)
+                host.write(runtime_env, rewrite_env(host.read(runtime_env), remove, add))
+                self.log("notice", "ENV", "%s; UNDO: restore the backup" % "; ".join(env_reasons))
+            if before is not None:
+                drift = hash_drift(before, host.compose_hashes(), cfg["FOLLOW_SERVICE"])
+                if drift:
+                    raise Stop("infra", ["changes the Compose definition of " + ", ".join(drift)])
+            try:
+                host.build()
+            except Refusal as error:
+                raise Stop("build", [str(error)])
+            built = host.image_id(cfg["FOLLOW_IMAGE"])
+            self.log("info", "BUILD", "%s built as %s" % (head, built))
+            host.up()
+            self.log("info", "UP", "recreated %s only; UNDO: retag %s and recreate" % (cfg["FOLLOW_SERVICE"], tag))
+            status = self.wait_healthy(expect_image=built)
+            if status != "healthy":
+                raise Stop("health", ["the new container was %s" % status])
+        except (Stop, Refusal, OSError) as error:
+            stop = error if isinstance(error, Stop) else Stop("deploy", [str(error)])
+            level = "warning" if stop.kind in STICKY else "err"
+            self.log(level, stop.kind.upper(), "%s: %s; rolling back to %s" % (head, "; ".join(stop.reasons), deployed))
             ok = self.rollback(inflight)
             state.pop("inflight")
             if not ok:
@@ -562,7 +723,7 @@ class Follower:
                 self.save(state)
                 self.log("err", "STOPPED", "the rollback is unhealthy too; acting on nothing until `clear`")
                 return "rollback-failed"
-            return self.stop(state, head, "health", ["the new container was %s" % status], level="err")
+            return self.stop(state, head, stop.kind, stop.reasons, level=level)
         state.pop("inflight")
         state.pop("failed", None)
         state.pop("recovered", None)
@@ -572,7 +733,7 @@ class Follower:
         return "deployed"
 
     def backup(self, path):
-        target = Path(self.config["FOLLOW_STATE_DIR"]) / ("backup-" + Path(path).name.lstrip("."))
+        target = self.state_dir / backup_name(path)
         write_atomic(target, self.host.read(path).encode(), 0o600)
         return str(target)
 
@@ -596,13 +757,14 @@ class Follower:
             self.host.sleep(5)
 
     def rollback(self, inflight):
-        """Put back what the deploy changed, in reverse: env files, checkout,
-        image tag, then recreate the service and wait for health."""
+        """Put back what the deploy changed, in reverse: env files, checkout
+        (also when a host-managed file set aside by an interrupted switch is
+        still waiting to be restored), image tag, then recreate and wait."""
         cfg, host = self.config, self.host
         for path, backup in inflight["backups"].items():
             host.write(path, Path(backup).read_text())
-        if host.checkout_head() != inflight["prev"]:
-            host.switch(inflight["prev"])
+        if host.checkout_head() != inflight["prev"] or any(self.state_dir.glob("managed-*")):
+            host.switch(inflight["prev"], str(self.state_dir))
         if inflight.get("had_image", True):
             host.tag(rollback_tag(cfg["FOLLOW_IMAGE"], self.env), cfg["FOLLOW_IMAGE"])
         host.up()

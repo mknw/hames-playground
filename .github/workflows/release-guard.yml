@@ -5,8 +5,12 @@ name: Release guard
 # fast-forwards release to a commit already on main. This check is the guard
 # for the other path — a pull request into release fails unless its head is
 # this repository's own main. The release ruleset requires it by this name.
+# `pull_request_target`, not `pull_request`: the workflow file is read from
+# the BASE branch, so a pull request cannot edit this check into passing. That
+# is safe here because the job checks nothing out, runs no code from the pull
+# request and holds no permission.
 on:
-  pull_request:
+  pull_request_target:
     branches: [release]
 
 permissions: {}

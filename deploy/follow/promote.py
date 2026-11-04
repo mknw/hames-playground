@@ -105,9 +105,13 @@ def promote(sha, yes):
     ff = head is not None and run("git", "merge-base", "--is-ancestor", head, sha, check=False).returncode == 0
     verdict, reasons = "pending", ["not read"]
     if follow.SHA_RE.match(sha):
-        verdict, reasons = follow.ci_verdict(
+        # The same push-only check runs the host reads, so the two cannot
+        # disagree about a commit a pull request has re-run CI on.
+        runs = follow.push_check_runs(
             gh_json("repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha)).get("check_runs", []),
-            gh_json("repos/%s/commits/%s/statuses?per_page=100" % (repo, sha)),
+            gh_json("repos/%s/actions/runs?head_sha=%s&event=push&per_page=100" % (repo, sha)).get("workflow_runs", []))
+        verdict, reasons = follow.ci_verdict(
+            runs, gh_json("repos/%s/commits/%s/statuses?per_page=100" % (repo, sha)),
             REQUIRED_CHECKS, SKIP_OK_CHECKS, [STATUS_CONTEXT])
     refusals = promote_refusals(sha, on_main, ff, head, verdict, reasons)
     if refusals:

@@ -278,15 +278,12 @@ async function main(): Promise<void> {
   rmSync(SCRATCH, { recursive: true, force: true })
   mkdirSync(SCRATCH, { recursive: true })
   const startedAt = new Date().toISOString()
-  // The commit this run tested, read BEFORE the layers run. A GO is recorded
-  // against it for a release promotion (deploy/follow/promote.py record-go),
-  // which refuses a report whose tree had uncommitted changes: that run tested
-  // no commit at all.
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: APP_DIR }).toString().trim()
-  const dirty =
-    execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: APP_DIR })
-      .toString()
-      .trim() !== ''
+  // The commit this run tested, read before the layers run and again after. A
+  // GO is recorded against it for a release promotion (deploy/follow/promote.py
+  // record-go), which refuses a report whose tree was not that clean commit
+  // throughout: uncommitted or untracked files (a suite can import an
+  // untracked one), or a commit or edit that landed during the run.
+  const atStart = treeState()
   const runs: LayerRun[] = LAYERS.map((layer) => ({
     layer,
     status: 'not attempted',
@@ -315,6 +312,9 @@ async function main(): Promise<void> {
   }
 
   const partial = Boolean(only || from)
+  const atEnd = treeState()
+  const commit = atStart.commit
+  const dirty = atStart.dirty || atEnd.dirty || atEnd.commit !== atStart.commit
   const report = renderReport({ startedAt, commit, dirty, runs, selected, stoppedAt, partial })
   mkdirSync(REPORT_DIR, { recursive: true })
   const file = path.join(REPORT_DIR, `${startedAt.replace(/[:.]/g, '-')}-release-check.md`)
@@ -324,6 +324,13 @@ async function main(): Promise<void> {
   console.log(`\n${terminalSummary({ runs, selected, stoppedAt, partial })}`)
   console.log(`\nReport: ${path.relative(APP_DIR, file)}`)
   process.exit(stoppedAt ? 1 : 0)
+}
+
+/** HEAD and whether the tree differs from it, untracked files included
+ *  (ignored ones, like this report's own directory, are not). */
+function treeState(): { commit: string; dirty: boolean } {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: APP_DIR }).toString().trim()
+  return { commit: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') !== '' }
 }
 
 function valueOf(args: string[], flag: string): string | undefined {

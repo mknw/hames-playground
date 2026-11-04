@@ -23,31 +23,52 @@ environment, under a host-wide lock shared by both environments.
 
 1. **Head.** `git ls-remote` reads the branch head. If the environment's checkout is
    already there, the tick ends.
-2. **CI.** The commit's check runs must include every required check, each one's
-   latest run completed with `success`. `changeset · version intent` runs only on
-   pull requests, so `skipped` is accepted for it alone. RELEASE also requires the
-   `release-check` commit status (below). A check that has not reported is pending,
-   never green; a red one holds the head until it changes or turns green.
-3. **Fast-forward.** The new head must descend from the deployed commit.
+2. **CI.** The commit's check runs from its `push` workflow runs must include every
+   required check, each one's latest run completed with `success`. The default list
+   is `main`'s ruleset (`typecheck · lint · test · build`, `changeset · version
+intent`) plus `docker image · build · boot`, the job that boots the image being
+   deployed; the general coordinator keeps the ruleset in step with it.
+   `changeset · version intent` runs only on pull requests, so `skipped` is accepted
+   for it alone. Runs from a pull request whose head is the same commit are ignored:
+   they would otherwise decide a verdict about the pushed commit. RELEASE also
+   requires the `release-check` commit status (below). A check that has not reported
+   is pending, never green; a red one holds the head until it changes or turns green.
+   The config refuses an empty check list, the wrong branch for its environment, and
+   a RELEASE config without `release-check`.
+3. **Main and fast-forward.** RELEASE fetches `main` and holds a head that is not
+   `main`'s head or an ancestor of it, however the branch moved; an error reading
+   either fails closed. The new head must also descend from the deployed commit.
 4. **Settings.** The target commit's `deploy/follow/env-keys.conf` is compared with
    the key names of the environment's app runtime env file (rules below).
 5. **Infra.** Paths that only shared services or separately built images read
    (`configs/Caddyfile*`, the gateway config and catalogs, `docker/`, `rootfs/`,
    `models/`, …) cannot be applied by an app-only deploy. DEV deploys the app and
-   journals the paths as not applied; RELEASE holds and asks.
-6. **Deploy.** The running container's image is tagged
+   journals the paths as not applied; RELEASE holds and asks. The Compose render is
+   compared too: if any service other than the environment's app changes definition,
+   the head is held. RELEASE, whose checkout is the Compose project, renders both
+   commits in a scratch worktree with the live `.env`, so this hold never moves the
+   live tree; DEV renders its unchanged project after its own checkout moves, and
+   puts everything back on a difference.
+6. **Dump.** RELEASE dumps its own Postgres database (`pg_dump --format=custom`,
+   checked with `pg_restore --list`) to `<state dir>/dumps/`, mode 0600, before
+   anything moves, and keeps the newest `FOLLOW_DUMP_KEEP` (default 5). A failed dump
+   holds the head and is retried next tick. A RELEASE config without
+   `FOLLOW_DB_NAME` is refused, so the timer cannot run without it.
+7. **Deploy.** The running container's image is tagged
    `<image>:follow-rollback-<env>`, an in-flight record is written, the checkout
-   moves (DEV also updates `DEV_REF` in the root `.env`), and the Compose render is
-   compared before and after: if any service other than the environment's app
-   changed definition, everything is put back and the head is held. Then
-   `docker compose build <service>` and `docker compose up -d --no-deps <service>`.
-   Never a full `up`: that re-runs shared one-shots and can recreate shared services.
-7. **Health.** The new container must reach `healthy` from the image just built,
-   within `FOLLOW_HEALTH_TIMEOUT` (default 600 s).
-8. **Rollback.** On a failed build or health check, the env files, the checkout and
-   the image tag are restored and the service recreated from the previous image. The
-   failed head is not retried until a newer head arrives or an operator runs `clear`.
-   If the rollback itself is unhealthy, the environment stops acting until `clear`.
+   moves (DEV also updates `DEV_REF` in the root `.env`; each backup is recorded
+   before its file changes). Then `docker compose build <service>` and
+   `docker compose up -d --no-deps <service>`. Never a full `up`: that re-runs shared
+   one-shots and can recreate shared services.
+8. **Health.** The new container must reach `healthy` from the image just built,
+   within `FOLLOW_HEALTH_TIMEOUT` (default 600 s). An image without a healthcheck
+   is not healthy.
+9. **Rollback.** On any failure after the checkout moves (a failed build, health
+   check, Compose or Docker error), the env files, the checkout and the image tag are
+   restored inline and the service recreated from the previous image, with the real
+   reason recorded. The failed head is not retried until a newer head arrives or an
+   operator runs `clear`. If the rollback itself is unhealthy, the environment stops
+   acting until `clear`.
 
 Every step goes to the systemd journal (with a priority) and to `journal.log` in
 the environment's state directory. Neither ever contains an env value: the settings
@@ -68,7 +89,9 @@ line against the code that enforces it.
 
 A `default` can never name a secret. "Stops and asks" means the head is held, the
 reason is journaled at warning priority with key names only, and the old version
-keeps serving. Fix the runtime file by hand and the next tick re-checks it and
+keeps serving. A held or failed head is recorded in the journal and in `status`;
+the general coordinator reads `status` as part of its routine, and nothing else
+notifies anyone. Fix the runtime file by hand and the next tick re-checks it and
 proceeds. When a commit retires a key or makes one mandatory, the same commit edits
 the manifest.
 
@@ -87,7 +110,8 @@ its commit) and sets the `release-check` commit status on that commit. `promote`
 refuses a commit that is not on `main`, one that `release` does not fast-forward to,
 and one whose required checks or `release-check` status are not green; then it asks
 for the SHA to be typed and pushes `<sha>:refs/heads/release` without force. The
-RELEASE host checks all of it again before deploying.
+RELEASE host checks again that the head is on `main`, fast-forwards and has green
+checks and a recorded GO before deploying.
 
 `release` is derived from `main` and never diverges from it: there are no fixes made
 directly on `release`. A fix lands on `main` first and is then promoted. The branch
@@ -96,9 +120,12 @@ same checks.
 
 The `Release guard` workflow covers the other path: a pull request into `release`
 fails its `release · source is main` check unless its head is this repository's
-own `main`. A merged pull request still produces a merge or rebased commit that is
-not on `main`, and no CI runs for it, so the RELEASE host would hold it; the promote
-script is the path that keeps the SHA.
+own `main`. It runs on `pull_request_target`, so the workflow file comes from the
+base branch and a pull request cannot edit the check into passing; it checks out
+nothing and holds no permission. A merged pull request still produces a merge or
+rebased commit that is not on `main`, which the RELEASE host holds, and `release`
+would then have diverged. The better guard is the ruleset: restrict updates to
+`release` to the owner, and do not use the pull-request path at all.
 
 ## Install on a host
 
@@ -126,7 +153,15 @@ The deploy user needs Docker access and write access to its checkout, the runtim
 env file and (DEV) the root `.env`. The script refuses to run as root, so without the
 `User=` drop-in every tick fails rather than leaving root-owned files in a checkout.
 For RELEASE, set `FOLLOW_MANAGED_FILES=configs/mcp-config.yaml` (bootstrap keeps
-that file skip-worktree) and `FOLLOW_REQUIRED_STATUSES=release-check`.
+that file skip-worktree), `FOLLOW_REQUIRED_STATUSES=release-check` and
+`FOLLOW_DB_NAME` (its own database). The RELEASE timer is enabled only once that
+dump has run: start one supervised tick first and check the `DUMP` line.
+
+**Manual work on the same checkout takes the lock.** The gated upgrade, bootstrap
+and any hand edit move the same checkouts and run Compose without the timer knowing.
+Either stop both timers first
+(`sudo systemctl stop hames-deploy-follow@dev.timer hames-deploy-follow@release.timer`)
+or run the work under the same lock: `flock <FOLLOW_LOCK> <command>`.
 
 `deploy-follow.py status --config <file>` prints the recorded state (held or failed
 head and why); `clear` forgets a held or failed head so the next tick re-evaluates it.
@@ -152,9 +187,10 @@ head and why); `clear` forgets a held or failed head so the next tick re-evaluat
 
 ## What it does not do
 
-- It takes no database dump. Image rollback relies on the additive schema
-  (`app/src/__tests__/lib/db/schema-additive.test.ts`); a change that needs more is a
-  [gated upgrade](app-upgrade.md), done by hand.
+- It never restores a dump by itself. RELEASE's dumps are there for an operator;
+  image rollback relies on the additive schema
+  (`app/src/__tests__/lib/db/schema-additive.test.ts`), and a change that needs more
+  is a [gated upgrade](app-upgrade.md), done by hand. DEV takes no dump.
 - It never applies infra. A change to a shared service, Caddy, the gateway or the
   sandbox images goes through the [gated upgrade](app-upgrade.md); once the release
   checkout sits at the branch head, the timer has nothing left to do.

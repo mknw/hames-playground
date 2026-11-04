@@ -74,7 +74,7 @@ describe('ensureOrgGraphSchema', () => {
   it('defers Member.id while a member lacks an id, or when the count returns no row', async () => {
     const { MEMBER_ID_CONSTRAINT_STATEMENT, CONSTRAINT_STATEMENTS } =
       await import('../../../lib/org-graph/ontology')
-    for (const missing of [44, null]) {
+    for (const missing of [5, null]) {
       vi.resetModules()
       sessionRun.mockClear()
       queue.length = 0

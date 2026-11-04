@@ -75,15 +75,15 @@ describe('backfill-member-ids', () => {
 
   it('counts, backfills and counts again in ONE transaction, then applies the constraint', async () => {
     const { driver, log, executeWrite, close } = fakeDriver({
-      before: { members: 44, withId: 0 },
-      assigned: 44,
-      after: { members: 44, withId: 44 },
+      before: { members: 5, withId: 0 },
+      assigned: 5,
+      after: { members: 5, withId: 5 },
     })
     const report = await backfillMemberIds(driver)
     expect(report).toEqual({
-      before: { members: 44, withId: 0 },
-      assigned: 44,
-      after: { members: 44, withId: 44 },
+      before: { members: 5, withId: 0 },
+      assigned: 5,
+      after: { members: 5, withId: 5 },
       constraint: true,
     })
     expect(executeWrite).toHaveBeenCalledTimes(1)
@@ -100,18 +100,18 @@ describe('backfill-member-ids', () => {
 
   it('is a no-op on a second run: assigns 0 and still reports the constraint', async () => {
     const { driver } = fakeDriver({
-      before: { members: 44, withId: 44 },
+      before: { members: 5, withId: 5 },
       assigned: 0,
-      after: { members: 44, withId: 44 },
+      after: { members: 5, withId: 5 },
     })
     expect(await backfillMemberIds(driver)).toMatchObject({ assigned: 0, constraint: true })
   })
 
   it('refuses to commit while a member would still lack an id, and applies no constraint', async () => {
     const { driver, log, close } = fakeDriver({
-      before: { members: 44, withId: 0 },
-      assigned: 43,
-      after: { members: 44, withId: 43 },
+      before: { members: 5, withId: 0 },
+      assigned: 4,
+      after: { members: 5, withId: 4 },
     })
     await expect(backfillMemberIds(driver)).rejects.toThrow(BackfillRefused)
     expect(log.some((l) => l.includes('CREATE CONSTRAINT'))).toBe(false)

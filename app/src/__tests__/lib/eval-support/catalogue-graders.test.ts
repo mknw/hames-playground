@@ -7,6 +7,8 @@
  * Mutations, each verified red:
  * - drop the `answerNotMatches` case (or its `negate`) → "a claim row" goes red.
  * - drop the `noMemoryStored` case → "every memory negative" goes red.
+ * - drop the `noProposalRaised` case → "every org negative" goes red.
+ * - drop the `graphEntryCount` case → "the org positives" goes red.
  * - `resolveShared`: stop substituting → "shared patterns are substituted" goes red.
  */
 import { readFileSync } from 'node:fs'
@@ -24,7 +26,9 @@ const catalogue = JSON.parse(
   readFileSync(join(APP, 'evals/general-next/scenarios.catalogue.json'), 'utf8'),
 ) as GraderCatalogue
 const rows = (
-  catalogue as unknown as { scenarios: Array<{ id: string; kind: string; memory?: boolean }> }
+  catalogue as unknown as {
+    scenarios: Array<{ id: string; kind: string; memory?: boolean; org?: boolean }>
+  }
 ).scenarios
 
 describe('catalogue graders', () => {
@@ -70,6 +74,35 @@ describe('catalogue graders', () => {
       // 24 is the isolation row: graded on rows and recall instead of absence.
       expect(m?.nothingStored || m?.noForeign, s.id).toBe(true)
     }
+  })
+
+  it('every org negative grades the trace or the store, not the reply', () => {
+    const negatives = rows.filter((s) => s.org && s.kind === 'negative')
+    expect(negatives.length).toBe(9)
+    for (const s of negatives) {
+      const checks = catalogueGraders(catalogue, s.id).orgExpect?.map((c) => c.check) ?? []
+      expect(checks, s.id).toContain('noProposalRaised')
+    }
+  })
+
+  it('the org positives carry their proposal and their store counts', () => {
+    expect(catalogueGraders(catalogue, '34-org-coordinator-replaced').orgExpect).toEqual([
+      expect.objectContaining({
+        check: 'proposalRaised',
+        turn: 1,
+        terms: ['COORDINATES'],
+        facts: ['Tamsin Orrin', 'Dorrit Wexley'],
+      }),
+      expect.objectContaining({ check: 'graphEntryCount', terms: ['COORDINATES'], count: 1 }),
+      expect.objectContaining({ check: 'graphEntryCount', facts: ['Dorrit Wexley'], count: 0 }),
+    ])
+    expect(catalogueGraders(catalogue, 'p99-org-created-by').orgExpect).toContainEqual(
+      expect.objectContaining({
+        check: 'graphNodeProperty',
+        property: 'createdBy',
+        equals: '$userA',
+      }),
+    )
   })
 
   it('an unknown row throws at module load', () => {

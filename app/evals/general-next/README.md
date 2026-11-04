@@ -188,7 +188,7 @@ failure" are self-fulfilling there. Only these discriminate hermetically: tool o
 arguments, route selection and completion, stash artifacts, the index and retrieval checks,
 and "first turn recorded a tool failure". A scenario whose only discriminating checks are
 absent (06) is a vacuous pass hermetically; every hermetic report says so in `hermeticCaveat`.
-Per-user memory runs on the rows that declare it (05, 19–31 and tn35/tn36/tn41/tn58) and on no other, so no other row pays a recall or a store step; see the next section.
+Per-user memory runs on the rows that declare it (05, 19–31 and tn35/tn36/tn41/tn58) and on no other, so no other row pays a recall or a store step; see the next section. The organizational-knowledge hook likewise runs only on the rows that declare `org` (32–43); see the section after it.
 
 ## Per-user memory (withMemory)
 
@@ -216,5 +216,19 @@ The graders read the store, the proposal, the answer's report and what recall at
 **Hermetic vs live.** Hermetically the gate, merge question and extractor are scripted per turn (`memory.turns[n].model`) and Synthesize answers only from the memory block recall handed it. So the recall, isolation and exclusion checks discriminate, and so do the negatives whose stop is deterministic: the switch (tn35, tn36), input isolation and the evidence rule (28, 29: the scripted model falls for the page or the guess), the organisation target having no writer (31), the sensitive stop after a sensitive answer (30). For small talk, a question and a hypothetical (25–27) the scripted gate answers as a correct model would, so a hermetic pass proves only that the store stops on that answer; the model's own judgement on every negative is a live claim. Claim checks on replies (tn35, tn36, tn41) stay self-fulfilling hermetically. **No live run has been made**: the same rows run unchanged on the private tier (`--live`, after FRONT's go), where the store gate, the extractor (`SmallQwen`) and the recall gate are real calls the report prices.
 
 **Not covered yet.** The host's Postgres store, its encryption and its owner scoping (layer 1: `src/__tests__/lib/db/memories-db-store.test.ts`); the app's answer RPC (`answerMemoryProposalFor`: the answer binding, its release, the version-checked save, the held-payload row); the joint memory wake (no `awaitWake`; a live job wakes both boxes before each scenario); compaction (M3), retention and forget; proposal expiry; a proposal with more than one item; `routerMemory: 'replies-only'`; organisation-graph writes (no writer before M12); what the reply should say with memory on (the open `memory-on` ruling); and recall-shaped tasks of other intents (the deferred `user-memory` cells in the catalogue).
+
+## Organizational knowledge (the org-knowledge hook)
+
+The hook's design (`docs/plan/org-knowledge-hook.md`, “Eval rows”) lists 34 rows. Twelve run: the nine true negatives and three positives (32–43). The other 22 are `proposed` rows in the catalogue (p88–p101, tn59–tn66); each one's notes say what it waits for. The driver runs the hook only for rows whose module names `org`, the way the host does after a turn: `settleOrgKnowledge` with the production decide adapter and the `orgDraft` loop-controller adapter, each wrapped to record what it was handed. It runs over a fresh **synthetic org graph** per scenario (`src/lib/eval-support/synthetic-org-graph.ts`: invented members, projects, placeholder pillars and themes, seeded by name). Between turns it gives the person's scripted answer: Add (`applyOrgProposal`, as that turn's owner) or Discard. A turn can hand the conversation to a second user in a new conversation of their own.
+
+The graders read the graph before and after, and the proposal each turn raised; they never read the reply (`org-checks.ts`, with a red each in `org-checks.test.ts`). They are `proposalRaised`, `noProposalRaised`, `graphEntryCount`, `graphLacksEntry`, `graphNodeProperty` and `graphElementsInclude`, the last of which reads a turn's own graph tool results. A row's org graders come from its catalogue row.
+
+**Hermetic results do not measure the gate.** Hermetically the gate and the draft are scripted per turn (`org.turns[n].model`), served through the production adapters by the fixture endpoint. A live run ignores the script and asks the real gate and the real draft loop on the private tier, with no code change. A hermetic pass therefore proves the plumbing, never the model's judgement:
+
+- **The positives (32–34)** prove the path from draft to proposal to answer to write: one new project, a deadline on an existing project, and a replaced coordinator whose removed edge is on the card.
+- **Seven of the true negatives (35–40 and 43)** have the scripted gate answer `no_organizational_knowledge` while the scripted draft would have proposed (each draft passes the validator on its own). A pass proves only that the gate's answer stops the hook before the draft.
+- **Two negatives stop deterministically.** In 41 the scripted gate falls for a colleague's health, and the validator drops the fact (V7: `ABOUT` never ends at a `Member`). In 42 the scripted gate falls for an instruction inside a mail, and the validator drops the mail's project (V3: its evidence is not in the user's message).
+
+**No live run has been made.**
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

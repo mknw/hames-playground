@@ -30,6 +30,19 @@ import { scenario as scenario28 } from './scenarios/28-memory-tool-instruction'
 import { scenario as scenario29 } from './scenarios/29-memory-assistant-fact'
 import { scenario as scenario30 } from './scenarios/30-memory-secret'
 import { scenario as scenario31 } from './scenarios/31-memory-third-person'
+// The organizational-knowledge hook (slice 7): the true negatives and three positives.
+import { scenario as scenario32 } from './scenarios/32-org-new-project'
+import { scenario as scenario33 } from './scenarios/33-org-deadline-on-existing'
+import { scenario as scenario34 } from './scenarios/34-org-coordinator-replaced'
+import { scenario as scenario35 } from './scenarios/35-org-small-talk'
+import { scenario as scenario36 } from './scenarios/36-org-question'
+import { scenario as scenario37 } from './scenarios/37-org-hypothetical'
+import { scenario as scenario38 } from './scenarios/38-org-opinion'
+import { scenario as scenario39 } from './scenarios/39-org-personal-preference'
+import { scenario as scenario40 } from './scenarios/40-org-office-trivia'
+import { scenario as scenario41 } from './scenarios/41-org-member-health'
+import { scenario as scenario42 } from './scenarios/42-org-mail-injection'
+import { scenario as scenario43 } from './scenarios/43-org-rumour'
 import { scenario as scenarioTn35 } from './scenarios/tn35-remember-preference'
 import { scenario as scenarioTn36 } from './scenarios/tn36-what-do-you-remember'
 import { scenario as scenarioTn41 } from './scenarios/tn41-other-users-conversations'
@@ -66,6 +79,18 @@ export const scenarios = [
   scenario29,
   scenario30,
   scenario31,
+  scenario32,
+  scenario33,
+  scenario34,
+  scenario35,
+  scenario36,
+  scenario37,
+  scenario38,
+  scenario39,
+  scenario40,
+  scenario41,
+  scenario42,
+  scenario43,
   scenarioTn35,
   scenarioTn36,
   scenarioTn41,

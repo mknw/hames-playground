@@ -2,6 +2,7 @@ import type { Check, ConversationScenario, ConversationTrace } from './conversat
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { addressesIn } from '@hames-ai/harness-patterns/egress-gate.server'
 import { memoryChecks } from './memory-checks'
+import { orgChecks } from './org-checks'
 
 const check = (name: string, pass: boolean, detail: string): Check => ({ name, pass, detail })
 
@@ -248,6 +249,7 @@ export function grade(
         trace.turns.map((t) => t.response),
       ),
     )
+  if (s.orgExpect) checks.push(...orgChecks(s.orgExpect, trace.org, trace.turns))
   if (!baseline) {
     for (const route of s.expectedRoutes) {
       checks.push(

@@ -49,6 +49,19 @@ export async function fixtureInference() {
           },
           usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
         }
+      } else if (req.url === '/v1/systemone' && body.questions['orgKnowledge.gate']) {
+        // The org-knowledge gate (slice 7) is not a route decision: it answers from the
+        // scenario's scripted model for this turn; absent, as a gate that sees nothing.
+        const gate = scenario.org?.turns[turnIndex]?.model?.gate ?? 'no_organizational_knowledge'
+        value = {
+          answers: {
+            'orgKnowledge.gate': choose(
+              body.questions['orgKnowledge.gate'] as { criteria: Record<string, unknown> },
+              gate,
+            ),
+          },
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
       } else if (req.url === '/v1/systemone' && memoryQuestion(body.questions)) {
         // The memory decisions (recall gate, store gate, merge question) are not route
         // decisions: they consume no scripted route. Each answers from the scenario's
@@ -107,6 +120,17 @@ export async function fixtureInference() {
             break
           case 'LoopController':
           case 'ActorController': {
+            // The org-knowledge draft loop (slice 7): its schema names the ontology. It
+            // Returns the scenario's scripted draft at once; absent, an empty draft.
+            if (fn === 'LoopController' && prompt.includes('ORGANIZATIONAL ONTOLOGY')) {
+              result = {
+                reasoning: 'Synthetic org draft',
+                tool_name: 'Return',
+                tool_args: scenario.org?.turns[turnIndex]?.model?.draft ?? '{"assertions":[]}',
+                is_final: true,
+              }
+              break
+            }
             const office = route === 'office-data'
             const name = pending.find(
               (t) =>

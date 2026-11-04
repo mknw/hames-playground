@@ -43,6 +43,7 @@ import { coldStartEstimate } from '../inference/cold-start.server'
 import {
   ensurePrivateTierAwake,
   keepWarmIntervalMs,
+  warmIdleCapMs,
   warmWhileOpenEnabled,
 } from '../inference/wake.server'
 import { ACTIVE_WINDOW_MINUTES, countActiveUsers } from '../db/conversations.server'
@@ -276,12 +277,18 @@ export interface KeepWarmAnswer {
    *  off or the private tier is not configured — so the browser stops asking
    *  for the rest of the page's life. */
   enabled: boolean
-  /** Whether THIS call woke or touched the boxes: false on the Anthropic tier. */
+  /** Whether THIS call reached a box (started or joined a wake). False on the
+   *  Anthropic tier, and false when every box answered recently enough that
+   *  keep-warm skipped it. */
   warmed: boolean
   /** When to ask again, or `null` when `enabled` is false. Sent even on the
    *  Anthropic tier, because the switch can move back to private while the page
    *  is open and the next ask is what notices. */
   nextInMs: number | null
+  /** How long the page may go without a pointer, key or focus event before it
+   *  stops asking (`PRIVATE_TIER_WARM_IDLE_MINUTES`); `null` when `enabled` is
+   *  false. Enforced by the page, the only place that sees input. */
+  idleCapMs: number | null
 }
 
 /**
@@ -289,7 +296,8 @@ export interface KeepWarmAnswer {
  * the app stays open and visible (owner, 2026-11-04). The browser calls this on
  * load, whenever the page becomes visible again, and every `nextInMs` while it
  * stays visible (`lib/private-tier-keep-warm.ts`); a hidden or closed page stops
- * calling, and the boxes then scale down after their own configured windows.
+ * calling, and so does a visible one left without input for `idleCapMs`. The
+ * boxes then scale down after their own configured windows.
  *
  * It is the THIRD entry point to the one wake, after a turn and the header
  * button, and it issues no wake of its own: `ensurePrivateTierAwake` keeps the
@@ -309,11 +317,12 @@ export interface KeepWarmAnswer {
 export async function keepPrivateTierWarm(): Promise<KeepWarmAnswer> {
   const user = await requireUser()
   if (!warmWhileOpenEnabled() || !selfDeployedConfigured()) {
-    return { enabled: false, warmed: false, nextInMs: null }
+    return { enabled: false, warmed: false, nextInMs: null, idleCapMs: null }
   }
   const nextInMs = keepWarmIntervalMs()
+  const idleCapMs = warmIdleCapMs()
   const tier = resolveTier(null, await getStoredInferenceTier(user.id))
-  if (tier !== 'self_deployed') return { enabled: true, warmed: false, nextInMs }
-  await ensurePrivateTierAwake({ keepWarm: true })
-  return { enabled: true, warmed: true, nextInMs }
+  if (tier !== 'self_deployed') return { enabled: true, warmed: false, nextInMs, idleCapMs }
+  const warmed = await ensurePrivateTierAwake({ keepWarm: true })
+  return { enabled: true, warmed, nextInMs, idleCapMs }
 }

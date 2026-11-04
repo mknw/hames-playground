@@ -68,6 +68,7 @@ vi.mock('../../../lib/inference/verda-control-plane.server', () => ({
   probeVerdaReplicas: () => probeVerdaReplicas(),
 }))
 
+import * as previewHeader from '../../../lib/harness-client/preview-header.server'
 import {
   getPreviewHeaderState,
   igniteSelfDeployedBox,
@@ -77,11 +78,16 @@ import { noteCallLatency, resetCallLatency } from '../../../lib/metrics/call-lat
 import {
   resetSmallActivity,
   noteSmallCallCompleted,
+  coldStartEstimate,
+  smallColdStartEstimate,
+  resetColdStartHistory,
+  resetSmallColdStartHistory,
 } from '../../../lib/inference/cold-start.server'
 import {
   resetSmallWake,
   resetLargeWake,
   keepWarmIntervalMs,
+  warmIdleCapMs,
   LARGE_LLM_WAKE_FAILED,
 } from '../../../lib/inference/wake.server'
 import {
@@ -109,6 +115,7 @@ const ENV_KEYS = [
   'LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS',
   'LARGE_LLM_WAKE_POLL_INTERVAL_MS',
   'PRIVATE_TIER_WARM_WHILE_OPEN',
+  'PRIVATE_TIER_WARM_IDLE_MINUTES',
   'INFERENCE_TIERS',
 ] as const
 let saved: Record<string, string | undefined>
@@ -530,15 +537,31 @@ describe('keepPrivateTierWarm', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('takes no owner id', () => {
-    expect(keepPrivateTierWarm.length).toBe(0)
+  it('takes no owner id — and no export of this module takes any parameter at all', () => {
+    // `.length` alone passes `(ownerId = x)` and `(...args)`; the source of each
+    // export's parameter list does not. Every export of a `'use server'` module
+    // is an RPC, so a parameter here is one the browser chooses (`SD-13`).
+    const exported = Object.entries(previewHeader).filter(([, v]) => typeof v === 'function')
+    expect(exported.map(([name]) => name).sort()).toEqual([
+      'getPreviewHeaderState',
+      'igniteSelfDeployedBox',
+      'keepPrivateTierWarm',
+    ])
+    for (const [name, fn] of exported) {
+      expect(String(fn), name).toMatch(new RegExp(`^async function ${name}\\(\\)`))
+    }
   })
 
   it('wakes both boxes for a user on the private tier, and says when to ask again', async () => {
     configureSelfDeployed()
     getStoredInferenceTier.mockResolvedValue('self_deployed')
     const answer = await keepPrivateTierWarm()
-    expect(answer).toEqual({ enabled: true, warmed: true, nextInMs: keepWarmIntervalMs() })
+    expect(answer).toEqual({
+      enabled: true,
+      warmed: true,
+      nextInMs: keepWarmIntervalMs(),
+      idleCapMs: warmIdleCapMs(),
+    })
     expect(boxRequests()).toHaveLength(2)
     expect(getStoredInferenceTier).toHaveBeenCalledWith('user-1')
   })
@@ -554,11 +577,63 @@ describe('keepPrivateTierWarm', () => {
     expect(boxRequests()).toHaveLength(2)
   })
 
+  it('answers warmed: false when both boxes answered recently enough to be skipped', async () => {
+    configureSelfDeployed()
+    getStoredInferenceTier.mockResolvedValue('self_deployed')
+    noteLargeCallCompleted()
+    noteSmallCallCompleted()
+    expect((await keepPrivateTierWarm()).warmed).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('sends the idle cap from PRIVATE_TIER_WARM_IDLE_MINUTES (default 30 minutes)', async () => {
+    configureSelfDeployed()
+    getStoredInferenceTier.mockResolvedValue('anthropic')
+    expect((await keepPrivateTierWarm()).idleCapMs).toBe(30 * 60_000)
+    process.env.PRIVATE_TIER_WARM_IDLE_MINUTES = '5'
+    expect((await keepPrivateTierWarm()).idleCapMs).toBe(5 * 60_000)
+  })
+
+  it('records no cold-start reading, even for a cold box it waited minutes for', async () => {
+    // Both boxes provably went cold (answered, then a whole window passed), and
+    // the wake takes 15s — a reading that would clear both plausibility floors
+    // INSIDE a turn's watch. Keep-warm opens none, so the history must not move.
+    vi.useFakeTimers()
+    try {
+      resetColdStartHistory()
+      resetSmallColdStartHistory()
+      configureSelfDeployed()
+      getStoredInferenceTier.mockResolvedValue('self_deployed')
+      noteLargeCallCompleted(Date.now() - 3_600_000)
+      noteSmallCallCompleted(Date.now() - 3_600_000)
+      fetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) =>
+            setTimeout(() => resolve(new Response('{}', { status: 200 })), 15_000),
+          ),
+      )
+      const before = [coldStartEstimate().samples, smallColdStartEstimate().samples]
+
+      const call = keepPrivateTierWarm()
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect((await call).warmed).toBe(true)
+
+      expect([coldStartEstimate().samples, smallColdStartEstimate().samples]).toEqual(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('never wakes for a user on the Anthropic tier, but keeps the page asking', async () => {
     configureSelfDeployed()
     getStoredInferenceTier.mockResolvedValue('anthropic')
     const answer = await keepPrivateTierWarm()
-    expect(answer).toEqual({ enabled: true, warmed: false, nextInMs: keepWarmIntervalMs() })
+    expect(answer).toEqual({
+      enabled: true,
+      warmed: false,
+      nextInMs: keepWarmIntervalMs(),
+      idleCapMs: warmIdleCapMs(),
+    })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -574,13 +649,23 @@ describe('keepPrivateTierWarm', () => {
     configureSelfDeployed()
     process.env.PRIVATE_TIER_WARM_WHILE_OPEN = '0'
     getStoredInferenceTier.mockResolvedValue('self_deployed')
-    expect(await keepPrivateTierWarm()).toEqual({ enabled: false, warmed: false, nextInMs: null })
+    expect(await keepPrivateTierWarm()).toEqual({
+      enabled: false,
+      warmed: false,
+      nextInMs: null,
+      idleCapMs: null,
+    })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('is off when the private tier is not configured', async () => {
     getStoredInferenceTier.mockResolvedValue('self_deployed')
-    expect(await keepPrivateTierWarm()).toEqual({ enabled: false, warmed: false, nextInMs: null })
+    expect(await keepPrivateTierWarm()).toEqual({
+      enabled: false,
+      warmed: false,
+      nextInMs: null,
+      idleCapMs: null,
+    })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

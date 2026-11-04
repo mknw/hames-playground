@@ -381,7 +381,7 @@ describe('the poll survives a box that drops what it is sent', () => {
     expect(fetchMock, 'it gave up on the first attempt early').toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
 
-    expect(await wake).toBeUndefined()
+    expect(await wake).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
@@ -501,7 +501,7 @@ describe('which failures are retried, and which end it on the spot', () => {
 
     const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS)
-    expect(await wake).toBeUndefined()
+    expect(await wake).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
@@ -514,7 +514,7 @@ describe('which failures are retried, and which end it on the spot', () => {
 
     const wake = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
-    expect(await wake).toBeUndefined()
+    expect(await wake).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
@@ -641,8 +641,8 @@ describe('concurrent turns share one poll', () => {
     const second = quiet(ensureLargeAwake())
     await vi.advanceTimersByTimeAsync(FAST_CYCLE_MS * 2)
 
-    expect(await first).toBeUndefined()
-    expect(await second).toBeUndefined()
+    expect(await first).toBe(true)
+    expect(await second).toBe(true)
     // Three: two dropped, one answered. A second poll would have made it four.
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
@@ -699,14 +699,14 @@ describe('concurrent turns share one poll', () => {
 
     // And the shared failure did not poison the next wake for any of them.
     fetchMock.mockImplementation(async () => ok())
-    await expect(ensureLargeAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBe(true)
   })
 
   it('retries after a failed poll instead of remembering the failure', async () => {
     fetchMock.mockImplementationOnce(async () => new Response('nope', { status: 400 }))
     await expect(ensureLargeAwake()).rejects.toThrow(LARGE_LLM_WAKE_FAILED)
     // A remembered rejection would make one bad minute poison every later turn.
-    await expect(ensureLargeAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
@@ -827,7 +827,7 @@ describe('what the wait teaches the estimate', () => {
   it('waits, and announces nothing, with no watch armed', async () => {
     // A triggered run or a script has no listener. The wake is not a UI feature:
     // it still runs, silently.
-    await expect(ensureLargeAwake()).resolves.toBeUndefined()
+    await expect(ensureLargeAwake()).resolves.toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

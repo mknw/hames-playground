@@ -70,7 +70,12 @@ beforeEach(() => {
   getPreviewHeaderState.mockResolvedValue(state())
   // Off by default so the cases below stay about the strip; the keep-warm
   // describe turns it on.
-  keepPrivateTierWarm.mockResolvedValue({ enabled: false, warmed: false, nextInMs: null })
+  keepPrivateTierWarm.mockResolvedValue({
+    enabled: false,
+    warmed: false,
+    nextInMs: null,
+    idleCapMs: null,
+  })
   igniteSelfDeployedBox.mockResolvedValue(
     state({
       warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
@@ -97,7 +102,12 @@ describe('keep warm while open (owner, 2026-11-04)', () => {
   })
 
   it('re-reads the box state when a keep-warm call actually warmed it', async () => {
-    keepPrivateTierWarm.mockResolvedValue({ enabled: true, warmed: true, nextInMs: 100_000 })
+    keepPrivateTierWarm.mockResolvedValue({
+      enabled: true,
+      warmed: true,
+      nextInMs: 100_000,
+      idleCapMs: 1_800_000,
+    })
     const { container } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
     // The mount poll, plus the one the warmed answer asked for.
@@ -107,7 +117,12 @@ describe('keep warm while open (owner, 2026-11-04)', () => {
   it('stops asking once the strip is unmounted', async () => {
     // Enabled with a far cadence, so the loop is alive and only the unmount can
     // explain the missing second ask on the visibility event below.
-    keepPrivateTierWarm.mockResolvedValue({ enabled: true, warmed: false, nextInMs: 100_000 })
+    keepPrivateTierWarm.mockResolvedValue({
+      enabled: true,
+      warmed: false,
+      nextInMs: 100_000,
+      idleCapMs: 1_800_000,
+    })
     const { container, unmount } = render(() => <PreviewHeaderStrip />)
     await mounted(container)
     unmount()

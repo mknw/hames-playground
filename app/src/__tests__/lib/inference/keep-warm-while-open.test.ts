@@ -15,12 +15,17 @@ import {
   resetLargeWake,
   resetSmallWake,
   warmWhileOpenEnabled,
+  warmIdleCapMs,
+  DEFAULT_PRIVATE_TIER_WARM_IDLE_MINUTES,
 } from '../../../lib/inference/wake.server'
 import {
   noteSmallCallCompleted,
   resetSmallActivity,
   resetSmallColdStartHistory,
   resetColdStartHistory,
+  runWithColdStartWatch,
+  coldStartEstimate,
+  smallColdStartEstimate,
 } from '../../../lib/inference/cold-start.server'
 import {
   noteLargeCallCompleted,
@@ -54,6 +59,7 @@ beforeEach(() => {
     'SMALL_LLM_SCALEDOWN_SECONDS',
     'LARGE_LLM_ROUTE',
     'PRIVATE_TIER_WARM_WHILE_OPEN',
+    'PRIVATE_TIER_WARM_IDLE_MINUTES',
   ])
     vi.stubEnv(name, undefined)
   fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
@@ -137,6 +143,36 @@ describe('ensurePrivateTierAwake({ keepWarm: true })', () => {
     expect(urls().filter((u) => u === LARGE || u === SMALL)).toHaveLength(2)
   })
 
+  it('resolves whether it reached a box: false when keep-warm skipped both, true otherwise', async () => {
+    answered(1_000)
+    expect(await ensurePrivateTierAwake({ keepWarm: true })).toBe(false)
+    answered(keepWarmIntervalMs() + 1_000)
+    expect(await ensurePrivateTierAwake({ keepWarm: true })).toBe(true)
+  })
+
+  it('a turn that JOINS a poll keep-warm started records no cold-start reading', async () => {
+    // Both boxes provably went cold, so a turn that STARTED this wake would
+    // record its 15s wait. One that joins keep-warm's poll waited a fragment of
+    // it, and keep-warm itself records nothing: the history must not move. With
+    // keep-warm on by default, this is why a cold start is rarely learned.
+    answered(3_600_000)
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(new Response('{}', { status: 200 })), 15_000),
+        ),
+    )
+    const open = ensurePrivateTierAwake({ keepWarm: true })
+    const turn = runWithColdStartWatch(
+      () => {},
+      () => ensurePrivateTierAwake(),
+    )
+    await vi.advanceTimersByTimeAsync(20_000)
+    await Promise.all([open, turn])
+    expect(urls().filter((u) => u === LARGE || u === SMALL)).toHaveLength(2)
+    expect([coldStartEstimate().samples, smallColdStartEstimate().samples]).toEqual([0, 0])
+  })
+
   it('does not keep a 27B on OpenRouter warm — it is not our box', async () => {
     vi.stubEnv('LARGE_LLM_ROUTE', 'openrouter')
     await ensurePrivateTierAwake({ keepWarm: true })
@@ -207,5 +243,24 @@ describe('PRIVATE_TIER_WARM_WHILE_OPEN', () => {
     vi.stubEnv('PRIVATE_TIER_WARM_WHILE_OPEN', 'sometimes')
     expect(warmWhileOpenEnabled()).toBe(true)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('PRIVATE_TIER_WARM_WHILE_OPEN'))
+  })
+})
+
+describe('PRIVATE_TIER_WARM_IDLE_MINUTES', () => {
+  it('defaults to 30 minutes (FRONT, 2026-11-04)', () => {
+    expect(DEFAULT_PRIVATE_TIER_WARM_IDLE_MINUTES).toBe(30)
+    expect(warmIdleCapMs()).toBe(30 * 60_000)
+  })
+
+  it('reads a positive number of minutes', () => {
+    vi.stubEnv('PRIVATE_TIER_WARM_IDLE_MINUTES', '2.5')
+    expect(warmIdleCapMs()).toBe(150_000)
+  })
+
+  it.each(['0', '-5', 'never', 'Infinity'])('warns on %j and keeps the default', (raw) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.stubEnv('PRIVATE_TIER_WARM_IDLE_MINUTES', raw)
+    expect(warmIdleCapMs()).toBe(30 * 60_000)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('PRIVATE_TIER_WARM_IDLE_MINUTES'))
   })
 })

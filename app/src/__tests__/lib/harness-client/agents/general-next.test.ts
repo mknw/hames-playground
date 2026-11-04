@@ -1121,7 +1121,8 @@ describe('general-next composition', () => {
 
   // The per-user gate contract (capability-guide.ts): a gate that filters at discovery
   // removes a tool from the info route AND the guide, because both read one list.
-  // MUTATION: hand `capabilityGuide` `info: [...infoTools, 'search']` — red.
+  // MUTATION: give the guide a wider list than the route's, resolved by the static
+  // catalog (`info: [...infoTools, 'search']`, `namespaceOf: deps.toolNamespaces`) — red.
   it('onboarding: a deployment without web, library docs or ingest is not told it has them', async () => {
     gateway.names = [...GRAPH.filter((name) => name !== 'graph_file_ingest'), 'read_neo4j_cypher']
     const patterns = await agent.createPatterns('synthetic-session', {

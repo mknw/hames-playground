@@ -1764,6 +1764,17 @@ export interface ActorAdapterOptions {
  * listing per call ensures the LLM is aware of tools created in earlier
  * turns of the same session (the Docker MCP gateway persists them across turns).
  */
+/** The non-thinking client the actor takes when its role resolves to a thinking
+ *  leaf. A thinking leaf is only ever resolved on the private tier
+ *  (`assertThinkingOverride`), so an absent answer is a broken invariant and
+ *  refuses rather than falling through to the role's Anthropic default. */
+function nonThinkingControllerClient(): string {
+  const client = selfDeployedNonThinkingClientFor('controller')
+  if (!client)
+    throw new Error('ActorController: a thinking controller client resolved off the private tier')
+  return client
+}
+
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,
 ): ActorFn & LegacyActorFn {
@@ -1867,7 +1878,23 @@ export function createActorControllerAdapter(
     // else — including a genuine structured-output failure, a network error or
     // a pre-call throw — is wrapped as `LLMCallError` so the observability
     // panel keeps the captured prompt/variables drill-down.
-    const baseOpts = { ...clientOverrideFor('controller'), collector }
+    //
+    // NO REASONING TWIN: the actor shares the `controller` ROLE with the loop
+    // controller, so a `controller` pattern that is reasoning-configured
+    // (`PRIVATE_REASONING_ROLES`) resolves this role to a thinking leaf — and
+    // `ActorController` is not designated for one, so the call used to be sent
+    // with thinking on and then refused after accounting (`accountBamlCall`),
+    // killing every actorCritic attempt. The `actor` pattern has no twin
+    // (`reasoning-roles.server.ts`), so it keeps its original function on the
+    // route-resolved NON-thinking client of the same box, the client a twin's
+    // corrective retry already takes. A hidden thinking leaf (a registry chain)
+    // is not a known thinking client and is still refused by the leaf policy.
+    const resolved = clientOverrideFor('controller')
+    const actorOverride =
+      resolved && THINKING_CLIENTS.has(resolved.client)
+        ? { ...resolved, client: nonThinkingControllerClient() }
+        : resolved
+    const baseOpts = { ...actorOverride, collector }
     let action: ControllerAction
     try {
       action = await b.ActorController(

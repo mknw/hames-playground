@@ -7,6 +7,7 @@ export interface Check {
 import type { SpendKey } from './spend-budget'
 import type { ArgsPredicate } from './tool-arguments'
 import type { GuardTurnCounts } from './guard-report'
+import type { ReasoningSummary } from './thinking-mode'
 import type { MemoryExpectations, MemoryScenario, MemoryTrace } from './memory-scenario'
 import type { OrgExpectations, OrgScenario, OrgTrace } from './org-scenario'
 
@@ -98,6 +99,10 @@ export interface ConversationResult extends SpendKey {
   /** 1-based attempt number of a graded run (#842): absent on a row that was never run
    * (gated, stopped, not run) or that failed before any attempt could be graded. */
   attempt?: number
+  /** Wall-clock of this graded attempt's `driver.run`, wake excluded. */
+  durationMs?: number
+  /** The reasoning this attempt's calls recorded (`thinking-mode.ts`). */
+  reasoning?: ReasoningSummary
 }
 
 export interface ConversationDriver {

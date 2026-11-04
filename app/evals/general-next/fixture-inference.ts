@@ -211,6 +211,15 @@ export async function fixtureInference() {
           default:
             throw new Error(`Unrecognised fixture inference function ${fn}`)
         }
+        // A thinking twin (`EVAL_THINKING`): answer the way a box with a reasoning
+        // parser does, the trace in the message's separate `reasoning` field and a
+        // content-only envelope (the twins' output types omit `reasoning`), so the
+        // adapter's trace restore is what fills the field. Never inline `</think>`.
+        const thinking = body.chat_template_kwargs?.enable_thinking === true
+        if (thinking && result && typeof result === 'object' && 'reasoning' in result) {
+          const { reasoning: _written, ...answer } = result as Record<string, unknown>
+          result = answer
+        }
         value = {
           id: 'fixture',
           model: body.model,
@@ -220,6 +229,7 @@ export async function fixtureInference() {
               message: {
                 role: 'assistant',
                 content: typeof result === 'string' ? result : JSON.stringify(result),
+                ...(thinking ? { reasoning: `Synthetic ${fn} thinking trace.` } : {}),
               },
               finish_reason: 'stop',
             },

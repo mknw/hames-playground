@@ -32,11 +32,19 @@ export function createSpendObserver({
       // twins — same endpoints contract, same no-caching posture, `zdr: true` on the
       // wire — so those two names ARE the private tier serving a call. Any other
       // unknown client is still the stop condition it always was: the allowlist must
-      // not become allow-everything.
+      // not become allow-everything. `LargeQwenThink` is the box route's thinking twin
+      // (the eval's thinking mode, `thinking-mode.ts`): the same 27B box and endpoint contract,
+      // time-priced like `LargeQwen` (`TIME_PRICED_CLIENTS`). Its absence stopped a
+      // thinking-on run at its first twin call while the OR twin was admitted.
       if (
-        !['LargeQwen', 'LargeQwenOR', 'LargeQwenThinkOR', 'SmallQwen', 'PrivateSystemOne'].includes(
-          sample.clientName ?? '',
-        )
+        ![
+          'LargeQwen',
+          'LargeQwenThink',
+          'LargeQwenOR',
+          'LargeQwenThinkOR',
+          'SmallQwen',
+          'PrivateSystemOne',
+        ].includes(sample.clientName ?? '')
       ) {
         budget.reason = 'Unexpected serving client on the private tier'
         onStop()

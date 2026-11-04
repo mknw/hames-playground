@@ -3,6 +3,9 @@ export interface SpendKey {
   agent: string
   scenario: string
   tier: 'self_deployed'
+  /** The eval's thinking run mode (`thinking-mode.ts`): a scenario run in both modes
+   *  is two ledger rows, so thinking-on spend is never filed under thinking-off. */
+  thinking?: 'off' | 'on'
 }
 
 /** The injection screen's BAML function. general-next's office and info route guards screen
@@ -78,7 +81,11 @@ export class SpendBudget {
 
   row(key: SpendKey): SpendRow {
     let row = this.rows.find(
-      (r) => r.agent === key.agent && r.scenario === key.scenario && r.tier === key.tier,
+      (r) =>
+        r.agent === key.agent &&
+        r.scenario === key.scenario &&
+        r.tier === key.tier &&
+        r.thinking === key.thinking,
     )
     if (!row) {
       row = {

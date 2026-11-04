@@ -22,17 +22,23 @@ describe('runner synchronous spend stop', () => {
   // spend-observer.ts — the route-switch eval stops on its first 27B-role call
   // again, which is the run-2 failure this test pins. Adding an unrelated name
   // to the list must equally fail the refusal case above.
-  it.each(['LargeQwen', 'LargeQwenOR', 'LargeQwenThinkOR', 'SmallQwen', 'PrivateSystemOne'])(
-    'accepts every client the private-tier seam can name: %s',
-    (clientName) => {
-      const { budget, observer, onStop } = setup()
-      observer.activate(key)
-      observer.observe({ clientName, metrics: { costEur: 0 } })
-      expect(onStop).not.toHaveBeenCalled()
-      expect(budget.reason).toBeUndefined()
-      expect(budget.totalUsd).toBe(0)
-    },
-  )
+  // MUTATION: drop 'LargeQwenThink' — an EVAL_THINKING=on run on the box route
+  // stops at its first twin call with "Unexpected serving client".
+  it.each([
+    'LargeQwen',
+    'LargeQwenThink',
+    'LargeQwenOR',
+    'LargeQwenThinkOR',
+    'SmallQwen',
+    'PrivateSystemOne',
+  ])('accepts every client the private-tier seam can name: %s', (clientName) => {
+    const { budget, observer, onStop } = setup()
+    observer.activate(key)
+    observer.observe({ clientName, metrics: { costEur: 0 } })
+    expect(onStop).not.toHaveBeenCalled()
+    expect(budget.reason).toBeUndefined()
+    expect(budget.totalUsd).toBe(0)
+  })
   it('stops usage outside the active scenario, including after deactivation', () => {
     const { budget, observer, onStop } = setup()
     observer.activate(key)

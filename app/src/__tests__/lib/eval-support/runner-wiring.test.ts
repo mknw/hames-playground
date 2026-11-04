@@ -479,3 +479,22 @@ it('the egress scenario records the slice 15 name-list observations', () => {
     'const observations: Observation[] = await measureNameListRecall(',
   )
 })
+
+// EVAL_THINKING: the mode's reasoning setting is entered after the wake and left in a
+// `finally` around the attempts, so a throwing scenario cannot leak thinking into the
+// next one, and the flip gate reads only the shipped (thinking-off) configuration.
+// MUTATION: move `leaveThinking()` out of the `finally`, or pass unfiltered `rows` to
+// `flipGate` → red.
+it('scopes the thinking mode to the attempts and gates only on thinking off', () => {
+  const s = run()
+  const enter = s.indexOf('const leaveThinking = enterThinking(')
+  expect(s.indexOf('await ensurePrivateTierAwake()')).toBeLessThan(enter)
+  expect(enter).toBeLessThan(s.indexOf('await driver.run('))
+  expect(s).toMatch(/\} finally \{\s*leaveThinking\(\)\s*\}/)
+  expect(s.indexOf('leaveThinking()')).toBeGreaterThan(s.indexOf('await driver.run('))
+  expect(s).toMatch(/rows\.filter\(\(r\) => r\.thinking === 'off'\) as ConversationResult\[\]/)
+  // parseThinking runs after .env is merged, so an inherited reasoning setting refuses.
+  expect(s.indexOf('parseThinking(process.env)')).toBeGreaterThan(
+    s.indexOf('Object.assign(process.env, deployed)'),
+  )
+})

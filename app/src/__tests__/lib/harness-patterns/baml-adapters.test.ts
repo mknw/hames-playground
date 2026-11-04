@@ -289,6 +289,41 @@ describe('createActorControllerAdapter', () => {
     const [, , , , context] = mockActorController.mock.calls[0]
     expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Factory protocol notes'))
   })
+
+  // The actor shares the `controller` ROLE but has no reasoning twin. With the
+  // `controller` PATTERN reasoning-configured the role resolves to the thinking
+  // leaf, which `ActorController` is not designated for: before this fix the call
+  // went out on it and was refused after accounting, so every actorCritic attempt
+  // died under `PRIVATE_REASONING_ROLES=controller` (and `EVAL_THINKING=on`).
+  // The fix is route-agnostic (it tests `THINKING_CLIENTS`, which holds both
+  // twins); the OpenRouter route is not staged here because its boot check needs
+  // an explicit model id captured at module load.
+  // MUTATION: pass `clientOverrideFor('controller')` straight into the bag again →
+  // the bag names LargeQwenThink and this goes red.
+  it('keeps ActorController off the thinking leaf when controller reasoning is on', async () => {
+    const { createActorControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    process.env.PRIVATE_REASONING_ROLES = 'controller'
+    try {
+      await withSelfDeployedTier(() =>
+        createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+      )
+    } finally {
+      delete process.env.PRIVATE_REASONING_ROLES
+    }
+    const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+    expect(bag.client).toBe('LargeQwen')
+  })
+
+  it('leaves the actor on the tier map when controller reasoning is off', async () => {
+    const { createActorControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    await withSelfDeployedTier(() =>
+      createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+    )
+    const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+    expect(bag.client).toBe('LargeQwen')
+  })
 })
 
 describe('createPlannerAdapter', () => {

@@ -32,6 +32,12 @@
  *       text or evidence
  *   V10 not a drop: each surviving element's verdict, `new`, `reinforces` or
  *       `updates`
+ *   V11 no near-duplicate (LD-24): a node of a name-keyed class that matches
+ *       no stored node by `nameKey` is dropped when its {@link nearNameKey}
+ *       (accents, punctuation and the class's own label word folded too)
+ *       equals a stored node's OF THE SAME LABEL. The refusal names that node,
+ *       so a repair turn can link to it under its stored name. Checked right
+ *       after the exact match, before properties
  *
  * At most `maxAssertions` (default 8) assertions are checked, in draft order;
  * the rest are counted under `cap`.
@@ -44,6 +50,7 @@ import {
   classOf,
   isIsoDay,
   nameKey,
+  nearNameKey,
   propertyRefusal,
   relationOf,
   valueTokens,
@@ -122,7 +129,24 @@ export interface OrgValidateContext {
 
 export type OrgVerdict = 'new' | 'reinforces' | 'updates'
 
-export type OrgRule = 'V1' | 'V2' | 'V3' | 'V4' | 'V5' | 'V6' | 'V7' | 'V8' | 'V9' | 'cap'
+export type OrgRule = 'V1' | 'V2' | 'V3' | 'V4' | 'V5' | 'V6' | 'V7' | 'V8' | 'V9' | 'V11' | 'cap'
+
+/** A stored node a V11 refusal names: what a repair turn links to. */
+export interface NearDuplicate {
+  readonly label: string
+  /** The stored name, verbatim from the graph — graph data, never the
+   *  user's words; a consumer that puts it in a prompt sanitizes it first. */
+  readonly name: string
+  readonly key: string
+}
+
+/** One refused assertion, positionally. */
+export interface RejectedAssertion {
+  readonly index: number
+  readonly rule: OrgRule
+  /** V11 only: the stored nodes the drafted one duplicates. */
+  readonly existing?: readonly NearDuplicate[]
+}
 
 export interface CheckedNode {
   readonly element: DraftNode
@@ -150,8 +174,10 @@ export interface CheckedAssertion {
 export interface OrgValidation {
   readonly accepted: readonly CheckedAssertion[]
   readonly rejected: Readonly<Partial<Record<OrgRule, number>>>
-  /** Positional diagnostics only; never copy values or evidence into feedback. */
-  readonly rejectedAssertions: readonly { readonly index: number; readonly rule: OrgRule }[]
+  /** Positional diagnostics. Never copy drafted values or evidence into
+   *  feedback; a V11 entry's `existing` is the one exception, because it is the
+   *  graph's own name for the node the draft must link to (sanitized first). */
+  readonly rejectedAssertions: readonly RejectedAssertion[]
 }
 
 export const DEFAULT_MAX_ASSERTIONS = 8
@@ -161,7 +187,10 @@ export const DEFAULT_MAX_ASSERTIONS = 8
 // ============================================================================
 
 class Drop extends Error {
-  constructor(readonly rule: OrgRule) {
+  constructor(
+    readonly rule: OrgRule,
+    readonly existing?: readonly NearDuplicate[],
+  ) {
     super(rule)
   }
 }
@@ -176,7 +205,7 @@ export function validateOrgDraft(
   ctx: OrgValidateContext,
 ): OrgValidation {
   const rejected: Partial<Record<OrgRule, number>> = {}
-  const rejectedAssertions: { index: number; rule: OrgRule }[] = []
+  const rejectedAssertions: RejectedAssertion[] = []
   const count = (rule: OrgRule, n = 1): void => {
     rejected[rule] = (rejected[rule] ?? 0) + n
   }
@@ -229,7 +258,11 @@ export function validateOrgDraft(
     } catch (e) {
       if (!(e instanceof Drop)) throw e
       count(e.rule)
-      rejectedAssertions.push({ index, rule: e.rule })
+      rejectedAssertions.push({
+        index,
+        rule: e.rule,
+        ...(e.existing ? { existing: e.existing } : {}),
+      })
     }
   }
   return { accepted, rejected, rejectedAssertions }
@@ -259,6 +292,10 @@ function checkAssertion(index: number, els: readonly DraftElement[], env: Env): 
     if (!cls) throw new Drop('V1')
     const matches = matchByName(cls, node, snapshot)
     if (matches.length > 1) throw new Drop('V5')
+    if (matches.length === 0) {
+      const near = nearDuplicates(cls, node, snapshot)
+      if (near.length > 0) throw new Drop('V11', near)
+    }
     if (!cls.creatable) {
       if (matches.length === 0) throw new Drop('V1')
       const drafted = Object.keys(node.properties)
@@ -409,6 +446,29 @@ function matchByName(cls: OntologyClass, node: DraftNode, snapshot: GraphSnapsho
       typeof n.properties[cls.nameProperty!] === 'string' &&
       nameKey(n.properties[cls.nameProperty!]) === key,
   )
+}
+
+/** V11: the stored nodes of the drafted node's own label whose near key equals
+ *  its near key. Only for a name-keyed class, whose identity is per label
+ *  (LD-24): an "Osprey" Theme is not a duplicate of an "Osprey" Project. */
+function nearDuplicates(
+  cls: OntologyClass,
+  node: DraftNode,
+  snapshot: GraphSnapshot,
+): NearDuplicate[] {
+  if (cls.identity !== 'nameKey' || cls.nameProperty === null) return []
+  const prop = cls.nameProperty
+  const name = node.properties[prop]
+  if (typeof name !== 'string' || name.trim() === '') return []
+  const key = nearNameKey(name, cls.label)
+  return snapshot.nodes
+    .filter(
+      (n) =>
+        n.label === cls.label &&
+        typeof n.properties[prop] === 'string' &&
+        nearNameKey(n.properties[prop], cls.label) === key,
+    )
+    .map((n) => ({ label: n.label, name: n.properties[prop], key: n.key }))
 }
 
 /** A node identified under its owner: the same name on a node the owner

@@ -116,6 +116,44 @@ export function orgGraphStoreContract(adapter: string, make: MakeStore): void {
       await fresh()
     })
 
+    // LD-24 / V11: a name brings back the stored nodes of ITS label that are the
+    // same node under the near key, or the validator never sees the stored
+    // "Osprey" when a draft says "Project Osprey". Mutation: drop the near
+    // match from the adapter's snapshot → the first expectation reddens; match
+    // across labels → the Theme expectation reddens.
+    it('snapshots the near-duplicates of a requested name, of its label only', async () => {
+      const accented = seedNode('po', 'Project', {
+        name: 'Projet Ősprey',
+        nameKey: 'projet ősprey',
+      })
+      await fresh([OSPREY, accented])
+      const keysOf = (s: GraphSnapshot) => s.nodes.map((x) => x.key).sort()
+      expect(
+        keysOf(
+          await h.store.snapshot({
+            names: [{ label: 'Project', name: 'Project Osprey' }],
+            keys: [],
+          }),
+        ),
+      ).toEqual(['id:osprey'])
+      expect(
+        keysOf(
+          await h.store.snapshot({
+            names: [{ label: 'Project', name: 'Projet Osprey' }],
+            keys: [],
+          }),
+        ),
+      ).toEqual(['id:po'])
+      expect(
+        keysOf(await h.store.snapshot({ names: [{ label: 'Theme', name: 'Osprey' }], keys: [] })),
+      ).toEqual([])
+      expect(
+        keysOf(
+          await h.store.snapshot({ names: [{ label: 'Project', name: 'Osprey Labs' }], keys: [] }),
+        ),
+      ).toEqual([])
+    })
+
     it('creates a new node with id, nameKey, createdBy and createdAt', async () => {
       const a = await prepare(h.store, heronDraft, HERON_MSG)
       const r = await h.store.apply(a, A)

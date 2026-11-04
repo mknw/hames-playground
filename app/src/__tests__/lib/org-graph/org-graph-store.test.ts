@@ -19,7 +19,10 @@ import {
   type CheckedAssertion,
   type GraphSnapshot,
 } from '@hames-ai/harness-patterns/org-knowledge-validate.server'
-import { createNeo4jOrgGraphStore } from '../../../lib/org-graph/org-graph-store.server'
+import {
+  createNeo4jOrgGraphStore,
+  NEAR_SCAN_LIMIT,
+} from '../../../lib/org-graph/org-graph-store.server'
 import { ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
 import { orgGraphStoreContract, seedNode } from './org-graph-store-contract'
 
@@ -202,6 +205,35 @@ describe('the Neo4j adapter’s statements', () => {
   // Design pin: every label and type in the Neo4j adapter's Cypher comes from
   // the ontology's sets, never from input. Mutation: interpolate a value into a
   // statement (e.g. `{nameKey: '${props.nameKey}'}`) → this scan names it.
+  // LD-24 / V11: the near scan reads every name of the label, because the near
+  // key folds accents and Cypher cannot. A label larger than the scan's bound
+  // cannot be proven free of a near-duplicate, so the snapshot fails closed
+  // (the hook then proposes nothing) instead of returning a partial view.
+  // Mutation: drop the `rows.length > NEAR_SCAN_LIMIT` throw → resolves.
+  it('fails the snapshot closed when a label is too large to scan for near-duplicates', async () => {
+    const run = async (q: string, p: Record<string, unknown> = {}) => {
+      const scan = /RETURN n\[\$prop\] AS name/.test(q)
+      const rows = scan
+        ? Array.from({ length: NEAR_SCAN_LIMIT + 1 }, (_, i) => ({ name: `P${i}`, key: `id:${i}` }))
+        : []
+      expect(scan ? p.prop : 'name').toBe('name')
+      return {
+        records: rows.map((r) => ({ get: (k: string) => (r as Record<string, unknown>)[k] })),
+      }
+    }
+    const session = {
+      executeRead: async (fn: (t: unknown) => unknown) => fn({ run }),
+      close: async () => undefined,
+    }
+    const store = createNeo4jOrgGraphStore({
+      ontology: ORG_ONTOLOGY,
+      driver: () => ({ session: () => session }) as never,
+    })
+    await expect(
+      store.snapshot({ names: [{ label: 'Project', name: 'Project Osprey' }], keys: [] }),
+    ).rejects.toThrow(/near-duplicate check cannot be complete/)
+  })
+
   it('interpolates nothing into Cypher but L(), T() and KEY()', () => {
     const src = readFileSync(
       resolve(__dirname, '../../../lib/org-graph/org-graph-store.server.ts'),

@@ -148,6 +148,31 @@ export function nameKey(name: string): string {
   return name.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim()
 }
 
+/**
+ * The key two names of one class are the SAME NODE under, though not the same
+ * string (V11, LD-24): {@link nameKey}, then accents folded (NFKD with every
+ * combining mark removed, so "Ősprey" is "osprey"), every run of
+ * non-alphanumeric characters read as one space, and the class's own label
+ * word dropped when it is the first or last of two or more words ("Project
+ * Osprey" and "Osprey project" are the Project "Osprey"). Built on `nameKey`
+ * rather than changing it: `nameKey` is the stored identity and the database's
+ * uniqueness key, so widening it would re-key every stored node. A letter that
+ * is not a base letter plus marks (ø, ł, ß) is not folded.
+ */
+export function nearNameKey(name: string, label: string): string {
+  const tokens = nameKey(name)
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t.length > 0)
+  const word = label.toLowerCase()
+  const stripped =
+    tokens.length > 1
+      ? tokens.filter((t, i) => !(t === word && (i === 0 || i === tokens.length - 1)))
+      : tokens
+  return (stripped.length > 0 ? stripped : tokens).join(' ')
+}
+
 /** `text` under {@link nameKey}, split on runs of non-alphanumeric characters
  *  — the token sequence value closure (V4) compares. */
 export function valueTokens(text: string): string[] {

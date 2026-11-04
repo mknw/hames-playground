@@ -27,6 +27,7 @@ import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import {
   classOf,
   nameKey,
+  nearNameKey,
   relationOf,
   type GraphOntology,
 } from '@hames-ai/harness-patterns/org-knowledge-ontology'
@@ -49,6 +50,14 @@ assertServerOnImport()
 /** Most rows one snapshot read returns. A draft names a handful of nodes; this
  *  bounds a legacy label with no `nameKey`, whose names are compared here. */
 export const SNAPSHOT_ROW_LIMIT = 1000
+
+/** Most nodes of one label the near-duplicate scan reads (V11, LD-24). The
+ *  near key folds accents, which Cypher cannot, so the scan reads every name
+ *  of the label and compares here. A label larger than this cannot be proven
+ *  free of a near-duplicate, so the snapshot THROWS (the hook stops with
+ *  `graph-read-error` and proposes nothing) rather than return a partial
+ *  view: the owner's "do not duplicate nodes" makes this fail closed. */
+export const NEAR_SCAN_LIMIT = 10_000
 
 // ----------------------------------------------------------------------------
 // The only interpolations
@@ -124,6 +133,38 @@ async function readSnapshot(
     set.add(nameKey(name))
     byLabel.set(label, set)
   }
+  // V11: every node of the label whose near key equals a requested name's.
+  const nearKeys: string[] = []
+  const nearByLabel = new Map<string, Set<string>>()
+  for (const { label, name } of names) {
+    const cls = classOf(ontology, label)
+    if (!cls?.nameProperty) continue
+    const set = nearByLabel.get(label) ?? new Set<string>()
+    set.add(nearNameKey(name, label))
+    nearByLabel.set(label, set)
+  }
+  for (const [label, near] of nearByLabel) {
+    const cls = classOf(ontology, label)!
+    const res = await tx.run(
+      `MATCH (n:${L(ontology, label)}) RETURN n[$prop] AS name, ${KEY('n')} AS key LIMIT $limit`,
+      { prop: cls.nameProperty, limit: neo4j.int(NEAR_SCAN_LIMIT + 1) },
+    )
+    const rows = res.records as unknown as Row[]
+    if (rows.length > NEAR_SCAN_LIMIT) {
+      throw new Error(
+        'org graph snapshot: more than ' +
+          String(NEAR_SCAN_LIMIT) +
+          ' nodes of one label; the near-duplicate check cannot be complete',
+      )
+    }
+    for (const r of rows) {
+      const v = r.get('name')
+      if (typeof v === 'string' && near.has(nearNameKey(v, label))) {
+        nearKeys.push(asString(r.get('key')))
+      }
+    }
+  }
+
   for (const [label, wanted] of byLabel) {
     const cls = classOf(ontology, label)!
     const res = await tx.run(
@@ -137,9 +178,10 @@ async function readSnapshot(
       if (v && wanted.has(nameKey(v))) add(asString(r.get('key')), node)
     }
   }
-  if (keys.length > 0) {
+  const byKey = [...new Set([...keys, ...nearKeys])]
+  if (byKey.length > 0) {
     const res = await tx.run(`MATCH (n) WHERE ${KEY('n')} IN $keys RETURN n, ${KEY('n')} AS key`, {
-      keys: [...keys],
+      keys: byKey,
     })
     for (const r of res.records as unknown as Row[]) add(asString(r.get('key')), r.get('n'))
   }

@@ -825,3 +825,74 @@ describe('the amended classes: Knowledge and Resource (LD-22)', () => {
     expect(schema).not.toMatch(/\bkey\b \((required|optional)\)/)
   })
 })
+
+// LD-24: the owner's "do not duplicate nodes", deterministically. A new node of a
+// name-keyed class is refused when its near key (nameKey plus accents,
+// punctuation and the class's own label word folded) equals a stored node's of
+// the SAME label, and the refusal names that node for the repair turn.
+// Mutations: skip the V11 check in checkAssertion → every "refuses" case
+// reddens; compare near keys across labels → the cross-label case reddens;
+// drop `existing` from the refusal → the naming assertion reddens.
+describe('V11: no near-duplicate of a stored node of the same label', () => {
+  const near = (r: ReturnType<typeof run>) => r.rejectedAssertions[0]?.existing
+
+  it("refuses 'Project Osprey' beside a stored 'Osprey', naming it", () => {
+    const msg = 'The Project Osprey review is due on 15 December.'
+    const r = run(
+      [node('p', 'Project', { name: 'Project Osprey' }, 'The Project Osprey')],
+      msg,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)).toEqual([{ label: 'Project', name: 'Osprey', key: 'k:osprey' }])
+  })
+
+  it("refuses 'Projet Ősprey' beside a stored 'Projet Osprey'", () => {
+    const snap = graph([['k:po', 'Project', { name: 'Projet Osprey' }]])
+    const msg = 'We renamed the work Projet Ősprey this week.'
+    const r = run(
+      [node('p', 'Project', { name: 'Projet Ősprey' }, 'the work Projet Ősprey')],
+      msg,
+      snap,
+    )
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)?.[0].name).toBe('Projet Osprey')
+  })
+
+  it('links a case or whitespace variant (one node by nameKey) and refuses a punctuation variant', () => {
+    const msg = 'The  OSPREY  status is paused; the Osprey. work waits.'
+    const linked = run(
+      [node('p', 'Project', { name: 'OSPREY', status: 'paused' }, 'OSPREY  status is paused')],
+      msg,
+      OSPREY,
+    )
+    expect(linked.rejected).toEqual({})
+    expect(linked.accepted[0].nodes[0].verdict).not.toBe('new')
+    expect(linked.accepted[0].nodes[0].existing?.key).toBe('k:osprey')
+    const dotted = run(
+      [node('p', 'Project', { name: 'Osprey.' }, 'the Osprey. work waits')],
+      msg,
+      OSPREY,
+    )
+    expect(dotted.rejected).toEqual({ V11: 1 })
+  })
+
+  it('admits a legitimately different name as new', () => {
+    const msg = 'Osprey Labs is a new workstream we started today.'
+    const r = run(
+      [node('p', 'Project', { name: 'Osprey Labs' }, 'Osprey Labs is a new workstream')],
+      msg,
+      OSPREY,
+    )
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+
+  it('treats the same name under another label as another node (per-label identity)', () => {
+    const msg = 'Osprey is also the name of our new theme.'
+    const r = run([node('t', 'Theme', { name: 'Osprey' }, 'Osprey is also the name')], msg, OSPREY)
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+})

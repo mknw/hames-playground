@@ -8,7 +8,11 @@
  * - {@link OrgGraphStore.snapshot} reads what a draft references: the nodes it
  *   names (by label and name key) or keys, every edge touching them, and the
  *   nodes at the other end — what the validator's resolution, owner matching
- *   and cardinality checks read.
+ *   and cardinality checks read. A name also brings back every node of ITS
+ *   label whose {@link nearNameKey} equals the name's, so the validator's
+ *   near-duplicate refusal (V11, LD-24) can see a stored "Osprey" when the
+ *   draft says "Project Osprey". An adapter that cannot prove it has seen
+ *   every such node throws rather than return a snapshot missing one.
  * - {@link OrgGraphStore.apply} writes ONE validated assertion in ONE
  *   transaction, after re-reading what the preview read:
  *     1. every node the preview resolved still exists and still holds the
@@ -32,6 +36,7 @@
 import {
   classOf,
   nameKey,
+  nearNameKey,
   relationOf,
   type GraphOntology,
   type OntologyClass,
@@ -223,9 +228,15 @@ export function createMemoryOrgGraphStore(
         const cls = classOf(ontology, label)
         if (!cls?.nameProperty) continue
         const key = nameKey(name)
+        const near = nearNameKey(name, label)
         for (const n of nodes) {
           const v = n.properties[cls.nameProperty]
-          if (n.label === label && typeof v === 'string' && nameKey(v) === key) wanted.add(n.key)
+          if (
+            n.label === label &&
+            typeof v === 'string' &&
+            (nameKey(v) === key || nearNameKey(v, label) === near)
+          )
+            wanted.add(n.key)
         }
       }
       const touching = edges.filter((e) => wanted.has(e.from) || wanted.has(e.to))

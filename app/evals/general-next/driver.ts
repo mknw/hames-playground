@@ -1,6 +1,7 @@
 /** Real package agent + real harness, with synthetic dependencies on every tool edge. */
 import type { AgentDefinition, AgentDeps, AgentGuards } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
+import type { MemoryRecalledEventData } from '@hames-ai/harness-patterns/types'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
 import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
@@ -25,6 +26,7 @@ import type {
   MemoryScenario,
   MemoryTurnTrace,
 } from '../../src/lib/eval-support/memory-scenario'
+import { fetchEnvelope } from '../../src/lib/eval-support/fetch-envelope'
 import type { fixtureInference } from './fixture-inference'
 import type { OrgScenario, OrgTurnTrace } from '../../src/lib/eval-support/org-scenario'
 
@@ -318,7 +320,11 @@ export async function createDriver(
                 : GRAPH_RELATIONSHIPS,
         }
       }
-      return { success: true, data: scenario?.toolData?.[name] ?? FIXTURES[name] }
+      const data = scenario?.toolData?.[name] ?? FIXTURES[name]
+      // A canned page reads as the production fetch server returns one (03, #775).
+      if (name === 'fetch' && typeof data === 'string')
+        return { success: true, data: fetchEnvelope(String(args.url ?? ''), data, args) }
+      return { success: true, data }
     },
   }
   // The runner also supplies a loopback gateway for the shared catalog read.
@@ -613,11 +619,20 @@ async function memorySeams(live: boolean) {
           // store step can change a row, so the trace holds what recall actually handed on.
           const lastUser = ctx.events.findLastIndex((e) => e.type === 'user_message')
           const rows = store.snapshot()
-          const recalled = ctx.events
+          const recalledEvents = ctx.events
             .slice(lastUser)
             .filter((e) => e.type === 'memory_recalled')
+          const recalled = recalledEvents
             .flatMap((e) => (e.data as { attached?: string[] }).attached ?? [])
             .flatMap((id) => rows.filter((r) => r.id === id))
+          // Why recall attached what it did, so a live miss names its stage (05, 2026-11-04).
+          const recallData = recalledEvents.at(-1)?.data as MemoryRecalledEventData | undefined
+          const recall = recallData && {
+            considered: recallData.considered,
+            survivors: recallData.survivors,
+            ...(recallData.skipped ? { skipped: recallData.skipped } : {}),
+            ...(recallData.gate ? { gate: recallData.gate.label } : {}),
+          }
           const report = await settleMemory(ctx, memoryStoreConfig(config), {
             conversationId: session,
           })
@@ -694,6 +709,7 @@ async function memorySeams(live: boolean) {
               : {}),
             ...(answer ? { answer } : {}),
             recalled,
+            ...(recall ? { recall } : {}),
             inputs: [...inputs],
           })
         },

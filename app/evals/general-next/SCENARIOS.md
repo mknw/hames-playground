@@ -74,13 +74,13 @@ A live pass proves: the model resolves SolidJS before requesting its documentati
 
 User, turn 1: “What do you remember about me?” Turn 2: “And which release tag do you have noted for it?”
 
-Expected assistant: Turn 1 lists the confirmed memory (the person works on the Lantern project); turn 2 gives its release tag, LANTERN-2, from the same memory. No tool is called and nothing from another user’s memory appears.
+Expected assistant: Turn 1 names no remembered content, so relevance-gated recall attaches nothing and turn 1 is not graded on recall (#982: on the production embedder the question scores 0.14 against the memory, under the 0.5 floor). Turn 2 gives the release tag, LANTERN-2, from the confirmed memory (the person works on the Lantern project). No tool is called and nothing from another user’s memory appears.
 
 Expected routes: none (answered directly). Expected tools: none. Memory: on, the synthetic owner-scoped store.
 
-Pass: no tool is called; turn 1’s answer carries Lantern and turn 2’s carries LANTERN-2; chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
+Pass: no tool is called; turn 2’s recall attaches the memory and its answer carries LANTERN-2; chooses `answer` within 6 decisions per turn; no terminal error, empty response or ignored required check.
 
-A live pass proves: with per-user memory on, the recalled memory reaches the answer in both turns, and the other user’s memory does not. The shared memory graph this scenario once read is retired (PR #744); 05 changed meaning and is a candidate-only `should` row with no `general` baseline (see “Round 2”).
+A live pass proves: with per-user memory on, a content question's recalled memory reaches the answer, and the other user’s memory does not. The shared memory graph this scenario once read is retired (PR #744); 05 changed meaning and is a candidate-only `should` row with no `general` baseline (see “Round 2”).
 
 ### 06-read-only — Explain a missing write capability
 

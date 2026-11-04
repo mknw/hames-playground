@@ -61,6 +61,14 @@ describe('03-web-read fixture (#775)', () => {
     expect(scenario).toContain(`a.url === '${SEARCH_URL}'`)
   })
 
+  // MUTATION (red): return `data` for `fetch` without `fetchEnvelope(...)` in the
+  // driver's transport — the canned page reaches the model as a bare line again.
+  it('a canned fetch page goes out in the production fetch envelope (live 2026-11-04)', () => {
+    expect(driver).toMatch(
+      /name === 'fetch' && typeof data === 'string'\)\s*return \{ success: true, data: fetchEnvelope\(String\(args\.url \?\? ''\), data, args\) \}/,
+    )
+  })
+
   it('the seeded local decoy does not answer the ask', () => {
     const notes = driver.match(/const NOTES =\s*'([^']*)'/)?.[1] ?? ''
     expect(notes).toContain('Lantern')

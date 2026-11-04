@@ -40,6 +40,72 @@ afterEach(() => {
 
 const roles = Object.keys(SELF_DEPLOYED_CLIENT_BY_ROLE) as BamlRole[]
 
+/**
+ * A function more than one role routes (FRONT ruling A / option 1, 2026-11-04):
+ * LoopController is the `controller` loop's and the org-knowledge `orgDraft`
+ * loop's. The check accepts the private client of ANY role that lists the
+ * function — computed from the map, never hard-coded — and refuses everything
+ * else exactly as before. Each pin names the mutation that reddens it.
+ */
+describe('private-only: a function shared by two roles', () => {
+  const listing = (fn: string) =>
+    roles.filter((r) => SWITCHED_FUNCTIONS_BY_ROLE[r]?.includes(fn)).sort()
+
+  // Mutation (b): take the first matching role only → SmallQwen via orgDraft
+  // is refused.
+  it('accepts the private client of every role that lists the function', () => {
+    expect(listing('LoopController')).toEqual(['controller', 'orgDraft'])
+    for (const role of listing('LoopController')) {
+      const client = SELF_DEPLOYED_CLIENT_BY_ROLE[role]
+      expect(() => assertBamlCallAllowed('LoopController', { client })).not.toThrow()
+    }
+    expect(SELF_DEPLOYED_CLIENT_BY_ROLE.orgDraft).toBe('SmallQwen')
+  })
+
+  // Mutation (a): accept any client name → a public client passes.
+  it('still refuses a public client, and a private client no listing role resolves to', () => {
+    for (const client of ['ControllerAnthropic', 'DescribeAnthropic', 'JevDecide', 'Nope']) {
+      expect(() => assertBamlCallAllowed('LoopController', { client })).toThrow(
+        /before any request/,
+      )
+    }
+    // Private, but no role listing the function resolves to it.
+    expect(() => assertBamlCallAllowed('LoopController', { client: 'PrivateSystemOne' })).toThrow(
+      /before any request/,
+    )
+    // The widening is per function: SmallQwen stays refused where only a
+    // LargeQwen role lists the function.
+    for (const fn of ['Router', 'ActorController', 'ScreenUntrustedContent']) {
+      expect(() => assertBamlCallAllowed(fn, { client: 'SmallQwen' })).toThrow(/before any request/)
+    }
+    expect(() => assertBamlCallAllowed('LoopController', undefined)).toThrow(/before any request/)
+  })
+
+  // Mutation (c): let an env or registry bag through → it passes.
+  it('refuses registry and env bags under every role that lists the function', () => {
+    for (const role of listing('LoopController')) {
+      const client = SELF_DEPLOYED_CLIENT_BY_ROLE[role]
+      for (const options of [
+        { client, clientRegistry: {} },
+        { client, env: {} },
+      ]) {
+        expect(() => assertBamlCallAllowed('LoopController', options)).toThrow(/before any request/)
+      }
+    }
+  })
+
+  it('lets the generated LoopController through the guarded client on the small box', async () => {
+    const native = vi.spyOn(generated, 'LoopController').mockResolvedValue({} as never)
+    const call = (client: string) =>
+      b.LoopController('q', 'i', [], [], null, null, null, null, null, null, { client })
+    expect(() => call('ControllerAnthropic')).toThrow(/before any request/)
+    expect(native).not.toHaveBeenCalled()
+    await call('SmallQwen')
+    await call('LargeQwen')
+    expect(native).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('private-only call guards', () => {
   it.each(roles)('routes %s outside any conversation or frame', (role) => {
     expect(activeInferenceTier()).toBe('self_deployed')

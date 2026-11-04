@@ -67,6 +67,7 @@ const ALL_ROLES: BamlRole[] = [
   'describe',
   'screen',
   'decide',
+  'orgDraft',
 ]
 
 /** The roles the map routes: the Anthropic chain each one leaves behind, and the
@@ -96,6 +97,9 @@ const ROUTED: Partial<Record<BamlRole, { from: string; to: string }>> = {
   screen: { from: 'DescribeAnthropic', to: 'LargeQwen' },
   // The public and private systemone clients.
   decide: { from: 'JevDecide', to: 'PrivateSystemOne' },
+  // The org-knowledge draft loop: LoopController under its own role, on the 4B
+  // (FRONT ruling A, 2026-11-04). `controller` keeps the 27B.
+  orgDraft: { from: 'ControllerAnthropic', to: 'SmallQwen' },
 }
 /** Nothing is held back any more. Kept as an empty map rather than deleted:
  *  every test below iterates it, so a future exception is added in one place
@@ -645,13 +649,20 @@ describe('every routed role has a wired call site', () => {
     for (const file of callSiteRoots().flatMap((dir) => sources(dir))) {
       if (file.endsWith('clients.server.ts')) continue
       const code = stripComments(readFileSync(file, 'utf8'))
+      // A function may be listed by more than one role (LoopController: the
+      // `controller` loop and the `orgDraft` loop). A file reaching it must
+      // spread the override of at least one role that lists it; the test above
+      // still requires every role's spread to exist somewhere.
+      const owners = new Map<string, string[]>()
       for (const [role, fns] of Object.entries(SWITCHED_FUNCTIONS_BY_ROLE)) {
-        const calls = (fns as readonly string[]).filter((fn) => code.includes(`b.${fn}(`))
-        if (calls.length === 0) continue
+        for (const fn of fns as readonly string[]) owners.set(fn, [...(owners.get(fn) ?? []), role])
+      }
+      for (const [fn, roles] of owners) {
+        if (!code.includes(`b.${fn}(`)) continue
         callingFiles += 1
-        if (!code.includes(`clientOverrideFor('${role}')`)) {
+        if (!roles.some((role) => code.includes(`clientOverrideFor('${role}')`))) {
           missing.push(
-            `${path.basename(file)} calls ${calls.join(', ')} without a ${role} override`,
+            `${path.basename(file)} calls ${fn} without a ${roles.join(' or ')} override`,
           )
         }
       }

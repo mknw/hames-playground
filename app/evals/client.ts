@@ -95,6 +95,8 @@ const PRODUCTION_ROLE: Record<EvalRole, BamlRole> = {
   screen: 'screen',
   // Systemone uses its own transport and URL, independently of chat overrides.
   decide: 'decide',
+  // The org-knowledge draft loop: LoopController under its own role.
+  orgDraft: 'orgDraft',
 }
 
 /**

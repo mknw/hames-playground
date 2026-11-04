@@ -81,6 +81,7 @@ is and why it is shaped this way, start at the front page —
   - [humanGate() and confirm()](#humangate-and-confirm)
   - [Supersede and expiry](#supersede-and-expiry)
   - [Properties (P1–P6)](#properties-p1p6)
+- [Organizational knowledge (settleOrgKnowledge, #930)](#organizational-knowledge-settleorgknowledge-930)
 - [EventView Query API](#eventview-query-api)
 - [Configuration System](#configuration-system)
   - [ViewConfig Options](#viewconfig-options)
@@ -3671,6 +3672,65 @@ persistent episodes and expiring preferences. Equality at expiry is expired.
 Nonfinite/negative days are refused; an invalid timestamp never authorizes a
 deletion. Expiry needs no model call. `expiredMemories` reads the configured
 values, never an embedded 180-day literal.
+
+## Organizational knowledge (settleOrgKnowledge, #930)
+
+The post-reply hook that proposes what the user's latest message asserts about
+the organisation, for a person to accept (`docs/plan/org-knowledge-hook.md`).
+It PROPOSES; nothing reaches the graph before the person answers.
+
+```typescript
+const patterns = withOrgKnowledge()([...agentPatterns]) // opt in; harnessUsesOrgKnowledge(patterns)
+// after the reply, from the host's post-turn continuation:
+await settleOrgKnowledge(
+  ctx,
+  {
+    store, // OrgKnowledgeStore: snapshot(refs) + apply(assertion, actor)
+    ontology, // a defineOntology() value: every proposal is checked against it
+    decide, // the systemone seam; ONE choice question, orgKnowledge.gate
+    draft, // OrgDraftFn, usually createOrgDraftLoop({ controller })
+    owner, // () => string | null
+    enabled, // the deployment switch: absent or false proposes nothing
+    mentionsMember, // the roster matcher (V9)
+    confirm, // OrgConfirmSeam: where the payload waits; absent proposes nothing
+    awaitWake, // optional; a wake that does not land proposes nothing
+  },
+  { conversationId },
+)
+```
+
+`settleOrgKnowledge` has `settleMemory`'s shape: a plain async function the host
+awaits in its post-turn continuation, so its events land before that
+continuation's one save; it never throws, writes into `ctx.events` directly
+(never the live transcript) and logs a stop by reason code, never the user's
+words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
+`no-pair`, `no-event-id`, `no-confirmation`, `waking`, `gate-error`, `gate`,
+`draft-error`, `draft-unparseable`, `graph-read-error`, `nothing-valid`,
+`only-reinforces`, `already-proposed`, `error`.
+
+- **The gate** is `ORG_KNOWLEDGE_GATE`, choices exactly
+  `add_to_organizational_kg` and `no_organizational_knowledge`, over the
+  CURRENT user message alone. A failed call proposes nothing.
+- **The draft** (`createOrgDraftLoop`) is a `simpleLoop` holding exactly
+  `ORG_DRAFT_TOOLS` (`read_neo4j_cypher`, `get_neo4j_schema`), inside a K1
+  guard on those tools, in a scratch context holding only the user's message,
+  with `renderOrgSchema(ontology)` as its schema. Its `Return` answer is one
+  JSON draft, parsed once by `parseOrgDraft` (closed shape, refs scoped to
+  their assertion, one optional ```json fence); anything else proposes
+  nothing. The host routes its controller: in `@hames-ai/harness-baml`,
+  `createLoopControllerAdapter(undefined, { role: 'orgDraft' })`.
+- **The validator** (`validateOrgDraft`, V1–V10) decides what survives; an
+  assertion that only reinforces is not proposed (`onlyReinforces`).
+- **The proposal** is `orgKnowledgeConfirmRequest`: kind
+  `orgKnowledge.confirm`, key the user message's event id, options `add` (one
+  flag per assertion, `a<index>`, labelled "Item N"; no rule may pick it) and
+  `discard` (the only option a rule may pick), rule `park`, a 7-day expiry. Its
+  `summary` is the count and the closed class set — never a name, value or
+  evidence. A hold that throws takes the proposal back out.
+- **`applyOrgProposal(cfg, { payload, selected, actor })`** is the approval's
+  write: no model; one `store.apply` per selected assertion, each `applied`,
+  `stale` or `failed` on its own; never throws. `payload` is the host's own
+  record (`parseOrgProposalPayload`), never client input.
 
 ## EventView Query API
 

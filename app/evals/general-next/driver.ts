@@ -327,7 +327,7 @@ export async function createDriver(
       const data = scenario?.toolData?.[name] ?? FIXTURES[name]
       // A canned page reads as the production fetch server returns one (03, #775).
       if (name === 'fetch' && typeof data === 'string')
-        return { success: true, data: fetchEnvelope(String(args.url ?? ''), data, args) }
+        return { success: true, data: fetchEnvelope(data, args) }
       return { success: true, data }
     },
   }

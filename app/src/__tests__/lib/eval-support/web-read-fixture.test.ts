@@ -65,7 +65,7 @@ describe('03-web-read fixture (#775)', () => {
   // driver's transport — the canned page reaches the model as a bare line again.
   it('a canned fetch page goes out in the production fetch envelope (live 2026-11-04)', () => {
     expect(driver).toMatch(
-      /name === 'fetch' && typeof data === 'string'\)\s*return \{ success: true, data: fetchEnvelope\(String\(args\.url \?\? ''\), data, args\) \}/,
+      /name === 'fetch' && typeof data === 'string'\)\s*return \{ success: true, data: fetchEnvelope\(data, args\) \}/,
     )
   })
 

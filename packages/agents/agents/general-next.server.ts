@@ -20,6 +20,7 @@ import {
   GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE,
   type ConfiguredPattern,
 } from '@hames-ai/harness-patterns'
+import { withOrgKnowledge } from '@hames-ai/harness-patterns/org-knowledge-hook.server'
 import {
   bamlPatterns,
   createActorControllerAdapter,
@@ -448,7 +449,10 @@ async function createPatterns(
   // Synthesis and the decisions model read memory (the latter its text only where the
   // host's tier line allows, a count elsewhere); decisionLoop builds fresh, memory-free
   // child data, so no route reads it.
-  return deps.memory ? withMemory<AgentData>(deps.memory)(patterns) : patterns
+  const remembered = deps.memory ? withMemory<AgentData>(deps.memory)(patterns) : patterns
+  // The organizational-knowledge hook: an opt-in the host settles after the
+  // reply; it changes nothing about how a pattern runs (slice 4).
+  return deps.orgKnowledge ? withOrgKnowledge()(remembered) : remembered
 }
 
 export const generalNextAgent: AgentDefinition = {

@@ -30,6 +30,7 @@ import { canonicalAgentId, getAgent } from './registry.server'
 import { getRequestUserId, isAttendedRequest } from './request-user.server'
 import { releaseDeletedSessions } from '../stash/release.server'
 import { createHostMemoryConfig } from '../memory/config.server'
+import { orgKnowledgeHookEnabled } from '../org-graph/hook.server'
 import { createEgressRoster } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
@@ -81,6 +82,10 @@ export function agentDeps(): AgentDeps {
   return {
     graphFileIngest: graphFileIngestEnabled(),
     memory: createHostMemoryConfig(),
+    // The organizational-knowledge hook's opt-in (slice 4): the deployment
+    // switch, read per build. The hook's own configuration is built where it
+    // settles (`lib/org-graph/hook.server.ts`).
+    orgKnowledge: orgKnowledgeHookEnabled(),
     // The guards' host settings, from the GUARD_* operator switches, read once
     // per build (boundary guards, slice 6). The web route's input filter rides
     // `guards` too (GUARD_PSEUDONYMISE): off, the field is OMITTED — the agent

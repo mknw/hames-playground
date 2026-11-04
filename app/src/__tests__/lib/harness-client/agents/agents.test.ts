@@ -256,6 +256,22 @@ describe('Agent Consistency', () => {
     expect(verdicts['general-next']).toEqual({ declared: true, built: true })
   })
 
+  // Org-knowledge slice 4: general-next opts into the hook only when the
+  // deployment's switch reaches it through AgentDeps. Mutation: wrap
+  // unconditionally (or never) → one of the two assertions fails.
+  it('general-next opts into the org-knowledge hook only when deps say so', async () => {
+    const { generalNextAgent } = await import('@hames-ai/agents/agents/general-next.server')
+    const { harnessUsesOrgKnowledge } =
+      await import('@hames-ai/harness-patterns/pattern-capabilities')
+    const off = await generalNextAgent.createPatterns('s-off', testAgentDeps)
+    const on = await generalNextAgent.createPatterns('s-on', {
+      ...testAgentDeps,
+      orgKnowledge: true,
+    })
+    expect(harnessUsesOrgKnowledge(off as never)).toBe(false)
+    expect(harnessUsesOrgKnowledge(on as never)).toBe(true)
+  })
+
   it('the only exported definition is general-next', async () => {
     expect((await allDefinitions()).map((d) => d.id)).toEqual(['general-next'])
   })

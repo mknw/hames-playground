@@ -178,6 +178,14 @@ export interface AgentDeps {
   /** Optional host memory wiring. An agent opts in explicitly with withMemory. */
   memory?: MemoryConfig
   /**
+   * The deployment's organizational-knowledge switch (`ORG_KNOWLEDGE_HOOK`,
+   * `docs/plan/org-knowledge-hook.md` slice 4). True: the agent opts in with
+   * `withOrgKnowledge()`, and the host settles the hook after each reply.
+   * Absent or false: nothing is proposed. The hook's configuration is the
+   * host's, built where it settles; this is only whether to opt in.
+   */
+  orgKnowledge?: boolean
+  /**
    * The guards' host settings (boundary guards, slice 6: the operator
    * switches). One object rather than one field per guard, so a guard added
    * later is a new key and not a second `AgentDeps` path. The composition root

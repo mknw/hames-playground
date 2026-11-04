@@ -39,11 +39,11 @@ import { simpleLoop } from './patterns/simpleLoop.server'
 import { withInjectionGuard } from './patterns/withInjectionGuard.server'
 import { decide, defineChoice } from './patterns/typedDecision.server'
 import { classOf, type GraphOntology } from './org-knowledge-ontology'
+import type { OrgActor, OrgApplyResult, OrgGraphStore } from './org-knowledge-store'
 import {
   validateOrgDraft,
   type CheckedAssertion,
   type DraftElement,
-  type GraphSnapshot,
   type OrgDraft,
   type OrgRule,
 } from './org-knowledge-validate.server'
@@ -62,27 +62,10 @@ assertServerOnImport()
 // The store this hook needs
 // ============================================================================
 
-/** Who accepted, and when (ISO timestamp). `userId` is an internal user id,
- *  never a name or an email (A8). */
-export interface OrgActor {
-  readonly userId: string
-  readonly now: string
-}
-
-export type OrgApplyResult =
-  | { readonly status: 'applied'; readonly keys: Readonly<Record<string, string>> }
-  | { readonly status: 'stale' }
-
-/** What the hook reads and writes the graph through: the graph store seam of
- *  `docs/plan/org-knowledge-hook.md` slice 2, which satisfies it. Declared here
- *  by shape so this module stands on slice 1 alone. */
-export interface OrgKnowledgeStore {
-  snapshot(refs: {
-    readonly names: readonly { readonly label: string; readonly name: string }[]
-    readonly keys: readonly string[]
-  }): Promise<GraphSnapshot>
-  apply(assertion: CheckedAssertion, actor: OrgActor): Promise<OrgApplyResult>
-}
+/** What the hook reads and writes the graph through: slice 2's graph store
+ *  seam. The names below are kept as aliases of it. */
+export type OrgKnowledgeStore = OrgGraphStore
+export type { OrgActor, OrgApplyResult }
 
 // ============================================================================
 // The gate

@@ -87,6 +87,7 @@ import {
 } from './session.server'
 import { startTurnMemory } from '../memory/config.server'
 import { settleMemory } from '@hames-ai/harness-patterns/memory-store.server'
+import { settleTurnOrgKnowledge, turnUsesOrgKnowledge } from '../org-graph/hook.server'
 import { memoryStoreConfig } from '@hames-ai/harness-patterns/patterns/withMemory.server'
 import {
   runWithRequestContext,
@@ -402,6 +403,7 @@ async function runOneTurn(
     result: HarnessResultScoped<SessionData>
     saved: SavedTurn
     memory?: MemoryConfig
+    orgKnowledge?: boolean
   }
   try {
     ran =
@@ -436,7 +438,14 @@ async function runOneTurn(
   // all three scopes, so it keeps them for its whole continuation (the
   // tier scope included: a detached summarization must not silently
   // change provider halfway through a turn).
-  void compactAndSave(req, result, titleWarned, saved, memoryAllowed ? ran.memory : undefined)
+  void compactAndSave(
+    req,
+    result,
+    titleWarned,
+    saved,
+    memoryAllowed ? ran.memory : undefined,
+    ran.orgKnowledge === true,
+  )
   return result
 }
 
@@ -625,7 +634,12 @@ async function runAndSave(
   run: RunFn,
   tier: InferenceTier,
   held: HeldTurn,
-): Promise<{ result: HarnessResultScoped<SessionData>; saved: SavedTurn; memory?: MemoryConfig }> {
+): Promise<{
+  result: HarnessResultScoped<SessionData>
+  saved: SavedTurn
+  memory?: MemoryConfig
+  orgKnowledge?: boolean
+}> {
   const { sessionId, userId } = req
   try {
     // WAKE THEN RUN. The self-hosted box scales to zero, so on the private tier
@@ -651,6 +665,7 @@ async function runAndSave(
     // not a second derivation.
     const patterns = await getOrBuildPatterns(sessionId, agentId)
     const memory = await startTurnMemory(patterns, agentDeps().memory)
+    const orgKnowledge = turnUsesOrgKnowledge(patterns)
     const result = await amendRunFrame(
       {
         live: req.onEvent,
@@ -678,7 +693,12 @@ async function runAndSave(
     await purgeClosedPayloads(result.context, userId).catch((err: unknown) =>
       console.error('[hitl] could not purge the closed payloads of %s:', sessionId, err),
     )
-    return { result, memory, saved: { version, eventCount: result.context.events.length } }
+    return {
+      result,
+      memory,
+      orgKnowledge,
+      saved: { version, eventCount: result.context.events.length },
+    }
   } catch (err) {
     console.error(`[turn] run failed for ${sessionId}:`, err)
     held.released = true
@@ -967,6 +987,7 @@ async function runResumeAndSave(
   result: HarnessResultScoped<SessionData>
   saved: SavedTurn
   memory?: MemoryConfig
+  orgKnowledge?: boolean
 }> {
   const { sessionId, userId } = req
   // `claimTurn` refuses a resume that loads no session, so this is never null
@@ -1022,6 +1043,7 @@ async function runResumeAndSave(
     }
     const patterns = await getOrBuildPatterns(sessionId, loaded.agentId)
     const memory = !plan.stopOnly ? await startTurnMemory(patterns, agentDeps().memory) : undefined
+    const orgKnowledge = !plan.stopOnly && turnUsesOrgKnowledge(patterns)
     const result = await amendRunFrame(
       {
         live: req.onEvent,
@@ -1060,6 +1082,7 @@ async function runResumeAndSave(
       agentId: loaded.agentId,
       result,
       memory,
+      orgKnowledge,
       saved: { version, eventCount: result.context.events.length },
     }
   } catch (err) {
@@ -1202,11 +1225,17 @@ async function compactAndSave(
   mustPersist: boolean,
   saved: SavedTurn,
   memory?: MemoryConfig,
+  orgKnowledge = false,
 ): Promise<void> {
   const before = result.context.events.length
   if (memory) {
     // The row id claimTurn created/claimed, never core's fresh context id.
     await settleMemory(result.context, memoryStoreConfig(memory), { conversationId: req.sessionId })
+  }
+  if (orgKnowledge) {
+    // The organizational-knowledge hook (slice 4): it proposes, never writes;
+    // its events ride this continuation's one save, like memory's.
+    await settleTurnOrgKnowledge(result.context, req.sessionId)
   }
   mustPersist ||= result.context.events.length !== before
   let persisted = false

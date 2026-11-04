@@ -722,6 +722,26 @@ export const FAKE_ANSWER_MARK = 'E2E-FAKE-ANSWER'
 /** The tool call the fake controller makes on turn 0, before returning. */
 export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
 
+/** The org-knowledge scenario's turn (slice 4) and the draft the fake's
+ *  draft loop returns for it: one new Project, its evidence copied from the
+ *  message, as the validator requires. Recognised by the ontology schema the
+ *  hook renders into the loop's context. */
+export const FAKE_ORG_MESSAGE = "We've started calling the new logistics workstream Project Heron."
+export const FAKE_ORG_DRAFT = JSON.stringify({
+  assertions: [
+    {
+      nodes: [
+        {
+          ref: 'p',
+          label: 'Project',
+          properties: { name: 'Heron' },
+          evidence: 'workstream Project Heron',
+        },
+      ],
+    },
+  ],
+})
+
 /** A graph question answered by NAME, the scalar shape the shipped few-shots
  * teach. The fake gateway answers its query with synthetic rows. */
 export const FAKE_GRAPH_LOOKUP_QUESTION = 'What does the knowledge graph say about Redis?'
@@ -781,6 +801,15 @@ function replyForBase(fn: BamlFunctionName, prompt: string): string {
       })
 
     case 'LoopController': {
+      // The org-knowledge draft loop (slice 4): Return the draft at once.
+      if (prompt.includes('ORGANIZATIONAL ONTOLOGY') && prompt.includes('Project Heron')) {
+        return JSON.stringify({
+          reasoning: 'One new project, named in the message.',
+          tool_name: 'Return',
+          tool_args: FAKE_ORG_DRAFT,
+          is_final: true,
+        })
+      }
       const turn = readTurn(prompt)
       if (turn > 0) {
         return JSON.stringify({

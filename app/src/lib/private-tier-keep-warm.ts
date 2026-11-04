@@ -73,12 +73,10 @@ export function startKeepWarm({ ask, onWarmed, doc = document }: KeepWarmOptions
     }
   }
 
+  // Hiding needs no handler of its own: a timer that fires while hidden finds
+  // `run` refusing, and showing the page again asks at once.
   const onVisibility = () => {
-    if (!visible()) {
-      clear()
-      return
-    }
-    void run()
+    if (visible()) void run()
   }
 
   doc.addEventListener('visibilitychange', onVisibility)

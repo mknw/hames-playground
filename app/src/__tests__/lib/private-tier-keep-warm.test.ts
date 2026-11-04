@@ -138,6 +138,18 @@ describe('startKeepWarm', () => {
     expect(ask).toHaveBeenCalledTimes(2)
   })
 
+  it('schedules nothing when the page closed while an ask was still pending', async () => {
+    // The strip unmounts during a cold wake that takes minutes; the answer
+    // arriving afterwards must not start a timer nobody can clear.
+    let release: (a: KeepWarmAnswer) => void = () => {}
+    ask.mockImplementationOnce(() => new Promise((r) => (release = r)))
+    start()
+    stop()
+    release(warm)
+    await vi.advanceTimersByTimeAsync(NEXT * 5)
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
   it('stops entirely once disposed — the page closed', async () => {
     start()
     await vi.advanceTimersByTimeAsync(0)

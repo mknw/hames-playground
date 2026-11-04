@@ -41,9 +41,10 @@ import { assertServerOnImport } from './assert.server'
 import { sanitizeUntrusted } from './injection-guard'
 import { MIN_EVIDENCE_CHARS } from './memory-acceptance.server'
 import {
-  MAX_TEXT_CHARS,
   classOf,
+  isIsoDay,
   nameKey,
+  propertyRefusal,
   relationOf,
   valueTokens,
   type GraphOntology,
@@ -164,7 +165,6 @@ class Drop extends Error {
 }
 
 const nfkc = (s: string): string => s.normalize('NFKC')
-const LINE_BREAK = /[\r\n\u2028\u2029\u0085]/u
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/
 
 export function validateOrgDraft(
@@ -438,20 +438,8 @@ function matchUnderOwner(
 }
 
 function checkProperties(cls: OntologyClass, node: DraftNode, isNew: boolean): void {
-  const allowed = new Set([...cls.required, ...cls.optional])
   for (const [prop, value] of Object.entries(node.properties)) {
-    if (!allowed.has(prop) || typeof value !== 'string' || value.trim() === '') {
-      throw new Drop('V2')
-    }
-    const closed = cls.closed[prop]
-    if (closed && !closed.includes(value)) throw new Drop('V2')
-    if (cls.dates.includes(prop) && !isIsoDay(value)) throw new Drop('V2')
-    if (
-      cls.lines.includes(prop) &&
-      (LINE_BREAK.test(value) || Array.from(value).length > MAX_TEXT_CHARS)
-    ) {
-      throw new Drop('V2')
-    }
+    if (propertyRefusal(cls, prop, value) !== null) throw new Drop('V2')
   }
   if (isNew) {
     for (const prop of cls.required) if (!(prop in node.properties)) throw new Drop('V2')
@@ -500,14 +488,6 @@ function containsRun(hay: readonly string[], needle: readonly string[]): boolean
     return true
   }
   return false
-}
-
-function isIsoDay(value: string): boolean {
-  const m = ISO_DAY.exec(value)
-  if (!m) return false
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  const date = new Date(Date.UTC(y, mo - 1, d))
-  return date.getUTCFullYear() === y && date.getUTCMonth() === mo - 1 && date.getUTCDate() === d
 }
 
 const MONTHS = [

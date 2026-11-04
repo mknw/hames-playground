@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Intent-shaped graph edit WRAPPER tests (#226 C2 / #225 PR-C2).
  *
@@ -23,6 +24,9 @@ vi.mock('../../../lib/auth/server', () => ({
 }))
 
 const repo = () => import('../../../lib/neo4j/graph-edit.server')
+const ontology = async () => (await import('../../../lib/org-graph/ontology')).ORG_ONTOLOGY
+/** The actor the wrapper reads after its gate: the session user's id. */
+const actorFor = (userId: string) => ({ userId, now: expect.any(String) })
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -70,17 +74,49 @@ describe('auth gate', () => {
     getAuthenticatedUser.mockRejectedValue(new Error('Authentication required: no session.'))
     const { createGraphNode } = await repo()
 
-    await expect(createGraphNode('Concept', 'GraphQL')).resolves.toBe('4:abc:99')
-    expect(ops.createGraphNode).toHaveBeenCalledWith('Concept', 'GraphQL', undefined)
+    await expect(createGraphNode('Project', 'Heron')).resolves.toBe('4:abc:99')
+    const { BYPASS_USER } = await import('../../../lib/auth/dev-bypass')
+    expect(ops.createGraphNode).toHaveBeenCalledWith(
+      await ontology(),
+      actorFor(BYPASS_USER.id),
+      'Project',
+      'Heron',
+      undefined,
+    )
   })
 
-  it('delegates each op with its caller arguments', async () => {
-    const { linkGraphNodes, setGraphNodeProperty } = await repo()
+  // Design pin (slice 6): createdBy is the session user. Mutation: omit the
+  // actor (or pass a constant) → the ops are not called with the session's id.
+  it('delegates each op with the ontology, the session user as actor, and its caller arguments', async () => {
+    const { createGraphNode, linkGraphNodes, setGraphNodeProperty } = await repo()
+    const o = await ontology()
 
-    await linkGraphNodes('4:abc:11', '4:abc:12', 'DEPENDS_ON')
-    expect(ops.linkGraphNodes).toHaveBeenCalledWith('4:abc:11', '4:abc:12', 'DEPENDS_ON')
+    await createGraphNode('Project', 'Heron', 'A workstream')
+    expect(ops.createGraphNode).toHaveBeenCalledWith(
+      o,
+      actorFor('user-a'),
+      'Project',
+      'Heron',
+      'A workstream',
+    )
 
-    await setGraphNodeProperty('4:abc:11', 'summary', 'v')
-    expect(ops.setGraphNodeProperty).toHaveBeenCalledWith('4:abc:11', 'summary', 'v')
+    await linkGraphNodes('4:abc:11', '4:abc:12', 'WORKS_ON')
+    expect(ops.linkGraphNodes).toHaveBeenCalledWith(
+      o,
+      actorFor('user-a'),
+      '4:abc:11',
+      '4:abc:12',
+      'WORKS_ON',
+    )
+
+    getAuthenticatedUser.mockResolvedValue({ id: 'user-b' })
+    await setGraphNodeProperty('4:abc:11', 'status', 'v')
+    expect(ops.setGraphNodeProperty).toHaveBeenCalledWith(
+      o,
+      actorFor('user-b'),
+      '4:abc:11',
+      'status',
+      'v',
+    )
   })
 })

@@ -53,7 +53,9 @@ export default function Nav() {
   return (
     <nav data-testid="app-header-strip" bg="ui-bg-secondary" border="b ui-border-primary">
       <ul text="ui-text-primary" p="3" container flex items-center>
-        <li flex items-center>
+        {/* `min-w="0"`: without it this item keeps its content's width and the
+            strip cannot give way at phone width (#936). */}
+        <li flex items-center min-w="0">
           <Show when={!onPublicRoute()}>
             <PreviewHeaderStrip />
           </Show>

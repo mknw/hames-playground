@@ -1050,7 +1050,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             }
             
         async Synthesize(
-        user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
+        user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,
         __baml_options__?: BamlCallOptions<never>
         ): Promise<string> {
           try {
@@ -1064,7 +1064,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
           // Check if onTick is provided - route through streaming if so
           if (__options__.onTick) {
           const __stream__ = this.stream.Synthesize(
-          user_message,intent,turns,has_error,error_message,memory_context,references,
+          user_message,intent,turns,has_error,error_message,memory_context,references,guide,
           __baml_options__
           );
 
@@ -1088,7 +1088,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
             const __raw__ = await this.runtime.callFunction(
             "Synthesize",
             {
-            "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null
+            "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null,"guide": guide?? null
             },
             this.ctxManager.cloneContext(),
             __options__.tb?.__tb(),
@@ -2378,7 +2378,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                   }
                   
             Synthesize(
-            user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
+            user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,
             __baml_options__?: BamlCallOptions<never>
             ): BamlStream<string, string>
               {
@@ -2427,7 +2427,7 @@ export type RecursivePartialNull<T> = MovedRecursivePartialNull<T>
                 const __raw__ = this.runtime.streamFunction(
                 "Synthesize",
                 {
-                "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message ?? null,"memory_context": memory_context ?? null,"references": references ?? null
+                "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message ?? null,"memory_context": memory_context ?? null,"references": references ?? null,"guide": guide ?? null
                 },
                 undefined,
                 this.ctxManager.cloneContext(),

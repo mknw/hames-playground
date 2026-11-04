@@ -34,6 +34,7 @@ import { orgKnowledgeHookEnabled } from '../org-graph/hook.server'
 import { createEgressRoster } from './web-pseudonymiser.server'
 import { reconcileMemoryReferences } from '../memory/reconcile.server'
 import { resolveSandboxSkills } from '../skills/sandbox-skills.server'
+import { USE_CASES_LABEL, USE_CASES_PATH } from '../use-cases'
 import {
   claimConversation,
   loadConversation,
@@ -86,6 +87,10 @@ export function agentDeps(): AgentDeps {
     // switch, read per build. The hook's own configuration is built where it
     // settles (`lib/org-graph/hook.server.ts`).
     orgKnowledge: orgKnowledgeHookEnabled(),
+    // The page the agent links when asked what it can do, for help, or how to
+    // start: the same `/use-cases` the nav links, beside the capabilities the
+    // agent derives from its own tools.
+    examplesPage: { href: USE_CASES_PATH, label: USE_CASES_LABEL },
     // The guards' host settings, from the GUARD_* operator switches, read once
     // per build (boundary guards, slice 6). The web route's input filter rides
     // `guards` too (GUARD_PSEUDONYMISE): off, the field is OMITTED — the agent

@@ -5,6 +5,16 @@
 // `memory_context` (#419 M9) is optional; a null one
 // renders nothing, so the prompt is byte-identical without it. When present it
 // is its own user-role block after the leading system block (see router.baml).
+//
+// `guide` is optional too, and a null one also renders nothing. It is the
+// deployment's own description of what the assistant can do, built by the
+// agent from its real tool list plus the host's example-questions page —
+// trusted text written by the deployment, never tool output — so it rides in
+// the LEADING system block (system-at-front rule, prompt-role-order.test.ts),
+// ahead of USER MESSAGE: it is stable per composition, so a provider's prefix
+// cache (vLLM's on the private tier) can reuse it. The agent passes it only on
+// a turn that ran no route (general-next.server.ts).
+// It answers "what can you do?", "help" and "how do I start?" in any language.
 
 // A projection of supplied locators, never document content. Numbered in the
 // prompt so an answer's [n] has an explicit source/locator to refer to.
@@ -22,13 +32,27 @@ function Synthesize(
   has_error: bool,
   error_message: string?,
   memory_context: string?,
-  references: SynthesisReference[]?
+  references: SynthesisReference[]?,
+  guide: string?
 ) -> string {
   client SynthesizerAnthropic
   prompt #"
     {{ _.role("system") }}
     Create a user-friendly response from tool execution results.
 
+    {% if guide %}
+    --- ASSISTANT GUIDE (written by this deployment, not a tool result) ---
+    {{ guide }}
+    --- END ASSISTANT GUIDE ---
+
+    When the user asks what you can do, asks for help, or asks how to start —
+    in any language — answer from this guide: name a few concrete things from
+    it as short examples, link its example-questions page as the Markdown link
+    written there, and claim no ability the guide does not list. Reply in the
+    language the user wrote in. When the message is about something else,
+    ignore this guide.
+
+    {% endif %}
     USER MESSAGE: {{ user_message }}
     INTENT: {{ intent }}
 
@@ -86,6 +110,10 @@ function Synthesize(
     - Every name, number, and fact in your response must trace to the results
       above. When the data is missing, empty, or negative, report that honestly
       rather than filling the gap.
+    {% if guide %}
+    - The one exception: what you can do, and the link to the example-questions
+      page, may come from the ASSISTANT GUIDE above, exactly as written there.
+    {% endif %}
 
     {% if references %}
     DOCUMENT CITATIONS:

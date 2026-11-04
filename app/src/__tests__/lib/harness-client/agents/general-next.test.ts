@@ -148,6 +148,8 @@ const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
+  synthesizerOptions: vi.fn(),
+  guided: vi.fn(),
   critic: vi.fn<
     (
       _intent: string,
@@ -183,6 +185,15 @@ vi.mock('@hames-ai/harness-baml', async (original) => ({
   },
   createCriticAdapter: () => mocks.critic,
   createInjectionScreen: () => mocks.screen,
+  createSynthesizer: (options: unknown) => {
+    mocks.synthesizerOptions(options)
+    // The guided synthesizer, told apart from `bamlPatterns().synthesize` by `guided`;
+    // both answer through the one `synthesize` mock the other pins read.
+    return (input: Parameters<typeof mocks.synthesize>[0]) => {
+      mocks.guided(input)
+      return mocks.synthesize(input)
+    }
+  },
   bamlPatterns: () => ({
     planner: () => mocks.planner,
     synthesize: mocks.synthesize,
@@ -1084,6 +1095,73 @@ describe('general-next composition', () => {
     expect(composition.egress.addressSources).toEqual(['web', 'graph'])
     expect(result.status).not.toBe('error')
     expect(result.response).toBe('synthetic answer')
+  })
+
+  // Onboarding ("what can you do?"): synthesis carries a guide built from what this
+  // composition actually holds, and the host's examples page. MUTATION: hand
+  // `capabilityGuide` a fixed `web: ['search']` in general-next.server.ts, or drop
+  // `examplesPage: deps.examplesPage` there — the second and first case go red.
+  it('onboarding: the synthesizer guide names the composed tools and links the examples page', async () => {
+    await agent.createPatterns('synthetic-session', {
+      ...deps,
+      examplesPage: { href: '/use-cases', label: 'Use cases' },
+    })
+    expect(mocks.synthesizerOptions).toHaveBeenCalledTimes(1)
+    const { guide } = mocks.synthesizerOptions.mock.calls[0][0] as { guide: string }
+    expect(guide).toContain('[Use cases](/use-cases)')
+    expect(guide).toContain('Read your Microsoft 365 mail')
+    expect(guide).toContain('Copy a OneDrive or SharePoint file')
+    expect(guide).toContain('Analyse uploaded files and numbers by running code')
+    expect(guide).toContain("organization's knowledge graph")
+    expect(guide).toContain('Search the public web.')
+    expect(guide).toContain('Look up developer library documentation.')
+    expect(guide).toContain('Search the documents uploaded to this conversation')
+    expect(guide).toContain('What it cannot do: send mail')
+  })
+
+  // The per-user gate contract (capability-guide.ts): a gate that filters at discovery
+  // removes a tool from the info route AND the guide, because both read one list.
+  // MUTATION: give the guide a wider list than the route's, resolved by the static
+  // catalog (`info: [...infoTools, 'search']`, `namespaceOf: deps.toolNamespaces`) — red.
+  it('onboarding: a deployment without web, library docs or ingest is not told it has them', async () => {
+    gateway.names = [...GRAPH.filter((name) => name !== 'graph_file_ingest'), 'read_neo4j_cypher']
+    const patterns = await agent.createPatterns('synthetic-session', {
+      ...deps,
+      graphFileIngest: false,
+    })
+    const { guide } = mocks.synthesizerOptions.mock.calls[0][0] as { guide: string }
+    expect(guide).not.toMatch(/web|library documentation|Copy a OneDrive/)
+    expect(guide).not.toContain('](')
+    expect(guide).toContain("organization's knowledge graph")
+    const info = walk(patterns).find((p) => p.name === 'simpleLoop')!
+    expect([...info.capabilities!.tools!]).toEqual(['read_neo4j_cypher'])
+  })
+
+  // Per-turn cost (#985 review): the guide rides only a turn that ran no route, judged
+  // on THIS turn even when the thread window carries the previous turn's record.
+  // MUTATION: `synthesize: guided` (unconditional) — turn 1 goes red; gate on
+  // `input.loopHistory` instead of `stepsThisTurn` — turn 2 goes red.
+  it('onboarding: the guide rides only a turn that dispatched no route', async () => {
+    choices = ['info-retrieval', 'answer']
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    const first = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      harness(...patterns)('synthetic task'),
+    )
+    expect(mocks.synthesize).toHaveBeenCalledTimes(1)
+    expect(mocks.synthesize.mock.calls[0][0].stepsThisTurn).toBeGreaterThan(0)
+    expect(mocks.guided).not.toHaveBeenCalled()
+
+    choices = ['answer']
+    await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(first.context), patterns, 'What can you do?'),
+    )
+    expect(mocks.guided).toHaveBeenCalledTimes(1)
+    const second = mocks.guided.mock.calls[0][0] as {
+      stepsThisTurn?: number
+      loopHistory?: unknown
+    }
+    expect(second.stepsThisTurn).toBe(0)
+    expect(second.loopHistory).toBeDefined()
   })
 
   it('P4: the office actor is GIVEN Graph readers and guarded ingest by exact name', async () => {

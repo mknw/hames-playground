@@ -35,6 +35,10 @@ export interface ConversationScenario {
   maxIterations: number
   failFirstTurn?: boolean
   noTools?: boolean
+  /** Hermetic only: the scripted Synthesize answers from the agent's capability guide
+   * as its prompt carried it, and from nothing else — so the onboarding graders decide
+   * what the guide said, not what the scenario expects. */
+  guideAnswer?: boolean
   /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`): its
    * switch, seed, owners, conversations and the person's answers. Absent = no memory
    * wired at all (no recall step, no store step). */

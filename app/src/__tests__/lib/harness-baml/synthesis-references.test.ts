@@ -9,7 +9,7 @@ import type {
   SynthesisReference,
   ToolCallRequest,
 } from '@hames-ai/harness-baml/baml_client/types'
-import { defaultSynthesize } from '@hames-ai/harness-baml/defaults.server'
+import { createSynthesizer, defaultSynthesize } from '@hames-ai/harness-baml/defaults.server'
 import * as clients from '@hames-ai/harness-baml/clients.server'
 import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 import { createContext, createEvent } from '@hames-ai/harness-patterns/context.server'
@@ -89,6 +89,7 @@ function render(client: string, result: unknown, references: SynthesisReference[
     null,
     null,
     references,
+    null,
     { client, env: ENV },
   )
 }
@@ -303,22 +304,71 @@ describe('defaultSynthesize reference projection', () => {
         defaultSynthesize({ ...input(RECORD), memoryContext: 'Remember metric units' }),
       )
       const args = synth.mock.calls[0]
-      expect(args).toHaveLength(8)
+      expect(args).toHaveLength(9)
       expect(args[5]).toBe('Remember metric units')
       expect(args[6]).toEqual([REFERENCE])
-      expect(args[7]?.collector).toBeDefined()
-      expect(args[7]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
+      expect(args[7]).toBeNull()
+      expect(args[8]?.collector).toBeDefined()
+      expect(args[8]?.client).toBe(tier === 'self_deployed' ? 'LargeQwen' : undefined)
       // Render exactly those arguments, with synthetic env values only.
       const body = (
-        await b.request.Synthesize(args[0], args[1], args[2], args[3], args[4], args[5], args[6], {
-          ...args[7],
-          env: ENV,
-        })
+        await b.request.Synthesize(
+          args[0],
+          args[1],
+          args[2],
+          args[3],
+          args[4],
+          args[5],
+          args[6],
+          args[7],
+          { ...args[8], env: ENV },
+        )
       ).body.text()
       expect(body).toContain('Remember metric units')
       expect(body).toContain('DOCUMENT CITATIONS:')
     },
   )
+})
+
+// Onboarding: the agent's capability guide rides the LEADING system block, and the
+// FIDELITY list gains the one exception that lets the answer state it and link its page.
+// A null guide is covered above: the historical request bytes are unchanged.
+// MUTATION: move the `{% if guide %}` block below `{{ _.role("user") }}` or below
+// `USER MESSAGE`, or drop
+// the guide's fidelity exception — the first case goes red; pass `null` for the
+// guide in defaults.server.ts — the second goes red.
+describe('Synthesize capability guide', () => {
+  const GUIDE = 'GUIDETOKEN can read mail. [Use cases](/use-cases)'
+  it.each(CLIENTS)(
+    '%s renders the guide and its fidelity exception in the system text',
+    async (client) => {
+      const body = (
+        await b.request.Synthesize('What can you do?', 'i', [], false, null, null, null, GUIDE, {
+          client,
+          env: ENV,
+        })
+      ).body.json() as { system?: unknown; messages: { role: string; content: unknown }[] }
+      const system = JSON.stringify(body.system ?? body.messages[0])
+      if (!body.system) expect(body.messages[0].role).toBe('system')
+      expect(system).toContain(GUIDE)
+      // Ahead of USER MESSAGE, so the stable guide is a cacheable prefix (#985 review NIT).
+      expect(system.indexOf(GUIDE)).toBeLessThan(system.indexOf('USER MESSAGE'))
+      expect(system).toContain('link its example-questions page as the Markdown link')
+      expect(system).toContain('Reply in the')
+      // The FIDELITY list (user block) gains its one exception, only with a guide.
+      const flat = (v: unknown) => JSON.stringify(v).replace(/\\n\s*/g, ' ')
+      expect(flat(body)).toContain(
+        'The one exception: what you can do, and the link to the example-questions page, may come from the ASSISTANT GUIDE above',
+      )
+    },
+  )
+  it('createSynthesizer hands the guide to its slot; defaultSynthesize and a blank guide hand null', async () => {
+    const synth = vi.spyOn(b, 'Synthesize').mockResolvedValue('answer')
+    await createSynthesizer({ guide: ` ${GUIDE} ` })(input(RECORD))
+    await defaultSynthesize(input(RECORD))
+    await createSynthesizer({ guide: '  ' })(input(RECORD))
+    expect(synth.mock.calls.map((args) => args[7])).toEqual([GUIDE, null, null])
+  })
 })
 
 /** Separate from grade(): the existing eval only checks marker presence.
@@ -363,7 +413,7 @@ describe('scripted synthesis replay through the real eval check', () => {
     async (_name, answer, passes) => {
       let body = ''
       vi.spyOn(b, 'Synthesize').mockImplementation(
-        async (message, intent, turns, error, errorMessage, memory, references, options) => {
+        async (message, intent, turns, error, errorMessage, memory, references, guide, options) => {
           body = (
             await b.request.Synthesize(
               message,
@@ -373,6 +423,7 @@ describe('scripted synthesis replay through the real eval check', () => {
               errorMessage,
               memory,
               references,
+              guide,
               { ...options, env: ENV },
             )
           ).body.text()

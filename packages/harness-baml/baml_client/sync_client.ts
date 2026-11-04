@@ -948,7 +948,7 @@ export class BamlSyncClient {
   }
   
   Synthesize(
-      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
+      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): string {
     try {
@@ -980,7 +980,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Synthesize",
         {
-          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null
+          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null,"guide": guide?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

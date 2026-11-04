@@ -184,9 +184,11 @@ export async function fixtureInference() {
           case 'Synthesize':
             result = scenario.memory
               ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
-              : scenario.failFirstTurn && turnIndex === 0
-                ? 'The lookup failed: synthetic service unavailable. No count is known.'
-                : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
+              : scenario.guideAnswer
+                ? guideAnswer(prompt)
+                : scenario.failFirstTurn && turnIndex === 0
+                  ? 'The lookup failed: synthetic service unavailable. No count is known.'
+                  : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
           case 'CompactIntent':
@@ -297,4 +299,20 @@ function memoryAnswer(prompt: string, reply: string | undefined): string {
   ]
     .filter(Boolean)
     .join(' ')
+}
+
+/**
+ * The scripted Synthesize of an onboarding scenario answers from the capability guide
+ * its prompt CARRIED — never from the scenario's expected facts — so "the answer links
+ * the examples page" and "the answer claims nothing the deployment lacks" decide what
+ * the agent's guide said on this composition.
+ */
+function guideAnswer(prompt: string): string {
+  const open = '--- ASSISTANT GUIDE'
+  const at = prompt.indexOf(open)
+  const begin = at < 0 ? -1 : prompt.indexOf('\n', at)
+  const end = begin < 0 ? -1 : prompt.indexOf('--- END ASSISTANT GUIDE ---', begin)
+  return end < 0
+    ? 'I can help with many things.'
+    : `Here is what I can do. ${prompt.slice(begin, end).trim()}`
 }

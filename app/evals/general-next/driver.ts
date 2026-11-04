@@ -5,6 +5,7 @@ import type { ConversationDriver, ConversationScenario, ConversationTrace } from
 import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
 import { projectCountArgs } from '../../src/lib/eval-support/tool-arguments'
+import { USE_CASES_LABEL, USE_CASES_PATH } from '../../src/lib/use-cases'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
@@ -384,6 +385,8 @@ export async function createDriver(
       })),
     }),
     quoteMemoriesToDecider: privateDecisionRun,
+    // The production host's examples page (session.server.ts), from the same constant.
+    examplesPage: { href: USE_CASES_PATH, label: USE_CASES_LABEL },
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',

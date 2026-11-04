@@ -1177,6 +1177,12 @@ export interface CompactExecutionInput {
    *  present ONLY when something was recalled (#419 M5a). Background about the
    *  user for the synthesizer to render as DATA; never a tool result. */
   memoryContext?: string
+  /** `thread` mode only: how many of `loopHistory`'s iterations THIS turn authored
+   *  (failed ones included). 0 means the turn ran no tool or route and answers
+   *  from the conversation alone, even when a wider thread window carries an
+   *  earlier turn's records. A synthesizer can spend prompt on such a turn
+   *  differently, e.g. only then add an agent's capability guide. */
+  stepsThisTurn?: number
 }
 
 /** Custom synthesis function type */

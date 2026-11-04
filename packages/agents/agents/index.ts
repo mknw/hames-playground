@@ -13,6 +13,7 @@
  * imports `@hames-ai/agents` (the root barrel) instead.
  */
 export { generalNextAgent, OFFICE_GRAPH_READ_TOOLS, officeLocalTools } from './general-next.server'
+export { capabilityGuide, type CapabilityGuideInput } from './capability-guide'
 export { getGraphSchema } from './graph-schema.server'
 export {
   NEO4J_FEW_SHOTS,

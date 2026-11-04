@@ -18,6 +18,9 @@ process.env.DATA_ENCRYPTION_KEY ||= 'unit-test-data-encryption-key'
 // developer's app/.env has a real key. The transport's own tests pass explicit
 // selections and mock the MCP client.
 process.env.EXA_TOOLS = 'off'
+// Same for the hosted Lenny's Data endpoint: a developer's env can carry its live
+// credentials and allowlist, and the transport's own tests inject a fake fetch.
+process.env.LENNYS_DATA_MCP = 'off'
 
 // Never let a test run touch the dev database. Unconditional (not `||=`): the
 // point is that a developer's own DATABASE_URL cannot leak in, because

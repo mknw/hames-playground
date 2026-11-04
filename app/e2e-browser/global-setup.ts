@@ -265,6 +265,7 @@ export function browserServerEnv(
 
     BAML_LOG: process.env.BAML_LOG ?? 'warn',
     EXA_TOOLS: 'off', // The browser suite is hermetic: no hosted MCP discovery.
+    LENNYS_DATA_MCP: 'off', // Nor the hosted Lenny's Data server.
   }
 }
 

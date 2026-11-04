@@ -48,6 +48,7 @@ import {
 import { drawFenceNonce } from '@hames-ai/harness-patterns/guard-gate.server'
 import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
+import { processTransports } from '@hames-ai/harness-patterns/tool-transport.server'
 import {
   activeTransportContext,
   activeTransports,
@@ -1040,7 +1041,12 @@ async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> 
  *  newly-registered tools in subsequent attempts/turns. */
 export function invalidateToolDescriptions(): void {
   toolDescCache = null
+  lastMissReread = -Infinity
 }
+
+/** The shortest gap between two re-reads triggered by a missing tool. */
+const MISS_REREAD_MS = 30_000
+let lastMissReread = -Infinity
 
 /** Filter tool descriptions by names plus an optional regex pattern for
  *  dynamically-discoverable tools. `refresh: true` forces a fresh listTools()
@@ -1050,7 +1056,26 @@ async function filterToolDescriptions(
   toolNames: readonly string[],
   options?: { dynamicPattern?: RegExp; refresh?: boolean },
 ): Promise<ToolDescription[]> {
-  const all = await getToolDescriptions(options?.refresh)
+  let all = await getToolDescriptions(options?.refresh)
+  // A name this caller's allowlist holds and a PROCESS transport owns, but the
+  // shared cache lacks. The cache is process-wide and filled in whichever
+  // request scope reached it first, while a process transport's listing can
+  // depend on that scope (a per-user gated transport lists nothing for a user
+  // it does not serve) or can have failed during the fill. Either way the
+  // caller who holds the tool would be shown no description for the life of
+  // the process. Re-read once, in THIS caller's scope; a fill that holds more
+  // shows nothing extra to anyone, because every read is filtered by the
+  // caller's own allowlist below. Throttled, so a transport that stays down
+  // costs one re-read per window rather than one per call. Names no process
+  // transport owns (a scoped sandbox tool, a withheld one) never trigger it.
+  const cached = new Set(all.map((t) => t.name))
+  const missing = toolNames.some(
+    (name) => !cached.has(name) && processTransports().some((t) => t.ownsTool(name)),
+  )
+  if (missing && Date.now() - lastMissReread >= MISS_REREAD_MS) {
+    lastMissReread = Date.now()
+    all = await getToolDescriptions(true)
+  }
   const nameSet = new Set(toolNames)
   const pattern = options?.dynamicPattern
   return all.filter((t) => nameSet.has(t.name) || (pattern?.test(t.name) ?? false))

@@ -51,6 +51,7 @@ import {
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { checkHomeDomains, homeDomains } from '../harness-client/ingress-classifier.server'
 import { createExaTransport } from './exa.server'
+import { createLennysDataTransport } from './lennys-data.server'
 
 // The registry, with the app's identity resolution injected (design S3): the
 // app passes its own getRequestUserId/getRequestSessionId pair, so the
@@ -143,6 +144,8 @@ const appToolTransport: ToolTransport = {
 
 registerTransport(appToolTransport)
 registerTransport(createExaTransport())
+// Off unless LENNYS_DATA_MCP=on; a bad value or missing credential refuses boot.
+registerTransport(createLennysDataTransport())
 
 // Once, at boot: a single-label home domain is refused, and a list with no
 // usable domain (every sender external) is warned about.

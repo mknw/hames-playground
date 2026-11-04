@@ -3178,3 +3178,63 @@ it('rv919: operator tag selection replaces search defaults and carries both dete
     }),
   ).rejects.toThrow(/selects no catalog tool/)
 })
+
+// Lenny's Data, the opt-in third-party transport (LENNYS_DATA_MCP). The gateway
+// mock stands in for the transport here: the catalog's `lennys_` prefix rule
+// groups the name either way, and the transport itself is pinned in
+// app-tools/lennys-data.test.ts.
+describe("general-next with the opt-in Lenny's Data tools", () => {
+  const PM = 'lennys_search_archive'
+
+  // MUTATION: drop `...pmTools` from infoTools, or declare 'lennys' on the
+  // info guard unconditionally (the default-off half below goes red).
+  it('are absent by default, and when offered reach only the info route, guarded as lennys', async () => {
+    const off = await agent.createPatterns('pm-off-session', deps)
+    expect(collectToolNames(off[0])).not.toContain(PM)
+    const offInfo = walk(off).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
+    expect(offInfo.injectionGuard!.namespaces).not.toContain('lennys')
+    expect(composition.egress.addressSources).not.toContain('lennys')
+
+    gateway.names = [...gateway.names, PM]
+    const on = await agent.createPatterns('pm-on-session', deps)
+    const info = walk(on).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
+    expect(info.injectionGuard!.namespaces).toContain('lennys')
+    expect(collectToolNames(info)).toContain(PM)
+    const office = walk(on).find((p) => p.config.patternId === 'doc')!
+    expect(collectToolNames(office)).not.toContain(PM)
+    expect(composition.egress.addressSources).toContain('lennys')
+  })
+
+  // The egress classification. MUTATION: add 'lennys' to the gate's `local`
+  // (the gate then refuses to build with a detector on a local tool), or drop
+  // `...pmTools` from the default detector selection (the pair becomes the
+  // `{ off, off }` default and the egress question is never asked).
+  it('every call is outgoing, with web search’s default detector pair, and the question is asked', async () => {
+    gateway.names = [...gateway.names, PM]
+    await agent.createPatterns('pm-detectors-session', deps)
+    expect(inferServer(PM)).toBe('lennys')
+    expect(composition.egress.local).not.toContain('lennys')
+    expect((composition.egress.detectors as { tools: Record<string, unknown> }).tools[PM]).toEqual({
+      nameMatch: 'evidence',
+      decide: 'on',
+    })
+
+    egressAnswer = () => 'personal'
+    mocks.controller.mockResolvedValueOnce({
+      action: {
+        reasoning: 'look up the archive',
+        tool_name: PM,
+        tool_args: '{"query":"synthetic colleague detail"}',
+        is_final: false,
+      },
+    })
+    const result = await run('self_deployed')
+    expect(egressStates).toHaveLength(1)
+    expect(egressStates[0]).toContain('synthetic colleague detail')
+    expect(gateway.calls).not.toContain(PM)
+    const refused = result.context.events.find(
+      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === PM,
+    )
+    expect(refused?.data).toMatchObject({ success: false })
+  })
+})

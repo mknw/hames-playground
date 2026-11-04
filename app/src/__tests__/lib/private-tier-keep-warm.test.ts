@@ -238,9 +238,13 @@ describe('the idle cap (PRIVATE_TIER_WARM_IDLE_MINUTES, FRONT 2026-11-04)', () =
   it('stops listening for input once disposed', async () => {
     start()
     await vi.advanceTimersByTimeAsync(NEXT * 20)
+    const removed = vi.spyOn(activity, 'removeEventListener')
     stop()
     touch('keydown')
     await vi.advanceTimersByTimeAsync(0)
     expect(ask).toHaveBeenCalledTimes(3)
+    // Removed, not merely ignored: a closed page must not leave a handler on the
+    // window for every pointer move.
+    expect(removed.mock.calls.map(([type]) => type).sort()).toEqual([...ACTIVITY_EVENTS].sort())
   })
 })

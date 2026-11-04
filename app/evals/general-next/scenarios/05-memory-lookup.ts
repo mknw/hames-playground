@@ -1,4 +1,5 @@
 import type { ConversationScenario } from '../types'
+import { catalogueChecks } from '../catalogue-checks'
 
 export const scenario: ConversationScenario = {
   id: '05-memory-lookup',
@@ -6,7 +7,8 @@ export const scenario: ConversationScenario = {
   priority: 'should',
   baseline: false,
   p4: false,
-  memory: true,
+  // Each owner holds one confirmed memory; the Eval user asks about their own.
+  memory: { enabled: true, seed: ['lantern', 'kestrel'], turns: [{}, {}] },
   messages: ['What do you remember about me?', 'And which release tag do you have noted for it?'],
   expectedTools: [],
   expectedRoutes: [],
@@ -16,4 +18,5 @@ export const scenario: ConversationScenario = {
   forbiddenTools: [],
   noTools: true,
   maxIterations: 6,
+  ...catalogueChecks('05-memory-lookup'),
 }

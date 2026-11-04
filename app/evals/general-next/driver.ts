@@ -12,7 +12,18 @@ import {
   indexForUser,
   stashSearchable,
 } from '../../src/lib/eval-support/synthetic-sandbox'
-import { createSyntheticMemory, EVAL_OWNER } from '../../src/lib/eval-support/synthetic-memory'
+import {
+  EVAL_OWNER,
+  SEED_MEMORIES,
+  createSyntheticEmbedder,
+  createSyntheticMemoryStore,
+  syntheticMemoryConfig,
+} from '../../src/lib/eval-support/synthetic-memory'
+import type {
+  MemoryOwnerId,
+  MemoryScenario,
+  MemoryTurnTrace,
+} from '../../src/lib/eval-support/memory-scenario'
 import type { fixtureInference } from './fixture-inference'
 
 const NOTES =
@@ -226,7 +237,7 @@ export async function createDriver(
   preload: readonly string[] = [],
 ): Promise<ConversationDriver> {
   // Runtime imports follow endpoint configuration; none of these run at module load.
-  const { harness, continueSession } = await import('@hames-ai/harness-patterns')
+  const { harness, continueSession, serializeContext } = await import('@hames-ai/harness-patterns')
   const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
   const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
   const { clientOverrideFor } = await import('@hames-ai/harness-baml/clients.server')
@@ -305,7 +316,7 @@ export async function createDriver(
                 : GRAPH_RELATIONSHIPS,
         }
       }
-      return { success: true, data: FIXTURES[name] }
+      return { success: true, data: scenario?.toolData?.[name] ?? FIXTURES[name] }
     },
   }
   // The runner also supplies a loopback gateway for the shared catalog read.
@@ -393,6 +404,7 @@ export async function createDriver(
           }),
     }),
   }
+  const memory = await memorySeams(live)
   const definitions = new Map<string, AgentDefinition>()
   async function loadAgent(id: string): Promise<AgentDefinition> {
     if (!/^[a-z][a-z0-9-]*$/.test(id)) throw new Error('Invalid agent id')
@@ -429,15 +441,25 @@ export async function createDriver(
       return withRunFrame(
         { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
         async () => {
-          // Per-user memory is on for the scenarios that name it and off for every other one,
-          // so no other scenario pays a recall step.
+          // Per-user memory is wired for the scenarios that name it and for no other one,
+          // so no other scenario pays a recall or a store step.
+          const mem = next.memory ? await memory.open(next.memory) : undefined
           const patterns = await agent.createPatterns(
             sessionId,
-            next.memory ? { ...deps, memory: createSyntheticMemory(() => EVAL_OWNER) } : deps,
+            next.memory && mem ? { ...deps, memory: mem.config } : deps,
           )
           const run = harness(...patterns)
           let serialized: string | undefined
+          let session = sessionId
           for (turn = 0; turn < next.messages.length; turn++) {
+            // A memory scenario may start a fresh conversation, as either owner: the
+            // same agent, no history, a new session id.
+            const script = next.memory?.turns[turn]
+            if (mem && turn > 0 && script?.newConversation) {
+              session = `${sessionId}-c${mem.conversation + 1}`
+              serialized = undefined
+            }
+            mem?.beginTurn(turn === 0 || !!script?.newConversation, script?.newConversation?.owner)
             // The person indexes the promoted deliverable from the Data Stash between
             // turns (#832): the agent does not, so this is the only way it becomes
             // searchable, and only if an earlier turn saved it.
@@ -445,22 +467,216 @@ export async function createDriver(
             fake?.turn(next, turn)
             const result = serialized
               ? await continueSession(serialized, patterns, next.messages[turn])
-              : await run(next.messages[turn], sessionId)
+              : await run(next.messages[turn], session)
             const events = result.context.events
             const lastUser = events.findLastIndex((e) => e.type === 'user_message')
+            // The turn's own events: the store step's decisions and proposal below are
+            // recorded in the memory trace, not here, so they cannot reach the route and
+            // decision-cap graders.
             trace.turns.push({
               response: result.response,
               status: result.status,
               events: events.slice(lastUser),
             })
             serialized = result.serialized
+            if (mem) {
+              // The host's post-turn continuation: the store step, then — between turns —
+              // the person's answer to its proposal, then ONE save of the context.
+              await mem.endTurn(result.context, next.memory!, turn, session, next.messages[turn])
+              serialized = serializeContext(result.context)
+            }
           }
+          if (mem) trace.memory = mem.trace()
           return trace
         },
       )
     },
     async close() {
       dispose()
+    },
+  }
+}
+
+/**
+ * The memory seams one driver shares across scenarios — the production decide,
+ * decide-all and extract adapters (so a hermetic run exercises their request shape
+ * against the fixture endpoint, and a live run asks the real models), each wrapped to
+ * record the state or input it was handed — and, per scenario, a fresh synthetic store
+ * with the scenario's seed and switch.
+ */
+async function memorySeams(live: boolean) {
+  const { settleMemory, memoryStoreConfig, applyMemoryProposal, readProposals, answerProposal } =
+    await import('@hames-ai/harness-patterns')
+  const { MEMORY_CONFIRM_KIND, MEMORY_CONFIRM_SAVE, MEMORY_CONFIRM_DISCARD } =
+    await import('@hames-ai/harness-patterns/memory-store.server')
+  const { createDecideAdapter, createDecideAllAdapter } =
+    await import('@hames-ai/harness-baml/baml-adapters.server')
+  const { createMemoryExtractAdapter } = await import('@hames-ai/harness-baml/baml-patterns.server')
+  const { limitsFor } = await import('@hames-ai/harness-baml/clients.server')
+  type Decide = ReturnType<typeof createDecideAdapter>
+  type DecideAll = ReturnType<typeof createDecideAllAdapter>
+  type Payload = import('@hames-ai/harness-patterns').MemoryProposalPayload
+  type Context = Parameters<typeof settleMemory>[0]
+
+  let inputs: string[] = []
+  // A wrapper keeps the transport's `limits` and `supportedTypes`, which the decision
+  // helpers read before they call it.
+  const recording = <F extends Decide | DecideAll>(fn: F): F => {
+    const wrapped = (async (input: { state: string }) => {
+      inputs.push(input.state)
+      return (fn as (i: unknown) => Promise<unknown>)(input)
+    }) as unknown as F
+    Object.defineProperty(wrapped, 'supportedTypes', { get: () => fn.supportedTypes })
+    if (fn.limits) Object.assign(wrapped, { limits: fn.limits })
+    return wrapped
+  }
+  const decide = recording(createDecideAdapter())
+  const decideAll = recording(createDecideAllAdapter())
+  const baseExtract = createMemoryExtractAdapter()
+  const extract: typeof baseExtract = async (input) => {
+    inputs.push(`${input.window}\n${input.latestUser}`)
+    return baseExtract(input)
+  }
+  const embed = live
+    ? (await import('../../src/lib/memory/embedder.server')).createMemoryEmbedder()
+    : createSyntheticEmbedder()
+
+  return {
+    async open(scenario: MemoryScenario) {
+      let owner: MemoryOwnerId = EVAL_OWNER
+      let conversation = -1
+      let held: { requestId: string; payload: Payload } | undefined
+      const store = await createSyntheticMemoryStore(() => owner, embed, scenario.seed)
+      const seed = store.snapshot()
+      const turns: MemoryTurnTrace[] = []
+      const config = {
+        ...syntheticMemoryConfig({
+          owner: () => owner,
+          store,
+          embed,
+          enabled: scenario.enabled,
+          decide,
+          decideAll,
+          extract,
+          confirm: {
+            hold: async ({ requestId, payload }) => {
+              held = { requestId, payload }
+            },
+          },
+        }),
+        limits: () => limitsFor('compactExecution'),
+      }
+      return {
+        config,
+        get conversation() {
+          return conversation
+        },
+        beginTurn(fresh: boolean, as?: MemoryOwnerId) {
+          if (fresh) {
+            conversation++
+            owner = as ?? EVAL_OWNER
+          }
+          inputs = []
+          held = undefined
+        },
+        async endTurn(
+          ctx: Context,
+          scenario: MemoryScenario,
+          turn: number,
+          session: string,
+          userMessage: string,
+        ) {
+          const script = scenario.turns[turn]
+          // `memory_recalled` is recorded once per turn: this turn's, read before the
+          // store step can change a row, so the trace holds what recall actually handed on.
+          const lastUser = ctx.events.findLastIndex((e) => e.type === 'user_message')
+          const rows = store.snapshot()
+          const recalled = ctx.events
+            .slice(lastUser)
+            .filter((e) => e.type === 'memory_recalled')
+            .flatMap((e) => (e.data as { attached?: string[] }).attached ?? [])
+            .flatMap((id) => rows.filter((r) => r.id === id))
+          const report = await settleMemory(ctx, memoryStoreConfig(config), {
+            conversationId: session,
+          })
+          const proposal = held
+          if (script?.changeBeforeAnswer)
+            await store.replaceContent(
+              SEED_MEMORIES[script.changeBeforeAnswer.seed].id,
+              script.changeBeforeAnswer.content,
+            )
+          let answer: MemoryTurnTrace['answer']
+          const open = proposal
+            ? readProposals(ctx).find(
+                (r) => r.requestId === proposal.requestId && r.kind === MEMORY_CONFIRM_KIND,
+              )
+            : undefined
+          if (proposal && open && script?.answer) {
+            const refs = proposal.payload.items.map((i) => i.ref)
+            answerProposal(
+              ctx,
+              {
+                [proposal.requestId]:
+                  script.answer === 'save'
+                    ? {
+                        choice: MEMORY_CONFIRM_SAVE,
+                        flags: Object.fromEntries(refs.map((r) => [r, true])),
+                      }
+                    : MEMORY_CONFIRM_DISCARD,
+              },
+              { principal: owner, patternId: 'memory-confirm' },
+            )
+            if (script.answer === 'save') {
+              const applied = await applyMemoryProposal(
+                ctx,
+                { store, embedSpace: () => embed.spaceId, enabled: () => scenario.enabled },
+                { payload: proposal.payload, selected: refs },
+              )
+              answer = {
+                choice: 'save',
+                ...(applied.skipped ? { skipped: applied.skipped } : {}),
+                items: applied.items.map((i) => ({
+                  outcome: i.outcome,
+                  ...(i.action ? { action: i.action } : {}),
+                })),
+              }
+            } else answer = { choice: 'discard', items: [] }
+          }
+          turns.push({
+            owner,
+            conversation,
+            userMessage,
+            settle: {
+              ...(report.skipped ? { skipped: report.skipped } : {}),
+              proposed: report.proposed,
+              written: report.written,
+              rejected: { ...report.rejected },
+            },
+            ...(proposal
+              ? {
+                  proposal: {
+                    requestId: proposal.requestId,
+                    items: proposal.payload.items.map((i) => ({
+                      kind: i.kind,
+                      content: i.content,
+                      evidence: i.evidence,
+                      dedupe:
+                        i.dedupe === 'new'
+                          ? ('new' as const)
+                          : 'reinforces' in i.dedupe
+                            ? ('reinforces' as const)
+                            : ('updates' as const),
+                    })),
+                  },
+                }
+              : {}),
+            ...(answer ? { answer } : {}),
+            recalled,
+            inputs: [...inputs],
+          })
+        },
+        trace: () => ({ seed, final: store.snapshot(), turns }),
+      }
     },
   }
 }

@@ -7,6 +7,7 @@ export interface Check {
 import type { SpendKey } from './spend-budget'
 import type { ArgsPredicate } from './tool-arguments'
 import type { GuardTurnCounts } from './guard-report'
+import type { MemoryExpectations, MemoryScenario, MemoryTrace } from './memory-scenario'
 
 export interface ConversationScenario {
   id: string
@@ -33,8 +34,21 @@ export interface ConversationScenario {
   maxIterations: number
   failFirstTurn?: boolean
   noTools?: boolean
-  /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`); absent = memory off. */
-  memory?: boolean
+  /** Runs with the synthetic owner-scoped per-user memory (`synthetic-memory.ts`): its
+   * switch, seed, owners, conversations and the person's answers. Absent = no memory
+   * wired at all (no recall step, no store step). */
+  memory?: MemoryScenario
+  /** The memory graders, read from the catalogue row (`catalogue-checks.ts`). */
+  memoryExpect?: MemoryExpectations
+  /** Pattern graders, read from the catalogue row: the final answer (or the named
+   * 1-based turn's) must match, or with `negate` must not match, case-insensitively. */
+  answerPatterns?: Array<{ says: string; pattern: string; turn?: number; negate: boolean }>
+  /** The final answer contains none of these facts (whole-token match). */
+  answerExcludes?: string[]
+  /** No `sandbox_bash` command and no `sandbox_write` content matches the pattern. */
+  noSandboxCommand?: { says: string; pattern: string }
+  /** Per-scenario tool results that replace the driver's shared fixture for that tool. */
+  toolData?: Record<string, unknown>
   /** A must whose acceptance run is pending: the flip gate lists it in the report
    * (with this issue number) but does not block the flip on it. Pinned by PENDING_MUSTS
    * in flip-gate.ts and the pin test in flip-gate.test.ts. */
@@ -57,6 +71,8 @@ export interface ConversationTrace {
   artifacts: string[]
   indexed: string[]
   retrievals: Array<{ source: string; turn: number }>
+  /** Present when the scenario ran with memory: the store, proposals, answers and recall. */
+  memory?: MemoryTrace
 }
 
 export interface ConversationResult extends SpendKey {

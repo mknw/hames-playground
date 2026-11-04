@@ -71,7 +71,27 @@ const RESTRAINT = new Set([
   'noWriteClaim',
   'noSandboxPath',
   'noUncoveredAbsenceClaim',
+  'noMemoryStored',
+  'noForeignMemory',
+  'memoryInputIsolated',
 ])
+/** Graders a module takes from its own row (`evals/general-next/catalogue-checks.ts`)
+ * rather than restating them, so a row carrying one needs a module that reads it. */
+const FROM_CATALOGUE = new Set([
+  'answerMatches',
+  'answerNotMatches',
+  'answerExcludes',
+  'noSandboxCommand',
+  'noMemoryStored',
+  'memoryProposed',
+  'memoryAnswered',
+  'memoryRows',
+  'memoryRecalled',
+  'noForeignMemory',
+  'memoryInputIsolated',
+])
+const MEMORY_OWNERS = ['eval-user', 'eval-other-user']
+const DEDUPE = ['new', 'reinforces', 'updates']
 const TURNS: Record<string, (n: number) => boolean> = {
   single: (n) => n === 1,
   'follow-up': (n) => n === 2,
@@ -104,11 +124,12 @@ function existingIds(md: string): string[] {
   const start = md.indexOf('## Scenario matrix')
   const end = md.indexOf('\n## ', start + 1)
   const section = md.slice(start, end < 0 ? undefined : end)
-  return [...section.matchAll(/^### (\d{2}-[a-z0-9-]+) — /gm)].map((m) => m[1])
+  return [...section.matchAll(/^### ((?:\d{2}|tn\d{2})-[a-z0-9-]+) — /gm)].map((m) => m[1])
 }
 
 function idPattern(s: Json): RegExp {
-  if (s.status === 'existing') return /^\d{2}-[a-z0-9-]+$/
+  // A proposed negative built later keeps its tn id when it becomes existing (#507 memory rows).
+  if (s.status === 'existing') return /^(?:\d{2}|tn\d{2})-[a-z0-9-]+$/
   return s.kind === 'negative' ? /^tn\d{2}-[a-z0-9-]+$/ : /^p\d{2}-[a-z0-9-]+$/
 }
 
@@ -127,6 +148,10 @@ type Item = Json & {
   examples?: { match?: unknown; noMatch?: unknown }
   turn?: number
   max?: number
+  owner?: string
+  dedupe?: string[]
+  outcome?: string
+  action?: string
 }
 const nonEmpty = (v: unknown): v is string[] =>
   Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string' && x.trim().length > 0)
@@ -212,6 +237,38 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
       return ['en', 'nl', 'fr'].includes(item.lang as string) ? [] : bad('lang')
     case 'noUncoveredAbsenceClaim':
       return reasoned(item.coverage) ? [] : bad('needs a coverage condition')
+    case 'memoryProposed':
+      if (
+        !Array.isArray(item.dedupe) ||
+        !item.dedupe.length ||
+        item.dedupe.some((d) => !DEDUPE.includes(d))
+      )
+        return bad('needs dedupe verdicts (new, reinforces, updates)')
+      return Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns
+        ? []
+        : bad('turn')
+    case 'memoryAnswered':
+      if (!['written', 'stale', 'discarded'].includes(item.outcome as string)) return bad('outcome')
+      if (
+        item.action !== undefined &&
+        (item.outcome !== 'written' || !['inserted', 'reinforced', 'updated'].includes(item.action))
+      )
+        return bad('action')
+      return Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns
+        ? []
+        : bad('turn')
+    case 'memoryRows':
+      if (!MEMORY_OWNERS.includes(item.owner as string)) return bad('owner')
+      return Array.isArray(item.facts) && item.facts.every((f) => typeof f === 'string' && f.trim())
+        ? []
+        : bad('facts (may be empty, never blank)')
+    case 'memoryRecalled':
+      if (!nonEmpty(item.facts)) return bad('needs facts')
+      return Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns
+        ? []
+        : bad('turn')
+    case 'memoryInputIsolated':
+      return nonEmpty(item.needles) ? [] : bad('needs needles')
     default:
       return []
   }
@@ -431,7 +488,7 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
   for (const s of scenarios)
     if (s.status === 'existing') {
       const on =
-        moduleIds.includes(String(s.id)) && /\bmemory:\s*true\b/.test(moduleText(String(s.id)))
+        moduleIds.includes(String(s.id)) && /\n {2}memory: \{/.test(moduleText(String(s.id)))
       if (s.memory === true && !on)
         errors.push(`${String(s.id)}: declares memory but its module does not turn memory on`)
       if (s.memory !== true && on)
@@ -572,6 +629,11 @@ function againstModule(s: Json, t: string): string[] {
       : !find('forbiddenTools').length,
     'forbiddenTools',
   )
+  // A row's catalogue-read graders run only if its module reads them, from its own row.
+  if (gr.some((i) => FROM_CATALOGUE.has(i.check)))
+    expect(t.includes(`...catalogueChecks('${at}')`), 'its catalogue graders (catalogueChecks)')
+  const read = t.match(/catalogueChecks\('([^']+)'\)/)?.[1]
+  expect(read === undefined || read === at, 'catalogueChecks reading another row')
   expect((one('citation') ?? null) === (find('citationLocator')[0]?.source ?? null), 'citation')
   expect((one('indexed') ?? null) === (find('indexedAndRetrieved')[0]?.file ?? null), 'indexed')
   expect(/\n {2}noTools: true/.test(t) === !!find('noTools').length, 'noTools')
@@ -917,10 +979,11 @@ describe('general-next scenario catalogue', () => {
     expect(validate(catalogue(), scenariosMd, moduleIds)).toEqual([])
   })
 
-  it('reads the 18 implemented scenarios from SCENARIOS.md, not zero', () => {
+  it('reads the 35 implemented scenarios from SCENARIOS.md, not zero', () => {
     // Guards the parser: an empty heading match would make the cross-check vacuous.
-    expect(existingIds(scenariosMd)).toHaveLength(18)
-    expect(moduleIds.length).toBeGreaterThanOrEqual(17)
+    expect(existingIds(scenariosMd)).toHaveLength(35)
+    expect(existingIds(scenariosMd)).toContain('tn58-other-owner-memory')
+    expect(moduleIds.length).toBeGreaterThanOrEqual(34)
   })
 
   it('reads its sources, not zero', () => {
@@ -1332,10 +1395,67 @@ describe('general-next scenario catalogue', () => {
       expect(errors.join()).toMatch(/tn58-other-owner-memory: must exclude a fact the synthetic/)
     })
     it('R5: the driver gives memory to the scenarios that ask for it and to no other', () => {
-      // Mutation (driver.ts): pass `memory: createSyntheticMemory(...)` unconditionally.
+      // Mutation (driver.ts): pass `memory: mem.config` unconditionally.
       expect(read('evals/general-next/driver.ts')).toMatch(
-        /next\.memory\s*\?\s*\{\s*\.\.\.deps,\s*memory:\s*createSyntheticMemory\(\(\) => EVAL_OWNER\)\s*\}\s*:\s*deps/,
+        /next\.memory && mem \? \{ \.\.\.deps, memory: mem\.config \} : deps/,
       )
+    })
+    it('M1: a row whose catalogue graders its module does not read', () => {
+      const text = moduleText('24-memory-isolation').replace(
+        "...catalogueChecks('24-memory-isolation'),",
+        '',
+      )
+      const s = catalogue().scenarios as Json[]
+      expect(againstModule(row(s, '24-memory-isolation'), text).join()).toMatch(
+        /24-memory-isolation: differs from its module on its catalogue graders/,
+      )
+    })
+    it('M1: a module reading another row’s graders', () => {
+      const text = moduleText('25-memory-small-talk').replace(
+        "...catalogueChecks('25-memory-small-talk')",
+        "...catalogueChecks('26-memory-question')",
+      )
+      const s = catalogue().scenarios as Json[]
+      expect(againstModule(row(s, '25-memory-small-talk'), text).join()).toMatch(
+        /catalogueChecks reading another row/,
+      )
+    })
+    it.each([
+      ['a proposal with no verdicts', (i: Item) => (i.dedupe = []), /needs dedupe verdicts/],
+      ['a proposal on a turn the row lacks', (i: Item) => (i.turn = 3), /memoryProposed turn/],
+    ])('M2: memoryProposed with %s', (_, edit, msg) => {
+      expect(
+        mutate((_c, s) => edit(itemOf(s, '19-memory-save-recall', 'memoryProposed'))).join(),
+      ).toMatch(msg)
+    })
+    it('M2: memoryAnswered naming an action on a stale answer', () => {
+      expect(
+        mutate(
+          (_, s) => (itemOf(s, '22-memory-stale', 'memoryAnswered').action = 'updated'),
+        ).join(),
+      ).toMatch(/22-memory-stale: memoryAnswered action/)
+    })
+    it('M2: memoryRows for an owner the store does not have', () => {
+      expect(
+        mutate(
+          (_, s) => (itemOf(s, '23-memory-discard', 'memoryRows').owner = 'eval-third'),
+        ).join(),
+      ).toMatch(/23-memory-discard: memoryRows owner/)
+    })
+    it('M2: a memory negative graded only on what did happen', () => {
+      const errors = mutate((_, s) => {
+        row(s, '25-memory-small-talk').grader = [
+          { check: 'memoryRecalled', says: '', turn: 1, facts: ['Lantern'] },
+        ]
+      })
+      expect(errors.join()).toMatch(/25-memory-small-talk: a negative needs a restraint check/)
+    })
+    it('M2: input isolation with no needle', () => {
+      expect(
+        mutate(
+          (_, s) => (itemOf(s, '28-memory-tool-instruction', 'memoryInputIsolated').needles = []),
+        ).join(),
+      ).toMatch(/memoryInputIsolated needs needles/)
     })
     it('N4: a multi-tag row without cells', () => {
       expect(

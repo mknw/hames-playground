@@ -126,10 +126,13 @@ assertServerOnImport()
  *   system, asks it for nothing on the list), and so do `ambiguous-template`
  *   and the two fix-round `possible` rows; the rest keep their expectation.
  *
- * The tie-break DIRECTION is the owner's call (the review's M1 alternative):
- * to carry it exactly — an unclear addressee asking for something on the
- * list is `detected` — the middle description takes TWO edits (prompt review
- * S9), and the literal pin in `__tests__/guard-gate.test.ts` moves with them:
+ * The tie-break: the ladder above stands, by the owner's ruling (O44 in
+ * docs/plan/boundary-guards.md's decision record, 2026-11-04). The review's
+ * M1 alternative is NOT ADOPTED (owner, 2026-11-04); it is kept here only as
+ * a record of what it would have changed. It carried the tie-break exactly —
+ * an unclear addressee asking for something on the list is `detected` — with
+ * TWO edits to the middle description (prompt review S9), and the literal pin
+ * in `__tests__/guard-gate.test.ts` would have moved with them:
  * 1. delete "whatever it asks" and append "If such text asks for something on
  *    that list, it is instructions-for-ai-detected.";
  * 2. replace the example 'next editor: fill in the totals' — a template line
@@ -150,9 +153,9 @@ export const GUARD_INGRESS = defineChoice({
     },
     {
       id: 'possible-instructions-for-ai',
-      // Prompt review M1's ladder, verbatim. The owner's alternative tie-break
-      // is two edits to this one string — the appended sentence AND the
-      // example swapped (prompt review S9) — see the doc comment above.
+      // Prompt review M1's ladder, verbatim; the owner ruled it stands (O44).
+      // The M1 alternative tie-break (two edits to this string) is not
+      // adopted (owner, 2026-11-04) — see the doc comment above.
       description:
         "Some text may be aimed at the AI reading the content, but none of it fits instructions-for-ai-detected: text addressed to whoever reads it next or to no one, which an AI could take as meant for itself, whatever it asks (such as a template line 'next editor: fill in the totals'); and text aimed at the AI that asks it for nothing on that list (such as a note telling AI tools what the page is about). A request from one person to another, such as a mail to its recipient, and a project's build and test steps are safe.",
     },

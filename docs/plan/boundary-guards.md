@@ -1,6 +1,6 @@
 # Boundary-only guards: a gated screen and an egress gate (Design)
 
-> **Status: revision 6, a design amendment (2026-11-02), not built; revisions 4 and 5 are not built and revision 3.1 is built.** Revision 6 reworks the ingress model check ([Revision 6](#revision-6-the-ingress-model-check-off-by-default-the-injection-ingress-guard)): the model screen and its gate question default to `off` on every tier, and the triage is re-engineered as the **injection-ingress-guard** — a three-choice classification (`safe` / `possible-instructions-for-ai` / `instructions-for-ai-detected`) at the existing Decide seam whose verdict attaches per content and drives the presentation of every link and citation to that content. Its rulings are O35 to O41; O41 is RULED (2026-11-02): mode `off` does not let a deterministic finding force the screen — the classification replaces that path. Revision 4 established
+> **Status: revision 6, a design amendment (2026-11-02), not built; revisions 4 and 5 are not built and revision 3.1 is built.** Revision 6 reworks the ingress model check ([Revision 6](#revision-6-the-ingress-model-check-off-by-default-the-injection-ingress-guard)): the model screen and its gate question default to `off` on every tier, and the triage is re-engineered as the **injection-ingress-guard** — a three-choice classification (`safe` / `possible-instructions-for-ai` / `instructions-for-ai-detected`) at the existing Decide seam whose verdict attaches per content and drives the presentation of every link and citation to that content. Its rulings are O35 to O44; O41 is RULED (2026-11-02): mode `off` does not let a deterministic finding force the screen — the classification replaces that path. O42 to O44 are RULED (2026-11-04) on slice 17's reviews: the gate is deleted from core, the classification's Anthropic-tier flow is accepted, and the middle label's prescribed tie-break stands. Revision 4 established
 
 **Current screen default (owner, 2026-10-30):** The self-deployed tier now defaults to `gated`; the 2026-10-27 evaluation met the bar for moving from `shadow`. `GUARD_SCREEN` still explicitly accepts `off`, `shadow`, `gated` and `always`. The Anthropic tier still defaults to `always`, and its switch still accepts only `off` or `always`. Earlier shadow-mode decisions and test rows below record the rollout history. Revision 5 changes the egress gate and K5, not this built screen default.
 
@@ -110,6 +110,12 @@ Binding on revision 6 (2026-11-02, the owner's direction on [#938](https://githu
 - **O39. Non-link content rides the citation plumbing.** Every cited chunk is marked like a link; uncited content does not surface. The residual — content that poisons the context without surfacing — is accepted, and the deterministic layer underneath is unchanged. [Non-link content](#non-link-content-the-citation-chip-is-the-marking-surface-o39)
 - **O40. One shared per-tier policy value** becomes the single owner of the screen-mode defaults; the two literals edited together today fold into it, shipped in the same slice as the defaults flip. [One shared value](#one-shared-per-tier-policy-value-o40)
 - **O41. RULED (2026-11-02, board).** Whether mode `off` still lets a deterministic finding force the screen: it does not — the classification replaces that path. The owner's note, recorded: the triage (the injection-ingress-guard) is the replacement for the former gate question. [O41](#o41-does-off-still-let-a-deterministic-finding-force-the-screen)
+
+Binding on revision 6's slice 17 (2026-11-04, the owner's rulings on the slice's code, security and prompt reviews; recorded in full in the [Owner decision record](#owner-decision-record)):
+
+- **O42. The guard gate is deleted from core.** Supersedes O35's "nothing is deleted" for this case. [O42](#o42-the-guard-gate-deleted-from-core)
+- **O43. The classification's Anthropic-tier flow is accepted.** With `GUARD_INGRESS` at `on` or `shadow`, content heads go to that tier's decisions host. Supersedes O4 and #701's Q2 for this flow. [O43](#o43-the-classifications-flow-to-the-anthropic-tiers-decisions-host)
+- **O44. The middle label's prescribed tie-break stands.** An unclear addressee lands in `possible-instructions-for-ai`. [O44](#o44-the-middle-labels-tie-break)
 
 **Coordinator proposals on revision 4 (with later rulings and readings noted):**
 
@@ -721,7 +727,7 @@ flowchart TB
 | τi                                          | dies with the gate                         | —                                                                         | `GUARD_GATE_THRESHOLD` retires: still set refuses boot naming the replacement (the `GUARD_EGRESS` precedent)                                                                                                     |
 | the safe line                               | none                                       | implementation detail                                                     | none                                                                                                                                                                                                             |
 
-**The screen's narrowed value set (author's proposal, owner may overrule).** With the gate retired from `general-next`'s composition (`packages/agents/agents/general-next.server.ts:221` is the composition slice 17 removes), the screen's `'gated'` and `'shadow'` values lose the gate that gave them their meaning. The code's own fallback would make both behave as `'always'` (`withInjectionGuard.server.ts:231`: without a gate, `gated` runs the screen) — a silent behaviour change. So the switch's accepted values narrow to `off | always` per tier (the Anthropic switch already accepts only those two), and a still-set `gated` or `shadow` refuses boot naming the change. The alternative, accepting the values with a boot warning, is the owner's to pick; the design recommends the refusal, because a switch whose value quietly changed meaning is the defect class the boot warnings exist to catch.
+**The screen's narrowed value set (author's proposal, owner may overrule).** With the gate retired from `general-next`'s composition (`packages/agents/agents/general-next.server.ts:221` is the composition slice 17 removes), the screen's `'gated'` and `'shadow'` values lose the gate that gave them their meaning. The code's own fallback would make both behave as `'always'` (`withInjectionGuard.server.ts:231`: without a gate, `gated` runs the screen) — a silent behaviour change. (Corrected under [O42](#o42-the-guard-gate-deleted-from-core): construction already refused that declaration, so the fallback could not be reached.) So the switch's accepted values narrow to `off | always` per tier (the Anthropic switch already accepts only those two), and a still-set `gated` or `shadow` refuses boot naming the change. The alternative, accepting the values with a boot warning, is the owner's to pick; the design recommends the refusal, because a switch whose value quietly changed meaning is the defect class the boot warnings exist to catch.
 
 ### Eval: `screen-on-the-tier` retires; the classification's calibration takes its place
 
@@ -802,7 +808,7 @@ Core settings are typed parameters on the patterns. `ByTier<T>` is `T | { readon
 
 **Revision 6 (not built) supersedes two rows above**: K2 `screen.mode`'s defaults become `off` on both tiers and τi retires with the gate; the replacement rows and the operator surface are in [Revision 6](#revision-6-the-ingress-model-check-off-by-default-the-injection-ingress-guard).
 
-**Why the two tiers differ on K2.** On the self-deployed tier the screen is a 27B call on the same single replica the controllers queue on, and the gate runs on the separate small box (`PrivateSystemOne`, `jev-decide.server.ts:259-262`), so gating moves work off the busy queue, once shadow mode has shown the gate can be trusted to ([O8](#o8-shadow-before-gated)). On the Anthropic tier the screen is Haiku, cheap and not shared, while the gate would send every body it reads (mail included) to the Anthropic tier's decisions host, which today receives route records and, by the owner's #701 ruling, not even an uploaded file's name. Hence `'always'` there.
+**Why the two tiers differ on K2.** On the self-deployed tier the screen is a 27B call on the same single replica the controllers queue on, and the gate runs on the separate small box (`PrivateSystemOne`, `jev-decide.server.ts:259-262`), so gating moves work off the busy queue, once shadow mode has shown the gate can be trusted to ([O8](#o8-shadow-before-gated)). On the Anthropic tier the screen is Haiku, cheap and not shared, while the gate would send every body it reads (mail included) to the Anthropic tier's decisions host, which today receives route records and, by the owner's #701 ruling, not even an uploaded file's name. Hence `'always'` there. (Revision 6's classification sends content heads there when `GUARD_INGRESS` is `on` or `shadow`; [O43](#o43-the-classifications-flow-to-the-anthropic-tiers-decisions-host) accepts that flow.)
 
 ## The two Decide questions
 
@@ -1191,7 +1197,7 @@ Each is one PR with its own review loop: a code review and a security review on 
 
 ## Owner decision record
 
-O1 to O12 are **RULED** (2026-10-20) and O13 to O23 are **RULED** (2026-10-21). **O24 to O28, O30 to O32 and O34 are ruled; O29 and O33 have applied recommendations the owner may overrule**: revision 5's, listed after [O23](#o23-prompt-fatigue-against-ruling-i). Each is kept here with its ruling and the owner's words, so the record is in one place. O13 to O19 were new in revision 1, O20 to O22 came from the security delta of revision 1, and O23 from its round 4. **No item of revision 3.1 remains open:** O23's default button is ruled Refuse (ruling X). The author's proposals the document proceeds on are listed in the status line. Where a ruling left a detail open, the text says which reading this document takes, labelled as the author's.
+O1 to O12 are **RULED** (2026-10-20) and O13 to O23 are **RULED** (2026-10-21). Revision 6's O35 to O41 are **RULED** (2026-11-02) and O42 to O44 (2026-11-04). **O24 to O28, O30 to O32 and O34 are ruled; O29 and O33 have applied recommendations the owner may overrule**: revision 5's, listed after [O23](#o23-prompt-fatigue-against-ruling-i). Each is kept here with its ruling and the owner's words, so the record is in one place. O13 to O19 were new in revision 1, O20 to O22 came from the security delta of revision 1, and O23 from its round 4. **No item of revision 3.1 remains open:** O23's default button is ruled Refuse (ruling X). The author's proposals the document proceeds on are listed in the status line. Where a ruling left a detail open, the text says which reading this document takes, labelled as the author's.
 
 ### O1: the directory matrix
 
@@ -1502,6 +1508,42 @@ O24 to O28, O30 to O32 and O34 have owner answers recorded verbatim above. O29 a
 - **In plain words:** today a K1 finding forces the screen in every mode that runs it, and mode `off` answers first, so nothing does (`withInjectionGuard.server.ts:227-228`). After the flip, should `off` still force a model call on a deterministic finding?
 - **Options:** (a) no — the classification replaces the finding-forces-screen path; `off` means ingress is fully deterministic; (b) yes — a K1 finding still forces the screen with the mode `off`.
 - **Status: RULED (2026-11-02, board): option (a) — the classification replaces the finding-forces-screen path. The owner's note, recorded: the triage is the replacement for the former gate question. Under (a) the flip is a settings change.
+- **Blocks:** none (ruled).
+
+### O42: the guard gate deleted from core
+
+- **In plain words:** slice 17 deletes the guard gate from `@hames-ai/harness-patterns`, not only from `general-next`'s composition. The deletion covers `createGuardGate`, `GUARD_SCREEN`, `GUARD_GATE_THRESHOLD`, `GUARD_GATE_TIMEOUT_MS`, `guardGateSkipRate`, the `GuardGate` and `GuardGateVerdict` types, `InjectionScreenConfig.gate` and the screen's `'shadow'` and `'gated'` modes. That is a breaking change to the core npm API, and O35 said "nothing is deleted".
+- **Options:**
+  - (a) Narrow the removal. Keep the generic gate seam in core and delete only what O36 names, plus what cannot exist without it.
+  - (b) Keep the full deletion.
+- **RULED (2026-11-04, board): (b), the full deletion stays.** This supersedes O35's "nothing is deleted" for this case.
+  - **Why:** the classification ([O36](#o36-the-triage-re-engineered-as-the-injection-ingress-guard)) replaces the gate. It does not sit beside it, so a gate seam kept in core would be a switch with nothing left behind it. A breaking change to the core npm API is within the owner's ruled scope.
+  - **What still has a switch:** the screen keeps `off | always`, and the classification has `GUARD_INGRESS`.
+- **A correction, recorded with the ruling.** [The screen's narrowed value set](#settings-revision-6-rows) says the code's own fallback would make a no-gate `'gated'` or `'shadow'` screen behave as `'always'`. It would not. On `main` at `d25830ca`, construction already refused that declaration (`withInjectionGuard.server.ts:497-503`), so the fallback at `:231` could not be reached. Slice 17's changeset, SPEC and source comments state the refusal.
+- **Blocks:** slice 17's merge (its code review, MUST-1).
+
+### O43: the classification's flow to the Anthropic tier's decisions host
+
+- **In plain words:** with `GUARD_INGRESS` at `on` or `shadow`, the classification sends a head of each external payload to the decisions host of the run's tier.
+  - **What is sent:** up to 20 000 characters (`GUARD_GATE_MAX_CHARS`, `packages/harness-patterns/guard-gate.server.ts:233`), in a state of at most 32 000 bytes (`:247`). That covers mail, file contents, web pages and every retrieved chunk of an uploaded document.
+  - **Where it goes on the Anthropic tier:** to `JevDecide`, the host `JEV_DECISIONS_URL` names, as the request body's `state` (`packages/harness-baml/jev-decide.server.ts:543-544`). That host is a processor other than Anthropic (SD-12).
+  - **Why it needed a ruling:** O4 kept the gate off that tier for exactly this reason ([Why the two tiers differ on K2](#settings)). #701's Q2 ruled that not even an uploaded file's name goes there ([`decide-document-context.md`](decide-document-context.md#owner-rulings)).
+- **Options:**
+  - (a) The flow is acceptable. Record it, and make both env templates say what is sent and to whom.
+  - (b) The Anthropic tier does not classify (`mode: { default: ingressMode, anthropic: 'off' }`) until the owner rules.
+- **RULED (2026-11-04, board): (a), the flow is acceptable.** This supersedes O4 and #701's Q2 for this flow only.
+  - **What it allows:** with `GUARD_INGRESS` at `on` or `shadow`, content heads of up to 20 000 characters go to the Anthropic tier's decisions host. Mail, file and document bodies are included. `shadow` sends the same bytes as `on`.
+  - **What it leaves alone:** the default, `off`, sends nothing. O4 still governs the screen: `GUARD_SCREEN_ANTHROPIC` accepts only `off | always`. Q2 still governs the Decide route's own state, which carries a document count only.
+  - **Where it is stated:** one value covers both tiers (ruling AE), and both env templates (`app/.env.example`, `.env.production.example`) say what is sent and to whom.
+- **Blocks:** slice 17's merge (its security review, MUST-1).
+
+### O44: the middle label's tie-break
+
+- **In plain words:** take text whose addressee is unclear and which asks for something on `instructions-for-ai-detected`'s list. The retired screen reported it. The ladder the prompt review prescribed (M1) labels it `possible-instructions-for-ai`, one step lower, whatever it asks.
+- **Options:**
+  - (a) The prescribed ladder stands.
+  - (b) Carry the tie-break exactly, so that text is `detected`. That takes two edits to the middle description: an appended sentence, and a swapped example.
+- **RULED (2026-11-04, board): (a), the prescribed ladder stands.** There is no tie-break change. The alternative is documented beside `GUARD_INGRESS` (`packages/harness-patterns/guard-gate.server.ts`) as not adopted. Slice 19 sets an unclear-addressee fixture's expectation at `possible`.
 - **Blocks:** none (ruled).
 
 ### Historical and remaining low-stakes notes

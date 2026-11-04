@@ -180,7 +180,7 @@ Recorded 2026-10-20; the design above follows them.
 
 - **Q1. Which option?** On every tier other than private, the Decide step sees a **count only** (option 2).
 - **Q3. Showing every name on the private tier.** **Overridden toward option 1 there:** every visible document's name, type and size, in a capped list (10 names, 80 code points each, 1,000 characters; beyond the cap, a `+K more documents` count). This replaced the recommended option 4, which is not built.
-- **Q2. Names to the Anthropic tier's decisions host.** **No**, as the invariant above. The check compares the run frame's raw tier slot with `'verda'`; everything else gets a count.
+- **Q2. Names to the Anthropic tier's decisions host.** **No**, as the invariant above. The check compares the run frame's raw tier slot with `'verda'`; everything else gets a count. Superseded for one flow by [boundary-guards O43](boundary-guards.md#o43-the-classifications-flow-to-the-anthropic-tiers-decisions-host) (2026-11-04): with `GUARD_INGRESS` at `on` or `shadow`, the injection-ingress-guard classification sends heads of retrieved document chunks, among other content, to that host. The Decide route's own state is unchanged.
 - **Q4. Hidden and archived files.** They stay off the list and out of the count; retrieval honours the same flags (#705).
 
 What the rulings do not settle is measurement: whether the list moves scenario 13, whether the count biases the other tiers' routing, and whether the cap fits. The live pass answers those.

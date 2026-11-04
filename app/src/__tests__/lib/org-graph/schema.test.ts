@@ -194,6 +194,21 @@ describe('countNonConforming', () => {
     ])
   })
 
+  it('runs the conformance query with the ontology-derived parameters, endpoints included', async () => {
+    const { countNonConforming } = await mod()
+    const { NON_CONFORMING_CYPHER, conformanceParams } =
+      await import('../../../lib/org-graph/ontology')
+    queue.push([{ kind: 'relation_endpoints', detail: ['USES', 'Widget', 'Gadget'], count: 5 }])
+
+    await expect(countNonConforming()).resolves.toEqual([
+      { kind: 'relation_endpoints', detail: ['USES', 'Widget', 'Gadget'], count: 5 },
+    ])
+    expect(sessionRun).toHaveBeenCalledWith(NON_CONFORMING_CYPHER, conformanceParams())
+    expect(
+      (sessionRun.mock.calls[0][1] as { relationEndpoints: unknown[] }).relationEndpoints,
+    ).not.toHaveLength(0)
+  })
+
   it('opens its session in READ mode', async () => {
     const { countNonConforming } = await mod()
     queue.push([])

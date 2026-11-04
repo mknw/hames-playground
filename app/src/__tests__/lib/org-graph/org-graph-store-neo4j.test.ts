@@ -15,12 +15,18 @@
  *     -e NEO4J_AUTH=neo4j/<password> neo4j:5.26
  *
  * The run also applies the ontology's constraint statements, which proves they
- * parse on the Community edition the stack runs.
+ * parse on the Community edition the stack runs, and executes the conformance
+ * query against a seeded graph (the only place it runs against a real server).
  */
 import neo4j, { type Driver } from 'neo4j-driver'
-import { describe, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createNeo4jOrgGraphStore } from '../../../lib/org-graph/org-graph-store.server'
-import { CONSTRAINT_STATEMENTS, ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
+import {
+  CONSTRAINT_STATEMENTS,
+  NON_CONFORMING_CYPHER,
+  ORG_ONTOLOGY,
+  conformanceParams,
+} from '../../../lib/org-graph/ontology'
 import { orgGraphStoreContract, type StoredGraph } from './org-graph-store-contract'
 
 const URL = process.env.ORG_GRAPH_TEST_NEO4J_URL
@@ -114,5 +120,41 @@ describe.skipIf(!ENABLED)('Neo4j adapter on a disposable database', () => {
         })
       },
     }
+  })
+
+  it('conformance counts a known relation type between the wrong labels', async () => {
+    // Synthetic vocabulary only. One edge of each shape the query must tell
+    // apart: a conforming pair, a declared type between two non-ontology
+    // labels, a declared type between two ontology labels it does not join, a
+    // multi-label endpoint that conforms through one label, and an unknown type
+    // (counted by its own branch, never twice).
+    await run('MATCH (n) DETACH DELETE n')
+    await run(`
+      CREATE (:Project {id: 'p1'})-[:USES]->(:Resource {id: 'r1'}),
+             (:Widget {id: 'w1'})-[:USES]->(:Gadget {id: 'g1'}),
+             (:Widget {id: 'w2'})-[:USES]->(:Gadget {id: 'g2'}),
+             (:Member {entraId: 'm1', displayName: 'M', mail: 'm@example.test'})
+               -[:USES]->(:Resource {id: 'r2'}),
+             (:Project:Extra {id: 'p2'})-[:USES]->(:Resource {id: 'r3'}),
+             (:Project {id: 'p3'})-[:CAN_BE]->(:Resource {id: 'r4'})
+    `)
+    const result = await run(NON_CONFORMING_CYPHER, conformanceParams())
+    const rows = result.records
+      .map((r) => ({
+        kind: String(r.get('kind')),
+        detail: r.get('detail') as string[],
+        count: Number(r.get('count')),
+      }))
+      .sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)))
+    expect(rows).toEqual(
+      [
+        { kind: 'node_label', detail: ['Gadget'], count: 2 },
+        { kind: 'node_label', detail: ['Widget'], count: 2 },
+        { kind: 'relation_endpoints', detail: ['USES', 'Member', 'Resource'], count: 1 },
+        { kind: 'relation_endpoints', detail: ['USES', 'Widget', 'Gadget'], count: 2 },
+        { kind: 'relation_type', detail: ['CAN_BE'], count: 1 },
+      ].sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y))),
+    )
+    await run('MATCH (n) DETACH DELETE n')
   })
 })

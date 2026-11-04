@@ -1,10 +1,13 @@
 /**
  * The organizational-graph ontology — one source of truth, pure and I/O-free.
  *
- * The graph holds organizational structure only: **members, resources,
- * knowledge**, and the relations between them. This module is the machine-
- * readable half of `docs/org-graph.md`; the doc is the prose half and cites
- * these exports rather than restating them. Change one, change the other.
+ * The graph holds organizational structure only: **members, pillars, themes,
+ * teams, projects and what attaches to them**, and the relations between them
+ * (`docs/plan/org-knowledge-hook.md`, "The ontology"). This module is the
+ * machine-readable half of `docs/org-graph.md`; the doc is the prose half and
+ * cites these exports rather than restating them. Change one, change the
+ * other. The organizational-knowledge hook checks every proposal against
+ * {@link ORG_ONTOLOGY}.
  *
  * ## What enforces what, and why it is split
  * The compose stack runs **Neo4j 5.26 Community** (`docker-compose.yaml`), and
@@ -41,77 +44,222 @@
  * once the directory is complete.
  */
 
-/** Node labels this graph admits. Anything else is non-conforming data. */
-export const NODE_LABELS = ['Member', 'Team', 'Resource', 'Knowledge'] as const
+import {
+  defineOntology,
+  type GraphOntology,
+  type OntologyClass,
+  type OntologyRelation,
+} from '@hames-ai/harness-patterns/org-knowledge-ontology'
+
+/**
+ * The ontology as data, in the shape `@hames-ai/harness-patterns` checks a
+ * proposal against (`docs/plan/org-knowledge-hook.md`, "The ontology"). Ten
+ * classes; every name here is a vocabulary term, never organisation data — the
+ * seeded pillars and themes come from configuration outside the repo.
+ *
+ * `Member` [the design's Person] and `Pillar` are linked to and never created
+ * by a proposal (axioms A3, A6). `Theme` is seeded AND proposable (amended A6).
+ * `Team` [Group] is the directory's group and a proposal's group alike, so one
+ * team cannot exist twice (LD-1). `Knowledge`, `AUTHORED` and `STEWARDS` are
+ * retired (LD-2): declared, never written, in no ruling.
+ */
+export const NODE_LABELS = [
+  'Member',
+  'Pillar',
+  'Theme',
+  'Team',
+  'Project',
+  'Deliverable',
+  'Deadline',
+  'Partner',
+  'Resource',
+  'Fact',
+] as const
 export type NodeLabel = (typeof NODE_LABELS)[number]
 
-/**
- * Relation types this graph admits, each with the endpoint labels it may join
- * and the one-line reason it exists. There is deliberately **no** reporting
- * relation: see the note on {@link RELATIONS}.
- */
-export interface RelationSpec {
-  readonly type: string
-  readonly from: readonly NodeLabel[]
-  readonly to: readonly NodeLabel[]
-  readonly why: string
-}
+/** Resource kinds and fact kinds: closed sets, by ruling (Fact: 2026-11-04). */
+export const RESOURCE_KINDS = ['document', 'system', 'dataset', 'tool'] as const
+export const FACT_KINDS = ['budget', 'status', 'decision', 'risk'] as const
+
+const NONE = {} as const
+const named = (
+  label: NodeLabel,
+  extra: Partial<OntologyClass> & Pick<OntologyClass, 'creatable'>,
+): OntologyClass => ({
+  label,
+  nameProperty: 'name',
+  required: ['name'],
+  optional: [],
+  derived: NONE,
+  closed: NONE,
+  dates: [],
+  lines: [],
+  identity: 'nameKey',
+  personFree: false,
+  ...extra,
+})
+
+/** Every label that is not a person or a fact: what a fact may be about. */
+const ABOUTABLE: readonly NodeLabel[] = NODE_LABELS.filter((l) => l !== 'Member' && l !== 'Fact')
+
+export const ORG_ONTOLOGY: GraphOntology = defineOntology({
+  classes: [
+    {
+      label: 'Member',
+      nameProperty: 'displayName',
+      required: ['displayName'],
+      optional: [],
+      derived: NONE,
+      closed: NONE,
+      dates: [],
+      lines: [],
+      identity: 'nameKey',
+      personFree: false,
+      creatable: false,
+    },
+    named('Pillar', { required: ['name', 'objective'], creatable: false }),
+    named('Theme', { optional: ['discipline'], creatable: true }),
+    named('Team', { creatable: true }),
+    named('Project', { optional: ['status', 'description'], creatable: true }),
+    named('Deliverable', { optional: ['description'], creatable: true }),
+    {
+      label: 'Deadline',
+      nameProperty: 'label',
+      required: ['label', 'date'],
+      optional: [],
+      derived: NONE,
+      closed: NONE,
+      dates: ['date'],
+      lines: [],
+      identity: 'owner',
+      personFree: false,
+      creatable: true,
+    },
+    named('Partner', { creatable: true }),
+    named('Resource', {
+      required: ['name', 'kind'],
+      optional: ['location'],
+      closed: { kind: RESOURCE_KINDS },
+      creatable: true,
+    }),
+    {
+      label: 'Fact',
+      nameProperty: null,
+      required: ['text', 'kind'],
+      optional: [],
+      derived: { evidence: 'evidence', statedOn: 'today' },
+      closed: { kind: FACT_KINDS },
+      dates: [],
+      lines: ['text'],
+      identity: 'none',
+      personFree: true,
+      creatable: true,
+    },
+  ],
+  relations: [
+    {
+      type: 'COORDINATES',
+      from: ['Member'],
+      to: ['Pillar', 'Theme'],
+      cardinality: { side: 'to', min: 0, max: 1, onExisting: 'replace' },
+      proposable: true,
+      why: 'Who coordinates a pillar or a theme: exactly one each, and a new coordinator replaces the old one in one proposal (A12).',
+    },
+    {
+      type: 'MEMBER_OF',
+      from: ['Member'],
+      to: ['Theme', 'Team'],
+      cardinality: null,
+      proposable: true,
+      why: 'Who belongs to which theme or team; the one relation the roster ingest is for.',
+    },
+    {
+      type: 'WORKS_ON',
+      from: ['Member', 'Team'],
+      to: ['Project'],
+      cardinality: null,
+      proposable: true,
+      why: 'Which people and teams work on a project.',
+    },
+    {
+      type: 'IN_PILLAR',
+      from: ['Project'],
+      to: ['Pillar'],
+      cardinality: { side: 'from', min: 0, max: 1, onExisting: 'replace' },
+      proposable: true,
+      why: 'The one objective a project serves, so it is counted once in every per-pillar view (A2).',
+    },
+    {
+      type: 'PARTNERS_ON',
+      from: ['Partner'],
+      to: ['Project'],
+      cardinality: null,
+      proposable: true,
+      why: 'Which external organisations a project is run with.',
+    },
+    {
+      type: 'DELIVERS',
+      from: ['Project'],
+      to: ['Deliverable'],
+      cardinality: { side: 'to', min: 1, max: 1, onExisting: 'refuse' },
+      proposable: true,
+      why: 'What a project produces; each deliverable belongs to exactly one project (LD-3).',
+    },
+    {
+      type: 'HAS_DEADLINE',
+      from: ['Project', 'Deliverable'],
+      to: ['Deadline'],
+      cardinality: { side: 'to', min: 1, max: 1, onExisting: 'refuse' },
+      proposable: true,
+      why: 'When a project or deliverable is due; a deadline answers no question without its owner (A4).',
+    },
+    {
+      type: 'USES',
+      from: ['Project'],
+      to: ['Resource'],
+      cardinality: null,
+      proposable: true,
+      why: 'The documents, systems, datasets and tools a project relies on; a resource may serve several.',
+    },
+    {
+      type: 'ABOUT',
+      from: ['Fact'],
+      to: ABOUTABLE,
+      cardinality: { side: 'from', min: 1, max: 1, onExisting: 'refuse' },
+      proposable: true,
+      why: 'What a fact is about: exactly one node, never a person and never another fact (A5).',
+    },
+    {
+      type: 'PART_OF',
+      from: ['Team'],
+      to: ['Team'],
+      cardinality: null,
+      proposable: false,
+      why: 'Team nesting as the directory records it; written by the ingest only, structural, and explicitly not a reporting line.',
+    },
+  ],
+})
 
 /**
- * The relation set. `MEMBER_OF` and `COORDINATES` are given; the other four are
- * the minimum that lets resources and knowledge attach to anything at all.
+ * The relation set, read off {@link ORG_ONTOLOGY}.
  *
  * **No reports-to, by decision.** No `REPORTS_TO` / `MANAGES` / `LEADS` edge
  * exists here, and `COORDINATES` is not a stand-in for one: it points at a
- * *team*, never at a person, so nothing in this ontology can express authority
- * of one individual over another. Graph's `/users` payload carries a `manager`
- * relationship; the ingest does not read it.
+ * pillar or a theme, never at a person, so nothing in this ontology can express
+ * authority of one individual over another. Graph's `/users` payload carries a
+ * `manager` relationship; the ingest does not read it.
  */
-export const RELATIONS: readonly RelationSpec[] = [
-  {
-    type: 'MEMBER_OF',
-    from: ['Member'],
-    to: ['Team'],
-    why: 'Who belongs to which team — the one relation the roster ingest is for.',
-  },
-  {
-    type: 'COORDINATES',
-    from: ['Member'],
-    to: ['Team'],
-    why: 'Who convenes a team, as a separate edge so coordination is stated rather than inferred from membership, and points at the team rather than at its people.',
-  },
-  {
-    type: 'PART_OF',
-    from: ['Team'],
-    to: ['Team'],
-    why: 'Team nesting, because Entra groups nest and MEMBER_OF cannot express a sub-team; structural only, and explicitly not a reporting line.',
-  },
-  {
-    type: 'STEWARDS',
-    from: ['Team'],
-    to: ['Resource'],
-    why: 'Which team is accountable for a resource, so "who do I ask about X" is one hop from the resource.',
-  },
-  {
-    type: 'ABOUT',
-    from: ['Knowledge'],
-    to: ['Member', 'Team', 'Resource'],
-    why: 'What a knowledge item documents — one polymorphic attach edge instead of three near-identical typed ones.',
-  },
-  {
-    type: 'AUTHORED',
-    from: ['Member'],
-    to: ['Knowledge'],
-    why: 'Provenance of a knowledge item; the only Member→Knowledge edge needed, and the reason Knowledge needs no author property.',
-  },
-] as const
+export const RELATIONS: readonly OntologyRelation[] = ORG_ONTOLOGY.relations
 
 export const RELATION_TYPES: readonly string[] = RELATIONS.map((r) => r.type)
 
 /**
- * Required properties per label, split into the two tiers the module header
- * explains. `key`/`entraId` values are the identity a uniqueness constraint is
- * declared on; see {@link CONSTRAINT_STATEMENTS}.
+ * Required properties per label as stored, split into the two tiers the module
+ * header explains, and the properties a uniqueness constraint is declared on.
+ * Every class but `Member` carries a stable `id` (A7); every class keyed by
+ * name carries `nameKey` (A1), so the database holds both axioms against every
+ * writer. `Member` keeps its directory identity until the ingest gives it an
+ * `id` (the ingest re-check, a data job).
  */
 export interface LabelSpec {
   readonly label: NodeLabel
@@ -123,17 +271,29 @@ export interface LabelSpec {
   readonly unique: readonly string[]
 }
 
-export const LABEL_SPECS: readonly LabelSpec[] = [
-  {
-    label: 'Member',
-    hard: ['entraId', 'displayName', 'mail'],
-    soft: ['department', 'jobTitle'],
-    unique: ['entraId', 'mail'],
-  },
-  { label: 'Team', hard: ['entraId', 'name'], soft: [], unique: ['entraId'] },
-  { label: 'Resource', hard: ['key', 'name'], soft: [], unique: ['key'] },
-  { label: 'Knowledge', hard: ['key', 'title'], soft: [], unique: ['key'] },
-] as const
+const PROVENANCE = ['id', 'createdBy', 'createdAt'] as const
+
+export const LABEL_SPECS: readonly LabelSpec[] = NODE_LABELS.map((label): LabelSpec => {
+  if (label === 'Member') {
+    return {
+      label,
+      hard: ['entraId', 'displayName', 'mail'],
+      soft: ['department', 'jobTitle'],
+      unique: ['entraId', 'mail'],
+    }
+  }
+  const cls = ORG_ONTOLOGY.classes.find((c) => c.label === label)!
+  const byName = cls.identity === 'nameKey'
+  const stored = [...cls.required, ...Object.keys(cls.derived)]
+  return {
+    label,
+    hard: [...PROVENANCE, ...stored, ...(byName ? ['nameKey'] : [])],
+    soft: [],
+    // A directory team keeps its entraId identity; a proposed one has none,
+    // and a uniqueness constraint admits any number of absent values.
+    unique: [...(label === 'Team' ? ['entraId'] : []), 'id', ...(byName ? ['nameKey'] : [])],
+  }
+})
 
 export const labelSpec = (label: NodeLabel): LabelSpec =>
   LABEL_SPECS.find((s) => s.label === label) as LabelSpec

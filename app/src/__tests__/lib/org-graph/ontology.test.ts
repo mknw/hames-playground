@@ -14,6 +14,7 @@ import {
   LABEL_SPECS,
   NODE_LABELS,
   NON_CONFORMING_CYPHER,
+  ORG_ONTOLOGY,
   RELATIONS,
   RELATION_TYPES,
   conformanceParams,
@@ -31,8 +32,20 @@ const MEMBER = {
 }
 
 describe('shape of the ontology', () => {
-  it('admits exactly the four organisational labels', () => {
-    expect([...NODE_LABELS]).toEqual(['Member', 'Team', 'Resource', 'Knowledge'])
+  it('admits exactly the ten labels of the org-knowledge ontology', () => {
+    expect([...NODE_LABELS]).toEqual([
+      'Member',
+      'Pillar',
+      'Theme',
+      'Team',
+      'Project',
+      'Deliverable',
+      'Deadline',
+      'Partner',
+      'Resource',
+      'Fact',
+    ])
+    expect(ORG_ONTOLOGY.classes.map((c) => c.label)).toEqual([...NODE_LABELS])
     // Every label carries a spec, so a label added without one cannot slip
     // through as "no required properties".
     for (const label of NODE_LABELS) expect(labelSpec(label)).toBeTruthy()
@@ -53,10 +66,51 @@ describe('shape of the ontology', () => {
     expect(personToPerson).toEqual([])
   })
 
-  it('points COORDINATES at a team, never at a person', () => {
+  it('points COORDINATES at a pillar or a theme, never at a person, one each', () => {
     const coordinates = RELATIONS.find((r) => r.type === 'COORDINATES')!
     expect(coordinates.from).toEqual(['Member'])
-    expect(coordinates.to).toEqual(['Team'])
+    expect(coordinates.to).toEqual(['Pillar', 'Theme'])
+    expect(coordinates.cardinality).toEqual({ side: 'to', min: 0, max: 1, onExisting: 'replace' })
+  })
+
+  it('retires the labels and relations nothing wrote (LD-2)', () => {
+    expect(NODE_LABELS).not.toContain('Knowledge')
+    expect(RELATION_TYPES).not.toContain('AUTHORED')
+    expect(RELATION_TYPES).not.toContain('STEWARDS')
+  })
+
+  // Design pin: every relation has a cardinality row. "Any number" is written
+  // as an explicit null. Mutation: add a relation without one → defineOntology
+  // throws when this module loads, and every test in the file fails.
+  it('gives every relation an explicit cardinality', () => {
+    for (const relation of RELATIONS) expect(relation.cardinality).not.toBeUndefined()
+    const bounded = Object.fromEntries(
+      RELATIONS.filter((r) => r.cardinality).map((r) => [r.type, r.cardinality]),
+    )
+    expect(bounded).toEqual({
+      COORDINATES: { side: 'to', min: 0, max: 1, onExisting: 'replace' },
+      IN_PILLAR: { side: 'from', min: 0, max: 1, onExisting: 'replace' },
+      DELIVERS: { side: 'to', min: 1, max: 1, onExisting: 'refuse' },
+      HAS_DEADLINE: { side: 'to', min: 1, max: 1, onExisting: 'refuse' },
+      ABOUT: { side: 'from', min: 1, max: 1, onExisting: 'refuse' },
+    })
+  })
+
+  it('creates no member or pillar, proposes themes, and keeps PART_OF for the ingest', () => {
+    const creatable = ORG_ONTOLOGY.classes.filter((c) => c.creatable).map((c) => c.label)
+    expect(creatable).not.toContain('Member')
+    expect(creatable).not.toContain('Pillar')
+    expect(creatable).toContain('Theme')
+    expect(RELATIONS.find((r) => r.type === 'PART_OF')!.proposable).toBe(false)
+  })
+
+  it('narrows a fact to four kinds, about one node that is neither a person nor a fact', () => {
+    const fact = ORG_ONTOLOGY.classes.find((c) => c.label === 'Fact')!
+    expect(fact.closed.kind).toEqual(['budget', 'status', 'decision', 'risk'])
+    expect(fact.personFree).toBe(true)
+    const about = RELATIONS.find((r) => r.type === 'ABOUT')!
+    expect(about.to).not.toContain('Member')
+    expect(about.to).not.toContain('Fact')
   })
 
   it('gives every relation a rationale and endpoints inside the label set', () => {
@@ -99,6 +153,17 @@ describe('constraint statements', () => {
     expect(CONSTRAINT_NAMES).toContain('org_member_mail')
     for (const name of CONSTRAINT_NAMES) expect(name.startsWith('org_')).toBe(true)
     expect(new Set(CONSTRAINT_NAMES).size).toBe(CONSTRAINT_NAMES.length)
+  })
+
+  it('declares a stable id on every class but Member, and a name key on every named one', () => {
+    for (const cls of ORG_ONTOLOGY.classes) {
+      const unique = labelSpec(cls.label as (typeof NODE_LABELS)[number]).unique
+      if (cls.label === 'Member') continue
+      expect(unique).toContain('id')
+      expect(unique.includes('nameKey')).toBe(cls.identity === 'nameKey')
+    }
+    expect(CONSTRAINT_NAMES).toContain('org_project_name_key')
+    expect(CONSTRAINT_NAMES).toContain('org_fact_id')
   })
 
   it('covers Member identity on both entraId and mail', () => {

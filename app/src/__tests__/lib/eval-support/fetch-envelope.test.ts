@@ -3,9 +3,11 @@
  * gateway's fetch server.
  *
  * MUTATION (red): drop the `slice.length === max` condition (always mark a cut), or
- * drop the `start >= page.length` branch — the matching case below goes red. */
+ * drop the `start >= page.length` branch — the matching case below goes red.
+ * MUTATION (red): make `fetchRefusal` return undefined (default the argument instead,
+ * as the fake once did), or accept `max_length` 1000000 — the refusal cases go red. */
 import { describe, expect, it } from 'vitest'
-import { fetchEnvelope } from '../../../lib/eval-support/fetch-envelope'
+import { fetchEnvelope, fetchRefusal } from '../../../lib/eval-support/fetch-envelope'
 
 const URL = 'https://nextjs.org/blog/next-15-5'
 const PAGE = 'Next.js version 15.5 makes Turbopack the default bundler for development.'
@@ -29,9 +31,33 @@ describe('fetchEnvelope', () => {
         `Contents of ${URL}:\n<error>No more content available.</error>`,
       )
   })
-  it('an argument the server would refuse falls back to its default', () => {
-    expect(fetchEnvelope(URL, PAGE, { max_length: 0, start_index: -1 })).toBe(
-      `Contents of ${URL}:\n${PAGE}`,
+  it('a valid argument set is not refused', () => {
+    for (const args of [
+      {},
+      { max_length: 1, start_index: 0 },
+      { max_length: 999_999 },
+      { raw: true },
+    ])
+      expect(fetchRefusal(args)).toBeUndefined()
+  })
+  // #989 review: the server validates before it fetches; it never serves the page at a
+  // default for an argument its schema rejects.
+  it('an argument the server would refuse is refused, never defaulted', () => {
+    for (const args of [
+      { max_length: 1_000_000 },
+      { max_length: 0 },
+      { max_length: 5000.5 },
+      { max_length: '5000' },
+      { start_index: -1 },
+      { start_index: 1.5 },
+    ]) {
+      const refusal = fetchRefusal(args)
+      expect(refusal, JSON.stringify(args)).toMatch(
+        /^1 validation error for Fetch\n(max_length|start_index)\n/,
+      )
+    }
+    expect(fetchRefusal({ max_length: 0, start_index: -1 })).toMatch(
+      /^2 validation errors for Fetch/,
     )
   })
 })

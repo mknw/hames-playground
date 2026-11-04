@@ -26,7 +26,7 @@ import type {
   MemoryScenario,
   MemoryTurnTrace,
 } from '../../src/lib/eval-support/memory-scenario'
-import { fetchEnvelope } from '../../src/lib/eval-support/fetch-envelope'
+import { fetchEnvelope, fetchRefusal } from '../../src/lib/eval-support/fetch-envelope'
 import type { fixtureInference } from './fixture-inference'
 import type { OrgScenario, OrgTurnTrace } from '../../src/lib/eval-support/org-scenario'
 
@@ -280,7 +280,10 @@ export async function createDriver(
     namespaceFor: (name: string) => NAMESPACES[name],
     listTools: async () => descriptions.filter((t) => !isSandboxTool(t.name)),
     callTool: async (name: string, args: Record<string, unknown>) => {
+      // The fetch server refuses an argument its schema rejects, before fetching (#989).
+      const refused = name === 'fetch' ? fetchRefusal(args) : undefined
       const success =
+        refused === undefined &&
         name !== 'write_neo4j_cypher' &&
         !(scenario?.failFirstTurn && turn === 0 && name === 'read_neo4j_cypher')
       trace?.tools.push({ name, args, success, turn })
@@ -289,9 +292,10 @@ export async function createDriver(
           success: false,
           data: null,
           error:
-            name === 'write_neo4j_cypher'
+            refused ??
+            (name === 'write_neo4j_cypher'
               ? 'Graph is read-only; write refused.'
-              : 'Synthetic service unavailable; retry on the next user turn.',
+              : 'Synthetic service unavailable; retry on the next user turn.'),
         }
       // Argument-aware where the four graph facts diverge: a TOTAL-count ask over
       // Project (the same shape the scenarios' own arg predicate grades) keeps returning

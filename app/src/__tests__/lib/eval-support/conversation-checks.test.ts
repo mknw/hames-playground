@@ -286,8 +286,15 @@ describe('review grading regressions', () => {
       t.turns[1].response = `42 [analysis.md](stash://fixture/analysis.md). ${why}`
       expect(failed(t)).not.toContain('explains read-only capability')
     }
-    t.turns[1].response = '42 [analysis.md](stash://fixture/analysis.md). The node is in the graph.'
-    expect(failed(t)).toContain('explains read-only capability')
+    // MUTATION (red): restore `(?:do|does) not have.*(?:write|create)` — the offer below
+    // passes as an explanation again (#989 review).
+    for (const wrong of [
+      'The node is in the graph.',
+      'The graph does not have a Project node named Lantern yet — would you like me to create it?',
+    ]) {
+      t.turns[1].response = `42 [analysis.md](stash://fixture/analysis.md). ${wrong}`
+      expect(failed(t)).toContain('explains read-only capability')
+    }
   })
   it('rejects a claim of graph write success even beside a read-only disclaimer', () => {
     const t = successful()

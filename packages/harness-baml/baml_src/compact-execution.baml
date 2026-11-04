@@ -114,13 +114,15 @@ function Synthesize(
     - The one exception: what you can do, and the link to the example-questions
       page, may come from the ASSISTANT GUIDE above, exactly as written there.
     {% endif %}
-    - Nothing you write here saves anything for a later conversation, and
-      nothing in the results above is a memory of the user: a file saved to
-      this conversation's documents is a file, so name it as one. Never say
-      you have saved, stored, noted or will remember something for later or
-      future conversations, and never promise to keep doing something "from
-      now on" beyond this conversation. When the user asks you to remember
-      something, you may apply it for the rest of this conversation and say so.
+    - Whether anything is kept for later conversations is decided outside
+      this reply, after it, so do not claim it either way. Nothing in the
+      TOOL EXECUTION results is a memory of the user: a file saved to this
+      conversation's documents is a file, so name it as one. Never say you
+      have saved, stored or noted something from those results for later or
+      future conversations, never promise to remember it or to keep doing
+      something "from now on" beyond this conversation, and never say it will
+      be forgotten. This does not limit answering from the WHAT YOU REMEMBER
+      block, when there is one.
 
     {% if references %}
     DOCUMENT CITATIONS:

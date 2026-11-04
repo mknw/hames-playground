@@ -1,11 +1,16 @@
 /** tn35 (live, 2026-11-04): with memory off, a route wrote a note file and the reply
  * told the user "Ik heb je voorkeur opgeslagen" — a save claim the results carried and
- * the FIDELITY rules allowed, because nothing told the synthesizer that a file in this
- * conversation is not something remembered later. Offline wire renders, no model call.
+ * the FIDELITY rules allowed. Synthesize runs BEFORE the store step (`settleMemory`), so
+ * whether anything is kept is never known when it writes: the rule is "do not claim it
+ * either way" (review of #989: a "for the rest of this conversation" clause understated a
+ * preference the store keeps unasked), scoped to the tool results, and it must not limit
+ * answering from a recalled memory (05 turn 2: "which release tag do you have noted").
+ * Offline wire renders, no model call.
  *
- * MUTATION (red): delete the "Nothing you write here saves anything…" bullet from
- * `Synthesize` in `packages/harness-baml/baml_src/compact-execution.baml` and
- * regenerate — every client below goes red. */
+ * MUTATIONS (red): delete the "Whether anything is kept…" bullet from `Synthesize` in
+ * `packages/harness-baml/baml_src/compact-execution.baml` and regenerate — every client
+ * goes red; drop its last sentence (the WHAT YOU REMEMBER carve-out) — red, with and
+ * without a memory block; put back "for the rest of this conversation and say so" — red. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { b } from '@hames-ai/harness-baml/baml_client'
 
@@ -48,10 +53,17 @@ describe('Synthesize never claims a save for later conversations', () => {
           { client, env: ENV },
         )
         const text = JSON.stringify(request.body.json())
-        expect(text).toContain('Nothing you write here saves anything for a later conversation')
-        expect(text).toContain('a file saved to\\n  this conversation')
-        expect(text).toContain('you have saved, stored, noted or will remember something')
-        expect(text).toContain('beyond this conversation')
+        expect(text).toContain(
+          'Whether anything is kept for later conversations is decided outside',
+        )
+        expect(text).toContain('so do not claim it either way')
+        expect(text).toContain('Nothing in the\\n  TOOL EXECUTION results is a memory of the user')
+        expect(text).toContain('a file saved to this\\n  conversation')
+        // The carve-out: a stored memory the block shows may be reported as noted.
+        expect(text).toContain('This does not limit answering from the WHAT YOU REMEMBER')
+        // Never understate retention the store step may still perform.
+        expect(text).not.toContain('for the rest of this conversation')
+        if (memory) expect(text).toContain(memory)
       }
     },
   )

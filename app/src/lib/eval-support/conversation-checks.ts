@@ -152,7 +152,9 @@ export function grade(
         'explains read-only capability',
         // "unable to create … only read access" is the same explanation in other words
         // (06's live miss, 2026-11-04); a write-success claim is the next check's job.
-        /read.only|\bread access\b|(?:cannot|can.t|unable to|not able to|(?:do|does) not have|(?:don|doesn).t have).*(?:write|create)/i.test(
+        // "does not have" counts only for a missing CAPABILITY: "the graph does not have
+        // a Lantern node — shall I create it?" offers a write it cannot do (#989 review).
+        /read.only|\bread access\b|(?:cannot|can.t|unable to|not able to).*(?:write|create)|(?:(?:do|does) not|(?:don|doesn).t) have\b[^.]{0,30}\b(?:permission|access|ability|tool)/i.test(
           final,
         ),
         final,

@@ -69,6 +69,14 @@ describe('03-web-read fixture (#775)', () => {
     )
   })
 
+  // MUTATION (red): drop `refused === undefined &&` from the driver's `success`, or
+  // `refused ??` from its error — an invalid fetch argument is served the page again.
+  it('an argument the fetch server would refuse is refused as a failed call (#989)', () => {
+    expect(driver).toContain("const refused = name === 'fetch' ? fetchRefusal(args) : undefined")
+    expect(driver).toMatch(/const success =\s*refused === undefined &&/)
+    expect(driver).toMatch(/error:\s*refused \?\?/)
+  })
+
   it('the seeded local decoy does not answer the ask', () => {
     const notes = driver.match(/const NOTES =\s*'([^']*)'/)?.[1] ?? ''
     expect(notes).toContain('Lantern')

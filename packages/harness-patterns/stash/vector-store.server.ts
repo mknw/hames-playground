@@ -207,8 +207,21 @@ export function createVectorStore(opts: VectorStoreOptions): VectorStore {
 // Naming helpers (shared so one index never mixes embedding models)
 // ============================================================================
 
+/**
+ * Collapse runs of non-alphanumerics to a single underscore and trim
+ * leading/trailing underscores. The trim is an index loop, not a backtracking
+ * regex: an anchored unbounded underscore run is a polynomial-ReDoS hazard on
+ * strings of many underscores (CodeQL js/polynomial-redos) — the loop is
+ * linear. The source-scan test pins that no underscore-quantifier regex
+ * returns to this module.
+ */
 export function sanitize(s: string): string {
-  return s.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+  const collapsed = s.replace(/[^a-zA-Z0-9]+/g, '_')
+  let start = 0
+  let end = collapsed.length
+  while (start < end && collapsed.charCodeAt(start) === 95 /* '_' */) start++
+  while (end > start && collapsed.charCodeAt(end - 1) === 95 /* '_' */) end--
+  return collapsed.slice(start, end)
 }
 
 /** `provider_model_dim` — equal tags ⇒ comparable vectors / same index. */

@@ -231,4 +231,6 @@ The graders read the graph before and after, and the proposal each turn raised; 
 
 **No live run has been made.**
 
+**The members are a fixture, never a database.** The synthetic graph's ten members (`SYNTHETIC_MEMBERS`) are invented records, pseudonymised by hand in the shape the roster ingest writes a `Member`. No eval path reads org or member data from any Neo4j, hermetic or live. `src/__tests__/lib/eval-support/no-real-neo4j.test.ts` pins that, with the mutations that turn it red in its header. `src/lib/org-graph/scripts/seed-eval-members.ts` MERGEs the same ten into a Neo4j (`createdBy: 'eval-seed'`, idempotent, never deletes) for **local manual use only**, such as the dev UI and the Org.graph tab. **No eval reads what it writes.**
+
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

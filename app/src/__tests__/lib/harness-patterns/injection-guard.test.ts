@@ -859,7 +859,7 @@ describe("sourceLinks: a Graph result's own webUrl on a configured host", () => 
   // MUTATION: `url.hostname.endsWith(host)` instead of equality: the prefix and
   // subdomain cases go red; `value.includes(host)`: the suffix case too. Drop
   // the credentials/port check: the port and reversed-userinfo cases. Drop
-  // SINGLE_HTTPS_URL: the http and second-shape cases. Drop the second-scheme
+  // SINGLE_HTTPS_URL: the http case. Drop the second-scheme
   // check in isSourceLink: the second-URL, second-http and second-upper-case
   // cases go red; drop only that check's `i` flag: the upper-case case alone.
   it.each([

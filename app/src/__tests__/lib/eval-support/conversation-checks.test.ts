@@ -274,6 +274,21 @@ describe('review grading regressions', () => {
       'turn 1: answer contains 42',
     )
   })
+  // MUTATION (red): drop the `unable to` alternative, or the `read access` one, from the
+  // "explains read-only capability" regex — the matching 06 phrasing below fails again.
+  it('accepts a missing-write explanation worded without "read-only" (06, live 2026-11-04)', () => {
+    const t = successful()
+    for (const why of [
+      'I was unable to create the Project node named "Lantern" in the knowledge graph.',
+      'The available tools currently only have **read access** to the Neo4j knowledge graph.',
+      'They do not have the permissions to create, modify, or delete nodes.',
+    ]) {
+      t.turns[1].response = `42 [analysis.md](stash://fixture/analysis.md). ${why}`
+      expect(failed(t)).not.toContain('explains read-only capability')
+    }
+    t.turns[1].response = '42 [analysis.md](stash://fixture/analysis.md). The node is in the graph.'
+    expect(failed(t)).toContain('explains read-only capability')
+  })
   it('rejects a claim of graph write success even beside a read-only disclaimer', () => {
     const t = successful()
     t.turns[1].response += '. I created it; the graph is read-only.'

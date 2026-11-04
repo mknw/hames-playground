@@ -188,6 +188,33 @@ failure" are self-fulfilling there. Only these discriminate hermetically: tool o
 arguments, route selection and completion, stash artifacts, the index and retrieval checks,
 and "first turn recorded a tool failure". A scenario whose only discriminating checks are
 absent (06) is a vacuous pass hermetically; every hermetic report says so in `hermeticCaveat`.
-The eval passes `deps.memory` to scenario 05 alone, as a synthetic read-only owner-scoped store (`src/lib/eval-support/synthetic-memory.ts`) whose recall gate is a fixed answer, and never runs the store step; so no `withMemory` gate or describe calls are priced that production makes.
+Per-user memory runs on the rows that declare it (05, 19–31 and tn35/tn36/tn41/tn58) and on no other, so no other row pays a recall or a store step; see the next section.
+
+## Per-user memory (withMemory)
+
+`general-next` wraps its patterns in `withMemory` when the host passes `deps.memory`, and the app always does; the user's switch decides. The driver passes it to the memory rows only, built the way the host builds it — the production `createDecideAdapter` / `createDecideAllAdapter` / `createMemoryExtractAdapter`, each wrapped to record the state or input it was handed — over a **writable synthetic store** (`src/lib/eval-support/synthetic-memory.ts`): in memory, owner-scoped (two invented owners, the owner resolved on every call), transactional (a throwing body rolls back, which the stale refusal and the provenance no-op need). After each turn the driver does what the host's post-turn continuation does: `settleMemory`, then — between turns — the person's answer to any `memory.confirm` proposal (`answerProposal`, and on save core's `applyMemoryProposal`), then one save of the context. A scenario can start a new conversation, as either owner, and can change a stored memory between a proposal and its answer.
+
+Two deliberate differences from production. **Every personal memory asks** (`settle.routineKinds: []`): production lets a plainly volunteered episodic, semantic or preference memory skip the question, and the confirm-flow rows must not depend on what the gate's `confirm` field said, so that unasked-write path is not exercised here. **Hermetic embeddings are synthetic** (a bag of stemmed words plus one shared axis standing in for the production query instruction); every similarity a row relies on — the reinforce and update bands, the recall floor — is pinned in `synthetic-memory.test.ts`. Live runs embed with the production embedder (the owner's local one, a live precondition already).
+
+What the rows cover, each with what a pass proves in its catalogue `notes` and in SCENARIOS.md:
+
+| Row            | Claim                                                                                                         |
+| -------------- | ------------------------------------------------------------------------------------------------------------- |
+| 05             | recall of a seeded memory into the answer, two turns; nothing of the other owner's                            |
+| 19             | a stated preference → one proposal with verbatim evidence → saved on confirm → recalled in a NEW conversation |
+| 20 / 21        | a restated preference reinforces; a changed one updates (the merge question)                                  |
+| 22             | a memory changed between the proposal and the answer is refused as stale; nothing written                     |
+| 23             | a discarded proposal stores nothing                                                                           |
+| 24, tn58, tn41 | owner isolation: the other owner's recall and answer never carry this owner's memory                          |
+| 25–27, 30, 31  | true negatives: small talk, a question, a hypothetical, a secret, a fact about a colleague                    |
+| 28             | a "remember that…" inside a fetched page: nothing stored, and no memory input reads the page                  |
+| 29             | a fact only the assistant said: nothing stored                                                                |
+| tn35, tn36     | memory wired, switch OFF: nothing stored, nothing recalled                                                    |
+
+The graders read the store, the proposal, the answer's report and what recall attached — `memory-checks.ts`, pinned with a red each in `memory-checks.test.ts` — and a row's memory and pattern graders come from its own catalogue row (`catalogue-checks.ts`), so the reviewed JSON is the run's. Every true negative asserts **no proposal and every row as seeded** (`noMemoryStored`); it is never satisfied by a reply that says nothing was saved.
+
+**Hermetic vs live.** Hermetically the gate, merge question and extractor are scripted per turn (`memory.turns[n].model`) and Synthesize answers only from the memory block recall handed it. So the recall, isolation and exclusion checks discriminate, and so do the negatives whose stop is deterministic: the switch (tn35, tn36), input isolation and the evidence rule (28, 29: the scripted model falls for the page or the guess), the organisation target having no writer (31), the sensitive stop after a sensitive answer (30). For small talk, a question and a hypothetical (25–27) the scripted gate answers as a correct model would, so a hermetic pass proves only that the store stops on that answer; the model's own judgement on every negative is a live claim. Claim checks on replies (tn35, tn36, tn41) stay self-fulfilling hermetically. **No live run has been made**: the same rows run unchanged on the private tier (`--live`, after FRONT's go), where the store gate, the extractor (`SmallQwen`) and the recall gate are real calls the report prices.
+
+**Not covered yet.** The host's Postgres store, its encryption and its owner scoping (layer 1: `src/__tests__/lib/db/memories-db-store.test.ts`); the app's answer RPC (`answerMemoryProposalFor`: the answer binding, its release, the version-checked save, the held-payload row); the joint memory wake (no `awaitWake`; a live job wakes both boxes before each scenario); compaction (M3), retention and forget; proposal expiry; a proposal with more than one item; `routerMemory: 'replies-only'`; organisation-graph writes (no writer before M12); what the reply should say with memory on (the open `memory-on` ruling); and recall-shaped tasks of other intents (the deferred `user-memory` cells in the catalogue).
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

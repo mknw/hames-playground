@@ -49,6 +49,29 @@ export async function fixtureInference() {
           },
           usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
         }
+      } else if (req.url === '/v1/systemone' && memoryQuestion(body.questions)) {
+        // The memory decisions (recall gate, store gate, merge question) are not route
+        // decisions: they consume no scripted route. Each answers from the scenario's
+        // scripted model for this turn; absent, as a model that sees nothing to keep.
+        const model = scenario.memory?.turns[turnIndex]?.model
+        const gate = model?.gate
+        const pick: Record<string, string> = {
+          'memory.recall': model?.recall ?? 'retrieve',
+          'memory.merge': model?.merge ?? 'distinct',
+          target: gate?.target ?? 'none',
+          confirm: gate?.confirm ?? 'ask',
+          kind: gate?.kind ?? 'episodic',
+          sensitive: gate?.sensitive ?? 'ordinary',
+        }
+        value = {
+          answers: Object.fromEntries(
+            Object.entries(body.questions).map(([name, question]) => [
+              name,
+              choose(question as { criteria: Record<string, unknown> }, pick[name]),
+            ]),
+          ),
+          usage: { input_tokens: 1, output_tokens: 0, cost: 0 },
+        }
       } else if (req.url === '/v1/systemone') {
         route = scenario.expectedRoutes[decisionIndex++] ?? 'answer'
         const answers = Object.fromEntries(
@@ -93,6 +116,7 @@ export async function fixtureInference() {
                   : t !== 'sandbox_bash' && !t.startsWith('graph_')),
             )
             if (name) pending.splice(pending.indexOf(name), 1)
+            const given = scenario.messages[turnIndex]?.match(/https?:\/\/[^\s)]+/)?.[0]
             result = {
               reasoning: 'Synthetic controller',
               tool_name: name ?? 'Return',
@@ -109,6 +133,8 @@ export async function fixtureInference() {
                             ? 'MATCH (p:Project) RETURN count(p) AS count'
                             : 'Next.js release notes',
                         url: 'https://nextjs.org/blog/next-15-5',
+                        // A message that names a page is read at that page (28's fetch).
+                        ...(given ? { url: given } : {}),
                         libraryName: 'solid-js',
                         context7CompatibleLibraryID: '/solidjs/solid',
                       },
@@ -127,8 +153,9 @@ export async function fixtureInference() {
             result = { injection_detected: false, reason: 'Synthetic clean fixture', spans: [] }
             break
           case 'Synthesize':
-            result =
-              scenario.failFirstTurn && turnIndex === 0
+            result = scenario.memory
+              ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
+              : scenario.failFirstTurn && turnIndex === 0
                 ? 'The lookup failed: synthetic service unavailable. No count is known.'
                 : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
@@ -144,6 +171,9 @@ export async function fixtureInference() {
             result = { summaries: ids.map((id) => ({ id, summary: 'Synthetic Lantern result' })) }
             break
           }
+          case 'ExtractMemory':
+            result = scenario.memory?.turns[turnIndex]?.model?.extract ?? []
+            break
           case 'ReferenceSelector':
             result = { selected: [], reasoning: 'No synthetic selection' }
             break
@@ -187,4 +217,55 @@ export async function fixtureInference() {
       await new Promise<void>((resolve) => server.close(() => resolve()))
     },
   }
+}
+
+const MEMORY_STORE_FIELDS = ['confirm', 'kind', 'sensitive', 'target']
+
+/** A memory decision request: the recall gate, the merge question, or the store gate's
+ *  four fields (served as one request of independent questions). */
+function memoryQuestion(questions: Record<string, unknown>): boolean {
+  const names = Object.keys(questions).sort()
+  return (
+    (names.length === 1 && (names[0] === 'memory.recall' || names[0] === 'memory.merge')) ||
+    names.join() === MEMORY_STORE_FIELDS.join()
+  )
+}
+
+/** A systemone choice answer: all mass on one of the question's own criteria. */
+function choose(question: { criteria: Record<string, unknown> }, chosen: string | undefined) {
+  const labels = Object.keys(question.criteria)
+  if (!chosen || !labels.includes(chosen)) throw new Error(`Fixture cannot answer ${chosen}`)
+  return {
+    type: 'choice',
+    choice: chosen,
+    probabilities: Object.fromEntries(labels.map((l) => [l, l === chosen ? 1 : 0])),
+  }
+}
+
+/**
+ * The scripted Synthesize of a memory scenario answers from the memory block it was
+ * HANDED and from nothing else — never from the scenario's expected facts — so "the
+ * answer carries the remembered fact" and "the answer carries no other owner's fact"
+ * are decided by what recall attached to the prompt, which is what they grade.
+ */
+function memoryAnswer(prompt: string, reply: string | undefined): string {
+  const at = prompt.indexOf('WHAT YOU REMEMBER ABOUT THIS USER')
+  const begin = at < 0 ? -1 : prompt.indexOf('---BEGIN DATA---', at)
+  const end = begin < 0 ? -1 : prompt.indexOf('---END DATA---', begin)
+  const remembered =
+    end < 0
+      ? []
+      : prompt
+          .slice(begin + '---BEGIN DATA---'.length, end)
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+  return [
+    reply,
+    remembered.length
+      ? `From earlier conversations I remember: ${remembered.join(' ')}`
+      : "I don't have any saved memories of you here.",
+  ]
+    .filter(Boolean)
+    .join(' ')
 }

@@ -1,6 +1,7 @@
 import type { Check, ConversationScenario, ConversationTrace } from './conversation'
 import { mcpNamespace } from '@hames-ai/connectors/mcp-catalog'
 import { addressesIn } from '@hames-ai/harness-patterns/egress-gate.server'
+import { memoryChecks } from './memory-checks'
 
 const check = (name: string, pass: boolean, detail: string): Check => ({ name, pass, detail })
 
@@ -226,6 +227,27 @@ export function grade(
       ),
     )
   }
+  // Catalogue-declared graders (`catalogue-checks.ts` reads them from the row).
+  for (const p of s.answerPatterns ?? []) {
+    const answer = p.turn ? (trace.turns[p.turn - 1]?.response ?? '') : final
+    const c = p.negate
+      ? answerNotMatchesCheck(answer, p.pattern, p.turn)
+      : answerMatchesCheck(answer, p.pattern, p.turn)
+    checks.push({ ...c, name: `${c.name}: ${p.says}` })
+  }
+  if (s.answerExcludes?.length) checks.push(answerExcludesCheck(final, s.answerExcludes))
+  if (s.noSandboxCommand)
+    checks.push(
+      noSandboxCommandCheck(trace.tools, s.noSandboxCommand.pattern, s.noSandboxCommand.says),
+    )
+  if (s.memoryExpect)
+    checks.push(
+      ...memoryChecks(
+        s.memoryExpect,
+        trace.memory,
+        trace.turns.map((t) => t.response),
+      ),
+    )
   if (!baseline) {
     for (const route of s.expectedRoutes) {
       checks.push(
@@ -290,6 +312,70 @@ export function answerMatchesCheck(answer: string, pattern: string, turn?: numbe
     turn ? `turn ${turn}: answer matches the pattern` : 'answer matches the pattern',
     re.test(answer),
     answer.slice(0, 200),
+  )
+}
+
+/** `answerNotMatches`: the final answer — or the named 1-based turn's — does NOT
+ *  match the case-insensitive pattern. A pattern that does not compile fails the
+ *  check rather than passing it: a claim check that cannot run has proved nothing. */
+export function answerNotMatchesCheck(answer: string, pattern: string, turn?: number): Check {
+  const name = turn ? `turn ${turn}: answer avoids the pattern` : 'answer avoids the pattern'
+  let re: RegExp
+  try {
+    re = new RegExp(pattern, 'i')
+  } catch (err) {
+    return check(
+      name,
+      false,
+      `the pattern does not compile: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const hit = re.exec(answer)
+  return check(name, hit === null, hit ? `matched ${JSON.stringify(hit[0])}` : answer.slice(0, 200))
+}
+
+/** `answerExcludes`: the final answer contains none of the facts, each read as a
+ *  whole token (the same matcher `answerIncludes` uses). */
+export function answerExcludesCheck(answer: string, facts: readonly string[]): Check {
+  const found = facts.filter((f) => containsFact(answer, f))
+  return check(
+    `answer excludes ${facts.join(', ')}`,
+    found.length === 0,
+    found.length ? `contains ${found.join(', ')}` : answer.slice(0, 200),
+  )
+}
+
+/** `noSandboxCommand`: no `sandbox_bash` command and no `sandbox_write` content
+ *  matches the case-insensitive pattern, whether or not the call succeeded — an
+ *  attempt is what the check forbids. */
+export function noSandboxCommandCheck(
+  tools: ConversationTrace['tools'],
+  pattern: string,
+  says: string,
+): Check {
+  const name = `no sandbox command: ${says}`
+  let re: RegExp
+  try {
+    re = new RegExp(pattern, 'i')
+  } catch (err) {
+    return check(
+      name,
+      false,
+      `the pattern does not compile: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const texts = tools.flatMap((t) =>
+    t.name === 'sandbox_bash'
+      ? [String(t.args.command ?? '')]
+      : t.name === 'sandbox_write'
+        ? [String(t.args.content ?? '')]
+        : [],
+  )
+  const hit = texts.find((text) => re.test(text))
+  return check(
+    name,
+    hit === undefined,
+    hit === undefined ? `${texts.length} command(s) and write(s) checked` : hit.slice(0, 200),
   )
 }
 

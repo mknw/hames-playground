@@ -7,7 +7,7 @@
  * the decision to wake is `keep-warm-while-open.test.ts`'s subject.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ACTIVITY_EVENTS, startKeepWarm } from '../../lib/private-tier-keep-warm'
+import { startKeepWarm } from '../../lib/private-tier-keep-warm'
 import type { KeepWarmAnswer } from '../../lib/harness-client/preview-header.server'
 
 class FakeDoc {
@@ -25,6 +25,9 @@ class FakeDoc {
   }
 }
 
+/** FRONT's "pointer, key or focus events", written out rather than read from
+ *  the module, so a dropped event type fails here instead of agreeing with itself. */
+const INPUT = ['pointerdown', 'pointermove', 'keydown', 'focus', 'focusin']
 const NEXT = 100_000
 /** The idle cap the stub answers with: three cadences, so the loop asks at 0,
  *  NEXT and 2·NEXT and finds itself idle at 3·NEXT. */
@@ -210,7 +213,7 @@ describe('the idle cap (PRIVATE_TIER_WARM_IDLE_MINUTES, FRONT 2026-11-04)', () =
     expect(ask).toHaveBeenCalledTimes(5)
   })
 
-  it.each(ACTIVITY_EVENTS)('counts %s as an interaction', async (type) => {
+  it.each(INPUT)('counts %s as an interaction', async (type) => {
     start()
     await vi.advanceTimersByTimeAsync(NEXT * 20)
     touch(type)
@@ -245,6 +248,6 @@ describe('the idle cap (PRIVATE_TIER_WARM_IDLE_MINUTES, FRONT 2026-11-04)', () =
     expect(ask).toHaveBeenCalledTimes(3)
     // Removed, not merely ignored: a closed page must not leave a handler on the
     // window for every pointer move.
-    expect(removed.mock.calls.map(([type]) => type).sort()).toEqual([...ACTIVITY_EVENTS].sort())
+    expect(removed.mock.calls.map(([type]) => type).sort()).toEqual([...INPUT].sort())
   })
 })

@@ -190,16 +190,29 @@ const CALLS: [string, () => Promise<{ body: { json(): unknown } }>][] = [
 
 /**
  * A function a SECOND role also routes, rendered against that role's client.
- * Since FRONT's ruling A (2026-11-04) `orgDraft` reaches `LoopController` on the
- * 4B, while `controller` reaches it on the 27B (CALLS above); a function is
- * therefore no longer one role's, and each (role, function) pair is rendered.
+ * Since FRONT's ruling A (2026-11-04) `orgDraft` reaches `LoopController` under
+ * its own role; since LD-23 (same day) that role's client is the 27B, like
+ * `controller`'s (CALLS above). A function is still not one role's, so each
+ * (role, function) pair is rendered against the map's own value for it.
  */
 const SHARED_CALLS: [string, string, () => Promise<{ body: { json(): unknown } }>][] = [
   [
     'orgDraft',
     'LoopController',
     () =>
-      b.request.LoopController('q', 'i', TOOLS, TURNS, null, null, null, null, null, null, SMALL),
+      b.request.LoopController(
+        'q',
+        'i',
+        TOOLS,
+        TURNS,
+        null,
+        null,
+        null,
+        null,
+        null,
+        'json',
+        SELF_DEPLOYED,
+      ),
   ],
 ]
 

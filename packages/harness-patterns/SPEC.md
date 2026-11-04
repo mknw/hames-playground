@@ -531,7 +531,7 @@ interface SimpleLoopConfig extends PatternConfig {
   onToolResult?: OnToolResult // Enrich/transform tool results before they're committed (see "Hooks" below)
   resultOmit?: Record<string, string[]> // Per-tool fields hidden from the controller turn log (see below)
   multiToolCalls?: 'parallel' | 'sequential' | 'off' // Multi-call turns (default: 'parallel'; see below)
-  returnStyle?: 'summary' | 'answer' // What the terminal `Return` carries (default: 'summary'; see below)
+  returnStyle?: 'summary' | 'answer' | 'json' // What the terminal `Return` carries (default: 'summary'; see below)
   validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined // Refuse a terminal answer with feedback; see below
   maxConsecutiveRecoveries?: number // Unusable answers in a row the loop feeds back before the next one is fatal (default: 1; see "One failure does not end the loop")
 }
@@ -736,6 +736,12 @@ turn) for a text nothing read.
   the deliverable — e.g. a custom `synthesize` that reads
   `loopHistory.iterations[].action`. Making the loop's answer _suppress_
   synthesis is #149 Option B and is deliberately not built.
+- `'json'` — the answer is the ONE JSON object the loop's context specifies,
+  in `tool_args` like any other arguments, with nothing written outside the
+  action; the system block, the catalog's Return line and the turn tail all
+  say so, and none says "plain prose". For a loop whose caller parses the
+  `Return` (the org-knowledge draft, LD-23 in
+  `docs/plan/org-knowledge-hook.md`). Prompt-only, like `'answer'`.
 
 **One exception: a Return-only turn (#610).** When the controller answers
 WITHOUT calling a tool, the terminal `Return` is the only content the turn
@@ -3739,7 +3745,11 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
 - **The draft** (`createOrgDraftLoop`) is a `simpleLoop` holding exactly
   `ORG_DRAFT_TOOLS` (`read_neo4j_cypher`, `get_neo4j_schema`), inside a K1
   guard on those tools, in a scratch context holding only the user's message,
-  with `renderOrgSchema(ontology)` as its schema. Its `Return` answer is one
+  with `renderOrgSchema(ontology)` as its schema. That schema carries
+  `ORG_NEAR_MATCH_RULE` (LD-23): a node is proposed as new only after a
+  case-insensitive near-match search of its class finds nothing; a node it
+  finds is linked under its stored name. The validator refuses only exact-name
+  duplicates, so the search is what stops a name variant. Its `Return` answer is one
   JSON verdict: `{"verdict":"propose","assertions":[...]}` or
   `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
   answer stops with `no-proposal`; its reason stays in scratch context. The
@@ -4070,7 +4080,7 @@ BAML Inputs:
   multi_call_mode       : string?          ← "parallel" | "sequential" | null, from config.multiToolCalls
                                              ('off' → null: no affordance rendered)
   plan_context          : string?          ← formatted plan from an upstream `planner` (#27)
-  return_style          : string?          ← "summary" | "answer", from config.returnStyle
+  return_style          : string?          ← "summary" | "answer" | "json", from config.returnStyle
                                              (null renders as "summary": brief terminal Return)
 
 BAML Return → ControllerAction:

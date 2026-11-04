@@ -18,6 +18,7 @@ import {
   parseOrgDraft,
   parseOrgProposalPayload,
   renderOrgSchema,
+  ORG_NEAR_MATCH_RULE,
   settleOrgKnowledge,
   withOrgKnowledge,
   type OrgKnowledgeConfig,
@@ -370,6 +371,7 @@ describe('the draft loop', () => {
       userMessage: string
       context?: string
       multiCallMode?: string
+      returnStyle?: string
     }) => {
       offered.push([...input.tools])
       expect(input.userMessage).toBe(USER)
@@ -377,6 +379,9 @@ describe('the draft loop', () => {
       // Review F1(a): `multiToolCalls: 'off'` reaches the controller as no
       // multi-call mode. Mutation: 'parallel' → the mode is 'parallel'.
       expect(input.multiCallMode).toBeUndefined()
+      // LD-23: the verdict is JSON, so the Return style is 'json'; 'answer'
+      // tells the model "plain prose (not JSON)". Mutation: 'answer' → red.
+      expect(input.returnStyle).toBe('json')
       return {
         action: {
           tool_name: 'Return',
@@ -594,6 +599,27 @@ describe('the draft verdict and validator deliberation', () => {
     const ctx = turn()
     expect((await settle(ctx, cfg)).skipped).toBe('draft-unparseable')
     expect(requests(ctx)).toEqual([])
+  })
+})
+
+describe('renderOrgSchema', () => {
+  // LD-23: a draft that cannot find a creatable node by its exact name must
+  // first search its class tolerantly, and link to a near-match instead of
+  // proposing a second node; only a search that finds nothing makes it new.
+  // Mutations: drop the rule from the schema, or drop the near-match search
+  // from its wording (the "not found → new" sentence alone) → red.
+  it('says to search for a near-match before proposing a node the graph lacks', () => {
+    const text = renderOrgSchema(ONTOLOGY)
+    expect(text).toContain(ORG_NEAR_MATCH_RULE)
+    expect(ORG_NEAR_MATCH_RULE).toMatch(/^Do not duplicate nodes\./)
+    expect(ORG_NEAR_MATCH_RULE).toContain('search its class for a near-match, case-insensitively')
+    expect(ORG_NEAR_MATCH_RULE).toContain("toLower(n.name) CONTAINS 'word'")
+    expect(ORG_NEAR_MATCH_RULE).toContain('use its stored name and link to it, never a second node')
+    expect(ORG_NEAR_MATCH_RULE).toContain(
+      'Only when that search finds nothing is the node proposed as new',
+    )
+    // The rule sits before the answer format, which stays the last line.
+    expect(text.split('\n').at(-1)).toMatch(/^Answer \(Return\) with JSON only/)
   })
 })
 

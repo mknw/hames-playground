@@ -19,11 +19,86 @@ import { nameKey } from '@hames-ai/harness-patterns/org-knowledge-ontology'
 import { ORG_ONTOLOGY } from '../org-graph/ontology'
 import type { OrgGraphSnapshot, OrgSeedName } from './org-scenario'
 
-/** The synthetic directory: members exist; the hook links to them, never creates them. */
-export const SYNTHETIC_MEMBERS: ReadonlyArray<{ displayName: string; mail: string }> = [
-  { displayName: 'Tamsin Orrin', mail: 'tamsin.orrin@example.invalid' },
-  { displayName: 'Dorrit Wexley', mail: 'dorrit.wexley@example.invalid' },
-  { displayName: 'Mira Cedar', mail: 'mira.cedar@example.invalid' },
+/** One directory member, in the shape the roster ingest writes a `Member` node. */
+export interface SyntheticMember {
+  readonly entraId: string
+  readonly displayName: string
+  readonly mail: string
+  /** Soft in the ontology: the tenant decides whether it is set, and mostly it is not. */
+  readonly department?: string
+  readonly jobTitle?: string
+}
+
+/**
+ * The Eval's member directory: ten records pseudonymised by hand (2026-11-04).
+ * Every value is invented — names, addresses (example.com), ids (fresh random
+ * UUIDs) and generic role titles. Only the shape is kept: the mix of roles, and
+ * which soft fields are present (a job title on every record, a department on
+ * none). No mapping to any real person exists anywhere. Members exist; the hook
+ * links to them, never creates them. The Eval reads no live or local graph for
+ * them (`no-real-neo4j.test.ts`).
+ */
+export const SYNTHETIC_MEMBERS: readonly SyntheticMember[] = [
+  {
+    entraId: '66b10305-be10-4445-935e-6c6f75758dc3',
+    displayName: 'Tamsin Orrin',
+    mail: 'tamsin.orrin@example.com',
+    jobTitle: 'Project Lead',
+  },
+  {
+    entraId: 'e7a1d169-ccbb-4057-9760-79e35a0401d2',
+    displayName: 'Halden Mirow',
+    mail: 'halden.mirow@example.com',
+    jobTitle: 'Research Analyst',
+  },
+  {
+    entraId: '18a167c0-6c79-4b39-abfd-73f08a3f7703',
+    displayName: 'Dorrit Wexley',
+    mail: 'dorrit.wexley@example.com',
+    jobTitle: 'Delivery Lead',
+  },
+  {
+    entraId: '66b61238-3225-4459-9071-ae878118e825',
+    displayName: 'Corwin Delacy',
+    mail: 'corwin.delacy@example.com',
+    jobTitle: 'Project Lead',
+  },
+  {
+    entraId: '1aa2b6a1-09cf-4ff9-a5ba-6fcca05b204e',
+    displayName: 'Yvaine Rocholl',
+    mail: 'yrocholl@example.com',
+    jobTitle: 'Project Lead',
+  },
+  {
+    entraId: '85552dbc-6f99-4dde-a4a5-4b48fa78b797',
+    displayName: 'Mira Cedar',
+    mail: 'mira.cedar@example.com',
+    jobTitle: 'Project Lead',
+  },
+  {
+    entraId: 'fa35ecbc-8683-45b7-a287-d1a04107bed2',
+    displayName: 'Osric Thelwall',
+    mail: 'osric@example.com',
+    jobTitle: 'Executive Director',
+  },
+  {
+    entraId: 'b23924fe-38a0-46ce-9fc1-c5c13af160c3',
+    displayName: 'Liesel Annick Brunvoll',
+    mail: 'liesel.brunvoll@example.com',
+    jobTitle: 'Project Lead',
+  },
+  {
+    entraId: '36510112-b51e-40c9-a9fd-b8508ae704d8',
+    displayName: 'Bastian Kettleby',
+    mail: 'bastian.kettleby@example.com',
+    jobTitle: 'Delivery Lead',
+  },
+  {
+    entraId: '9f403ff1-e52f-4f28-8c03-7ab994ffaa8f',
+    displayName: 'Pernille Ostrander',
+    mail: 'pernille.ostrander@example.com',
+    jobTitle: 'Project Lead',
+  },
 ]
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -56,10 +131,13 @@ const node = (id: string, label: string, props: Record<string, string>): Snapsho
     createdBy: 'seed',
   },
 })
-const member = (id: string, displayName: string): SnapshotNode => ({
-  key: `id:${id}`,
+/** A member's node id: `m-` and the given name, lower-cased (`m-dorrit`). */
+const memberId = (m: SyntheticMember) => `m-${m.displayName.split(' ')[0].toLowerCase()}`
+const member = (m: SyntheticMember): SnapshotNode => ({
+  key: `id:${memberId(m)}`,
   label: 'Member',
-  properties: { id, displayName },
+  // A missing soft field stays absent, as the ingest leaves it.
+  properties: { id: memberId(m), ...m },
 })
 const edge = (type: string, from: string, to: string): SnapshotEdge => ({
   type,
@@ -69,11 +147,7 @@ const edge = (type: string, from: string, to: string): SnapshotEdge => ({
 
 const SEEDS: Record<OrgSeedName, { nodes: SnapshotNode[]; edges: SnapshotEdge[] }> = {
   members: {
-    nodes: [
-      member('m-tamsin', 'Tamsin Orrin'),
-      member('m-dorrit', 'Dorrit Wexley'),
-      member('m-mira', 'Mira Cedar'),
-    ],
+    nodes: SYNTHETIC_MEMBERS.map(member),
     edges: [],
   },
   osprey: { nodes: [node('p-osprey', 'Project', { name: 'Osprey' })], edges: [] },

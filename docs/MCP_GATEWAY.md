@@ -75,7 +75,11 @@ are offered, each with a `lennys_` prefix in the `lennys` namespace. So a remote
 name such as `search` can never take over a gateway tool, and the server cannot
 add, rename or re-argue one. The model sees a fixed description and a schema
 built from the pin, with only argument types taken from the server; a call sends
-only pinned arguments, and a value outside a pinned enum is refused. Auth is OAuth 2.1 with a public client and an emailed sign-in link,
+only pinned arguments, and a value outside a pinned enum is refused. If the
+server's live schema drifts from a tool's pin (a pinned argument gone, a
+required one unpinned, a pinned enum value no longer offered), that tool is
+withheld, its calls get a fixed refusal naming it, and the drift is logged once;
+re-pin with the sign-in script. Auth is OAuth 2.1 with a public client and an emailed sign-in link,
 which the server cannot follow, so the operator signs in once with
 `scripts/lennys-data-sign-in.ts` (from `app/`) and sets
 `LENNYS_DATA_MCP_CLIENT_ID`, `LENNYS_DATA_MCP_REFRESH_TOKEN` and

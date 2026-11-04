@@ -73,7 +73,14 @@ export const LENNYS_FAILURES = {
   timeout: "Lenny's Data request timed out",
   rateLimit: "Lenny's Data rate limit reached (HTTP 429)",
   unavailable: "Lenny's Data request unavailable",
+  invalidParams:
+    "Lenny's Data rejected the arguments: the server's schema no longer matches the pin; re-pin with scripts/lennys-data-sign-in.ts",
 } as const
+
+/** The fixed refusal for a tool whose live schema drifted from its pin. The
+ *  name is the operator's pin, never server text. */
+export const driftRefusal = (remote: string): string =>
+  `Lenny's Data tool "${remote}" no longer matches its pin; re-pin with scripts/lennys-data-sign-in.ts`
 
 export function classifyFailure(err: unknown): string {
   // A refused refresh surfaces as an OAuthError subclass (invalid_grant…).
@@ -87,6 +94,7 @@ export function classifyFailure(err: unknown): string {
   const code = errorCode(err)
   if (code === 401 || code === 403) return LENNYS_FAILURES.signIn
   if (code === ErrorCode.RequestTimeout) return LENNYS_FAILURES.timeout
+  if (code === ErrorCode.InvalidParams) return LENNYS_FAILURES.invalidParams
   if (code === 429) return LENNYS_FAILURES.rateLimit
   return LENNYS_FAILURES.unavailable
 }
@@ -379,6 +387,42 @@ export function pinnedArguments(
   return out
 }
 
+/**
+ * Whether the server's live schema still matches a tool's pin (PR #986 E1).
+ * Drift is a pinned argument the server no longer declares, a server-required
+ * argument the pin leaves out, or a pinned enum value outside the server's own
+ * enum (when it declares one). Returns a fixed category, never server text, or
+ * null when the pin still matches. A drifted tool is withheld: offering it would
+ * send a call the server has to reject, and the user would see a generic
+ * failure instead of the cause.
+ */
+export function schemaDrift(server: unknown, args: PinnedArgs): string | null {
+  const src = (typeof server === 'object' && server !== null ? server : {}) as Record<
+    string,
+    unknown
+  >
+  const declared = (
+    typeof src.properties === 'object' && src.properties !== null ? src.properties : {}
+  ) as Record<string, Record<string, unknown> | undefined>
+  for (const name of args.keys()) {
+    if (!Object.hasOwn(declared, name)) return 'a pinned argument is no longer declared'
+  }
+  const required = Array.isArray(src.required) ? src.required : []
+  if (required.some((k) => typeof k === 'string' && !args.has(k))) {
+    return 'a required argument is not pinned'
+  }
+  for (const [name, values] of args) {
+    if (!values) continue
+    const prop = declared[name] ?? {}
+    const items = prop.type === 'array' ? (prop.items as Record<string, unknown> | undefined) : prop
+    const serverEnum = Array.isArray(items?.enum) ? items.enum.map(String) : null
+    if (serverEnum && [...values].some((v) => !serverEnum.includes(v))) {
+      return 'a pinned enum value is outside the server enum'
+    }
+  }
+  return null
+}
+
 const fixedDescription = (remote: string): string =>
   `Lenny's Data archive tool "${remote}": a third-party product-management newsletter and podcast archive. Arguments follow the schema.`
 
@@ -439,6 +483,15 @@ export function createLennysDataTransport(
   // The sanitised listing, kept once discovery succeeds (the pinned names and
   // structural schemas do not depend on who asks), so a re-read is cheap.
   let listing: MCPToolDescription[] | null = null
+  // Pinned tools whose live schema drifted from the pin: withheld from the
+  // listing, refused at call time, and logged once each.
+  const drifted = new Map<string, string>()
+  const warned = new Set<string>()
+  function warnDrift(remote: string, reason: string): void {
+    if (warned.has(remote)) return
+    warned.add(remote)
+    console.warn(`[lennys-data] withheld ${remote}: ${reason}; re-pin with the sign-in script`)
+  }
   let lastFailure = -Infinity
   async function discover(): Promise<MCPToolDescription[]> {
     if (listing) return listing
@@ -449,11 +502,17 @@ export function createLennysDataTransport(
       const { tools } = await withClient((client) => client.listTools())
       listing = tools
         .filter((tool) => config!.tools.has(tool.name))
+        .filter((tool) => {
+          const reason = schemaDrift(tool.inputSchema, config!.tools.get(tool.name)!)
+          if (reason) drifted.set(tool.name, reason)
+          return reason === null
+        })
         .map((tool) => ({
           name: `${LENNYS_TOOL_PREFIX}${tool.name}`,
           description: fixedDescription(tool.name),
           inputSchema: pinnedSchema(tool.inputSchema, config!.tools.get(tool.name)!),
         }))
+      for (const [name, reason] of drifted) warnDrift(name, reason)
       for (const name of config!.tools.keys()) {
         if (!tools.some((tool) => tool.name === name)) {
           console.warn(`[lennys-data] pinned tool ${name} is absent from the server's listing`)
@@ -480,6 +539,14 @@ export function createLennysDataTransport(
         return { success: false, data: null, error: "Lenny's Data tool unavailable" }
       }
       const remote = name.slice(LENNYS_TOOL_PREFIX.length)
+      // The drift verdict needs a discovery; a failed one leaves the call to
+      // fail on its own, with its own fixed message.
+      await discover().catch(() => null)
+      const reason = drifted.get(remote)
+      if (reason) {
+        warnDrift(remote, reason)
+        return { success: false, data: null, error: driftRefusal(remote) }
+      }
       const sent = pinnedArguments(args, config!.tools.get(remote)!)
       if (!sent) {
         return { success: false, data: null, error: "Lenny's Data argument value not allowed" }

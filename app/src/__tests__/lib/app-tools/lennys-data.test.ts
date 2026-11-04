@@ -51,7 +51,7 @@ const CONFIG = {
   clientId: 'synthetic-client',
   refreshToken: 'r0',
   users: new Set([OWNER]),
-  tools: parsePinnedTools('search(query,kind=newsletter|podcast|interview),get_post(id)'),
+  tools: parsePinnedTools('search(query,kind=newsletter|podcast),get_post(id)'),
 }
 const asOwner = async (): Promise<string | null> => OWNER
 const ON = {
@@ -77,6 +77,7 @@ function fakeServer() {
     tokenStatus: 200,
     revoked: new Set<string>(),
     mcpStatus: 200,
+    invalidParams: false,
     tools: [
       {
         name: 'search',
@@ -93,10 +94,13 @@ function fakeServer() {
             server_extra: { type: 'string', description: SENTINEL },
             'bad key!': { type: 'string' },
           },
-          required: ['query', 'server_extra', 'bad key!'],
+          required: ['query'],
         },
       },
-      { name: 'get_post', inputSchema: { type: 'object' } },
+      {
+        name: 'get_post',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      },
       { name: 'surprise_tool', description: SENTINEL, inputSchema: { type: 'object' } },
     ],
   }
@@ -172,6 +176,13 @@ function fakeServer() {
       } else if (msg.method === 'tools/list') {
         result = { tools: state.tools }
       } else if (msg.method === 'tools/call') {
+        if (state.invalidParams) {
+          return json({
+            jsonrpc: '2.0',
+            id: msg.id,
+            error: { code: -32602, message: `Invalid params: ${SENTINEL}` },
+          })
+        }
         state.calls.push({ name: msg.params!.name!, arguments: msg.params!.arguments })
         result = { content: [{ type: 'text', text: 'synthetic archive result' }] }
       }
@@ -278,13 +289,12 @@ describe('names, namespace and what the server may say', () => {
     expect(server.state.calls).toEqual([])
     expect(JSON.stringify(tools)).not.toContain(SENTINEL)
     // Only pinned argument names, only pinned enum values: `server_extra` and
-    // `server_chosen` are the server's and never appear; `interview` is the
-    // operator's and does.
+    // `server_chosen` are the server's and never appear.
     expect(tools[0].inputSchema).toEqual({
       type: 'object',
       properties: {
         query: { type: 'string' },
-        kind: { type: 'string', enum: ['newsletter', 'podcast', 'interview'] },
+        kind: { type: 'string', enum: ['newsletter', 'podcast'] },
       },
       required: ['query'],
     })
@@ -469,7 +479,14 @@ describe('the refresh path (real SDK auth)', () => {
     await transport.callTool('lennys_search', { query: 'one' })
     await transport.callTool('lennys_search', { query: 'two' })
     await transport.callTool('lennys_search', { query: 'three' })
-    expect(server.state.tokenBodies.map((b) => b.get('refresh_token'))).toEqual(['r0', 'r1', 'r2'])
+    // Four refreshes for three calls: the first call's drift check runs a
+    // discovery first. Each one sends the token the previous one returned.
+    expect(server.state.tokenBodies.map((b) => b.get('refresh_token'))).toEqual([
+      'r0',
+      'r1',
+      'r2',
+      'r3',
+    ])
     const logged = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('rotated'))
     expect(logged).toHaveLength(1)
     expect(String(logged[0][0])).not.toMatch(/\b[ar][0-9]\b/)
@@ -492,6 +509,65 @@ describe('the refresh path (real SDK auth)', () => {
     const before = server.state.requests
     expect(await tokens.accessToken()).toBe('a1')
     expect(server.state.requests).toBe(before)
+  })
+})
+
+// PR #986 E1: the server's live schema drifts from the pin.
+describe('schema drift from the pin', () => {
+  const searchSchema = () => server.state.tools[0].inputSchema as Record<string, unknown>
+
+  // MUTATION: skip the drift check at discovery (the drifted tool is offered),
+  // or let callTool send a drifted tool's call (a tools/call request goes out),
+  // or drop the warn-once guard (the warning repeats).
+  it.each([
+    [
+      'a pinned argument the server no longer declares',
+      () => delete (searchSchema().properties as Record<string, unknown>).kind,
+    ],
+    [
+      'a server-required argument the pin leaves out',
+      () => (searchSchema().required = ['query', 'server_extra']),
+    ],
+    [
+      'a pinned enum value outside the server enum',
+      () =>
+        ((searchSchema().properties as Record<string, { enum?: string[] }>).kind.enum = [
+          'newsletter',
+        ]),
+    ],
+  ])(
+    '%s: the tool is withheld, its call refused with a fixed message, and the drift logged once',
+    async (_label, drift) => {
+      drift()
+      const transport = transportAsOwner()
+      expect((await transport.listTools()).map((t) => t.name)).toEqual(['lennys_get_post'])
+      for (const query of ['one', 'two']) {
+        const result = await transport.callTool('lennys_search', { query })
+        expect(result).toEqual({
+          success: false,
+          data: null,
+          error: `Lenny's Data tool "search" no longer matches its pin; re-pin with scripts/lennys-data-sign-in.ts`,
+        })
+      }
+      expect(server.state.calls).toEqual([])
+      const logged = warn.mock.calls.filter((c: unknown[]) => String(c[0]).includes('withheld'))
+      expect(logged).toHaveLength(1)
+      expect(String(logged[0][0])).toContain('search')
+      expect(String(logged[0][0])).not.toContain(SENTINEL)
+      // The undrifted tool still works.
+      expect(await transport.callTool('lennys_get_post', { id: 'x' })).toMatchObject({
+        success: true,
+      })
+    },
+  )
+
+  // MUTATION: drop the InvalidParams branch in classifyFailure (the generic
+  // "unavailable" comes back instead).
+  it('a call-time invalid-params rejection says the schema no longer matches the pin', async () => {
+    server.state.invalidParams = true
+    const result = await transportAsOwner().callTool('lennys_search', { query: 'q' })
+    expect(result).toEqual({ success: false, data: null, error: LENNYS_FAILURES.invalidParams })
+    expect(JSON.stringify(result)).not.toContain(SENTINEL)
   })
 })
 

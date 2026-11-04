@@ -121,12 +121,17 @@ export async function fixtureInference() {
           case 'LoopController':
           case 'ActorController': {
             // The org-knowledge draft loop (slice 7): its schema names the ontology. It
-            // Returns the scenario's scripted draft at once; absent, an empty draft.
+            // Wraps the scripted assertions in the explicit verdict envelope; absent, no proposal.
             if (fn === 'LoopController' && prompt.includes('ORGANIZATIONAL ONTOLOGY')) {
               result = {
                 reasoning: 'Synthetic org draft',
                 tool_name: 'Return',
-                tool_args: scenario.org?.turns[turnIndex]?.model?.draft ?? '{"assertions":[]}',
+                tool_args: scenario.org?.turns[turnIndex]?.model?.draft
+                  ? JSON.stringify({
+                      verdict: 'propose',
+                      ...JSON.parse(scenario.org.turns[turnIndex].model!.draft!),
+                    })
+                  : JSON.stringify({ verdict: 'no-proposal', reason: 'No scripted candidate' }),
                 is_final: true,
               }
               break

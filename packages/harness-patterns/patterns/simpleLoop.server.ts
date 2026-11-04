@@ -424,6 +424,7 @@ function batchOutcomes(round: LoopRound): SubCallOutcome[] {
 /** Did the round dispatch a tool (it breaks a run of unusable answers), count
  *  as an unusable answer, or neither? */
 function roundEffect(round: LoopRound): 'dispatched' | 'unusable' | 'none' {
+  if (round.recovery?.failure === 'return_rejected') return 'none'
   const a = round.action
   if (!a) return 'unusable' // an unparseable answer
   if (a.additional_calls && a.additional_calls.length > 0) {
@@ -458,7 +459,7 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
       },
     }
   }
-  if (action.is_final || action.tool_name === 'Return') return undefined
+  if ((action.is_final || action.tool_name === 'Return') && !recovery) return undefined
   const head = {
     n,
     reasoning: action.reasoning,
@@ -1307,6 +1308,18 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Check if done (is_final flag OR tool_name === 'Return')
         if (action.is_final || action.tool_name === 'Return') {
           trackAction()
+          const feedback = await config?.validateReturn?.(action)
+          if (feedback !== undefined) {
+            const recovery: LoopRecoveryEventData = {
+              failure: 'return_rejected',
+              error: feedback,
+              turn,
+              maxTurns,
+            }
+            trackLoopRecovery(scope, recovery)
+            turns.push(projectRound({ n: turn, action, recovery, calls: [] }, projection)!)
+            continue
+          }
           scope.data = {
             ...scope.data,
             lastAction: action,

@@ -742,6 +742,7 @@ export const FAKE_TOOL_ARGS = '{"query":"MATCH (n) RETURN count(n) AS n"}'
  *  hook renders into the loop's context. */
 export const FAKE_ORG_MESSAGE = "We've started calling the new logistics workstream Project Heron."
 export const FAKE_ORG_DRAFT = JSON.stringify({
+  verdict: 'propose',
   assertions: [
     {
       nodes: [

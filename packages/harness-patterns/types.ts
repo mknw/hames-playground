@@ -806,6 +806,10 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  results, across patterns, including the fields `resultOmit` hides from the
    *  controller), so the default asks the loop for a summary only. */
   returnStyle?: ReturnStyle
+  /** Check a terminal action before the loop exits. A feedback string refuses
+   *  the answer and consumes this round; the controller sees it on the next
+   *  round within maxTurns. Undefined accepts. A thrown check fails the loop. */
+  validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined
   /** The consecutive-recovery cap (default: 1): how many answers the loop
    *  cannot use it will feed back IN A ROW. An unusable answer is one that would
    *  not parse, `tool_args` that would not parse, a tool off the allowlist, or a
@@ -1468,6 +1472,8 @@ export interface WarningEventData {
  * tests key on it rather than on the wording of {@link LoopRecoveryEventData.error}.
  */
 export type LoopRecoveryFailure =
+  /** A parsed terminal answer failed the consumer's deterministic check. */
+  | 'return_rejected'
   /** The tool ran and reported failure. */
   | 'tool_error'
   /** Every call of a multi-call turn failed — ran and failed, or was refused

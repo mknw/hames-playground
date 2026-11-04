@@ -3713,7 +3713,7 @@ continuation's one save; it never throws, writes into `ctx.events` directly
 (never the live transcript) and logs a stop by reason code, never the user's
 words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
 `no-pair`, `no-event-id`, `no-confirmation`, `waking`, `gate-error`, `gate`,
-`draft-error`, `draft-unparseable`, `graph-read-error`, `nothing-valid`,
+`draft-error`, `draft-unparseable`, `no-proposal`, `graph-read-error`, `nothing-valid`,
 `only-reinforces`, `already-proposed`, `error`.
 
 - **The gate** is `ORG_KNOWLEDGE_GATE`, choices exactly
@@ -3723,12 +3723,21 @@ words. Its stops, in order: `no-user`, `disabled`, `no-tier`, `turn-failed`,
   `ORG_DRAFT_TOOLS` (`read_neo4j_cypher`, `get_neo4j_schema`), inside a K1
   guard on those tools, in a scratch context holding only the user's message,
   with `renderOrgSchema(ontology)` as its schema. Its `Return` answer is one
-  JSON draft, parsed once by `parseOrgDraft` (closed shape, refs scoped to
-  their assertion, one optional ```json fence); anything else proposes
-  nothing. The host routes its controller: in `@hames-ai/harness-baml`,
+  JSON verdict: `{"verdict":"propose","assertions":[...]}` or
+  `{"verdict":"no-proposal","reason":"short reason"}`. A no-proposal
+  answer stops with `no-proposal`; its reason stays in scratch context. The
+  `validateReturn` callback strictly parses each candidate (assertions use
+  `parseOrgDraft`, with scoped refs and one optional JSON fence), reads the
+  snapshot and runs V1–V10 inside the loop. Any rejection becomes feedback for
+  another round within the same `maxTurns` budget (default 4). No extra model
+  call runs outside the loop. Exhaustion preserves the final refusal and
+  proposes nothing; a graph-read failure stops immediately. The host routes its controller: in `@hames-ai/harness-baml`,
   `createLoopControllerAdapter(undefined, { role: 'orgDraft' })`.
 - **The validator** (`validateOrgDraft`, V1–V10) decides what survives; an
-  assertion that only reinforces is not proposed (`onlyReinforces`).
+  assertion that only reinforces is not proposed (`onlyReinforces`). A
+  candidate with any rejected assertion is repaired or declined. A final
+  explicit propose verdict requires a validator pass and at least one writing
+  assertion; a custom draft seam's output cannot bypass the final check.
 - **The proposal** is `orgKnowledgeConfirmRequest`: kind
   `orgKnowledge.confirm`, key the user message's event id, options `add` (one
   flag per assertion, `a<index>`, labelled "Item N"; no rule may pick it) and
@@ -4390,3 +4399,10 @@ either package's — they live in `app/src/lib/inference/scripts/`.
 3. **Config injects metadata** - Optional config for things like schema injection
 4. **Server-only enforcement** - `.server.ts` files with runtime guards
 5. **Session persistence** - Full context serializable for multi-turn conversations
+
+`SimpleLoopConfig.validateReturn(action)` optionally checks a terminal action
+before exit. Returning a string refuses it and records `return_rejected`
+feedback in the turn log; returning undefined accepts it. Refusals consume
+`maxTurns` without counting as unusable model answers under
+`maxConsecutiveRecoveries`; a thrown check fails the loop. Other loops retain
+their existing behavior when the callback is absent.

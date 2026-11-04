@@ -7,6 +7,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import {
+  MAX_DRAFT_ELEMENTS,
   ORG_DRAFT_TOOLS,
   ORG_KNOWLEDGE_ADD,
   ORG_KNOWLEDGE_CONFIRM_KIND,
@@ -365,10 +366,14 @@ describe('the draft loop', () => {
       tools: readonly string[]
       userMessage: string
       context?: string
+      multiCallMode?: string
     }) => {
       offered.push([...input.tools])
       expect(input.userMessage).toBe(USER)
       expect(input.context).toBe('SCHEMA')
+      // Review F1(a): `multiToolCalls: 'off'` reaches the controller as no
+      // multi-call mode. Mutation: 'parallel' → the mode is 'parallel'.
+      expect(input.multiCallMode).toBeUndefined()
       return {
         action: {
           tool_name: 'Return',
@@ -386,6 +391,38 @@ describe('the draft loop', () => {
     expect(offered).toEqual([['read_neo4j_cypher', 'get_neo4j_schema']])
     expect([...ORG_DRAFT_TOOLS]).toEqual(['read_neo4j_cypher', 'get_neo4j_schema'])
     expect(text).toBe(DRAFT)
+  })
+
+  // Review F1(b): the loop's round budget is 4. A controller that never
+  // returns runs the budget out: the draft rejects with no answer after
+  // exactly 4 controller calls. Mutation: `maxTurns ?? 40` → more calls.
+  it('stops a controller that never returns after four rounds, with no answer', async () => {
+    let calls = 0
+    const controller = (async () => {
+      calls += 1
+      return {
+        action: {
+          tool_name: 'read_neo4j_cypher',
+          tool_args: JSON.stringify({ query: 'MATCH (n) RETURN n LIMIT 1' }),
+          reasoning: 'looking',
+          status: 'running',
+          is_final: false,
+        },
+        llmCall: undefined,
+      }
+    }) as unknown as ControllerFn
+    const transport = {
+      id: 'fake-neo4j',
+      ownsTool: (name: string) => (ORG_DRAFT_TOOLS as readonly string[]).includes(name),
+      callTool: async () => ({ success: true, data: [] }),
+      listTools: async () => [],
+    }
+    await expect(
+      withRunFrame({ transports: [transport as never] }, () =>
+        createOrgDraftLoop({ controller })({ userMessage: USER, schema: 'SCHEMA' }),
+      ),
+    ).rejects.toThrow(/no answer/)
+    expect(calls).toBe(4)
   })
 })
 
@@ -428,6 +465,26 @@ describe('parseOrgDraft', () => {
     ]) {
       expect(parseOrgDraft(bad)).toBeNull()
     }
+  })
+
+  // Review F3: the over-length refusal (MAX_DRAFT_ELEMENTS). Mutation: drop
+  // the length check → both drafts parse.
+  it('refuses a draft longer than the element cap, across assertions and within one', () => {
+    const node = (i: number) => ({
+      ref: `r${i}`,
+      label: 'Project',
+      properties: { name: `P${i}` },
+      evidence: 'e e e e e',
+    })
+    const over = MAX_DRAFT_ELEMENTS + 1
+    const across = { assertions: Array.from({ length: over }, (_, i) => ({ nodes: [node(i)] })) }
+    const within = { assertions: [{ nodes: Array.from({ length: over }, (_, i) => node(i)) }] }
+    expect(parseOrgDraft(JSON.stringify(across))).toBeNull()
+    expect(parseOrgDraft(JSON.stringify(within))).toBeNull()
+    const atCap = {
+      assertions: [{ nodes: Array.from({ length: MAX_DRAFT_ELEMENTS }, (_, i) => node(i)) }],
+    }
+    expect(parseOrgDraft(JSON.stringify(atCap))!.elements).toHaveLength(MAX_DRAFT_ELEMENTS)
   })
 })
 

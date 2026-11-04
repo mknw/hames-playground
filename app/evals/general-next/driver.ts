@@ -25,6 +25,7 @@ import type {
   MemoryTurnTrace,
 } from '../../src/lib/eval-support/memory-scenario'
 import type { fixtureInference } from './fixture-inference'
+import type { OrgScenario, OrgTurnTrace } from '../../src/lib/eval-support/org-scenario'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
@@ -405,6 +406,7 @@ export async function createDriver(
     }),
   }
   const memory = await memorySeams(live)
+  const orgs = await orgSeams(live)
   const definitions = new Map<string, AgentDefinition>()
   async function loadAgent(id: string): Promise<AgentDefinition> {
     if (!/^[a-z][a-z0-9-]*$/.test(id)) throw new Error('Invalid agent id')
@@ -444,6 +446,8 @@ export async function createDriver(
           // Per-user memory is wired for the scenarios that name it and for no other one,
           // so no other scenario pays a recall or a store step.
           const mem = next.memory ? await memory.open(next.memory) : undefined
+          // The org-knowledge hook likewise runs only for the scenarios that name it.
+          const org = next.org ? await orgs.open(next.org) : undefined
           const patterns = await agent.createPatterns(
             sessionId,
             next.memory && mem ? { ...deps, memory: mem.config } : deps,
@@ -460,6 +464,14 @@ export async function createDriver(
               serialized = undefined
             }
             mem?.beginTurn(turn === 0 || !!script?.newConversation, script?.newConversation?.owner)
+            // An org scenario may hand a later turn to the second user, in a fresh
+            // conversation of their own.
+            const orgScript = next.org?.turns[turn]
+            if (org && turn > 0 && orgScript?.newConversation) {
+              session = `${sessionId}-o${turn}`
+              serialized = undefined
+            }
+            org?.beginTurn(orgScript?.newConversation?.owner)
             // The person indexes the promoted deliverable from the Data Stash between
             // turns (#832): the agent does not, so this is the only way it becomes
             // searchable, and only if an earlier turn saved it.
@@ -485,8 +497,15 @@ export async function createDriver(
               await mem.endTurn(result.context, next.memory!, turn, session, next.messages[turn])
               serialized = serializeContext(result.context)
             }
+            if (org) {
+              // The host's post-turn continuation for the org hook: propose, then the
+              // person's answer between turns, then one save of the context.
+              await org.endTurn(result.context, next.org!, turn, session, next.messages[turn])
+              serialized = serializeContext(result.context)
+            }
           }
           if (mem) trace.memory = mem.trace()
+          if (org) trace.org = org.trace()
           return trace
         },
       )
@@ -676,6 +695,171 @@ async function memorySeams(live: boolean) {
           })
         },
         trace: () => ({ seed, final: store.snapshot(), turns }),
+      }
+    },
+  }
+}
+
+/**
+ * The org-knowledge seams one driver shares across scenarios (slice 7): the
+ * production decide adapter and the `orgDraft` loop-controller adapter, each
+ * recording what it was handed. A hermetic run serves them from the fixture
+ * endpoint's scripted gate and draft; a live run asks the real gate and the
+ * real draft loop on the private tier, with no code change. Per scenario: a
+ * fresh synthetic org graph with the scenario's seeds.
+ */
+async function orgSeams(live: boolean) {
+  const hook = await import('@hames-ai/harness-patterns/org-knowledge-hook.server')
+  const { readProposals } = await import('@hames-ai/harness-patterns')
+  const { answerProposal } = await import('@hames-ai/harness-patterns/hitl.server')
+  const { createDecideAdapter, createLoopControllerAdapter } =
+    await import('@hames-ai/harness-baml/baml-adapters.server')
+  const { ORG_ONTOLOGY } = await import('../../src/lib/org-graph/ontology')
+  const synthetic = await import('../../src/lib/eval-support/synthetic-org-graph')
+  type Payload = import('@hames-ai/harness-patterns/org-knowledge-hook.server').OrgProposalPayload
+  type Context = Parameters<typeof hook.settleOrgKnowledge>[0]
+
+  let inputs: string[] = []
+  const baseDecide = createDecideAdapter()
+  const decide = (async (input: { state: string }) => {
+    inputs.push(input.state)
+    return (baseDecide as (i: unknown) => Promise<unknown>)(input)
+  }) as unknown as typeof baseDecide
+  Object.defineProperty(decide, 'supportedTypes', { get: () => baseDecide.supportedTypes })
+  if (baseDecide.limits) Object.assign(decide, { limits: baseDecide.limits })
+  const loop = hook.createOrgDraftLoop({
+    controller: createLoopControllerAdapter(undefined, { role: 'orgDraft' }),
+  })
+  const mentionsMember = synthetic.syntheticMentionsMember
+  const owners = { $userA: EVAL_OWNER, $userB: 'eval-other-user', $driverUserId: EVAL_OWNER }
+
+  return {
+    async open(scenario: OrgScenario) {
+      let owner: MemoryOwnerId = EVAL_OWNER
+      let held: { requestId: string; payload: Payload } | undefined
+      const store = synthetic.createSyntheticOrgGraph(scenario.seed)
+      const seed = synthetic.orgGraphSnapshot(store)
+      const turns: OrgTurnTrace[] = []
+      const config = {
+        store,
+        ontology: ORG_ONTOLOGY,
+        decide,
+        draft: async (input: { userMessage: string; schema: string }) => {
+          inputs.push(input.userMessage)
+          return loop(input)
+        },
+        owner: () => owner,
+        enabled: () => true,
+        mentionsMember,
+        confirm: {
+          hold: async ({ requestId, payload }: { requestId: string; payload: Payload }) => {
+            held = { requestId, payload }
+          },
+        },
+        // Hermetic runs fix the day so a scripted draft's dates stay valid; a live
+        // run uses the day it runs.
+        ...(live ? {} : { today: () => '2026-11-04' }),
+      }
+      const nameOfKey = (key: string) => {
+        const n = store.dump().nodes.find((x) => x.key === key)
+        return n
+          ? (n.properties.name ?? n.properties.displayName ?? n.properties.label ?? key)
+          : key
+      }
+      return {
+        beginTurn(as?: MemoryOwnerId) {
+          if (as) owner = as
+          inputs = []
+          held = undefined
+        },
+        async endTurn(
+          ctx: Context,
+          s: OrgScenario,
+          turn: number,
+          session: string,
+          userMessage: string,
+        ) {
+          const script = s.turns[turn]
+          const report = await hook.settleOrgKnowledge(ctx, config, { conversationId: session })
+          const proposal = held
+          let answer: OrgTurnTrace['answer']
+          const open = proposal
+            ? readProposals(ctx).find(
+                (r) =>
+                  r.requestId === proposal.requestId && r.kind === hook.ORG_KNOWLEDGE_CONFIRM_KIND,
+              )
+            : undefined
+          const elements = proposal
+            ? proposal.payload.assertions.flatMap((a) => {
+                const nameOf = new Map(
+                  a.nodes.map((n) => [
+                    n.element.ref,
+                    n.properties.name ??
+                      n.properties.displayName ??
+                      n.properties.label ??
+                      n.properties.text ??
+                      '',
+                  ]),
+                )
+                return [
+                  ...a.nodes.map((n) => ({
+                    kind: 'node' as const,
+                    term: n.element.label,
+                    names: [nameOf.get(n.element.ref) ?? ''],
+                    verdict: n.verdict,
+                    removes: [] as string[],
+                  })),
+                  ...a.edges.map((e) => ({
+                    kind: 'edge' as const,
+                    term: e.element.type,
+                    names: [nameOf.get(e.element.from) ?? '', nameOf.get(e.element.to) ?? ''],
+                    verdict: e.verdict,
+                    removes: e.removes.map((r) => `${nameOfKey(r.from)} -> ${nameOfKey(r.to)}`),
+                  })),
+                ]
+              })
+            : []
+          if (proposal && open && script?.answer) {
+            const flags = proposal.payload.assertions.map((a) => `a${a.index}`)
+            answerProposal(
+              ctx,
+              {
+                [proposal.requestId]:
+                  script.answer === 'add'
+                    ? {
+                        choice: hook.ORG_KNOWLEDGE_CONFIRM_ADD,
+                        flags: Object.fromEntries(flags.map((f) => [f, true])),
+                      }
+                    : hook.ORG_KNOWLEDGE_CONFIRM_DISCARD,
+              },
+              { principal: owner, patternId: 'org-knowledge-confirm' },
+            )
+            if (script.answer === 'add') {
+              const applied = await hook.applyOrgProposal(
+                { store },
+                {
+                  payload: proposal.payload,
+                  selected: flags,
+                  actor: { userId: owner, now: new Date().toISOString() },
+                },
+              )
+              answer = { choice: 'add', items: { ...applied.items } }
+            } else answer = { choice: 'discard', items: {} }
+          }
+          turns.push({
+            owner,
+            userMessage,
+            settle: {
+              ...(report.skipped ? { skipped: report.skipped } : {}),
+              proposed: report.proposed,
+              rejected: { ...report.rejected },
+            },
+            ...(proposal ? { proposal: { requestId: proposal.requestId, elements } } : {}),
+            ...(answer ? { answer } : {}),
+            inputs: [...inputs],
+          })
+        },
+        trace: () => ({ seed, final: synthetic.orgGraphSnapshot(store), turns, owners }),
       }
     },
   }

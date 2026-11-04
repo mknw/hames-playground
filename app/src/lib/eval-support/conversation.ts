@@ -8,6 +8,7 @@ import type { SpendKey } from './spend-budget'
 import type { ArgsPredicate } from './tool-arguments'
 import type { GuardTurnCounts } from './guard-report'
 import type { MemoryExpectations, MemoryScenario, MemoryTrace } from './memory-scenario'
+import type { OrgExpectations, OrgScenario, OrgTrace } from './org-scenario'
 
 export interface ConversationScenario {
   id: string
@@ -40,6 +41,12 @@ export interface ConversationScenario {
   memory?: MemoryScenario
   /** The memory graders, read from the catalogue row (`catalogue-checks.ts`). */
   memoryExpect?: MemoryExpectations
+  /** Runs with the organizational-knowledge hook over the synthetic org graph
+   * (`synthetic-org-graph.ts`): its seed, owners, scripted gate and draft, and the
+   * person's answers. Absent = the hook is not run at all. */
+  org?: OrgScenario
+  /** The org-knowledge graders, read from the catalogue row. */
+  orgExpect?: OrgExpectations
   /** Pattern graders, read from the catalogue row: the final answer (or the named
    * 1-based turn's) must match, or with `negate` must not match, case-insensitively. */
   answerPatterns?: Array<{ says: string; pattern: string; turn?: number; negate: boolean }>
@@ -73,6 +80,8 @@ export interface ConversationTrace {
   retrievals: Array<{ source: string; turn: number }>
   /** Present when the scenario ran with memory: the store, proposals, answers and recall. */
   memory?: MemoryTrace
+  /** Present when the scenario ran the org-knowledge hook: the graph, proposals, answers. */
+  org?: OrgTrace
 }
 
 export interface ConversationResult extends SpendKey {

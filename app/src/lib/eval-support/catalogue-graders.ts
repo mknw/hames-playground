@@ -10,6 +10,7 @@
  */
 import type { ConversationScenario } from './conversation'
 import type { MemoryDedupe, MemoryExpectations, MemoryOwnerId } from './memory-scenario'
+import type { OrgCheck } from './org-scenario'
 
 export interface GraderItem {
   check: string
@@ -22,6 +23,12 @@ export interface GraderItem {
   outcome?: 'written' | 'stale' | 'discarded'
   action?: 'inserted' | 'reinforced' | 'updated'
   owner?: MemoryOwnerId
+  /** Org-knowledge graders (slice 7). */
+  terms?: string[]
+  count?: number
+  node?: string
+  property?: string
+  equals?: string
 }
 
 export interface GraderCatalogue {
@@ -31,7 +38,7 @@ export interface GraderCatalogue {
 
 export type CatalogueGraders = Pick<
   ConversationScenario,
-  'answerPatterns' | 'answerExcludes' | 'noSandboxCommand' | 'memoryExpect'
+  'answerPatterns' | 'answerExcludes' | 'noSandboxCommand' | 'memoryExpect' | 'orgExpect'
 >
 
 /** `{{name}}` → the shared pattern, nested up to four levels (the validator's rule). An
@@ -59,6 +66,7 @@ export function catalogueGraders(c: GraderCatalogue, id: string): CatalogueGrade
     noForeign?: boolean
     inputIsolated?: string[]
   } = {}
+  const org: OrgCheck[] = []
   for (const item of row.grader) {
     const says = item.says ?? item.check
     switch (item.check) {
@@ -102,8 +110,46 @@ export function catalogueGraders(c: GraderCatalogue, id: string): CatalogueGrade
       case 'memoryInputIsolated':
         memory.inputIsolated = [...(memory.inputIsolated ?? []), ...item.needles!]
         break
+      // The org-knowledge graders (slice 7): each read by `org-checks.ts`.
+      case 'proposalRaised':
+        org.push({
+          check: 'proposalRaised',
+          says,
+          ...(item.turn ? { turn: item.turn } : {}),
+          terms: item.terms ?? [],
+          facts: item.facts ?? [],
+        })
+        break
+      case 'noProposalRaised':
+        org.push({ check: 'noProposalRaised', says, ...(item.facts ? { facts: item.facts } : {}) })
+        break
+      case 'graphEntryCount':
+        org.push({
+          check: 'graphEntryCount',
+          says,
+          ...(item.terms ? { terms: item.terms } : {}),
+          ...(item.facts ? { facts: item.facts } : {}),
+          count: item.count!,
+        })
+        break
+      case 'graphLacksEntry':
+        org.push({ check: 'graphLacksEntry', says, facts: item.facts! })
+        break
+      case 'graphNodeProperty':
+        org.push({
+          check: 'graphNodeProperty',
+          says,
+          node: item.node!,
+          property: item.property!,
+          equals: item.equals!,
+        })
+        break
+      case 'graphElementsInclude':
+        org.push({ check: 'graphElementsInclude', says, turn: item.turn!, facts: item.facts! })
+        break
     }
   }
   if (Object.keys(memory).length) out.memoryExpect = memory
+  if (org.length) out.orgExpect = org
   return out
 }

@@ -74,6 +74,8 @@ const RESTRAINT = new Set([
   'noMemoryStored',
   'noForeignMemory',
   'memoryInputIsolated',
+  'noProposalRaised',
+  'graphLacksEntry',
 ])
 /** Graders a module takes from its own row (`evals/general-next/catalogue-checks.ts`)
  * rather than restating them, so a row carrying one needs a module that reads it. */
@@ -89,9 +91,19 @@ const FROM_CATALOGUE = new Set([
   'memoryRecalled',
   'noForeignMemory',
   'memoryInputIsolated',
+  'proposalRaised',
+  'noProposalRaised',
+  'graphEntryCount',
+  'graphLacksEntry',
+  'graphNodeProperty',
+  'graphElementsInclude',
 ])
 const MEMORY_OWNERS = ['eval-user', 'eval-other-user']
 const DEDUPE = ['new', 'reinforces', 'updates']
+/** The owner placeholders an org grader may compare a property with (`org-checks.ts`). */
+const ORG_OWNERS = ['$userA', '$userB', '$driverUserId']
+/** A term an org grader names is a class or relation type of the ontology, read from source. */
+const ontologyTerm = (term: string) => read('src/lib/org-graph/ontology.ts').includes(`'${term}'`)
 const TURNS: Record<string, (n: number) => boolean> = {
   single: (n) => n === 1,
   'follow-up': (n) => n === 2,
@@ -130,7 +142,8 @@ function existingIds(md: string): string[] {
 function idPattern(s: Json): RegExp {
   // A proposed negative built later keeps its tn id when it becomes existing (#507 memory rows).
   if (s.status === 'existing') return /^(?:\d{2}|tn\d{2})-[a-z0-9-]+$/
-  return s.kind === 'negative' ? /^tn\d{2}-[a-z0-9-]+$/ : /^p\d{2}-[a-z0-9-]+$/
+  // The org rows (slice 7) took the proposed positives past p99, so three digits are allowed.
+  return s.kind === 'negative' ? /^tn\d{2,3}-[a-z0-9-]+$/ : /^p\d{2,3}-[a-z0-9-]+$/
 }
 
 type Item = Json & {
@@ -152,6 +165,11 @@ type Item = Json & {
   dedupe?: string[]
   outcome?: string
   action?: string
+  terms?: string[]
+  count?: number
+  node?: string
+  property?: string
+  equals?: string
 }
 const nonEmpty = (v: unknown): v is string[] =>
   Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string' && x.trim().length > 0)
@@ -269,6 +287,35 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
         : bad('turn')
     case 'memoryInputIsolated':
       return nonEmpty(item.needles) ? [] : bad('needs needles')
+    case 'proposalRaised': {
+      if (!nonEmpty(item.terms) || !Array.isArray(item.facts) || !item.facts.every(reasoned))
+        return bad('needs terms (and facts, may be empty, never blank)')
+      if (!item.terms.every(ontologyTerm)) return bad('names a term outside the ontology')
+      return item.turn === undefined ||
+        (Number.isInteger(item.turn) && item.turn >= 1 && item.turn <= turns)
+        ? []
+        : bad('turn')
+    }
+    case 'graphEntryCount':
+      if (!Number.isInteger(item.count) || item.count! < 0) return bad('needs a count')
+      if (item.terms !== undefined && (!nonEmpty(item.terms) || !item.terms.every(ontologyTerm)))
+        return bad('names a term outside the ontology')
+      return item.facts === undefined || nonEmpty(item.facts) ? [] : bad('facts')
+    case 'graphLacksEntry':
+      return nonEmpty(item.facts) ? [] : bad('needs facts')
+    case 'graphNodeProperty': {
+      const equals = item.equals
+      if (!reasoned(item.node) || !reasoned(item.property) || !reasoned(equals))
+        return bad('needs a node, a property and a value')
+      return !(equals as string).startsWith('$') || ORG_OWNERS.includes(equals as string)
+        ? []
+        : bad('equals names an unknown owner')
+    }
+    case 'graphElementsInclude':
+      if (!nonEmpty(item.facts)) return bad('needs facts')
+      return Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns
+        ? []
+        : bad('turn')
     default:
       return []
   }
@@ -494,6 +541,15 @@ function retiredAndMemory(c: Json, scenarios: Json[], byId: Map<string, Json>): 
       if (s.memory !== true && on)
         errors.push(`${String(s.id)}: its module turns memory on but the row does not declare it`)
     } else if ('memory' in s) errors.push(`${String(s.id)}: memory is for existing rows`)
+  // The org-knowledge hook (slice 7) runs only for the rows that name it, the same way.
+  for (const s of scenarios)
+    if (s.status === 'existing') {
+      const on = moduleIds.includes(String(s.id)) && /\n {2}org: \{/.test(moduleText(String(s.id)))
+      if (s.org === true && !on)
+        errors.push(`${String(s.id)}: declares org but its module does not run the org hook`)
+      if (s.org !== true && on)
+        errors.push(`${String(s.id)}: its module runs the org hook but the row does not declare it`)
+    } else if ('org' in s) errors.push(`${String(s.id)}: org is for existing rows`)
   const sum = byId.get('p87-arithmetic-in-sandbox')
   if (!sum) errors.push('p87-arithmetic-in-sandbox: missing (owner, 2026-10-22: use the sandbox)')
   else {
@@ -979,9 +1035,9 @@ describe('general-next scenario catalogue', () => {
     expect(validate(catalogue(), scenariosMd, moduleIds)).toEqual([])
   })
 
-  it('reads the 35 implemented scenarios from SCENARIOS.md, not zero', () => {
+  it('reads the 47 implemented scenarios from SCENARIOS.md, not zero', () => {
     // Guards the parser: an empty heading match would make the cross-check vacuous.
-    expect(existingIds(scenariosMd)).toHaveLength(35)
+    expect(existingIds(scenariosMd)).toHaveLength(47)
     expect(existingIds(scenariosMd)).toContain('tn58-other-owner-memory')
     expect(moduleIds.length).toBeGreaterThanOrEqual(34)
   })
@@ -1393,6 +1449,59 @@ describe('general-next scenario catalogue', () => {
         ).filter((i) => i.check !== 'answerExcludes')
       })
       expect(errors.join()).toMatch(/tn58-other-owner-memory: must exclude a fact the synthetic/)
+    })
+    // The org-knowledge rows (slice 7).
+    it('O1: a row declaring org whose module does not run the hook', () => {
+      const errors = mutate((_, s) => {
+        row(s, '01-greeting').org = true
+      })
+      expect(errors.join()).toMatch(/01-greeting: declares org but its module does not run/)
+    })
+    it('O1: a module running the hook while its row does not declare it', () => {
+      const errors = mutate((_, s) => {
+        delete row(s, '35-org-small-talk').org
+      })
+      expect(errors.join()).toMatch(/35-org-small-talk: its module runs the org hook but the row/)
+    })
+    it('O1: a proposed row declaring org', () => {
+      const errors = mutate((_, s) => {
+        row(s, 'p88-org-team-works-on').org = true
+      })
+      expect(errors.join()).toMatch(/p88-org-team-works-on: org is for existing rows/)
+    })
+    it('O2: an org grader naming a term outside the ontology', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, '32-org-new-project', 'proposalRaised').terms = ['Programme']
+      })
+      expect(errors.join()).toMatch(/32-org-new-project: proposalRaised names a term outside/)
+    })
+    it('O2: an org property check comparing with an unknown owner', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, 'p99-org-created-by', 'graphNodeProperty').equals = '$userC'
+      })
+      expect(errors.join()).toMatch(/p99-org-created-by: graphNodeProperty equals names an unknown/)
+    })
+    it('O2: a count that is not a count, and a canvas turn past the last', () => {
+      const errors = mutate((_, s) => {
+        itemOf(s, '43-org-rumour', 'graphEntryCount').count = -1
+        itemOf(s, 'p98-org-shared-after-accept', 'graphElementsInclude').turn = 3
+      })
+      expect(errors.join()).toMatch(/43-org-rumour: graphEntryCount needs a count/)
+      expect(errors.join()).toMatch(/p98-org-shared-after-accept: graphElementsInclude turn/)
+    })
+    it('O3: an org negative graded only by its decision cap', () => {
+      const errors = mutate((_, s) => {
+        row(s, '35-org-small-talk').grader = graderOf(row(s, '35-org-small-talk')).filter(
+          (i) => i.check !== 'noProposalRaised',
+        )
+      })
+      expect(errors.join()).toMatch(/35-org-small-talk: a negative needs a restraint check/)
+    })
+    it('O4: the driver runs the org hook for the scenarios that name it and for no other', () => {
+      // Mutation (driver.ts): open the org seams unconditionally.
+      expect(read('evals/general-next/driver.ts')).toMatch(
+        /const org = next\.org \? await orgs\.open\(next\.org\) : undefined/,
+      )
     })
     it('R5: the driver gives memory to the scenarios that ask for it and to no other', () => {
       // Mutation (driver.ts): pass `memory: mem.config` unconditionally.

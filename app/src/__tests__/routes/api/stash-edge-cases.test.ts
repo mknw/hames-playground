@@ -60,9 +60,10 @@ vi.mock('@hames-ai/harness-patterns/stash/document-store.server', () => ({
 
 const ingestStashDocument =
   vi.fn<(sessionId: string, docId: string, opts?: unknown) => Promise<{ chunks: number } | null>>()
-const searchDocuments = vi.fn<() => Promise<unknown[]>>()
+const searchDocuments = vi.fn<(...a: unknown[]) => Promise<unknown[]>>()
 vi.mock('@hames-ai/harness-patterns/stash/document-ingest.server', () => ({
-  searchDocuments: () => searchDocuments(),
+  MAX_SEARCH_SPAN: 200,
+  searchDocuments: (...a: unknown[]) => searchDocuments(...a),
   ingestStashDocument: (...a: unknown[]) => ingestStashDocument(...(a as [never, never])),
 }))
 
@@ -273,10 +274,39 @@ describe('GET /api/stash/search', () => {
     expect(searchDocuments).not.toHaveBeenCalled()
   })
 
-  it('ignores a non-numeric k rather than failing the search', async () => {
-    const res = await search.GET(evt(new Request('http://x/s?sessionId=s1&q=hi&k=lots')))
-    expect(res.status).toBe(200)
-    expect(searchDocuments).toHaveBeenCalledTimes(1)
+  // #707: a non-numeric k used to be ignored (the search ran on the default).
+  // MUTATION: drop the `!Number.isFinite(kNum)` 400 in search.ts → red.
+  it('400s a non-numeric k and runs no search', async () => {
+    for (const k of ['lots', 'Infinity', 'NaN']) {
+      const res = await search.GET(evt(new Request(`http://x/s?sessionId=s1&q=hi&k=${k}`)))
+      expect(res.status).toBe(400)
+    }
+    expect(searchDocuments).not.toHaveBeenCalled()
+  })
+
+  // #707: k reached the vector query unclamped. MUTATION: drop the
+  // `Math.min(…, MAX_SEARCH_SPAN)` clamp in search.ts → the 1e6 case goes red;
+  // drop the `Math.max(…, 1)` → the 0 and -3 cases go red.
+  it('clamps a numeric k to 1..MAX_SEARCH_SPAN and truncates a fraction', async () => {
+    const cases: Array<[string, number]> = [
+      ['1000000', 200],
+      ['1e9', 200],
+      ['0', 1],
+      ['-3', 1],
+      ['7.9', 7],
+      ['12', 12],
+    ]
+    for (const [raw, expected] of cases) {
+      searchDocuments.mockClear()
+      const res = await search.GET(evt(new Request(`http://x/s?sessionId=s1&q=hi&k=${raw}`)))
+      expect(res.status).toBe(200)
+      expect(searchDocuments).toHaveBeenCalledWith('s1', 'hi', { k: expected })
+    }
+  })
+
+  it('leaves k to the library default when absent', async () => {
+    await search.GET(evt(new Request('http://x/s?sessionId=s1&q=hi')))
+    expect(searchDocuments).toHaveBeenCalledWith('s1', 'hi', { k: undefined })
   })
 
   it('500s with the backend’s reason when the embedding server is unreachable', async () => {

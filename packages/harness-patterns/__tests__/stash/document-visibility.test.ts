@@ -334,6 +334,13 @@ describe('searchDocuments — hidden and archived documents', () => {
     expect(ks).toEqual([5, 10, 20, 40, 80, 160, 200])
   })
 
+  // #707. Mutation: restore `let span = k` → the first query asks for 5000.
+  it('bounds the FIRST query by the ceiling when k is above it', async () => {
+    const { ks, callTool } = countingSearches()
+    await search(fake, callTool, 5000)
+    expect(ks).toEqual([200])
+  })
+
   // Mutation: remove `hits.length < span ||` → the loop keeps widening over an
   // index that has already been read to the end.
   it('stops widening once the index holds fewer chunks than the window', async () => {

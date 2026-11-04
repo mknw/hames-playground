@@ -395,8 +395,8 @@ export function validateMember(record: Partial<MemberRecord>): {
  * The endpoint branch is separate from the type branch because a known type
  * between the wrong labels is drift the type check cannot see: a `USES` edge
  * between two nodes outside the ontology passes `type(r) IN $relationTypes`.
- * A node or relationship counts as conforming when ANY of its labels matches,
- * the same reading the label branch uses for a node. The pairs come from
+ * A node, or either end of a relationship, conforms when ANY one of its labels
+ * does — the same reading the label branch uses for a node. The pairs come from
  * {@link conformanceParams}, read off the ontology's own relations, and are
  * never restated here.
  *

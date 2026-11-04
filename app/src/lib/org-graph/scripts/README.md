@@ -22,10 +22,11 @@ a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
 ## The scripts
 
-| File                 | Touches       | Destructive        |
-| -------------------- | ------------- | ------------------ |
-| `setup-org-graph.ts` | Neo4j schema  | only with `--wipe` |
-| `ingest-roster.ts`   | Graph → Neo4j | no (upsert)        |
+| File                   | Touches         | Destructive                                               |
+| ---------------------- | --------------- | --------------------------------------------------------- |
+| `setup-org-graph.ts`   | Neo4j schema    | only with `--wipe`                                        |
+| `ingest-roster.ts`     | Graph → Neo4j   | no (upsert)                                               |
+| `seed-eval-members.ts` | fixture → Neo4j | no (MERGE, additive; refuses a graph with directory data) |
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -35,6 +36,11 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
+
+# ten invented members (the Eval's fixture) for a local graph with NO directory
+# ingest; no eval reads them. --target must name the resolved Neo4j; it refuses a
+# graph holding any Member it did not write. createdBy 'eval-seed'; deletes nothing.
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/seed-eval-members.ts --target localhost:7687
 ```
 
 A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:

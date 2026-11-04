@@ -2077,7 +2077,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pf01 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the gate and the draft are scripted through the production decide and orgDraft adapters, so a pass proves the plumbing (gate, draft, validator, proposal, answer, write) and never measures the gate; a live run asks the real models with no code change. The design’s turn-2 recall half is graded by the reply, which these graders never read; p98 carries the store-and-canvas half.",
       "org": true
@@ -2187,7 +2187,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members; Theme 1, coordinated by Dorrit Wexley"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members; Theme 1, coordinated by Dorrit Wexley"
       ],
       "notes": "Design row pft01 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the gate and the draft are scripted through the production decide and orgDraft adapters, so a pass proves the plumbing (gate, draft, validator, proposal, answer, write) and never measures the gate; a live run asks the real models with no code change.",
       "org": true
@@ -2225,7 +2225,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pftn01 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the scripted gate answers no_organizational_knowledge while the scripted draft would have proposed, so a pass proves the gate’s answer stops the hook before the draft (wiring); only a live run grades the gate’s own judgement.",
       "org": true
@@ -2401,7 +2401,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pftn05 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the scripted gate answers no_organizational_knowledge while the scripted draft would have proposed, so a pass proves the gate’s answer stops the hook before the draft (wiring); only a live run grades the gate’s own judgement. Memory is off in this row; the personal-memory half is 19’s.",
       "org": true
@@ -2444,7 +2444,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pftn06 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the scripted gate answers no_organizational_knowledge while the scripted draft would have proposed, so a pass proves the gate’s answer stops the hook before the draft (wiring); only a live run grades the gate’s own judgement.",
       "org": true
@@ -2488,7 +2488,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pftn07 (docs/plan/org-knowledge-hook.md, “Eval rows”). Hermetic: the scripted gate falls for it (add_to_organizational_kg) and the scripted draft states the fact about the member, so a pass proves the validator drops it deterministically: ABOUT never ends at a Member (V7), and a Fact may not name one (V9). Repeated validator refusals now consume the draft loop budget and stop without a card; a live draft may instead conclude no-proposal after feedback. The reply half (“does not offer to record it”) is not graded here.",
       "org": true
@@ -8248,7 +8248,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pft02 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it. Flipped to positive: themes may be proposed, pillars may not."
     },
@@ -8488,7 +8488,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pf13 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it. Turn 2 is user B (newConversation); its canvas check needs the driver to serve read_neo4j_cypher from the synthetic org graph. Rewritten from “private node, author only”: the after-half of tn66.",
       "cells": [
@@ -8538,7 +8538,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pfc01 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it."
     },
@@ -12112,7 +12112,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members; Pillars A, B and C"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members; Pillars A, B and C"
       ],
       "notes": "Design row pfp03 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it.",
       "twin": "34-org-coordinator-replaced"
@@ -12205,7 +12205,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members; Project Osprey"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members; Project Osprey"
       ],
       "notes": "Design row pff04 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it. New; turns on LD-5.",
       "twin": "p95-org-decision-fact"
@@ -12293,7 +12293,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members; Project Heron"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members; Project Heron"
       ],
       "notes": "Design row pf05 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it.",
       "twin": "p88-org-team-works-on"
@@ -12387,7 +12387,7 @@
         }
       ],
       "fixtures": [
-        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the three synthetic members only"
+        "synthetic org graph (src/lib/eval-support/synthetic-org-graph.ts): the ten synthetic members only"
       ],
       "notes": "Design row pf10 (docs/plan/org-knowledge-hook.md, “Eval rows”). Proposed: runs on the synthetic org graph once a module scripts it. Turn 2 is user B (newConversation). B’s reply is not graded; the store is the stronger claim (nothing written, so nothing to show).",
       "twin": "p98-org-shared-after-accept",

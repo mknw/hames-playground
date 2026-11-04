@@ -510,7 +510,7 @@ User: “We’ve started calling the new logistics workstream Project Heron.”
 
 Expected assistant: A short acknowledgement. One Project, Heron, is proposed on the acceptance card; the person answers Add and Heron is written once.
 
-Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the three synthetic members.
+Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the ten synthetic members.
 
 Pass: a proposal naming Heron (reads the proposal); one Heron after Add (reads the synthetic org graph); within 6 decisions per turn; no terminal error, empty response or ignored required check. Every org check reads the graph or the proposal, never the reply.
 
@@ -552,7 +552,7 @@ User: “Morning! Ready for the weekend?”
 
 Expected assistant: A friendly reply; nothing is proposed for the graph.
 
-Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the three synthetic members.
+Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the ten synthetic members.
 
 Pass: no org-knowledge proposal on any turn (reads the trace); within 6 decisions per turn; no terminal error, empty response or ignored required check. Every org check reads the graph or the proposal, never the reply.
 
@@ -608,7 +608,7 @@ User: “I prefer my summaries as bullet points.”
 
 Expected assistant: Acknowledges the preference; nothing is proposed for the organizational graph (personal memory, off here, may raise its own).
 
-Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the three synthetic members.
+Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the ten synthetic members.
 
 Pass: no org-knowledge proposal on any turn (reads the trace); no fact written (reads the synthetic org graph); within 6 decisions per turn; no terminal error, empty response or ignored required check. Every org check reads the graph or the proposal, never the reply.
 
@@ -622,7 +622,7 @@ User: “The coffee machine on the third floor is broken again.”
 
 Expected assistant: A sympathetic reply; nothing is proposed and no resource is written.
 
-Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the three synthetic members.
+Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the ten synthetic members.
 
 Pass: no org-knowledge proposal on any turn (reads the trace); no coffee-machine entry (reads the synthetic org graph); within 6 decisions per turn; no terminal error, empty response or ignored required check. Every org check reads the graph or the proposal, never the reply.
 
@@ -636,7 +636,7 @@ User: “Tamsin Orrin is off sick this week with a back injury.”
 
 Expected assistant: A kind reply that does not offer to record it; nothing is proposed and no fact is written.
 
-Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the three synthetic members.
+Expected routes: none required. Expected tools: none required. Org graph: synthetic, seeded with the ten synthetic members.
 
 Pass: no org-knowledge proposal on any turn (reads the trace); no fact written (reads the synthetic org graph); within 6 decisions per turn; no terminal error, empty response or ignored required check. Every org check reads the graph or the proposal, never the reply.
 

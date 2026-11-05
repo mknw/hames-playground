@@ -72,3 +72,58 @@ describe('link acceptance (#901 slice 3)', () => {
     })
   })
 })
+
+// The persisted mark (ruling Q5 as overridden — issue #901 comment
+// 6618793027, 2026-11-04): "cancel and mark unsafe" — the mark is PERSISTED,
+// not rendering-only, and "no session state beyond the persisted mark". The
+// mark rides the same session-scoped store as acceptance, keyed like it but
+// on the defang identity (`data-link-raw`, what the defang strips on): the
+// component re-derives the inert text from it on every re-render. Still
+// client-side and per session — nothing is written anywhere else, and a
+// reload (a fresh store) starts empty.
+describe('mark unsafe — the persisted mark (comment 6618793027)', () => {
+  const RAW_GUIDE = 'https://external.example/guide'
+  const RAW_OTHER = 'https://external.example/other'
+
+  it('starts empty — nothing is marked without an explicit mark', () => {
+    const store = createLinkAcceptanceStore()
+    expect(store.isMarkedUnsafe('m1', RAW_GUIDE)).toBe(false)
+  })
+
+  it('records the mark for the chosen raw spelling in one message', () => {
+    const store = createLinkAcceptanceStore()
+    store.markUnsafe('m1', RAW_GUIDE)
+    expect(store.isMarkedUnsafe('m1', RAW_GUIDE)).toBe(true)
+  })
+
+  // MUTATION: key the mark by the raw spelling alone (drop the message id) →
+  // the same spelling in another message reads marked → red. The defang's
+  // own scoping is per message (slice 2): only the chosen message's chosen
+  // spelling goes inert on re-render.
+  it('never marks the same raw spelling in another message', () => {
+    const store = createLinkAcceptanceStore()
+    store.markUnsafe('m1', RAW_GUIDE)
+    // The mark is THIS message's fact — and only this message's fact.
+    expect(store.isMarkedUnsafe('m1', RAW_GUIDE)).toBe(true)
+    expect(store.isMarkedUnsafe('m2', RAW_GUIDE)).toBe(false)
+  })
+
+  // MUTATION: share one set between marks and acceptances (or key marks on
+  // the dest) → an acceptance reads as a mark → red. The two decisions are
+  // independent facts (Q2 vs Q5).
+  it('keeps the mark independent of acceptance', () => {
+    const store = createLinkAcceptanceStore()
+    store.accept('m1', RAW_GUIDE)
+    expect(store.isMarkedUnsafe('m1', RAW_GUIDE)).toBe(false)
+    store.markUnsafe('m1', RAW_OTHER)
+    expect(store.isAccepted('m1', RAW_OTHER)).toBe(false)
+  })
+
+  // Client-side lifetime, like acceptance: a reload creates a fresh store.
+  it('a reload starts empty — a fresh store instance carries no mark', () => {
+    const store = createLinkAcceptanceStore()
+    store.markUnsafe('m1', RAW_GUIDE)
+    const reloaded = createLinkAcceptanceStore()
+    expect(reloaded.isMarkedUnsafe('m1', RAW_GUIDE)).toBe(false)
+  })
+})

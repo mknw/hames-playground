@@ -182,12 +182,14 @@ const ALLOWLIST: Exception[] = [
 const HTML_SINKS: Exception[] = [
   {
     file: 'src/components/ark-ui/ChatMessages.tsx',
-    match: 'innerHTML={renderAssistantContent(',
+    match: 'innerHTML={rendered().html}',
     reason:
-      "The chat's single markdown render path. `renderAssistantContent` sanitizes marked's " +
-      'output through `sanitizeMarkdownHtml`, whose inert-DOM `annotate` pass is where the ' +
-      'annotators run (#428), so this is the one sink every assistant message — live or ' +
-      'rehydrated from history — passes through.',
+      "The chat's single markdown render path. `rendered` is the per-message memo of " +
+      "`renderAssistantContent`, which sanitizes marked's output through `sanitizeMarkdownHtml`, " +
+      'whose inert-DOM `annotate` pass is where the annotators run (#428), so this is the one ' +
+      'sink every assistant message — live or rehydrated from history — passes through. The ' +
+      "memo exists for the persisted mark's re-derivation (ruling Q5 as overridden, issue #901 " +
+      'comment 6618793027): the re-render effect tracks the same computation the sink renders.',
   },
 ]
 

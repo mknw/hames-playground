@@ -144,9 +144,13 @@ describe('the link-review body', () => {
     expect(onDefang).not.toHaveBeenCalled()
   })
 
-  it('"Cancel and defang" asks the mount to defang, then closes', async () => {
+  // The label is the owner's ruling (issue #901 comment 6618793027,
+  // 2026-11-04, overriding the 2026-11-03 recommendation): "cancel and mark
+  // unsafe". Asserted on the visible text, not just the testid.
+  it('"Cancel and mark unsafe" asks the mount to defang, then closes', async () => {
     const { onClose, onDefang } = mount()
     await tick(80)
+    expect(q('link-review-defang')!.textContent).toBe('Cancel and mark unsafe')
     fireEvent.click(q('link-review-defang')!)
     expect(onDefang).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)

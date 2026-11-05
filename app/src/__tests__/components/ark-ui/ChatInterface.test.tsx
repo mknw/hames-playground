@@ -1184,7 +1184,12 @@ describe('ChatInterface — session-scoped link acceptance (#901 slice 3)', () =
     expect(container.querySelector('a[data-link-review="unverified"]')).toBeTruthy()
     fireEvent.click(container.querySelector('[data-testid="accept-as-safe-trigger"]')!)
     await tick()
-    fireEvent.click(document.querySelector('[data-testid="accept-as-safe-item"]')!)
+    // Select the item the way a pointer does — press, then release: the menu
+    // machine's ITEM_CLICK needs the pointerdown's highlight (a bare click
+    // event does not select). `onSelect` fires on both pointer and keyboard.
+    const item = document.querySelector('[data-testid="accept-as-safe-item"]')!
+    fireEvent.pointerDown(item, { pointerType: 'mouse' })
+    fireEvent.click(item)
     await settle()
 
     // s1's link now navigates without a review (accepted for this session).

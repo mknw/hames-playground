@@ -23,10 +23,24 @@
  *
  * ## What it is not
  *
- * Nothing here persists: no server record, nothing across reloads, nothing
- * shared between viewers. The store is client-side signal state; a new page
- * starts empty, fail-closed — every unrecognised link reviews again, exactly
- * as the ruling requires.
+ * Nothing here reaches a server, nothing crosses reloads, nothing is shared
+ * between viewers. The store is client-side signal state; a new page starts
+ * empty, fail-closed — every unrecognised link reviews again, exactly as the
+ * rulings require.
+ *
+ * ## The persisted mark (ruling Q5 as overridden — issue #901 comment
+ * ## 6618793027, 2026-11-04)
+ *
+ * The dialog's "Cancel and mark unsafe" records a MARK — the fact that this
+ * address was marked unsafe — that is PERSISTED, not rendering-only ("No
+ * session state beyond the persisted mark"): the chosen message's re-render
+ * re-derives the inert text from the mark, so the link does not come back
+ * with the next rendering. The mark is keyed like acceptance — one mark is
+ * (message id, exact raw spelling), where the raw spelling is the defang
+ * identity (`data-link-raw`), not the resolved destination — and it rides
+ * this same session-scoped store, so its lifetime is the acceptance store's:
+ * client-side, per session, a reload starts empty. A server-side record is
+ * NOT authorised by the comment; no session state beyond the mark is stored.
  *
  * ## How acceptance disables the intercept (not the stamp)
  *
@@ -39,7 +53,9 @@
  */
 import { createSignal } from 'solid-js'
 
-/** The session-scoped "Accept as safe" record (#901 slice 3). */
+/** The session-scoped link decisions (#901 slice 3): the "Accept as safe"
+ *  record (ruling Q2) and the persisted "Cancel and mark unsafe" mark (ruling
+ *  Q5 as overridden — issue #901 comment 6618793027). */
 export interface LinkAcceptanceStore {
   /** Whether the exact resolved destination `dest` is accepted in message
    *  `messageId`. Reactive when read inside a tracking scope. */
@@ -47,21 +63,41 @@ export interface LinkAcceptanceStore {
   /** Accept the exact resolved destination `dest` in message `messageId` —
    *  one link in one message, never another. */
   accept: (messageId: string, dest: string) => void
+  /** Whether the raw spelling `raw` (the defang identity, `data-link-raw`)
+   *  was marked unsafe in message `messageId` — the persisted mark the
+   *  re-render re-derives the inert text from. */
+  isMarkedUnsafe: (messageId: string, raw: string) => boolean
+  /** Mark the raw spelling `raw` unsafe in message `messageId`: the chosen
+   *  link in the chosen message stays inert through re-renders. */
+  markUnsafe: (messageId: string, raw: string) => void
 }
 
-/** One store per session (or per page load): message id → accepted dests. */
+/** One store per session (or per page load): message id → accepted dests,
+ *  message id → marked-unsafe raw spellings. */
 export function createLinkAcceptanceStore(): LinkAcceptanceStore {
   const [accepted, setAccepted] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(new Map())
+  const [markedUnsafe, setMarkedUnsafe] = createSignal<ReadonlyMap<string, ReadonlySet<string>>>(
+    new Map(),
+  )
   return {
     // Read and written outside JSX on purpose: `isAccepted` runs inside the
     // strip's tracked expressions (and fresh in event handlers), and `accept`
-    // runs from the menu item's click — the two scopes the rule names.
+    // runs from the menu item's selection — the two scopes the rule names.
     isAccepted: (messageId, dest) => accepted().get(messageId)?.has(dest) ?? false,
     accept: (messageId, dest) =>
       setAccepted((prev) => {
         const next = new Map(prev)
         const forMessage = new Set(next.get(messageId) ?? [])
         forMessage.add(dest)
+        next.set(messageId, forMessage)
+        return next
+      }),
+    isMarkedUnsafe: (messageId, raw) => markedUnsafe().get(messageId)?.has(raw) ?? false,
+    markUnsafe: (messageId, raw) =>
+      setMarkedUnsafe((prev) => {
+        const next = new Map(prev)
+        const forMessage = new Set(next.get(messageId) ?? [])
+        forMessage.add(raw)
         next.set(messageId, forMessage)
         return next
       }),

@@ -1,5 +1,14 @@
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { For, Show, Switch, Match, createEffect, createSignal, type JSX } from 'solid-js'
+import {
+  For,
+  Show,
+  Switch,
+  Match,
+  createEffect,
+  createMemo,
+  createSignal,
+  type JSX,
+} from 'solid-js'
 import type { ToolCallInfo } from './types'
 import { ToolCallDisplay } from './ToolCallDisplay'
 import { marked, Tokenizer } from 'marked'
@@ -326,11 +335,15 @@ interface LinkReviewTarget {
  *  nothing to activate, nothing left in the tab order. Returns how many
  *  anchors were replaced.
  *
- *  Current rendering ONLY: this touches the DOM built from `message.content`,
- *  never the content itself, so the next rendering derived from it — a
- *  streaming update, a reload, another viewer — presents the link again.
- *  Scoping to `container` (one message's rendering) keeps "the chosen link in
- *  this message" from reaching the same address in another message. */
+ *  This touches the DOM built from `message.content`, never the content
+ *  itself. Ruling Q5 as overridden (issue #901 comment 6618793027,
+ *  2026-11-04): the dialog's action records a PERSISTED mark on the mount's
+ *  acceptance store, and every re-render of the marked message re-derives
+ *  this defang from the mark — so the link does not come back with the next
+ *  rendering. Still scoped to `container` (one message's rendering), which
+ *  keeps "the chosen link in this message" from reaching the same address in
+ *  another message, and still client-side: a reload (a fresh store) starts
+ *  empty. */
 export function defangAnchors(container: Element, raw: string): number {
   let replaced = 0
   for (const anchor of Array.from(container.querySelectorAll('a[data-link-raw]'))) {
@@ -508,6 +521,11 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                 // re-render (the callback re-runs with the new message object).
                 let prose: HTMLDivElement | undefined
 
+                // The rendered assistant content, memoized per message so the
+                // innerHTML expression and the mark re-derivation below track
+                // the one computation.
+                const rendered = createMemo(() => renderAssistantContent(message))
+
                 /** The message's currently-rendered unverified links — slice
                  *  1's stamps read back from the LIVE rendering, deduped by
                  *  resolved destination: two anchors spelling one address are
@@ -554,6 +572,32 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           `${remaining.length} unverified link${remaining.length === 1 ? '' : 's'} still to review.`,
                   )
                 }
+
+                // The persisted mark, re-derived on every rendering of this
+                // message (ruling Q5 as overridden — issue #901 comment
+                // 6618793027, 2026-11-04): each anchor whose raw spelling the
+                // store marks unsafe goes inert text again, so a re-render does
+                // not present a marked link back. Client-side, per session — no
+                // session state beyond the mark, and a reload (a fresh store)
+                // starts empty. Solid effects run after the DOM is written, so
+                // `prose` is assigned and `innerHTML` set by the time this
+                // runs; when the re-derivation removes an anchor it bumps the
+                // strip's tick so the indicator and the Accept-as-safe list
+                // re-derive in the same flush.
+                createEffect(() => {
+                  void rendered().html
+                  const el = prose
+                  if (!el) return
+                  const raws = new Set(
+                    Array.from(el.querySelectorAll('a[data-link-raw]')).map((a) =>
+                      a.getAttribute('data-link-raw'),
+                    ),
+                  )
+                  for (const raw of raws) {
+                    if (raw === null || !linkAcceptance().isMarkedUnsafe(message.id, raw)) continue
+                    if (defangAnchors(el, raw) > 0) setDefangTick((t) => t + 1)
+                  }
+                })
 
                 return (
                   <div flex="~ col" gap="2">
@@ -671,7 +715,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                               // compiled and the runtime JSX paths call it.
                               ref={(el) => (prose = el)}
                               // eslint-disable-next-line solid/no-innerhtml
-                              innerHTML={renderAssistantContent(message).html}
+                              innerHTML={rendered().html}
                             />
                             {/* #901 slice 3 — the "Links unverified" indicator and
                               the Accept-as-safe action: one strip per assistant
@@ -740,7 +784,15 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                                             <Menu.Item
                                               value={dest}
                                               data-testid="accept-as-safe-item"
-                                              onClick={() => acceptLink(dest)}
+                                              // `onSelect`, not `onClick`: zag's
+                                              // menu machine invokes selection on
+                                              // BOTH pointer and keyboard
+                                              // activation — the keyboard path
+                                              // never dispatches a DOM click, so
+                                              // an onClick here left keyboard
+                                              // users with an action that did
+                                              // nothing (code review r1, MUST 1).
+                                              onSelect={() => acceptLink(dest)}
                                               p="x-2 y-1.5"
                                               text="xs ui-text-primary"
                                               break-all
@@ -934,6 +986,14 @@ export const ChatMessages = (props: ChatMessagesProps) => {
           const target = reviewTarget()
           if (!target) return
           defangAnchors(target.container, target.raw)
+          // The mark is PERSISTED, not rendering-only (ruling Q5 as
+          // overridden — issue #901 comment 6618793027, 2026-11-04): every
+          // re-render of this message re-derives the defang from the store.
+          // Keyed like acceptance on (message id, the defang identity
+          // `data-link-raw`); client-side, per session — no session state
+          // beyond the mark, nothing across reloads, nothing to a server.
+          const messageId = target.container.getAttribute('data-message-id')
+          if (messageId !== null) linkAcceptance().markUnsafe(messageId, target.raw)
           // Re-derive the strip: the anchor left this rendering, so it leaves
           // the indicator's count and the Accept-as-safe list too (slice 3).
           setDefangTick((t) => t + 1)

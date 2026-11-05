@@ -80,7 +80,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(b, 'Router').mockImplementation(async (message, routes, history, memory) => {
     routerBodies.push(
-      (await b.request.Router(message, routes, history, memory, OFFLINE)).body.json(),
+      (await b.request.Router(message, routes, history, memory, null, OFFLINE)).body.json(),
     )
     return {
       intent: 'search units',
@@ -101,6 +101,8 @@ beforeEach(() => {
             errorMessage,
             memory,
             references,
+            null,
+            null,
             OFFLINE,
           )
         ).body.json(),
@@ -135,9 +137,10 @@ describe('router memory setting', () => {
     await run('routing-and-replies')
     const args = vi.mocked(b.Router).mock.calls[0]
     expect(args.slice(0, 4)).toEqual([MESSAGE, ROUTES, [], BLOCK])
-    expect(args[4]?.collector).toBeDefined()
-    expect(args[4]?.client).toBeUndefined()
-    const mainBody = (await b.request.Router(MESSAGE, ROUTES, [], BLOCK, OFFLINE)).body.json()
+    expect(args[4]).toBeNull()
+    expect(args[5]?.collector).toBeDefined()
+    expect(args[5]?.client).toBeUndefined()
+    const mainBody = (await b.request.Router(MESSAGE, ROUTES, [], BLOCK, null, OFFLINE)).body.json()
     expect(routerBodies[0]).toEqual(mainBody)
     expect(JSON.stringify(routerBodies[0])).toContain('MEMTOKEN-7731')
     expect(JSON.stringify(routerBodies[0])).toContain('when writing `intent`')

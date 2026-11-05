@@ -183,6 +183,7 @@ export function createFenceWordingScenario(header: FenceHeader): Scenario {
           undefined, // multi_call_mode
           undefined, // plan_context
           undefined, // return_style
+          null,
           opts,
         )
         const args = argsParseAsObject(action.tool_name, action.tool_args)

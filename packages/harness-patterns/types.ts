@@ -186,8 +186,11 @@ export type MultiCallMode = 'parallel' | 'sequential' | 'off'
  *    `tool_args`. Prompt-only: the loop still sets no `data.response`, so a
  *    downstream `compactExecution` remains the author (passthrough is #149
  *    Option B, not built). For a loop whose Return prose is itself the
- *    deliverable — e.g. under a custom `synthesize` that reads the action. */
-export type ReturnStyle = 'summary' | 'answer'
+ *    deliverable — e.g. under a custom `synthesize` that reads the action.
+ *  - 'json' — the answer is the one JSON object the loop's context specifies,
+ *    in `tool_args` like any other arguments, with no prose around the action.
+ *    For a loop whose caller parses the Return (the org-knowledge draft). */
+export type ReturnStyle = 'summary' | 'answer' | 'json'
 
 /** Max concurrently in-flight sub-calls of a 'parallel' multi-call turn. Also
  *  the batch-size guidance rendered into the controller prompts (keep in sync
@@ -495,6 +498,18 @@ export interface ControllerInput {
   returnStyle?: ReturnStyle
 }
 
+/** Callbacks the loop hands the controller beside its input. They are kept out of
+ *  {@link ControllerInput} on purpose: the input is plain data that consumers clone,
+ *  record and replay, and a function in it would break each of those. */
+export interface ControllerHooks {
+  /** Called before a same-endpoint retry of a thinking attempt, with the failed
+   *  attempt's record. The pattern records it as a `warning`, so the attempt the
+   *  retry replaced stays visible (and priced) even when the retry succeeds. The
+   *  same contract as {@link PlannerFn}'s `onRetry`. A controller that never retries
+   *  a thinking attempt never calls it. */
+  onRetry?: (failedCall: LLMCallRecord | undefined) => void
+}
+
 /** The actor seam's one named input (#225 Lane A4) — replaces the positional
  *  tail of the actor seam. `previousAttempts` was already a typed array;
  *  nothing here is stringified or re-parsed. The live callable is
@@ -568,7 +583,7 @@ export interface ModelLimits {
  *  provide it, and a seam without one falls back to the conservative 16K
  *  window (the same default `getContextWindow` carried). */
 export type ControllerFn = {
-  (input: ControllerInput): Promise<ControllerCallResult>
+  (input: ControllerInput, hooks?: ControllerHooks): Promise<ControllerCallResult>
   /** Per-call model budgets (Lane A5). Optional: a custom injected
    *  implementation may not know them — the adapter implementations always
    *  provide it, and a seam without one falls back to the conservative 16K
@@ -806,6 +821,10 @@ export interface SimpleLoopConfig extends PatternConfig {
    *  results, across patterns, including the fields `resultOmit` hides from the
    *  controller), so the default asks the loop for a summary only. */
   returnStyle?: ReturnStyle
+  /** Check a terminal action before the loop exits. A feedback string refuses
+   *  the answer and consumes this round; the controller sees it on the next
+   *  round within maxTurns. Undefined accepts. A thrown check fails the loop. */
+  validateReturn?: (action: ControllerAction) => Promise<string | undefined> | string | undefined
   /** The consecutive-recovery cap (default: 1): how many answers the loop
    *  cannot use it will feed back IN A ROW. An unusable answer is one that would
    *  not parse, `tool_args` that would not parse, a tool off the allowlist, or a
@@ -1181,6 +1200,12 @@ export interface CompactExecutionInput {
    *  present ONLY when something was recalled (#419 M5a). Background about the
    *  user for the synthesizer to render as DATA; never a tool result. */
   memoryContext?: string
+  /** `thread` mode only: how many of `loopHistory`'s iterations THIS turn authored
+   *  (failed ones included). 0 means the turn ran no tool or route and answers
+   *  from the conversation alone, even when a wider thread window carries an
+   *  earlier turn's records. A synthesizer can spend prompt on such a turn
+   *  differently, e.g. only then add an agent's capability guide. */
+  stepsThisTurn?: number
 }
 
 /** Custom synthesis function type */
@@ -1440,6 +1465,9 @@ export type WarningTask =
   | 'skills_mount'
   /** The planner retried without thinking or accepted a plan with no trace (#625). */
   | 'planner'
+  /** A thinking loop controller hit its cap or produced no answer and was retried
+   *  once without thinking (#625; the attempt rides the warning's call record). */
+  | 'controller'
   /** `decisionLoop`'s read of the conversation's documents for its state (#507). */
   | 'decision_documents'
   /** `decisionLoop` could not quote this turn's recalled memories to its decisions
@@ -1484,6 +1512,8 @@ export interface WarningEventData {
  * tests key on it rather than on the wording of {@link LoopRecoveryEventData.error}.
  */
 export type LoopRecoveryFailure =
+  /** A parsed terminal answer failed the consumer's deterministic check. */
+  | 'return_rejected'
   /** The tool ran and reported failure. */
   | 'tool_error'
   /** Every call of a multi-call turn failed — ran and failed, or was refused

@@ -57,6 +57,7 @@ function serializedReport(budget: SpendBudget): Record<string, unknown> {
     scenarios: [{ id: 'count' }],
     candidate: 'general-next',
     flipGate: () => ({}),
+    thinkingReport: () => undefined,
     GENERAL_BASELINE: {},
     openRouterLarge: false,
     cap: 20,

@@ -15,9 +15,9 @@
  *   3  the gate: ONE choice question over the current user message ALONE
  *   4  the draft: a dry run on a read-only loop (the host's {@link OrgDraftFn},
  *      usually {@link createOrgDraftLoop}), handed the same message alone
- *   5  a strict parse of the draft ({@link parseOrgDraft}), one attempt
+ *   5  a strict parse of each candidate and its explicit proposal verdict
  *   6  the snapshot of what the draft names, through the host's store
- *   7  the deterministic validator, with its assertion cap
+ *   7  the deterministic validator, feeding refusals back within the loop budget
  *   8  an assertion that only reinforces writes nothing and is not proposed
  *   9  the proposal (`proposeToHuman`, kind `orgKnowledge.confirm`): counts and
  *      the closed class set only — no name, no value, no evidence
@@ -29,7 +29,8 @@
  */
 
 import { assertServerOnImport } from './assert.server'
-import { currentRunFrame } from './run-frame.server'
+import { currentClock, currentRunFrame } from './run-frame.server'
+import { localDate } from './clock'
 import { proposeToHuman } from './hitl.server'
 import { setLivePatternEnabled } from './live-event-context.server'
 import { readStoreWindow, DEFAULT_PROPOSAL_TTL_MS } from './memory-store.server'
@@ -38,14 +39,21 @@ import { runChain } from './patterns/chain.server'
 import { simpleLoop } from './patterns/simpleLoop.server'
 import { withInjectionGuard } from './patterns/withInjectionGuard.server'
 import { decide, defineChoice } from './patterns/typedDecision.server'
+import { sanitizeUntrusted } from './injection-guard'
 import { classOf, type GraphOntology } from './org-knowledge-ontology'
-import type { OrgActor, OrgApplyResult, OrgGraphStore } from './org-knowledge-store'
+import {
+  OrgSnapshotIncompleteError,
+  type OrgActor,
+  type OrgApplyResult,
+  type OrgGraphStore,
+} from './org-knowledge-store'
 import {
   validateOrgDraft,
   type CheckedAssertion,
   type DraftElement,
   type OrgDraft,
   type OrgRule,
+  type RejectedAssertion,
 } from './org-knowledge-validate.server'
 import type {
   ConfiguredPattern,
@@ -107,28 +115,36 @@ export const ORG_DRAFT_TOOLS = ['read_neo4j_cypher', 'get_neo4j_schema'] as cons
 export type OrgDraftFn = (input: {
   readonly userMessage: string
   readonly schema: string
+  /** Undefined accepts this answer; feedback spends another loop round. */
+  readonly validate: (text: string) => Promise<string | undefined>
 }) => Promise<string>
+
+/** Only budget exhaustion may preserve the loop's last validator refusal. */
+class OrgDraftBudgetExhaustedError extends Error {}
 
 /**
  * The draft as a `simpleLoop` over the two read-only Neo4j tools, inside a K1
  * guard on those tools, in a scratch context that holds the user's message and
- * nothing else. Its client is the `controller`'s: the host routes it (the tier
- * decides which model answers).
+ * nothing else. The host routes its controller (in the reference host, the
+ * `orgDraft` role; the tier decides which model answers).
  */
 export function createOrgDraftLoop(opts: {
   readonly controller: ControllerFn
   readonly maxTurns?: number
 }): OrgDraftFn {
-  return async ({ userMessage, schema }) => {
+  return async ({ userMessage, schema, validate }) => {
     // Built per call: the schema is the loop's config, and a pattern's body
     // reads the config it was built with.
     const loop = simpleLoop(opts.controller, [...ORG_DRAFT_TOOLS], {
       patternId: 'org-knowledge-draft',
       schema,
-      returnStyle: 'answer',
+      // The verdict is JSON the hook parses: 'answer' would tell the model
+      // "plain prose (not JSON)" against the schema's own format (LD-23).
+      returnStyle: 'json',
       multiToolCalls: 'off',
       rememberPriorTurns: false,
       maxTurns: opts.maxTurns ?? 4,
+      validateReturn: (action) => validate(action.tool_args),
     })
     const pattern = withInjectionGuard({ tools: [...ORG_DRAFT_TOOLS] })(
       loop as unknown as ConfiguredPattern<Record<string, unknown>>,
@@ -136,8 +152,14 @@ export function createOrgDraftLoop(opts: {
     const scratch = createContext<Record<string, unknown>>(userMessage)
     const done = await runChain(scratch, [pattern])
     const text = (done.data as { returnText?: unknown }).returnText
-    if (typeof text !== 'string' || text.trim() === '')
+    if (typeof text !== 'string' || text.trim() === '') {
+      const exhausted = done.events.some(
+        (event) =>
+          event.type === 'error' && (event.data as { kind?: string }).kind === 'budget_exhausted',
+      )
+      if (exhausted) throw new OrgDraftBudgetExhaustedError('the draft loop returned no answer')
       throw new Error('the draft loop returned no answer')
+    }
     return text
   }
 }
@@ -164,12 +186,86 @@ export function renderOrgSchema(ontology: GraphOntology): string {
     'Relations:',
     ...relations,
     'Rules: every value must be copied from the user message; every element carries `evidence`, a span copied verbatim from the user message; use the stored name of a node that already exists; propose nothing for a question, hypothetical, opinion, rumour or anything about a person.',
-    'Answer (Return) with JSON only: {"assertions":[{"nodes":[{"ref":"a","label":"Project","properties":{"name":"…"},"evidence":"…"}],"edges":[{"type":"…","from":"a","to":"b","evidence":"…"}]}]}. An empty list when nothing fits: {"assertions":[]}.',
+    // LD-23: the first live private-tier run declined a new project because the
+    // graph did not hold it yet, which is the case the hook exists for. The
+    // near-match search comes first so the draft links on its first answer; the
+    // validator's V11 (LD-24) refuses a near-duplicate it misses either way.
+    ORG_NEAR_MATCH_RULE,
+    'Answer (Return) with JSON only: {"verdict":"propose","assertions":[{"nodes":[{"ref":"a","label":"Project","properties":{"name":"…"},"evidence":"…"}],"edges":[{"type":"…","from":"a","to":"b","evidence":"…"}]}]}. If nothing is worth proposing, answer {"verdict":"no-proposal","reason":"short reason"}. A propose answer is checked before the loop can finish: use validator feedback to repair it or conclude no-proposal, within the remaining turns. Never override a validator refusal.',
   ].join('\n')
 }
 
+/** The schema's new-node rule (LD-23). An exact-name read that finds nothing
+ *  is not evidence the node is new; only the tolerant search below is. It is a
+ *  prompt, not the control: the validator's V11 refusal (LD-24) is what keeps a
+ *  name variant from becoming a second node, and this rule saves the round a
+ *  refusal would cost. */
+export const ORG_NEAR_MATCH_RULE =
+  "Do not duplicate nodes. Before proposing a node as new, search its class for a near-match, case-insensitively, on the name's most distinctive word without accents: MATCH (n:Label) WHERE toLower(n.name) CONTAINS 'word' RETURN n (use the class's own name property, e.g. displayName for Member). If that finds a node, it is the same node: use its stored name and link to it, never a second node. Only when that search finds nothing is the node proposed as new, unless its class says Link only; not finding it by its exact name is no reason for no-proposal."
+
+/**
+ * One refused assertion as repair feedback: its position and rule, and for a
+ * near-duplicate (V11, LD-24) the stored node to link to instead. The stored
+ * name is graph data reaching a prompt outside the K1 guard (SD-1), so it goes
+ * through the sanitizer first and is left out when the sanitizer finds
+ * anything; the drafted values and evidence are never echoed.
+ */
+export function rejectionNote({ index, rule, existing }: RejectedAssertion): string {
+  if (rule !== 'V11' || !existing || existing.length === 0) return `a${index}: ${rule}`
+  const named = existing.slice(0, 3).map(({ label, name, inDraft }) => {
+    const { report } = sanitizeUntrusted(
+      name,
+      { tool: 'org_knowledge', namespace: 'org_knowledge' },
+      { spotlight: 'off' },
+    )
+    const shown =
+      report.findings.length === 0 && name.length <= NOTE_NAME_MAX_CHARS
+        ? `${label} ${JSON.stringify(name)}`
+        : `an existing ${label}`
+    return { shown, inDraft: inDraft === true }
+  })
+  const names = named.map((n) => n.shown).join(' or ')
+  return named.every((n) => n.inDraft)
+    ? `a${index}: V11, a duplicate of ${names} elsewhere in this draft; name one node once, under one name`
+    : `a${index}: V11, a duplicate of ${names} already in the graph; link to it under that stored name, never a second node`
+}
+
+/** Longest stored name a repair note echoes (review of #994): a longer one is
+ *  named by its label only. */
+export const NOTE_NAME_MAX_CHARS = 120
+
 /** Most elements one draft may carry; a longer draft is not parsed. */
 export const MAX_DRAFT_ELEMENTS = 200
+
+type OrgDraftAnswer =
+  | { readonly verdict: 'propose'; readonly draft: OrgDraft }
+  | { readonly verdict: 'no-proposal'; readonly reason: string }
+
+/** The loop's closed verdict envelope. The reason stays in scratch context. */
+function parseOrgDraftAnswer(text: string): OrgDraftAnswer | null {
+  const fenced = /^\s*```(?:json)?\s*\n([\s\S]*?)\n\s*```\s*$/.exec(text)
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(fenced ? fenced[1] : text)
+  } catch {
+    return null
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  if (
+    raw.verdict === 'no-proposal' &&
+    Object.keys(raw).every((k) => ['verdict', 'reason'].includes(k)) &&
+    typeof raw.reason === 'string' &&
+    raw.reason.trim() !== ''
+  )
+    return { verdict: 'no-proposal', reason: raw.reason }
+  if (
+    raw.verdict !== 'propose' ||
+    !Object.keys(raw).every((k) => ['verdict', 'assertions'].includes(k))
+  )
+    return null
+  const draft = parseOrgDraft(JSON.stringify({ assertions: raw.assertions }))
+  return draft ? { verdict: 'propose', draft } : null
+}
 
 /**
  * Parse the draft strictly: a JSON object (optionally inside ONE ```json
@@ -349,7 +445,8 @@ export interface OrgKnowledgeConfig {
   readonly wakeBudgetMs?: number
   /** Default: the run frame's `inference.tier`. */
   readonly tier?: () => string | undefined
-  /** The ISO day the message was said. Default: today, UTC. */
+  /** The ISO day the message was said. Default: the turn clock's local date
+   *  (the user's day, `RunFrame.clock`); with no clock, today in UTC. */
   readonly today?: () => string
   readonly maxAssertions?: number
 }
@@ -367,7 +464,10 @@ export type OrgKnowledgeSkip =
   | 'gate'
   | 'draft-error'
   | 'draft-unparseable'
+  | 'no-proposal'
   | 'graph-read-error'
+  /** The store could not prove it showed every near-duplicate (LD-24). */
+  | 'graph-incomplete'
   | 'nothing-valid'
   | 'only-reinforces'
   | 'already-proposed'
@@ -380,6 +480,14 @@ export interface OrgKnowledgeReport {
 }
 
 const DEFAULT_WAKE_BUDGET_MS = 180_000
+
+/** The stop a failed graph read ends with. */
+function readStop(err: unknown): 'graph-incomplete' | 'graph-read-error' {
+  return err instanceof OrgSnapshotIncompleteError ? 'graph-incomplete' : 'graph-read-error'
+}
+
+const isReadStop = (s: OrgKnowledgeSkip | undefined): boolean =>
+  s === 'graph-read-error' || s === 'graph-incomplete'
 
 function errorKind(e: unknown): string {
   return e instanceof Error && e.name ? e.name : 'Error'
@@ -481,42 +589,102 @@ async function run(
   if (gate.reason === 'error' || gate.label === null) return stop('gate-error')
   if (gate.label !== ORG_KNOWLEDGE_ADD) return stop('gate')
 
-  // --- 4 + 5. the draft, parsed once ------------------------------------------------
+  // --- 4–8. deliberate: parse, snapshot and validate inside the loop ---------------
+  let validated:
+    | {
+        text: string
+        checked: ReturnType<typeof validateOrgDraft>
+        writing: CheckedAssertion[]
+      }
+    | undefined
+  let failure:
+    | {
+        skipped: OrgKnowledgeSkip
+        rejected: OrgKnowledgeReport['rejected']
+        /** The cause a read failure logs: an error kind, never a message. */
+        extra?: string
+      }
+    | undefined
+  const refuse = (
+    skipped: OrgKnowledgeSkip,
+    rejected: OrgKnowledgeReport['rejected'] = {},
+    summary: string = skipped,
+  ) => {
+    failure = { skipped, rejected }
+    return `Validator: ${summary}; rejected: ${JSON.stringify(rejected)}. Repair the draft using only the user's message, or Return no-proposal with a short reason.`
+  }
+  const validate = async (text: string): Promise<string | undefined> => {
+    validated = undefined
+    failure = undefined
+    const answer = parseOrgDraftAnswer(text)
+    if (!answer) return refuse('draft-unparseable')
+    if (answer.verdict === 'no-proposal') return undefined
+    const { draft } = answer
+    const names: { label: string; name: string }[] = []
+    for (const el of draft.elements) {
+      if (el.kind !== 'node') continue
+      const cls = classOf(cfg.ontology, el.label)
+      const name = cls?.nameProperty ? el.properties[cls.nameProperty] : undefined
+      if (name) names.push({ label: el.label, name })
+    }
+    let snapshot
+    try {
+      snapshot = await cfg.store.snapshot({ names, keys: [] })
+    } catch (err) {
+      // An infrastructure failure cannot be repaired by a model. The cause is
+      // kept (review of #994): a store too large to scan for near-duplicates
+      // has its own reason, and any other failure logs its error kind.
+      refuse(readStop(err))
+      failure = { ...failure!, extra: errorKind(err) }
+      throw new Error('org graph snapshot unavailable')
+    }
+    const checked = validateOrgDraft(draft, snapshot, cfg.ontology, {
+      userMessage,
+      today: cfg.today ? cfg.today() : todayForUser(),
+      mentionsMember: cfg.mentionsMember,
+      ...(cfg.maxAssertions !== undefined && { maxAssertions: cfg.maxAssertions }),
+    })
+    if (checked.accepted.length === 0 || Object.keys(checked.rejected).length > 0) {
+      const label = checked.accepted.length > 0 ? 'partly-valid' : 'nothing-valid'
+      const assertions = checked.rejectedAssertions.map(rejectionNote)
+      return refuse(
+        'nothing-valid',
+        checked.rejected,
+        `${label}; assertions: ${assertions.join(', ')}`,
+      )
+    }
+    const writing = checked.accepted.filter((a) => !onlyReinforces(a))
+    if (writing.length === 0) return refuse('only-reinforces', checked.rejected)
+    validated = { text, checked, writing }
+    return undefined
+  }
   let text: string
   try {
-    text = await cfg.draft({ userMessage, schema: renderOrgSchema(cfg.ontology) })
+    text = await cfg.draft({ userMessage, schema: renderOrgSchema(cfg.ontology), validate })
   } catch (err) {
-    return stop('draft-error', errorKind(err))
+    // A later model/transport failure is not the previous round's verdict.
+    // Retain it only when the loop actually exhausted its repair budget (or
+    // the current validation itself failed to read the graph).
+    if (!(err instanceof OrgDraftBudgetExhaustedError) && !isReadStop(failure?.skipped))
+      failure = undefined
+    return failure
+      ? stop(failure.skipped, failure.extra, failure.rejected)
+      : stop('draft-error', errorKind(err))
   }
-  const draft = parseOrgDraft(text)
-  if (!draft) return stop('draft-unparseable')
-
-  // --- 6. the snapshot -----------------------------------------------------------
-  const names: { label: string; name: string }[] = []
-  for (const el of draft.elements) {
-    if (el.kind !== 'node') continue
-    const cls = classOf(cfg.ontology, el.label)
-    const name = cls?.nameProperty ? el.properties[cls.nameProperty] : undefined
-    if (name) names.push({ label: el.label, name })
+  const answer = parseOrgDraftAnswer(text)
+  if (answer?.verdict === 'no-proposal') return stop('no-proposal')
+  // A custom draft seam cannot bypass the deterministic final check or return
+  // a different candidate from the one that passed inside the loop.
+  if (validated?.text !== text) {
+    try {
+      await validate(text)
+    } catch (err) {
+      // `validate` recorded the read's own cause before it rethrew.
+      return stop(failure?.skipped ?? readStop(err), failure?.extra ?? errorKind(err))
+    }
   }
-  let snapshot
-  try {
-    snapshot = await cfg.store.snapshot({ names, keys: [] })
-  } catch (err) {
-    return stop('graph-read-error', errorKind(err))
-  }
-
-  // --- 7 + 8. validate; drop what writes nothing --------------------------------------
-  const today = cfg.today ? cfg.today() : new Date().toISOString().slice(0, 10)
-  const checked = validateOrgDraft(draft, snapshot, cfg.ontology, {
-    userMessage,
-    today,
-    mentionsMember: cfg.mentionsMember,
-    ...(cfg.maxAssertions !== undefined && { maxAssertions: cfg.maxAssertions }),
-  })
-  if (checked.accepted.length === 0) return stop('nothing-valid', undefined, checked.rejected)
-  const writing = checked.accepted.filter((a) => !onlyReinforces(a))
-  if (writing.length === 0) return stop('only-reinforces', undefined, checked.rejected)
+  if (!validated) return stop(failure?.skipped ?? 'nothing-valid', undefined, failure?.rejected)
+  const { checked, writing } = validated
 
   // --- 9 + 10. propose and hold ------------------------------------------------------
   const ttl = cfg.confirm.expiresInMs ?? DEFAULT_PROPOSAL_TTL_MS
@@ -611,4 +779,12 @@ export function withOrgKnowledge() {
     const [first, ...rest] = patterns
     return [{ ...first, capabilities: { ...first.capabilities, orgKnowledge: true } }, ...rest]
   }
+}
+
+/** The user's calendar day for this turn: the run frame's clock, read in its
+ *  own zone. A Brussels message said at 00:30 local is stated on the local
+ *  date, not on the UTC one that is still yesterday. */
+function todayForUser(): string {
+  const clock = currentClock()
+  return clock ? localDate(clock) : new Date().toISOString().slice(0, 10)
 }

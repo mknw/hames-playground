@@ -98,7 +98,7 @@ export class BamlSyncClient {
 
   
   ActorController(
-      user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,
+      user_message: string,intent: string,tools: types.ToolDescription[],attempts: types.Attempt[],context?: string | null,few_shots?: types.FewShot[] | null,attempt_n?: number | null,max_attempts?: number | null,multi_call_mode?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.ControllerAction {
     try {
@@ -130,7 +130,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "ActorController",
         {
-          "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context?? null,"few_shots": few_shots?? null,"attempt_n": attempt_n?? null,"max_attempts": max_attempts?? null,"multi_call_mode": multi_call_mode?? null
+          "user_message": user_message,"intent": intent,"tools": tools,"attempts": attempts,"context": context?? null,"few_shots": few_shots?? null,"attempt_n": attempt_n?? null,"max_attempts": max_attempts?? null,"multi_call_mode": multi_call_mode?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -248,7 +248,7 @@ export class BamlSyncClient {
   }
   
   ControllerThinking(
-      user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+      user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.ControllerActionThinking {
     try {
@@ -280,7 +280,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "ControllerThinking",
         {
-          "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null
+          "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -498,7 +498,7 @@ export class BamlSyncClient {
   }
   
   LoopController(
-      user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,
+      user_message: string,intent: string,tools: types.ToolDescription[],turns: types.LoopTurn[],context?: string | null,turns_previous_runs?: types.PriorResult[] | null,few_shots?: types.FewShot[] | null,multi_call_mode?: string | null,plan_context?: string | null,return_style?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.ControllerAction {
     try {
@@ -530,7 +530,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "LoopController",
         {
-          "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null
+          "user_message": user_message,"intent": intent,"tools": tools,"turns": turns,"context": context?? null,"turns_previous_runs": turns_previous_runs?? null,"few_shots": few_shots?? null,"multi_call_mode": multi_call_mode?? null,"plan_context": plan_context?? null,"return_style": return_style?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -548,7 +548,7 @@ export class BamlSyncClient {
   }
   
   Planner(
-      user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+      user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.PlanResult {
     try {
@@ -580,7 +580,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Planner",
         {
-          "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null
+          "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -598,7 +598,7 @@ export class BamlSyncClient {
   }
   
   PlannerThinking(
-      user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,
+      user_message: string,intent: string,tools: types.ToolDescription[],context?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.PlanResultThinking {
     try {
@@ -630,7 +630,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "PlannerThinking",
         {
-          "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null
+          "user_message": user_message,"intent": intent,"tools": tools,"context": context?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -848,7 +848,7 @@ export class BamlSyncClient {
   }
   
   Router(
-      message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,
+      message: string,routes: types.RouteOption[],history: types.Message[],memory_context?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): types.RoutingResult {
     try {
@@ -880,7 +880,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Router",
         {
-          "message": message,"routes": routes,"history": history,"memory_context": memory_context?? null
+          "message": message,"routes": routes,"history": history,"memory_context": memory_context?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),
@@ -948,7 +948,7 @@ export class BamlSyncClient {
   }
   
   Synthesize(
-      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,
+      user_message: string,intent: string,turns: types.LoopTurn[],has_error: boolean,error_message?: string | null,memory_context?: string | null,references?: types.SynthesisReference[] | null,guide?: string | null,current_time?: string | null,
       __baml_options__?: BamlCallOptions<never>
   ): string {
     try {
@@ -980,7 +980,7 @@ export class BamlSyncClient {
       const __raw__ = this.runtime.callFunctionSync(
         "Synthesize",
         {
-          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null
+          "user_message": user_message,"intent": intent,"turns": turns,"has_error": has_error,"error_message": error_message?? null,"memory_context": memory_context?? null,"references": references?? null,"guide": guide?? null,"current_time": current_time?? null
         },
         this.ctxManager.cloneContext(),
         __options__.tb?.__tb(),

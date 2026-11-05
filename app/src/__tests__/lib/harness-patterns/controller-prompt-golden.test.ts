@@ -124,7 +124,20 @@ const CASES: Record<string, Record<string, Render>> = {
   LoopController: {
     // No optional sections, default summary style, no history.
     first: (o, client = b) =>
-      client.request.LoopController('q', 'i', TOOLS, [], null, null, null, null, null, null, o),
+      client.request.LoopController(
+        'q',
+        'i',
+        TOOLS,
+        [],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        o,
+      ),
     // Both populated and legacy history, rolling markers, expansions, errors,
     // batch calls, escaped few-shots, prior results, and a separate plan.
     parallel: (o, client = b) =>
@@ -139,6 +152,7 @@ const CASES: Record<string, Record<string, Render>> = {
         'parallel',
         'PLAN\n1. Search\n2. Inspect',
         'answer',
+        null,
         o,
       ),
     sequential: (o, client = b) =>
@@ -153,12 +167,26 @@ const CASES: Record<string, Record<string, Render>> = {
         'sequential',
         '',
         'summary',
+        null,
         o,
       ),
   },
   ControllerThinking: {
     first: (o, client = b) =>
-      client.request.ControllerThinking('q', 'i', TOOLS, [], null, null, null, null, null, null, o),
+      client.request.ControllerThinking(
+        'q',
+        'i',
+        TOOLS,
+        [],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        o,
+      ),
     parallel: (o, client = b) =>
       client.request.ControllerThinking(
         'Find the "sample"\nfile',
@@ -171,14 +199,15 @@ const CASES: Record<string, Record<string, Render>> = {
         'parallel',
         'PLAN\n1. Search\n2. Inspect',
         'answer',
+        null,
         o,
       ),
   },
   ActorController: {
     first: (o, client = b) =>
-      client.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, o),
+      client.request.ActorController('q', 'i', TOOLS, [], null, null, 1, 5, null, null, o),
     noBudget: (o, client = b) =>
-      client.request.ActorController('q', 'i', [], [], '', [], null, null, null, o),
+      client.request.ActorController('q', 'i', [], [], '', [], null, null, null, null, o),
     parallel: (o, client = b) =>
       client.request.ActorController(
         'q',
@@ -190,6 +219,7 @@ const CASES: Record<string, Record<string, Render>> = {
         4,
         5,
         'parallel',
+        null,
         o,
       ),
     sequential: (o, client = b) =>
@@ -203,17 +233,19 @@ const CASES: Record<string, Record<string, Render>> = {
         3,
         8,
         'sequential',
+        null,
         o,
       ),
   },
   Planner: {
-    first: (o, client = b) => client.request.Planner('q', 'i', TOOLS, null, o),
+    first: (o, client = b) => client.request.Planner('q', 'i', TOOLS, null, null, o),
     context: (o, client = b) =>
       client.request.Planner(
         'Find the "sample"\nfile',
         'Find the sample',
         TOOLS,
         'CONTEXT\nSynthetic schema',
+        null,
         o,
       ),
   },
@@ -269,7 +301,7 @@ describe('#625 shared bodies can omit content-side reasoning', () => {
       Object.entries(getBamlFiles()).map(([file, source]) => [
         file,
         source.replace(
-          /(\{\{ (?:LoopControllerBody|ActorControllerBody|PlannerBody)\([^\n]+), true(\) \}\})/g,
+          /(\{\{ (?:LoopControllerBody|ActorControllerBody|PlannerBody)\([^\n]+), true((?:, current_time)?\) \}\})/g,
           '$1, false$2',
         ),
       ]),

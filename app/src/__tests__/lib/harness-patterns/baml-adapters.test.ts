@@ -109,33 +109,47 @@ describe('createLoopControllerAdapter', () => {
   })
 
   // FRONT ruling A (2026-11-04, org-knowledge slice 3): the org-knowledge draft
-  // loop is LoopController under its own `orgDraft` role, the small box on the
-  // private tier; every other loop keeps `controller`, the 27B. Mutation: make
-  // the adapter ignore `role` (always `clientOverrideFor('controller')`) → the
-  // orgDraft call names LargeQwen.
+  // loop is LoopController under its own `orgDraft` role; since LD-23 (same day)
+  // that role's private client is the 27B, like `controller`'s, so the shipped
+  // map cannot tell the roles apart. A consumer layer that maps only `orgDraft`
+  // can. Mutation: make the adapter ignore `role` (always
+  // `clientOverrideFor('controller')`) → the orgDraft call carries no client.
   it('routes LoopController by the role it was built with', async () => {
     const { createLoopControllerAdapter } =
       await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { configureConsumerClients } = await import('@hames-ai/harness-baml/clients.server')
     const bagOf = (call: unknown[]) => call[call.length - 1] as Record<string, unknown>
-    await withSelfDeployedTier(async () => {
+    configureConsumerClients((role) => (role === 'orgDraft' ? { client: 'SmallQwen' } : undefined))
+    try {
       await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
       await createLoopControllerAdapter()('m', 'i', '[]', 0)
-    })
+    } finally {
+      configureConsumerClients(undefined)
+    }
     expect(bagOf(mockLoopController.mock.calls[0])).toMatchObject({ client: 'SmallQwen' })
-    expect(bagOf(mockLoopController.mock.calls[1])).toMatchObject({ client: 'LargeQwen' })
-    // Budgeting follows the same role: the 4B's window, not the 27B's.
-    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
-    await withSelfDeployedTier(async () => {
-      expect(resolveClientForRole('orgDraft')).toBe('SmallQwen')
-      expect(
-        createLoopControllerAdapter(undefined, { role: 'orgDraft' }).limits!().contextWindow,
-      ).toBe(32_768)
-      expect(createLoopControllerAdapter().limits!().contextWindow).toBe(131_072)
-    })
-    // On the Anthropic tier the draft rides the controller chain, unmoved.
+    expect(bagOf(mockLoopController.mock.calls[1]).client).toBeUndefined()
+    // On the Anthropic tier, unlayered, the draft rides the controller chain.
     mockLoopController.mockClear()
     await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
     expect(bagOf(mockLoopController.mock.calls[0]).client).toBeUndefined()
+  })
+
+  // LD-23: on the private tier the draft runs, and is budgeted, on the 27B.
+  // Mutation: map `orgDraft` back to `SmallQwen` → the call names SmallQwen and
+  // the window is the 4B's 32 768.
+  it('puts the org-knowledge draft on the 27B on the private tier', async () => {
+    const { createLoopControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const { resolveClientForRole } = await import('@hames-ai/harness-baml/clients.server')
+    const bagOf = (call: unknown[]) => call[call.length - 1] as Record<string, unknown>
+    await withSelfDeployedTier(async () => {
+      await createLoopControllerAdapter(undefined, { role: 'orgDraft' })('m', 'i', '[]', 0)
+      expect(resolveClientForRole('orgDraft')).toBe('LargeQwen')
+      expect(
+        createLoopControllerAdapter(undefined, { role: 'orgDraft' }).limits!().contextWindow,
+      ).toBe(131_072)
+    })
+    expect(bagOf(mockLoopController.mock.calls[0])).toMatchObject({ client: 'LargeQwen' })
   })
 
   it('should return action and llmCall data', async () => {
@@ -289,6 +303,57 @@ describe('createActorControllerAdapter', () => {
     const [, , , , context] = mockActorController.mock.calls[0]
     expect(context.indexOf('PLAN')).toBeLessThan(context.indexOf('Factory protocol notes'))
   })
+
+  // The actor shares the `controller` ROLE but has no reasoning twin. With the
+  // `controller` PATTERN reasoning-configured the role resolves to the thinking
+  // leaf, which `ActorController` is not designated for: before this fix the call
+  // went out on it and was refused after accounting, so every actorCritic attempt
+  // died under `PRIVATE_REASONING_ROLES=controller` (and `EVAL_THINKING=on`).
+  // Staged on BOTH routes (#981 review SHOULD): a fix that checks only
+  // `client === 'LargeQwenThink'`, or hard-codes `client: 'LargeQwen'`, passes the
+  // box case and breaks actorCritic on the OpenRouter route. The OR route's boot
+  // check reads `LARGE_LLM_MODEL` as captured at module load, so that case sets it
+  // and re-imports the modules fresh.
+  // MUTATIONS (each run red): pass `clientOverrideFor('controller')` straight into
+  // the bag (both cases); test `resolved.client === 'LargeQwenThink'` instead of
+  // `THINKING_CLIENTS.has(...)` (openrouter case); hard-code `client: 'LargeQwen'`
+  // (openrouter case).
+  it.each([
+    ['modal', 'LargeQwen'],
+    ['openrouter', 'LargeQwenOR'],
+  ])(
+    'keeps ActorController off the thinking leaf when controller reasoning is on (%s route)',
+    async (route, expected) => {
+      process.env.PRIVATE_REASONING_ROLES = 'controller'
+      process.env.LARGE_LLM_ROUTE = route
+      process.env.LARGE_LLM_MODEL = 'synthetic/model'
+      vi.resetModules()
+      try {
+        const { createActorControllerAdapter } =
+          await import('@hames-ai/harness-baml/baml-adapters.server')
+        await withSelfDeployedTier(() =>
+          createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+        )
+      } finally {
+        delete process.env.PRIVATE_REASONING_ROLES
+        delete process.env.LARGE_LLM_ROUTE
+        delete process.env.LARGE_LLM_MODEL
+        vi.resetModules()
+      }
+      const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+      expect(bag.client).toBe(expected)
+    },
+  )
+
+  it('leaves the actor on the tier map when controller reasoning is off', async () => {
+    const { createActorControllerAdapter } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    await withSelfDeployedTier(() =>
+      createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], []),
+    )
+    const bag = mockActorController.mock.calls[0].at(-1) as { client?: string }
+    expect(bag.client).toBe('LargeQwen')
+  })
 })
 
 describe('createPlannerAdapter', () => {
@@ -318,7 +383,7 @@ describe('createPlannerAdapter', () => {
       await import('@hames-ai/harness-baml/baml-adapters.server')
     const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
     mockPlannerThinking.mockImplementation(async (...args: unknown[]) => {
-      const { collector } = args[4] as { collector: object }
+      const { collector } = args[5] as { collector: object }
       Object.defineProperty(collector, 'last', {
         value: {
           rawLlmResponse: JSON.stringify({ plan: '1. Search', n_steps: 1 }),
@@ -397,6 +462,85 @@ describe('createPlannerAdapter', () => {
     health.__resetGatewayHealth()
     mockCatalog.names = [...MOCK_CATALOG_DEFAULT]
     invalidateToolDescriptions()
+  })
+
+  // PR #986 review, MUST 1. A process transport whose listing depends on the
+  // request scope (a per-user gated one) must not lose its descriptions for the
+  // whole process because another user's turn filled the shared cache first.
+  // MUTATION: drop the miss re-read in filterToolDescriptions (the holder is
+  // shown nothing), or drop its `ownsTool` condition (a scoped-only name such
+  // as a sandbox tool then re-reads, and the listTools count goes up).
+  it('re-reads the cache for a process-owned tool the first fill lacked, in the holder’s scope', async () => {
+    const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
+    const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    const { createPlannerAdapter, invalidateToolDescriptions } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const unregister = registerTransport({
+      id: 'scope-dependent',
+      ownsTool: (name) => name === 'gated_search',
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    })
+    try {
+      invalidateToolDescriptions()
+      // First fill, in a scope the gated transport does not serve.
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      // The holder's scope: the gated transport now lists its tool.
+      mockCatalog.names = [...MOCK_CATALOG_DEFAULT, 'gated_search']
+      await createPlannerAdapter(['read_neo4j_cypher', 'gated_search'])('msg', 'intent')
+      expect(
+        (mockPlanner.mock.calls.at(-1)![2] as Array<{ name: string }>).map((t) => t.name),
+        'the holder was shown the first fill, without its own tool',
+      ).toEqual(['read_neo4j_cypher', 'gated_search'])
+
+      // A name no process transport owns never re-reads.
+      invalidateToolDescriptions()
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      const reads = vi.mocked(listTools).mock.calls.length
+      await createPlannerAdapter(['read_neo4j_cypher', 'sandbox_bash'])('msg', 'intent')
+      expect(vi.mocked(listTools).mock.calls.length).toBe(reads)
+    } finally {
+      unregister()
+      mockCatalog.names = [...MOCK_CATALOG_DEFAULT]
+      invalidateToolDescriptions()
+    }
+  })
+
+  // PR #986 delta review, D2. A process-owned tool that stays missing (its
+  // transport is down) costs one catalog re-read per 30 s window, not one per
+  // call. MUTATION: drop the window check (`Date.now() - lastMissReread >=
+  // MISS_REREAD_MS`): the second miss inside the window reads again.
+  it('throttles the miss re-read to one catalog read per window', async () => {
+    const { registerTransport } = await import('@hames-ai/harness-patterns/tool-transport.server')
+    const { listTools } = await import('@hames-ai/harness-patterns/mcp-client.server')
+    const { createPlannerAdapter, invalidateToolDescriptions } =
+      await import('@hames-ai/harness-baml/baml-adapters.server')
+    const unregister = registerTransport({
+      id: 'down',
+      ownsTool: (name) => name === 'gated_search',
+      callTool: async () => ({ success: true, data: null }),
+      listTools: async () => [],
+    })
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    try {
+      invalidateToolDescriptions()
+      await createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent')
+      const reads = () => vi.mocked(listTools).mock.calls.length
+      const start = reads()
+      const holder = ['read_neo4j_cypher', 'gated_search']
+      await createPlannerAdapter(holder)('msg', 'intent') // first miss: one re-read
+      expect(reads()).toBe(start + 1)
+      now.mockReturnValue(1_000_000 + 29_999)
+      await createPlannerAdapter(holder)('msg', 'intent') // inside the window: none
+      expect(reads()).toBe(start + 1)
+      now.mockReturnValue(1_000_000 + 30_000)
+      await createPlannerAdapter(holder)('msg', 'intent') // window over: one more
+      expect(reads()).toBe(start + 2)
+    } finally {
+      now.mockRestore()
+      unregister()
+      invalidateToolDescriptions()
+    }
   })
 
   it('propagates a non-recoverable failure as an LLMCallError', async () => {
@@ -1754,5 +1898,53 @@ describe('extractPromptTemplates', () => {
     extractPromptTemplates(source, cache)
 
     expect(cache.Planner).toBe('plan it')
+  })
+})
+
+// The turn clock (`RunFrame.clock`) reaches every time-reasoning call as its
+// trailing `current_time` argument — the slot just before the options bag.
+// Mutation: pass `null` instead of `currentTimeBlock()` at any one call site
+// (e.g. the loop controller's first call) → that adapter's pin goes red.
+describe('current_time from the run frame clock', () => {
+  const CLOCK = { instant: Date.parse('2026-11-04T23:30:00Z'), timeZone: 'Europe/Brussels' }
+  const slot = (mock: ReturnType<typeof vi.fn>) => {
+    const call = mock.mock.calls.at(-1)!
+    return call[call.length - 2]
+  }
+  const inTurn = async <T>(fn: () => Promise<T>) => {
+    const { withRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+    return withRunFrame({ clock: CLOCK }, fn)
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockLoopController.mockResolvedValue(mockFinalAction())
+    mockActorController.mockResolvedValue(mockFinalAction())
+    mockPlanner.mockResolvedValue({ reasoning: 'r', plan: '1. search', n_steps: 1 })
+  })
+
+  it('every adapter passes the same block, rendered once per turn', async () => {
+    const { formatTimeBlock } = await import('@hames-ai/harness-patterns/clock')
+    const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
+    const expected = formatTimeBlock(CLOCK)
+    expect(expected).toContain('Thursday, 2026-11-05, 00:30 UTC+01:00 (Europe/Brussels)')
+    await inTurn(async () => {
+      await adapters.createLoopControllerAdapter()('msg', 'intent', '[]', 0)
+      expect(slot(mockLoopController)).toBe(expected)
+      await adapters.createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], [])
+      expect(slot(mockActorController)).toBe(expected)
+      await adapters.createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent', 'Node: Person')
+      expect(slot(mockPlanner)).toBe(expected)
+    })
+  })
+
+  it('outside a clocked frame each adapter passes null (the prompt is unchanged)', async () => {
+    const adapters = await import('@hames-ai/harness-baml/baml-adapters.server')
+    await adapters.createLoopControllerAdapter()('msg', 'intent', '[]', 0)
+    expect(slot(mockLoopController)).toBeNull()
+    await adapters.createActorControllerAdapter(['code-mode'])('msg', 'intent', ['code-mode'], [])
+    expect(slot(mockActorController)).toBeNull()
+    await adapters.createPlannerAdapter(['read_neo4j_cypher'])('msg', 'intent', 'Node: Person')
+    expect(slot(mockPlanner)).toBeNull()
   })
 })

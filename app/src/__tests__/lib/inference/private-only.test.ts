@@ -51,15 +51,45 @@ describe('private-only: a function shared by two roles', () => {
   const listing = (fn: string) =>
     roles.filter((r) => SWITCHED_FUNCTIONS_BY_ROLE[r]?.includes(fn)).sort()
 
-  // Mutation (b): take the first matching role only → SmallQwen via orgDraft
-  // is refused.
-  it('accepts the private client of every role that lists the function', () => {
+  // LD-23 put both roles on the 27B, so the shipped map can no longer tell
+  // "any listing role" from "the first listing role". The widening is kept
+  // for the next time the two roles differ, and pinned against a map split on
+  // a THROWAWAY module instance (`vi.resetModules`), so the shared map every
+  // other test reads is never written. Mutation (b): take the first matching
+  // role only → the split role's client is refused.
+  it('accepts the private client of every role that lists the function', async () => {
     expect(listing('LoopController')).toEqual(['controller', 'orgDraft'])
     for (const role of listing('LoopController')) {
       const client = SELF_DEPLOYED_CLIENT_BY_ROLE[role]
       expect(() => assertBamlCallAllowed('LoopController', { client })).not.toThrow()
     }
-    expect(SELF_DEPLOYED_CLIENT_BY_ROLE.orgDraft).toBe('SmallQwen')
+    expect(SELF_DEPLOYED_CLIENT_BY_ROLE.orgDraft).toBe('LargeQwen')
+    // Unsplit, the 4B is a private client no listing role resolves to.
+    expect(() => assertBamlCallAllowed('LoopController', { client: 'SmallQwen' })).toThrow(
+      /before any request/,
+    )
+    vi.resetModules()
+    const fresh = await import('@hames-ai/harness-baml/clients.server')
+    expect(fresh.SELF_DEPLOYED_CLIENT_BY_ROLE).not.toBe(SELF_DEPLOYED_CLIENT_BY_ROLE)
+    // If the map is ever frozen, this pin needs a seam to split it through —
+    // say so here rather than fail on the assignment below.
+    expect(
+      Object.isFrozen(fresh.SELF_DEPLOYED_CLIENT_BY_ROLE),
+      'SELF_DEPLOYED_CLIENT_BY_ROLE is frozen: give this pin a seam to split the roles',
+    ).toBe(false)
+    ;(fresh.SELF_DEPLOYED_CLIENT_BY_ROLE as Partial<Record<BamlRole, string>>).orgDraft =
+      'SmallQwen'
+    expect(() =>
+      fresh.assertBamlCallAllowed('LoopController', { client: 'SmallQwen' }),
+    ).not.toThrow()
+    expect(() =>
+      fresh.assertBamlCallAllowed('LoopController', { client: 'LargeQwen' }),
+    ).not.toThrow()
+    // The fresh instance still enforces: a public client is refused.
+    expect(() =>
+      fresh.assertBamlCallAllowed('LoopController', { client: 'ControllerAnthropic' }),
+    ).toThrow(/before any request/)
+    expect(SELF_DEPLOYED_CLIENT_BY_ROLE.orgDraft).toBe('LargeQwen')
   })
 
   // Mutation (a): accept any client name → a public client passes.
@@ -94,15 +124,15 @@ describe('private-only: a function shared by two roles', () => {
     }
   })
 
-  it('lets the generated LoopController through the guarded client on the small box', async () => {
+  it('lets the generated LoopController through the guarded client on the 27B only', async () => {
     const native = vi.spyOn(generated, 'LoopController').mockResolvedValue({} as never)
     const call = (client: string) =>
-      b.LoopController('q', 'i', [], [], null, null, null, null, null, null, { client })
+      b.LoopController('q', 'i', [], [], null, null, null, null, null, null, null, { client })
     expect(() => call('ControllerAnthropic')).toThrow(/before any request/)
+    expect(() => call('SmallQwen')).toThrow(/before any request/)
     expect(native).not.toHaveBeenCalled()
-    await call('SmallQwen')
     await call('LargeQwen')
-    expect(native).toHaveBeenCalledTimes(2)
+    expect(native).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -1,11 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SpendBudget, type SpendKey } from '../../../lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../../lib/eval-support/spend-observer'
+import { PRIVATE_TIER_CLIENTS } from '@hames-ai/harness-baml/clients.server'
+
+vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 const key: SpendKey = { agent: 'general-next', scenario: 'test', tier: 'self_deployed' }
 const setup = (live = true) => {
   const budget = new SpendBudget(20, 0.8)
   const onStop = vi.fn()
-  return { budget, onStop, observer: createSpendObserver({ budget, live, onStop }) }
+  return {
+    budget,
+    onStop,
+    observer: createSpendObserver({ budget, live, onStop, privateClients: PRIVATE_TIER_CLIENTS }),
+  }
 }
 describe('runner synchronous spend stop', () => {
   it.each(['Anthropic', undefined])(
@@ -18,11 +25,22 @@ describe('runner synchronous spend stop', () => {
       expect(onStop).toHaveBeenCalledTimes(1)
     },
   )
-  // MUTATION: drop 'LargeQwenOR' (or the Think twin) from the allowlist in
-  // spend-observer.ts — the route-switch eval stops on its first 27B-role call
-  // again, which is the run-2 failure this test pins. Adding an unrelated name
-  // to the list must equally fail the refusal case above.
-  it.each(['LargeQwen', 'LargeQwenOR', 'LargeQwenThinkOR', 'SmallQwen', 'PrivateSystemOne'])(
+  // The allowlist is the package's PRIVATE_TIER_CLIENTS, which the runner passes in
+  // (#981 review NIT: it used to be a hand copy, and that copy had lost `LargeQwenThink`).
+  // MUTATION: drop 'LargeQwenOR' from PRIVATE_TIER_CLIENTS in clients.server.ts, or
+  // drop a thinking leaf from THINKING_CLIENTS → the enumeration below goes red, and
+  // a route-switched or thinking-on eval stops on its first 27B-role call.
+  it('admits exactly the clients the private tier can name, thinking leaves included', () => {
+    expect([...PRIVATE_TIER_CLIENTS].sort()).toEqual([
+      'LargeQwen',
+      'LargeQwenOR',
+      'LargeQwenThink',
+      'LargeQwenThinkOR',
+      'PrivateSystemOne',
+      'SmallQwen',
+    ])
+  })
+  it.each([...PRIVATE_TIER_CLIENTS])(
     'accepts every client the private-tier seam can name: %s',
     (clientName) => {
       const { budget, observer, onStop } = setup()

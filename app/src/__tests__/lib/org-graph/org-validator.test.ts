@@ -13,6 +13,7 @@ import {
   type GraphSnapshot,
   type OrgValidateContext,
 } from '@hames-ai/harness-patterns/org-knowledge-validate.server'
+import { renderOrgSchema } from '@hames-ai/harness-patterns/org-knowledge-hook.server'
 import { ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
 
 const TODAY = '2026-11-04'
@@ -728,5 +729,243 @@ describe('assertions', () => {
     expect(r.accepted).toHaveLength(8)
     expect(r.rejected).toEqual({ cap: 2 })
     expect(run(elements, msg, EMPTY, { maxAssertions: 3 }).rejected).toEqual({ cap: 7 })
+  })
+})
+
+// The owner's amendment of 2026-11-04 (LD-22): organizational knowledge and
+// resources stay classes. Mutations that redden this block: drop `Knowledge`
+// from NODE_LABELS or its class (every admit case → V1); drop it from ABOUT's
+// `from` (→ V1/V7); set its `personFree` false, or drop `name` from its
+// `lines` (the V9 case is admitted); add `key` to its optional properties (the
+// V2 case is admitted); drop the Knowledge line from the schema render.
+describe('the amended classes: Knowledge and Resource (LD-22)', () => {
+  const MSG = 'For Osprey we keep the Dorrit Wexley handover notes as the onboarding guide.'
+  const knowledge = (properties: Record<string, string>, evidence = 'as the onboarding guide') =>
+    node('k', 'Knowledge', properties, evidence)
+  const aboutOsprey: DraftElement[] = [
+    node('p', 'Project', { name: 'Osprey' }, 'For Osprey we keep'),
+    edge('ABOUT', 'k', 'p', 'For Osprey we keep'),
+  ]
+  const mentionsMember = (t: string) => /dorrit wexley/i.test(t)
+
+  it('admits a knowledge item about a project, as a new node', () => {
+    const r = run([knowledge({ name: 'the onboarding guide' }), ...aboutOsprey], MSG, OSPREY, {
+      mentionsMember,
+    })
+    expect(r.rejected).toEqual({})
+    const k = r.accepted[0].nodes.find((n) => n.element.label === 'Knowledge')!
+    expect(k.verdict).toBe('new')
+    expect(r.accepted[0].edges.map((e) => e.element.type)).toEqual(['ABOUT'])
+  })
+
+  it('drops a knowledge item about nothing, and one about a person', () => {
+    expect(run([knowledge({ name: 'the onboarding guide' })], MSG, OSPREY).rejected).toEqual({
+      V6: 1,
+    })
+    const snap = graph([['k:dw', 'Member', { displayName: 'Dorrit Wexley' }]])
+    const r = run(
+      [
+        knowledge({ name: 'the onboarding guide' }),
+        node('m', 'Member', { displayName: 'Dorrit Wexley' }, 'the Dorrit Wexley handover'),
+        edge('ABOUT', 'k', 'm', 'the Dorrit Wexley handover'),
+      ],
+      MSG,
+      snap,
+    )
+    expect(r.rejected).toEqual({ V7: 1 })
+  })
+
+  // Review of #988, term 1: an item ABOUT itself is about no node, yet met
+  // `min: 1`. Mutation: put Knowledge back in ABOUTABLE → admitted, red.
+  it('drops a knowledge item about itself', () => {
+    const r = run(
+      [
+        knowledge({ name: 'the onboarding guide' }),
+        edge('ABOUT', 'k', 'k', 'as the onboarding guide'),
+      ],
+      MSG,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V7: 1 })
+  })
+
+  it('drops a knowledge item whose name names a member, even when its evidence does not', () => {
+    const r = run(
+      [knowledge({ name: 'Dorrit Wexley handover notes' }), ...aboutOsprey],
+      MSG,
+      OSPREY,
+      { mentionsMember },
+    )
+    expect(r.rejected).toEqual({ V9: 1 })
+  })
+
+  it('never lets a draft set the legacy key a uniqueness constraint holds', () => {
+    for (const label of ['Knowledge', 'Resource']) {
+      const props: Record<string, string> =
+        label === 'Knowledge'
+          ? { name: 'the onboarding guide', key: 'onboarding' }
+          : { name: 'the onboarding guide', kind: 'document', key: 'onboarding' }
+      const r = run(
+        [node('k', label, props, 'as the onboarding guide'), ...aboutOsprey],
+        MSG,
+        OSPREY,
+      )
+      expect(r.rejected).toEqual({ V2: 1 })
+    }
+  })
+
+  it('renders both classes, and Knowledge as an ABOUT subject, into the draft schema', () => {
+    const schema = renderOrgSchema(ORG_ONTOLOGY)
+    expect(schema).toContain('- Knowledge: name (required); description (optional).')
+    expect(schema).toContain(
+      '- Resource: name (required); kind (required); location (optional); kind one of document/system/dataset/tool.',
+    )
+    expect(schema).toMatch(/- \(Fact\|Knowledge\)-\[:ABOUT\]->\([^)]*\bResource\b[^)]*\)/)
+    expect(schema).not.toMatch(/\bkey\b \((required|optional)\)/)
+  })
+})
+
+// LD-24: the owner's "do not duplicate nodes", deterministically. A new node of a
+// name-keyed class is refused when its near key (nameKey plus accents,
+// punctuation and the class's own label word folded) equals a stored node's of
+// the SAME label, and the refusal names that node for the repair turn.
+// Mutations: skip the V11 check in checkAssertion → every "refuses" case
+// reddens; compare near keys across labels → the cross-label case reddens;
+// drop `existing` from the refusal → the naming assertion reddens.
+describe('V11: no near-duplicate of a stored node of the same label', () => {
+  const near = (r: ReturnType<typeof run>) => r.rejectedAssertions[0]?.existing
+
+  it("refuses 'Project Osprey' beside a stored 'Osprey', naming it", () => {
+    const msg = 'The Project Osprey review is due on 15 December.'
+    const r = run(
+      [node('p', 'Project', { name: 'Project Osprey' }, 'The Project Osprey')],
+      msg,
+      OSPREY,
+    )
+    expect(r.accepted).toEqual([])
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)).toEqual([{ label: 'Project', name: 'Osprey', key: 'k:osprey' }])
+  })
+
+  it("refuses 'Projet Ősprey' beside a stored 'Projet Osprey'", () => {
+    const snap = graph([['k:po', 'Project', { name: 'Projet Osprey' }]])
+    const msg = 'We renamed the work Projet Ősprey this week.'
+    const r = run(
+      [node('p', 'Project', { name: 'Projet Ősprey' }, 'the work Projet Ősprey')],
+      msg,
+      snap,
+    )
+    expect(r.rejected).toEqual({ V11: 1 })
+    expect(near(r)?.[0].name).toBe('Projet Osprey')
+  })
+
+  it('links a case or whitespace variant (one node by nameKey) and refuses a punctuation variant', () => {
+    const msg = 'The  OSPREY  status is paused; the Osprey. work waits.'
+    const linked = run(
+      [node('p', 'Project', { name: 'OSPREY', status: 'paused' }, 'OSPREY  status is paused')],
+      msg,
+      OSPREY,
+    )
+    expect(linked.rejected).toEqual({})
+    expect(linked.accepted[0].nodes[0].verdict).not.toBe('new')
+    expect(linked.accepted[0].nodes[0].existing?.key).toBe('k:osprey')
+    const dotted = run(
+      [node('p', 'Project', { name: 'Osprey.' }, 'the Osprey. work waits')],
+      msg,
+      OSPREY,
+    )
+    expect(dotted.rejected).toEqual({ V11: 1 })
+  })
+
+  it('admits a legitimately different name as new', () => {
+    const msg = 'Osprey Labs is a new workstream we started today.'
+    const r = run(
+      [node('p', 'Project', { name: 'Osprey Labs' }, 'Osprey Labs is a new workstream')],
+      msg,
+      OSPREY,
+    )
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+
+  it('treats the same name under another label as another node (per-label identity)', () => {
+    const msg = 'Osprey is also the name of our new theme.'
+    const r = run([node('t', 'Theme', { name: 'Osprey' }, 'Osprey is also the name')], msg, OSPREY)
+    expect(r.rejected).toEqual({})
+    expect(r.accepted[0].nodes[0].verdict).toBe('new')
+  })
+})
+
+// Review of #994: the terms on V11's reach.
+describe('V11 inside one draft, on symbols, and on classes it never checks', () => {
+  // SHOULD 2. Mutation: drop the draft-twin check in checkAssertion → both
+  // cases admit two new Projects.
+  it('refuses a near-twin of another new node of the same draft, naming it', () => {
+    const msg = 'We started Osprey, also called Project Osprey in the plan.'
+    const one = run(
+      [
+        node('a', 'Project', { name: 'Osprey' }, 'We started Osprey'),
+        node('b', 'Project', { name: 'Project Osprey' }, 'called Project Osprey', 1),
+      ],
+      msg,
+    )
+    expect(one.accepted.map((a) => a.index)).toEqual([0])
+    expect(one.rejectedAssertions).toEqual([
+      {
+        index: 1,
+        rule: 'V11',
+        existing: [{ label: 'Project', name: 'Osprey', key: 'draft:a', inDraft: true }],
+      },
+    ])
+    // An exact twin (one nameKey) is still one new node, not a refusal.
+    const exact = run(
+      [
+        node('a', 'Project', { name: 'Osprey' }, 'We started Osprey'),
+        node('b', 'Project', { name: 'OSPREY' }, 'We started Osprey', 1),
+      ],
+      msg,
+    )
+    expect(exact.rejected).toEqual({})
+  })
+
+  // SHOULD 3. Mutations: fold every non-alphanumeric character → the C++ and
+  // emoji cases are refused; drop the empty-key guard → the dash case is.
+  it('keeps names that differ by a symbol, and never matches an empty key', () => {
+    const snap = graph([
+      ['k:c', 'Team', { name: 'C' }],
+      ['k:eagle', 'Team', { name: 'Launch 🦅' }],
+      ['k:dashes', 'Team', { name: '--' }],
+    ])
+    for (const [name, msg, evidence] of [
+      ['C++', 'Our new team C++ owns the compiler.', 'team C++ owns'],
+      ['C#', 'Our new team C# owns the runtime.', 'team C# owns'],
+      ['Launch 🚀', 'Our new team Launch 🚀 owns the launches.', 'team Launch 🚀 owns'],
+    ]) {
+      const r = run([node('t', 'Team', { name }, evidence)], msg, snap)
+      expect(r.rejected, name).toEqual({})
+      expect(r.accepted[0].nodes[0].verdict, name).toBe('new')
+    }
+    // A name of separators only has the empty near key: V11 does not apply,
+    // and the value rule (V4) is what refuses it.
+    const dash = run(
+      [node('t', 'Team', { name: '—' }, 'team — owns the')],
+      'Our new team — owns the gaps.',
+      snap,
+    )
+    expect(dash.rejected).toEqual({ V4: 1 })
+  })
+
+  // SHOULD 6. A class the hook may not create is never near-checked: an
+  // unmatched member is V1, as before V11. Mutation: check non-creatable
+  // classes again → V11.
+  it('refuses an unmatched member under V1, not V11', () => {
+    const snap = graph([['m:t', 'Member', { displayName: 'Tamsin Orrin' }]])
+    const r = run(
+      [node('m', 'Member', { displayName: 'Tamsin Orrin.' }, 'Tamsin Orrin. leads')],
+      'Tamsin Orrin. leads the theme now.',
+      snap,
+    )
+    expect(r.rejected).toEqual({ V1: 1 })
   })
 })

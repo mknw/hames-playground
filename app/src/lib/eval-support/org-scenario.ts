@@ -29,7 +29,7 @@ export type OrgSeedName =
  *  empty. A hermetic pass therefore proves the plumbing, never the gate. */
 export interface ScriptedOrgModel {
   readonly gate?: 'add_to_organizational_kg' | 'no_organizational_knowledge'
-  /** The draft loop's final answer (the JSON `parseOrgDraft` reads). */
+  /** Scripted assertions JSON; the fixture endpoint adds verdict: propose. */
   readonly draft?: string
 }
 
@@ -130,6 +130,18 @@ export interface OrgTurnTrace {
   }
   /** The gate's state and the draft's input, as sent while this turn settled. */
   readonly inputs: readonly string[]
+  /** Each draft-loop controller call this turn made, in order (LD-23): the loop
+   *  runs in a scratch context, so these are not in the turn's events. */
+  readonly draftCalls?: readonly OrgDraftCall[]
+}
+
+/** One draft-loop controller call, as the capture records it. */
+export interface OrgDraftCall {
+  readonly outcome: 'completion' | 'error'
+  readonly error?: string
+  /** The client BAML selected, when the call carried a record. */
+  readonly client?: string
+  readonly rawOutput?: string
 }
 
 export interface OrgTrace {

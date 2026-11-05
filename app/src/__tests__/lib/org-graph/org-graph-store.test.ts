@@ -13,13 +13,19 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { createMemoryOrgGraphStore } from '@hames-ai/harness-patterns/org-knowledge-store'
+import {
+  createMemoryOrgGraphStore,
+  OrgSnapshotIncompleteError,
+} from '@hames-ai/harness-patterns/org-knowledge-store'
 import {
   validateOrgDraft,
   type CheckedAssertion,
   type GraphSnapshot,
 } from '@hames-ai/harness-patterns/org-knowledge-validate.server'
-import { createNeo4jOrgGraphStore } from '../../../lib/org-graph/org-graph-store.server'
+import {
+  createNeo4jOrgGraphStore,
+  NEAR_SCAN_LIMIT,
+} from '../../../lib/org-graph/org-graph-store.server'
 import { ORG_ONTOLOGY } from '../../../lib/org-graph/ontology'
 import { orgGraphStoreContract, seedNode } from './org-graph-store-contract'
 
@@ -108,9 +114,17 @@ describe('the Neo4j adapter’s statements', () => {
       heron(),
       ACTOR,
     )
-    const write = calls.find((c) => c.q.includes('Project'))!
+    const writeAt = calls.findIndex((c) => /^(MERGE|CREATE)\b/.test(c.q))
+    const write = calls[writeAt]
     expect(write.q.startsWith('MERGE (n:`Project` {nameKey: $nameKey})')).toBe(true)
     expect(write.p).toMatchObject({ nameKey: 'heron', id: 'n1', actor: 'user-a' })
+    // LD-24: inside the same transaction, before the write, the re-read scans
+    // the new node's label for a near-duplicate.
+    const scanAt = calls.findIndex((c) =>
+      /^MATCH \(n:`Project`\) RETURN n\[\$prop\] AS name/.test(c.q),
+    )
+    expect(scanAt).toBeGreaterThanOrEqual(0)
+    expect(scanAt).toBeLessThan(writeAt)
   })
 
   // Design pin: createdBy is set on create and never on match. Mutation: SET
@@ -202,6 +216,35 @@ describe('the Neo4j adapter’s statements', () => {
   // Design pin: every label and type in the Neo4j adapter's Cypher comes from
   // the ontology's sets, never from input. Mutation: interpolate a value into a
   // statement (e.g. `{nameKey: '${props.nameKey}'}`) → this scan names it.
+  // LD-24 / V11: the near scan reads every name of the label, because the near
+  // key folds accents and Cypher cannot. A label larger than the scan's bound
+  // cannot be proven free of a near-duplicate, so the snapshot fails closed
+  // (the hook then proposes nothing) instead of returning a partial view.
+  // Mutation: drop the `rows.length > NEAR_SCAN_LIMIT` throw → resolves.
+  it('fails the snapshot closed when a label is too large to scan for near-duplicates', async () => {
+    const run = async (q: string, p: Record<string, unknown> = {}) => {
+      const scan = /RETURN n\[\$prop\] AS name/.test(q)
+      const rows = scan
+        ? Array.from({ length: NEAR_SCAN_LIMIT + 1 }, (_, i) => ({ name: `P${i}`, key: `id:${i}` }))
+        : []
+      expect(scan ? p.prop : 'name').toBe('name')
+      return {
+        records: rows.map((r) => ({ get: (k: string) => (r as Record<string, unknown>)[k] })),
+      }
+    }
+    const session = {
+      executeRead: async (fn: (t: unknown) => unknown) => fn({ run }),
+      close: async () => undefined,
+    }
+    const store = createNeo4jOrgGraphStore({
+      ontology: ORG_ONTOLOGY,
+      driver: () => ({ session: () => session }) as never,
+    })
+    await expect(
+      store.snapshot({ names: [{ label: 'Project', name: 'Project Osprey' }], keys: [] }),
+    ).rejects.toThrow(/near-duplicate check cannot be complete/)
+  })
+
   it('interpolates nothing into Cypher but L(), T() and KEY()', () => {
     const src = readFileSync(
       resolve(__dirname, '../../../lib/org-graph/org-graph-store.server.ts'),
@@ -220,5 +263,122 @@ describe('the Neo4j adapter’s statements', () => {
       (x) => !/^(?:L|T)\(ontology, [\w.!]+\)$/.test(x) && !/^KEY\('[a-z]'\)$/.test(x),
     )
     expect(offending).toEqual([])
+  })
+})
+
+// ----------------------------------------------------------------------------
+// The Neo4j adapter's near-duplicate path, in CI (review of #994, SHOULD 5)
+// ----------------------------------------------------------------------------
+
+/** A session double that answers the near scan with `scan`, a key lookup with
+ *  `stored`, and everything else with no rows; it records every statement. */
+function nearDriver(
+  scan: { name: string; key: string }[],
+  stored: Record<string, { labels: string[]; properties: Record<string, string> }> = {},
+) {
+  const calls: Call[] = []
+  const run = async (q: string, p: Record<string, unknown> = {}) => {
+    calls.push({ q, p })
+    const rows = /RETURN n\[\$prop\] AS name/.test(q)
+      ? scan
+      : /IN \$keys RETURN n, /.test(q) && !/-\[r\]-/.test(q)
+        ? (p.keys as string[]).filter((k) => stored[k]).map((k) => ({ n: stored[k], key: k }))
+        : /AS key\b/.test(q) && !/IN \$keys/.test(q)
+          ? [{ key: 'id:new' }]
+          : []
+    return {
+      records: rows.map((r) => ({ get: (k: string) => (r as Record<string, unknown>)[k] })),
+    }
+  }
+  const session = {
+    executeRead: async (fn: (t: unknown) => unknown) => fn({ run }),
+    executeWrite: async (fn: (t: unknown) => unknown) => fn({ run }),
+    close: async () => undefined,
+  }
+  return {
+    calls,
+    store: createNeo4jOrgGraphStore({
+      ontology: ORG_ONTOLOGY,
+      driver: () => ({ session: () => session }) as never,
+      newId: () => 'new',
+    }),
+  }
+}
+
+const STORED_OSPREY = { labels: ['Project'], properties: { name: 'Ősprey', id: 'osprey' } }
+const keyLookups = (calls: Call[]) =>
+  calls.filter((c) => /IN \$keys RETURN n, /.test(c.q) && !/-\[r\]-/.test(c.q))
+
+describe('the Neo4j adapter’s near-duplicate path', () => {
+  // Mutations: compare `nameKey(v)` instead of the near key in the scan → the
+  // accented stored name is missed; drop `nearKeys` from the key lookup → it
+  // is scanned but never fetched.
+  it('fetches a near-duplicate the label scan finds', async () => {
+    const { calls, store } = nearDriver([{ name: 'Ősprey', key: 'id:osprey' }], {
+      'id:osprey': STORED_OSPREY,
+    })
+    const snap = await store.snapshot({
+      names: [{ label: 'Project', name: 'Project Osprey' }],
+      keys: [],
+    })
+    expect(keyLookups(calls).map((c) => c.p.keys)).toEqual([['id:osprey']])
+    expect(snap.nodes.map((n) => n.key)).toEqual(['id:osprey'])
+  })
+
+  // The MUST of the review, on this adapter, in CI: the write's own re-read
+  // scans the new node's label and refuses the near-duplicate as stale.
+  // Mutation: re-read with no names (`[]` for `newNodeNames(...)`) → applied.
+  it('refuses as stale a write whose near-duplicate exists inside its transaction', async () => {
+    const { calls, store } = nearDriver([{ name: 'Ősprey', key: 'id:osprey' }], {
+      'id:osprey': STORED_OSPREY,
+    })
+    const a = check(
+      [
+        {
+          kind: 'node',
+          ref: 'p',
+          label: 'Project',
+          properties: { name: 'Project Osprey' },
+          evidence: 'started the Project Osprey',
+          assertion: 0,
+        },
+      ],
+      'We have started the Project Osprey workstream.',
+    )
+    expect((await store.apply(a, ACTOR)).status).toBe('stale')
+    expect(calls.some((c) => /^(MERGE|CREATE)\b/.test(c.q))).toBe(false)
+  })
+
+  // SHOULD 6: a class the hook may not create is never scanned, so a large
+  // directory cannot fail a snapshot closed. Mutation: scan every name-keyed
+  // class → a Member scan is issued.
+  it('never scans a label the hook may not create', async () => {
+    const { calls, store } = nearDriver([])
+    await store.snapshot({ names: [{ label: 'Member', name: 'Tamsin Orrin' }], keys: [] })
+    expect(calls.some((c) => /RETURN n\[\$prop\] AS name/.test(c.q))).toBe(false)
+  })
+
+  // NIT 9: the bound itself is in. Mutation: `>` → `>=` → this throws.
+  it('resolves a label of exactly the scan bound', async () => {
+    const rows = Array.from({ length: NEAR_SCAN_LIMIT }, (_, i) => ({
+      name: `P${i}`,
+      key: `id:${i}`,
+    }))
+    const { store } = nearDriver(rows)
+    await expect(
+      store.snapshot({ names: [{ label: 'Project', name: 'Project Osprey' }], keys: [] }),
+    ).resolves.toBeDefined()
+  })
+
+  // SHOULD 4: the fail-closed stop keeps its cause, as its own error class.
+  it('fails closed above the bound with OrgSnapshotIncompleteError', async () => {
+    const rows = Array.from({ length: NEAR_SCAN_LIMIT + 1 }, (_, i) => ({
+      name: `P${i}`,
+      key: `id:${i}`,
+    }))
+    const { store } = nearDriver(rows)
+    await expect(
+      store.snapshot({ names: [{ label: 'Project', name: 'Project Osprey' }], keys: [] }),
+    ).rejects.toBeInstanceOf(OrgSnapshotIncompleteError)
   })
 })

@@ -403,17 +403,34 @@ class DockerMcpTransport implements McpTransport {
     }
     try {
       const result = await target.client.callTool({ name: target.nativeName, arguments: args })
-      if (Array.isArray(result.content)) {
-        const textContent = result.content.find((c) => c.type === 'text')
-        if (textContent && 'text' in textContent) {
-          try {
-            return { success: result.isError !== true, data: JSON.parse(textContent.text) }
-          } catch {
-            return { success: result.isError !== true, data: textContent.text }
-          }
+      const textContent = Array.isArray(result.content)
+        ? result.content.find((c) => c.type === 'text')
+        : undefined
+      const text = textContent && 'text' in textContent ? textContent.text : undefined
+      let data: unknown = result.structuredContent ?? result
+      if (text !== undefined) {
+        try {
+          data = JSON.parse(text)
+        } catch {
+          data = text
         }
       }
-      return { success: result.isError !== true, data: result.structuredContent ?? result }
+      if (result.isError !== true) return { success: true, data }
+      // A failure carries its text on `error` (#440), the channel every pattern
+      // records and the controller turn log renders, so a failed command's
+      // output reaches the model. `data` is kept as well, deliberately: the
+      // in-VM shell reports a non-zero exit as `isError` with
+      // `{ stdout, stderr, exit_code }`, and the work-sync plumbing (`bash()`)
+      // reads the exit code from it.
+      return {
+        success: false,
+        data,
+        error:
+          text ??
+          (result.structuredContent !== undefined
+            ? JSON.stringify(result.structuredContent)
+            : 'Tool reported an error with no message'),
+      }
     } catch (error) {
       return {
         success: false,

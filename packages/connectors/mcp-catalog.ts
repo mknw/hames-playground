@@ -20,7 +20,8 @@
  * names this registration. Skipping it is a build-time error, not a silent
  * pass-through.
  *
- * 79 distinct names across 5 namespaces. The app-side per-user tools are NOT
+ * 79 distinct names across 5 namespaces, plus the `lennys_` prefix rule below.
+ * The app-side per-user tools are NOT
  * here — they declare their own namespaces (`registry.server.ts`), which ride
  * `inferServer` through the app transport's `namespaceFor`.
  */
@@ -129,6 +130,21 @@ for (const t of [
 ])
   MCP_TOOL_CATALOG[t] = 'filesystem'
 
+/**
+ * Lenny's Data — a remote, third-party MCP server (product-management newsletter
+ * and podcast archive), reached by the host app's own process transport, never
+ * through the gateway. Its
+ * tool names are discovered at boot rather than known here, so they are matched
+ * by the prefix that transport puts on every one of them: an unprefixed remote
+ * name such as `search` would otherwise take over the gateway's tool of the
+ * same name, because a process transport is consulted before the gateway. The
+ * namespace is the prefix's own heuristic reading, so `inferServer` and this
+ * catalog cannot disagree about it. Nothing declares it local, so the egress
+ * gate treats every one of its calls as outgoing.
+ */
+export const LENNYS_NAMESPACE = 'lennys'
+export const LENNYS_TOOL_PREFIX = `${LENNYS_NAMESPACE}_`
+
 /** The catalog, for introspection (the app-side namespace test reads it). */
 export { MCP_TOOL_CATALOG }
 
@@ -138,5 +154,8 @@ export { MCP_TOOL_CATALOG }
  * Undefined for names it does not know, so the caller's chain falls through.
  */
 export function mcpNamespace(toolName: string): string | undefined {
-  return MCP_TOOL_CATALOG[toolName]
+  return (
+    MCP_TOOL_CATALOG[toolName] ??
+    (toolName.startsWith(LENNYS_TOOL_PREFIX) ? LENNYS_NAMESPACE : undefined)
+  )
 }

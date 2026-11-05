@@ -301,6 +301,26 @@ describe('callTool + withInjectionGuard', () => {
     await closeMcpClient()
   })
 
+  it('sanitizes the ERROR channel of an isError result (#440)', async () => {
+    // An `isError` result is a failure whatever its text says, so its text
+    // must land on the error channel, which this chokepoint sanitizes — never
+    // on `data`, which it leaves alone on a failure. MUTATION: in dispatchTool
+    // return `{ success: false, data: <text> }` for isError — the raw attack
+    // survives on `data` and this goes red.
+    const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
+    mockCallTool.mockResolvedValue({ content: [{ type: 'text', text: ATTACK }], isError: true })
+    const guard = createInjectionGuard({ namespaces: ['web'], catalog: WEB_CATALOG }, () => {}, 'p')
+
+    const result = await runWithInjectionGuard(guard, () => callTool('search', { q: 'x' }))
+
+    expect(result.success).toBe(false)
+    expect(result.data).toBeNull()
+    expect(result.error).not.toMatch(/ignore all previous instructions/i)
+    expect(result.error).toContain('neutralized:instruction-override')
+    expect(result.sanitized?.neutralized).toBe(true)
+    await closeMcpClient()
+  })
+
   it('sanitizes a structured (multi-block) result leaf by leaf', async () => {
     const { callTool, closeMcpClient, createInjectionGuard, runWithInjectionGuard } = await load()
     mockCallTool.mockResolvedValue({

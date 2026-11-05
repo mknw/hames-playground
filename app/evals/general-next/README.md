@@ -23,13 +23,14 @@ corepack pnpm eval:general-next
 EVAL_GENERAL_GO='S3 merged: go' corepack pnpm eval:general-next --live
 ```
 
-| Variable               | Default        | Meaning                                                                                                                                                                                       |
-| ---------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EVAL_GENERAL_AGENT`   | `general-next` | Package agent ID; its `agents/<id>.server.ts` module exports an `AgentDefinition` with that ID. No hardcoded candidate import or registry change. Missing modules fail rather than fall back. |
-| `EVAL_ONLY`            | all            | Comma-separated scenario IDs; unknown IDs fail before setup. A filtered run cannot establish the flip gate.                                                                                   |
-| `EVAL_GENERAL_CAP_USD` | `20`           | Positive USD cap; anything above `25` is refused. The conservative stop threshold is **80%** of this amount (`16` by default), shared across baseline and candidate scenarios.                |
-| `EVAL_GENERAL_GO`      | unset          | Acknowledges the coordinator's go message; required in addition to `--live`. It is an operator attestation, never permission inferred from S3 appearing in the tree.                          |
-| `EVAL_GENERAL_CAPTURE` | unset (off)    | Exactly `1` writes a trace capture beside the report (below). Anything else, including `0`, leaves it off.                                                                                    |
+| Variable               | Default        | Meaning                                                                                                                                                                                                                                      |
+| ---------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EVAL_GENERAL_AGENT`   | `general-next` | Package agent ID; its `agents/<id>.server.ts` module exports an `AgentDefinition` with that ID. No hardcoded candidate import or registry change. Missing modules fail rather than fall back.                                                |
+| `EVAL_ONLY`            | all            | Comma-separated scenario IDs; unknown IDs fail before setup. A filtered run cannot establish the flip gate.                                                                                                                                  |
+| `EVAL_GENERAL_CAP_USD` | `20`           | Positive USD cap; anything above `25` is refused. The conservative stop threshold is **80%** of this amount (`16` by default), shared across baseline and candidate scenarios.                                                               |
+| `EVAL_GENERAL_GO`      | unset          | Acknowledges the coordinator's go message; required in addition to `--live`. It is an operator attestation, never permission inferred from S3 appearing in the tree.                                                                         |
+| `EVAL_GENERAL_CAPTURE` | unset (off)    | Exactly `1` writes a trace capture beside the report (below). Anything else, including `0`, leaves it off.                                                                                                                                   |
+| `EVAL_THINKING`        | `off`          | `on` runs the reasoning twins so the model's thinking fills `reasoning`; `compare` runs every scenario thinking-off then thinking-on and reports them side by side. See [Thinking on](#thinking-on-eval_thinking). Anything else is refused. |
 
 The runner writes one JSON report under `evals/reports`, including each scenario's
 status, checks, agent, tier, observer cost, infrastructure floor and call count.
@@ -80,7 +81,11 @@ call. Per scenario row:
 - `controllerCalls`: the raw completion of `LoopController` / `ActorController` calls, capped at
   8,000 characters each (the prompt is not recorded): every call that ended in an `error` or
   `loop_recovery` event (`outcome` `error` / `recovery`), and, for a scenario that failed, every
-  call.
+  call. The org-knowledge draft loop's calls are here too, under `patternId`
+  `org-knowledge-draft` with the serving `client`, recorded for EVERY scenario: the loop runs in a
+  scratch context, so the driver records them beside the org trace, and that recorder sees only
+  `completion` or `error`, never `recovery` (a validator-refused Return or unparseable `tool_args`
+  reads as a `completion`), so the error-only rule would drop the rounds worth reading.
 - `criticCalls`: every critic verdict and failed critic call, whether the scenario passed or not —
   a rejection on a passing scenario is exactly what the diagnosis reads. A verdict row carries the
   `verdict` (`is_sufficient`), the `reason` (`explanation`), `suggestedApproach`, and the raw
@@ -101,6 +106,113 @@ the flag at a run that feeds the agent anything else. Captured `state`, `error` 
 are verbatim: scrub them before quoting them on the public tracker. `capture.test.ts` and the `capture:` pins in `general-next.test.ts` hold the
 shape (the second pins a scripted run's critic verdicts and the synthesis beside the decisions),
 `runner-wiring.test.ts` the flag, the path and the checkpoint.
+
+## Thinking on (`EVAL_THINKING`)
+
+`EVAL_THINKING=on` runs general-next with model-side thinking on for the three patterns
+that produce `reasoning` and have a reasoning twin: the loop controller
+(`ControllerThinking`), the critic (`CriticThinking`) and the planner (`PlannerThinking`).
+The box's reasoning parser returns the trace in a separate field, and the adapters restore
+it into `reasoning` (the critic, which has no such field, records it on the call record's
+`parsedOutput.reasoning`). `compare` runs each scenario once per mode in one process, so
+both modes share one cold start and one scale-down tail.
+
+How it switches, and why production is untouched:
+
+- **One switch, the production one.** The runner sets `PRIVATE_REASONING_ROLES` to
+  `controller,critic,planner` (on) or empty (off) in its own process around each
+  scenario's attempts, and restores it in a `finally`
+  (`src/lib/eval-support/thinking-mode.ts`). It adds no client, registry or routing path,
+  so the twins run on their shipped clients: `LargeQwenThink` on the box,
+  `LargeQwenThinkOR` on the OpenRouter route. Their 4 096-token / 180 s cap and timeout
+  coupling is pinned in `planner-thinking-render.test.ts`, and the cap mirror in
+  `CLIENT_MAX_OUTPUT_TOKENS` by `client-output-caps.test.ts`.
+- **The eval owns that setting.** An inherited non-empty `PRIVATE_REASONING_ROLES` (from
+  `.env` or the shell) is refused in every mode, so a row labelled `off` really ran with
+  thinking off.
+- **Only the eval's clients move.** `eval-thinking.test.ts` resolves every private-tier
+  role through the real seam before, during and after each mode. It checks that `on`
+  moves exactly `controller`, `critic` and `planner` from `LargeQwen` to
+  `LargeQwenThink`, that `off` and the restore match production, that the Anthropic tier
+  moves nothing, and that no module under `packages/` or `app/src` other than
+  `thinking-mode.ts` contains the variable's name.
+- **The actor keeps its original.** `ActorController` shares the `controller` role but
+  has no twin. With `controller` thinking on, it now stays on the same route's
+  non-thinking client. Before this change it was sent on the thinking leaf and then
+  refused, which failed every actorCritic route.
+- **The describe family and the screen stay off** (#625 G19 Q2), and the flip gate reads
+  only the thinking-off rows, because it is a statement about the shipped configuration.
+
+What the report adds. Every graded row carries `thinking` (`off` / `on`), `durationMs`
+(the attempt's `driver.run` wall-clock, wake excluded) and `reasoning`. `reasoning` counts
+the calls, how many were twin calls, and the total and largest `reasoning` length, per
+function. It also counts `fallbacks` and `capHits`:
+
+- `fallbacks` is twin attempts replaced by a retry without thinking. A `ControllerThinking`
+  or `PlannerThinking` attempt that hits its cap or produces no answer is retried once on
+  the original function, on the same endpoint. The adapter prices the failed attempt
+  once, and the pattern records it as a `warning` (`task: 'controller'` or `'planner'`)
+  carrying its call record and trace. So the attempt counts as a twin call plus the
+  original's retry, and its trace length is in `maxChars`.
+- `capHits` is twin attempts whose record says they hit the output cap.
+
+These two are the numbers the shipped 4 096-token twin cap is judged by.
+`planner-thinking.test.ts` ("Controller thinking fallback stays visible") pins the
+controller half. The ledger keeps one spend row per (scenario, mode). The top-level
+`thinking.comparison` has one line per scenario and one cell per mode, each with the
+graded status (the MUST 2-of-3 rule included), attempts, latency, USD, reasoning
+characters and calls, `fallbacks` and `capHits`.
+
+Hermetic `EVAL_THINKING=compare` passes all 44 runnable scenarios in both modes. That is
+wiring only: the fixture returns a synthetic trace for a thinking request.
+
+**This eval leaves the planner unmeasured, live runs included.** No scenario selects the
+`think` route: it was dropped by owner verdict (`unusedValues["routes:think"]` in
+`scenarios.catalogue.json`). So a run reaches `PlannerThinking` only when the decider
+misroutes, and that run also fails the scenario. The planner is the role whose
+private-tier output cut (32 768 → 4 096 tokens) is still unmeasured. That measurement
+belongs to `pnpm eval:harness`'s `planner-plan-shape` scenario, not to this eval. The
+planner's routing move is pinned in `eval-thinking.test.ts`, and its twin adapter has its
+own pins (`planner-thinking*.test.ts`).
+
+### Live run (needs the owner's go and a spend cap)
+
+From `app/`, with the same preconditions as any live run:
+
+```bash
+EVAL_GENERAL_GO='S3 merged: go' EVAL_THINKING=compare EVAL_GENERAL_CAP_USD=<cap> \
+  EVAL_GENERAL_CAPTURE=1 corepack pnpm eval:general-next --live
+```
+
+`EVAL_THINKING=on` skips the thinking-off half and costs less, but the report then has no
+baseline column, and the flip gate is ineligible because it has no thinking-off rows.
+
+**Cost estimate per route, one pass, private tier.** These are estimates,
+not measurements. The inputs:
+
+- the recorded thinking-off passes on #507 (Modal 27B on a snapshot restore: about
+  2.7–3.3 USD, of which about 1.7–1.9 USD is the cold start and the idle windows;
+  OpenRouter route: 0.57–1.0 USD), measured when 17 scenarios were runnable;
+- #625 Q5's planner twin latency, 18.8 s p50 against 2.2 s with thinking off, for about
+  8× the output tokens;
+- the hermetic count of 28 twin calls per pass, which a live model can multiply by two or
+  three through longer loops and MUST re-runs.
+
+| Route (`LARGE_LLM_ROUTE`) | Thinking off | Thinking on (`on`)                                                           | `compare` (one process) |
+| ------------------------- | ------------ | ---------------------------------------------------------------------------- | ----------------------- |
+| Modal 27B box (unset)     | 2.7–3.3 USD  | 3.9–5.8 USD: +40–80 twin calls × ~17 s at ~6.6 USD/h                         | 5.0–7.2 USD             |
+| OpenRouter (`openrouter`) | 0.6–1.0 USD  | 1.1–2.1 USD: observer cost ×8 on twin calls, +small-box floor                | 1.5–3.0 USD             |
+| Anthropic tier            | not runnable | not runnable: this eval is private-tier only, and the twins are too (G19 Q4) | —                       |
+
+With 44 runnable scenarios today, the extra memory and org-knowledge rows mostly use the
+small box and add little 27B time, but every scenario's wall-clock is charged against
+both boxes' hourly floor. Read the upper end of each range as the realistic one. The cap
+should be the `compare` figure plus margin, for example 10 USD on the box or 4 USD on
+OpenRouter. The runner stops at 80% of the cap, and its final in-flight call can overshoot
+(see above). Every Modal figure is over the 2 USD standing limit, and so is the upper end of
+both OpenRouter thinking-on figures, so the live run needs its own go. The OpenRouter route
+also sends the 27B roles to a public provider under ZDR: that is the route's existing
+processor decision, not something this option changes.
 
 ## Execution boundaries and pending evidence
 
@@ -230,5 +342,9 @@ The graders read the graph before and after, and the proposal each turn raised; 
 - **Two negatives stop deterministically.** In 41 the scripted gate falls for a colleague's health, and the validator drops the fact (V7: `ABOUT` never ends at a `Member`). In 42 the scripted gate falls for an instruction inside a mail, and the validator drops the mail's project (V3: its evidence is not in the user's message).
 
 **No live run has been made.**
+
+**The draft reads the scenario's own graph, strictly.** The org rows' draft loop holds `read_neo4j_cypher` / `get_neo4j_schema`, served by `syntheticOrgDraftTransport` (`src/lib/eval-support/synthetic-org-graph.ts`) from the scenario's synthetic org graph, the graph its candidate is validated against. The read serves a Cypher subset as strictly as Neo4j would: `MATCH (v:Label {prop: 'x'})` patterns and a `WHERE` of `v.prop` / `toLower(v.prop)` with `=`, `CONTAINS`, `STARTS WITH` or `ENDS WITH` joined by `AND` / `OR`, with `$params` read from the call. A label is honoured, equality is exact and case-sensitive, and a pattern node that matches nothing empties the read. Anything outside the subset, or not Cypher, is a failed call naming the subset. So a lookup of `{name: 'Project Osprey'}` does not find a stored `Osprey` here either, and a row can fail by duplicating a node (LD-23). Not modelled: Neo4j's row shape (node rows are `{ label, ...properties }`, edge rows `{ from, type, to }`).
+
+**The members are a fixture, never a database.** The synthetic graph's ten members (`SYNTHETIC_MEMBERS`) are invented, with the fields the roster ingest writes on a `Member`. No eval path reads org or member data from any Neo4j, hermetic or live: the driver's synthetic transport owns every neo4j tool, so none falls through to the gateway. `src/__tests__/lib/eval-support/no-real-neo4j.test.ts` pins that, with the mutations that turn it red in its header. `src/lib/org-graph/scripts/seed-eval-members.ts` MERGEs the same ten into a Neo4j (`createdBy: 'eval-seed'`, idempotent, never deletes) for **local manual use only**, such as the dev UI and the Org.graph tab. It needs `--target <host:port>` equal to the resolved Neo4j, and it refuses a graph that holds any `Member` it did not write, i.e. any directory data. **No eval reads what it writes.**
 
 The JSON report includes a computed `flipGate` with explicit reasons; hermetic or filtered reports are ineligible. See the catalogue’s rollout criterion map and each scenario’s “A live pass proves” statement.

@@ -129,17 +129,18 @@ beforeAll(async () => {
         ],
         via,
       ),
-    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, via),
+    Router: () => rq('Router')('m', [{ name: 'neo4j', description: 'd' }], [], null, null, via),
     // Ten positional parameters, then the options bag. Counting matters more
     // than it looks: an extra `null` pushes `via` past the options slot, the
     // render silently falls back to the DECLARED Anthropic chain, and the
     // assertion below on `model` is what catches it.
     LoopController: () =>
-      rq('LoopController')('m', 'i', tools, [], null, null, null, null, null, null, via),
+      rq('LoopController')('m', 'i', tools, [], null, null, null, null, null, null, null, via),
     ActorController: () =>
-      rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, via),
+      rq('ActorController')('m', 'i', tools, [], null, null, null, null, null, null, via),
     Critic: () => rq('Critic')('i', [attempt], via),
-    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, via),
+    // Eight positional parameters (the last, `guide`, since #985), then the bag.
+    Synthesize: () => rq('Synthesize')('m', 'i', [], false, null, null, null, null, null, via),
     ResultDescribe: () => rq('ResultDescribe')('search', '{}', 'r', 'rows', via),
     ResultDescribeBatch: () =>
       rq('ResultDescribeBatch')(
@@ -147,13 +148,26 @@ beforeAll(async () => {
         via,
       ),
     CompactIntent: () => rq('CompactIntent')([], 'latest', via),
-    Planner: () => rq('Planner')('m', 'i', tools, null, via),
-    PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, via),
+    Planner: () => rq('Planner')('m', 'i', tools, null, null, via),
+    PlannerThinking: () => rq('PlannerThinking')('m', 'i', tools, null, null, via),
     // The reasoning twins: same positional shapes as their originals, then the
     // options bag — same counting rule as LoopController above — on the THINK
     // leaf, which is the twin's own wire shape.
     ControllerThinking: () =>
-      rq('ControllerThinking')('m', 'i', tools, [], null, null, null, null, null, null, viaThink),
+      rq('ControllerThinking')(
+        'm',
+        'i',
+        tools,
+        [],
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        viaThink,
+      ),
     CriticThinking: () => rq('CriticThinking')('i', [attempt], viaThink),
     // `boundary` (the markers' per-call code) sits before the bag (slice 8).
     ScreenUntrustedContent: () =>

@@ -22,10 +22,12 @@ a `dotenv` import (same convention as `../../sandbox/scripts/`).
 
 ## The scripts
 
-| File                 | Touches       | Destructive        |
-| -------------------- | ------------- | ------------------ |
-| `setup-org-graph.ts` | Neo4j schema  | only with `--wipe` |
-| `ingest-roster.ts`   | Graph → Neo4j | no (upsert)        |
+| File                     | Touches         | Destructive                                                  |
+| ------------------------ | --------------- | ------------------------------------------------------------ |
+| `setup-org-graph.ts`     | Neo4j schema    | only with `--wipe`                                           |
+| `ingest-roster.ts`       | Graph → Neo4j   | no (upsert)                                                  |
+| `seed-eval-members.ts`   | fixture → Neo4j | no (MERGE, additive; refuses a graph with directory data)    |
+| `backfill-member-ids.ts` | Neo4j → Neo4j   | no (sets `Member.id` only where absent; then its constraint) |
 
 ```sh
 # idempotent: creates missing constraints, deletes nothing
@@ -35,6 +37,19 @@ pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/setup-org-graph.ts --wipe
 
 pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/ingest-roster.ts
+
+# ten invented members (the Eval's fixture) for a local graph with NO directory
+# ingest; no eval reads them. --target must name the resolved Neo4j; it refuses a
+# graph holding any Member it did not write. createdBy 'eval-seed'; deletes nothing.
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/seed-eval-members.ts --target localhost:7687
+
+# ONE-OFF: give every Member written before ids an id (one transaction, counts
+# before and after, never overwriting one), then apply Member.id's constraint.
+# Idempotent; --target as for the seed. Prints counts only. --dry-run writes
+# nothing: member counts, ids it would assign, pre-v2 Knowledge nodes (no name),
+# and whether the constraint exists. A real run prints that report first.
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687 --dry-run
+pnpm dlx tsx --env-file=.env src/lib/org-graph/scripts/backfill-member-ids.ts --target localhost:7687
 ```
 
 A third, `smoke-pseudonymise.ts`, is run the same way but lives elsewhere:

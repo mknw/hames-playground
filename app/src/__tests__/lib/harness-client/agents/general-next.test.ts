@@ -148,6 +148,8 @@ const mocks = vi.hoisted(() => ({
   controller: vi.fn<ControllerFn>(),
   actor: vi.fn<ControllerFn>(),
   actorOptions: vi.fn(),
+  synthesizerOptions: vi.fn(),
+  guided: vi.fn(),
   critic: vi.fn<
     (
       _intent: string,
@@ -183,6 +185,15 @@ vi.mock('@hames-ai/harness-baml', async (original) => ({
   },
   createCriticAdapter: () => mocks.critic,
   createInjectionScreen: () => mocks.screen,
+  createSynthesizer: (options: unknown) => {
+    mocks.synthesizerOptions(options)
+    // The guided synthesizer, told apart from `bamlPatterns().synthesize` by `guided`;
+    // both answer through the one `synthesize` mock the other pins read.
+    return (input: Parameters<typeof mocks.synthesize>[0]) => {
+      mocks.guided(input)
+      return mocks.synthesize(input)
+    }
+  },
   bamlPatterns: () => ({
     planner: () => mocks.planner,
     synthesize: mocks.synthesize,
@@ -1113,6 +1124,73 @@ describe('general-next composition', () => {
     expect(composition.egress.addressSources).toEqual(['web', 'graph'])
     expect(result.status).not.toBe('error')
     expect(result.response).toBe('synthetic answer')
+  })
+
+  // Onboarding ("what can you do?"): synthesis carries a guide built from what this
+  // composition actually holds, and the host's examples page. MUTATION: hand
+  // `capabilityGuide` a fixed `web: ['search']` in general-next.server.ts, or drop
+  // `examplesPage: deps.examplesPage` there — the second and first case go red.
+  it('onboarding: the synthesizer guide names the composed tools and links the examples page', async () => {
+    await agent.createPatterns('synthetic-session', {
+      ...deps,
+      examplesPage: { href: '/use-cases', label: 'Use cases' },
+    })
+    expect(mocks.synthesizerOptions).toHaveBeenCalledTimes(1)
+    const { guide } = mocks.synthesizerOptions.mock.calls[0][0] as { guide: string }
+    expect(guide).toContain('[Use cases](/use-cases)')
+    expect(guide).toContain('Read your Microsoft 365 mail')
+    expect(guide).toContain('Copy a OneDrive or SharePoint file')
+    expect(guide).toContain('Analyse uploaded files and numbers by running code')
+    expect(guide).toContain("organization's knowledge graph")
+    expect(guide).toContain('Search the public web.')
+    expect(guide).toContain('Look up developer library documentation.')
+    expect(guide).toContain('Search the documents uploaded to this conversation')
+    expect(guide).toContain('What it cannot do: send mail')
+  })
+
+  // The per-user gate contract (capability-guide.ts): a gate that filters at discovery
+  // removes a tool from the info route AND the guide, because both read one list.
+  // MUTATION: give the guide a wider list than the route's, resolved by the static
+  // catalog (`info: [...infoTools, 'search']`, `namespaceOf: deps.toolNamespaces`) — red.
+  it('onboarding: a deployment without web, library docs or ingest is not told it has them', async () => {
+    gateway.names = [...GRAPH.filter((name) => name !== 'graph_file_ingest'), 'read_neo4j_cypher']
+    const patterns = await agent.createPatterns('synthetic-session', {
+      ...deps,
+      graphFileIngest: false,
+    })
+    const { guide } = mocks.synthesizerOptions.mock.calls[0][0] as { guide: string }
+    expect(guide).not.toMatch(/web|library documentation|Copy a OneDrive/)
+    expect(guide).not.toContain('](')
+    expect(guide).toContain("organization's knowledge graph")
+    const info = walk(patterns).find((p) => p.name === 'simpleLoop')!
+    expect([...info.capabilities!.tools!]).toEqual(['read_neo4j_cypher'])
+  })
+
+  // Per-turn cost (#985 review): the guide rides only a turn that ran no route, judged
+  // on THIS turn even when the thread window carries the previous turn's record.
+  // MUTATION: `synthesize: guided` (unconditional) — turn 1 goes red; gate on
+  // `input.loopHistory` instead of `stepsThisTurn` — turn 2 goes red.
+  it('onboarding: the guide rides only a turn that dispatched no route', async () => {
+    choices = ['info-retrieval', 'answer']
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    const first = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      harness(...patterns)('synthetic task'),
+    )
+    expect(mocks.synthesize).toHaveBeenCalledTimes(1)
+    expect(mocks.synthesize.mock.calls[0][0].stepsThisTurn).toBeGreaterThan(0)
+    expect(mocks.guided).not.toHaveBeenCalled()
+
+    choices = ['answer']
+    await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(first.context), patterns, 'What can you do?'),
+    )
+    expect(mocks.guided).toHaveBeenCalledTimes(1)
+    const second = mocks.guided.mock.calls[0][0] as {
+      stepsThisTurn?: number
+      loopHistory?: unknown
+    }
+    expect(second.stepsThisTurn).toBe(0)
+    expect(second.loopHistory).toBeDefined()
   })
 
   it('P4: the office actor is GIVEN Graph readers and guarded ingest by exact name', async () => {
@@ -3281,5 +3359,65 @@ describe('general-next: the injection-ingress-guard classification (revision 6, 
     const documents = configs.find((c) => c.tools?.includes('retriever'))
     expect(documents?.ingressGuard).toBeDefined()
     expect(documents).not.toHaveProperty('screen')
+  })
+})
+
+// Lenny's Data, the opt-in third-party transport (LENNYS_DATA_MCP). The gateway
+// mock stands in for the transport here: the catalog's `lennys_` prefix rule
+// groups the name either way, and the transport itself is pinned in
+// app-tools/lennys-data.test.ts.
+describe("general-next with the opt-in Lenny's Data tools", () => {
+  const PM = 'lennys_search_archive'
+
+  // MUTATION: drop `...pmTools` from infoTools, or declare 'lennys' on the
+  // info guard unconditionally (the default-off half below goes red).
+  it('are absent by default, and when offered reach only the info route, guarded as lennys', async () => {
+    const off = await agent.createPatterns('pm-off-session', deps)
+    expect(collectToolNames(off[0])).not.toContain(PM)
+    const offInfo = walk(off).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
+    expect(offInfo.injectionGuard!.namespaces).not.toContain('lennys')
+    expect(composition.egress.addressSources).not.toContain('lennys')
+
+    gateway.names = [...gateway.names, PM]
+    const on = await agent.createPatterns('pm-on-session', deps)
+    const info = walk(on).find((p) => p.config.patternId === 'info' && p.injectionGuard)!
+    expect(info.injectionGuard!.namespaces).toContain('lennys')
+    expect(collectToolNames(info)).toContain(PM)
+    const office = walk(on).find((p) => p.config.patternId === 'doc')!
+    expect(collectToolNames(office)).not.toContain(PM)
+    expect(composition.egress.addressSources).toContain('lennys')
+  })
+
+  // The egress classification. MUTATION: add 'lennys' to the gate's `local`
+  // (the gate then refuses to build with a detector on a local tool), or drop
+  // `...pmTools` from the default detector selection (the pair becomes the
+  // `{ off, off }` default and the egress question is never asked).
+  it('every call is outgoing, with web search’s default detector pair, and the question is asked', async () => {
+    gateway.names = [...gateway.names, PM]
+    await agent.createPatterns('pm-detectors-session', deps)
+    expect(inferServer(PM)).toBe('lennys')
+    expect(composition.egress.local).not.toContain('lennys')
+    expect((composition.egress.detectors as { tools: Record<string, unknown> }).tools[PM]).toEqual({
+      nameMatch: 'evidence',
+      decide: 'on',
+    })
+
+    egressAnswer = () => 'personal'
+    mocks.controller.mockResolvedValueOnce({
+      action: {
+        reasoning: 'look up the archive',
+        tool_name: PM,
+        tool_args: '{"query":"synthetic colleague detail"}',
+        is_final: false,
+      },
+    })
+    const result = await run('self_deployed')
+    expect(egressStates).toHaveLength(1)
+    expect(egressStates[0]).toContain('synthetic colleague detail')
+    expect(gateway.calls).not.toContain(PM)
+    const refused = result.context.events.find(
+      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === PM,
+    )
+    expect(refused?.data).toMatchObject({ success: false })
   })
 })

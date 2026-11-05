@@ -186,6 +186,22 @@ describe('simpleLoop multi-call turns', () => {
     expect(result.events.filter((e) => e.type === 'error')).toEqual([])
   })
 
+  // #984 review: the joined per-call errors of an all-failed batch are bounded
+  // like the combined result. MUTATION: drop the `truncateTo` on the batch
+  // `error` → 2 × 20 000 chars reach the controller.
+  it('all sub-calls failed: the joined errors are bounded by maxResultChars', async () => {
+    const { DEFAULT_RUNTIME_CONFIG } = await import('@hames-ai/harness-patterns/runtime-config')
+    toolErrors.tool_a = 'A'.repeat(20_000)
+    toolErrors.tool_b = 'B'.repeat(20_000)
+    const { controller } = await runPattern([
+      batchAction({ tool: 'tool_a' }, [{ tool_name: 'tool_b', tool_args: '{}' }]),
+    ])
+
+    const seen = (controller.mock.calls[1][0] as ControllerInput).turns![0]!.tool_result!
+    expect(seen.error!.length).toBe(DEFAULT_RUNTIME_CONFIG.maxResultChars + '…[truncated]'.length)
+    expect(seen.error!.endsWith('…[truncated]')).toBe(true)
+  })
+
   it('sequential mode: in-order execution, stop on first failure, rest skipped', async () => {
     toolErrors.tool_b = 'boom'
     const { controller } = await runPattern(

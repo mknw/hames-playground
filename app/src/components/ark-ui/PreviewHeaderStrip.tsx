@@ -143,8 +143,10 @@ import {
 import {
   getPreviewHeaderState,
   igniteSelfDeployedBox,
+  keepPrivateTierWarm,
   type PreviewHeaderState,
 } from '~/lib/harness-client/preview-header.server'
+import { startKeepWarm } from '~/lib/private-tier-keep-warm'
 import { COLD_START_HEADLINE, coldStartBasisHint } from '~/lib/cold-start-format'
 import {
   formatCompactNumber,
@@ -371,6 +373,30 @@ const Metric = (props: { label: string; value: string; hint: string; children: J
   </div>
 )
 
+/**
+ * The server function's answer as a state the strip can render, or a throw.
+ *
+ * SolidStart's client RESOLVES rather than rejects on a response the app's own
+ * middleware refused — the cross-site check's `text/plain` 403, the rate
+ * limiter's 429 — handing back the body text as the value. Stored as state,
+ * that string made the `p50` hint read `latency.samples` off `undefined`, and
+ * the throw at the root layout blanked every page (#936). So the payload is
+ * checked before it becomes state, and anything else takes the error path the
+ * poll and the start button already have, carrying the refusal's own words.
+ */
+export function asHeaderState(value: unknown): PreviewHeaderState {
+  const v = value as Partial<PreviewHeaderState> | null
+  const isObject = (x: unknown) => typeof x === 'object' && x !== null
+  if (isObject(v) && isObject(v?.warmth) && isObject(v?.usage) && isObject(v?.latency)) {
+    return v as PreviewHeaderState
+  }
+  throw new Error(
+    typeof value === 'string' && value !== ''
+      ? value
+      : 'The server answered with something other than the preview status.',
+  )
+}
+
 export const PreviewHeaderStrip = () => {
   const [state, setState] = createSignal<PreviewHeaderState | null>(null)
   /** When THIS browser received the payload above. The countdown ticks against
@@ -410,7 +436,7 @@ export const PreviewHeaderStrip = () => {
 
   const load = async () => {
     try {
-      const next = await getPreviewHeaderState()
+      const next = asHeaderState(await getPreviewHeaderState())
       setState(next)
       setReceivedAt(Date.now())
       setError(null)
@@ -420,11 +446,14 @@ export const PreviewHeaderStrip = () => {
       // the one thing the strip must not keep saying about a running box.
       // `answering` counts because it is `ready` plus a turn (`largeWarmth`).
       if (next.warmth.state === 'ready' || next.warmth.state === 'answering') setIgniteError(null)
-    } catch {
+    } catch (err) {
       // A poll that cannot reach the server leaves the last known values on
       // screen rather than blanking the bar — but it must not keep presenting
-      // them as live, so the strip dims and says "stale".
-      setError('The preview status could not be refreshed.')
+      // them as live, so the strip dims and says "stale". The reason rides the
+      // `title`: a refusal names its cause (`asHeaderState`), and "could not be
+      // refreshed" alone sends whoever hovers it looking in the wrong place.
+      const why = err instanceof Error && err.message ? ` ${err.message}` : ''
+      setError(`The preview status could not be refreshed.${why}`)
     }
   }
 
@@ -432,6 +461,13 @@ export const PreviewHeaderStrip = () => {
     void load()
     const tick = setInterval(() => setNow(Date.now()), TICK_INTERVAL_MS)
     onCleanup(() => clearInterval(tick))
+    // Wake the private tier on load and keep it warm while this page is open and
+    // visible (owner, 2026-11-04). Mounted here because the strip renders only on
+    // signed-in routes (`Nav`), and the server refuses every other case itself:
+    // no session, the setting off, or a user on the Anthropic tier
+    // (`keepPrivateTierWarm`). A warmed answer re-reads the box state so the
+    // indicator follows without waiting for its own poll.
+    onCleanup(startKeepWarm({ ask: keepPrivateTierWarm, onWarmed: () => void load() }))
   })
 
   // The poll's RATE is a function of what the last poll said, so the interval
@@ -569,7 +605,7 @@ export const PreviewHeaderStrip = () => {
     setError(null)
     setIgniteError(null)
     try {
-      setState(await igniteSelfDeployedBox())
+      setState(asHeaderState(await igniteSelfDeployedBox()))
       setReceivedAt(Date.now())
     } catch (err) {
       // Surfaced, never swallowed, and on its OWN channel: a wake that failed is
@@ -646,6 +682,7 @@ export const PreviewHeaderStrip = () => {
             flex="~"
             items="center"
             gap="3"
+            min-w="0"
             op={error() ? '60' : '100'}
             transition="opacity"
           >
@@ -723,14 +760,28 @@ export const PreviewHeaderStrip = () => {
                 block whose width varies keeps moving what sits beside it (the
                 measured cost was a 1152-pixel diff in a run where nothing had
                 changed). Removed rather than stubbed, too: a stub would make the
-                visual test assert a layout the app never renders. */}
+                visual test assert a layout the app never renders.
+
+                `min-w="0"` + `overflow="x-auto"` is what keeps the strip inside a
+                phone-width viewport (#936): the five metrics need about 500px at
+                their fixed minimum widths, so at 390px a non-shrinking row pushed
+                every page into a horizontal scroll. Now this block is the one
+                thing that gives way — it scrolls within itself, and the warm
+                indicator before it stays in view. A region that scrolls must be
+                reachable without a pointer, hence the tab stop and its name. */}
             <div
               data-testid="preview-header-metrics"
+              role="group"
+              aria-label="Usage metrics"
+              tabIndex={0}
               flex="~"
               items="center"
               gap="3"
+              min-w="0"
+              overflow="x-auto"
               border="l ui-border-primary"
               p="l-3"
+              ring="2 transparent focus-visible:ui-accent/40"
             >
               <Metric
                 label="active"

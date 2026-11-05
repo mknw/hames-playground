@@ -75,7 +75,19 @@ describe.each(['AnthropicSonnet5', 'LargeQwen'])('Return contract (%s wire)', (c
   it('puts the plain-prose instruction only in the loop prompt', async () => {
     const options = { client, env: ENV }
     const actor = (
-      await b.request.ActorController('q', 'i', [], [], null, null, 1, 6, 'sequential', options)
+      await b.request.ActorController(
+        'q',
+        'i',
+        [],
+        [],
+        null,
+        null,
+        1,
+        6,
+        'sequential',
+        null,
+        options,
+      )
     ).body.text()
     expect(actor).not.toContain('For Return, use plain prose')
     expect(actor).not.toContain('plain prose (not JSON)')
@@ -92,6 +104,7 @@ describe.each(['AnthropicSonnet5', 'LargeQwen'])('Return contract (%s wire)', (c
           null,
           null,
           style,
+          null,
           options,
         )
       ).body.text()

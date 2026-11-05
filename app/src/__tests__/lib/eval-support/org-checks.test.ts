@@ -32,6 +32,7 @@ import {
   createSyntheticOrgGraph,
   orgGraphSnapshot,
   syntheticMentionsMember,
+  SYNTHETIC_MEMBERS,
 } from '../../../lib/eval-support/synthetic-org-graph'
 
 const EMPTY: OrgGraphSnapshot = { nodes: [], edges: [] }
@@ -269,9 +270,28 @@ describe('the synthetic org graph', () => {
   })
   it('names a member by full name or address in any case, by one part only capitalised', () => {
     expect(syntheticMentionsMember('ask TAMSIN ORRIN')).toBe(true)
-    expect(syntheticMentionsMember('mail dorrit.wexley@example.invalid')).toBe(true)
+    expect(syntheticMentionsMember('mail dorrit.wexley@example.com')).toBe(true)
     expect(syntheticMentionsMember('Mira said so')).toBe(true)
     expect(syntheticMentionsMember('a cedar tree')).toBe(false)
     expect(syntheticMentionsMember('Admiration')).toBe(false)
+  })
+  it('holds ten invented members: the ingest’s Member fields, plus the store’s node id', () => {
+    expect(SYNTHETIC_MEMBERS).toHaveLength(10)
+    const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    expect(new Set(SYNTHETIC_MEMBERS.map((m) => m.entraId)).size).toBe(10)
+    for (const m of SYNTHETIC_MEMBERS) {
+      expect(m.entraId).toMatch(v4)
+      expect(m.mail).toMatch(/^[a-z.]+@example\.com$/)
+    }
+    const nodes = orgGraphSnapshot(createSyntheticOrgGraph(['members'])).nodes
+    expect(new Set(nodes.map((n) => n.key)).size).toBe(10)
+    for (const n of nodes) {
+      expect(n.label).toBe('Member')
+      // The ingest writes the first four (`upsertMembers`) and never `id`; the
+      // synthetic store adds `id` so the seeds' edges can address the node.
+      expect(Object.keys(n.properties).sort()).toEqual(
+        ['displayName', 'entraId', 'jobTitle', 'mail', 'id'].sort(),
+      )
+    }
   })
 })

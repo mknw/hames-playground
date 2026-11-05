@@ -21,14 +21,21 @@ beforeAll(() => installDomStubs())
 
 const getPreviewHeaderState = vi.fn()
 const igniteSelfDeployedBox = vi.fn()
+const keepPrivateTierWarm = vi.fn()
 vi.mock('~/lib/harness-client/preview-header.server', () => ({
   getPreviewHeaderState: () => getPreviewHeaderState(),
   igniteSelfDeployedBox: () => igniteSelfDeployedBox(),
+  keepPrivateTierWarm: () => keepPrivateTierWarm(),
 }))
 
 const { render, waitFor, fireEvent } = await import('@solidjs/testing-library')
-const { PreviewHeaderStrip, POLL_INTERVAL_MS, IGNITE_LABEL, IGNITE_FAILED_LABEL } =
-  await import('../../../components/ark-ui/PreviewHeaderStrip')
+const {
+  PreviewHeaderStrip,
+  POLL_INTERVAL_MS,
+  IGNITE_LABEL,
+  IGNITE_FAILED_LABEL,
+  TICK_INTERVAL_MS,
+} = await import('../../../components/ark-ui/PreviewHeaderStrip')
 
 type State = Awaited<
   ReturnType<typeof import('~/lib/harness-client/preview-header.server').getPreviewHeaderState>
@@ -66,6 +73,14 @@ const state = (over: Partial<State> = {}): State =>
 beforeEach(() => {
   vi.clearAllMocks()
   getPreviewHeaderState.mockResolvedValue(state())
+  // Off by default so the cases below stay about the strip; the keep-warm
+  // describe turns it on.
+  keepPrivateTierWarm.mockResolvedValue({
+    enabled: false,
+    warmed: false,
+    nextInMs: null,
+    idleCapMs: null,
+  })
   igniteSelfDeployedBox.mockResolvedValue(
     state({
       warmth: warmth({ state: 'ready', secondsUntilScaledown: 300, scaledownSeconds: 300 }),
@@ -83,6 +98,43 @@ const indicator = (container: HTMLElement) =>
 async function mounted(container: HTMLElement) {
   await waitFor(() => expect(container.textContent).toContain('active'))
 }
+
+describe('keep warm while open (owner, 2026-11-04)', () => {
+  it('asks the server to wake the private tier as soon as the strip mounts', async () => {
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+    expect(keepPrivateTierWarm).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-reads the box state when a keep-warm call actually warmed it', async () => {
+    keepPrivateTierWarm.mockResolvedValue({
+      enabled: true,
+      warmed: true,
+      nextInMs: 100_000,
+      idleCapMs: 1_800_000,
+    })
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+    // The mount poll, plus the one the warmed answer asked for.
+    await waitFor(() => expect(getPreviewHeaderState).toHaveBeenCalledTimes(2))
+  })
+
+  it('stops asking once the strip is unmounted', async () => {
+    // Enabled with a far cadence, so the loop is alive and only the unmount can
+    // explain the missing second ask on the visibility event below.
+    keepPrivateTierWarm.mockResolvedValue({
+      enabled: true,
+      warmed: false,
+      nextInMs: 100_000,
+      idleCapMs: 1_800_000,
+    })
+    const { container, unmount } = render(() => <PreviewHeaderStrip />)
+    await mounted(container)
+    unmount()
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(keepPrivateTierWarm).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('the tier switch is gone from here', () => {
   it('offers no way to change a tier from the header', async () => {
@@ -520,6 +572,65 @@ describe('degradation', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// #936: SolidStart's client RESOLVES on a refusal from the app's own middleware
+// (the cross-site check's text/plain 403) with the body text as the value. The
+// strip stored that string as state and the `p50` hint read `latency.samples`
+// off `undefined` — a throw at the root layout, i.e. a blank app.
+// Mutation: drop `asHeaderState(...)` from `load()` → the first two go red
+// (the first never shows the chip; in the second the string state freezes the
+// countdown); drop it from `igniteBox` → the third does.
+describe('a refused call (#936)', () => {
+  const REFUSAL = 'Cross-site request refused: this route accepts requests only from pages on x'
+
+  it('says the status is unavailable, with the refusal in its title, when the FIRST poll is refused', async () => {
+    getPreviewHeaderState.mockResolvedValue(REFUSAL)
+    const { container } = render(() => <PreviewHeaderStrip />)
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-testid="preview-header-unavailable"]')).not.toBeNull(),
+    )
+    const chip = container.querySelector('[data-testid="preview-header-unavailable"]')!
+    expect(chip.getAttribute('title')).toContain('Cross-site request refused')
+    expect(container.textContent).not.toContain('active')
+  })
+
+  it('keeps the last values and says "stale" when a LATER poll is refused', async () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = render(() => <PreviewHeaderStrip />)
+      await vi.waitFor(() => expect(container.textContent).toContain('12.5k'))
+
+      getPreviewHeaderState.mockResolvedValue(REFUSAL)
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS + 1)
+
+      await vi.waitFor(() => expect(container.textContent).toContain('stale'))
+      expect(container.textContent).toContain('12.5k')
+      // The refusal must not have become the state. If it had, the countdown's
+      // memo throws reading it on the next tick, and the strip freezes on its
+      // last good frame — still saying "stale" and "12.5k", so only a number
+      // that should have MOVED can tell.
+      const before = indicator(container).textContent
+      await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS * 2)
+      expect(indicator(container).textContent).not.toBe(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a refused START as a failed start, not as a new state', async () => {
+    getPreviewHeaderState.mockResolvedValue(cold())
+    igniteSelfDeployedBox.mockResolvedValue(REFUSAL)
+
+    const { container } = render(() => <PreviewHeaderStrip />)
+    await waitFor(() => expect(container.textContent).toContain('cold'))
+    fireEvent.click(indicator(container))
+
+    await waitFor(() => expect(container.textContent).toContain(IGNITE_FAILED_LABEL))
+    const banner = container.querySelector('[data-testid="self-deployed-ignite-failed"]')!
+    expect(banner.getAttribute('title')).toContain('Cross-site request refused')
   })
 })
 

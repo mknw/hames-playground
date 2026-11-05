@@ -4,7 +4,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { buildGraphHarness } from './harness'
-import { shapeEvents, shapeMessages, localDayBounds } from '../../graph/graph-tools.server'
+import { shapeEvents, shapeMessages, localCalendarDay } from '../../graph/graph-tools.server'
+import { withRunFrame } from '@hames-ai/harness-patterns/run-frame.server'
 
 const h = buildGraphHarness()
 const { runAppTool, appToolDescriptions } = h
@@ -363,17 +364,73 @@ describe('graph_calendar_range', () => {
   })
 })
 
-describe('localDayBounds', () => {
-  it('returns naive local ISO bounds for the day (no Z — Graph applies Prefer tz)', () => {
-    const { start, end } = localDayBounds(new Date(2026, 6, 27, 15, 30))
-    expect(start).toBe('2026-07-27T00:00:00')
-    expect(end).toBe('2026-07-27T23:59:59')
-    expect(start.endsWith('Z')).toBe(false)
+describe('localCalendarDay', () => {
+  const at = Date.parse('2026-11-04T23:30:00Z')
+  it("is the user's local date, not the UTC one", () => {
+    expect(localCalendarDay(at, 'Europe/Brussels')).toBe('2026-11-05')
+    expect(localCalendarDay(at, 'UTC')).toBe('2026-11-04')
+    expect(localCalendarDay(at, 'America/New_York')).toBe('2026-11-04')
   })
 
-  it('applies a day offset, crossing month boundaries', () => {
-    expect(localDayBounds(new Date(2026, 6, 31, 12, 0), 1).start).toBe('2026-08-01T00:00:00')
-    expect(localDayBounds(new Date(2026, 7, 1, 12, 0), -1).start).toBe('2026-07-31T00:00:00')
+  it('applies a day offset as calendar days, across months and a DST change', () => {
+    expect(localCalendarDay(Date.parse('2026-07-31T12:00:00Z'), 'Europe/Brussels', 1)).toBe(
+      '2026-08-01',
+    )
+    expect(localCalendarDay(Date.parse('2026-08-01T12:00:00Z'), 'Europe/Brussels', -1)).toBe(
+      '2026-07-31',
+    )
+    // 2026-03-29 is 23 hours long in Brussels; a day is still a day.
+    expect(localCalendarDay(Date.parse('2026-03-28T23:30:00Z'), 'Europe/Brussels', 1)).toBe(
+      '2026-03-30',
+    )
+  })
+})
+
+describe("graph_calendar_today reads the user's day (RunFrame.clock)", () => {
+  const inTurn = <T>(iso: string, timeZone: string, fn: () => Promise<T>) =>
+    withRunFrame({ clock: { instant: Date.parse(iso), timeZone } }, fn)
+  const bounds = () => {
+    const q = new URL(lastCall()[1], 'https://graph.microsoft.com').searchParams
+    return [q.get('startDateTime'), q.get('endDateTime')]
+  }
+
+  // Mutation: compute the day from `new Date()` / the server zone (the old
+  // localDayBounds) → the day is 2026-11-04 on a UTC runner.
+  it('a Brussels user just after midnight UTC gets the local date, with offset bounds', async () => {
+    const res = await inTurn('2026-11-04T23:30:00Z', 'Europe/Brussels', () =>
+      runAppTool('graph_calendar_today', {}),
+    )
+    expect(res.data).toMatchObject({ day: '2026-11-05', timeZone: 'Europe/Brussels' })
+    // Graph treats a naive bound as UTC (Prefer only formats the response), so
+    // each bound carries its own offset. Mutation: send naive `T00:00:00`.
+    expect(bounds()).toEqual(['2026-11-05T00:00:00+01:00', '2026-11-06T00:00:00+01:00'])
+    expect(lastCall()[2].headers?.Prefer).toBe('outlook.timezone="Europe/Brussels"')
+  })
+
+  it('a day spanning the spring DST change has bounds with two offsets', async () => {
+    await inTurn('2026-03-29T10:00:00Z', 'Europe/Brussels', () =>
+      runAppTool('graph_calendar_today', {}),
+    )
+    expect(bounds()).toEqual(['2026-03-29T00:00:00+01:00', '2026-03-30T00:00:00+02:00'])
+  })
+
+  it('day_offset counts from the local date', async () => {
+    const res = await inTurn('2026-11-04T23:30:00Z', 'Europe/Brussels', () =>
+      runAppTool('graph_calendar_today', { day_offset: -1 }),
+    )
+    expect(res.data).toMatchObject({ day: '2026-11-04' })
+  })
+
+  it("graph_calendar_range reads dates in the turn's zone, over GRAPH_TIMEZONE", async () => {
+    vi.stubEnv('GRAPH_TIMEZONE', 'Asia/Tokyo')
+    try {
+      await inTurn('2026-11-04T12:00:00Z', 'Europe/Brussels', () =>
+        runAppTool('graph_calendar_range', { start: '2026-11-05', end: '2026-11-05' }),
+      )
+      expect(bounds()).toEqual(['2026-11-05T00:00:00+01:00', '2026-11-06T00:00:00+01:00'])
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 })
 

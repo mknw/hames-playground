@@ -38,6 +38,8 @@
  */
 import { domainToASCII, domainToUnicode } from 'node:url'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
+import { localDate } from '@hames-ai/harness-patterns/clock'
+import { currentClock } from '@hames-ai/harness-patterns/run-frame.server'
 import { embeddingProviderPassesEgress } from '@hames-ai/harness-patterns/stash/embeddings.server'
 import { GraphAuthRequiredError } from './graph-auth'
 import type { AppToolDefinition } from '../app-tools/registry'
@@ -215,9 +217,9 @@ export function shapeMe(raw: unknown): GraphMeResult {
 // Calendar
 // ============================================================================
 
-/** IANA timezone Graph should render event times in. Defaults to the server's
- *  own zone, which is right for a single-tenant deployment; override with
- *  `GRAPH_TIMEZONE` if the app and its users don't share one. */
+/** The deployment's zone for Graph reads made OUTSIDE a turn (no run-frame
+ *  clock): `GRAPH_TIMEZONE`, else the server's own zone. Inside a turn the
+ *  user's zone wins — see {@link userTimeZone}. */
 function graphTimeZone(): string {
   return (
     process.env.GRAPH_TIMEZONE?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
@@ -225,16 +227,37 @@ function graphTimeZone(): string {
 }
 
 /**
- * Local-day bounds as naive ISO strings (no `Z`). Graph interprets these in the
- * timezone from the `Prefer: outlook.timezone` header, so we must NOT send UTC
- * instants here — that would shift the day boundary.
+ * The zone "today", "since" and a date range mean for THIS call: the turn's
+ * clock (`RunFrame.clock`, the user's zone, the same one every prompt in the
+ * turn was told), else {@link graphTimeZone}. One zone per turn, so the
+ * calendar a model reads and the date it was given cannot disagree.
  */
-export function localDayBounds(now: Date, dayOffset = 0): { start: string; end: string } {
-  const d = new Date(now)
-  d.setDate(d.getDate() + dayOffset)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-  return { start: `${day}T00:00:00`, end: `${day}T23:59:59` }
+function userTimeZone(): string {
+  return currentClock()?.timeZone ?? graphTimeZone()
+}
+
+/** The turn's start instant — the "now" every prompt in the turn carries —
+ *  else the wall clock outside a turn. */
+function turnInstant(): number {
+  return currentClock()?.instant ?? Date.now()
+}
+
+/**
+ * The user's local calendar date at `instant`, shifted by `dayOffset` whole
+ * days. Calendar arithmetic, not instant arithmetic: adding 24h across a DST
+ * change can land on the wrong date, adding a day to a date cannot.
+ */
+export function localCalendarDay(instant: number, timeZone: string, dayOffset = 0): string {
+  const day = new Date(`${localDate({ instant, timeZone })}T00:00:00Z`)
+  day.setUTCDate(day.getUTCDate() + Math.trunc(dayOffset))
+  return day.toISOString().slice(0, 10)
+}
+
+/** The date after `day` (`YYYY-MM-DD`). */
+function nextCalendarDay(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
 }
 
 /** Calendar dates, not instants: UTC arithmetic keeps local midnight stable over DST. */
@@ -1578,14 +1601,21 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     },
     execute: async (args, { userId }) => {
       const offset = Number.isFinite(Number(args.day_offset)) ? Number(args.day_offset) : 0
-      const tz = graphTimeZone()
-      const { start, end } = localDayBounds(new Date(), offset)
+      // The user's day, from the turn's clock. The bounds carry their offset:
+      // Graph reads a bound's own offset and treats a naive one as UTC (Prefer
+      // only formats the response), so naive local bounds shifted the day by
+      // the user's UTC offset — a Brussels morning's first hour or two fell
+      // into "yesterday".
+      const tz = userTimeZone()
+      const day = localCalendarDay(turnInstant(), tz, offset)
+      const start = graphLocalMidnight(day, tz)
+      const end = graphLocalMidnight(nextCalendarDay(day), tz)
 
       // calendarView (not /events) so recurring series are expanded into
       // occurrences within the window.
       const raw = await graphFetch(
         userId,
-        `/me/calendarView?startDateTime=${start}&endDateTime=${end}` +
+        `/me/calendarView?startDateTime=${encodeURIComponent(start)}&endDateTime=${encodeURIComponent(end)}` +
           `&$select=subject,start,end,isAllDay,location,organizer,onlineMeetingUrl` +
           `&$orderby=start/dateTime&$top=50`,
         {
@@ -1596,7 +1626,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
       const events = stampAll(shapeEvents(raw), rawItems(raw), (e) => [
         recipientAddress(e.organizer),
       ])
-      return stamp({ timeZone: tz, day: start.slice(0, 10), events }, resultProvenance(events))
+      return stamp({ timeZone: tz, day, events }, resultProvenance(events))
     },
   })
 
@@ -1605,8 +1635,8 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     namespace: 'graph',
     description:
       "List the signed-in user's own calendar occurrences in an inclusive start/end date range (YYYY-MM-DD, at most 92 days). " +
-      'Events overlapping either boundary are included by calendarView. Dates mean local midnight in ' +
-      `${graphTimeZone()} (GRAPH_TIMEZONE when set, otherwise the server timezone); ` +
+      "Events overlapping either boundary are included by calendarView. Dates mean local midnight in the user's time zone " +
+      `(outside a chat turn: ${graphTimeZone()}, GRAPH_TIMEZONE when set, otherwise the server timezone); ` +
       'the response echoes the effective timezone and exclusive end. At most 200 events; truncated results ask for a narrower range.',
     inputSchema: {
       type: 'object',
@@ -1628,7 +1658,7 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
     },
     execute: async (args, { userId }) => {
       const { start, end } = rangeBounds(args)
-      const timezone = graphTimeZone()
+      const timezone = userTimeZone()
       const startWithOffset = graphLocalMidnight(start, timezone)
       const endWithOffset = graphLocalMidnight(end, timezone)
       const events: CalendarEvent[] = []
@@ -2296,7 +2326,12 @@ export function registerGraphConnectorTools(deps: GraphConnectorDeps): void {
         if (Number.isNaN(d.getTime())) {
           throw new Error(`since must be a date like 2026-07-01 (got "${args.since}").`)
         }
-        sinceClause = ` and receivedDateTime ge ${d.toISOString().slice(0, 10)}T00:00:00Z`
+        // The date's local midnight in the turn's zone, sent as its UTC instant:
+        // "since today" in Brussels starts at 23:00Z the day before, not 00:00Z.
+        // Outside a turn (no clock) it stays UTC midnight, as it always was.
+        const zone = currentClock()?.timeZone ?? 'UTC'
+        const since = new Date(graphLocalMidnight(d.toISOString().slice(0, 10), zone))
+        sinceClause = ` and receivedDateTime ge ${since.toISOString().replace(/\.\d{3}Z$/, 'Z')}`
       }
 
       const folder = direction === 'sent' ? 'sentitems' : 'inbox'

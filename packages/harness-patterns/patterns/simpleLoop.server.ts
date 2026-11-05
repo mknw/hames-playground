@@ -424,6 +424,7 @@ function batchOutcomes(round: LoopRound): SubCallOutcome[] {
 /** Did the round dispatch a tool (it breaks a run of unusable answers), count
  *  as an unusable answer, or neither? */
 function roundEffect(round: LoopRound): 'dispatched' | 'unusable' | 'none' {
+  if (round.recovery?.failure === 'return_rejected') return 'none'
   const a = round.action
   if (!a) return 'unusable' // an unparseable answer
   if (a.additional_calls && a.additional_calls.length > 0) {
@@ -458,7 +459,7 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
       },
     }
   }
-  if (action.is_final || action.tool_name === 'Return') return undefined
+  if ((action.is_final || action.tool_name === 'Return') && !recovery) return undefined
   const head = {
     n,
     reasoning: action.reasoning,
@@ -496,7 +497,9 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
         tool: action.tool_name,
         result: truncateTo(JSON.stringify(combined), p.maxResultChars),
         success: anySucceeded,
-        error: anySucceeded ? null : errors.join('; '),
+        // Bounded like the result: a tool's own failure text rides here (#440),
+        // and an unbounded one would fill every later controller prompt.
+        error: anySucceeded ? null : truncateTo(errors.join('; '), p.maxResultChars),
       },
       ...(expansions.length > 0 ? { expansions } : {}),
     }
@@ -515,7 +518,7 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
       tool: action.tool_name,
       result: truncateTo(resultStr, p.maxResultChars),
       success: result?.success ?? false,
-      error: result?.error ?? null,
+      error: result?.error == null ? null : truncateTo(result.error, p.maxResultChars),
     },
     ...(expansions.length > 0 ? { expansions } : {}),
   }
@@ -1226,21 +1229,41 @@ export function simpleLoop<T extends SimpleLoopData>(
         // collector, core no longer creates or hands one down.
         let controllerLlmCall: LLMCallRecord | undefined
         try {
-          const controllerResult = await controller({
-            userMessage: userContent,
-            intent,
-            // L14 (#225 Lane B3): the loop's allowlist IS the controller's
-            // advertised list — one declaration, on the seam.
-            tools: allowlist,
-            turns: trimmedTurns,
-            turn,
-            context: config?.schema,
-            priorResults,
-            fewShots,
-            multiCallMode: multiMode === 'off' ? undefined : multiMode,
-            planContext,
-            returnStyle,
-          })
+          const controllerResult = await controller(
+            {
+              userMessage: userContent,
+              intent,
+              // L14 (#225 Lane B3): the loop's allowlist IS the controller's
+              // advertised list — one declaration, on the seam.
+              tools: allowlist,
+              turns: trimmedTurns,
+              turn,
+              context: config?.schema,
+              priorResults,
+              fewShots,
+              multiCallMode: multiMode === 'off' ? undefined : multiMode,
+              planContext,
+              returnStyle,
+            },
+            {
+              // A thinking attempt that hit its cap or produced no answer is retried
+              // once without thinking inside the adapter; record the attempt it
+              // replaced, as the planner does, so it is not hidden behind the retry.
+              onRetry: (failedCall) => {
+                trackEvent(
+                  scope,
+                  'warning',
+                  {
+                    task: 'controller',
+                    message: 'The thinking controller hit its output cap or produced no answer.',
+                    fallback: 'Retry once without thinking on the same inference endpoint.',
+                  },
+                  true,
+                  failedCall,
+                )
+              },
+            },
+          )
           // Apply the contract's documented defaults ONCE, here, before the
           // action is recorded or read: `is_final` is optional (#159) and
           // absent means false. Every controller funnels through this point —
@@ -1310,6 +1333,18 @@ export function simpleLoop<T extends SimpleLoopData>(
         // Check if done (is_final flag OR tool_name === 'Return')
         if (action.is_final || action.tool_name === 'Return') {
           trackAction()
+          const feedback = await config?.validateReturn?.(action)
+          if (feedback !== undefined) {
+            const recovery: LoopRecoveryEventData = {
+              failure: 'return_rejected',
+              error: feedback,
+              turn,
+              maxTurns,
+            }
+            trackLoopRecovery(scope, recovery)
+            turns.push(projectRound({ n: turn, action, recovery, calls: [] }, projection)!)
+            continue
+          }
           scope.data = {
             ...scope.data,
             lastAction: action,

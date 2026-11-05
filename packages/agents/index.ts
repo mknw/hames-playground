@@ -20,4 +20,11 @@ export {
 } from './reference-extractor'
 export { errorBubble, replayMessages, warningBubble, type ReplayedMessage } from './replay'
 export type { GraphElement } from './types'
-export type { AgentData, AgentDefinition, AgentDeps, AgentGuards, SandboxAttach } from './types'
+export type {
+  AgentData,
+  AgentDefinition,
+  AgentDeps,
+  AgentGuards,
+  ExamplesPage,
+  SandboxAttach,
+} from './types'

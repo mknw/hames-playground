@@ -41,7 +41,7 @@
  * silently becomes a zero — "0 tests passed" and "I could not read the output"
  * are different facts and only one of them is a reason to ship.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -278,6 +278,12 @@ async function main(): Promise<void> {
   rmSync(SCRATCH, { recursive: true, force: true })
   mkdirSync(SCRATCH, { recursive: true })
   const startedAt = new Date().toISOString()
+  // The commit this run tested, read before the layers run and again after. A
+  // GO is recorded against it for a release promotion (deploy/follow/promote.py
+  // record-go), which refuses a report whose tree was not that clean commit
+  // throughout: uncommitted or untracked files (a suite can import an
+  // untracked one), or a commit or edit that landed during the run.
+  const atStart = treeState()
   const runs: LayerRun[] = LAYERS.map((layer) => ({
     layer,
     status: 'not attempted',
@@ -306,7 +312,10 @@ async function main(): Promise<void> {
   }
 
   const partial = Boolean(only || from)
-  const report = renderReport({ startedAt, runs, selected, stoppedAt, partial })
+  const atEnd = treeState()
+  const commit = atStart.commit
+  const dirty = atStart.dirty || atEnd.dirty || atEnd.commit !== atStart.commit
+  const report = renderReport({ startedAt, commit, dirty, runs, selected, stoppedAt, partial })
   mkdirSync(REPORT_DIR, { recursive: true })
   const file = path.join(REPORT_DIR, `${startedAt.replace(/[:.]/g, '-')}-release-check.md`)
   writeFileSync(file, report)
@@ -315,6 +324,13 @@ async function main(): Promise<void> {
   console.log(`\n${terminalSummary({ runs, selected, stoppedAt, partial })}`)
   console.log(`\nReport: ${path.relative(APP_DIR, file)}`)
   process.exit(stoppedAt ? 1 : 0)
+}
+
+/** HEAD and whether the tree differs from it, untracked files included
+ *  (ignored ones, like this report's own directory, are not). */
+function treeState(): { commit: string; dirty: boolean } {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: APP_DIR }).toString().trim()
+  return { commit: git('rev-parse', 'HEAD'), dirty: git('status', '--porcelain') !== '' }
 }
 
 function valueOf(args: string[], flag: string): string | undefined {
@@ -330,6 +346,8 @@ function valueOf(args: string[], flag: string): string | undefined {
 
 interface ReportInput {
   startedAt: string
+  commit: string
+  dirty: boolean
   runs: LayerRun[]
   selected: readonly Layer[]
   stoppedAt?: Layer
@@ -338,7 +356,7 @@ interface ReportInput {
 
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)}s`
 
-function verdict(input: Omit<ReportInput, 'startedAt'>): string {
+function verdict(input: Pick<ReportInput, 'stoppedAt' | 'partial'>): string {
   if (input.stoppedAt) return `NO-GO — ${input.stoppedAt.title} failed`
   if (input.partial) return 'PARTIAL — the layers named on the command line passed'
   return 'GO — every hermetic layer passed'
@@ -365,7 +383,7 @@ function countsCell(entry: LayerRun): string {
 
 /** The terminal half: short enough to read without scrolling, and it names the
  *  file rather than restating it. */
-function terminalSummary(input: Omit<ReportInput, 'startedAt'>): string {
+function terminalSummary(input: Omit<ReportInput, 'startedAt' | 'commit' | 'dirty'>): string {
   const lines = [`RELEASE CHECK: ${verdict(input)}`, '']
   for (const entry of input.runs) {
     const mark = entry.status === 'passed' ? '✓' : entry.status === 'failed' ? '✗' : '·'
@@ -387,6 +405,10 @@ function renderReport(input: ReportInput): string {
   out.push('')
   out.push(`- **Verdict:** ${verdict(input)}`)
   out.push(`- **Run:** ${input.startedAt} · ${seconds(total)}`)
+  out.push(
+    `- **Commit:** ${input.commit}` +
+      (input.dirty ? ' (working tree had uncommitted changes)' : ''),
+  )
   // "selected", not "attempted": on a NO-GO the layers above the failure were
   // selected and never run, and the table below says so per row. A header line
   // claiming they were attempted contradicts it, in the one report whose whole

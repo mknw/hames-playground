@@ -17,6 +17,7 @@
  * carry over unchanged in kind."
  */
 
+import { currentTimeBlock } from './time-block.server'
 import { Collector } from '@boundaryml/baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
@@ -24,6 +25,7 @@ import type {
   LLMResult,
   LoopTurn,
   SelectorFn,
+  SynthesisFn,
 } from '@hames-ai/harness-patterns/types'
 import { trimToFit } from '@hames-ai/harness-patterns/token-budget.server'
 import { unspotlight } from '@hames-ai/harness-patterns/guard'
@@ -46,6 +48,27 @@ assertServerOnImport()
 // ============================================================================
 
 export async function defaultSynthesize(input: CompactExecutionInput): Promise<LLMResult<string>> {
+  return synthesize(input, null)
+}
+
+/**
+ * A `compactExecution` synthesizer that also carries the agent's GUIDE: the
+ * deployment's own description of what the assistant can do and where its
+ * example questions are, which the prompt answers "what can you do?", "help"
+ * and "how do I start?" from. The agent builds the text from its real tool
+ * list (never a hand-written capability list), so the answer cannot claim a
+ * tool the deployment lacks. An empty guide is no guide: the request is then
+ * byte-identical to `defaultSynthesize`'s.
+ */
+export function createSynthesizer(options: { guide?: string } = {}): SynthesisFn {
+  const guide = options.guide?.trim() || null
+  return (input) => synthesize(input, guide)
+}
+
+async function synthesize(
+  input: CompactExecutionInput,
+  guide: string | null,
+): Promise<LLMResult<string>> {
   // Dynamic import to avoid circular dependencies
   const { b } = await import('./guarded-client.server')
   const startTime = Date.now()
@@ -129,6 +152,7 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
     hasError: input.hasError ?? false,
     errorMessage: input.errorMessage,
     references,
+    ...(guide ? { guide } : {}),
   }
 
   // Call with options always: the implementation-owned collector is in the
@@ -152,6 +176,11 @@ export async function defaultSynthesize(input: CompactExecutionInput): Promise<L
       // fence (data-fence.ts).
       input.memoryContext ? escapeDataFence(input.memoryContext) : null,
       references.length ? references : null,
+      // `guide`: deployment-authored, so it renders in the leading system block
+      // and is not fence-escaped; null renders nothing.
+      guide,
+      // `current_time`: the turn's clock block (time-block.server.ts), or null.
+      currentTimeBlock(),
       synthOpts,
     )
   } catch (e) {

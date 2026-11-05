@@ -16,6 +16,7 @@
  * - CriticFn(intent, previous_attempts)
  */
 
+import { currentTimeBlock } from './time-block.server'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type {
   ControllerAction,
@@ -25,6 +26,7 @@ import type {
   EventMetrics,
   ReturnStyle,
   ControllerInput,
+  ControllerHooks,
   ActorInput,
   PlannerFn,
   PlanCallResult,
@@ -46,6 +48,7 @@ import {
 import { drawFenceNonce } from '@hames-ai/harness-patterns/guard-gate.server'
 import { listTools as mcpListTools } from '@hames-ai/harness-patterns/mcp-client.server'
 import { gatewayDegradation } from '@hames-ai/harness-patterns/gateway-health.server'
+import { processTransports } from '@hames-ai/harness-patterns/tool-transport.server'
 import {
   activeTransportContext,
   activeTransports,
@@ -1038,7 +1041,12 @@ async function getToolDescriptions(refresh = false): Promise<ToolDescription[]> 
  *  newly-registered tools in subsequent attempts/turns. */
 export function invalidateToolDescriptions(): void {
   toolDescCache = null
+  lastMissReread = -Infinity
 }
+
+/** The shortest gap between two re-reads triggered by a missing tool. */
+const MISS_REREAD_MS = 30_000
+let lastMissReread = -Infinity
 
 /** Filter tool descriptions by names plus an optional regex pattern for
  *  dynamically-discoverable tools. `refresh: true` forces a fresh listTools()
@@ -1048,7 +1056,26 @@ async function filterToolDescriptions(
   toolNames: readonly string[],
   options?: { dynamicPattern?: RegExp; refresh?: boolean },
 ): Promise<ToolDescription[]> {
-  const all = await getToolDescriptions(options?.refresh)
+  let all = await getToolDescriptions(options?.refresh)
+  // A name this caller's allowlist holds and a PROCESS transport owns, but the
+  // shared cache lacks. The cache is process-wide and filled in whichever
+  // request scope reached it first, while a process transport's listing can
+  // depend on that scope (a per-user gated transport lists nothing for a user
+  // it does not serve) or can have failed during the fill. Either way the
+  // caller who holds the tool would be shown no description for the life of
+  // the process. Re-read once, in THIS caller's scope; a fill that holds more
+  // shows nothing extra to anyone, because every read is filtered by the
+  // caller's own allowlist below. Throttled, so a transport that stays down
+  // costs one re-read per window rather than one per call. Names no process
+  // transport owns (a scoped sandbox tool, a withheld one) never trigger it.
+  const cached = new Set(all.map((t) => t.name))
+  const missing = toolNames.some(
+    (name) => !cached.has(name) && processTransports().some((t) => t.ownsTool(name)),
+  )
+  if (missing && Date.now() - lastMissReread >= MISS_REREAD_MS) {
+    lastMissReread = Date.now()
+    all = await getToolDescriptions(true)
+  }
   const nameSet = new Set(toolNames)
   const pattern = options?.dynamicPattern
   return all.filter((t) => nameSet.has(t.name) || (pattern?.test(t.name) ?? false))
@@ -1109,6 +1136,7 @@ export function createLoopControllerAdapter(
   const call = async (
     input: ControllerInput,
     passedCollector?: Collector,
+    hooks?: ControllerHooks,
   ): Promise<ControllerCallResult> => {
     const { b } = await import('./guarded-client.server')
     const startTime = Date.now()
@@ -1210,6 +1238,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
+          currentTimeBlock(),
           baseOpts,
         )
         // The collector, not the routing intention, proves that this response
@@ -1242,6 +1271,7 @@ export function createLoopControllerAdapter(
           input.multiCallMode,
           input.planContext,
           input.returnStyle,
+          currentTimeBlock(),
           baseOpts,
         )
       }
@@ -1294,6 +1324,23 @@ export function createLoopControllerAdapter(
         // default; no public fallback; no further corrective retry here.
         const retryClient = selfDeployedNonThinkingClientFor(role)
         if (!retryClient) throw wrapAsLLMCallError(e, functionName, variables, startTime, collector)
+        // Keep the failed thinking attempt and the retry in separate collectors,
+        // each accounted once (the planner's rule): wrapping the failure prices
+        // the attempt the retry replaces, and `onRetry` hands its record — with
+        // the parser trace it produced — to the loop, which records it as a
+        // `warning`. Without this a cap-hit twin left no event and no usage
+        // sample, so the retry's `LoopController` record was all anyone saw.
+        const failedCall = wrapAsLLMCallError(
+          e,
+          functionName,
+          variables,
+          startTime,
+          collector,
+        ).llmCall
+        const failedTrace = thinkingFrom(selected)
+        if (failedCall && failedTrace.kind === 'trace')
+          failedCall.parsedOutput = { reasoning: failedTrace.text }
+        hooks?.onRetry?.(failedCall)
         const retryCollector = new Collector('LoopController')
         try {
           const retryOpts = { ...override, collector: retryCollector, client: retryClient }
@@ -1318,6 +1365,7 @@ export function createLoopControllerAdapter(
               input.multiCallMode,
               input.planContext,
               input.returnStyle,
+              currentTimeBlock(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1348,6 +1396,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
+            currentTimeBlock(),
             retryOpts,
           )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
@@ -1395,6 +1444,7 @@ export function createLoopControllerAdapter(
             input.multiCallMode,
             input.planContext,
             input.returnStyle,
+            currentTimeBlock(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(
@@ -1431,7 +1481,7 @@ export function createLoopControllerAdapter(
     first: ControllerInput | string,
     ...rest: unknown[]
   ): Promise<ControllerCallResult> => {
-    if (typeof first !== 'string') return call(first)
+    if (typeof first !== 'string') return call(first, undefined, rest[0] as ControllerHooks)
     // Legacy positional form — see the overload doc on `ControllerFn`.
     const [
       intent,
@@ -1552,7 +1602,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
     let llmCall: LLMCallRecord | undefined
     try {
       if (requestedThinking) {
-        const answer = await b.PlannerThinking(user_message, intent, tools, context, baseOpts)
+        const answer = await b.PlannerThinking(
+          user_message,
+          intent,
+          tools,
+          context,
+          currentTimeBlock(),
+          baseOpts,
+        )
         const selected = selectedCall()
         // The collector, not the routing intention, proves that this response
         // came from a trace-exposing leaf. A mixed chain cannot satisfy this.
@@ -1572,7 +1629,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
         if (trace.kind !== 'trace') warning = 'no thinking trace'
         plan = { ...answer, reasoning: trace.kind === 'trace' ? trace.text : '' }
       } else {
-        plan = await b.Planner(user_message, intent, tools, context, baseOpts)
+        plan = await b.Planner(user_message, intent, tools, context, currentTimeBlock(), baseOpts)
       }
       llmCall = extractLLMCallData(collector, functionName, variables, startTime, plan)
     } catch (e) {
@@ -1643,6 +1700,7 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
               intent,
               tools,
               context,
+              currentTimeBlock(),
               retryOpts,
             )
             const transport = (request: HTTPRequest | null | undefined) => {
@@ -1662,7 +1720,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
               )
             }
           }
-          plan = await b.Planner(user_message, intent, tools, context, retryOpts)
+          plan = await b.Planner(
+            user_message,
+            intent,
+            tools,
+            context,
+            currentTimeBlock(),
+            retryOpts,
+          )
           if (selectedCall(retryCollector)?.clientName !== retryClient) {
             throw new Error('Planner retry did not select the original private-tier client')
           }
@@ -1677,7 +1742,14 @@ export function createPlannerAdapter(toolNames: string[]): PlannerFn {
           ? [context, retry.guidance].filter(Boolean).join('\n\n')
           : context
         try {
-          plan = await b.Planner(user_message, intent, tools, retryContext, baseOpts)
+          plan = await b.Planner(
+            user_message,
+            intent,
+            tools,
+            retryContext,
+            currentTimeBlock(),
+            baseOpts,
+          )
           llmCall = extractLLMCallData(collector, 'Planner', variables, startTime, plan)
         } catch (retryError) {
           throw wrapAsLLMCallError(retryError, 'Planner', variables, startTime, collector)
@@ -1764,6 +1836,17 @@ export interface ActorAdapterOptions {
  * listing per call ensures the LLM is aware of tools created in earlier
  * turns of the same session (the Docker MCP gateway persists them across turns).
  */
+/** The non-thinking client the actor takes when its role resolves to a thinking
+ *  leaf. A thinking leaf is only ever resolved on the private tier
+ *  (`assertThinkingOverride`), so an absent answer is a broken invariant and
+ *  refuses rather than falling through to the role's Anthropic default. */
+function nonThinkingControllerClient(): string {
+  const client = selfDeployedNonThinkingClientFor('controller')
+  if (!client)
+    throw new Error('ActorController: a thinking controller client resolved off the private tier')
+  return client
+}
+
 export function createActorControllerAdapter(
   toolsOrOptions: string[] | ActorAdapterOptions,
 ): ActorFn & LegacyActorFn {
@@ -1867,7 +1950,23 @@ export function createActorControllerAdapter(
     // else — including a genuine structured-output failure, a network error or
     // a pre-call throw — is wrapped as `LLMCallError` so the observability
     // panel keeps the captured prompt/variables drill-down.
-    const baseOpts = { ...clientOverrideFor('controller'), collector }
+    //
+    // NO REASONING TWIN: the actor shares the `controller` ROLE with the loop
+    // controller, so a `controller` pattern that is reasoning-configured
+    // (`PRIVATE_REASONING_ROLES`) resolves this role to a thinking leaf — and
+    // `ActorController` is not designated for one, so the call used to be sent
+    // with thinking on and then refused after accounting (`accountBamlCall`),
+    // killing every actorCritic attempt. The `actor` pattern has no twin
+    // (`reasoning-roles.server.ts`), so it keeps its original function on the
+    // route-resolved NON-thinking client of the same box, the client a twin's
+    // corrective retry already takes. A hidden thinking leaf (a registry chain)
+    // is not a known thinking client and is still refused by the leaf policy.
+    const resolved = clientOverrideFor('controller')
+    const actorOverride =
+      resolved && THINKING_CLIENTS.has(resolved.client)
+        ? { ...resolved, client: nonThinkingControllerClient() }
+        : resolved
+    const baseOpts = { ...actorOverride, collector }
     let action: ControllerAction
     try {
       action = await b.ActorController(
@@ -1880,6 +1979,7 @@ export function createActorControllerAdapter(
         input.attemptNumber,
         input.maxAttempts,
         input.multiCallMode,
+        currentTimeBlock(),
         baseOpts,
       )
     } catch (e) {
@@ -1901,6 +2001,7 @@ export function createActorControllerAdapter(
             input.attemptNumber,
             input.maxAttempts,
             input.multiCallMode,
+            currentTimeBlock(),
             baseOpts,
           )
           const llmCall = extractLLMCallData(

@@ -118,11 +118,19 @@ export function memoryRecalledCheck(
   turn: number,
   facts: readonly string[],
 ): Check {
-  const recalled = turnOf(trace, turn)?.recalled ?? []
+  const t = turnOf(trace, turn)
+  const recalled = t?.recalled ?? []
+  // The stage a miss happened at: rows read, rows past the floors, the skip reason and
+  // the gate's label — counts and labels only, never a memory's text.
+  const why = t?.recall
+    ? ` · considered ${t.recall.considered}, survivors ${t.recall.survivors}` +
+      (t.recall.gate ? `, gate ${t.recall.gate}` : '') +
+      (t.recall.skipped ? `, skipped ${t.recall.skipped}` : '')
+    : ''
   return check(
     `turn ${turn}: recall attached ${facts.join(' · ')}`,
     facts.every((f) => recalled.some((r) => r.content.includes(f))),
-    JSON.stringify(recalled.map((r) => r.content)),
+    JSON.stringify(recalled.map((r) => r.content)) + why,
   )
 }
 

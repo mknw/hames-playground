@@ -1,10 +1,12 @@
 /** Real package agent + real harness, with synthetic dependencies on every tool edge. */
 import type { AgentDefinition, AgentDeps, AgentGuards } from '@hames-ai/agents'
 import type { MCPToolDescription } from '@hames-ai/harness-patterns'
+import type { MemoryRecalledEventData } from '@hames-ai/harness-patterns/types'
 import type { ConversationDriver, ConversationScenario, ConversationTrace } from './types'
 import { agentModuleUrl } from '../../src/lib/eval-support/package-layout'
 import { liveDescriptions } from '../../src/lib/eval-support/live-descriptions'
 import { projectCountArgs } from '../../src/lib/eval-support/tool-arguments'
+import { USE_CASES_LABEL, USE_CASES_PATH } from '../../src/lib/use-cases'
 import {
   SANDBOX_FILE_TOOLS,
   createSyntheticSandbox,
@@ -24,8 +26,13 @@ import type {
   MemoryScenario,
   MemoryTurnTrace,
 } from '../../src/lib/eval-support/memory-scenario'
+import { fetchEnvelope, fetchRefusal } from '../../src/lib/eval-support/fetch-envelope'
 import type { fixtureInference } from './fixture-inference'
-import type { OrgScenario, OrgTurnTrace } from '../../src/lib/eval-support/org-scenario'
+import type {
+  OrgDraftCall,
+  OrgScenario,
+  OrgTurnTrace,
+} from '../../src/lib/eval-support/org-scenario'
 
 const NOTES =
   'Lantern release date: 2030-04-12. Target count: 50. North revenue: 47. South revenue: 19. Hosting overspend: 5.'
@@ -222,6 +229,9 @@ const NAMESPACES: Record<string, string> = {
   'resolve-library-id': 'context7',
   'get-library-docs': 'context7',
   graph_mail_recent: 'graph',
+  // Owned by the synthetic transport, with NO shared fixture: a row that calls it
+  // brings its own payload in `toolData` (45 does), so no row reads another's day.
+  graph_calendar_today: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
   sandbox_read: 'sandbox',
@@ -277,7 +287,10 @@ export async function createDriver(
     namespaceFor: (name: string) => NAMESPACES[name],
     listTools: async () => descriptions.filter((t) => !isSandboxTool(t.name)),
     callTool: async (name: string, args: Record<string, unknown>) => {
+      // The fetch server refuses an argument its schema rejects, before fetching (#989).
+      const refused = name === 'fetch' ? fetchRefusal(args) : undefined
       const success =
+        refused === undefined &&
         name !== 'write_neo4j_cypher' &&
         !(scenario?.failFirstTurn && turn === 0 && name === 'read_neo4j_cypher')
       trace?.tools.push({ name, args, success, turn })
@@ -286,9 +299,10 @@ export async function createDriver(
           success: false,
           data: null,
           error:
-            name === 'write_neo4j_cypher'
+            refused ??
+            (name === 'write_neo4j_cypher'
               ? 'Graph is read-only; write refused.'
-              : 'Synthetic service unavailable; retry on the next user turn.',
+              : 'Synthetic service unavailable; retry on the next user turn.'),
         }
       // Argument-aware where the four graph facts diverge: a TOTAL-count ask over
       // Project (the same shape the scenarios' own arg predicate grades) keeps returning
@@ -317,7 +331,11 @@ export async function createDriver(
                 : GRAPH_RELATIONSHIPS,
         }
       }
-      return { success: true, data: scenario?.toolData?.[name] ?? FIXTURES[name] }
+      const data = scenario?.toolData?.[name] ?? FIXTURES[name]
+      // A canned page reads as the production fetch server returns one (03, #775).
+      if (name === 'fetch' && typeof data === 'string')
+        return { success: true, data: fetchEnvelope(data, args) }
+      return { success: true, data }
     },
   }
   // The runner also supplies a loopback gateway for the shared catalog read.
@@ -384,6 +402,8 @@ export async function createDriver(
       })),
     }),
     quoteMemoriesToDecider: privateDecisionRun,
+    // The production host's examples page (session.server.ts), from the same constant.
+    examplesPage: { href: USE_CASES_PATH, label: USE_CASES_LABEL },
     createRedisBackend: () => ({
       name: 'redis',
       type: 'keyword',
@@ -441,7 +461,19 @@ export async function createDriver(
       for (const [name, content] of UPLOADS) documents.set(name, content)
       const sessionId = `eval-${key.agent}-${next.id}`
       return withRunFrame(
-        { inference: { tier: 'self_deployed' }, hitl: { attended: false } },
+        {
+          inference: { tier: 'self_deployed' },
+          hitl: { attended: false },
+          // A scenario's fixed clock (45): the host's per-turn slot, held for the scenario.
+          ...(next.clock
+            ? {
+                clock: {
+                  instant: Date.parse(next.clock.instant),
+                  timeZone: next.clock.timeZone,
+                },
+              }
+            : {}),
+        },
         async () => {
           // Per-user memory is wired for the scenarios that name it and for no other one,
           // so no other scenario pays a recall or a store step.
@@ -610,11 +642,20 @@ async function memorySeams(live: boolean) {
           // store step can change a row, so the trace holds what recall actually handed on.
           const lastUser = ctx.events.findLastIndex((e) => e.type === 'user_message')
           const rows = store.snapshot()
-          const recalled = ctx.events
+          const recalledEvents = ctx.events
             .slice(lastUser)
             .filter((e) => e.type === 'memory_recalled')
+          const recalled = recalledEvents
             .flatMap((e) => (e.data as { attached?: string[] }).attached ?? [])
             .flatMap((id) => rows.filter((r) => r.id === id))
+          // Why recall attached what it did, so a live miss names its stage (05, 2026-11-04).
+          const recallData = recalledEvents.at(-1)?.data as MemoryRecalledEventData | undefined
+          const recall = recallData && {
+            considered: recallData.considered,
+            survivors: recallData.survivors,
+            ...(recallData.skipped ? { skipped: recallData.skipped } : {}),
+            ...(recallData.gate ? { gate: recallData.gate.label } : {}),
+          }
           const report = await settleMemory(ctx, memoryStoreConfig(config), {
             conversationId: session,
           })
@@ -691,6 +732,7 @@ async function memorySeams(live: boolean) {
               : {}),
             ...(answer ? { answer } : {}),
             recalled,
+            ...(recall ? { recall } : {}),
             inputs: [...inputs],
           })
         },
@@ -727,9 +769,36 @@ async function orgSeams(live: boolean) {
   }) as unknown as typeof baseDecide
   Object.defineProperty(decide, 'supportedTypes', { get: () => baseDecide.supportedTypes })
   if (baseDecide.limits) Object.assign(decide, { limits: baseDecide.limits })
-  const loop = hook.createOrgDraftLoop({
-    controller: createLoopControllerAdapter(undefined, { role: 'orgDraft' }),
-  })
+  const { amendRunFrame } = await import('@hames-ai/harness-patterns/run-frame.server')
+  type ControllerFn = import('@hames-ai/harness-patterns').ControllerFn
+  // The draft loop runs in a scratch context whose events the graded trace never
+  // holds, so its completions are recorded here for the capture (LD-23).
+  let draftCalls: OrgDraftCall[] = []
+  const baseController = createLoopControllerAdapter(undefined, { role: 'orgDraft' })
+  const recordingController: ControllerFn = Object.assign(
+    async (input: Parameters<ControllerFn>[0]) => {
+      try {
+        const result = await baseController(input)
+        draftCalls.push({
+          outcome: 'completion',
+          ...(result.llmCall?.clientName !== undefined && { client: result.llmCall.clientName }),
+          ...(result.llmCall?.rawOutput !== undefined && { rawOutput: result.llmCall.rawOutput }),
+        })
+        return result
+      } catch (err) {
+        const llmCall = (err as { llmCall?: { clientName?: string; rawOutput?: string } }).llmCall
+        draftCalls.push({
+          outcome: 'error',
+          error: err instanceof Error ? err.message : String(err),
+          ...(llmCall?.clientName !== undefined && { client: llmCall.clientName }),
+          ...(llmCall?.rawOutput !== undefined && { rawOutput: llmCall.rawOutput }),
+        })
+        throw err
+      }
+    },
+    { limits: baseController.limits },
+  )
+  const loop = hook.createOrgDraftLoop({ controller: recordingController })
   const mentionsMember = synthetic.syntheticMentionsMember
   const owners = { $userA: EVAL_OWNER, $userB: 'eval-other-user', $driverUserId: EVAL_OWNER }
 
@@ -744,9 +813,13 @@ async function orgSeams(live: boolean) {
         store,
         ontology: ORG_ONTOLOGY,
         decide,
-        draft: async (input: { userMessage: string; schema: string }) => {
+        // The draft reads the scenario's own synthetic org graph, the one its
+        // candidate is validated against — never the route's project graph.
+        draft: async (input: Parameters<typeof loop>[0]) => {
           inputs.push(input.userMessage)
-          return loop(input)
+          return amendRunFrame({ transports: [synthetic.syntheticOrgDraftTransport(store)] }, () =>
+            loop(input),
+          )
         },
         owner: () => owner,
         enabled: () => true,
@@ -770,6 +843,7 @@ async function orgSeams(live: boolean) {
         beginTurn(as?: MemoryOwnerId) {
           if (as) owner = as
           inputs = []
+          draftCalls = []
           held = undefined
         },
         async endTurn(
@@ -857,6 +931,7 @@ async function orgSeams(live: boolean) {
             ...(proposal ? { proposal: { requestId: proposal.requestId, elements } } : {}),
             ...(answer ? { answer } : {}),
             inputs: [...inputs],
+            draftCalls: [...draftCalls],
           })
         },
         trace: () => ({ seed, final: synthetic.orgGraphSnapshot(store), turns, owners }),

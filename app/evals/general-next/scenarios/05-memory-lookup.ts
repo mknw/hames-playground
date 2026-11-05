@@ -13,7 +13,9 @@ export const scenario: ConversationScenario = {
   expectedTools: [],
   expectedRoutes: [],
   answerIncludes: ['LANTERN-2'],
-  turnAnswerIncludes: [['Lantern'], ['LANTERN-2']],
+  // Turn 1 names no remembered content, and recall is relevance-gated: it attaches
+  // nothing there on the production embedder (#982), so only turn 2 grades recall.
+  turnAnswerIncludes: [[], ['LANTERN-2']],
   artifacts: [],
   forbiddenTools: [],
   noTools: true,

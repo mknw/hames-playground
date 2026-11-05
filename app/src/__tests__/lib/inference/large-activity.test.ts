@@ -53,14 +53,23 @@ describe('largeScaledownSeconds', () => {
 
   it('falls back rather than rendering "scaling down now, forever"', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    for (const bad of ['0', '-5', 'soon', '']) {
+    // '0.5' is the #308 case: positive as parsed, `0` once floored.
+    // A silent fallback would hide a misconfigured deployment behind a
+    // plausible countdown, so EACH bad value must warn, not merely the run:
+    // a silent `seconds > 0 ? seconds : DEFAULT` after the original check
+    // would still warn for '0' and pass a loop-wide assertion.
+    for (const bad of ['0', '-5', 'soon', '', '0.5']) {
+      warn.mockClear()
       process.env.LARGE_LLM_SCALEDOWN_SECONDS = bad
       expect(largeScaledownSeconds()).toBe(DEFAULT_LARGE_LLM_SCALEDOWN_SECONDS)
+      expect(warn, `no warning for ${JSON.stringify(bad)}`).toHaveBeenCalledTimes(1)
     }
-    // A silent fallback would hide a misconfigured deployment behind a
-    // plausible countdown.
-    expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it('floors a fractional window rather than refusing every fraction', () => {
+    process.env.LARGE_LLM_SCALEDOWN_SECONDS = '1.5'
+    expect(largeScaledownSeconds()).toBe(1)
   })
 })
 

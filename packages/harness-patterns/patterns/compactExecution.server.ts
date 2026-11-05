@@ -131,6 +131,8 @@ function buildSynthesisInputFromView(
       let returnOnlyText: string | undefined
       // True when a loop history was built from failed calls alone.
       let failedOnlyHistory = false
+      // Steps of the thread THIS turn authored; set below when a history is built.
+      input.stepsThisTurn = 0
 
       // Build loop history from events if available
       if (toolEvents.length > 0 || actionEvents.length > 0) {
@@ -258,6 +260,7 @@ function buildSynthesisInputFromView(
           // (#614). Carried beside it, never in `response`: a synthesizer that
           // takes `response` over the history would lose the failure instead.
           if (!real.some((it) => mine.has(it) && succeeded.has(it))) failedOnlyHistory = true
+          input.stepsThisTurn = real.filter((it) => mine.has(it)).length
           input.loopHistory = {
             iterations: real,
             startTime: toolEvents[0]?.ts ?? Date.now(),

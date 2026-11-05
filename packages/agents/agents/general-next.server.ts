@@ -28,11 +28,13 @@ import {
   createDecideAdapter,
   createInjectionScreen,
   createLoopControllerAdapter,
+  createSynthesizer,
 } from '@hames-ai/harness-baml'
 import { assertServerOnImport } from '@hames-ai/harness-patterns/assert.server'
 import type { ByTier, ScreenMode } from '@hames-ai/harness-patterns'
 import { INGRESS_POLICY_DEFAULT, SCREEN_POLICY_BY_TIER } from '../types'
 import type { AgentData, AgentDefinition, AgentDeps, SandboxAttach } from '../types'
+import { capabilityGuide } from './capability-guide'
 import { withInfoDocumentReferences } from './info-document-references.server'
 import { getGraphSchema } from './graph-schema.server'
 import { NEO4J_READ_ONLY_CONTEXT } from './neo4j-fewshots.server'
@@ -153,7 +155,10 @@ async function createPatterns(
     ...(deps.graphFileIngest === true ? ['graph_file_ingest'] : []),
   ].filter((name) => available.has(name))
   const docTools = tools.context7 ?? []
-  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools]
+  // Lenny's Data (third-party product-management archive): present only when the
+  // host's opt-in transport is on (LENNYS_DATA_MCP), so absent by default.
+  const pmTools = tools.lennys ?? []
+  const infoTools = [...(tools.neo4j ?? []), ...(tools.web ?? []), ...docTools, ...pmTools]
   const officeAttach: SandboxAttach = {
     id: `${sessionId}:office`,
     sessionId,
@@ -256,7 +261,12 @@ async function createPatterns(
   // The guard refuses a declared namespace that matches no catalog tool, so the
   // optional server is declared only when the gateway offers it.
   const infoGuard = {
-    namespaces: ['web', 'neo4j', ...(docTools.length ? ['context7'] : [])],
+    namespaces: [
+      'web',
+      'neo4j',
+      ...(docTools.length ? ['context7'] : []),
+      ...(pmTools.length ? ['lennys'] : []),
+    ],
     catalog: tools.all,
     spotlight: 'always' as const,
     screen: {
@@ -358,7 +368,9 @@ async function createPatterns(
     fetchTools,
     toolTags: toolTagsFor(tools.all),
     detectors: (() => {
-      const search = (tools.web ?? []).filter((name) => !fetchTools.includes(name))
+      // Lenny's Data tools carry model-written query text to a third party, as
+      // web search does, so they get the same default pair.
+      const search = [...(tools.web ?? []).filter((name) => !fetchTools.includes(name)), ...pmTools]
       const pair = {
         nameMatch: deps.guards?.egressNameMatch ?? 'evidence',
         decide: deps.guards?.egressDecide ?? 'on',
@@ -374,7 +386,13 @@ async function createPatterns(
     })(),
     // Like the info guard, context7 only when the gateway offers it: the gate
     // refuses, on every turn, a source namespace no catalog tool resolves to.
-    addressSources: ['web', ...(docTools.length ? ['context7'] : []), 'graph'],
+    // Lenny's Data is published third-party content, like library docs.
+    addressSources: [
+      'web',
+      ...(docTools.length ? ['context7'] : []),
+      ...(pmTools.length ? ['lennys'] : []),
+      'graph',
+    ],
     roster: deps.egressRoster,
     decide: createDecideAdapter(),
     // The composition root validates these bounds at boot.
@@ -412,10 +430,16 @@ async function createPatterns(
           'info-retrieval': {
             pattern: info,
             description:
-              'Look things up in the knowledge graph, on the public web and in library docs; cannot open files uploaded to this conversation.\n' +
-              'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs).',
+              'Look things up in the knowledge graph, on the public web and in library docs' +
+              (pmTools.length ? ", and in Lenny's Data's product-management archive" : '') +
+              '; cannot open files uploaded to this conversation.\n' +
+              'Tools: graph query (read_neo4j_cypher), web (search, fetch), library docs (resolve-library-id, get-library-docs)' +
+              (pmTools.length ? ', product-management archive (lennys_* tools)' : '') +
+              '.',
             capability:
-              'Read the knowledge graph; search or fetch public web sources and library documentation.',
+              'Read the knowledge graph; search or fetch public web sources and library documentation' +
+              (pmTools.length ? "; search Lenny's Data's newsletter and podcast archive" : '') +
+              '.',
             siblingResults: ['retriever'],
           },
           'read-documents': {
@@ -449,6 +473,22 @@ async function createPatterns(
       ),
     ),
   )
+  // "What can you do?" is answered from what this composition actually holds,
+  // read from the lists the routes run with (capability-guide.ts states the
+  // contract a per-user tool gate must keep): the office route's Graph and
+  // sandbox tools, the info route's tools under Tools()'s own namespaces, the
+  // retriever route, memory if wired, and the host's page of example questions.
+  const guided = createSynthesizer({
+    guide: capabilityGuide({
+      office: collectToolNames(office),
+      info: infoTools,
+      namespaceOf: (name) =>
+        Object.entries(tools).find(([ns, list]) => ns !== 'all' && list?.includes(name))?.[0],
+      documents: true,
+      memory: deps.memory !== undefined,
+      examplesPage: deps.examplesPage,
+    }),
+  })
   const patterns = [
     orchestrator,
     compactExecution<AgentData>({
@@ -457,7 +497,10 @@ async function createPatterns(
       // Records of the previous turn too (`threadTurns`), but errors of this turn only.
       viewConfig: { fromPatterns: ['orchestrator'], fromLastNTurns: 1 },
       threadTurns: 2,
-      synthesize: baml.synthesize,
+      // The guide rides only a turn that ran no route (`stepsThisTurn` 0):
+      // onboarding is answered directly, and a turn with tool results does not
+      // pay ~400 uncached prompt tokens for a block it is told to ignore.
+      synthesize: (input) => (input.stepsThisTurn ? baml.synthesize(input) : guided(input)),
       liveEvents: true,
     }),
   ]
@@ -484,6 +527,7 @@ export const generalNextAgent: AgentDefinition = {
     'web_search',
     'fetch',
     'context7',
+    'lennys-data (app-side, hosted, opt-in)',
     'graph (app-side, per-user)',
     'office sandbox',
     'Data Stash',

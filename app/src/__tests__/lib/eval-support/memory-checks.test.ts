@@ -162,6 +162,22 @@ describe('memoryRecalled and noForeignMemory', () => {
     expect(memoryRecalledCheck(t, 2, ['short bullet points']).pass).toBe(true)
     expect(memoryRecalledCheck(t, 1, ['short bullet points']).pass).toBe(false)
   })
+  // MUTATION (red): drop the `why` suffix from memoryRecalledCheck's detail — a live miss
+  // no longer says whether the gate skipped or the floors rejected (05, 2026-11-04).
+  it('a miss names its stage in the detail, with no memory text', () => {
+    const t = trace({
+      turns: [
+        turn({ recall: { considered: 1, survivors: 0, gate: 'retrieve' } }),
+        turn({ recall: { considered: 1, survivors: 1, gate: 'skip', skipped: 'gate' } }),
+      ],
+    })
+    expect(memoryRecalledCheck(t, 1, ['Lantern']).detail).toBe(
+      '[] · considered 1, survivors 0, gate retrieve',
+    )
+    expect(memoryRecalledCheck(t, 2, ['Lantern']).detail).toBe(
+      '[] · considered 1, survivors 1, gate skip, skipped gate',
+    )
+  })
   it('another owner’s row fails; the turn owner’s own passes', () => {
     const own = trace({
       turns: [turn({ owner: 'eval-other-user', recalled: [row({ owner: 'eval-other-user' })] })],

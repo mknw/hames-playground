@@ -32,6 +32,15 @@ import { assertPackageLayout } from '../../src/lib/eval-support/package-layout'
 import { grade } from '../../src/lib/eval-support/conversation-checks'
 import { guardTurnCounts } from '../../src/lib/eval-support/guard-report'
 import { CaptureLog, captureEnabled } from '../../src/lib/eval-support/capture'
+import {
+  EVAL_REASONING_PATTERNS,
+  THINKING_TWINS,
+  enterThinking,
+  parseThinking,
+  reasoningSummary,
+  thinkingComparison,
+  thinkingModes,
+} from '../../src/lib/eval-support/thinking-mode'
 import type { ConversationDriver, ConversationResult } from './types'
 import { scenarios } from './index'
 
@@ -101,6 +110,10 @@ async function main() {
     })
   }
   poisonPublicProviders(process.env)
+  // EVAL_THINKING (default off): read after .env is loaded, so an inherited reasoning
+  // setting is refused before any wake. `compare` runs each scenario in both modes.
+  const thinking = parseThinking(process.env)
+  const modes = thinkingModes(thinking)
   // All model calls use the production private-role map. No EVAL_CLIENT overrides.
   process.env.USE_SELF_DEPLOYED_INFERENCE = '1'
   const liveCatalog = live
@@ -137,10 +150,12 @@ async function main() {
   const budget = new SpendBudget(cap, rates.eurPerUsdRate())
   const results: ConversationResult[] = []
   let wakeDetail: string | undefined
-  const jobs = picked.map((s) => ({
-    scenario: s,
-    key: { agent: candidate, scenario: s.id, tier: 'self_deployed' as const },
-  }))
+  const jobs = picked.flatMap((s) =>
+    modes.map((mode) => ({
+      scenario: s,
+      key: { agent: candidate, scenario: s.id, tier: 'self_deployed' as const, thinking: mode },
+    })),
+  )
   const file = resolve(
     'evals/reports',
     `${new Date().toISOString().replace(/[:.]/g, '-')}-general-next.json`,
@@ -153,12 +168,33 @@ async function main() {
   let active: SpendKey | undefined
   let started = 0
   let driver: ConversationDriver | undefined
+  // The thinking-on vs thinking-off table (`thinking-mode.ts`): one line per
+  // scenario, one cell per mode that ran.
+  const thinkingReport = (rows: ConversationResult[]) => ({
+    selection: thinking,
+    modes,
+    patterns: modes.includes('on') ? EVAL_REASONING_PATTERNS : [],
+    twins: modes.includes('on') ? THINKING_TWINS : [],
+    comparison: thinkingComparison(
+      picked.map((s) => s.id),
+      modes,
+      rows.map((r) => ({ ...r, thinking: r.thinking ?? 'off' })),
+      (id, statuses) =>
+        candidateScenarioStatus(picked.find((s) => s.id === id)!.priority, statuses),
+      (id, mode) => {
+        const row = budget.rows.find((r) => r.scenario === id && r.thinking === mode)
+        return row ? row.observerUsd + row.infrastructureUsd + row.tailUsd : 0
+      },
+    ),
+  })
   const write = () => {
     const small = smallInfraRate()
     // Every attempt of a re-run scenario is its own row (#842); a scenario with no
     // graded attempt yet falls back to the not-run/gated row.
     const rows = jobs.flatMap(({ key }): ConversationResult[] => {
-      const attempts = results.filter((r) => r.agent === key.agent && r.scenario === key.scenario)
+      const attempts = results.filter(
+        (r) => r.agent === key.agent && r.scenario === key.scenario && r.thinking === key.thinking,
+      )
       if (attempts.length > 0) return attempts
       return [
         {
@@ -183,8 +219,10 @@ async function main() {
             picked.length === scenarios.length,
             candidate,
             scenarios,
-            rows as ConversationResult[],
+            // The gate is a statement about the shipped configuration: thinking off.
+            rows.filter((r) => r.thinking === 'off') as ConversationResult[],
           ),
+          thinking: thinkingReport(rows),
           // RECORDED, not run: `general` was removed, so these are its last live results.
           generalBaselineRecorded: GENERAL_BASELINE,
           hermeticCaveat: live
@@ -243,7 +281,12 @@ async function main() {
     process.exit(1)
   }
   const { observeLlmUsage } = await import('@hames-ai/harness-patterns/llm-usage-observer.server')
-  const observer = createSpendObserver({ budget, live, onStop: stop })
+  const observer = createSpendObserver({
+    budget,
+    live,
+    onStop: stop,
+    privateClients: clients.PRIVATE_TIER_CLIENTS,
+  })
   const unobserve = observeLlmUsage(observer.observe)
   const timer = setInterval(() => {
     tick()
@@ -319,40 +362,51 @@ async function main() {
           // it as passing when 2 of the 3 attempts pass. Every other priority runs once.
           // A first-attempt pass runs once; a scenario that throws is not a graded
           // failure and gets no re-run.
-          let attempt = 0
-          while (attempt < (job.scenario.priority === 'must' ? MUST_RERUN_ATTEMPTS : 1)) {
-            attempt++
-            try {
-              const trace = await driver.run(job.scenario, active)
-              const checks = grade(job.scenario, trace, false)
-              if ((await takeEgressAttempts?.())?.length)
-                checks.push({
-                  name: 'no unexpected egress',
-                  pass: false,
-                  detail: 'Hermetic egress backstop refused requests',
+          // The mode's reasoning setting scopes exactly this scenario's attempts: the
+          // wake above is mode-independent, and the next job sets its own.
+          const leaveThinking = enterThinking(active.thinking ?? 'off', process.env)
+          try {
+            let attempt = 0
+            while (attempt < (job.scenario.priority === 'must' ? MUST_RERUN_ATTEMPTS : 1)) {
+              attempt++
+              try {
+                const runStarted = Date.now()
+                const trace = await driver.run(job.scenario, active)
+                const durationMs = Date.now() - runStarted
+                const checks = grade(job.scenario, trace, false)
+                if ((await takeEgressAttempts?.())?.length)
+                  checks.push({
+                    name: 'no unexpected egress',
+                    pass: false,
+                    detail: 'Hermetic egress backstop refused requests',
+                  })
+                const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
+                capture?.add(active, trace, status === 'fail')
+                results.push({
+                  ...active,
+                  attempt,
+                  status,
+                  checks,
+                  durationMs,
+                  reasoning: reasoningSummary(trace.turns.flatMap((t) => t.events)),
+                  guards: guardTurnCounts(trace.turns),
                 })
-              const status = checks.length > 0 && checks.every((c) => c.pass) ? 'pass' : 'fail'
-              capture?.add(active, trace, status === 'fail')
-              results.push({
-                ...active,
-                attempt,
-                status,
-                checks,
-                guards: guardTurnCounts(trace.turns),
-              })
-              // First failure earns exactly two more attempts, pass or fail.
-              if (attempt === 1 && status === 'pass') break
-            } catch (err) {
-              capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
-              results.push({
-                ...active,
-                status: 'fail',
-                checks: [],
-                error: err instanceof Error ? err.message : 'Scenario threw',
-              })
-              break
+                // First failure earns exactly two more attempts, pass or fail.
+                if (attempt === 1 && status === 'pass') break
+              } catch (err) {
+                capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
+                results.push({
+                  ...active,
+                  status: 'fail',
+                  checks: [],
+                  error: err instanceof Error ? err.message : 'Scenario threw',
+                })
+                break
+              }
+              if (budget.stopped) break
             }
-            if (budget.stopped) break
+          } finally {
+            leaveThinking()
           }
         } catch (err) {
           capture?.addError(active, err instanceof Error ? err.message : 'Scenario threw')
@@ -376,8 +430,10 @@ async function main() {
     // passed 2 of its 3 re-run attempts is a pass here and in the gate, while a
     // scenario that failed before any attempt (a throw, a wake failure) still fails
     // the run. Gated and not-run scenarios are reported, not failed.
-    process.exitCode = picked.some((s) => {
-      const rows = results.filter((r) => r.agent === candidate && r.scenario === s.id)
+    process.exitCode = jobs.some(({ scenario: s, key }) => {
+      const rows = results.filter(
+        (r) => r.agent === candidate && r.scenario === s.id && r.thinking === key.thinking,
+      )
       const attemptRows = rows.filter((r) => r.attempt !== undefined)
       if (attemptRows.length > 0)
         return (

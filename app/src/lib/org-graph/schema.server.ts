@@ -5,7 +5,9 @@
  *
  *  - {@link ensureOrgGraphSchema} applies the ontology's constraints and is
  *    safe to run on every boot. It **never** deletes anything. Every statement
- *    is `IF NOT EXISTS`, so a second run is a no-op.
+ *    is `IF NOT EXISTS`, so a second run is a no-op. `Member.id`'s constraint
+ *    waits until no member lacks an id (one read decides; see
+ *    `MEMBER_ID_CONSTRAINT_STATEMENT`).
  *  - {@link wipeAndApplyOrgGraphSchema} clears the graph first. It is the
  *    one-shot migration authorised for the switch to an organisational-only
  *    graph and nothing else, so it refuses to run unless the caller passes the
@@ -32,6 +34,8 @@ import { getNeo4jDriver } from '@hames-ai/connectors/neo4j/client'
 import {
   CONSTRAINT_NAMES,
   CONSTRAINT_STATEMENTS,
+  MEMBERS_WITHOUT_ID_CYPHER,
+  MEMBER_ID_CONSTRAINT_STATEMENT,
   NON_CONFORMING_CYPHER,
   conformanceParams,
 } from './ontology'
@@ -90,6 +94,13 @@ async function applyConstraints(): Promise<void> {
     // a parallel apply turns one clear failure into an unordered pile of them.
     for (const statement of CONSTRAINT_STATEMENTS) {
       await session.run(statement)
+    }
+    // Only once every member has an id: on a graph the ingest filled before
+    // members had one, the backfill script applies it after backfilling. No
+    // row back is not "none missing" — the constraint then waits.
+    const row = (await session.run(MEMBERS_WITHOUT_ID_CYPHER)).records[0]
+    if (row && toCount(row.get('missing')) === 0) {
+      await session.run(MEMBER_ID_CONSTRAINT_STATEMENT)
     }
   } finally {
     await session.close()

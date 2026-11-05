@@ -604,8 +604,9 @@ export async function ensureSessionIngested(
 // ============================================================================
 
 /** Most chunks one search will ask the index for while looking past hits that are
- *  filtered out (see {@link searchDocuments}). */
-const MAX_SEARCH_SPAN = 200
+ *  filtered out (see {@link searchDocuments}) — and so the most hits one search
+ *  can return: the ceiling a caller-supplied `k` is clamped to. */
+export const MAX_SEARCH_SPAN = 200
 
 /** Document flag reads in flight at once while filtering one batch of hits. */
 const FLAG_READ_CONCURRENCY = 4
@@ -678,7 +679,9 @@ async function visibleHits(
     return v
   }
 
-  let span = k
+  // The first query is bounded too: a caller's `k` above the ceiling would
+  // otherwise be one oversized vector query before the widening cap applies.
+  let span = Math.min(k, MAX_SEARCH_SPAN)
   for (;;) {
     const hits = await fetchBatch(span)
 

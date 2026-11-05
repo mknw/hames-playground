@@ -123,6 +123,7 @@ export const actorUnparseableFeedbackScenario: Scenario = {
         2, // attempt_n
         6, // max_attempts
         undefined, // multi_call_mode
+        null,
         ctx.opts('actor', collector),
       )
       checks.push(
@@ -227,6 +228,7 @@ export const criticRejectAndReviseScenario: Scenario = {
       2, // attempt_n
       3, // max_attempts
       undefined, // multi_call_mode
+      null,
       ctx.opts('actor', actorCollector),
     )
     const sameCommand =

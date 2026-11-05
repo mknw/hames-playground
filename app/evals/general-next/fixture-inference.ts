@@ -125,12 +125,17 @@ export async function fixtureInference() {
           case 'LoopController':
           case 'ActorController': {
             // The org-knowledge draft loop (slice 7): its schema names the ontology. It
-            // Returns the scenario's scripted draft at once; absent, an empty draft.
+            // Wraps the scripted assertions in the explicit verdict envelope; absent, no proposal.
             if (fn === 'LoopController' && prompt.includes('ORGANIZATIONAL ONTOLOGY')) {
               result = {
                 reasoning: 'Synthetic org draft',
                 tool_name: 'Return',
-                tool_args: scenario.org?.turns[turnIndex]?.model?.draft ?? '{"assertions":[]}',
+                tool_args: scenario.org?.turns[turnIndex]?.model?.draft
+                  ? JSON.stringify({
+                      verdict: 'propose',
+                      ...JSON.parse(scenario.org.turns[turnIndex].model!.draft!),
+                    })
+                  : JSON.stringify({ verdict: 'no-proposal', reason: 'No scripted candidate' }),
                 is_final: true,
               }
               break
@@ -153,19 +158,21 @@ export async function fixtureInference() {
                   ? {
                       command: `python3 -c "# lantern-notes.md lantern-sales.csv ${scenario.artifacts.join(' ')}"`,
                     }
-                  : name?.startsWith('graph_')
-                    ? { limit: 10 }
-                    : {
-                        query:
-                          name === 'read_neo4j_cypher'
-                            ? 'MATCH (p:Project) RETURN count(p) AS count'
-                            : 'Next.js release notes',
-                        url: 'https://nextjs.org/blog/next-15-5',
-                        // A message that names a page is read at that page (28's fetch).
-                        ...(given ? { url: given } : {}),
-                        libraryName: 'solid-js',
-                        context7CompatibleLibraryID: '/solidjs/solid',
-                      },
+                  : name === 'graph_calendar_today'
+                    ? { day_offset: 0 }
+                    : name?.startsWith('graph_')
+                      ? { limit: 10 }
+                      : {
+                          query:
+                            name === 'read_neo4j_cypher'
+                              ? 'MATCH (p:Project) RETURN count(p) AS count'
+                              : 'Next.js release notes',
+                          url: 'https://nextjs.org/blog/next-15-5',
+                          // A message that names a page is read at that page (28's fetch).
+                          ...(given ? { url: given } : {}),
+                          libraryName: 'solid-js',
+                          context7CompatibleLibraryID: '/solidjs/solid',
+                        },
               ),
               // The actor cannot exit actorCritic itself: is_final only summons the critic,
               // which is the exit authority, so the actor sets it on its LAST scripted tool.
@@ -183,9 +190,13 @@ export async function fixtureInference() {
           case 'Synthesize':
             result = scenario.memory
               ? memoryAnswer(prompt, scenario.memory.turns[turnIndex]?.model?.reply)
-              : scenario.failFirstTurn && turnIndex === 0
-                ? 'The lookup failed: synthetic service unavailable. No count is known.'
-                : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
+              : scenario.guideAnswer
+                ? guideAnswer(prompt)
+                : scenario.clock
+                  ? timeAnswer(prompt)
+                  : scenario.failFirstTurn && turnIndex === 0
+                    ? 'The lookup failed: synthetic service unavailable. No count is known.'
+                    : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
           case 'CompactIntent':
@@ -208,6 +219,15 @@ export async function fixtureInference() {
           default:
             throw new Error(`Unrecognised fixture inference function ${fn}`)
         }
+        // A thinking twin (`EVAL_THINKING`): answer the way a box with a reasoning
+        // parser does, the trace in the message's separate `reasoning` field and a
+        // content-only envelope (the twins' output types omit `reasoning`), so the
+        // adapter's trace restore is what fills the field. Never inline `</think>`.
+        const thinking = body.chat_template_kwargs?.enable_thinking === true
+        if (thinking && result && typeof result === 'object' && 'reasoning' in result) {
+          const { reasoning: _written, ...answer } = result as Record<string, unknown>
+          result = answer
+        }
         value = {
           id: 'fixture',
           model: body.model,
@@ -217,6 +237,7 @@ export async function fixtureInference() {
               message: {
                 role: 'assistant',
                 content: typeof result === 'string' ? result : JSON.stringify(result),
+                ...(thinking ? { reasoning: `Synthetic ${fn} thinking trace.` } : {}),
               },
               finish_reason: 'stop',
             },
@@ -296,4 +317,37 @@ function memoryAnswer(prompt: string, reply: string | undefined): string {
   ]
     .filter(Boolean)
     .join(' ')
+}
+
+/**
+ * The scripted Synthesize of an onboarding scenario answers from the capability guide
+ * its prompt CARRIED — never from the scenario's expected facts — so "the answer links
+ * the examples page" and "the answer claims nothing the deployment lacks" decide what
+ * the agent's guide said on this composition.
+ */
+function guideAnswer(prompt: string): string {
+  const open = '--- ASSISTANT GUIDE'
+  const at = prompt.indexOf(open)
+  const begin = at < 0 ? -1 : prompt.indexOf('\n', at)
+  const end = begin < 0 ? -1 : prompt.indexOf('--- END ASSISTANT GUIDE ---', begin)
+  return end < 0
+    ? 'I can help with many things.'
+    : `Here is what I can do. ${prompt.slice(begin, end).trim()}`
+}
+
+/**
+ * The scripted Synthesize of a clocked scenario (45) answers from the CURRENT TIME block it
+ * was HANDED and from the tool results in the same prompt, and from nothing else — so "the
+ * answer carries the user's local date" is decided by what the run's clock put in the prompt.
+ * No block, no date: the answer says it does not know.
+ */
+function timeAnswer(prompt: string): string {
+  const at = prompt.indexOf('CURRENT TIME')
+  const line = at < 0 ? undefined : prompt.slice(at).split('\n')[1]?.trim()
+  return [
+    line ? `Today is ${line.replace(/,\s*\d{2}:\d{2}.*$/, '')}.` : "I don't know today's date.",
+    prompt.includes('Design review')
+      ? 'This afternoon: Design review at 14:00.'
+      : 'I could not read your calendar.',
+  ].join(' ')
 }

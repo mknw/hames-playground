@@ -15,11 +15,13 @@
  * provenance-conflict no-op both depend on it.
  *
  * The embedder here is for HERMETIC runs: a deterministic bag of stemmed content words,
- * plus one axis every text shares (the production embedder's query instruction —
- * "retrieve relevant memories about the user" — is what lets a generic "what do you
- * remember about me" reach a memory at all; this axis stands in for it). A live run
- * passes the production embedder instead. Every similarity a scenario relies on is
- * pinned in `synthetic-memory.test.ts`. Synthetic data only.
+ * plus one small axis every text shares, so two texts with a couple of content words in
+ * common land near the production embedder's scores (a content question vs. its memory:
+ * 0.57 here, 0.55 measured). The axis must stay too small to carry a question that names
+ * no content: "what do you remember about me" scores 0.27 here and 0.14 on the production
+ * embedder, under the 0.5 floor in both (#982). A live run passes the production embedder
+ * instead. Every similarity a scenario relies on is pinned in `synthetic-memory.test.ts`.
+ * Synthetic data only.
  */
 import type { MemoryConfig } from '@hames-ai/harness-patterns'
 import type {
@@ -76,8 +78,9 @@ export const SEED_MEMORIES: Readonly<Record<SeedName, Seed>> = {
 // ---------------------------------------------------------------------------
 
 const DIMENSIONS = 1024
-/** The shared "about the user" axis; its square (4) is every pair's baseline overlap. */
-const USER_AXIS = 2
+/** The shared axis; its square (1) is every pair's baseline overlap. Kept small enough
+ *  that it never lifts a content-free question over the semantic floor (#982). */
+const USER_AXIS = 1
 const STOPWORDS = new Set(
   (
     'a an the and or but if of to in on for at by with from as is are was were be been am ' +

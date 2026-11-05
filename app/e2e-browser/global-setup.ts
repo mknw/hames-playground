@@ -238,6 +238,14 @@ export function browserServerEnv(
     // one parked wake stays one parked wake. What the poll RETRIES is covered a
     // layer down, in `app/e2e/scenarios/08-cold-start-ux` and `large-wake.test.ts`.
     LARGE_LLM_WAKE_ATTEMPT_TIMEOUT_MS: String(10 * 60 * 1000),
+    // Keep-warm-while-open OFF. Its default is on, and with the 2s window above
+    // every open page would wake the fake box on load and touch it every 5s, so
+    // no scenario could see a cold box, a parked wake would be joined by the
+    // page, and the wake counts scenarios 2 and 9 assert would move with page
+    // timing. What it does is a request decision, not something painted, so it
+    // is pinned at layer 1 (`keep-warm-while-open.test.ts`, `preview-header.test.ts`,
+    // `private-tier-keep-warm.test.ts`).
+    PRIVATE_TIER_WARM_WHILE_OPEN: '0',
     // The Anthropic half, which has no such seam. See
     // `src/lib/inference/dev-fake-inference.server.ts`.
     E2E_FAKE_INFERENCE_URL: backend.llm.baseUrl,
@@ -257,6 +265,7 @@ export function browserServerEnv(
 
     BAML_LOG: process.env.BAML_LOG ?? 'warn',
     EXA_TOOLS: 'off', // The browser suite is hermetic: no hosted MCP discovery.
+    LENNYS_DATA_MCP: 'off', // Nor the hosted Lenny's Data server.
   }
 }
 

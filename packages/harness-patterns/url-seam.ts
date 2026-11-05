@@ -163,3 +163,117 @@ export function interpretUrlSpans(
   }
   return { spans: result, destinations }
 }
+
+// ============================================================================
+// Offset map (slice 5)
+// ============================================================================
+
+/**
+ * One rewrite in a pass, in that pass's INPUT coordinates: the code units
+ * `[start, end)` became `length` code units. A strip is `length: 0`, an
+ * insertion is `start === end`.
+ */
+export interface TextEdit {
+  readonly start: number
+  readonly end: number
+  readonly length: number
+}
+
+/** One recorded pass: its edits plus, for each edit, its range in the pass's
+ *  OUTPUT and the net length change of every edit before it. */
+interface Pass {
+  readonly inStart: readonly number[]
+  readonly inEnd: readonly number[]
+  readonly outStart: readonly number[]
+  readonly outEnd: readonly number[]
+  /** `shift[i]`: summed `length - (end - start)` of edits `0 … i-1`. */
+  readonly shift: readonly number[]
+}
+
+/** How many leading entries of the nondecreasing `values` satisfy `ok`. */
+function prefixCount(values: readonly number[], ok: (v: number) => boolean): number {
+  let lo = 0
+  let hi = values.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (ok(values[mid])) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/**
+ * The explicit offset map from an ORIGINAL string to the string a sequence of
+ * rewrite passes made of it (`docs/plan/url-interpretation-seam.md`, slice 5).
+ * The ingress sanitizer records each rule's pass, so a span found in the text
+ * at a later rule's pass can be located in the original leaf (`toOriginal`),
+ * and a span of the original leaf located in the current text (`toCurrent`).
+ *
+ * A range maps by its two ends. An end that falls inside rewritten text —
+ * inside a marker, or on a stripped character — snaps outward to the edge of
+ * that rewrite: a range never maps to half a rewrite. Stripped characters at a
+ * range's edge stay outside it; stripped characters inside it stay inside, so
+ * the original range spells what the source wrote. Insertions at a range's
+ * edge (a defang's backticks) stay outside it.
+ *
+ * Work: recording is linear in the number of edits; mapping is a binary search
+ * per pass — no regex, no recursion, nothing that grows with the input faster
+ * than the edits a bounded corpus produced.
+ */
+export class OffsetMap {
+  private readonly passes: Pass[] = []
+
+  /** Record one pass. `edits` must be sorted and non-overlapping, as one
+   *  global `String.prototype.replace` produces them. */
+  record(edits: readonly TextEdit[]): void {
+    if (edits.length === 0) return
+    const outStart: number[] = []
+    const outEnd: number[] = []
+    const shift: number[] = [0]
+    for (const [i, edit] of edits.entries()) {
+      if (edit.start > edit.end || (i > 0 && edit.start < edits[i - 1].end))
+        throw new Error('OffsetMap: edits must be sorted and non-overlapping')
+      outStart.push(edit.start + shift[i])
+      outEnd.push(edit.start + shift[i] + edit.length)
+      shift.push(shift[i] + edit.length - (edit.end - edit.start))
+    }
+    this.passes.push({
+      inStart: edits.map((edit) => edit.start),
+      inEnd: edits.map((edit) => edit.end),
+      outStart,
+      outEnd,
+      shift,
+    })
+  }
+
+  /** A range of the current text, located in the original text. */
+  toOriginal(range: UrlSpanRange): UrlSpanRange {
+    let { start, end } = range
+    for (let p = this.passes.length - 1; p >= 0; p--) {
+      const { inStart, inEnd, outStart, outEnd, shift } = this.passes[p]
+      // Start: edits wholly before it shift it; one it sits inside snaps it
+      // to that edit's input start.
+      const s = prefixCount(outEnd, (v) => v <= start)
+      start = s < inStart.length && outStart[s] <= start ? inStart[s] : start - shift[s]
+      // End: edits that begin before it shift it; one it sits inside snaps it
+      // to that edit's input end.
+      const e = prefixCount(outStart, (v) => v < end)
+      end = e > 0 && outEnd[e - 1] > end ? inEnd[e - 1] : end - shift[e]
+    }
+    return { start, end }
+  }
+
+  /** A range of the original text, located in the current text. */
+  toCurrent(range: UrlSpanRange): UrlSpanRange {
+    let { start, end } = range
+    for (const { inStart, inEnd, outStart, outEnd, shift } of this.passes) {
+      // The mirror image: an insertion AT the start precedes the character
+      // there, an insertion AT the end follows the range.
+      const s = prefixCount(inEnd, (v) => v <= start)
+      start = s < inStart.length && inStart[s] <= start ? outStart[s] : start + shift[s]
+      const e = prefixCount(inStart, (v) => v < end)
+      end = e > 0 && inEnd[e - 1] > end ? outEnd[e - 1] : end + shift[e]
+    }
+    return { start, end }
+  }
+}

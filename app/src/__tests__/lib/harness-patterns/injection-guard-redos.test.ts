@@ -419,6 +419,21 @@ describe('ReDoS: the corpus is bounded by test, not by claim', () => {
     expect(bestOf(() => sanitizeText(page, [rule]))).toBeLessThan(100)
   })
 
+  it("exfil-data-url's offset-mapped pass stays linear in spans x earlier edits", () => {
+    // URL-interpretation-seam slice 5: the URL rule's matches are located
+    // through an offset map that every earlier pass recorded, so a hostile page
+    // can multiply its spans by the edits before them — here 4,000 data-bearing
+    // URLs behind 80,000 stripped zero-width characters. The map is a binary
+    // search per pass, so this is ~20ms of CPU. MUTATION: copy a pass's
+    // input-side offsets per mapped range (`[...inEnd]` / `[...inStart]` in
+    // `OffsetMap.toCurrent`), i.e. linear work per range: the same page costs
+    // ~0.5s and this goes red.
+    const unit = '\u200B'.repeat(20) + `https://e.x/?d=${'A'.repeat(64)}` + ' '
+    const page = unit.repeat(4_000)
+    expect(sanitizeText(page, INJECTION_RULES).findings).toHaveLength(4_001)
+    expect(bestOf(() => sanitizeText(page, INJECTION_RULES))).toBeLessThan(100)
+  })
+
   it('still detects the attack it was bounded around', () => {
     // The whole point of bounding rather than deleting: a heading-style forged
     // turn, with realistic leading indentation, must still be neutralized. A

@@ -428,10 +428,16 @@ describe('ReDoS: the corpus is bounded by test, not by claim', () => {
     // input-side offsets per mapped range (`[...inEnd]` / `[...inStart]` in
     // `OffsetMap.toCurrent`), i.e. linear work per range: the same page costs
     // ~0.5s and this goes red.
+    //
+    // The budget is 250 ms (issue #998, owner decision N99 option A): a
+    // budget derived from the measured idle cost — ~20-50 ms of CPU locally —
+    // with headroom for loaded runners, whose observations ran 100-116 ms
+    // (three false reds on 2026-11-05, issue #998), and still far below the
+    // mutant's cost.
     const unit = '\u200B'.repeat(20) + `https://e.x/?d=${'A'.repeat(64)}` + ' '
     const page = unit.repeat(4_000)
     expect(sanitizeText(page, INJECTION_RULES).findings).toHaveLength(4_001)
-    expect(bestOf(() => sanitizeText(page, INJECTION_RULES))).toBeLessThan(100)
+    expect(bestOf(() => sanitizeText(page, INJECTION_RULES))).toBeLessThan(250)
   })
 
   it('still detects the attack it was bounded around', () => {

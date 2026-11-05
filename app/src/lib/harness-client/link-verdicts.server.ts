@@ -9,9 +9,12 @@
  * boundary where assistant message content is served (the live `done` frame in
  * `routes/api/events.ts`, history load in `actions.server.ts#loadConversation`,
  * and the shared transcript in `shared-conversation.server.ts`) — and only the
- * VERDICT crosses: the recognised hostnames among that message's own links,
- * hostnames that are already visible in the message's anchor text. A hostname
- * the verdict does not name is unverified on the client, fail-closed.
+ * VERDICT crosses: the recognised hostnames among that message's own links.
+ * The invariant is substring-hood, not anchor text: every hostname in the
+ * verdict is a substring of the message's own `content` — the markdown source
+ * and the rendered href alike — so the verdict adds no identifier `content`
+ * does not already carry, and `content` crosses on every serving path. A
+ * hostname the verdict does not name is unverified on the client, fail-closed.
  *
  * Computing at the content-serving boundaries rather than through a
  * classify-anything endpoint is what keeps this oracle-free: a caller can

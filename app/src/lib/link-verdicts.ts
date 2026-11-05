@@ -37,6 +37,11 @@
  *    decision reads. Only `http:`/`https:` anchors participate — a link that is
  *    not a web address gets neither indicator nor dialog (approved Q9).
  *
+ * A base-relative spelling the base-less parse rejects is resolved against
+ * the page's own URL before that decision — judged as the browser resolves
+ * it, not as the string it looks like — so a protocol-relative host cannot
+ * escape the stamp by its spelling.
+ *
  * ## The trust model (SA-M10)
  *
  * This runs as part of the sanitizer's `annotate` pass: on the inert DOM, AFTER
@@ -63,6 +68,17 @@ const REVIEW_MARKER = 'data-link-review'
 const RAW_ATTRIBUTE = 'data-link-raw'
 const DEST_ATTRIBUTE = 'data-link-dest'
 
+/** `new URL(href, window.location.href)` — the page-resolved form — or `null`
+ *  when even that is not a URL the platform parser accepts (the browser could
+ *  not navigate it either). */
+function resolveAsTheBrowserWould(href: string): URL | null {
+  try {
+    return new URL(href, window.location.href)
+  } catch {
+    return null
+  }
+}
+
 /**
  * Classify every anchor in the inert, already-sanitized `root` and stamp the
  * unverified ones. Returns the per-message unverified count — the indicator's
@@ -80,16 +96,25 @@ export function annotateLinkVerdicts(root: Element, recognisedHosts?: Recognised
     const href = anchor.getAttribute('href') as string
     // One whole-value span per anchor: the href attribute, handed to the seam.
     const span = interpretUrlSpans(href, [{ start: 0, end: href.length }]).spans[0]
-    // Not an address the platform parser accepts (relative hrefs land here).
-    if (!span?.url) continue
+    // Classify the href AS THE BROWSER RESOLVES IT: the seam parses with no
+    // base, so a base-relative spelling — a protocol-relative `//host/path`
+    // above all — comes back `url: null` and would escape classification
+    // entirely while still rendering as a live cross-origin anchor. Resolving
+    // against the page's own URL is the same discipline `isAllowedImageSource`
+    // documents (sanitize-html.ts): judged as what they would fetch, not as
+    // the string they look like. For an absolute href the base changes nothing.
+    const url = span?.url ?? resolveAsTheBrowserWould(href)
+    // Not an address even page-resolved — the browser could not navigate it
+    // either, so there is nothing to classify.
+    if (!url) continue
     // http/https only — a link that is not a web address gets neither
     // indicator nor dialog metadata.
-    if (span.url.protocol !== 'http:' && span.url.protocol !== 'https:') continue
-    const recognised = hosts.has(span.url.hostname) || span.url.origin === window.location.origin
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') continue
+    const recognised = hosts.has(url.hostname) || url.origin === window.location.origin
     if (recognised) continue
     anchor.setAttribute(REVIEW_MARKER, 'unverified')
-    anchor.setAttribute(RAW_ATTRIBUTE, span.raw)
-    anchor.setAttribute(DEST_ATTRIBUTE, span.url.href)
+    anchor.setAttribute(RAW_ATTRIBUTE, span?.raw ?? href)
+    anchor.setAttribute(DEST_ATTRIBUTE, url.href)
     unverified++
   }
   return unverified

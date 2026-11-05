@@ -781,6 +781,86 @@ describe('renderAssistantMarkdown — link-review verdicts (#901 slice 1)', () =
       expect(anchor(host, href)!.getAttribute('data-link-review')).toBe('unverified')
   })
 
+  // MUST-1 (review round 1): a base-relative href is classified as the
+  // browser resolves it — `new URL(href, window.location.href)` — never
+  // skipped because the seam's base-less parse rejects the spelling. Both
+  // spellings below used to render as live cross-origin anchors with no
+  // stamp and no count. The protocol-relative spelling reaches the annotate
+  // pass from CommonMark; the backslash spelling survives verbatim only in a
+  // raw anchor — the markdown destination is percent-encoded by the pipeline
+  // into an own-origin path (pinned in the next case), so the raw anchor is
+  // where the browser actually resolves `/\evil…` cross-origin.
+  it('stamps and counts base-relative hrefs, resolved as the browser resolves them', () => {
+    const r = renderVerdicts('[one](//evil.example/a) and <a href="/\\evil.example/b">two</a>')
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(2)
+    const protocolRelative = anchor(host, '//evil.example/a')!
+    expect(protocolRelative.getAttribute('data-link-review')).toBe('unverified')
+    expect(protocolRelative.getAttribute('data-link-raw')).toBe('//evil.example/a')
+    // The destination is the resolved address — the page's own scheme.
+    expect(protocolRelative.getAttribute('data-link-dest')).toBe('http://evil.example/a')
+    const backslash = anchor(host, '/\\evil.example/b')!
+    expect(backslash.getAttribute('data-link-review')).toBe('unverified')
+    expect(backslash.getAttribute('data-link-raw')).toBe('/\\evil.example/b')
+    expect(backslash.getAttribute('data-link-dest')).toBe('http://evil.example/b')
+  })
+
+  // The same backslash spelling written as a markdown destination arrives at
+  // the annotate pass percent-encoded (`/%5Cevil.example/b`), which the
+  // browser resolves to the page's own origin — genuinely clean, and the
+  // resolved-URL classification must keep treating it so.
+  it('keeps a markdown backslash destination clean once the pipeline has encoded it', () => {
+    const r = renderVerdicts('[two](/\\evil.example/b)')
+    const host = mount(r.html)
+
+    expect(anchor(host, '/%5Cevil.example/b')).not.toBeNull()
+    expect(r.unverifiedLinks).toBe(0)
+    expect(host.querySelectorAll('[data-link-review]')).toHaveLength(0)
+  })
+
+  it('leaves a relative own-origin path clean — no metadata, not counted', () => {
+    const r = renderVerdicts('Open [the console](/console).')
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(0)
+    expect(host.querySelectorAll('[data-link-review]')).toHaveLength(0)
+    expect(attributeNames(host)).not.toContain('data-link-dest')
+  })
+
+  // The port-less spelling of the suffix class: under a stubbed port-less page
+  // origin, `evilapp.example.com` is a hostname SUFFIX of the page's own host
+  // (`app.example.com`) — which the origin-exactness rule must still reject.
+  // The descriptor is saved and restored, so the stub cannot leak into the
+  // other cases of this suite.
+  it('rejects a hostname-suffixed host under a port-less page origin', () => {
+    const savedLocation = Object.getOwnPropertyDescriptor(window, 'location')!
+    Object.defineProperty(window, 'location', {
+      value: {
+        href: 'https://app.example.com/inbox',
+        origin: 'https://app.example.com',
+        hostname: 'app.example.com',
+      },
+      writable: true,
+    })
+    try {
+      const r = renderVerdicts(
+        '[evil](https://evilapp.example.com/x) [own](https://app.example.com/y)',
+      )
+      const host = mount(r.html)
+
+      expect(r.unverifiedLinks).toBe(1)
+      expect(anchor(host, 'https://evilapp.example.com/x')!.getAttribute('data-link-review')).toBe(
+        'unverified',
+      )
+      expect(anchor(host, 'https://app.example.com/y')!.hasAttribute('data-link-review')).toBe(
+        false,
+      )
+    } finally {
+      Object.defineProperty(window, 'location', savedLocation)
+    }
+  })
+
   it('gives a non-http(s) scheme neither indicator nor dialog metadata', () => {
     const r = renderVerdicts(
       '[mail](mailto:someone@example.com) plus ' +

@@ -76,7 +76,7 @@
  */
 
 import type { ByTier, CallRecordSink, DecisionMadeEventData, LLMCallRecord } from './types'
-import { interpretUrlSpans } from './url-seam'
+import { interpretUrlSpans, OffsetMap, type TextEdit, type UrlSpanRange } from './url-seam'
 
 // ============================================================================
 // Sentinels
@@ -1085,12 +1085,37 @@ export interface TextSanitizeResult {
   findings: SanitizeFinding[]
 }
 
+/** The rule whose rewrite path reads through the URL interpretation seam
+ *  (`docs/plan/url-interpretation-seam.md`, slice 5). */
+const SEAM_URL_RULE = 'exfil-data-url'
+
 /**
  * Apply the rule corpus to one string. Returns the SAME string reference when
  * no rule matched, so callers can cheaply detect "nothing happened".
  *
  * `startIndex` seeds the marker counter so indices stay unique across the many
  * string leaves of one structured result.
+ *
+ * ## The URL rule's rewrite path (slice 5)
+ *
+ * Rules run in corpus order and each rewrites the text the next one reads, so
+ * a match's offset is an offset in the text AT THAT RULE'S PASS, not in the
+ * original leaf. Every pass is therefore recorded in an explicit
+ * {@link OffsetMap}. `exfil-data-url` keeps its corpus regex as its detector;
+ * its matches are located in the ORIGINAL leaf through the map and handed to
+ * the URL seam there, which supplies the original span (its `raw` is what the
+ * source wrote) and the parser's destination (`url`). The rewrite location is
+ * that span mapped back to the current text, and the defang wraps the CURRENT
+ * text there — the rule's own regex match at its pass. "Original" means
+ * not-canonical, never not-current: neither `url.href` nor the original
+ * spelling is ever written into the output, because the original spelling can
+ * still carry characters an earlier rule stripped (`hidden-invisible`,
+ * `sentinel-escape`).
+ *
+ * Failure direction: the round trip must land exactly on the detector's
+ * match. If it does not, the map or the seam is wrong and this THROWS — a
+ * seam implementation error fails closed (the guard's caller blocks the
+ * content), it never defangs the wrong characters or skips the rule.
  */
 export function sanitizeText(
   text: string,
@@ -1098,6 +1123,7 @@ export function sanitizeText(
   startIndex = 0,
 ): TextSanitizeResult {
   const findings: SanitizeFinding[] = []
+  const map = new OffsetMap()
   let out = text
   let n = startIndex
 
@@ -1106,12 +1132,10 @@ export function sanitizeText(
     if (!rule.re.test(out)) continue
     rule.re.lastIndex = 0
 
-    out = out.replace(rule.re, (match, ...rest) => {
-      // `String.replace` passes the offset as the second-to-last argument
-      // (before the whole string) when the pattern has no capture groups, and
-      // after every group when it does — so read it positionally from the end.
-      const offset =
-        typeof rest[rest.length - 2] === 'number' ? (rest[rest.length - 2] as number) : -1
+    const edits: TextEdit[] = []
+    // Rewrite one match found at `at` in the current text: record its finding
+    // and its edit, and return what replaces it.
+    const rewrite = (match: string, at: number, offset: number): string => {
       const replacement =
         rule.action === 'strip'
           ? ''
@@ -1122,6 +1146,17 @@ export function sanitizeText(
             : rule.action === 'defang'
               ? '`' + match.replace(/`/g, "'") + '`'
               : marker(rule.id, n)
+
+      // A defang is two insertions around a same-length interior (a backtick
+      // becomes a quote), so a span inside it keeps its exact characters.
+      if (rule.action === 'defang') {
+        edits.push(
+          { start: at, end: at, length: 1 },
+          { start: at + match.length, end: at + match.length, length: 1 },
+        )
+      } else {
+        edits.push({ start: at, end: at + match.length, length: replacement.length })
+      }
 
       // Strips and escapes are lossless character-class rewrites, not attack
       // spans worth a per-occurrence record — one finding per rule keeps a page
@@ -1146,10 +1181,64 @@ export function sanitizeText(
         if (!lossless) n++
       }
       return replacement
-    })
+    }
+
+    if (rule.id === SEAM_URL_RULE) {
+      out = rewriteThroughSeam(text, out, rule.re, map, rewrite)
+    } else {
+      out = out.replace(rule.re, (match, ...rest) => {
+        // `String.replace` passes the offset as the second-to-last argument
+        // (before the whole string) when the pattern has no capture groups, and
+        // after every group when it does — so read it positionally from the end.
+        const offset =
+          typeof rest[rest.length - 2] === 'number' ? (rest[rest.length - 2] as number) : -1
+        // The edit needs the true position even for a rule with named groups,
+        // whose trailing `groups` object pushes the offset one further back.
+        const at = (
+          typeof rest[rest.length - 1] === 'object' ? rest[rest.length - 3] : rest[rest.length - 2]
+        ) as number
+        return rewrite(match, at, offset)
+      })
+    }
+    map.record(edits)
   }
 
   return { text: findings.length > 0 ? out : text, findings }
+}
+
+/**
+ * The URL rule's pass (see {@link sanitizeText}): the detector's matches in the
+ * current text → their ranges in the original leaf (`map`) → the seam's spans
+ * there → back to the current text, where each must land exactly on its match
+ * → each match rewritten in place, left to right.
+ */
+function rewriteThroughSeam(
+  original: string,
+  current: string,
+  detector: RegExp,
+  map: OffsetMap,
+  rewrite: (match: string, at: number, offset: number) => string,
+): string {
+  const found: UrlSpanRange[] = [...current.matchAll(detector)].map((m) => ({
+    start: m.index,
+    end: m.index + m[0].length,
+  }))
+  const { spans } = interpretUrlSpans(
+    original,
+    found.map((range) => map.toOriginal(range)),
+  )
+  if (spans.length !== found.length) throw new Error('URL seam: span count mismatch')
+  let next = ''
+  let cursor = 0
+  for (const [i, span] of spans.entries()) {
+    const at = map.toCurrent(span)
+    if (at.start !== found[i].start || at.end !== found[i].end)
+      throw new Error('URL seam: mapped span does not land on its match')
+    next +=
+      current.slice(cursor, at.start) + rewrite(current.slice(at.start, at.end), at.start, at.start)
+    cursor = at.end
+  }
+  return next + current.slice(cursor)
 }
 
 // ============================================================================

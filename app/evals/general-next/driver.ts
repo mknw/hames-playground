@@ -357,15 +357,15 @@ export async function createDriver(
   // the eval's frame is `self_deployed`, so 05's memory reaches the decider as text.
   const { privateDecisionRun } =
     await import('../../src/lib/harness-client/decision-documents.server')
-  // The guards' bag the production agent takes, with the same three settings
-  // the runner counts against (#844, #845 review finding 2): one
-  // `guardConfig()` read shared by the bag and the runner, so the eval's gate
-  // runs at the env's τi and its egress gate at the env's τe and N, and the
-  // report's τi is never a second env read. Building the bag never logs; only
-  // `assertGuardsConfigured()` does.
+  // The guards' bag the production agent takes, with the same settings the
+  // runner counts against (#844; #938 revision 6): one `guardConfig()` read
+  // shared by the bag and the runner, so the eval's classification runs at the
+  // env's `GUARD_INGRESS` and its egress gate at the env's τe and N, and the
+  // report's guards row is never a second env read. τi died with the gate.
+  // Building the bag never logs; only `assertGuardsConfigured()` does.
   const guardNumbers = guardConfig()
   const guards: AgentGuards = {
-    gateThreshold: guardNumbers.gateThreshold,
+    ingressMode: guardNumbers.ingressMode,
     egressThreshold: guardNumbers.egressThreshold,
     maxOutgoingRetriesPostTripwire: guardNumbers.maxOutgoingRetriesPostTripwire,
     pseudonymiseForWeb: guardNumbers.pseudonymise
@@ -449,9 +449,9 @@ export async function createDriver(
     throw err
   }
   return {
-    // The same `guardConfig()` read the bag carries: the runner reads τi from
-    // here, so the report's skip count is the run's own τi (#845 review
-    // finding 2).
+    // The same `guardConfig()` read the bag carries (revision 6: τi died
+    // with the gate; the classification's mode is the shared value the run
+    // and the report read).
     guards: guardNumbers,
     async run(next, key) {
       const agent = await loadAgent(key.agent)

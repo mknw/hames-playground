@@ -47,7 +47,14 @@ function guardOf(type: EventType, data: unknown): Guard | undefined {
         : undefined
     case 'decision_made': {
       const key = (data as Partial<DecisionMadeEventData> | undefined)?.key
-      return key === 'guard.screen' ? 'injection' : key === 'guard.egress' ? 'egress' : undefined
+      // `guard.screen` is the retired gate's question: persisted conversations
+      // still hold its events, so it keeps rendering. `guard.ingress` is the
+      // classification's (revision 6).
+      return key === 'guard.screen' || key === 'guard.ingress'
+        ? 'injection'
+        : key === 'guard.egress'
+          ? 'egress'
+          : undefined
     }
     case 'egress_audit':
     case 'egress_refused':

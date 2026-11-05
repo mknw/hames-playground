@@ -262,16 +262,23 @@ const deps: AgentDeps = {
 // switches it on. The reachability pins below compose this explicit switch;
 // the default pins assert no switch reaches a screen or a gate call.
 const SCREEN_ON = { default: 'always', anthropic: 'always' } as const
+const SCREEN_OFF = { default: 'off', anthropic: 'off' } as const
 let choices: string[]
 /** What the scripted decider takes once `choices` runs out, when the spec still offers it
  *  (else `answer`): a model that keeps choosing one route. */
 let sticky: string | undefined
 let states: string[]
-/** The guard gate's states (`guard.screen`), apart from the loop's: the gate is
- *  asked on the self-deployed tier and never on the Anthropic tier. */
-let gateStates: string[]
-/** The gate's answer, pTrue. Below τi (0.15): "skip", obeyed in gated mode. */
-let gateP: number
+/** The classification's states (revision 6, `guard.ingress`): one per external
+ *  payload the guards classify. */
+let ingressStates: string[]
+/** The classification's question as the box received it. */
+let ingressQuestions: Array<{ type?: string; criteria?: Record<string, string> }>
+/** The p(safe) the fake box answers the classification with. */
+let ingressP: number
+/** Answer the classification's choice question with a NOUL answer (the wire
+ *  shape the retired gate got): the box is out of contract, and the
+ *  classification must abstain rather than mislabel. */
+let ingressAnswersNoul: boolean
 /** The egress question's states (`guard.egress`), and its answer: the label
  *  given all the mass. `nothing_private` lets every outgoing call go. */
 let egressStates: string[]
@@ -299,8 +306,10 @@ beforeEach(() => {
   choices = ['info-retrieval', 'answer']
   sticky = undefined
   states = []
-  gateStates = []
-  gateP = 0.05
+  ingressStates = []
+  ingressQuestions = []
+  ingressP = 0.9
+  ingressAnswersNoul = false
   egressStates = []
   egressAnswer = () => 'nothing_private'
   egressMass = undefined
@@ -333,11 +342,31 @@ beforeEach(() => {
   seedSmallGpuForTests('L4', Number.MAX_SAFE_INTEGER)
   requests = vi.fn(async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body))
-    // Setup change 2 of the guard design: the gate's noul question gets its own branch.
-    if (body.questions['guard.screen']) {
-      gateStates.push(body.state)
+    // Setup change 2, revision 6: the classification's choice question gets
+    // its own branch. `ingressP` names the p(safe) the box answers with.
+    if (body.questions['guard.ingress']) {
+      ingressStates.push(body.state)
+      ingressQuestions.push(body.questions['guard.ingress'])
+      if (ingressAnswersNoul) {
+        return Response.json({
+          answers: { 'guard.ingress': { type: 'noul', noul: 0.05 } },
+          usage: { input_tokens: 1, output_tokens: 0 },
+        })
+      }
+      const mass = 1 - ingressP
       return Response.json({
-        answers: { 'guard.screen': { type: 'noul', noul: gateP } },
+        answers: {
+          'guard.ingress': {
+            type: 'choice',
+            choice: ingressP >= 0.5 ? 'safe' : 'instructions-for-ai-detected',
+            confidence: 1,
+            probabilities: {
+              safe: ingressP,
+              'possible-instructions-for-ai': mass / 2,
+              'instructions-for-ai-detected': mass / 2,
+            },
+          },
+        },
         usage: { input_tokens: 1, output_tokens: 0 },
       })
     }
@@ -604,8 +633,8 @@ describe('general-next composition', () => {
           state: string
           questions: { next_step: { criteria: Record<string, string>; instructions: string } }
         } =>
-          // The guard gate's `guard.screen` question rides the same decide seam
-          // whenever a tool result needs screening; only the loop's own
+          // The classification's `guard.ingress` question rides the same decide
+          // seam whenever it is switched on; only the loop's own
           // `next_step` question is a decision over the routes.
           (body as { questions?: { next_step?: unknown } }).questions?.next_step !== undefined,
       )
@@ -2691,12 +2720,13 @@ it.each([false, undefined])(
   },
 )
 
-describe('general-next: the screen mode per tier and its gate (boundary guards slices 3 and 16)', () => {
+describe('general-next: the screen mode per tier (boundary guards slices 3, 16 and 17)', () => {
   const searchOnce = () =>
     mocks.controller.mockResolvedValueOnce({
       action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
     })
-  const gateDecisions = (events: readonly { type: string; data: unknown }[]) =>
+  // The retired gate's key: nothing may record it any more (revision 6).
+  const retiredGateDecisions = (events: readonly { type: string; data: unknown }[]) =>
     events.filter(
       (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.screen',
     )
@@ -2708,20 +2738,20 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
 
   // Slice 16 (O35/O40): both tiers' declared default is the ONE shared
   // SCREEN_POLICY_BY_TIER — 'off' — so with no switch set NO screen call and NO
-  // gate question happens on either tier, and each composed screen.mode IS
+  // model question happens on either tier, and each composed screen.mode IS
   // the shared value (agent default == composition-root default, the fold).
   // MUTATION: restore the old defaults in SCREEN_POLICY_BY_TIER, or local literals
   // in general-next's fallback: the screen call appears and this goes red.
   it.each(['anthropic', 'self_deployed'] as const)(
-    'the %s tier defaults to the shared off: no screen call, no gate question',
+    'the %s tier defaults to the shared off: no screen call, no model question',
     async (tier) => {
       searchOnce()
       gateway.result = 'CLEAN-WEB-SENTINEL'
       const result = await run(tier)
       expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
       expect(mocks.screen).not.toHaveBeenCalled()
-      expect(gateStates).toEqual([])
-      expect(gateDecisions(result.context.events)).toHaveLength(0)
+      expect(ingressStates).toEqual([])
+      expect(retiredGateDecisions(result.context.events)).toHaveLength(0)
       expect(screenModes()).toEqual([
         {
           default: SCREEN_POLICY_BY_TIER.self_deployed,
@@ -2736,31 +2766,44 @@ describe('general-next: the screen mode per tier and its gate (boundary guards s
   )
 
   // The split (revision 6): the screen is reachable only when its switch is
-  // on. An explicit 'always' composes the ungated screen; the 'shadow' switch
-  // below records the gate's skip and still runs it.
-  it("an explicit 'always' switch runs the screen and never asks the gate", async () => {
+  // on. An explicit 'always' composes the screen, with no gate in front of it
+  // (slice 17 removed the gate composition) and no classification asked.
+  // MUTATION: compose any gate-shaped question in front of the screen again:
+  // a decision is recorded and this goes red.
+  it("an explicit 'always' switch runs the screen and asks no question first", async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
     const result = await run('self_deployed', {
       ...deps,
       guards: { ...deps.guards, screenMode: SCREEN_ON },
     })
-    expect(gateStates).toEqual([])
+    expect(ingressStates).toEqual([])
     expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
-    expect(gateDecisions(result.context.events)).toHaveLength(0)
+    expect(retiredGateDecisions(result.context.events)).toHaveLength(0)
   })
 
-  it("an explicit 'shadow' switch records a skip and still runs the screen", async () => {
+  // The classification's shadow pin (revision 6): records a shadow
+  // decision_made keyed guard.ingress and attaches no mark to the result, so
+  // it changes no presentation. The screen's own 'shadow' mode retired with
+  // the gate. MUTATION: attach the mark in 'shadow' (gate it on the answer
+  // rather than on the mode being 'on'): the tool_result carries a mark, red.
+  it('GUARD_INGRESS=shadow records a shadow classification and runs no screen', async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
     const result = await run('self_deployed', {
       ...deps,
-      guards: { ...deps.guards, screenMode: { default: 'shadow', anthropic: 'always' } },
+      guards: { ...deps.guards, screenMode: SCREEN_OFF, ingressMode: 'shadow' },
     })
-    expect(gateStates).toHaveLength(1)
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
-    const [decision] = gateDecisions(result.context.events)
-    expect(decision.data).toMatchObject({ key: 'guard.screen', type: 'noul', shadow: true })
+    expect(ingressStates).toHaveLength(1)
+    expect(mocks.screen).not.toHaveBeenCalled()
+    const [decision] = result.context.events.filter(
+      (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.ingress',
+    )
+    expect(decision?.data).toMatchObject({ key: 'guard.ingress', shadow: true, tool: 'search' })
+    const searched = result.context.events.find(
+      (e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search',
+    )
+    expect(searched?.data).not.toHaveProperty('ingress')
   })
 
   // MUTATION: drop `classify: deps.classifyIngress` from either route guard's
@@ -2837,7 +2880,7 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
         { default: 'off', anthropic: 'off' },
         { default: 'off', anthropic: 'off' },
       ])
-      // No gate is asked either: 'off' skips both layers.
+      // No retired gate question is recorded either.
       expect(
         result.context.events.filter(
           (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.screen',
@@ -2847,26 +2890,49 @@ describe('general-next: the GUARD_* operator switches (boundary guards slice 6)'
   )
 
   // The Anthropic half of security delta N5, at the AGENT: the bag's
-  // self-deployed-side value must leave the Anthropic tier alone, so a weaker
-  // mode there can only ever come from the anthropic side of the map. (The
-  // env switches themselves narrow to off | always at boot, revision 6; the
-  // per-tier map this composes is still typed for all four modes.)
-  // MUTATION: apply the self-deployed value to both tiers (spread it over the
-  // map) in general-next: the gate is asked on the Anthropic tier and this goes red.
-  it('GUARD_SCREEN=gated leaves the Anthropic tier screening every external result, gate never asked', async () => {
+  // self-deployed-side value must leave the Anthropic tier alone, so a mode
+  // there can only ever come from the anthropic side of the map. (The env
+  // switches and core's screen mode both accept only off | always since
+  // revision 6.) MUTATION: apply the self-deployed value to both tiers (spread
+  // it over the map) in general-next: the Anthropic tier's screen goes quiet
+  // and this goes red.
+  it.each([
+    ['anthropic', true],
+    ['self_deployed', false],
+  ] as const)(
+    "screenMode { default: 'off', anthropic: 'always' } screens on the anthropic side only (%s)",
+    async (tier, screened) => {
+      searchOnce()
+      gateway.result = 'CLEAN-WEB-SENTINEL'
+      await run(tier, {
+        ...deps,
+        guards: { ...deps.guards, screenMode: { default: 'off', anthropic: 'always' } },
+      })
+      expect(mocks.screen.mock.calls.map(([input]) => input.tool).includes('search')).toBe(screened)
+      const modes = screenConfigs().map((c) => (c as { screen: { mode: unknown } }).screen.mode)
+      expect(modes).toEqual([
+        { default: 'off', anthropic: 'always' },
+        { default: 'off', anthropic: 'always' },
+      ])
+    },
+  )
+
+  // Revision 6: GUARD_INGRESS is ONE value on both tiers (ruling AE), so the
+  // Anthropic tier classifies exactly like the self-deployed one. MUTATION:
+  // split it per tier in general-next (`{ default: 'off', anthropic: 'on' }`):
+  // the tier seam disagrees with the switch, red.
+  it('GUARD_INGRESS=on classifies the Anthropic tier the same as the self-deployed one', async () => {
     searchOnce()
     gateway.result = 'CLEAN-WEB-SENTINEL'
     await run('anthropic', {
       ...deps,
-      guards: { ...deps.guards, screenMode: { default: 'gated', anthropic: 'always' } },
+      guards: { ...deps.guards, ingressMode: 'on' },
     })
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
-    expect(gateStates).toEqual([])
-    const modes = screenConfigs().map((c) => (c as { screen: { mode: unknown } }).screen.mode)
-    expect(modes).toEqual([
-      { default: 'gated', anthropic: 'always' },
-      { default: 'gated', anthropic: 'always' },
-    ])
+    expect(ingressStates).toHaveLength(1)
+    const modes = screenConfigs().map(
+      (c) => (c as { ingressGuard: { mode: unknown } }).ingressGuard.mode,
+    )
+    expect(modes).toEqual(['on', 'on'])
   })
 
   // MUTATION: drop the selected name matcher or Decide setting from general-next's
@@ -3055,30 +3121,23 @@ describe('general-next: the guard thresholds and the tripwire N as settings (#84
     events
       .filter((e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search')
       .map((e) => e.data as { success: boolean; error?: string })
-  const gated = { default: 'gated', anthropic: 'always' } as const
-
-  // τi, default 0.15: a gate answer of 0.2 is at or above it, so a gated
-  // screen runs. MUTATION: change GUARD_GATE_THRESHOLD to 0.25 (or have
-  // general-next pass a fixed threshold): red.
-  it('unset, τi is 0.15: a gated screen runs on a gate answer of 0.2', async () => {
+  // Revision 6 (#938): τi and the gate question retired. The classification
+  // runs as GUARD_INGRESS says, ONE value on both tiers (ruling AE). The safe
+  // line is code-owned (`GUARD_INGRESS_SAFE_LINE`, measured 2026-11-03); the
+  // bag carries no threshold for it.
+  // MUTATION: drop `ingressGuard` from any route guard in general-next: the
+  // classification never runs and this goes red.
+  it('unset, the classification is off: no guard.ingress call is made', async () => {
     searchCall('x')
-    gateP = 0.2
-    await run('self_deployed', { ...deps, guards: { ...deps.guards, screenMode: gated } })
-    expect(gateStates).toHaveLength(1)
-    expect(mocks.screen.mock.calls.map(([input]) => input.tool)).toContain('search')
+    await run('self_deployed', { ...deps })
+    expect(ingressStates).toEqual([])
   })
 
-  // MUTATION: drop `{ threshold: deps.guards?.gateThreshold }` from
-  // general-next's createGuardGate: the screen still runs, red.
-  it('gateThreshold 0.25: the same answer skips the gated screen', async () => {
+  it('GUARD_INGRESS=on classifies every external payload once per result', async () => {
     searchCall('x')
-    gateP = 0.2
-    await run('self_deployed', {
-      ...deps,
-      guards: { ...deps.guards, screenMode: gated, gateThreshold: 0.25 },
-    })
-    expect(gateStates).toHaveLength(1)
-    expect(mocks.screen).not.toHaveBeenCalled()
+    gateway.result = 'CLEAN-WEB-SENTINEL'
+    await run('self_deployed', { ...deps, guards: { ...deps.guards, ingressMode: 'on' } })
+    expect(ingressStates).toHaveLength(1)
   })
 
   // τe, default 0.3: 0.35 of the mass on the private labels is at or above
@@ -3177,6 +3236,130 @@ it('rv919: operator tag selection replaces search defaults and carries both dete
       guards: { ...deps.guards, egressTools: ['tag:missing-review-type'] },
     }),
   ).rejects.toThrow(/selects no catalog tool/)
+})
+
+// Revision 6, slice 17: the injection-ingress-guard classification, end to end
+// through general-next's real guards and loops; only inference is scripted.
+describe('general-next: the injection-ingress-guard classification (revision 6, slice 17)', () => {
+  const searchOnce = () =>
+    mocks.controller.mockResolvedValueOnce({
+      action: { reasoning: 'look', tool_name: 'search', tool_args: '{"q":"x"}', is_final: false },
+    })
+  const searched = (events: readonly { type: string; data: unknown }[]) =>
+    events.find((e) => e.type === 'tool_result' && (e.data as { tool: string }).tool === 'search')
+      ?.data as { ingress?: Array<Record<string, unknown>> } | undefined
+  const ingressDecisions = (events: readonly { id?: string; type: string; data: unknown }[]) =>
+    events.filter(
+      (e) => e.type === 'decision_made' && (e.data as { key?: string }).key === 'guard.ingress',
+    )
+  const ON = { ...deps, guards: { ...deps.guards, ingressMode: 'on' as const } }
+
+  // The question reaches the box as a CHOICE with the three ruled labels, and a
+  // confident `safe` answer marks the loop's tool_result, the mark naming the
+  // decision event that holds the probabilities. MUTATIONS: drop `ingress`
+  // from simpleLoop's single-call tool_result (no mark); drop the event id
+  // from the mark (`eventId` unresolvable).
+  it.each(['anthropic', 'self_deployed'] as const)(
+    "'on' asks one choice question and marks the result safe (%s)",
+    async (tier) => {
+      searchOnce()
+      gateway.result = 'CLEAN-WEB-SENTINEL'
+      const result = await run(tier, ON)
+      expect(ingressQuestions).toHaveLength(1)
+      expect(ingressQuestions[0].type).toBe('choice')
+      expect(Object.keys(ingressQuestions[0].criteria ?? {})).toEqual([
+        'safe',
+        'possible-instructions-for-ai',
+        'instructions-for-ai-detected',
+      ])
+      // The state quotes the content between nonced markers, never bare.
+      expect(ingressStates[0]).toMatch(/---BEGIN CONTENT UNDER REVIEW [0-9a-f]{16}---/)
+      expect(ingressStates[0]).toContain('> ')
+      const marks = searched(result.context.events)?.ingress
+      expect(marks).toHaveLength(1)
+      expect(marks![0]).toMatchObject({ tool: 'search', label: 'safe', safe: true })
+      const [decision] = ingressDecisions(result.context.events)
+      expect(marks![0].eventId).toBe(decision.id)
+      expect(decision.data).toMatchObject({ tool: 'search', item: marks![0].item })
+      expect(decision.data).not.toHaveProperty('shadow')
+    },
+  )
+
+  // The safe line, end to end: an argmax `safe` short of the line presents as
+  // the cautious middle. MUTATION: present the argmax label (drop the line).
+  it("an answer short of the safe line marks the result 'possible-instructions-for-ai'", async () => {
+    searchOnce()
+    gateway.result = 'CLEAN-WEB-SENTINEL'
+    ingressP = 0.6
+    const result = await run('self_deployed', ON)
+    expect(searched(result.context.events)?.ingress?.[0]).toMatchObject({
+      label: 'possible-instructions-for-ai',
+      safe: false,
+    })
+  })
+
+  // The design's named mutation for the stub: a NOUL answer to the choice
+  // question (the retired gate's wire shape). The classification must abstain
+  // — recorded, the content flowing (O38), and in 'on' the result carries an
+  // ABSTAINED mark (security review MUST-2) — never mislabel. MUTATION: read a
+  // noul answer as a choice (or treat a missing label as `safe`): a labelled
+  // mark appears, red.
+  it('a noul answer to the choice question abstains: recorded, an abstained mark, the result still flows', async () => {
+    searchOnce()
+    gateway.result = 'CLEAN-WEB-SENTINEL'
+    ingressAnswersNoul = true
+    const result = await run('self_deployed', ON)
+    expect(ingressStates).toHaveLength(1)
+    const tool = searched(result.context.events)
+    expect(tool).toBeDefined()
+    expect(JSON.stringify(tool)).toContain('CLEAN-WEB-SENTINEL')
+    const [decision] = ingressDecisions(result.context.events)
+    expect(decision.data).toMatchObject({ key: 'guard.ingress', abstained: true })
+    expect(tool?.ingress).toEqual([
+      expect.objectContaining({
+        tool: 'search',
+        abstained: true,
+        safe: false,
+        eventId: decision.id,
+      }),
+    ])
+    expect(tool?.ingress?.[0]).not.toHaveProperty('label')
+  })
+
+  // Ruling O carried over: internal content gets K1 only. MUTATION: classify
+  // on `data` regardless of the host classifier's verdict.
+  it("the host's classifier keeps internal content from the classification", async () => {
+    searchOnce()
+    gateway.result = 'CLEAN-INTERNAL-SENTINEL'
+    await run('self_deployed', {
+      ...ON,
+      guards: { ...ON.guards, classifyIngress: () => 'internal' },
+    })
+    expect(gateway.calls).toContain('search')
+    expect(ingressStates).toEqual([])
+  })
+
+  // The three guards that cover external content declare it, and the
+  // documents guard declares it WITHOUT a screen (ruling 4 kept: no screen on
+  // the retriever). MUTATIONS: give the documents guard a `screen`; drop its
+  // `ingressGuard`; or drop it from the office or info guard.
+  it('office, info and documents guards declare the classification; the documents guard has no screen', async () => {
+    await agent.createPatterns('s', ON)
+    const configs = composition.guardConfigs as Array<{
+      tools?: string[]
+      screen?: unknown
+      ingressGuard?: { mode?: unknown; run?: unknown }
+    }>
+    const declaring = configs.filter((c) => c.ingressGuard !== undefined)
+    expect(declaring).toHaveLength(3)
+    for (const c of declaring) {
+      expect(c.ingressGuard!.mode).toBe('on')
+      expect(c.ingressGuard!.run).toBeTypeOf('function')
+    }
+    const documents = configs.find((c) => c.tools?.includes('retriever'))
+    expect(documents?.ingressGuard).toBeDefined()
+    expect(documents).not.toHaveProperty('screen')
+  })
 })
 
 // Lenny's Data, the opt-in third-party transport (LENNYS_DATA_MCP). The gateway

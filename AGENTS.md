@@ -2,7 +2,7 @@
 
 Project-level guidance for Claude Code, Codex and Pi in this repository.
 
-**MCP gateway tools are for debugging.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which adds ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). Claude sessions disable these tools by default through `disabledMcpjsonServers` in `~/.claude/settings.json`; normal work uses native tools + `gh` + `orca`. To debug gateway/tool behavior, run `claude --mcp-config .mcp.json --strict-mcp-config` for the full gateway or pass a minimal JSON for one server. Pi has no per-invocation MCP flag: temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
+**MCP gateway tools are for debugging.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which adds ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). Claude sessions disable these tools by default through `disabledMcpjsonServers` in `~/.claude/settings.json`; normal work uses native tools + `gh`. To debug gateway/tool behavior, run `claude --mcp-config .mcp.json --strict-mcp-config` for the full gateway or pass a minimal JSON for one server. Pi has no per-invocation MCP flag: temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
 
 ## Commands
 
@@ -98,9 +98,9 @@ not approximate a skill from memory, from a handoff brief's summary, or by
 when it is. In Codex, repo skills are linked under `.agents/skills/`. If a skill's
 body directs further loading (e.g. the orchestration stub's version-matched
 guide), that fetch is PART of calling the skill, not an extra step. Before work
-that touches a skill's scope — any `orca`
-command or dispatch (`orchestration`, `kg-lane-dispatch`, `dispatching-work`),
-test work (`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
+that touches a skill's scope — any lane dispatch or `herdr`
+runtime command (`herdr`, `kg-lane-dispatch`, `dispatching-work`), test work
+(`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
 FIRST, then act. Relevance is judged by the work's scope, never its size: a
 task that "seems simple" is not an exemption.
 

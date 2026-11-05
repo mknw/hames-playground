@@ -1,16 +1,16 @@
 /**
  * The general-next report's per-turn guard counts, computed from the turn's own
- * events alone (boundary guards slice 7; the design's one row marked 7): the
- * gate's skip rate is computable from `decision_made` events keyed
- * `guard.screen` alone, and the report prints it. The negative case is the
- * pin's point: a route decision (`next_step`) is not a gate call, whatever its
- * shape, and a Decide failure on the egress question is counted where the
- * redesign looks for it.
+ * events alone (boundary guards slice 7; revision 6 slice 17 moved the counts
+ * from the retired gate's calls to the injection-ingress-guard
+ * classification's, keyed `guard.ingress`). The negative case is the pin's
+ * point: a route decision (`next_step`) is not a classification call,
+ * whatever its shape, and a Decide failure on a guard question is counted
+ * where the redesign looks for it.
  */
 import { describe, expect, it, vi } from 'vitest'
 
-// The counts reuse the slice-3 skip-rate function, whose module (and the egress
-// gate's) self-asserts server-only; the suite runs under jsdom, so the assert
+// The counts read the classification's key and safe line from their module,
+// which self-asserts server-only; the suite runs under jsdom, so the assert
 // is mocked exactly as the sibling fixture tests do.
 vi.mock('@hames-ai/harness-patterns/assert.server', () => ({ assertServerOnImport: vi.fn() }))
 
@@ -20,11 +20,30 @@ import { guardTurnCounts } from '../../../lib/eval-support/guard-report'
 const event = (type: string, data: unknown, llmCall?: { durationMs: number }) =>
   ({ type, data, ...(llmCall ? { llmCall } : {}) }) as ContextEvent
 
-const gateAnswer = (pTrue: number | null, ms?: number) =>
+/** A classification answer (`guard.ingress`, revision 6): `pSafe` is the
+ *  `safe` probability, the argmax label follows it, `null` is an abstention. */
+const classify = (
+  pSafe: number | null,
+  opts: { ms?: number; shadow?: boolean; label?: string } = {},
+) =>
   event(
     'decision_made',
-    { key: 'guard.screen', pTrue, abstained: pTrue === null, shadow: true },
-    ms ? { durationMs: ms } : undefined,
+    {
+      key: 'guard.ingress',
+      ...(pSafe === null
+        ? { label: null, probs: {}, abstained: true }
+        : {
+            label: opts.label ?? (pSafe >= 0.5 ? 'safe' : 'instructions-for-ai-detected'),
+            probs: {
+              safe: pSafe,
+              'possible-instructions-for-ai': (1 - pSafe) / 2,
+              'instructions-for-ai-detected': (1 - pSafe) / 2,
+            },
+            abstained: false,
+          }),
+      ...(opts.shadow ? { shadow: true } : {}),
+    },
+    opts.ms ? { durationMs: opts.ms } : undefined,
   )
 const egressDown = () =>
   event('decision_made', { key: 'guard.egress', abstained: true, reason: 'error' })
@@ -36,12 +55,13 @@ const screenCall = (ms: number) =>
 const turnOf = (...events: ContextEvent[]) => [{ response: 'a', status: 'done', events }]
 
 describe('the per-turn guard counts', () => {
-  it('counts gate calls, skip rate, latency, screens, prompts, audits and Decide failures from events alone', () => {
+  it('counts classification calls, safe presentations, latency, screens, prompts, audits and Decide failures from events alone', () => {
     const [row] = guardTurnCounts(
       turnOf(
         routeDecision(),
-        gateAnswer(0.05, 120), // below τi 0.15: a (shadow) skip
-        gateAnswer(0.9, 80),
+        classify(0.9, { ms: 120 }), // safe, above the line
+        classify(0.6, { ms: 80, shadow: true }), // argmax safe, short of the line
+        classify(0.05), // detected
         egressDown(),
         screenCall(400),
         event('hitl_request', { kind: 'egress-release', requestId: 'r1' }),
@@ -52,11 +72,11 @@ describe('the per-turn guard counts', () => {
     )!
     expect(row).toMatchObject({
       turn: 1,
-      gateCalls: 2,
-      gateSkipped: 1,
-      gateUnavailable: 0,
-      gateSkipRate: 0.5,
-      gateLatencyMs: 200,
+      classificationCalls: 3,
+      classificationShadow: 1,
+      classificationUnavailable: 0,
+      classificationSafe: 1,
+      classificationLatencyMs: 200,
       screenCalls: 1,
       screenLatencyMs: 400,
       promptsRaised: 1,
@@ -67,22 +87,26 @@ describe('the per-turn guard counts', () => {
     })
   })
 
-  // The half the row is written for: the gate's numbers come from `guard.screen`
-  // alone. A route decision must not land in them.
-  // MUTATION: make the counting function read every `decision_made` event
-  // (drop the key filter): this assertion turns red. The design's own mutation
-  // — drop the key from the gate's event in `guard-gate.server.ts` — reddens
-  // the counts above instead (every gate number falls to 0) and slice 3's pin
-  // with it.
-  it('a route decision is not a gate call, and an empty turn reports zeros with a null latency', () => {
-    const [route] = guardTurnCounts(turnOf(routeDecision()))!
-    expect(route.gateCalls).toBe(0)
-    expect(route.gateSkipRate).toBe(0)
+  // The half the row is written for: the classification's numbers come from
+  // `guard.ingress` alone. A route decision, and the retired gate's
+  // `guard.screen` events a persisted capture may still hold, must not land
+  // in them. MUTATION: make the counting function read every `decision_made`
+  // event (drop the key filter): this assertion turns red.
+  it('a route decision and a retired gate event are not classification calls; an empty turn reports zeros', () => {
+    const [route] = guardTurnCounts(
+      turnOf(
+        routeDecision(),
+        event('decision_made', { key: 'guard.screen', pTrue: 0.9, abstained: false }),
+      ),
+    )!
+    expect(route.classificationCalls).toBe(0)
     const [empty] = guardTurnCounts(turnOf())!
     expect(empty).toMatchObject({
-      gateCalls: 0,
-      gateSkipRate: 0,
-      gateLatencyMs: null,
+      classificationCalls: 0,
+      classificationShadow: 0,
+      classificationUnavailable: 0,
+      classificationSafe: 0,
+      classificationLatencyMs: null,
       screenCalls: 0,
       screenLatencyMs: null,
       promptsRaised: 0,
@@ -93,33 +117,34 @@ describe('the per-turn guard counts', () => {
     })
   })
 
-  it('an unavailable gate answer is counted as unavailable, not as a skip', () => {
-    const [row] = guardTurnCounts(turnOf(gateAnswer(null, 30), gateAnswer(0.05)))!
-    expect(row.gateCalls).toBe(2)
-    expect(row.gateUnavailable).toBe(1)
-    expect(row.gateSkipped).toBe(1)
-    expect(row.gateSkipRate).toBe(0.5)
-    expect(row.gateLatencyMs).toBe(30)
+  // MUTATION: count an abstention as a safe presentation, or drop the
+  // abstained filter (unavailable reads 0).
+  it('an unavailable classification is counted as unavailable and as a guard Decide failure, never as safe', () => {
+    const [row] = guardTurnCounts(turnOf(classify(null, { ms: 30 }), classify(0.9)))!
+    expect(row.classificationCalls).toBe(2)
+    expect(row.classificationUnavailable).toBe(1)
+    expect(row.classificationSafe).toBe(1)
+    expect(row.decideDown).toBe(1)
+    expect(row.classificationLatencyMs).toBe(30)
+  })
+
+  // The report applies the classification's own rule: argmax `safe` short of
+  // the safe line presents as the cautious middle, so it is not counted safe.
+  // MUTATION: drop the `>= GUARD_INGRESS_SAFE_LINE` half of `presentsSafe`.
+  it('counts as safe only what presents as safe: argmax safe at or above the line', () => {
+    const [row] = guardTurnCounts(turnOf(classify(0.69), classify(0.7), classify(0.95)))!
+    expect(row.classificationSafe).toBe(2)
   })
 
   it('counts per turn, not per conversation', () => {
     const rows = guardTurnCounts([
-      { response: 'a', status: 'done', events: [gateAnswer(0.05)] },
-      { response: 'b', status: 'done', events: [gateAnswer(0.9), egressDown()] },
+      { response: 'a', status: 'done', events: [classify(0.9)] },
+      { response: 'b', status: 'done', events: [classify(0.05), egressDown()] },
     ])
     expect(rows.map((r) => r.turn)).toEqual([1, 2])
-    expect(rows[0]!.gateCalls).toBe(1)
-    expect(rows[1]!.gateCalls).toBe(1)
+    expect(rows[0]!.classificationCalls).toBe(1)
+    expect(rows[1]!.classificationCalls).toBe(1)
     expect(rows[1]!.decideDown).toBe(1)
     expect(rows[0]!.decideDown).toBe(0)
-  })
-
-  // #844: a run whose gate ran with GUARD_GATE_THRESHOLD set reads its skips
-  // against that τi, not the default. MUTATION: drop the threshold argument
-  // from the guardGateSkipRate call: the 0.2 answer is not a skip, red.
-  it('reads the skip count against the τi the run used (default 0.15)', () => {
-    const turn = turnOf(gateAnswer(0.2), gateAnswer(0.9))
-    expect(guardTurnCounts(turn)[0]!.gateSkipped).toBe(0)
-    expect(guardTurnCounts(turn, 0.25)[0]!.gateSkipped).toBe(1)
   })
 })

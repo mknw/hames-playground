@@ -626,6 +626,12 @@ function formatEventData(event: ContextEvent): string {
       // instead. The state survives only in the transport's `llmCall.variables`.
       // Pinned by decision-state-sentinel.
       const data = event.data as DecisionMadeEventData
+      // The injection-ingress-guard's answer is PRESENTATION only (O38): a
+      // checker's "safe" printed beside attacker content is the very shape its
+      // `detected` criterion names, and the argmax label here ignores the safe
+      // line. So the model reads a fixed, metadata-only line — no label, no p
+      // (security review SHOULD-6).
+      if (data.key === 'guard.ingress') return 'guard.ingress: content classified for presentation'
       const pMax = Math.max(0, ...Object.values(data.probs ?? {}))
       const head =
         data.type === 'score'

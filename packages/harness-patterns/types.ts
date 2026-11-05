@@ -1124,6 +1124,14 @@ export interface ToolCallResult {
    *  copy this onto the `tool_result` event. Redacted by construction; the
    *  verbatim spans live only on the `content_sanitized` event. */
   sanitized?: import('./injection-guard').SanitizeSummary
+  /** Set by `withInjectionGuard` (in `callTool`) when the injection-ingress-guard
+   *  classified this result's content (revision 6, O37): one mark for the
+   *  `data` payload. The error channel opts out: an error string is not
+   *  content a reference surfaces — a deliberate narrowing of the coverage
+   *  claim ("where K1 runs"), named for the security review (code review
+   *  SHOULD-4). Loop patterns copy this onto the `tool_result` event.
+   *  Metadata by construction, like `sanitized`. */
+  ingress?: import('./injection-guard').IngressMark
 }
 
 export type ToolSet = Record<string, string[]> & { all: string[] }
@@ -1308,6 +1316,14 @@ export interface ToolResultEventData {
    *  serializes `event.data`), so a full report here would hand the neutralized
    *  injection to the next LLM. See `SanitizeSummary`. */
   sanitized?: import('./injection-guard').SanitizeSummary
+  /** Set by `withInjectionGuard` when the injection-ingress-guard classified
+   *  this result's content (revision 6, O37): one mark per classified payload,
+   *  keyed by the same item id the provenance fence carries — the call's id
+   *  for a tool result, the hit's `docId` for a retrieved hit. Like `sanitized`
+   *  this is metadata only (SD-3): label ids, the safe line's pass and the
+   *  decision record's event id, never content — safe anywhere this payload is
+   *  JSON-dumped, and NOT part of the LLM-facing `tool_result` projection. */
+  ingress?: readonly import('./injection-guard').IngressMark[]
   /** The id of the request this result was HELD for (#433). Set when a resume,
    *  a supersede or an expiry replaced the `HeldResult` placeholder with the
    *  outcome; the placeholder's `summary` is deleted in the same step, so a
@@ -2046,11 +2062,18 @@ export interface DecisionMadeEventData {
   tool?: string
   callId?: string
   skipReason?: 'unaskable' | 'queued' | 'anthropic-veto' | 'failed'
-  /** Shadow mode only, and only when the gate answered: what the gate WOULD
-   *  have decided at its own configured threshold — run the screen (true) or
-   *  skip it (false). The timeline row reads this, not `label`, whose argmax
-   *  can disagree with the threshold rule (#784 item 10). */
+  /** The retired guard gate's shadow stamp (revision 6, #938): nothing writes
+   *  it any more, but persisted conversations still hold `guard.screen`
+   *  shadow events that do, and the timeline keeps rendering them. */
   wouldRun?: boolean
+  /** The injection-ingress-guard's item id (`guard.ingress` events): the
+   *  fence's item id — the call's id for a tool result, the hit's `docId` —
+   *  naming which payload of a result the classification answers for. */
+  item?: string
+  /** `guard.ingress` events: the answer covers only a head of the content
+   *  (the 20 000-character cut, or a shorter head that fitted the state
+   *  budget); text after it was never read (prompt review S6). */
+  truncated?: boolean
 }
 
 // ============================================================================

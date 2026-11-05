@@ -116,21 +116,22 @@ settings, from the `GUARD_*` operator switches (below) — plus
 `deps.egressRoster` for the egress gate. It chooses among Microsoft 365 work, Neo4j/web lookup,
 conversation-document retrieval and planning, then synthesizes once from the
 orchestrator's guarded route records. Each guard declares its own options and
-none is inherited: the office and info route guards declare an always-on fence
-and a screen behind the guard gate, with a mode per tier. On the Anthropic tier
-the screen runs on every external result and the gate is never asked; on the
-self-deployed tier the gate is asked first and, in `'shadow'`, its answer is
-recorded and the screen runs anyway, until an eval bar moves that tier to
-`'gated'`. `deps.guards.screenMode` replaces that tier map when the host sets
-it (validated at boot against these defaults; on the Anthropic tier only
-`'off'` and `'always'` are accepted — `'gated'` or `'shadow'` there would send
-the bodies the screen would have read to that tier's decisions host). A
-deterministic finding always forces the screen, after
-sanitization, so those neutralizations stay intact. The host's classifier
-(`deps.guards.classifyIngress`) keeps the deployment's own content to the deterministic
-pass. That is a screen call per
-external office or info result, plus a gate call on the self-deployed tier. The documents route's guard declares the
-fence and no screen, so retrieved hits get the deterministic pass only. The
+none is inherited: the office and info route guards declare an always-on fence,
+a screen and the injection-ingress-guard classification, and both model steps
+are off by default. The screen's mode per tier is `deps.guards.screenMode`
+(the shared default is `'off'` on both tiers; the host's switches accept only
+`'off'` and `'always'` per tier, validated at boot), and a deterministic
+finding forces a screen that is switched on, after sanitization, so those
+neutralizations stay intact. The classification runs at `deps.guards.ingressMode`
+(`'off'` unless the host sets it; `'shadow'` records each answer and marks
+nothing, `'on'` marks each external result for presentation and never
+withholds it). The host's classifier (`deps.guards.classifyIngress`) keeps the
+deployment's own content to the deterministic pass, out of both model steps.
+With both off, ingress is fully deterministic; switched on, that is a screen
+call and a classification call per external office or info result. The
+documents route's guard declares the fence and the classification and no
+screen, so retrieved hits get the deterministic pass, the fence and — when
+switched on — one classification per hit. The
 orchestrator's loop sanitizes and screens nothing of its own: a route record
 is capped, and the tool-result bodies it quotes keep the fence they arrived in. A screen outage inside a route is recorded and fails open. The web
 route admits only its own and retriever
@@ -155,18 +156,18 @@ fields of
 [`AgentDeps.guards`](#what-an-agent-definition-contains); a host that composes
 guards in code sets the same fields directly:
 
-| Variable                                 | Sets                                                                                                                                                                               | Values                                |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `GUARD_SCREEN`                           | the injection screen's mode on the self-deployed tier                                                                                                                              | `off` / `shadow` / `gated` / `always` |
-| `GUARD_SCREEN_ANTHROPIC`                 | the screen's mode on the Anthropic tier (only the two modes that do not ask the gate)                                                                                              | `off` / `always`                      |
-| `GUARD_EGRESS_TOOLS`                     | comma-separated exact tool names or `tag:` selectors for the selected detector pair                                                                                                | names or tags, default search tools   |
-| `GUARD_EGRESS_NAME_MATCH`                | name matching for selected tools                                                                                                                                                   | `off` / `evidence` / `refuse`         |
-| `GUARD_EGRESS_DECIDE`                    | Decide for selected tools                                                                                                                                                          | `off` / `on` / `shadow`               |
-| `GUARD_PSEUDONYMISE`                     | the web route's input pseudonymiser (default `off`; explicit `on` applies on both tiers)                                                                                           | `on` / `off`                          |
-| `GUARD_GATE_THRESHOLD`                   | τi, `gateThreshold`: the screen runs when the gate's probability is at or above it (default `0.15`; obeyed only by a `gated` screen)                                               | a number from 0 to 1                  |
-| `GUARD_EGRESS_THRESHOLD`                 | τe, `egressThreshold`: an outgoing call is refused or asked about when the private mass is at or above it (default `0.3`)                                                          | a number from 0 to 1                  |
-| `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | the tripwire's N, `maxOutgoingRetriesPostTripwire`: refusal N + 1 on a route closes it for the turn (default `0`)                                                                  | a whole number, 0 or greater          |
-| `GRAPH_DOCUMENT_HOSTS`                   | the tenant's own SharePoint/OneDrive hosts, `documentHosts`: a Graph result's own `webUrl` on one of these exact hostnames is exempt from `exfil-data-url`, and from no other rule | comma-separated exact hostnames       |
+| Variable                                 | Sets                                                                                                                                                                                                                                                               | Values                              |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| `GUARD_SCREEN`                           | the injection screen's mode on the self-deployed tier (default `off`; the retired gate's `shadow` / `gated` refuse boot)                                                                                                                                           | `off` / `always`                    |
+| `GUARD_SCREEN_ANTHROPIC`                 | the screen's mode on the Anthropic tier (default `off`)                                                                                                                                                                                                            | `off` / `always`                    |
+| `GUARD_EGRESS_TOOLS`                     | comma-separated exact tool names or `tag:` selectors for the selected detector pair                                                                                                                                                                                | names or tags, default search tools |
+| `GUARD_EGRESS_NAME_MATCH`                | name matching for selected tools                                                                                                                                                                                                                                   | `off` / `evidence` / `refuse`       |
+| `GUARD_EGRESS_DECIDE`                    | Decide for selected tools                                                                                                                                                                                                                                          | `off` / `on` / `shadow`             |
+| `GUARD_PSEUDONYMISE`                     | the web route's input pseudonymiser (default `off`; explicit `on` applies on both tiers)                                                                                                                                                                           | `on` / `off`                        |
+| `GUARD_INGRESS`                          | the injection-ingress-guard classification's mode, `ingressMode`, one value on both tiers: `shadow` records each answer, `on` marks each external result for presentation (default `off`). A still-set `GUARD_GATE_THRESHOLD` (the retired gate's τi) refuses boot | `off` / `shadow` / `on`             |
+| `GUARD_EGRESS_THRESHOLD`                 | τe, `egressThreshold`: an outgoing call is refused or asked about when the private mass is at or above it (default `0.3`)                                                                                                                                          | a number from 0 to 1                |
+| `GUARD_EGRESS_MAX_RETRIES_POST_TRIPWIRE` | the tripwire's N, `maxOutgoingRetriesPostTripwire`: refusal N + 1 on a route closes it for the turn (default `0`)                                                                                                                                                  | a whole number, 0 or greater        |
+| `GRAPH_DOCUMENT_HOSTS`                   | the tenant's own SharePoint/OneDrive hosts, `documentHosts`: a Graph result's own `webUrl` on one of these exact hostnames is exempt from `exfil-data-url`, and from no other rule                                                                                 | comma-separated exact hostnames     |
 
 A mode below a tier's declared default, or a number looser than its default (a
 threshold above it, an N above 0), warns at boot, naming what it loosens; an

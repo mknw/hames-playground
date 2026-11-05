@@ -509,6 +509,7 @@ export function actorCritic<T extends ActorCriticData>(
                   result: result.data,
                   error: result.error,
                   ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+                  ...(result.ingress ? { ingress: result.ingress } : {}),
                 }
               },
             })
@@ -548,6 +549,7 @@ export function actorCritic<T extends ActorCriticData>(
                 success: o.success,
                 error: o.error,
                 ...(o.sanitized ? { sanitized: o.sanitized } : {}),
+                ...(o.ingress ? { ingress: [o.ingress] } : {}),
               } as ToolResultEventData,
               resolved.trackHistory,
             ),
@@ -816,6 +818,7 @@ export function actorCritic<T extends ActorCriticData>(
             success: result.success,
             error: result.error,
             ...(result.sanitized ? { sanitized: result.sanitized } : {}),
+            ...(result.ingress ? { ingress: [result.ingress] } : {}),
           } as ToolResultEventData,
           resolved.trackHistory,
         )

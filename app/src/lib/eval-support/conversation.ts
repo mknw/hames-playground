@@ -112,11 +112,12 @@ export interface ConversationResult extends SpendKey {
 export interface ConversationDriver {
   run(scenario: ConversationScenario, key: SpendKey): Promise<ConversationTrace>
   close(): Promise<void>
-  /** The guards' bag the driver's agent ran with (`guardConfig()`'s three
-   *  settings, #844, read once here): the runner counts skips against the τi
-   *  the run actually used, never a second env read (#845 review). */
+  /** The guards' bag the driver's agent ran with (`guardConfig()`'s settings,
+   *  #844, read once here): the runner's guards row counts against the values
+   *  the run actually used, never a second env read (#845 review; revision 6:
+   *  τi died with the gate, the classification's mode is the shared value). */
   guards: {
-    gateThreshold: number
+    ingressMode: string
     egressThreshold: number
     maxOutgoingRetriesPostTripwire: number
   }

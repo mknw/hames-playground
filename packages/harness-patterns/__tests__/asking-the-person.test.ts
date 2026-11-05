@@ -477,10 +477,17 @@ describe('Accept', () => {
     const log: Log = []
     const { store } = memoryStore()
     const web = scripted([act('web_search', { query: 'Ravi Example salary' }), done])
+    const classify = vi.fn(async () => ({
+      label: 'safe' as const,
+      safe: true,
+      probs: {},
+      abstained: false,
+    }))
     const guarded = withInjectionGuard({
       namespaces: ['web'],
       catalog: CATALOG,
       spotlight: 'always',
+      ingressGuard: { run: classify, mode: 'on' },
     })(loop(web.fn, ['web_search']))
     const patterns = agent({ web: guarded }, ['web', DECISION_LOOP_ANSWER])
     const frame = frameOf(log, store)
@@ -496,6 +503,9 @@ describe('Accept', () => {
     const results = resultsOf(resumed.context.events, 'web_search')
     const sent = results[results.length - 1]
     expect(JSON.stringify(sent.result)).toContain('⟦external provenance: web/web_search')
+    // Revision 6, slice 17: the re-sent result carries its classification.
+    // MUTATION: drop the `ingress` copy on simpleLoop's re-dispatch tool_result.
+    expect(sent.ingress).toEqual([expect.objectContaining({ tool: 'web_search', label: 'safe' })])
     expect(eventsOf<EgressAuditEventData>(resumed.context.events, 'egress_audit')).toEqual([
       expect.objectContaining({ tool: 'web_search', allowedBy: 'person' }),
     ])
@@ -844,6 +854,69 @@ describe('N8 batch checklist', () => {
     const frame = frameOf(log, store)
     return { log, rows, web, patterns, frame }
   }
+
+  // Revision 6, slice 17 (O37): a held batch member that is released and sent
+  // on re-entry still carries the classification its guard gave the result.
+  // MUTATION: drop the `ingress` copy at the re-dispatched batch's sub-call
+  // return or at its tool_result event in simpleLoop: red.
+  it('a released batch member carries its classification mark onto its tool_result', async () => {
+    const log: Log = []
+    const { store } = memoryStore()
+    const web = observable([
+      act(
+        'web_search',
+        { query: 'synthetic-one' },
+        {
+          additional_calls: [{ tool_name: 'web_search', tool_args: '{"query":"synthetic-two"}' }],
+        },
+      ),
+      done,
+    ])
+    const classify = vi.fn(async (input: { item?: string }) => ({
+      label: 'safe' as const,
+      safe: true,
+      probs: {},
+      abstained: false,
+      eventId: `ev-${input.item}`,
+    }))
+    const patterns = agent(
+      {
+        web: withInjectionGuard({
+          namespaces: ['web'],
+          catalog: CATALOG,
+          ingressGuard: { run: classify, mode: 'on' },
+        })(
+          simpleLoop<Data>(web.fn, ['web_search'], {
+            patternId: 'web',
+            maxTurns: 6,
+            multiToolCalls: 'parallel',
+          }),
+        ),
+      },
+      ['web', DECISION_LOOP_ANSWER],
+      { decide: egressDecide([PERSONAL, PERSONAL]) },
+    )
+    const frame = frameOf(log, store)
+    const { paused, request } = await toPause(patterns, frame)
+    const flags = Object.fromEntries(request.options[0].flags!.map((f) => [f.id, true]))
+    const resumed = await resumeHarness<Data>(
+      paused.serialized,
+      patterns,
+      { [request.requestId]: { choice: 'continue', flags } },
+      { frame },
+    )
+    // The re-sent results, not the held placeholders' substituted outcomes
+    // (which carry `heldBy` and, by `substituteHeld`, no mark).
+    const all = resultsOf(resumed.context.events, 'web_search')
+    for (const held of all.filter((e) => e.heldBy)) expect(held).not.toHaveProperty('ingress')
+    const sent = all.filter((e) => e.success && !e.heldBy)
+    expect(sent).toHaveLength(2)
+    for (const e of sent) {
+      expect(e.ingress).toEqual([
+        expect.objectContaining({ tool: 'web_search', label: 'safe', safe: true }),
+      ])
+    }
+  })
 
   it('labels only the unticked held row across events, turn log and model input', async () => {
     const log: Log = []

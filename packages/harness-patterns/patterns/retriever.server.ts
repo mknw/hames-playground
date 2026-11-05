@@ -51,6 +51,7 @@ import { currentRunFrame } from '../run-frame.server'
 import { getErrorHint } from '../error-hints'
 import { trimToFit } from '../token-budget.server'
 import { removeThinkBlocks } from '../content-transforms'
+import type { IngressMark } from '../injection-guard'
 import { LLMCallError } from '../types'
 
 assertServerOnImport()
@@ -426,10 +427,10 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
       // so no LLM-visible surface (synthesizer prompt, ref: expansion, UI) ever
       // holds the raw text. A read-time `contentTransform` would have covered
       // only the views that opt into it, and not `scope.data`.
-      const matches = await sanitizeHits(merged)
+      const { hits: matches, ingress } = await sanitizeHits(merged)
 
       scope.data = { ...scope.data, matches }
-      emitMatches(scope, matches, backendKinds, text, resolved.trackHistory, llmCall)
+      emitMatches(scope, matches, backendKinds, text, resolved.trackHistory, llmCall, ingress)
       return scope
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error)
@@ -454,8 +455,8 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
 
 /**
  * Sanitize the untrusted text of each hit through the active
- * `withInjectionGuard`, if any. Outside a guard wrapper this is an identity
- * function and the hits are returned by reference.
+ * `withInjectionGuard`, if any. Outside a guard wrapper the hits are
+ * returned by reference and nothing is classified.
  *
  * Only `content` and `source` are scanned: those are the free-text fields an
  * ingested document controls. Ids, offsets and scores are structural — a
@@ -470,28 +471,51 @@ export function retriever<T extends RetrieverData>(config: RetrieverConfig): Con
  * Emitting the `content_sanitized` event is the guard's own contract, so there
  * is nothing to track here.
  */
-async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
+async function sanitizeHits(hits: RetrievalHit[]): Promise<{
+  hits: RetrievalHit[]
+  /** One `ingress` mark per classified hit — the classification is one
+   *  Decide call per hit's CONTENT (O37: the screen would have been two, and
+   *  the filename opts out, like every non-content field). */
+  ingress: IngressMark[]
+}> {
   const guard = currentRunFrame()?.guard
-  if (!guard || hits.length === 0 || !guard.isUntrusted('retriever')) return hits
+  if (!guard || hits.length === 0 || !guard.isUntrusted('retriever')) return { hits, ingress: [] }
+
+  // The hits are sanitized CONCURRENTLY (security review SHOULD-8): each
+  // classification can wait up to its own deadline, so one after another a
+  // k-hit retrieval would wait up to k × that deadline while the decisions
+  // host is slow or down. The results keep the hits' order.
+  const scanned = await Promise.all(
+    hits.map(async (hit) => {
+      // `content` gets the full treatment. `source` is a FILENAME, and it is
+      // scanned separately with the fence switched off: a benign document called
+      // "New instructions for expenses.docx" matches `instruction-new-directive`,
+      // and wrapping a filename in a multi-line spotlight fence would break the
+      // citation label AND the filename-to-docId match that drives the inline
+      // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
+      // poisoned filename is still neutralized without collateral damage. The
+      // content's fence names the hit's `docId` as its item id; a hit with none
+      // (a web hit) names no item, and the filename is never one (it is content).
+      // The classification follows the same split (`ingress: false` on the
+      // filename): ONE classification call per hit.
+      const [scannedContent, scannedSource] = await Promise.all([
+        guard.sanitize('retriever', hit.content, { item: hit.docId }),
+        hit.source === undefined
+          ? undefined
+          : guard.sanitize('retriever', hit.source, {
+              spotlight: 'off',
+              ingress: false,
+            }),
+      ])
+      return { hit, scannedContent, scannedSource }
+    }),
+  )
 
   const out: RetrievalHit[] = []
+  const ingress: IngressMark[] = []
   let changed = false
-  for (const hit of hits) {
-    // `content` gets the full treatment. `source` is a FILENAME, and it is
-    // scanned separately with the fence switched off: a benign document called
-    // "New instructions for expenses.docx" matches `instruction-new-directive`,
-    // and wrapping a filename in a multi-line spotlight fence would break the
-    // citation label AND the filename-to-docId match that drives the inline
-    // viewer (see ChatMessages.tsx). Marker-only keeps it a single line, so a
-    // poisoned filename is still neutralized without collateral damage. The
-    // content's fence names the hit's `docId` as its item id; a hit with none
-    // (a web hit) names no item, and the filename is never one (it is content).
-    const scannedContent = await guard.sanitize('retriever', hit.content, { item: hit.docId })
-    const scannedSource =
-      hit.source === undefined
-        ? undefined
-        : await guard.sanitize('retriever', hit.source, { spotlight: 'off' })
-
+  for (const { hit, scannedContent, scannedSource } of scanned) {
+    if (scannedContent.ingress) ingress.push(scannedContent.ingress)
     // Compare by REFERENCE, not by `summary` presence: `spotlight: 'always'`
     // fences a chunk on which nothing was detected, and that fence must reach
     // `scope.data.matches` even though there is no finding to annotate.
@@ -506,7 +530,7 @@ async function sanitizeHits(hits: RetrievalHit[]): Promise<RetrievalHit[]> {
       ...(scannedSource ? { source: scannedSource.data as string } : {}),
     })
   }
-  return changed ? out : hits
+  return { hits: changed ? out : hits, ingress }
 }
 
 /** Project a hit to a locatable reference, or null when it has no source
@@ -533,7 +557,9 @@ function toReference(h: RetrievalHit): RetrievalReference | null {
 /** Emit the retrieval as a `tool_result` so the compactExecution reads it via
  *  `view.fromLastPattern()` (same channel a simpleLoop tool call uses). The
  *  result is a typed {@link RetrieverResult}. The optional `llmCall` carries
- *  `RetrieveQuery` observability when the query was rewritten. */
+ *  `RetrieveQuery` observability when the query was rewritten. The `ingress`
+ *  marks ride the event as metadata, one per classified hit (O37: a cited
+ *  chunk can be marked at the chip — slice 18 reads them from here). */
 function emitMatches<T>(
   scope: PatternScope<T>,
   matches: RetrievalHit[],
@@ -541,6 +567,7 @@ function emitMatches<T>(
   query: string,
   trackHistory: Parameters<typeof trackEvent>[3],
   llmCall?: LLMCallData,
+  ingress: readonly IngressMark[] = [],
 ): void {
   const references = matches.map(toReference).filter((r): r is RetrievalReference => r !== null)
   const result: RetrieverResult = { query, backends: backendKinds, matches, references }
@@ -554,6 +581,7 @@ function emitMatches<T>(
       summary: matches.length
         ? `${matches.length} match(es) from ${backendKinds.join(', ') || 'no backends'}`
         : 'no matches',
+      ...(ingress.length ? { ingress: [...ingress] } : {}),
     } as ToolResultEventData,
     trackHistory,
     llmCall,

@@ -7,7 +7,7 @@ import {
   SpendBudget,
   parseSpendCap,
   floorHourlyRate,
-  screenShare,
+  guardShare,
   type SpendKey,
 } from '../../src/lib/eval-support/spend-budget'
 import { createSpendObserver } from '../../src/lib/eval-support/spend-observer'
@@ -244,7 +244,7 @@ async function main() {
             "The observer prices completed calls, so a final call can overshoot the 80% stop threshold and even the configured cap. Private infrastructure is an additional conservative floor: elapsed private-scenario time (including setup and endpoint wake wait) times the large GPU hourly rate plus the small box's served-family rate — the highest supported-family rate until the box's GPU is observed, and charges take the running maximum, so a mid-run family change can raise the floor but never lower it. Tails reserved before the family was observed keep that conservative rate; observer call-time cost is also counted, deliberately overcounting overlap. Configured scale-down tails are reserved once per run and after idle gaps longer than each box window. Provider rounding and unobserved infrastructure are not measured. This is not an invoice ceiling. Hermetic results certify scripted wiring only; they cannot authorize the default flip.",
           results: rows.map((r) => {
             const spend = budget.row(r)
-            return { ...r, spend, screen: screenShare(spend) }
+            return { ...r, spend, guardShare: guardShare(spend) }
           }),
         },
         null,
@@ -389,7 +389,7 @@ async function main() {
                   checks,
                   durationMs,
                   reasoning: reasoningSummary(trace.turns.flatMap((t) => t.events)),
-                  guards: guardTurnCounts(trace.turns, driver.guards.gateThreshold),
+                  guards: guardTurnCounts(trace.turns),
                 })
                 // First failure earns exactly two more attempts, pass or fail.
                 if (attempt === 1 && status === 'pass') break

@@ -1,8 +1,11 @@
 /**
- * Which tool results the injection screen gates in (boundary guards, ruling O):
- * content from external senders and other unsafe sources, never the deployment's
- * own. `general-next`'s office and info guards take {@link classifyIngress} as
- * their screen's `classify`, through `AgentDeps.classifyIngress`.
+ * Which tool results the injection screen and the injection-ingress-guard
+ * classification read (boundary guards, ruling O; revision 6): content from
+ * external senders and other unsafe sources, never the deployment's own.
+ * `general-next`'s office and info guards take {@link classifyIngress} as their
+ * screen's `classify`, through `AgentDeps.classifyIngress`, and the guard reads
+ * the same verdict to scope the classification (an internal payload is never
+ * classified).
  *
  * The rule, by namespace, declared here in code:
  *
@@ -18,8 +21,10 @@
  *     whoever sent it), and any namespace this rule does not know.
  *
  * Internal content still gets the deterministic pass, and a deterministic
- * finding on it still forces the screen (the guard's rule, not this module's).
- * A namespace the rule does not know is external, so it is screened.
+ * finding on it still forces a screen that is switched on (the guard's rule, not
+ * this module's); internal content is never classified. A namespace the rule
+ * does not know is external, so it is screened and classified when those steps
+ * are on.
  */
 import { domainToASCII } from 'node:url'
 import type { IngressClassifier } from '@hames-ai/harness-patterns/injection-guard'
@@ -103,8 +108,8 @@ export function checkHomeDomains(log: (message: string) => void = console.warn):
   if (usable > 0) return
   log(
     '[ingress] HOME_EMAIL_DOMAINS names no usable domain: every Microsoft 365 sender, ' +
-      'organiser and sharer counts as external, so the injection screen and its gate run ' +
-      'on all of their content. Set it to the deployment’s own email domains.',
+      'organiser and sharer counts as external, so the injection screen and the classification run ' +
+      'on all of their content when switched on. Set it to the deployment’s own email domains.',
   )
 }
 

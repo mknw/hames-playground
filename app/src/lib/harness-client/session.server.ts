@@ -105,9 +105,9 @@ export function agentDeps(): AgentDeps {
         egressTools: switches.egressTools,
         egressNameMatch: switches.egressNameMatch,
         egressDecide: switches.egressDecide,
-        // The guards' numbers (#844): τi, τe and the tripwire's N, each the
-        // pattern's own default when its variable is unset.
-        gateThreshold: switches.gateThreshold,
+        // The classification's mode (GUARD_INGRESS), one value for both
+        // tiers; τi died with the gate (revision 6) and has no field here.
+        ingressMode: switches.ingressMode,
         egressThreshold: switches.egressThreshold,
         maxOutgoingRetriesPostTripwire: switches.maxOutgoingRetriesPostTripwire,
         ...(switches.pseudonymise

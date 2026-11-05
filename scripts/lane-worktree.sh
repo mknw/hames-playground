@@ -94,6 +94,13 @@ if [ -z "$base" ]; then
   fi
 fi
 
+# Preflight the required seeds BEFORE the worktree exists: a missing one must
+# not leave a half-created checkout behind (the refusal creates no worktree).
+for req in app/.env configs/mcp-config.yaml; do
+  [ -e "$repo/$req" ] \
+    || die "required file missing in the main checkout: \"$repo/$req\" (seed \"$req\")"
+done
+
 echo "lane-worktree.sh: creating \"$path\" (branch \"$branch\", base \"$base\") from \"$repo\""
 git -C "$repo" worktree add -b "$branch" "$path" "$base" >&2
 
@@ -150,7 +157,10 @@ fi
 
 [ -d "$path/app" ] || die "the checkout has no app/ directory: \"$path/app\""
 cd "$path/app"
-run pnpm install --frozen-lockfile
+# A failed install leaves the checkout half-bootstrapped; the failure must be
+# loud and the checkout discarded — never a lane started in it.
+run pnpm install --frozen-lockfile \
+  || die "pnpm install failed — the checkout at \"$path\" is half-bootstrapped; remove it with: git worktree remove \"$path\" --force"
 
 echo "lane-worktree.sh: done — \"$path\" on \"$branch\"."
 echo "Next (herdr): herdr worktree open --cwd \"$repo\" --path \"$path\" --no-focus"

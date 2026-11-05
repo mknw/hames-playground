@@ -14,9 +14,14 @@
 #   6. refusals: the main checkout as target, a target inside it, a non-empty
 #      target, an unknown argument — each exits non-zero and quotes the path
 #   7. the main checkout's tree is untouched by a successful run
+#   8. a failed install aborts loudly: a fixture whose install runs a failing
+#      postinstall makes the script exit non-zero quoting the worktree path and
+#      calling the checkout half-bootstrapped
+#   9. a missing required seed aborts: a fixture without app/.env makes the
+#      script exit non-zero quoting "app/.env" and creates no worktree
 #
-# Needs git and pnpm on PATH (the fixture install has no dependencies and
-# runs offline). Run: scripts/lane-worktree.test.sh   (no args, exits 0 on green)
+# Needs git and pnpm on PATH (the fixture installs have no dependencies and
+# run offline). Run: scripts/lane-worktree.test.sh   (no args, exits 0 on green)
 
 set -u
 
@@ -60,20 +65,28 @@ command -v git >/dev/null 2>&1 || { echo "lane-worktree.test.sh needs git" >&2; 
 command -v pnpm >/dev/null 2>&1 || { echo "lane-worktree.test.sh needs pnpm on PATH" >&2; exit 1; }
 
 # --- fixture: a minimal main checkout whose workspace installs offline -------
-main="$tmp/main"
-mkdir -p "$main/app" "$main/packages/shared" "$main/configs" "$main/.claude" "$main/deploy/modal"
-cat > "$main/package.json" <<'JSON'
+# make_fixture <dir> [--no-app-env] [--postinstall-fails]
+make_fixture() {
+  local dir=$1 app_pkg
+  shift
+  mkdir -p "$dir/app" "$dir/packages/shared" "$dir/configs" "$dir/.claude" "$dir/deploy/modal"
+  cat > "$dir/package.json" <<'JSON'
 { "name": "fixture-root", "private": true }
 JSON
-cat > "$main/pnpm-workspace.yaml" <<'YAML'
+  cat > "$dir/pnpm-workspace.yaml" <<'YAML'
 packages:
   - app
   - packages/shared
 YAML
-cat > "$main/app/package.json" <<'JSON'
-{ "name": "fixture-app", "private": true, "dependencies": { "shared": "workspace:*" } }
-JSON
-cat > "$main/.gitignore" <<'EOF'
+  app_pkg='{ "name": "fixture-app", "private": true, "dependencies": { "shared": "workspace:*" } }'
+  case " $* " in
+    *" --postinstall-fails "*)
+      # Kills a swallowed install failure: this postinstall fails on every machine.
+      app_pkg='{ "name": "fixture-app", "private": true, "dependencies": { "shared": "workspace:*" }, "scripts": { "postinstall": "exit 1" } }'
+      ;;
+  esac
+  printf '%s\n' "$app_pkg" > "$dir/app/package.json"
+  cat > "$dir/.gitignore" <<'EOF'
 node_modules/
 app/.env
 .env
@@ -82,23 +95,28 @@ deploy/modal/*.local.*
 .claude/settings.json
 .claude/settings.local.json
 EOF
-echo "APPENV" > "$main/app/.env"
-echo "ROOTENV" > "$main/.env"
-echo "MCP" > "$main/configs/mcp-config.yaml"
-echo "OVERRIDE" > "$main/docker-compose.override.yml"
-echo "CREDS" > "$main/deploy/modal/creds.local.env"
-echo '{"name":"shared","private":true,"main":"index.js"}' > "$main/packages/shared/package.json"
-echo 'export {};' > "$main/packages/shared/index.js"
-echo '{}' > "$main/.claude/settings.json"
+  case " $* " in *" --no-app-env "*) ;; *) echo "APPENV" > "$dir/app/.env" ;; esac
+  echo "ROOTENV" > "$dir/.env"
+  echo "MCP" > "$dir/configs/mcp-config.yaml"
+  echo "OVERRIDE" > "$dir/docker-compose.override.yml"
+  echo "CREDS" > "$dir/deploy/modal/creds.local.env"
+  echo '{"name":"shared","private":true,"main":"index.js"}' > "$dir/packages/shared/package.json"
+  echo 'export {};' > "$dir/packages/shared/index.js"
+  echo '{}' > "$dir/.claude/settings.json"
 
-git -C "$main" init -q -b main
-git -C "$main" add -A
-git -C "$main" -c user.email=fixture@example.invalid -c user.name=fixture commit -qm init
-# A committed lockfile the worktree inherits, so --frozen-lockfile passes offline.
-(cd "$main" && pnpm install >/dev/null 2>&1)
-[ -f "$main/pnpm-lock.yaml" ] || { echo "fixture setup failed: no pnpm-lock.yaml" >&2; exit 1; }
-git -C "$main" add -A
-git -C "$main" -c user.email=fixture@example.invalid -c user.name=fixture commit -qm lockfile
+  git -C "$dir" init -q -b main
+  git -C "$dir" add -A
+  git -C "$dir" -c user.email=fixture@example.invalid -c user.name=fixture commit -qm init
+  # A committed lockfile the worktree inherits, so --frozen-lockfile passes offline.
+  # --ignore-scripts: the lockfile must exist even when the fixture's postinstall fails.
+  (cd "$dir" && pnpm install --ignore-scripts >/dev/null 2>&1)
+  [ -f "$dir/pnpm-lock.yaml" ] || { echo "fixture setup failed: no pnpm-lock.yaml in $dir" >&2; exit 1; }
+  git -C "$dir" add -A
+  git -C "$dir" -c user.email=fixture@example.invalid -c user.name=fixture commit -qm lockfile
+}
+
+main="$tmp/main"
+make_fixture "$main"
 
 # --- 1-5, 7: a successful run -------------------------------------------------
 wt="$tmp/wt"
@@ -150,6 +168,25 @@ assert_fails "refuses a missing --branch" "" \
   bash "$SCRIPT" --repo "$main" --path "$tmp/nope2"
 assert_fails "refuses a missing --path" "" \
   bash "$SCRIPT" --repo "$main" --branch lane-x
+
+# --- 8: a failed install aborts loudly (MUST-1: never a half-bootstrapped lane) -
+broken="$tmp/main-broken-install"
+make_fixture "$broken" --postinstall-fails
+wtbroken="$tmp/wt-broken"
+assert_fails "a failing install aborts the script" "\"$wtbroken\"" \
+  bash "$SCRIPT" --repo "$broken" --branch lane-broken --path "$wtbroken"
+assert_contains "the failure names the checkout half-bootstrapped" "half-bootstrapped" \
+  "$(bash "$SCRIPT" --repo "$broken" --branch lane-broken2 --path "$tmp/wt-broken2" 2>&1 || true)"
+assert_contains "the failure names the recovery command" 'git worktree remove' \
+  "$(bash "$SCRIPT" --repo "$broken" --branch lane-broken3 --path "$tmp/wt-broken3" 2>&1 || true)"
+
+# --- 9: a missing required seed aborts, quoting it, creating no worktree -------
+noenv="$tmp/main-no-env"
+make_fixture "$noenv" --no-app-env
+wtnoenv="$tmp/wt-noenv"
+assert_fails "a missing app/.env aborts the script" '"app/.env"' \
+  bash "$SCRIPT" --repo "$noenv" --branch lane-noenv --path "$wtnoenv"
+assert_not_contains "the refused seed created no worktree" "$wtnoenv" "$(git -C "$noenv" worktree list)"
 
 # The scratch worktree is gone with $tmp; nothing to clean up.
 if [ "$failures" -eq 0 ]; then

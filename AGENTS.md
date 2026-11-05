@@ -2,7 +2,7 @@
 
 Project-level guidance for Claude Code, Codex and Pi in this repository.
 
-**MCP gateway tools are for debugging.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which adds ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). Claude sessions disable these tools by default through `disabledMcpjsonServers` in `~/.claude/settings.json`; normal work uses native tools + `gh` + `orca`. To debug gateway/tool behavior, run `claude --mcp-config .mcp.json --strict-mcp-config` for the full gateway or pass a minimal JSON for one server. Pi has no per-invocation MCP flag: temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
+**MCP gateway tools are for debugging.** The repo's `.mcp.json` registers `hames-mcp-gateway` (port 8811), which adds ~114 tool schemas (redis, filesystem, browser, neo4j, fetch, web_search, context7, database-server). Claude sessions disable these tools by default through `disabledMcpjsonServers` in `~/.claude/settings.json`; normal work uses native tools + `gh`. To debug gateway/tool behavior, run `claude --mcp-config .mcp.json --strict-mcp-config` for the full gateway or pass a minimal JSON for one server. Pi has no per-invocation MCP flag: temporarily remove the `disabledMcpjsonServers` entry, restart the session, and restore it afterwards.
 
 ## Commands
 

@@ -247,6 +247,8 @@ shows up nowhere, and the lane's herdr pane is what makes its terminal readable 
 #    seeds, deploy/modal links, .claude settings, pnpm install --frozen-lockfile.
 scripts/lane-worktree.sh --repo <repo-root> --branch <lane> --path <path>
 # 2. attach it as its own workspace (--no-focus: the caller keeps its pane).
+#    --cwd <repo-root> (the repo parent workspace — a cwd inside a linked worktree
+#    is refused with `linked_worktree_source`).
 #    Read .result.workspace, .result.tab and .result.root_pane from the response.
 herdr worktree open --cwd <repo-root> --path <path> --no-focus
 # 3. a shell pane pinned to the checkout. Read .result.pane.pane_id.
@@ -254,18 +256,29 @@ herdr pane split --pane <root-pane> --direction right --cwd <path> --no-focus
 # 4. start the agent. Names are lowercase [a-z][a-z0-9_-]{0,31}, unique among live
 #    agents. Per-kind model/flags ride after `--` (see Lane agent and model).
 herdr agent start <lane> --kind pi --pane <pane-id>
+# 4b. readiness read BEFORE the first prompt: agent load is a setup window, and a
+#     prompt submitted during it is silently swallowed. Prompt only when the
+#     ready/composer state is visible in the tail.
+herdr agent read <lane> --source recent --lines 20
 # 5. deliver the spec: file first, prompt points at it (see "Writing any agent-bound
 #    text safely"). --wait waits for observed activity, not task completion.
 herdr agent prompt <lane> "$(cat /tmp/prompt.txt)" --wait --timeout 120000
 ```
 
-Order is the guard. `scripts/lane-worktree.sh` runs to completion — node_modules exist —
-before the pane exists, and `herdr agent start` returns only after the runtime has
-detected the agent in that pane and considers it ready for input (it returns
-`agent_not_ready` instead of parking, and the name stays usable for `agent wait` and
-`agent read`). There is no fresh-worktree setup window left for a prompt to fall into;
-what remains is load, which lengthens every step, so the `--timeout` values stay
-generous (`agent start` accepts up to 300000 ms).
+Order is the guard — and the bootstrap half of it can fail. `herdr agent start`
+returns only after the runtime has detected the agent in that pane and considers it
+ready for input (it returns `agent_not_ready` instead of parking, and the name stays
+usable for `agent wait` and `agent read`). But the script aborts on install failure
+with a quoted reason, and the checkout must then be discarded (`git worktree remove
+--force`) and recreated after the cause is fixed — never start a lane in a
+half-bootstrapped tree. There is no worktree-setup window left (the script completes
+first); what remains is AGENT LOAD — a pi pane takes seconds to reach its composer,
+and a prompt submitted during that window is silently swallowed (observed:
+`agent_prompt_stalled`, no turn). After `agent start`, read the pane once
+(`herdr agent read <lane> --source recent --lines 20`) and prompt only when the
+ready/composer state is visible; treat `agent_prompt_stalled` per the doctrine —
+inspect, never re-submit blindly. Load also lengthens every step, so the `--timeout`
+values stay generous (`agent start` accepts up to 300000 ms).
 
 Never let a lane run anywhere else: an agent started in a pane of the coordinator's own
 checkout works in the one tree with the owner's dev server attached — every save
@@ -317,9 +330,10 @@ Verify agent availability and flags against the runtime's registry of record —
 parameters — never against examples in help text or skills.
 
 **A start receipt is not a running lane.** After every start or prompt, confirm the
-agent is _generating_ — `herdr agent get <lane>` shows `agent_status: "working"` with a
-token counter that climbs between two reads a few minutes apart; `herdr agent read
-<lane> --source recent-unwrapped --lines 120` shows the tail. `agent start` returning,
+agent is _generating_ — `herdr agent get <lane>` shows `agent_status: "working"` (its
+JSON carries status and sequence numbers, no token field), and the token counter that
+climbs between two reads a few minutes apart lives in `herdr agent read <lane>
+--source recent-unwrapped --lines 120`'s tail. `agent start` returning,
 a prompt submission acknowledged, and `--wait` observing activity are receipts about the
 hand-off; the Orca counterpart was a lane whose spec sat unsubmitted for over an hour
 while the coordinator reported it running (2026-08-27), which is why the rule is
@@ -347,7 +361,10 @@ because a delta sent to a closed pane dies and a fresh reviewer has to take over
 close workspaces, tabs or panes you did not create.
 
 **A spinner is not progress.** A lane is alive only when its token counter moves
-between two reads a few minutes apart; a "working" status, a file mtime or
+between two reads a few minutes apart — and the counter lives in the `agent read`
+tail (`herdr agent read <lane> --source recent-unwrapped --lines 120`), not in
+`agent get`'s JSON, which carries status and sequence numbers but no token field; a
+"working" status, a file mtime or
 `git status` says nothing about liveness, so when the counter is out of view, read
 a wider tail or wait and read again. A lane past its expected-by time with a frozen
 counter is stopped and restarted, never given more time. Its replacement starts in

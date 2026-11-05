@@ -314,6 +314,41 @@ describe('loadConversation', () => {
     loadSession.mockResolvedValue(null)
     await expect(actions.loadConversation('nope')).rejects.toThrow('Conversation not found')
   })
+
+  // #901 slice 1, ruling Q1: history load is one of the three boundaries where
+  // the server computes the link verdicts — a rehydrated transcript reviews
+  // its links exactly as the live turn did. Assistant messages only: user
+  // turns are not rendered as markdown.
+  it('attaches the server-computed link verdicts to assistant messages only', async () => {
+    vi.stubEnv('GRAPH_DOCUMENT_HOSTS', 'docs.example')
+    const serialized = JSON.stringify({
+      sessionId: 'sess-13',
+      events: [
+        { id: 'e1', type: 'user_message', ts: 1, data: { content: 'the docs?' } },
+        {
+          id: 'e2',
+          type: 'assistant_message',
+          ts: 2,
+          data: {
+            content: 'See [docs](https://docs.example/a) and [x](https://other.example/b).',
+            final: true,
+          },
+        },
+      ],
+    })
+    loadSession.mockResolvedValue({
+      serializedContext: serialized,
+      agentId: 'search',
+      kind: 'conversation',
+      status: 'done',
+    })
+
+    const loaded = await actions.loadConversation('sess-13')
+
+    expect(loaded.messages[1]!.recognisedLinkHosts).toEqual(['docs.example'])
+    expect(loaded.messages[0]!.recognisedLinkHosts).toBeUndefined()
+    vi.unstubAllEnvs()
+  })
 })
 
 // What a client whose stream was lost polls. It is a browser-reachable RPC, so

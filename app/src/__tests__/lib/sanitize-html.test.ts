@@ -16,6 +16,8 @@
  * the two image sources that are still allowed to load.
  */
 import { describe, it, expect, vi } from 'vitest'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { escapeHtmlAttribute, sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 /** An image source the sanitizer allows: the Data Stash's raw-download route. */
@@ -508,5 +510,37 @@ describe('escapeHtmlAttribute', () => {
 
   it('leaves ordinary values alone', () => {
     expect(escapeHtmlAttribute('quarterly-report.pdf')).toBe('quarterly-report.pdf')
+  })
+})
+
+// ============================================================================
+// #901 slice 1, mutation M4: the annotate pass runs BEFORE the image pass
+// ============================================================================
+//
+// The order of the two calls at the end of `sanitizeMarkdownHtml` is
+// load-bearing for the link-review verdicts: classification stamps the anchors
+// first, and the image pass replaces refused `<img>` elements last, so a
+// blocked image's placeholder — inert text, possibly containing an address —
+// is never something the classifier saw or stamped, and can never be counted
+// as an unverified link ("links get the dialog, non-links get nothing",
+// ruling Q3).
+//
+// This is a SOURCE pin, not a behaviour pin, and that is deliberate: the
+// anchor-only classification this slice ships COMMUTES with the image pass
+// (annotate stamps `a[href]` elements; the image pass replaces `[src]`
+// elements — neither touches the other's population), so no behaviour test
+// could redden the swap on its own. The pin below is what makes the mutation —
+// swapping the two calls — fail loudly, and the behavioural half of the
+// property (a placeholder is never counted, never stamped) is pinned in
+// `chat-markdown.test.ts`, through the whole pipeline.
+describe('sanitizeMarkdownHtml: annotate runs before the image pass (#901 slice 1, M4)', () => {
+  it('classifies links before the image pass replaces refused sources', async () => {
+    const source = await readFile(resolve(process.cwd(), 'src/lib/sanitize-html.ts'), 'utf8')
+    const annotate = source.indexOf('annotate?.(body)')
+    const block = source.indexOf('blockAutoLoadingSources(body)')
+    expect(annotate).toBeGreaterThan(-1)
+    expect(block).toBeGreaterThan(-1)
+    // Strict: the annotate pass must come first, not merely exist.
+    expect(annotate).toBeLessThan(block)
   })
 })

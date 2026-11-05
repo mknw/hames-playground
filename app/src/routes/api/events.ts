@@ -28,6 +28,9 @@ import { sanitizeHarnessSettings } from '../../lib/settings'
 // in a route module is stripped from the build (see SSE_KEEPALIVE_MS there).
 import { SSE_KEEPALIVE_FRAME, SSE_KEEPALIVE_MS } from '../../lib/sse-client'
 import { DEFAULT_AGENT_ID } from '../../lib/harness-client/agent-ids'
+// Server-computed link verdicts (#901 slice 1): the recognised-host list
+// stays here — only the per-link verdict crosses on the done frame.
+import { recognisedLinkHostsFor } from '../../lib/harness-client/link-verdicts.server'
 
 async function requireUserId(): Promise<string> {
   if (isBypassEnabled()) return BYPASS_USER.id
@@ -154,6 +157,9 @@ export async function POST(event: APIEvent) {
               `event: done\ndata: ${JSON.stringify({
                 sessionId,
                 response: result.response,
+                // The verdict for every link in the answer, computed on the
+                // server where the host list is readable (#901 Q1).
+                recognisedLinkHosts: recognisedLinkHostsFor(result.response),
                 data: result.data,
                 status: result.status,
                 duration_ms: result.duration_ms,

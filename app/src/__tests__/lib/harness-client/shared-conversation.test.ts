@@ -13,7 +13,7 @@
  * non-final status line, an error naming an endpoint — because every one of
  * those is in the owner's own transcript and none of them may be in this one.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const loadSharedRow = vi.fn()
 
@@ -82,6 +82,10 @@ const FULL_CONTEXT = JSON.stringify({
   ],
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
+
 beforeEach(() => {
   replay.impl = null
   loadSharedRow.mockReset()
@@ -102,7 +106,13 @@ describe('loadSharedConversation', () => {
     expect(view!.sharedAt).toBe(SHARED_AT.getTime())
     expect(view!.messages).toEqual([
       { id: 'e1', role: 'user', content: 'what did finance send?', timestamp: 10 },
-      { id: 'e6', role: 'assistant', content: 'The CFO sent Q3.', timestamp: 15 },
+      {
+        id: 'e6',
+        role: 'assistant',
+        content: 'The CFO sent Q3.',
+        timestamp: 15,
+        recognisedLinkHosts: [],
+      },
     ])
   })
 
@@ -111,7 +121,7 @@ describe('loadSharedConversation', () => {
     expect(Object.keys(view!).sort()).toEqual(['id', 'messages', 'sharedAt', 'title'])
   })
 
-  it('copies four named fields off a message rather than spreading it', async () => {
+  it('copies five named fields off a message rather than spreading it', async () => {
     // A replay that grew a field — the future this guards against, staged now
     // rather than waited for. A `{ ...m }` projection publishes `hint` and
     // `internalNote` here; a field-by-field one drops them.
@@ -128,7 +138,7 @@ describe('loadSharedConversation', () => {
     ]
     const view = await loadSharedConversation('t'.repeat(43))
     expect(view!.messages).toEqual([
-      { id: 'x1', role: 'assistant', content: 'visible', timestamp: 20 },
+      { id: 'x1', role: 'assistant', content: 'visible', timestamp: 20, recognisedLinkHosts: [] },
     ])
     expect(JSON.stringify(view)).not.toContain('internalNote')
     expect(JSON.stringify(view)).not.toContain('internal hint')
@@ -159,6 +169,32 @@ describe('loadSharedConversation', () => {
     expect(await loadSharedConversation(undefined as unknown as string)).toBeNull()
     expect(await loadSharedConversation({ toString: () => 'x' } as unknown as string)).toBeNull()
     expect(loadSharedRow).not.toHaveBeenCalled()
+  })
+
+  // #901 slice 1, ruling Q1: the anonymous read path serves the verdicts too —
+  // computed here for the transcript's own already-visible links, never the
+  // host list. Assistant turns only; a user turn is not rendered as links.
+  it('serves the server-computed link verdicts for the transcript own links', async () => {
+    vi.stubEnv('GRAPH_DOCUMENT_HOSTS', 'docs.example')
+    replay.impl = () => [
+      {
+        id: 'x1',
+        role: 'assistant',
+        content: 'See [docs](https://docs.example/a).',
+        timestamp: 20,
+      },
+      {
+        id: 'x2',
+        role: 'user',
+        content: 'and https://docs.example in my own words',
+        timestamp: 21,
+      },
+    ]
+
+    const view = await loadSharedConversation('t'.repeat(43))
+
+    expect(view!.messages[0]!.recognisedLinkHosts).toEqual(['docs.example'])
+    expect(view!.messages[1]!.recognisedLinkHosts).toBeUndefined()
   })
 
   it('answers an empty transcript rather than throwing on an unparseable blob', async () => {

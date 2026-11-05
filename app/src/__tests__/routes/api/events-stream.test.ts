@@ -141,6 +141,26 @@ describe('POST /api/events', () => {
     })
   })
 
+  // #901 slice 1, ruling Q1: the recognised-host comparison runs HERE, on the
+  // server, and only the per-message verdict crosses on the done frame.
+  it('computes the answer link verdicts and carries them on the done frame', async () => {
+    vi.stubEnv('GRAPH_DOCUMENT_HOSTS', 'docs.example')
+    runTurnAndPersist.mockImplementation(async (req) => {
+      req.onResult?.({
+        ...RESULT,
+        response: 'See [docs](https://docs.example/a) and [x](https://other.example/b).',
+      })
+      req.onSettled?.()
+      return RESULT
+    })
+
+    const parsed = await frames(await POST(evt({ sessionId: 's1', message: 'hi' })))
+    expect(parsed.at(-1)!.event).toBe('done')
+    expect(parsed.at(-1)!.data.recognisedLinkHosts).toEqual(['docs.example'])
+
+    vi.unstubAllEnvs()
+  })
+
   it('drives one interactive turn, with the caller-supplied settings', async () => {
     await POST(
       evt({ sessionId: 's1', message: 'hi', agentId: 'neo4j', settings: { maxToolTurns: 3 } }),

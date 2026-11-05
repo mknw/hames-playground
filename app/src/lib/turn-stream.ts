@@ -352,6 +352,8 @@ export async function runTurn(
         timestamp: new Date(),
         // Retriever citations for this turn (inline superscripts + footer).
         references: extractReferences(finalResult?.context?.events ?? []),
+        // Server-computed link verdicts, from the done frame (#901 slice 1).
+        recognisedLinkHosts: finalResult?.recognisedLinkHosts,
       })
     }
     flushAfterAnswer()

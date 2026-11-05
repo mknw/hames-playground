@@ -6,6 +6,10 @@
  * guard's `sourceLinks`: a Graph result's `webUrl` on one of them is exempt from
  * `exfil-data-url`, and from no other rule.
  *
+ * Since #901 slice 1 they also feed the chat link-review verdicts
+ * (`link-verdicts.server.ts`): the comparison runs server-side only, and what
+ * crosses to the browser is the per-message verdict — never this list.
+ *
  * Matching is by exact hostname, so an entry names a host, never a pattern:
  * `contoso.sharepoint.com` does not cover `contoso-my.sharepoint.com` (list both)
  * or `evil.contoso.sharepoint.com`. Empty (the default): no link is exempt, and

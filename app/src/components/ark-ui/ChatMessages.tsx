@@ -6,6 +6,7 @@ import { marked, Tokenizer } from 'marked'
 import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
 import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
+import { annotateLinkVerdicts, type RecognisedLinkHosts } from '~/lib/link-verdicts'
 
 // Rendering options only — marked passes raw HTML in the source through
 // untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
@@ -106,6 +107,12 @@ export interface Message {
   turnInfo?: string
   /** Retriever citations for this turn (inline superscripts + sources footer). */
   references?: RetrievalReference[]
+  /** Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised
+   *  hostnames among this message's own http(s) links, filled in where the
+   *  content is served (live `done` frame, history load, shared transcript).
+   *  Absent = nothing is recognised, so every http(s) link renders unverified —
+   *  fail-closed; the tenant host list itself never crosses. */
+  recognisedLinkHosts?: RecognisedLinkHosts
 }
 
 interface ChatMessagesProps {
@@ -264,15 +271,34 @@ function dedupeReferencesByDoc(references: RetrievalReference[]): RetrievalRefer
  * click handlers below respond to was built by one of these two annotators,
  * from typed reference data, and the image pass still runs after them.
  */
+/** One assistant message's render: the HTML for `innerHTML`, plus the
+ * per-message unverified-link count the indicator shows (slice 3). The count
+ * is a parallel return value — never re-parsed out of `html`, which the
+ * sanitizer forbids. */
+export interface RenderedAssistantMarkdown {
+  html: string
+  /** How many http(s) anchors in this message are unverified — unrecognised
+   *  and unaccepted. Recognised and non-http(s) anchors are not counted. */
+  unverifiedLinks: number
+}
+
 export function renderAssistantMarkdown(
   content: string,
   entityNames: Map<string, string[]>,
   references: RetrievalReference[],
-): string {
-  return sanitizeMarkdownHtml(marked.parse(content ?? '') as string, (root) => {
+  recognisedLinkHosts?: RecognisedLinkHosts,
+): RenderedAssistantMarkdown {
+  // The link classification's count, threaded out of the annotate callback
+  // through a closure: the sanitizer's `annotate` contract is unchanged.
+  let unverifiedLinks = 0
+  const html = sanitizeMarkdownHtml(marked.parse(content ?? '') as string, (root) => {
     annotateEntities(root, entityNames)
     annotateReferences(root, references)
+    // Last of the three: the link verdicts stamp the anchors the others leave
+    // behind, and the image pass after the annotate pass keeps the last word.
+    unverifiedLinks = annotateLinkVerdicts(root, recognisedLinkHosts)
   })
+  return { html, unverifiedLinks }
 }
 
 export const ChatMessages = (props: ChatMessagesProps) => {
@@ -356,8 +382,13 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   /** Render assistant message with entity + reference annotation */
-  const renderAssistantContent = (content: string, references: RetrievalReference[]) =>
-    renderAssistantMarkdown(content, props.graphEntityNames ?? new Map(), references)
+  const renderAssistantContent = (message: Message) =>
+    renderAssistantMarkdown(
+      message.content,
+      props.graphEntityNames ?? new Map(),
+      message.references ?? [],
+      message.recognisedLinkHosts,
+    )
 
   return (
     <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
@@ -477,10 +508,7 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                           text="sm"
                           class="prose-chat"
                           // eslint-disable-next-line solid/no-innerhtml
-                          innerHTML={renderAssistantContent(
-                            message.content,
-                            message.references ?? [],
-                          )}
+                          innerHTML={renderAssistantContent(message).html}
                         />
                         {/* Sources footer — one chip per cited file; opens
                     the inline file viewer (navigator pages chunks). */}

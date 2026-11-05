@@ -219,6 +219,14 @@ const FIXTURES: Record<string, unknown> = {
       body: 'Launch checklist: verify CSV export; publish notes.',
     },
   ],
+  // #1006 scenario 46: the office route's file finder. Invented file names only;
+  // the two kinds the follow-up re-points the search at.
+  graph_files_search: [
+    { name: 'q3-budget-summary.xlsx', kind: 'budget summary' },
+    { name: 'q4-budget-summary.xlsx', kind: 'budget summary' },
+    { name: 'q3-budget-forecast.xlsx', kind: 'budget forecast' },
+    { name: 'q4-budget-forecast.xlsx', kind: 'budget forecast' },
+  ],
 }
 const NAMESPACES: Record<string, string> = {
   get_neo4j_schema: 'neo4j',
@@ -232,6 +240,9 @@ const NAMESPACES: Record<string, string> = {
   // Owned by the synthetic transport, with NO shared fixture: a row that calls it
   // brings its own payload in `toolData` (45 does), so no row reads another's day.
   graph_calendar_today: 'graph',
+  // #1006 scenario 46: the office route's file finder, served by the shared
+  // fixture result like every other graph read here.
+  graph_files_search: 'graph',
   sandbox_bash: 'sandbox',
   sandbox_write: 'sandbox',
   sandbox_read: 'sandbox',

@@ -222,6 +222,13 @@ function contract(at: string, item: Item, turns: number, routes: string[]): stri
       return nonEmpty(item.routes) && item.routes.every((r) => routes.includes(r))
         ? []
         : bad('needs routes from the vocabulary')
+    case 'resolvedIntent':
+      if (!nonEmpty(item.facts)) return bad('needs facts')
+      if (!(Number.isInteger(item.turn) && item.turn! >= 1 && item.turn! <= turns))
+        return bad('turn')
+      return nonEmpty(item.routes) && item.routes.every((r) => routes.includes(r))
+        ? []
+        : bad('needs routes from the vocabulary')
     case 'validArgs':
     case 'toolFailedThenSucceeded':
       return reasoned(item.tool) ? [] : bad('needs a tool')
@@ -1035,9 +1042,9 @@ describe('general-next scenario catalogue', () => {
     expect(validate(catalogue(), scenariosMd, moduleIds)).toEqual([])
   })
 
-  it('reads the 49 implemented scenarios from SCENARIOS.md, not zero', () => {
+  it('reads the 50 implemented scenarios from SCENARIOS.md, not zero', () => {
     // Guards the parser: an empty heading match would make the cross-check vacuous.
-    expect(existingIds(scenariosMd)).toHaveLength(49)
+    expect(existingIds(scenariosMd)).toHaveLength(50)
     expect(existingIds(scenariosMd)).toContain('tn58-other-owner-memory')
     expect(moduleIds.length).toBeGreaterThanOrEqual(34)
   })

@@ -46,6 +46,7 @@ import { scenario as scenario43 } from './scenarios/43-org-rumour'
 import { scenario as scenario44 } from './scenarios/44-onboarding'
 // The turn clock: today's date and "this afternoon" in the user's time zone.
 import { scenario as scenario45 } from './scenarios/45-today-calendar-afternoon'
+import { scenario as scenario46 } from './scenarios/46-retry-different-target'
 import { scenario as scenarioTn35 } from './scenarios/tn35-remember-preference'
 import { scenario as scenarioTn36 } from './scenarios/tn36-what-do-you-remember'
 import { scenario as scenarioTn41 } from './scenarios/tn41-other-users-conversations'
@@ -96,6 +97,7 @@ export const scenarios = [
   scenario43,
   scenario44,
   scenario45,
+  scenario46,
   scenarioTn35,
   scenarioTn36,
   scenarioTn41,

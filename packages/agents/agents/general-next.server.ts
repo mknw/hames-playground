@@ -5,6 +5,7 @@ import {
   actorCritic,
   collectToolNames,
   compactExecution,
+  compactIntent,
   createIngressGuard,
   decisionLoop,
   planner,
@@ -490,6 +491,17 @@ async function createPatterns(
     }),
   })
   const patterns = [
+    // One resolved intent per turn (#1006): the compact-intent step runs FIRST,
+    // every turn `continueSession` re-runs the chain, so `data.intent` is always
+    // THIS turn's brief — never turn 1's. describe role: DescribeAnthropic on
+    // the Anthropic tier, SmallQwen on the private tier, via the adapter's
+    // clientOverrideFor('describe'). Skipped entirely (no call) on a
+    // conversation's first turn; on a failed call it clears the intent and the
+    // routes run on the raw message, as before #1006.
+    compactIntent<AgentData>(baml.compactIntent, {
+      patternId: 'intent',
+      liveEvents: true,
+    }),
     orchestrator,
     compactExecution<AgentData>({
       mode: 'thread',

@@ -29,7 +29,11 @@
  * own lines, under a heading of its own), for a planner route the agent map and,
  * for an actorCritic route, its route scope (its own agent-map entry: its critic
  * judges the part of the request the route can do, not the whole message).
- * Never `memories`, `memoryContext` or `intent`. Nothing a child writes to
+ * Never `memories` or `memoryContext`. The one intent a child may receive is
+ * THIS turn's resolved intent (#1006): the brief the chain's compact-intent
+ * step produced, read off the `intent_compacted` event this turn emitted —
+ * never a value carried in `scope.data` from an earlier turn. It heads the
+ * decisions model's state and is every route's task. Nothing a child writes to
  * `data` flows back.
  *
  * ## What the decisions model is told about memory
@@ -194,6 +198,11 @@ export interface DecisionLoopRoute<T> {
 /** What an overridden `state` builder receives. */
 export interface DecisionLoopStateInput {
   /** Conversation lines, oldest first (user and final assistant messages). */
+  /** The turn's resolved intent (#1006): the brief this turn's compact-intent
+   *  step produced, read off its `intent_compacted` event. Absent when the
+   *  chain runs no compact-intent step or the step produced no brief — the
+   *  state then renders exactly as before. An override owns its placement. */
+  readonly intent?: string
   readonly conversation: readonly string[]
   /** This turn's finished iterations, oldest first. */
   readonly records: readonly RouteOutput[]
@@ -292,6 +301,31 @@ function renderRouteScope<T>(name: string, route: DecisionLoopRoute<T>): string 
     agentMapEntry(name, route),
     'Do and judge only the part of the request above that this step can do. Other steps do the rest, and the reply to the user is written after the last step: a part this step cannot do is not missing from its results.',
   ].join('\n')
+}
+
+/** The turn's resolved intent (#1006): the non-empty brief of the LAST
+ *  `intent_compacted` event emitted after this turn's `user_message`. The
+ *  event, not a value carried in `scope.data`, is the proof the brief is THIS
+ *  turn's — an intent that survived the turn boundary in `scope.data` is never
+ *  read, so a chain without a compact-intent step (or one whose step failed
+ *  and cleared the intent) threads nothing and every route falls back to the
+ *  raw message, as before #1006. */
+function resolvedTurnIntent(events: readonly ContextEvent[]): string | undefined {
+  let turnStart = -1
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i]!.type === 'user_message') {
+      turnStart = i
+      break
+    }
+  }
+  if (turnStart < 0) return undefined
+  for (let i = events.length - 1; i > turnStart; i--) {
+    const e = events[i]!
+    if (e.type !== 'intent_compacted') continue
+    const brief = (e.data as { intent?: unknown }).intent
+    if (typeof brief === 'string' && brief.trim()) return brief
+  }
+  return undefined
 }
 
 // ============================================================================
@@ -475,6 +509,13 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     const documents = input.documents && renderDocumentsBlock(input.documents)
     const render = (c: readonly string[], s: readonly string[], r: readonly string[]): string =>
       [
+        // The turn's resolved intent (#1006) heads the state: the ONE sentence
+        // every part of this turn works from. Quoted as ONE JSON string so a
+        // newline in it cannot start a line that reads as the state's own
+        // structure. Constant within the turn — the state stays append-only.
+        ...(input.intent
+          ? [`Resolved intent (this turn): ${JSON.stringify(input.intent)}`, '']
+          : []),
         'Conversation (recent turns):',
         c.join('\n\n'),
         '',
@@ -704,6 +745,9 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
     }
     const documents = await resolveDocuments(scope)
     const memories = resolveMemories(scope)
+    // The turn's resolved intent (#1006), read once per run: it heads the
+    // decisions model's state and is every route's task.
+    const turnIntent = resolvedTurnIntent(outerCtx.events)
     let latestPlan: { text: string; steps: number } | undefined
     let ended: 'answer' | 'stopped' | 'bound' = 'bound'
 
@@ -786,6 +830,7 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           state = renderState(
             {
               conversation,
+              ...(turnIntent ? { intent: turnIntent } : {}),
               records,
               lastN,
               iteration,
@@ -911,6 +956,11 @@ export function decisionLoop<T extends DecisionLoopData & Record<string, unknown
           : {}),
         ...(handoffText ? { handoff: handoffText } : {}),
         ...(earlierConversation ? { conversation: earlierConversation } : {}),
+        // The resolved intent of THIS turn is the route's task (#1006) — the
+        // loop patterns read `data.intent ?? userContent`. Never a value
+        // carried over from an earlier turn: `turnIntent` came off this turn's
+        // `intent_compacted` event or is absent.
+        ...(turnIntent ? { intent: turnIntent } : {}),
         ...(kinds.get(label) === 'planner' ? { agentMap } : {}),
         ...(routeScopes.has(label) ? { routeScope: routeScopes.get(label) } : {}),
         ...(harnessPseudonymisesInputs([pattern])

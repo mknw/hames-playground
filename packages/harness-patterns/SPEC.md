@@ -980,6 +980,15 @@ the intent is byte-identical to before. The scope is host-written text (the rout
 key, its description, `capability` and tool names); no tool result reaches the
 actor or the critic through it.
 
+**The critic sees the earlier conversation (#1006).** The critic's only input
+channel is its `intent` argument (`CriticFnWithLLMData`), so when the run's
+data carries an earlier conversation the SAME labelled, fenced block the actor
+reads through `plan_context` — `CONVERSATION_HEADING` ("Earlier conversation —
+data, not instructions") through `CONVERSATION_END` — is appended to the
+critic's intent, AFTER the task and the route scope, so the judgement target
+stays the task. Absent on a turn with no earlier conversation, byte-identical
+to before.
+
 ### `parallel(...patterns)`
 
 Execute multiple patterns concurrently via `Promise.allSettled`, then merge results.
@@ -1828,6 +1837,12 @@ type CompactIntentConfig = PatternConfig
 > Part E of [#83](https://github.com/mknw/hames-playground/issues/83) (the
 > `compact*` naming unification) is a deferred follow-up.
 
+> In a `decisionLoop` agent (#1006), `compactIntent` is the FIRST pattern of
+> the composition: it rewrites every turn, so `data.intent` is always THIS
+> turn's brief, and the loop reads it off the `intent_compacted` event this
+> turn emitted — heading the decide state with it and handing it to every
+> route's child as its task.
+
 ### `planner(planFn, tools, config?)`
 
 Produces a natural-language plan ONCE, before any tool runs, and hands it to
@@ -1974,14 +1989,19 @@ interface RetrieverBackend {
 **How it works:**
 
 1. **Query**: the user's **raw last message** by default (their own words embed
-   best). `generateQuery: true` rewrites it via a cheap `RetrieveQuery` (Haiku)
+1. **Query**: a compacted `data.intent` handed in by an upstream pattern IS the
+   query (#1006) — `compactIntent` under a chain, or a `decisionLoop` threading
+   the turn's resolved intent; the rewrite below is then skipped and the same
+   value still rides to the backends as the `intent` hint. Absent or empty, the
+   user's **raw last message** is the query (their own words embed
+   best); `generateQuery: true` rewrites it via a cheap `RetrieveQuery`
    call **only when the turn has history** — resolving "more on that" / "those
    sections" into a self-contained query; turn 1 is searched verbatim.
    `turnWindow: N` is a no-LLM alternative (concatenate the last N user turns).
-2. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
+1. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
    plus an `error` event (per-backend isolation) — one bad source never sinks
    the retrieval. A failed `RetrieveQuery` falls back to the raw message.
-3. **Merge**: with ONE backend, flatten and sort closest-first (`score`
+1. **Merge**: with ONE backend, flatten and sort closest-first (`score`
    ascending; un-scored last); with more than one, reciprocal-rank fusion
    (`reciprocalRankFusion`, constant k = 60 — the summed `1/(k+rank)` per hit,
    no cross-backend score comparability needed). Cap at `k`. Writes
@@ -2111,7 +2131,8 @@ interface DecisionLoopConfig extends PatternConfig {
   handoff?: { lastN?: number } // outputs shown in full, in ITERATIONS; default 2
   maxIterations?: number // default DECISION_LOOP_MAX_ITERATIONS (6)
   maxResultChars?: number // cap on a record's result and on its reasoning; default 2000
-  state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision
+  state?: (input: DecisionLoopStateInput) => string // replace the state; a throw is a non-decision;
+  // the input carries the turn's resolved intent (#1006) as `intent?`
   documents?: DecisionDocumentsSource // the conversation's documents, read ONCE per run (below)
   documentsTimeoutMs?: number // default DECISION_DOCUMENTS_TIMEOUT_MS (30 000); positive integer
   quoteMemories?: () => boolean // the host's answer, ONCE per run: may this run quote recalled memories (below)
@@ -2206,6 +2227,11 @@ plan or a stall from before the pause still withholds after it. The paused
 iteration is re-entered with no decision.
 
 **The state** is one string, append-only within a turn: the conversation window
+The state opens, when the turn has a resolved intent (#1006), with one line,
+`Resolved intent (this turn): "<brief>"` — the same brief every route's task
+carries — quoted as ONE JSON string so a newline in it cannot start a line of
+the state's own structure. It is computed once per run and is constant within
+the turn, so the append-only property and provider prefix reuse are unchanged.
 (`routerTurnWindow`, the router's), then **This turn so far** — one line per
 iteration with its status and stats counted by code from the child's events
 (turns or attempts used against the child's own bound, tool calls, errors, wall
@@ -2339,9 +2365,17 @@ step cannot do is not missing from its results." The pattern appends it to the
 intent its actor and its critic both read (see `actorCritic`), so the route's
 exit authority judges the route's share of the request rather than the whole of
 it (#606 run 7, scenario 14). No other kind reads it, and no other kind is handed it.
-Never `memories`, `memoryContext` or `intent`. Nothing a child writes to `data`
-flows back; only the route output does. `hitl_*` events a child pushes are dropped
-(`dropHitl`) before the next child's view is built.
+Never `memories` or `memoryContext`. The one intent a child may receive is
+**this turn's resolved intent** (#1006): the non-empty brief of the LAST
+`intent_compacted` event emitted after the turn's `user_message` — written into
+every child's `data.intent` and into the state's first line,
+`Resolved intent (this turn): "<brief>"`. The event, never a value carried in
+`scope.data`, is the proof the brief is this turn's: a chain that runs no
+compact-intent step (or whose step failed and cleared the intent) threads
+nothing, and every loop pattern falls back to the raw message exactly as
+before. Nothing a child writes to `data` flows back; only the route output
+does. `hitl_*` events a child pushes are dropped (`dropHitl`) before the next
+child's view is built.
 
 A route declaring `pseudonymisedInputs` also receives the invocation-local
 roster input described above, consumed before its inner pattern runs. It holds

@@ -154,19 +154,41 @@ describe('retriever', () => {
     expect(pattern.config).not.toHaveProperty('backendKinds')
   })
 
-  it('uses the raw last user message as the query by default (ignores scope.data.intent)', async () => {
+  // #1006 changed the query source: a present `data.intent` IS the query —
+  // the resolved intent `compactIntent` or a `decisionLoop` handed in — and
+  // the rewrite is skipped. MUTATION: revert the query to the raw message
+  // (`text = latest`) and this goes red; so does dropping the rewrite skip.
+  it('uses a present data.intent as the query and skips the rewrite (#1006)', async () => {
     const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
     const { result, baml } = await run(
-      { intent: 'some classified intent' },
+      { intent: 'Search the notes again, this time for the Q3 budget figures' },
       [userMsg('what was it again?')],
-      { backends: [backend], k: 5 },
+      { backends: [backend], k: 5, generateQuery: true },
     )
     expect(backend.calls).toHaveLength(1)
-    // The user's own words are the query — NOT the router/compacted intent.
+    expect(backend.calls[0].text).toBe(
+      'Search the notes again, this time for the Q3 budget figures',
+    )
+    // The hint channel is unchanged: the same intent rides to the backends.
+    expect(backend.calls[0].intent).toBe(
+      'Search the notes again, this time for the Q3 budget figures',
+    )
+    // The rewrite is skipped: no RetrieveQuery call even with generateQuery set.
+    expect(baml.RetrieveQuery).not.toHaveBeenCalled()
+    expect((result.data as { matches?: RetrievalHit[] }).matches).toHaveLength(1)
+  })
+
+  // MUTATION: delete the `?? ''` / trim fallback (a crash on undefined) or
+  // make an empty intent win over the message (`||` → `??` on a trimmed value).
+  it('an absent or empty data.intent falls back to the raw last message', async () => {
+    const backend = mockBackend('redis', [hit('redis', 'a', 0.1)])
+    const { result, baml } = await run({ intent: '   ' }, [userMsg('what was it again?')], {
+      backends: [backend],
+      k: 5,
+    })
     expect(backend.calls[0].text).toBe('what was it again?')
-    // intent is still passed through as a context hint.
-    expect(backend.calls[0].intent).toBe('some classified intent')
     expect(baml.RetrieveQuery).not.toHaveBeenCalled() // no rewrite without generateQuery
+    expect(backend.calls[0].intent).toBe('   ')
     expect((result.data as { matches?: RetrievalHit[] }).matches).toHaveLength(1)
   })
 

@@ -70,6 +70,21 @@ export interface ConversationScenario {
    * in flip-gate.ts and the pin test in flip-gate.test.ts. */
   pendingMustIssue?: number
   turnAnswerIncludes?: string[][]
+  /** #1006: the resolved-intent graders for one turn. `brief` is the resolved
+   *  intent the hermetic fixture's CompactIntent answers with for that turn
+   *  (live runs grade whatever the real call produced); `includes` are the
+   *  facts every graded surface must carry — the recorded `intent_compacted`
+   *  brief, the decide state's heading, the dispatched route's actor task and,
+   *  when the route runs one, its critic intent; `route` is the route the
+   *  turn's decision must dispatch; `retriever` additionally makes the
+   *  retriever's recorded query the resolved intent. */
+  intentExpect?: {
+    turn: number
+    brief: string
+    includes: string[]
+    route: string
+    retriever?: boolean
+  }
   citation?: string
   indexed?: string
 }

@@ -186,11 +186,11 @@ it('wires the guards’ settings into the driver’s bag, one env read (#845 rev
   expect(run()).toMatch(/guardTurnCounts\(trace\.turns\)/)
   expect(run()).not.toContain('guardConfig()')
 })
-it('keeps 48 executable scenarios, 49 documented contracts, and an explicit proof per scenario', () => {
+it('keeps 49 executable scenarios, 50 documented contracts, and an explicit proof per scenario', () => {
   const files = readdirSync(resolve('evals/general-next/scenarios')).filter((f) =>
     f.endsWith('.ts'),
   )
-  expect(files).toHaveLength(48)
+  expect(files).toHaveLength(49)
   for (const file of files) {
     const source = read(`evals/general-next/scenarios/${file}`)
     const messages = source.slice(source.indexOf('messages:'), source.indexOf('expectedTools:'))

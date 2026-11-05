@@ -160,19 +160,21 @@ export async function fixtureInference() {
                     }
                   : name === 'graph_calendar_today'
                     ? { day_offset: 0 }
-                    : name?.startsWith('graph_')
-                      ? { limit: 10 }
-                      : {
-                          query:
-                            name === 'read_neo4j_cypher'
-                              ? 'MATCH (p:Project) RETURN count(p) AS count'
-                              : 'Next.js release notes',
-                          url: 'https://nextjs.org/blog/next-15-5',
-                          // A message that names a page is read at that page (28's fetch).
-                          ...(given ? { url: given } : {}),
-                          libraryName: 'solid-js',
-                          context7CompatibleLibraryID: '/solidjs/solid',
-                        },
+                    : name === 'graph_files_search'
+                      ? { query: 'budget summaries budget forecasts' }
+                      : name?.startsWith('graph_')
+                        ? { limit: 10 }
+                        : {
+                            query:
+                              name === 'read_neo4j_cypher'
+                                ? 'MATCH (p:Project) RETURN count(p) AS count'
+                                : 'Next.js release notes',
+                            url: 'https://nextjs.org/blog/next-15-5',
+                            // A message that names a page is read at that page (28's fetch).
+                            ...(given ? { url: given } : {}),
+                            libraryName: 'solid-js',
+                            context7CompatibleLibraryID: '/solidjs/solid',
+                          },
               ),
               // The actor cannot exit actorCritic itself: is_final only summons the critic,
               // which is the exit authority, so the actor sets it on its LAST scripted tool.
@@ -199,8 +201,14 @@ export async function fixtureInference() {
                     : `Synthetic answer: ${(scenario.turnAnswerIncludes?.[turnIndex] ?? scenario.answerIncludes).join(' ')} ${scenario.artifacts.join(' ')} ${scenario.citation ? `[${scenario.citation}](stash://fixture/${scenario.citation})` : ''} ${scenario.forbiddenTools.length ? 'The graph is read-only.' : ''}`
             break
           case 'RetrieveQuery':
-          case 'CompactIntent':
             result = scenario.messages.at(-1)
+            break
+          case 'CompactIntent':
+            // #1006: a scenario that grades the resolved intent scripts the
+            // brief its compact-intent step produces (the turn's follow-up,
+            // resolved); every other scenario keeps the pass-through the
+            // pattern performs on a conversation's first turn.
+            result = scenario.intentExpect?.brief ?? scenario.messages.at(-1)
             break
           case 'ResultDescribe':
             result = 'Synthetic Lantern result'

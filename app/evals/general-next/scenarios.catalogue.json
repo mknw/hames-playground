@@ -178,6 +178,10 @@
       "exists": true,
       "says": "candidate only: each route is selected and its child completes before answer"
     },
+    "resolvedIntent": {
+      "exists": true,
+      "says": "#1006: the named turn records a resolved intent (the compact-intent brief) that names each fact, and the decide state's heading, the dispatched route's actor task and its critic intent carry it; with retriever true the retriever's recorded query is the resolved intent too"
+    },
     "answerWithinDecisions": {
       "exists": true,
       "says": "candidate only: every turn ends on answer within the decision cap"
@@ -2916,6 +2920,69 @@
       "notes": "Hermetic: the scripted Synthesize answers from the CURRENT TIME block it was handed, so a pass proves the clock reaches synthesis. Live: the calendar result carries no date or zone, so an answer with 2026-11-05 and Thursday shows the model took the date from the turn clock rather than from a tool result; it does not show a no-tool date question is answered (the decision loop's routing step gets no clock)."
     },
     {
+      "id": "46-retry-different-target",
+      "title": "A follow-up that re-points the same search at two new targets",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["office-data"],
+        "sources": ["uploads"],
+        "intents": ["lookup-fact"],
+        "turnShape": "follow-up",
+        "toolShape": "one",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": [
+        "Look through my documents for the quarterly numbers.",
+        "Try again with the sandbox route, this time to find which documents are the budget summaries and which are the budget forecasts."
+      ],
+      "expected": "Turn 2 is a back-reference that re-points the same document search at two named kinds. The decision dispatches office-data again (not read-documents), and the turn's resolved intent — the compact-intent brief, the decide state's heading, the actor's task and the critic's judgement target — names both kinds (#1006).",
+      "grader": [
+        {
+          "check": "orderedTools",
+          "says": "module expectedTools",
+          "tools": ["graph_files_search"]
+        },
+        {
+          "check": "validArgs",
+          "says": "module expectedArgs predicate: the search query names the budget kinds",
+          "tool": "graph_files_search"
+        },
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes: both kinds named",
+          "facts": ["budget summaries", "budget forecasts"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes",
+          "routes": ["office-data"]
+        },
+        {
+          "check": "resolvedIntent",
+          "says": "module intentExpect: turn 2's resolved intent names both kinds across the compact-intent brief, the decide state, the actor task and the critic intent",
+          "turn": 2,
+          "facts": ["budget summaries", "budget forecasts"],
+          "routes": ["office-data"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the hermetic CompactIntent answer scripts the turn-2 resolved brief (module intentExpect.brief); every other scenario keeps the pass-through"
+      ],
+      "notes": "Built for #1006. Hermetic: the scripted brief proves the RESOLVED intent reaches the four surfaces, not that a model resolves back-references well — that is the live run's claim. Red on today's main: no intent_compacted event exists, so the resolved-intent checks fail. The actor's task and the critic's intent carry the resolved intent because decisionLoop threads data.intent and the critic reads the same task string; the earlier conversation rides the critic's argument as the labelled data block."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",
@@ -3143,7 +3210,6 @@
         "check:forbiddenTools-decoupled",
         "check:oneOfTools",
         "driver:graph_file_ingest",
-        "driver:graph_files_search",
         "driver:graph_files_shared"
       ]
     },
@@ -4020,11 +4086,7 @@
         "graph_files_search → {\"query\": \"Lantern\", \"total\": 2, \"results\": [{\"name\": \"lantern-roadmap.pptx\", \"folder\": \"Lantern\", \"modified\": \"<Tuesday this week, clamped to the run date>\", \"snippet\": null, \"drive_id\": \"drv-1\", \"item_id\": \"itm-0\"}, {\"name\": \"lantern-budget.xlsx\", \"folder\": \"Lantern\", \"modified\": \"<Wednesday this week, clamped to the run date>\", \"snippet\": null, \"drive_id\": \"drv-1\", \"item_id\": \"itm-1\"}]} when modified_after is this Monday; without the filter lantern-brief.docx (last month) is returned as well"
       ],
       "notes": "Run on a Monday, \"since Monday\" is today; the grader accepts that date.",
-      "needs": [
-        "check:forbiddenTools-decoupled",
-        "driver:graph_file_ingest",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:forbiddenTools-decoupled", "driver:graph_file_ingest"]
     },
     {
       "id": "p18-meeting-brief",
@@ -4112,12 +4174,7 @@
         ["prepare", "m365-files"],
         ["prepare", "knowledge-graph"]
       ],
-      "needs": [
-        "check:allTools",
-        "check:answerMatches",
-        "check:forbiddenTools-decoupled",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:allTools", "check:answerMatches", "check:forbiddenTools-decoupled"]
     },
     {
       "id": "p19-draft-reply-to-paste",
@@ -4831,7 +4888,6 @@
         "check:answerMatches",
         "check:forbiddenTools-decoupled",
         "check:onlyRoutes",
-        "driver:graph_files_search",
         "driver:graph_files_shared",
         "driver:graph_mail_attachments"
       ]
@@ -4916,8 +4972,7 @@
         "check:answerMaxWords",
         "check:answerNotMatches",
         "check:forbiddenTools-decoupled",
-        "check:onlyRoutes",
-        "driver:graph_files_search"
+        "check:onlyRoutes"
       ],
       "notes": "Owner asked 2026-10-22 whether the agent can get an exact count by writing its own text into the sandbox with sandbox_write and counting there: yes — sandbox_write is not on this row's forbidden list, so that route is open and not wrong. Kept as it is; the question stays for follow-up."
     },
@@ -4989,8 +5044,7 @@
         "check:answerLanguage",
         "check:answerNotMatches",
         "check:forbiddenTools-decoupled",
-        "check:onlyRoutes",
-        "driver:graph_files_search"
+        "check:onlyRoutes"
       ]
     },
     {
@@ -5054,12 +5108,7 @@
           "max": 6
         }
       ],
-      "needs": [
-        "check:answerMatches",
-        "check:forbiddenTools-decoupled",
-        "check:onlyRoutes",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:answerMatches", "check:forbiddenTools-decoupled", "check:onlyRoutes"]
     },
     {
       "id": "p32-explain-from-upload",
@@ -6087,7 +6136,7 @@
         "graph_files_search → {\"query\": \"Lantern\", \"total\": 1, \"results\": [{\"name\": \"lantern-budget.xlsx\", \"folder\": \"Lantern\", \"modified\": \"<this quarter>\", \"snippet\": null, \"drive_id\": \"drv-1\", \"item_id\": \"itm-0\"}]} with modified_after on the quarter start; without it lantern-budget-2029.xlsx (two quarters ago) is returned as well"
       ],
       "notes": "Calendar quarter assumed. If the company runs a fiscal year, \"this quarter\" means something else, and only the owner can say which.",
-      "needs": ["check:answerExcludes", "driver:graph_files_search"]
+      "needs": ["check:answerExcludes"]
     },
     {
       "id": "p49-time-zone",
@@ -6818,12 +6867,7 @@
         ["draft", "pasted-text"],
         ["transform-text", "pasted-text"]
       ],
-      "needs": [
-        "check:answerMatches",
-        "check:answerNotMatches",
-        "check:forbiddenTools-decoupled",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:answerMatches", "check:answerNotMatches", "check:forbiddenTools-decoupled"]
     },
     {
       "id": "p63-out-of-office-text",
@@ -6993,11 +7037,7 @@
         }
       ],
       "notes": "Running the sum in the sandbox is acceptable; looking anything up is not.",
-      "needs": [
-        "check:answerMatches",
-        "check:forbiddenTools-decoupled",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:answerMatches", "check:forbiddenTools-decoupled"]
     },
     {
       "id": "p66-assess-pasted-headlines",
@@ -7059,12 +7099,7 @@
         }
       ],
       "notes": "A judgement with an expected answer; the owner may prefer to grade only that a reason is given.",
-      "needs": [
-        "check:answerMatches",
-        "check:forbiddenTools-decoupled",
-        "check:onlyRoutes",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:answerMatches", "check:forbiddenTools-decoupled", "check:onlyRoutes"]
     },
     {
       "id": "p67-calendar-to-csv",
@@ -7554,8 +7589,7 @@
         "check:answerMatches",
         "check:forbiddenTools-decoupled",
         "check:onlyRoutes",
-        "driver:graph_files_list",
-        "driver:graph_files_search"
+        "driver:graph_files_list"
       ]
     },
     {
@@ -7794,11 +7828,7 @@
         ["repair", "conversation"],
         ["repair", "pasted-text"]
       ],
-      "needs": [
-        "check:answerLanguage",
-        "check:forbiddenTools-decoupled",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:answerLanguage", "check:forbiddenTools-decoupled"]
     },
     {
       "id": "p80-user-retypes-name-for-web",
@@ -12036,12 +12066,7 @@
         "graph_files_search → {\"query\": \"lantern-contract-final\", \"total\": 1, \"results\": [{\"name\": \"lantern-contract-final.pdf\", \"folder\": \"Lantern Archive\", \"modified\": \"2030-01-15\", \"snippet\": null, \"drive_id\": \"drv-1\", \"item_id\": \"itm-0\"}]}"
       ],
       "twin": "p50-paginated-folder",
-      "needs": [
-        "check:noUncoveredAbsenceClaim",
-        "check:oneOfTools",
-        "driver:graph_files_list",
-        "driver:graph_files_search"
-      ]
+      "needs": ["check:noUncoveredAbsenceClaim", "check:oneOfTools", "driver:graph_files_list"]
     },
     {
       "id": "tn53-general-knowledge-no-web",

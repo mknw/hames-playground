@@ -15,6 +15,110 @@ function containsFact(answer: string, fact: string): boolean {
   return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(answer)
 }
 
+/** #1006 — the resolved-intent graders for one turn. Each graded surface comes
+ *  off the turn's own events, so a turn whose chain runs no compact-intent
+ *  step (today's main) fails all of them rather than grading vacuously: the
+ *  `intent_compacted` event is absent, so the brief check fails first and the
+ *  others report what they read instead. */
+function resolvedIntentChecks(
+  ie: NonNullable<ConversationScenario['intentExpect']>,
+  trace: ConversationTrace,
+  checks: Check[],
+): void {
+  const turn = trace.turns[ie.turn - 1]
+  const events = turn?.events ?? []
+  const briefs = events
+    .filter((e) => e.type === 'intent_compacted')
+    .map((e) => record(e.data).intent)
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+  const brief = briefs.at(-1) ?? ''
+  checks.push(
+    check(
+      `turn ${ie.turn}: resolved intent recorded`,
+      brief.length > 0,
+      brief || 'no intent_compacted event with a brief this turn',
+    ),
+  )
+  for (const fact of ie.includes)
+    checks.push(check(`resolved intent names ${fact}`, containsFact(brief, fact), brief))
+
+  // The decide state: the FIRST decision of the turn heads with the intent.
+  const decision = events.find((e) => e.type === 'decision_made')
+  const state = String(record(record(decision?.llmCall).variables).state ?? '')
+  checks.push(
+    check(
+      `turn ${ie.turn}: decide state heads with the resolved intent`,
+      state.startsWith('Resolved intent (this turn):') &&
+        ie.includes.every((f) => state.includes(f)),
+      state.slice(0, 300) || 'no decision recorded this turn',
+    ),
+  )
+
+  // The route: the turn's decisions dispatch `route`, and the dispatched
+  // child's actor task — the controller call's `intent` variable — carries the
+  // resolved intent.
+  const dispatched = events.some(
+    (e) =>
+      e.type === 'decision_made' &&
+      record(e.data).label === ie.route &&
+      record(e.data).abstained !== true,
+  )
+  checks.push(
+    check(
+      `turn ${ie.turn}: decision dispatches ${ie.route}`,
+      dispatched,
+      JSON.stringify(
+        events.filter((e) => e.type === 'decision_made').map((e) => record(e.data).label),
+      ),
+    ),
+  )
+  const actorIntents = events
+    .filter((e) => e.type === 'controller_action')
+    .map((e) => record(e.llmCall?.variables).intent)
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+  const actorIntent = actorIntents.at(-1) ?? ''
+  checks.push(
+    check(
+      `turn ${ie.turn}: actor task carries the resolved intent`,
+      actorIntent.length > 0 && ie.includes.every((f) => containsFact(actorIntent, f)),
+      actorIntent.slice(0, 300) || 'no controller call recorded this turn',
+    ),
+  )
+
+  // The critic, when the dispatched route runs one (actorCritic): its intent
+  // argument carries the resolved intent too.
+  const criticIntents = events
+    .filter((e) => e.type === 'critic_result')
+    .map((e) => record(e.llmCall?.variables).intent)
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+  if (criticIntents.length > 0) {
+    const criticIntent = criticIntents.at(-1) ?? ''
+    checks.push(
+      check(
+        `turn ${ie.turn}: critic intent carries the resolved intent`,
+        ie.includes.every((f) => containsFact(criticIntent, f)),
+        criticIntent.slice(0, 300),
+      ),
+    )
+  }
+
+  // The retriever's recorded query, when the turn dispatches one.
+  if (ie.retriever) {
+    const queries = events
+      .filter((e) => e.type === 'tool_result' && record(e.data).tool === 'retriever')
+      .map((e) => record(record(e.data).result).query)
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    const query = queries.at(-1) ?? ''
+    checks.push(
+      check(
+        `turn ${ie.turn}: retriever query is the resolved intent`,
+        query.length > 0 && ie.includes.every((f) => containsFact(query, f)),
+        query || 'no retriever result this turn',
+      ),
+    )
+  }
+}
+
 function routeCompleted(
   events: ConversationTrace['turns'][number]['events'],
   route: string,
@@ -256,6 +360,10 @@ export function grade(
       ),
     )
   if (s.orgExpect) checks.push(...orgChecks(s.orgExpect, trace.org, trace.turns))
+  // #1006: the resolved-intent graders. Every graded surface is read from the
+  // trace events, so a live run grades whatever the real compact-intent call
+  // produced, and a hermetic one the fixture's scripted brief.
+  if (s.intentExpect) resolvedIntentChecks(s.intentExpect, trace, checks)
   if (!baseline) {
     for (const route of s.expectedRoutes) {
       checks.push(

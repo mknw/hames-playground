@@ -295,6 +295,37 @@ describe('ObservabilityPanel — summary bar', () => {
 })
 
 describe('ObservabilityPanel — timeline construction', () => {
+  // #1006: the turn's resolved intent is the Context Manager's first agent
+  // line — the compact-intent event commits right after the user's message and
+  // before the orchestrator enters, so the chronological timeline opens the
+  // turn with the user's message, then the brief as the next row's preview.
+  // MUTATION: emit the event after the orchestrator's pattern_enter (a
+  // compact-intent step placed after the loop) and this reddens.
+  it('renders the resolved intent as the turn’s first agent line', () => {
+    const events = [
+      ev('user_message', { content: 'try again, this time for the Q3 figures' }),
+      {
+        ...ev('intent_compacted', {
+          intent: 'Search the documents again, this time for the Q3 figures',
+          latest: 'try again, this time for the Q3 figures',
+          historyLength: 2,
+        }),
+        patternId: 'intent',
+      },
+      ev('pattern_enter', { pattern: 'decisionLoop', route: 'info-retrieval' }),
+      ev('controller_action', {
+        action: { reasoning: 'r', tool_name: 'read_neo4j_cypher', tool_args: '{}' },
+      }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    const texts = rows(container).map((r) => r.textContent ?? '')
+    expect(texts[0]).toContain('user message')
+    expect(texts[1]).toContain('intent compacted')
+    expect(texts[1]).toContain('Search the documents again')
+    // The orchestrator's rows come after the brief, never before it.
+    expect(texts.slice(2).join('\n')).not.toContain('Search the documents again')
+  })
+
   it('sorts events oldest-first regardless of arrival order', () => {
     const late = ev('user_message', { content: 'second' })
     const early = { ...ev('user_message', { content: 'first' }), ts: 0 }

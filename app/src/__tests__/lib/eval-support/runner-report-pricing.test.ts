@@ -65,7 +65,7 @@ function serializedReport(budget: SpendBudget): Record<string, unknown> {
     file: 'report.json',
     capture: undefined,
     wakeDetail: undefined,
-    screenShare: () => ({}),
+    guardShare: () => ({}),
     writeFileSync: (_path: string, value: string) => {
       serialized = value
     },

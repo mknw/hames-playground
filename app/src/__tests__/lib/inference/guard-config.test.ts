@@ -9,7 +9,9 @@
 //   switches' weakening warnings have no case left; a still-set 'gated' or
 //   'shadow' (the retired gate's modes) REFUSES boot naming the change, and a
 //   still-set GUARD_GATE_THRESHOLD refuses boot naming the replacement (the
-//   GUARD_EGRESS posture). The warnings and the values come from the one
+//   GUARD_EGRESS posture). Slice 17 added GUARD_INGRESS, the
+//   injection-ingress-guard classification's one value for both tiers
+//   (default 'off'). The warnings and the values come from the one
 //   `readGuards()` pass, so the pins live here beside the parse they pin.
 //
 // Env handling: the parse reads `process.env` per call (the same discipline as
@@ -19,7 +21,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
+import { INGRESS_POLICY_DEFAULT, SCREEN_POLICY_BY_TIER } from '@hames-ai/agents/types'
 import { assertGuardsConfigured, guardConfig } from '../../../lib/inference/guard-config.server'
 
 // The boot validator is the warnings' only logger; the tests read the calls.
@@ -50,13 +52,17 @@ describe('the GUARD_* operator switches (boundary guards slice 6)', () => {
       egressNameMatch: undefined,
       egressDecide: undefined,
       pseudonymise: false,
+      // Revision 6 (O35): the classification's one value, from the shared
+      // default the agent's fallback also reads.
+      ingressMode: INGRESS_POLICY_DEFAULT,
       // #844: today's numbers, as literals rather than the constants they come
       // from, so moving a constant is a red here and not a silent new default.
-      gateThreshold: 0.15,
       egressThreshold: 0.3,
       maxOutgoingRetriesPostTripwire: 0,
     })
     expect(SCREEN_POLICY_BY_TIER).toEqual({ self_deployed: 'off', anthropic: 'off' })
+    // MUTATION: change INGRESS_POLICY_DEFAULT to 'shadow' or 'on': red.
+    expect(INGRESS_POLICY_DEFAULT).toBe('off')
     expect(warns).toEqual([])
   })
 
@@ -233,6 +239,33 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     },
   )
 
+  // Revision 6, slice 17: GUARD_INGRESS, ONE value for both tiers (ruling AE,
+  // the egress detectors' convention). The declared default is 'off', so no
+  // accepted value is looser than it and no boot warning has a case; an
+  // unknown value refuses boot naming the variable. MUTATIONS: read the value
+  // without `parseMode` (an unknown value reaches the bag and the guard's own
+  // construction refusal names a different thing): the refusal rows go red;
+  // drop the parse and keep the default: the accepted rows go red.
+  it.each([
+    ['off', 'off'],
+    ['shadow', 'shadow'],
+    ['on', 'on'],
+    ['  ON  ', 'on'],
+  ])('GUARD_INGRESS=%j sets the one classification mode (%j), with no warning', (raw, want) => {
+    vi.stubEnv('GUARD_INGRESS', raw)
+    expect(guardConfig().ingressMode).toBe(want)
+    assertGuardsConfigured()
+    expect(warns).toEqual([])
+  })
+  it.each(['gated', 'always', 'true', '1', 'enabled'])(
+    'GUARD_INGRESS=%j refuses boot naming the variable and the accepted values',
+    (raw) => {
+      vi.stubEnv('GUARD_INGRESS', raw)
+      expect(() => guardConfig()).toThrow(/GUARD_INGRESS/)
+      expect(() => guardConfig()).toThrow(/off, shadow, on/)
+    },
+  )
+
   // MUTATION: read the wrong variable for one setting (or drop its parse and
   // keep the default): that row goes red.
   it.each([
@@ -245,12 +278,12 @@ describe('the guard thresholds and the tripwire N as settings (#844)', () => {
     expect(guardConfig()[field]).toBe(want)
   })
 
-  // Each setting moves its own field only; τi stays at the pattern's own
-  // default now that nothing can set it.
+  // Each setting moves its own field only; τi has no field now that nothing
+  // can set it.
   it('each variable sets its own field and leaves the others at their defaults', () => {
     vi.stubEnv('GUARD_EGRESS_THRESHOLD', '0.1')
     expect(guardConfig()).toMatchObject({
-      gateThreshold: 0.15,
+      ingressMode: 'off',
       egressThreshold: 0.1,
       maxOutgoingRetriesPostTripwire: 0,
     })

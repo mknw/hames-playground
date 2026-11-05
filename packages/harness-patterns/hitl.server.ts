@@ -1375,9 +1375,10 @@ function substituteHeld(
       tool: data.tool,
       namespace: 'hitl',
     })
-    // A fresh object: no `summary`, and no `sanitized` that described the
-    // placeholder rather than what replaced it.
-    const { summary: _summary, sanitized: _sanitized, ...rest } = data
+    // A fresh object: no `summary`, no `sanitized` and no `ingress` mark that
+    // described the placeholder rather than what replaced it (a stale
+    // classification would mark content it never read).
+    const { summary: _summary, sanitized: _sanitized, ingress: _ingress, ...rest } = data
     event.data = {
       ...rest,
       result,

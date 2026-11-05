@@ -43,6 +43,7 @@ import type {
   RetrieverBackend,
   RetrieverData,
   ScreenMode,
+  IngressMode,
 } from '@hames-ai/harness-patterns'
 import type { OnToolResult, ByTier } from '@hames-ai/harness-patterns/types'
 import type { HarnessData } from '@hames-ai/harness-patterns/harness.server'
@@ -73,24 +74,28 @@ export interface GraphElement extends ElementDefinition {
  *   guards #938, O35), so a host that composes no screen settings runs a
  *   fully deterministic ingress. The composition root's switches accept
  *   only `'off'` and `'always'` per tier; a set `'gated'` or `'shadow'`
- *   refuses boot naming the change, and the four core values remain
- *   reachable in a reviewed line of code (the bag is typed `ByTier`).
+ *   refuses boot naming the change. Core itself accepts only `'off'` and
+ *   `'always'` since revision 6, slice 17 retired the gate.
+ * - `ingressMode` sets the injection-ingress-guard classification's
+ *   `ingressGuard.mode` on every guard that declares one — ONE value on
+ *   both tiers (the egress detectors' convention, ruling AE), because the
+ *   classification is mark-only presentation (O38) and needs no tier split.
+ *   Absent: `INGRESS_POLICY_DEFAULT` below (`'off'`, O35 — with no switch
+ *   set, ingress is fully deterministic).
  * - `egressTools`, `egressNameMatch` and `egressDecide` select per-tool detectors.
- *   The former mode setting was removed.
  * - `classifyIngress` is the host's classifier (ruling O), passed as a
  *   screen's `classify`. Absent: every payload is external, the safe default.
- *   It rides `guards` rather than its own `AgentDeps` field — one path to the
- *   screen's gating, not two — and no env variable sets it.
+ *   It rides `guards` rather than its own `AgentDeps` field — one path to
+ *   the screen's gating, not two — and no env variable sets it.
  * - `pseudonymiseForWeb` is the input pseudonymiser (K5): supplied, the agent
  *   wraps its web route in `withPseudonymisedInputs` with it. Absent (the
  *   host's switch is off, or no `guards` bag at all), the agent composes no
  *   wrapper, never a null filter into one that would withhold every word of
  *   inherited content on the tier it runs on (boundary guards slice 5).
- * - `gateThreshold` is τi, the guard gate's `threshold` (`createGuardGate`):
- *   the screen runs when the gate's pTrue is at or above it. It decides
- *   anything only where the screen's mode is `'gated'`. Absent: the gate's
- *   own `GUARD_GATE_THRESHOLD` default — the env variable of that name
- *   retired with revision 6 (#938), and a still-set value refuses boot.
+ * - `gateThreshold` is RETIRED with the gate (revision 6, #938): the
+ *   `createGuardGate` composition is gone from this agent, and the
+ *   `GUARD_GATE_THRESHOLD` env variable refuses boot (guard-config). No
+ *   replacement field exists.
  * - `egressThreshold` is τe, the egress gate's `threshold`: a call is refused
  *   (or the person asked) when 1 − P(`nothing_private`) is at or above it, on
  *   every tier. Absent: `GUARD_EGRESS_THRESHOLD`.
@@ -103,18 +108,22 @@ export interface GraphElement extends ElementDefinition {
  *   Absent or empty: no link is exempt.
  *
  * τe and the egress tripwire's N are the host's to validate (the app refuses
- * boot on an out-of-range value and warns on one looser than the default);
- * τi is code-owned since revision 6, its env variable retired. The patterns
- * themselves still refuse a value outside their range at construction.
+ * boot on an out-of-range value and warns on one looser than the default).
+ * The patterns themselves still refuse a value outside their range at
+ * construction.
  */
 export interface AgentGuards {
   readonly screenMode?: ByTier<ScreenMode>
+  /** The injection-ingress-guard classification's mode — ONE value on both
+   *   tiers (ruling AE): `'off'` (the default, `INGRESS_POLICY_DEFAULT`),
+   *   `'shadow'` (records, changes no presentation) or `'on'` (drives
+   *   presentation). Set by `GUARD_INGRESS`. */
+  readonly ingressMode?: IngressMode
   readonly egressTools?: readonly string[]
   readonly egressNameMatch?: EgressDetectors['nameMatch']
   readonly egressDecide?: EgressDetectors['decide']
   readonly classifyIngress?: IngressClassifier
   readonly pseudonymiseForWeb?: PseudonymiseForWeb
-  readonly gateThreshold?: number
   readonly egressThreshold?: number
   readonly maxOutgoingRetriesPostTripwire?: number
   readonly documentHosts?: readonly string[]
@@ -136,6 +145,14 @@ export const SCREEN_POLICY_BY_TIER: {
   self_deployed: 'off',
   anthropic: 'off',
 }
+
+/** The injection-ingress-guard classification's ONE default (revision 6,
+ *  O35): one value, not a per-tier pair, because the classification is
+ *  mark-only presentation (O38) — `GUARD_INGRESS` sets one value for both
+ *  tiers. Declared beside `SCREEN_POLICY_BY_TIER` so the composition root's
+ *  validation and the agent's fallback read one literal, the same fold as
+ *  the screen's (O40). */
+export const INGRESS_POLICY_DEFAULT: IngressMode = 'off'
 
 /**
  * The composite the app calls `SessionData` (app `session.server.ts`) — all

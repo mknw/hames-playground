@@ -26,7 +26,10 @@
  * no extra `pattern_enter`/`pattern_exit` noise, no change to
  * `view.fromLastPattern()` resolution. The only observable difference on a
  * clean run is nothing at all; on detection, a `content_sanitized` event and a
- * `sanitized` annotation on the affected `tool_result`.
+ * `sanitized` annotation on the affected `tool_result`. When the
+ * injection-ingress-guard classification runs (its own opt-in, `ingressGuard`),
+ * its answer lands as a `decision_made` event keyed `guard.ingress` and an
+ * `ingress` mark on the affected `tool_result` — metadata only, never content.
  */
 
 import { assertServerOnImport } from '../assert.server'
@@ -47,10 +50,15 @@ import {
   sanitizeUntrusted,
   SCREEN_WITHHELD,
   type ActiveInjectionGuard,
+  type IngressClassification,
   type IngressFlagPayload,
+  type IngressLabel,
   type IngressClass,
   type IngressClassifier,
+  type IngressMark,
+  type IngressMode,
   type InjectionGuardOptions,
+  type InjectionIngressGuardConfig,
   type InjectionScreenConfig,
   type SanitizeReport,
   type ScreenMode,
@@ -182,75 +190,60 @@ export function createInjectionGuard(
     declares(tool) ? config : (outer?.optionsFor(tool) ?? config)
 
   if (config.screen) refuseUnreadableScreen(config.screen, namespaces)
+  if (config.ingressGuard) refuseUnreadableIngress(config.ingressGuard)
 
-  /** The gate's answer as a `decision_made` event in the live scope, its call
-   *  record redacted (the gate's state is the payload it read). Best effort, like
-   *  the screen's `model_call`: a recording failure never changes a verdict. */
-  const recordGateDecision = (event: DecisionMadeEventData, call?: LLMCallRecord): void => {
+  /** The classification's answer as a `decision_made` event in the live scope,
+   *  its call record redacted (the classification's state is the payload it
+   *  read). Best effort, like the screen's `model_call`: a recording failure
+   *  never changes a verdict. Returns the event's id, for the payload's
+   *  attachment as the decision record's reference (O37). */
+  const recordIngressDecision = (
+    event: DecisionMadeEventData,
+    call?: LLMCallRecord,
+  ): string | undefined => {
     try {
-      emit(createEvent('decision_made', patternId, event, redactCall(call)))
+      const recorded = createEvent('decision_made', patternId, event, redactCall(call))
+      emit(recorded)
+      return recorded.id
     } catch (recordErr) {
       console.error(
-        '[withInjectionGuard] recording the gate decision failed; the verdict is unaffected:',
+        '[withInjectionGuard] recording the classification decision failed; the verdict is unaffected:',
         recordErr,
       )
+      return undefined
     }
   }
 
   /**
    * Whether the model screen runs on this payload, in this order:
    *   1. an `exempt` namespace: never (ruling L), whatever else holds;
-   *   2. mode `'off'` on this call's tier: never;
-   *   3. a deterministic finding: always, with no gate call — a hit is already
-   *      a positive, and the gate would only add a way to talk the screen out;
-   *   4. an internal payload, by the declaration's classifier: never (ruling O);
-   *   5. `'always'`: always; `'shadow'`: the gate is asked and recorded, and the
-   *      screen runs whatever it said; `'gated'`: the gate decides, and a gate
-   *      that is unavailable or throws runs the screen (the safe direction).
+   *   2. mode `'off'` on this call's tier: never — O41 ruled (a): a
+   *      deterministic finding forces nothing past an `'off'`, because the
+   *      classification replaced the finding-forces-model-call path and
+   *      `'off'` means ingress is fully deterministic;
+   *   3. a deterministic finding: always, with no model call in between — a
+   *      hit is already a positive, and a model asked whether to look closer
+   *      would only add a way to talk the screen out of running;
+   *   4. an internal payload, by the declaration's classifier: never (ruling O).
    *
-   * Only `'off'` and `'gated'` can skip the screen, each by its exact value. The
-   * declaration is read on every call, so a value construction never saw (a cast,
-   * a later write) fails safe: anything else runs the screen, as `'shadow'` does.
-   *
-   * A gate whose answer is not obeyed is not waited for: its call is returned
-   * as `shadowGate`, to run beside the screen and be awaited after it, so a
-   * `'shadow'` result costs the slower of the two calls rather than their sum,
-   * and the gate's decision is still recorded inside this scope. It never
-   * rejects.
+   * Only `'off'` can skip the screen, by its exact value. The declaration is
+   * read on every call, so a value construction never saw (a cast, a later
+   * write) fails safe: anything else runs the screen.
    */
-  const shouldScreen = async (
+  const shouldScreen = (
     screen: InjectionScreenConfig,
-    p: { tool: string; namespace: string; data: unknown; report: SanitizeReport },
-  ): Promise<{ run: boolean; shadowGate?: Promise<void> }> => {
-    if (screen.exempt?.includes(p.namespace)) return { run: false }
-    const mode = resolveByTier(screen.mode ?? (screen.gate ? 'shadow' : 'always'))
-    if (mode === 'off') return { run: false }
-    if (p.report.findings.length > 0) return { run: true }
-    if (classifyIngress(screen.classify, p) === 'internal') return { run: false }
-    const gate = screen.gate
-    if (mode === 'always' || !gate) return { run: true }
-    const asked = (async () =>
-      gate({
-        tool: p.tool,
-        namespace: p.namespace,
-        content: typeof p.data === 'string' ? p.data : (JSON.stringify(p.data) ?? ''),
-        ...(mode !== 'gated' && { shadow: true }),
-        onDecision: recordGateDecision,
-      }))()
-    if (mode !== 'gated') {
-      return {
-        run: true,
-        shadowGate: asked.then(
-          () => undefined,
-          () => undefined,
-        ),
-      }
-    }
-    try {
-      return { run: (await asked).run }
-    } catch {
-      return { run: true }
-    }
+    p: {
+      tool: string
+      namespace: string
+      data: unknown
+      report: SanitizeReport
+      external: boolean
+    },
+  ): boolean => {
+    if (screen.exempt?.includes(p.namespace)) return false
+    if (resolveByTier(screen.mode ?? 'always') === 'off') return false
+    if (p.report.findings.length > 0) return true
+    return p.external
   }
 
   return {
@@ -269,16 +262,59 @@ export function createInjectionGuard(
       const effective = { ...options, spotlight: call?.spotlight ?? options.spotlight }
       let { data: out, report } = sanitizeUntrusted(data, { tool, namespace, item }, effective)
 
+      // Both model steps read the SAME projection: the sanitized one after a
+      // deterministic finding (K1's markers are part of what each reads — one
+      // rule, no branches: a payload's findings never change whether either
+      // runs), the original otherwise.
+      const projection = report.findings.length > 0 ? out : data
+      // Recorded before the screen can add findings of its own: the label floor
+      // below needs to know which layer flagged the payload.
+      const deterministicFinding = report.findings.length > 0
+      let screenPositive = false
+      const external =
+        classifyIngress(options.screen?.classify, { tool, namespace, data }) === 'external'
+      // Ruling L named the gate and the screen: an `exempt` namespace meets
+      // neither. The classification replaced the gate, so it inherits the
+      // exemption rather than quietly widening what a declaration exempted.
+      const exempt = options.screen?.exempt?.includes(namespace) === true
+
+      // The injection-ingress-guard classification (O36): one Decide call per
+      // external payload in `'on'`/`'shadow'`, beside the screen and reading
+      // the same head, so a run that pays for both waits the slower of the two
+      // rather than their sum. Label + friction, never withhold (O38): the
+      // answer attaches as metadata and changes no content. In `'on'`, an
+      // unavailable answer (a timeout, a transport failure, a state it could
+      // not render, a runner that throws) attaches an ABSTAINED mark, so a
+      // reader can tell "classified and failed" from "never classified"
+      // (security review MUST-2). A per-call `ingress: false` opts a payload
+      // out — the error channel and a hit's filename: neither is content a
+      // reference surfaces, a deliberate narrowing of "where K1 runs" (code
+      // review SHOULD-4) — and a mode that is not `'on'` by its exact value —
+      // `'shadow'`, or a value construction never saw — records with
+      // `shadow: true` and attaches no mark.
+      const ingressGuard = call?.ingress === false ? undefined : options.ingressGuard
+      const ingressMode = ingressGuard ? resolveByTier(ingressGuard.mode ?? 'off') : 'off'
+      const classification =
+        ingressGuard && ingressMode !== 'off' && external && !exempt
+          ? (async () =>
+              ingressGuard.run({
+                tool,
+                namespace,
+                content:
+                  typeof projection === 'string' ? projection : (JSON.stringify(projection) ?? ''),
+                item: fenceItemId(item),
+                ...(ingressMode !== 'on' && { shadow: true as const }),
+                onDecision: recordIngressDecision,
+              }))()
+          : undefined
+
       // The model screen, as its declaration says (`shouldScreen`). After a
       // deterministic finding it reads the sanitized projection, never the
       // original spans. A screen outage is recorded on the report; the
       // declaration's `onUnavailable` decides whether the payload stands.
       const screen = call?.screen === false ? undefined : options.screen
-      const decided = screen
-        ? await shouldScreen(screen, { tool, namespace, data, report })
-        : { run: false }
-      if (screen && decided.run) {
-        const screenInput = report.findings.length > 0 ? out : data
+      if (screen && shouldScreen(screen, { tool, namespace, data, report, external })) {
+        const screenInput = projection
         try {
           const verdict = await screen.run({
             tool,
@@ -309,6 +345,7 @@ export function createInjectionGuard(
             },
           })
           if (verdict.injection_detected) {
+            screenPositive = true
             const screened = applyScreenVerdict(
               screenInput,
               verdict,
@@ -343,9 +380,55 @@ export function createInjectionGuard(
           }
         }
       }
-      // A shadow gate ran beside the screen; its decision lands before this
-      // result is returned.
-      await decided.shadowGate
+      // The classification ran beside the screen; its answer lands before this
+      // result is returned. The runner's contract says it never throws; one
+      // that does (a custom `run`) is an unavailable answer like any other.
+      let classified: IngressClassification | undefined
+      if (classification) {
+        try {
+          classified = await classification
+        } catch {
+          classified = undefined
+        }
+      }
+      // Only an `'on'` answer attaches a mark. A `'shadow'` answer lives on its
+      // `decision_made` event alone (stamped `shadow: true`, with the tool and
+      // item id to correlate it): a mark a presentation reader could misread is
+      // not attached at all, so "changes no presentation" holds by
+      // construction rather than by every reader remembering a flag.
+      //
+      // In `'on'` every classification that RAN attaches a mark:
+      //  - an answer: its label, FLOORED by what the other layers found
+      //    (security review SHOULD-4) — a deterministic finding is already a
+      //    positive, so the label is at least `possible-instructions-for-ai`,
+      //    and a positive screen verdict makes it `instructions-for-ai-detected`.
+      //    A floored label is never `safe`.
+      //  - no answer: an abstained mark (no label, `safe: false`), which a
+      //    reader presents as unchecked, never as safe (security MUST-2).
+      // `truncated` says the label covers only the head it read (prompt S6,
+      // security S5).
+      let ingress: IngressMark | undefined
+      if (ingressMode === 'on' && classification) {
+        const markItem = fenceItemId(item)
+        const base = {
+          tool,
+          ...(markItem !== undefined ? { item: markItem } : {}),
+          ...(classified?.truncated ? { truncated: true as const } : {}),
+          ...(classified?.eventId !== undefined ? { eventId: classified.eventId } : {}),
+        }
+        if (classified && !classified.abstained && classified.label !== null) {
+          const floor: IngressLabel = screenPositive
+            ? 'instructions-for-ai-detected'
+            : deterministicFinding
+              ? 'possible-instructions-for-ai'
+              : 'safe'
+          const label =
+            INGRESS_RANK[classified.label] >= INGRESS_RANK[floor] ? classified.label : floor
+          ingress = { ...base, label, safe: label === 'safe' && classified.safe }
+        } else {
+          ingress = { ...base, abstained: true, safe: false }
+        }
+      }
 
       if (report.findings.length === 0) {
         // Nothing was DETECTED. `out` may still differ from `data` — a bare
@@ -362,16 +445,16 @@ export function createInjectionGuard(
           // must be visible rather than invisible.
           const event = buildEvent(patternId, report)
           emit(event)
-          return { data: out, summary: redactReport(report, event.id) }
+          return { data: out, summary: redactReport(report, event.id), ingress }
         }
-        return { data: out }
+        return { data: out, ingress }
       }
 
       const event = buildEvent(patternId, report)
       emit(event)
       // The REDACTED summary goes back to the caller (and onto the tool_result
       // event); the verbatim spans stay on `event` alone. See `SanitizeSummary`.
-      return { data: out, summary: redactReport(report, event.id) }
+      return { data: out, summary: redactReport(report, event.id), ingress }
     },
   }
 }
@@ -443,19 +526,29 @@ function classifyIngress(
   }
 }
 
-/** The four screen modes; any other value is refused at construction. */
-const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'shadow', 'gated', 'always'])
+/** The classification's labels in order of severity, for the floor above. */
+const INGRESS_RANK: Readonly<Record<IngressLabel, number>> = {
+  safe: 0,
+  'possible-instructions-for-ai': 1,
+  'instructions-for-ai-detected': 2,
+}
+
+/** The two screen modes; any other value is refused at construction. */
+const SCREEN_MODES: ReadonlySet<unknown> = new Set<ScreenMode>(['off', 'always'])
+/** The classification's three modes. */
+const INGRESS_MODES: ReadonlySet<unknown> = new Set<IngressMode>(['off', 'shadow', 'on'])
 
 /**
  * REFUSE a screen declaration that reads like protection and is not:
  *
  *  - a `run` that is not a function — every call would be a screen outage;
- *  - a `mode` that is not one of the four, on any tier, or a per-tier map with
+ *  - a `mode` that is not one of the two, on any tier, or a per-tier map with
  *    no own `default` (it would resolve to the map itself) — whatever it was
- *    meant to say, the guard would act on something else;
+ *    meant to say, the guard would act on something else. The retired gate's
+ *    `'shadow'`/`'gated'` are refused here because both asked a gate, and no
+ *    gate can be passed any more (revision 6, #938). On main they already
+ *    refused construction when no gate was passed;
  *  - an `onUnavailable` other than `'pass'` or `'withhold'`;
- *  - a mode that asks the gate (`'shadow'`, `'gated'`) on any tier, with no
- *    gate passed — it would run as nothing anyone declared;
  *  - an `exempt` namespace the guard does not declare — it would match nothing
  *    while reading like a decision (#242 item 4's rule, applied here).
  *
@@ -481,7 +574,7 @@ function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<s
   if (unknown.length > 0) {
     throw new Error(
       `[withInjectionGuard] the screen's mode ${JSON.stringify(unknown[0])} is not one of ` +
-        `'off', 'shadow', 'gated' or 'always'.`,
+        `'off' or 'always'.`,
     )
   }
   if (
@@ -494,13 +587,6 @@ function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<s
         `is not 'pass' or 'withhold'.`,
     )
   }
-  if (!screen.gate && modes.some((m) => m === 'shadow' || m === 'gated')) {
-    throw new Error(
-      `[withInjectionGuard] the screen's mode asks the guard gate ('shadow' or 'gated') ` +
-        `but no gate was passed. Pass \`gate: createGuardGate(decide)\`, or declare ` +
-        `'always' or 'off'.`,
-    )
-  }
   for (const ns of screen.exempt ?? []) {
     if (!namespaces.has(ns)) {
       throw new Error(
@@ -509,6 +595,38 @@ function refuseUnreadableScreen(screen: InjectionScreenConfig, namespaces: Set<s
           `exempts nothing while reading like a decision. (#242 item 4)`,
       )
     }
+  }
+}
+
+/**
+ * REFUSE a classification declaration that reads like protection and is not:
+ * a `run` that is not a function (every payload it covers would be unmarked
+ * for a reason nobody can see), a `mode` that is not one of the three on any
+ * tier, or a per-tier map with no own `default` — the same rule the screen's
+ * declaration follows, so a JavaScript caller, a cast and a value read from
+ * configuration cannot produce a declaration the guard would act on as
+ * something else.
+ */
+function refuseUnreadableIngress(ingress: InjectionIngressGuardConfig): void {
+  if (typeof ingress.run !== 'function') {
+    throw new Error(
+      `[withInjectionGuard] the classification's \`run\` is not a function, so every payload ` +
+        'it covers would be unmarked. Pass `run: createIngressGuard(decide)` or your own.',
+    )
+  }
+  const { mode } = ingress
+  if (typeof mode === 'object' && mode !== null && !Object.hasOwn(mode, 'default')) {
+    throw new Error(
+      `[withInjectionGuard] the classification's per-tier mode has no \`default\`, so a ` +
+        'tier it does not name would resolve to the map itself. Add `default`.',
+    )
+  }
+  const unknown = (mode === undefined ? [] : tierValues(mode)).filter((m) => !INGRESS_MODES.has(m))
+  if (unknown.length > 0) {
+    throw new Error(
+      `[withInjectionGuard] the classification's mode ${JSON.stringify(unknown[0])} is not ` +
+        "one of 'off', 'shadow' or 'on'.",
+    )
   }
 }
 

@@ -512,13 +512,27 @@ async function applyGuard(
   // rewrite off `summary` would have thrown that fence away and forwarded the
   // raw payload.
   if (result.success) {
-    const { data, summary } = await guard.sanitize(name, result.data, { item: id })
-    if (data === result.data && !summary) return result
-    return { ...result, data, ...(summary ? { sanitized: summary } : {}) }
+    const { data, summary, ingress } = await guard.sanitize(name, result.data, { item: id })
+    if (data === result.data && !summary && !ingress) return result
+    return {
+      ...result,
+      data,
+      ...(summary ? { sanitized: summary } : {}),
+      ...(ingress ? { ingress } : {}),
+    }
   }
 
+  // The error channel opts the classification out (`ingress: false`). Not for
+  // O37 — the two branches are exclusive per call, so classifying the error
+  // would still be one classification per result — but because an error
+  // string is not content a reference surfaces. That is a deliberate
+  // narrowing of the design's coverage claim ("where K1 runs", SD-6's two
+  // enforcement points), named for the security review (code review SHOULD-4).
   if (typeof result.error !== 'string' || result.error.length === 0) return result
-  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, { item: id })
+  const { data: cleanedError, summary } = await guard.sanitize(name, result.error, {
+    item: id,
+    ingress: false,
+  })
   if (cleanedError === result.error && !summary) return result
   return { ...result, error: cleanedError as string, ...(summary ? { sanitized: summary } : {}) }
 }

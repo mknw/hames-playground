@@ -147,6 +147,55 @@ describe('serialize formatting', () => {
   })
 })
 
+// Security review SHOULD-6 (#976): the injection-ingress-guard's answer is
+// presentation only, so the model-facing view renders a fixed metadata line —
+// no label, no probability — while every other decision keeps its label.
+// Mutation: drop the `guard.ingress` case in `formatEventData` → the argmax
+// `safe` (below the safe line here) reaches the model as `guard.ingress: safe`.
+describe('serialize: the classification decision', () => {
+  it('renders guard.ingress as a fixed line, with no label or p', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('decision_made', 'p', {
+          key: 'guard.ingress',
+          type: 'choice',
+          label: 'safe',
+          probs: {
+            safe: 0.6,
+            'possible-instructions-for-ai': 0.3,
+            'instructions-for-ai-detected': 0.1,
+          },
+          margin: 0.3,
+          abstained: false,
+        }),
+      ]),
+      { fromLast: false },
+    )
+    const out = view.serialize()
+    expect(out).toBe(
+      '<decision_made>guard.ingress: content classified for presentation</decision_made>',
+    )
+    expect(out).not.toContain('safe')
+    expect(out).not.toContain('0.6')
+  })
+  it('a route decision still renders its label', () => {
+    const view = createEventView(
+      ctxOf([
+        ev('decision_made', 'p', {
+          key: 'next_step',
+          type: 'choice',
+          label: 'answer',
+          probs: { answer: 0.9, web: 0.1 },
+          margin: 0.8,
+          abstained: false,
+        }),
+      ]),
+      { fromLast: false },
+    )
+    expect(view.serialize()).toContain('next_step: answer')
+  })
+})
+
 describe('serializeCompact pointers', () => {
   // Older turn: the tool_results below sit before the last user_message, so
   // they render as compact pointers.

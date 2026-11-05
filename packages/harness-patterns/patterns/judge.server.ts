@@ -78,10 +78,14 @@ export function judge<T extends JudgeData>(
         const maxCandidates = config?.maxCandidates ?? candidates.length
         const limitedCandidates = candidates.slice(0, maxCandidates)
 
-        // Format candidates for evaluator
+        // Format candidates for evaluator. The injection-ingress-guard's
+        // `ingress` mark is PRESENTATION metadata (O38): a checker's "safe"
+        // beside the content the evaluator ranks is the shape its own
+        // `detected` criterion names, so it never reaches the evaluator's model
+        // (security review S9, the same class as the event view's fixed line).
         const formattedCandidates = limitedCandidates.map((c) => ({
           source: c.patternId,
-          content: JSON.stringify(c.data),
+          content: JSON.stringify(withoutIngressMark(c.data)),
         }))
 
         // Call evaluator
@@ -117,4 +121,11 @@ export function judge<T extends JudgeData>(
     config: resolved,
     estimateTurns: () => 1,
   }
+}
+
+/** A `tool_result` payload without its `ingress` mark; anything else as is. */
+function withoutIngressMark(data: unknown): unknown {
+  if (data === null || typeof data !== 'object' || !('ingress' in data)) return data
+  const { ingress: _ingress, ...rest } = data as Record<string, unknown>
+  return rest
 }

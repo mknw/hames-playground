@@ -11,16 +11,19 @@ export interface SpendKey {
 /** The injection screen's BAML function. general-next's office and info route guards screen
  * external tool results (always after a deterministic finding, otherwise as the screen's mode
  * says); retriever hits and route-output records are not model-screened, so its private-tier
- * time is its own report line. */
+ * time is its own report line. The screen is default-OFF since revision 6 (#938, O35), so
+ * this share is non-zero only when a run re-enables it — the share counts it only when
+ * it runs. */
 export const SCREEN_FUNCTION = 'ScreenUntrustedContent'
 
-/** The guard gate's ledger prefix: a Decide call keyed `guard.*` (`guard.screen` asks the
- * screen's gate). Its own line beside the screen's, so a run shows what the gate costs next to
- * what it saves. */
-export const GATE_FUNCTION_PREFIX = 'Decide:guard.'
+/** The injection-ingress-guard classification's ledger line: the Decide call
+ * keyed `guard.ingress` (revision 6, slice 17) — one per external payload in
+ * `'on'`/`'shadow'`. Matched EXACTLY: the egress gate's `Decide:guard.egress`
+ * calls are not the classification's, and file under "other". */
+export const INGRESS_FUNCTION = 'Decide:guard.ingress'
 
 /** The ledger name of one observer sample: the BAML function, and for a Decide call its question
- * key, so the gate's calls are not filed with the loop's. */
+ * key, so the classification's calls are not filed with the loop's. */
 export function ledgerFunction(functionName?: string, decisionKey?: string): string | undefined {
   return functionName && decisionKey ? `${functionName}:${decisionKey}` : functionName
 }
@@ -188,30 +191,26 @@ export function floorHourlyRate(configured: number, committed: number): number {
   return Math.max(configured, committed)
 }
 
-/** The screen and its gate against everything else, for one row. Shares are of observer cost
- * and of calls; infrastructure and tail lines are scenario time and not attributable. */
-export function screenShare(row: Pick<SpendRow, 'functions' | 'calls' | 'observerUsd'>) {
+/** The two model steps of the ingress check, against everything else, for one
+ * row — the screen's share (counted only when it runs) and the
+ * injection-ingress-guard classification's, whose Decide calls are its own
+ * line beside the screen's, so a run shows what the classification costs
+ * while the screen is off. Shares are of observer cost and of calls;
+ * infrastructure and tail lines are scenario time and not attributable. */
+export function guardShare(row: Pick<SpendRow, 'functions' | 'calls' | 'observerUsd'>) {
   const screen = row.functions[SCREEN_FUNCTION] ?? { calls: 0, observerUsd: 0 }
-  const gate = Object.entries(row.functions)
-    .filter(([name]) => name.startsWith(GATE_FUNCTION_PREFIX))
-    .reduce(
-      (sum, [, f]) => ({
-        calls: sum.calls + f.calls,
-        observerUsd: sum.observerUsd + f.observerUsd,
-      }),
-      { calls: 0, observerUsd: 0 },
-    )
+  const classification = row.functions[INGRESS_FUNCTION] ?? { calls: 0, observerUsd: 0 }
   const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0)
   return {
-    calls: screen.calls,
-    observerUsd: screen.observerUsd,
-    gateCalls: gate.calls,
-    gateObserverUsd: gate.observerUsd,
-    otherCalls: row.calls - screen.calls - gate.calls,
-    otherObserverUsd: row.observerUsd - screen.observerUsd - gate.observerUsd,
-    callShare: share(screen.calls, row.calls),
-    observerUsdShare: share(screen.observerUsd, row.observerUsd),
-    gateCallShare: share(gate.calls, row.calls),
-    gateObserverUsdShare: share(gate.observerUsd, row.observerUsd),
+    screenCalls: screen.calls,
+    screenObserverUsd: screen.observerUsd,
+    classificationCalls: classification.calls,
+    classificationObserverUsd: classification.observerUsd,
+    otherCalls: row.calls - screen.calls - classification.calls,
+    otherObserverUsd: row.observerUsd - screen.observerUsd - classification.observerUsd,
+    screenCallShare: share(screen.calls, row.calls),
+    screenObserverUsdShare: share(screen.observerUsd, row.observerUsd),
+    classificationCallShare: share(classification.calls, row.calls),
+    classificationObserverUsdShare: share(classification.observerUsd, row.observerUsd),
   }
 }

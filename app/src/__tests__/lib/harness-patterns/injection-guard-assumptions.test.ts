@@ -59,14 +59,11 @@ vi.mock('@hames-ai/harness-patterns/assert.server', () => ({
   assertServerOnImport: vi.fn(),
 }))
 
-/** The screen behind a gate that answers "run", in `'gated'` mode (boundary
- *  guards slice 3). MUTATION for every test that uses it: make the stub answer
- *  "skip" (`run: false`) — the screen no longer runs on clean content and the
- *  test goes red. */
+// Revision 6 (#938): the guard gate retired; the screen tests run in
+// `'always'` mode. The retired gate stub became this plain declaration.
 const gatedScreen = (run: unknown) => ({
   run: run as never,
-  mode: 'gated' as const,
-  gate: vi.fn(async () => ({ run: true, pTrue: 0.9, why: 'gate' as const })),
+  mode: 'always' as const,
 })
 
 async function loadGuard() {
@@ -521,17 +518,16 @@ describe('the screen and a cheap-rule hit: the hit forces the screen over the wh
   // finding switched the screen off and the prose was neither neutralized nor
   // fenced nor screened: the strongest layer switched off by the weakest
   // layer's false positive. Now a finding FORCES the screen, on the sanitized
-  // projection and with no gate call, so the prose is read. MUTATION: ask the
-  // gate before checking findings (the stub below says skip) — red.
+  // projection, so the prose is read. MUTATION: gate the findings check
+  // behind a model call that answers skip — red.
   it('one false-positive URL finding forces the screen, which then reads the prose', async () => {
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
-    const gate = vi.fn(async () => ({ run: false, pTrue: 0.01, why: 'gate' as const }))
     const guard = createInjectionGuard(
       {
         namespaces: ['graph'],
         catalog: ['list_graph_messages'],
-        screen: { run: screen, gate, mode: 'gated' },
+        screen: { run: screen, mode: 'always' },
       },
       () => {},
       'microsoft-365',
@@ -540,7 +536,6 @@ describe('the screen and a cheap-rule hit: the hit forces the screen over the wh
     const { data, summary } = await guard.sanitize(CTX.tool, { messages: [mailMessage()] })
 
     expect(screen).toHaveBeenCalledTimes(1)
-    expect(gate).not.toHaveBeenCalled()
     expect(summary?.rules).toEqual(expect.arrayContaining(['exfil-data-url', 'llm-screen-1']))
     expect(summary?.screenReason).toBe(verdictDetected.reason)
     const preview = (data as { messages: Record<string, string>[] }).messages[0].preview
@@ -568,9 +563,9 @@ describe('the screen and a cheap-rule hit: the hit forces the screen over the wh
     expect(preview).toContain('neutralized:llm-screen-1')
   })
 
-  it('disableRules on the false-positive rule leaves the result clean, and the gate lets the screen read it', async () => {
+  it('disableRules on the false-positive rule leaves the result clean, and the screen reads it', async () => {
     // Switching `exfil-data-url` off for this agent leaves no finding, so the
-    // screen runs as its mode says (here: the gate says run). It also stops
+    // screen runs as its mode says (here: always). It also stops
     // defanging every genuine data-URL for that agent, which is the trade.
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
@@ -596,19 +591,21 @@ describe('the screen and a cheap-rule hit: the hit forces the screen over the wh
   })
 
   // #784 item 6: the narrow alternative to `disableRules` above. Only the Graph
-  // result's own `webUrl` on a configured host is exempt, so the gate decides
-  // (here: skip) instead of a false positive forcing the screen. MUTATION:
+  // result's own `webUrl` on a configured host is exempt, so the screen's own
+  // rule decides (here: the host classifier calls the payload internal, so
+  // nothing but a finding could run it) instead of a false positive forcing the
+  // screen. Revision 6: the retired gate's "skip" was this test's stand-in for
+  // that rule; the classifier is the one that remains. MUTATION:
   // ignore `sourceLinks` in `sanitizeUntrusted`: the finding returns and the
   // screen is forced — red.
   it("sourceLinks: the tenant's own webUrl forces no screen; the same link in a mail preview still does", async () => {
     const createInjectionGuard = await loadGuard()
     const screen = vi.fn().mockResolvedValue(verdictDetected)
-    const gate = vi.fn(async () => ({ run: false, pTrue: 0.01, why: 'gate' as const }))
     const guard = createInjectionGuard(
       {
         namespaces: ['graph'],
         catalog: ['list_graph_messages'],
-        screen: { run: screen, gate, mode: 'gated' },
+        screen: { run: screen, mode: 'always', classify: () => 'internal' },
         sourceLinks: { namespace: 'graph', field: 'webUrl', hosts: ['contoso-my.sharepoint.com'] },
       },
       () => {},

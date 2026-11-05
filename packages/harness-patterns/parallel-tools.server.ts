@@ -40,6 +40,8 @@ export interface SubCall {
     /** Audit trail when `withInjectionGuard` neutralized this sub-call's
      *  content (`result` already holds the sanitized version). */
     sanitized?: import('./injection-guard').SanitizeSummary
+    /** The classification of this sub-call's content (revision 6, O37). */
+    ingress?: import('./injection-guard').IngressMark
   }>
   precheckError?: string
 }
@@ -63,6 +65,9 @@ export interface SubCallOutcome {
    *  Carried per sub-call so a batched turn keeps the same per-tool fidelity as
    *  a singular one — the batch's `tool_result` events are per sub-call too. */
   sanitized?: import('./injection-guard').SanitizeSummary
+  /** The injection-ingress-guard classification of this sub-call's content
+   *  (revision 6, O37). Metadata by construction, like `sanitized`. */
+  ingress?: import('./injection-guard').IngressMark
 }
 
 /** Execute a batch of sub-calls under the given mode. Outcomes come back in
@@ -88,6 +93,7 @@ export async function runBatch(calls: SubCall[], mode: MultiCallMode): Promise<S
         result: r.result,
         error: r.error,
         ...(r.sanitized ? { sanitized: r.sanitized } : {}),
+        ...(r.ingress ? { ingress: r.ingress } : {}),
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

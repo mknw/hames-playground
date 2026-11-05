@@ -16,7 +16,12 @@ import {
   isGuardEvent,
 } from '../../observability/projection'
 import { GUARD_EGRESS } from '../../egress-gate.server'
-import { GUARD_SCREEN } from '../../guard-gate.server'
+import { GUARD_INGRESS } from '../../guard-gate.server'
+
+/** The retired guard gate's key: nothing writes it any more, but persisted
+ *  conversations still hold its events and the projection keeps rendering
+ *  them — so its fixtures stay. */
+const GUARD_SCREEN_KEY = 'guard.screen'
 
 let seq = 0
 const ev = (type: EventType, data: unknown, extra: Partial<ContextEvent> = {}): ContextEvent => ({
@@ -189,7 +194,7 @@ describe('getEventPreview', () => {
     expect(
       getEventPreview('decision_made', {
         ...decision,
-        key: GUARD_SCREEN.key,
+        key: GUARD_SCREEN_KEY,
         type: 'noul',
         label: 'false',
         pTrue: 0.12,
@@ -225,7 +230,7 @@ describe('getEventPreview', () => {
     const shadow = (wouldRun: boolean, label: string, pTrue: number) =>
       getEventPreview('decision_made', {
         ...decision,
-        key: GUARD_SCREEN.key,
+        key: GUARD_SCREEN_KEY,
         type: 'noul',
         label,
         pTrue,
@@ -240,7 +245,7 @@ describe('getEventPreview', () => {
     expect(
       getEventPreview('decision_made', {
         ...decision,
-        key: GUARD_SCREEN.key,
+        key: GUARD_SCREEN_KEY,
         type: 'noul',
         label: 'false',
         pTrue: 0.3,
@@ -372,7 +377,7 @@ describe('getEventLane', () => {
 describe('isGuardEvent', () => {
   // Mutation: drop any one arm of `guardOf` → that guard's row falls back to the
   // Tools lane; key the decision on anything but the declared key → a rename of
-  // GUARD_SCREEN or GUARD_EGRESS reddens this test instead of emptying the lane.
+  // GUARD_SCREEN_KEY (historical rows) or GUARD_EGRESS reddens this test instead of emptying the lane.
   it("claims every guard's record by its declared marker", () => {
     const guards: Array<[EventType, unknown]> = [
       ['content_sanitized', { tool: 'fetch', findings: [] }],
@@ -380,7 +385,8 @@ describe('isGuardEvent', () => {
       ['egress_refused', { tool: 'fetch', cause: 'decide', closes: 'none' }],
       ['egress_blocked', { tool: 'fetch', route: null, rule: 'check-failed' }],
       ['error', { kind: 'egress_decide_unavailable', error: 'fixed' }],
-      ['decision_made', { key: GUARD_SCREEN.key, label: 'true' }],
+      ['decision_made', { key: GUARD_SCREEN_KEY, label: 'true' }],
+      ['decision_made', { key: GUARD_INGRESS.key, label: 'safe' }],
       ['decision_made', { key: GUARD_EGRESS.key, label: 'personal' }],
       ['model_call', { role: 'screen', source: 'web/fetch' }],
       ['warning', { task: 'egress_check', message: 'm', fallback: 'f' }],

@@ -59,6 +59,9 @@ export default function SharedConversation() {
       role: m.role,
       content: m.content,
       timestamp: new Date(m.timestamp),
+      // Server-computed link verdicts (#901 slice 1): the visitor's browser
+      // reviews the transcript's links with the same verdicts the owner's did.
+      recognisedLinkHosts: m.recognisedLinkHosts,
     }))
 
   return (

@@ -32,6 +32,12 @@ export interface ReplayedMessage {
   hint?: string
   patternId?: string
   turnInfo?: string
+  /** Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised
+   *  hostnames among this message's own http(s) links. Replay NEVER fills it —
+   *  this module is pure and has no access to the host list. The serving
+   *  boundary (history load, shared transcript) decorates assistant messages
+   *  with it; absent means nothing is recognised, fail-closed. */
+  recognisedLinkHosts?: readonly string[]
 }
 
 /**

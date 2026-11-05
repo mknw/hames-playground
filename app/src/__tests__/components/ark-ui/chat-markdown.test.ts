@@ -13,11 +13,21 @@
  * is the question that matters, not "does this substring appear".
  */
 import { describe, it, expect } from 'vitest'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { marked } from 'marked'
 import type { RetrievalReference } from '@hames-ai/harness-patterns/patterns/retriever.server'
 import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 
 const { renderAssistantMarkdown } = await import('~/components/ark-ui/ChatMessages')
+
+/** The pre-link-review cases read the html half of the parallel return value
+ * (#901 slice 1); the link-verdict cases below call the full function. */
+const renderHtml = (
+  content: string,
+  entityNames: Map<string, string[]>,
+  references: RetrievalReference[],
+): string => renderAssistantMarkdown(content, entityNames, references).html
 
 const noEntities = new Map<string, string[]>()
 
@@ -42,7 +52,7 @@ const attributeNames = (host: HTMLElement): string[] =>
 
 describe('renderAssistantMarkdown — markup carried in model output', () => {
   it('strips script elements embedded in the message', () => {
-    const out = renderAssistantMarkdown(
+    const out = renderHtml(
       'Here is the mail body:\n\n<script>window.stolen = 1</script>\n\nDone.',
       noEntities,
       [],
@@ -58,11 +68,7 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
     // image survives and this stays a test of the handler strip. It was
     // `x.png` until #415 D13 refused every other source.
     const src = '/api/stash/document/doc-1?sessionId=s1&download'
-    const out = renderAssistantMarkdown(
-      `<img src="${src}" onerror="window.stolen = 1">`,
-      noEntities,
-      [],
-    )
+    const out = renderHtml(`<img src="${src}" onerror="window.stolen = 1">`, noEntities, [])
     const img = mount(out).querySelector('img')
     expect(img).not.toBeNull()
     expect(img!.getAttribute('src')).toBe(src)
@@ -70,7 +76,7 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
   })
 
   it('neutralises javascript: links written as markdown', () => {
-    const out = renderAssistantMarkdown('[click me](javascript:window.stolen=1)', noEntities, [])
+    const out = renderHtml('[click me](javascript:window.stolen=1)', noEntities, [])
     expect(out).not.toContain('javascript:')
     expect(mount(out).querySelector('a')?.getAttribute('href') ?? '').not.toContain('javascript:')
     expect(out).toContain('click me')
@@ -97,7 +103,7 @@ describe('renderAssistantMarkdown — markup carried in model output', () => {
       '',
       '[docs](https://example.test/docs)',
     ].join('\n')
-    const out = renderAssistantMarkdown(md, noEntities, [])
+    const out = renderHtml(md, noEntities, [])
 
     expect(out).toContain('<h2>Report</h2>')
     expect(out).toContain('<strong>bold</strong>')
@@ -127,7 +133,7 @@ describe('renderAssistantMarkdown — a remote image in the answer does not load
   ]
 
   it.each(spellings)('%s renders as a placeholder, never an <img>', (_label, md) => {
-    const host = mount(renderAssistantMarkdown(md, noEntities, []))
+    const host = mount(renderHtml(md, noEntities, []))
 
     expect(host.querySelector('img')).toBeNull()
     const placeholder = host.querySelector('span.blocked-image')
@@ -141,9 +147,7 @@ describe('renderAssistantMarkdown — a remote image in the answer does not load
   it('survives entity annotation, which runs before the image pass', () => {
     // The annotators wrap text nodes of the sanitized DOM. The image pass runs
     // after them, so nothing they do can bring an image back.
-    const host = mount(
-      renderAssistantMarkdown(`Acme results ![x](${exfil})`, new Map([['Acme', ['n1']]]), []),
-    )
+    const host = mount(renderHtml(`Acme results ![x](${exfil})`, new Map([['Acme', ['n1']]]), []))
 
     expect(host.querySelector('img')).toBeNull()
     expect(host.querySelector('span.blocked-image')).not.toBeNull()
@@ -158,7 +162,7 @@ describe('renderAssistantMarkdown — links open in a new tab', () => {
   // repo-wide guard for hand-written anchors is `src/__tests__/links-new-tab.test.ts`.
   it('stamps target and rel on a markdown link', () => {
     const link = mount(
-      renderAssistantMarkdown('See [the docs](https://example.test/docs).', noEntities, []),
+      renderHtml('See [the docs](https://example.test/docs).', noEntities, []),
     ).querySelector('a')
 
     expect(link).not.toBeNull()
@@ -169,7 +173,7 @@ describe('renderAssistantMarkdown — links open in a new tab', () => {
 
   it('stamps them on a raw anchor carried in the model output too', () => {
     const link = mount(
-      renderAssistantMarkdown(
+      renderHtml(
         'From the mail body: <a href="https://example.test/x" target="_self">x</a>',
         noEntities,
         [],
@@ -184,9 +188,9 @@ describe('renderAssistantMarkdown — links open in a new tab', () => {
 describe('renderAssistantMarkdown — annotation spans', () => {
   it('annotates known entity names and keeps the span hooks', () => {
     const entities = new Map<string, string[]>([['Acme Corp', ['n1', 'n2']]])
-    const span = mount(
-      renderAssistantMarkdown('We looked into Acme Corp today.', entities, []),
-    ).querySelector('.graph-entity')
+    const span = mount(renderHtml('We looked into Acme Corp today.', entities, [])).querySelector(
+      '.graph-entity',
+    )
 
     expect(span).not.toBeNull()
     expect(span!.getAttribute('data-entity-name')).toBe('Acme Corp')
@@ -196,7 +200,7 @@ describe('renderAssistantMarkdown — annotation spans', () => {
 
   it('annotates cited filenames and keeps the citation superscript', () => {
     const host = mount(
-      renderAssistantMarkdown('See notes.md for the detail.', noEntities, [reference('notes.md')]),
+      renderHtml('See notes.md for the detail.', noEntities, [reference('notes.md')]),
     )
     const span = host.querySelector('.doc-ref')
 
@@ -213,9 +217,7 @@ describe('renderAssistantMarkdown — annotation spans', () => {
   it('escapes a quote in a document id instead of letting it open a new attribute', () => {
     const docId = 'doc" onmouseover="window.stolen=1'
     const host = mount(
-      renderAssistantMarkdown('See notes.md for the detail.', noEntities, [
-        reference('notes.md', docId),
-      ]),
+      renderHtml('See notes.md for the detail.', noEntities, [reference('notes.md', docId)]),
     )
 
     expect(host.querySelector('.doc-ref')?.getAttribute('data-doc-id')).toBe(docId)
@@ -229,7 +231,7 @@ describe('renderAssistantMarkdown — annotation spans', () => {
   it('carries a quote in a filename into the citation title as a value, not markup', () => {
     const source = 'q1" onmouseover="window.stolen=1" x="report.pdf'
     const host = mount(
-      renderAssistantMarkdown(`Summary of ${source} attached.`, noEntities, [reference(source)]),
+      renderHtml(`Summary of ${source} attached.`, noEntities, [reference(source)]),
     )
 
     expect(host.querySelector('.doc-ref')?.getAttribute('title')).toBe(`Open ${source} in viewer`)
@@ -239,7 +241,7 @@ describe('renderAssistantMarkdown — annotation spans', () => {
 
   it('escapes quotes in entity ids instead of letting them open a new attribute', () => {
     const entities = new Map<string, string[]>([['Acme', ['n1" onmouseover="window.stolen=1']]])
-    const host = mount(renderAssistantMarkdown('We looked into Acme today.', entities, []))
+    const host = mount(renderHtml('We looked into Acme today.', entities, []))
 
     expect(host.querySelector('.graph-entity')?.getAttribute('data-entity-ids')).toBe(
       'n1" onmouseover="window.stolen=1',
@@ -368,8 +370,8 @@ describe('renderAssistantMarkdown: annotation cannot turn an attribute back into
   ]
 
   it.each(payloads)('%s', (_label, md, entities, references) => {
-    const host = mount(renderAssistantMarkdown(md, entities, references))
-    const plain = mount(renderAssistantMarkdown(md, noEntities, [])).innerHTML
+    const host = mount(renderHtml(md, entities, references))
+    const plain = mount(renderHtml(md, noEntities, [])).innerHTML
 
     expect(attackerLoads(host)).toEqual([])
     for (const a of host.querySelectorAll('a')) {
@@ -381,7 +383,7 @@ describe('renderAssistantMarkdown: annotation cannot turn an attribute back into
 
   it('still annotates the prose beside a hostile attribute', () => {
     const host = mount(
-      renderAssistantMarkdown(
+      renderHtml(
         `Acme and report.pdf: [ok](https://ok.test/ "x>Acme report.pdf <img src=//${ATTACKER}/b.png>")`,
         acme,
         [reference('report.pdf')],
@@ -416,7 +418,7 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
 
   it('does not split a character reference that spells an entity name', () => {
     const host = mount(
-      renderAssistantMarkdown(
+      renderHtml(
         `if a &lt;img src=//${ATTACKER}/x&gt; b then lt wins`,
         new Map([
           ['lt', ['n1']],
@@ -439,7 +441,7 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
     const name = '<b onmouseover="window.stolen=1">Acme</b>'
     const file = `<a href="//${ATTACKER}/f">report</a>.pdf`
     const host = mount(
-      renderAssistantMarkdown(
+      renderHtml(
         `x&lt;b onmouseover="window.stolen=1"&gt;Acme&lt;/b&gt;y, ` +
           `x&lt;a href="//${ATTACKER}/f"&gt;report&lt;/a&gt;.pdf y`,
         new Map([[name, ['n1']]]),
@@ -457,16 +459,14 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
   })
 
   it('annotates a name that contains an ampersand', () => {
-    const host = mount(renderAssistantMarkdown('AT&T reported.', new Map([['AT&T', ['n1']]]), []))
+    const host = mount(renderHtml('AT&T reported.', new Map([['AT&T', ['n1']]]), []))
 
     expect(host.querySelector('.graph-entity')?.getAttribute('data-entity-name')).toBe('AT&T')
     expect(host.querySelector('p')!.textContent).toBe('AT&T reported.')
   })
 
   it('leaves the text of a refused image alone: the placeholder is built after annotation', () => {
-    const host = mount(
-      renderAssistantMarkdown(`Acme: ![c](https://${ATTACKER}/Acme.png)`, acme, []),
-    )
+    const host = mount(renderHtml(`Acme: ![c](https://${ATTACKER}/Acme.png)`, acme, []))
 
     expect(host.querySelector('.blocked-image')?.textContent).toBe(
       `Image blocked: https://${ATTACKER}/Acme.png`,
@@ -477,14 +477,14 @@ describe('renderAssistantMarkdown: annotation reads the text the reader sees (#4
 
   it('leaves a match the name lookup cannot resolve as text, rather than throwing', () => {
     // The regex's `i` flag matches final sigma against σ; `toLowerCase` does not.
-    const host = mount(renderAssistantMarkdown('Aςb and Aσb', new Map([['Aσ', ['n1']]]), []))
+    const host = mount(renderHtml('Aςb and Aσb', new Map([['Aσ', ['n1']]]), []))
 
     expect([...host.querySelectorAll('.graph-entity')].map((s) => s.textContent)).toEqual(['Aσ'])
     expect(host.querySelector('p')!.textContent).toBe('Aςb and Aσb')
   })
 
   it('skips code spans and code blocks, as before', () => {
-    const host = mount(renderAssistantMarkdown('Acme `Acme` and\n\n```\nAcme\n```', acme, []))
+    const host = mount(renderHtml('Acme `Acme` and\n\n```\nAcme\n```', acme, []))
 
     expect(
       [...host.querySelectorAll('.graph-entity')].map((s) => s.parentElement!.nodeName),
@@ -496,9 +496,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
   // A filename copied verbatim from a tool result is the usual source. CommonMark
   // ends a destination at the first space, so these used to render as literal
   // `[text](url…)` with a stray autolink. Synthetic names throughout.
-  const anchors = (md: string) => [
-    ...mount(renderAssistantMarkdown(md, noEntities, [])).querySelectorAll('a'),
-  ]
+  const anchors = (md: string) => [...mount(renderHtml(md, noEntities, [])).querySelectorAll('a')]
 
   it('links a filename containing spaces, encoding only the spaces', () => {
     const [a, ...rest] = anchors('[Q3 notes](https://files.example.test/docs/Meeting Notes Q3.pdf)')
@@ -512,7 +510,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
 
   it('keeps a "(1)" in the filename inside the destination', () => {
     const md = 'See [copy](https://files.example.test/docs/Budget draft (1).xlsx) now.'
-    const host = mount(renderAssistantMarkdown(md, noEntities, []))
+    const host = mount(renderHtml(md, noEntities, []))
     const links = host.querySelectorAll('a')
 
     expect(links).toHaveLength(1)
@@ -529,9 +527,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
   })
 
   it('leaves a code span containing such a link as code', () => {
-    const host = mount(
-      renderAssistantMarkdown('`[x](https://files.example.test/a b.pdf)`', noEntities, []),
-    )
+    const host = mount(renderHtml('`[x](https://files.example.test/a b.pdf)`', noEntities, []))
 
     expect(host.querySelector('a')).toBeNull()
     expect(host.querySelector('code')!.textContent).toBe('[x](https://files.example.test/a b.pdf)')
@@ -548,7 +544,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
     // Without spaces the sanitizer drops the href; with spaces the text stays
     // literal. Either way no anchor carries the scheme.
     for (const md of ['[x](javascript:window.stolen=1)', '[x](javascript:window.stolen = 1)']) {
-      const host = mount(renderAssistantMarkdown(md, noEntities, []))
+      const host = mount(renderHtml(md, noEntities, []))
 
       expect(host.querySelector('a')?.getAttribute('href') ?? '').not.toContain('javascript:')
       expect(host.querySelector('[href], [src]')?.getAttribute('href') ?? '').not.toContain(
@@ -562,7 +558,7 @@ describe('renderAssistantMarkdown — link destinations containing spaces', () =
     // what blocks it: a placeholder with the whole encoded URL, no anchor. With
     // images unhandled the lexer re-enters at the `[` and renders `!<a>…</a>`.
     const host = mount(
-      renderAssistantMarkdown('![chart](https://files.example.test/my chart.png)', noEntities, []),
+      renderHtml('![chart](https://files.example.test/my chart.png)', noEntities, []),
     )
 
     expect(host.querySelector('img')).toBeNull()
@@ -703,4 +699,183 @@ describe('renderAssistantMarkdown — unterminated link-shaped input is bounded'
 
     expect(performance.now() - t0).toBeLessThan(1_500)
   }, 120_000)
+})
+
+// ============================================================================
+// #901 slice 1: link-review verdicts in the annotate pass
+// ============================================================================
+//
+// Ruling Q1 (2026-11-03): the recognised-host list is SERVER-ONLY, so the
+// verdict crosses with the message (`Message.recognisedLinkHosts`, filled in
+// where the content is served) and the annotate pass stamps it as code-owned
+// metadata on the inert DOM. DOMPurify has already stripped every `data-*`
+// attribute the model wrote (ALLOW_DATA_ATTR: false), so the three stamped
+// values below are this code's and no one else's — the citation annotators'
+// trust model (SA-M10), applied to links. What each value is FOR:
+//   - `data-link-review` — the interactive hook (slice 3's indicator/dialog);
+//   - `data-link-raw`    — the anchor's own spelling: the DEFANG identity;
+//   - `data-link-dest`   — the canonical destination: what the dialog shows
+//                          and what acceptance keys on (slice 2/3).
+describe('renderAssistantMarkdown — link-review verdicts (#901 slice 1)', () => {
+  const renderVerdicts = (md: string, hosts?: readonly string[]) =>
+    renderAssistantMarkdown(md, noEntities, [], hosts)
+
+  /** The first anchor whose href is exactly `href`, or null. */
+  const anchor = (host: HTMLElement, href: string): HTMLAnchorElement | null =>
+    [...host.querySelectorAll('a')].find((a) => a.getAttribute('href') === href) ?? null
+
+  it('stamps and counts an unverified http link with its raw and destination', () => {
+    const r = renderVerdicts('See [the file](https://untrusted.example/p/q?r=1).')
+    const a = mount(r.html).querySelector('a')!
+
+    expect(r.unverifiedLinks).toBe(1)
+    expect(a.getAttribute('data-link-review')).toBe('unverified')
+    expect(a.getAttribute('data-link-raw')).toBe('https://untrusted.example/p/q?r=1')
+    // The destination carries the whole resolved address, path and query.
+    expect(a.getAttribute('data-link-dest')).toBe('https://untrusted.example/p/q?r=1')
+    // The stamp is additive: the sanitizer's own link rule is untouched.
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('leaves a recognised link clean — no metadata, not counted', () => {
+    const r = renderVerdicts(
+      'See [the doc](https://docs.example/a) and [else](https://untrusted.example/b).',
+      ['docs.example'],
+    )
+    const host = mount(r.html)
+    const recognised = anchor(host, 'https://docs.example/a')!
+
+    expect(r.unverifiedLinks).toBe(1)
+    expect(recognised.getAttributeNames().sort()).toEqual(['href', 'rel', 'target'])
+  })
+
+  // The fail-closed direction: a verdict the server never delivered, or one
+  // that missed this anchor's hostname, can only ADD a review. Treating an
+  // unproven link as recognised is the one failure this feature must not have.
+  it('is fail-closed: an absent verdict list leaves every http link unverified', () => {
+    const r = renderVerdicts('See [x](https://untrusted.example/).')
+    expect(r.unverifiedLinks).toBe(1)
+    expect(mount(r.html).querySelector('a')!.getAttribute('data-link-review')).toBe('unverified')
+  })
+
+  // The page's own origin is decided client-side (the browser is the one place
+  // that reliably knows it), by EXACT origin equality — not hostname suffix.
+  it('recognises only the page origin itself, exactly', () => {
+    // jsdom serves this suite from http://localhost:3000.
+    const r = renderVerdicts(
+      '[own](http://localhost:3000/console) [sub](http://sub.localhost:3000/x) ' +
+        '[suffix-host](http://fake-localhost.example/y) [other-scheme](https://localhost:3000/z)',
+    )
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(3)
+    expect(anchor(host, 'http://localhost:3000/console')!.hasAttribute('data-link-review')).toBe(
+      false,
+    )
+    for (const href of [
+      'http://sub.localhost:3000/x',
+      'http://fake-localhost.example/y',
+      'https://localhost:3000/z',
+    ])
+      expect(anchor(host, href)!.getAttribute('data-link-review')).toBe('unverified')
+  })
+
+  it('gives a non-http(s) scheme neither indicator nor dialog metadata', () => {
+    const r = renderVerdicts(
+      '[mail](mailto:someone@example.com) plus ' +
+        '<a href="tel:+15550100">call</a> and [ftp](ftp://files.example/pub)',
+    )
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(0)
+    expect(host.querySelectorAll('[data-link-review]')).toHaveLength(0)
+    expect(attributeNames(host)).not.toContain('data-link-raw')
+    expect(attributeNames(host)).not.toContain('data-link-dest')
+  })
+
+  // SA-M10 for links: a forged `data-link-*` in model output is stripped by
+  // DOMPurify before the annotate pass runs, so it can never produce an
+  // interactive link-review element. Both halves: the values on an unverified
+  // anchor are the classifier's, and a recognised anchor carries none at all.
+  it('overwrites a forged data-link-* with the classifier values', () => {
+    const r = renderVerdicts(
+      '<a href="https://untrusted.example/x" data-link-review="unverified" ' +
+        'data-link-raw="https://forged.example/" data-link-dest="https://forged.example/">x</a>',
+    )
+    const a = mount(r.html).querySelector('a')!
+
+    expect(a.getAttribute('data-link-raw')).toBe('https://untrusted.example/x')
+    expect(a.getAttribute('data-link-dest')).toBe('https://untrusted.example/x')
+  })
+
+  it('strips a forged data-link-review from a link the verdict recognises', () => {
+    const r = renderVerdicts(
+      '<a href="https://docs.example/x" data-link-review="unverified">x</a>',
+      ['docs.example'],
+    )
+    const a = mount(r.html).querySelector('a')!
+
+    expect(a.getAttributeNames().sort()).toEqual(['href', 'rel', 'target'])
+  })
+
+  // M5: the defang identity is the anchor's own spelling, never the canonical
+  // rewrite — the destination is the canonical half and is stamped separately.
+  it('stamps the raw spelling as the defang identity, the canonical as the destination', () => {
+    const r = renderVerdicts('[x](https://EXAMPLE.com/P)')
+    const a = mount(r.html).querySelector('a')!
+
+    expect(a.getAttribute('data-link-raw')).toBe('https://EXAMPLE.com/P')
+    expect(a.getAttribute('data-link-dest')).toBe('https://example.com/P')
+  })
+
+  // M4: the image pass has the last word. A placeholder is inert text and is
+  // never counted as an unverified link, and the anchor around one is counted
+  // exactly once — for itself, not for the image it contains.
+  it('never counts a blocked image placeholder as an unverified link', () => {
+    const r = renderVerdicts('![chart](https://evil.example/c.png)')
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(0)
+    expect(host.querySelector('a')).toBeNull()
+    expect(host.querySelector('.blocked-image')!.getAttributeNames().sort()).toEqual([
+      'class',
+      'title',
+    ])
+  })
+
+  it('counts a link around a blocked image once, for the link only', () => {
+    const r = renderVerdicts('[![alt](https://evil.example/i.png)](https://page.example/x)')
+    const host = mount(r.html)
+
+    expect(r.unverifiedLinks).toBe(1)
+    const a = host.querySelector('a')!
+    expect(a.getAttribute('data-link-review')).toBe('unverified')
+    // The placeholder the image pass left inside the anchor carries nothing.
+    expect(a.querySelector('.blocked-image')!.getAttributeNames().sort()).toEqual([
+      'class',
+      'title',
+    ])
+  })
+
+  it('counts every anchor separately and skips recognised ones', () => {
+    const r = renderVerdicts(
+      '[a](https://a.example/1) [dup](https://a.example/2) [ok](https://docs.example/3)',
+      ['docs.example'],
+    )
+    expect(r.unverifiedLinks).toBe(2)
+  })
+})
+
+// Ruling Q4: the browser-side renderer reaches the seam through its documented
+// INTERNAL subpath. The root barrel re-exports `.server.ts` modules, so a barrel
+// import would drag server-only code into the page bundle — a source pin, not
+// a type error.
+describe('the link-verdict module seam import (ruling Q4)', () => {
+  it('imports the url-seam subpath, never the root barrel', async () => {
+    const source = await readFile(resolve(process.cwd(), 'src/lib/link-verdicts.ts'), 'utf8')
+    const imports = [...source.matchAll(/^import[^;]*?from\s+'([^']+)'/gm)].map((m) => m[1])
+    expect(imports).toContain('@hames-ai/harness-patterns/url-seam')
+    expect(imports.filter((i) => i === '@hames-ai/harness-patterns')).toEqual([])
+  })
 })

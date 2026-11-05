@@ -317,6 +317,29 @@ describe('runTurn — effects', () => {
     expect(rec.started).toBe(1)
   })
 
+  // #901 slice 1, ruling Q1: the live path's verdicts ride the done frame and
+  // land on the assistant message; a frame without them (an older server, a
+  // lost field) leaves the message without verdicts, and the renderer treats
+  // every http link as unverified — fail-closed.
+  it('carries the done frame link verdicts onto the assistant message', async () => {
+    fetchMock.mockResolvedValue(sseResponse([done({ recognisedLinkHosts: ['docs.example'] })]))
+    const rec = recorder()
+    await runTurn(request(), rec.sink)
+
+    expect(rec.messages).toEqual([
+      expect.objectContaining({ role: 'assistant', recognisedLinkHosts: ['docs.example'] }),
+    ])
+  })
+
+  it('leaves the assistant message without verdicts when the frame carries none', async () => {
+    fetchMock.mockResolvedValue(sseResponse([done()]))
+    const rec = recorder()
+    await runTurn(request(), rec.sink)
+
+    expect(rec.messages).toEqual([expect.objectContaining({ role: 'assistant' })])
+    expect(rec.messages[0]!.recognisedLinkHosts).toBeUndefined()
+  })
+
   it('forwards a title_updated frame with the session id it names, not the run’s', async () => {
     fetchMock.mockResolvedValue(
       sseResponse([

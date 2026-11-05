@@ -359,6 +359,9 @@ export async function setConversationTier(
 // without dragging in the auth/DB import graph. Re-export the type for callers.
 import { replayMessages, type ReplayedMessage } from '@hames-ai/agents/replay'
 export type { ReplayedMessage }
+// Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised-host
+// list stays server-side; only per-message verdicts cross with the content.
+import { recognisedLinkHostsFor } from './link-verdicts.server'
 
 export interface LoadedConversation {
   id: string
@@ -384,7 +387,12 @@ export async function loadConversation(sessionId: string): Promise<LoadedConvers
     throw new Error('Conversation not found')
   }
 
-  const messages = replayMessages(loaded.serializedContext)
+  // Assistant messages carry the server-computed link verdicts for their own
+  // links (#901 slice 1) — the one place history load could stamp them, so a
+  // rehydrated transcript reviews links exactly as the live turn did.
+  const messages = replayMessages(loaded.serializedContext).map((m) =>
+    m.role === 'assistant' ? { ...m, recognisedLinkHosts: recognisedLinkHostsFor(m.content) } : m,
+  )
   return {
     id: sessionId,
     agentId: loaded.agentId,

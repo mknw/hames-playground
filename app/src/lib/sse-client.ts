@@ -98,6 +98,10 @@ export interface DoneEventData {
   duration_ms?: number
   context: UnifiedContext
   serialized?: string
+  /** Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised
+   *  hostnames among the response's own http(s) links. The tenant host list
+   *  never crosses — only these per-message verdicts do. */
+  recognisedLinkHosts?: readonly string[]
 }
 
 /** Notification that the conversation's title was just regenerated server-side.

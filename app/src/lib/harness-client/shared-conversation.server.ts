@@ -52,6 +52,10 @@
 
 import { loadSharedConversation as loadSharedRow } from '../db/conversations.server'
 import { replayMessages } from '@hames-ai/agents/replay'
+// Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised-host
+// list never reaches a shared transcript's HTML or payload — only the verdicts
+// for the transcript's own already-visible links do, computed here.
+import { recognisedLinkHostsFor } from './link-verdicts.server'
 
 /** One turn of a shared transcript. A deliberate subset of `ReplayedMessage`:
  *  no `hint`, no `patternId`, no `turnInfo` — those ride on the error bubbles
@@ -63,6 +67,13 @@ export interface SharedMessage {
   content: string
   /** Epoch ms — convert to Date on the client. */
   timestamp: number
+  /** Server-computed link verdicts (#901 slice 1, ruling Q1): the recognised
+   *  hostnames among this assistant turn's own http(s) links — addresses
+   *  already visible in the transcript's own anchors, not the host list. What
+   *  the ruling forbids is the list crossing; a link the dialog will treat
+   *  differently from its neighbour has to carry the difference, so this is
+   *  the verdict, filled for assistant turns only. */
+  recognisedLinkHosts?: readonly string[]
 }
 
 export interface SharedConversationView {
@@ -95,8 +106,16 @@ export async function loadSharedConversation(
   for (const m of replayMessages(row.serializedContext)) {
     if (m.role !== 'user' && m.role !== 'assistant') continue
     // Field-by-field rather than a spread: a spread would carry whatever
-    // `ReplayedMessage` grows next straight out to an anonymous viewer.
-    messages.push({ id: m.id, role: m.role, content: m.content, timestamp: m.timestamp })
+    // `ReplayedMessage` grows next straight out to an anonymous viewer. The
+    // verdicts are the one deliberate addition, computed for this turn's own
+    // content right here — never taken from the replayed message.
+    messages.push({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      timestamp: m.timestamp,
+      ...(m.role === 'assistant' ? { recognisedLinkHosts: recognisedLinkHostsFor(m.content) } : {}),
+    })
   }
 
   return {

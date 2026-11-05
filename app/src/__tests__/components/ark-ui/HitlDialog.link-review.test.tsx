@@ -103,6 +103,18 @@ describe('the link-review body', () => {
     expect(summary!.textContent).not.toContain(ADDRESS)
   })
 
+  // MUTATION: drop `visibleFormatChars` from the address render (or run the
+  // address through `displayText` instead) → the bidi control is applied to
+  // the shown text rather than shown → red. The shell's untrusted-text rule
+  // on the one surface this slice names as the bidi target.
+  it('makes a bidi/format control in the address visible, not applied', async () => {
+    mount({ address: 'https://external.example/\u200Fa/path' })
+    await tick()
+    expect(q('link-review-address')!.textContent).toBe(
+      'https://external.example/\u27e8U+200F\u27e9a/path',
+    )
+  })
+
   // MUTATION: decide on close (call onDefang in the Escape path) → Escape
   // defangs the link → red.
   it('Escape closes the dialog and decides nothing', async () => {

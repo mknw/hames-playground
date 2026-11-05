@@ -1192,7 +1192,7 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
   const armId = createUniqueId()
   const [armed, setArmed] = createSignal(false)
   const detected = () => (props.severity ?? 'unverified') === 'detected'
-  const reason = () => props.reason ?? DEFAULT_LINK_REVIEW_REASON
+  const reason = () => visibleFormatChars(props.reason ?? DEFAULT_LINK_REVIEW_REASON)
   // Every review starts disarmed: a greyed open action never carries over
   // from a previous one.
   createEffect(

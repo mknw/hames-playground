@@ -1,6 +1,6 @@
 ---
 name: kg-lane-dispatch
-description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, and the URL + verdict + gates report-back, and the review loop that lands the work — whose terms bind a fix, the coordinator's merge mechanics, and which agent and model run a lane here. Use when writing a task spec, handing work to a lane, worker, or subagent in THIS repo, or reviewing and merging what one sends back. How to split work or run a coordinator loop is `dispatching-work`; Orca worker mechanics are `orchestration`.
+description: This repo's hand-off contract — the pointer line every dispatch carries, findings landing as a GitHub issue or PR comment, the URL + verdict + gates report-back written once to the lane's done-file, and the review loop that lands the work — whose terms bind a fix, the coordinator's merge mechanics, and which agent and model run a lane here. Use when writing a task spec, handing work to a lane, worker, or subagent in THIS repo, or reviewing and merging what one sends back. How to split work or run a coordinator loop is `dispatching-work`; the herdr runtime contract is `herdr --skill` and `herdr api schema --json`, plus the herdr-native doctrine in `dispatching-work`.
 ---
 
 # kg-lane-dispatch — how work leaves the coordinator, and how it lands
@@ -12,9 +12,12 @@ mechanics in §4 and §5.
 This skill is only the repo contract — it routes everything generic elsewhere:
 coordination doctrine (how to split the work, which executor and model take a
 piece, supervision, and the review gate itself) is the `dispatching-work`
-skill; Orca's command surface and message mechanics are the `orchestration`
-skill. Within this repo, the standing acceptance criteria each piece of work is
-held to live in [`docs/agents/AGENT-BRIEF.md`](../../../docs/agents/AGENT-BRIEF.md);
+skill, whose herdr-native section carries the runtime recipe (dispatch, waits,
+reports, worktrees, close) — point at it, do not duplicate it here. The
+runtime's own command surface is `herdr --skill` and `herdr api schema --json`;
+the installed binary is the authority for syntax. Within this repo, the standing
+acceptance criteria each piece of work is held to live in
+[`docs/agents/AGENT-BRIEF.md`](../../../docs/agents/AGENT-BRIEF.md);
 the issue-tracker workflow lives in
 [`docs/agents/issue-tracker.md`](../../../docs/agents/issue-tracker.md).
 This skill covers only what none of those do: the shape of the hand-off, and
@@ -63,16 +66,17 @@ that writes public pages is private tooling, so public text and commits name it 
 general words ("the agent that writes public pages").
 
 **A security finding stays private until its fix merges.** For a weakness in a live
-system the deliverable is a private file, and its path goes to the coordinator by
-mailbox; a public issue, if one is wanted, is filed after the merge. The fix PR carries a
-generic title and body until it merges, and a review on it posts only a short verdict
-("changes needed, details sent privately") with the finding in the private file.
-Private files live in the coordinator's notes folder, `~/orca-coordinator-specs`: it is
-owner-only, and nothing in it is quoted, linked or committed in public text.
+system the deliverable is a private file, and its path reaches the coordinator through
+the lane's ask-file (see §3); a public issue, if one is wanted, is filed after the
+merge. The fix PR carries a generic title and body until it merges, and a review on it
+posts only a short verdict ("changes needed, details sent privately") with the finding
+in the private file. Private files live in the coordinator's private notes folder: it
+is owner-only, and nothing in it is quoted, linked or committed in public text.
 
 ## 3. The URL is the record; the coordinator relays
 
-A lane's `worker_done` (or an Agent-tool subagent's final message) carries:
+A lane's report-back line — written once to its done-file (or an Agent-tool subagent's
+final message) — carries:
 
 - the **URL** it posted to,
 - a **one-line verdict or status**,
@@ -98,37 +102,46 @@ Say so in the task spec, in these words or close to them:
 
 ```
 Post your findings as the comment: it is the agents' record. Report back only the URL,
-a one-line verdict, and gate results.
+a one-line verdict, and gate results — written once, at the end, to the done-file.
 ```
 
-### A lane speaks exactly three times' worth of message types
+### A lane reports exactly three ways
 
-`ask`, `escalation`, `worker_done` — and `worker_done` exactly once, at the end.
+`ask`, `escalation`, `done` — as files in the report directory the spec names, and the
+done-file exactly once, at the end.
 
-**Never `--type heartbeat`.** It is a real Orca message type with a `--phase` field,
-so a lane narrating its progress reaches for it naturally, and each one wakes the
-coordinator for a check-and-ack round-trip that carries no decision. Spell the ban out:
-"no periodic status messages" reads to a lane as a style note about prose, and it
-keeps sending typed pings.
+The runtime has no mailbox, so the report directory is the channel: a durable directory
+both sides can read, **agreed before dispatch and named in the spec**. Questions and
+blockers go to `<lane>.ask` as they arise — an agent that has written one goes idle, and
+that settle is what wakes the coordinator. The one-line report goes to `<lane>.done`,
+written **once, when the work is finished**: the URL, the verdict, the gate results.
+Nothing else writes there; a half-written done-file reads like a verdict.
 
-Progress is already visible without them — `worker-show` and `terminal read` inspect a
-lane on demand, and the coordinator's `check --wait --types worker_done,escalation,question`
-blocks until something actionable arrives. A lane that wants to report mid-flight
-either has a question (`ask`) or is blocked (`escalation`); silence is the absence of
-news, not evidence of progress — a quiet lane may be working, stuck or dead, and
-nothing in the mailbox says which. So every dispatch carries an **expected-by time**
-— dispatch time plus twice the expected duration — and an **outcome artifact** to
-check: the report file, PR comment or commit, or issue the task spec named as the
-deliverable. Once the expected-by time passes, the coordinator inspects the artifact
-and the lane (`worker-show` / `terminal read`) and acts on what it finds — the
-outcome, not the mailbox, decides.
+**No progress pings.** Orca's typed-heartbeat failure has a direct equivalent here: a
+lane narrating its progress writes status lines into the report directory or prompts the
+coordinator with "still working", and each one wakes a human for a round-trip that
+carries no decision. Spell the ban out — "no progress pings" reads to a lane as a style
+note about prose, and it keeps narrating. Progress is already visible without them:
+`herdr agent get <lane>` and `herdr agent read <lane> --source recent-unwrapped --lines 120`
+inspect a lane on demand, and `herdr agent wait <lane> --timeout <ms>` — or
+`dispatching-work`'s `watch-inbox.sh --runtime herdr --target <lane>` as a background
+task — blocks until the lane settles (`idle`/`done`/`blocked`), which is when its files
+are read. Silence is the absence of news, not evidence of progress — a quiet lane may be
+working, stuck or dead, and nothing on disk says which. So every dispatch carries an
+**expected-by time** — dispatch time plus twice the expected duration — and an
+**outcome artifact** to check: the done-file, PR comment or commit, or issue the task
+spec named as the deliverable. Once the expected-by time passes, the coordinator inspects
+the artifact and the lane and acts on what it finds — the outcome, not the elapsed wait,
+decides.
 
-**Ack what you process.** `check` replays the Run's oldest unacked Delivery FIFO on
-every call (documented: "Replay until `--ack`") — an unacked `worker_done` makes every
-later `check --wait` return instantly with the same stale message, which reads exactly
-like a new event. After handling a Delivery, run
-`orca orchestration check --ack <deliveryId> --wait --types …` so the next wait blocks
-on the NEXT message rather than replaying the last one.
+**Reconcile what you process.** There is no replay and no ack to lean on: files on disk
+are the state, and a wake shows you only what you look at. After any wake, re-read the
+whole report directory — an ask-file may have landed while you were reading the
+done-file. After a disconnect, a compaction or a resume, the first action is the same
+full re-read plus `herdr agent get`, because a summary that says "waiting for X" carries
+none of the files that arrived since. A `herdr agent wait` or `agent prompt --wait` that
+ends in `timeout` or `agent_prompt_stalled` has NOT proved its prompt undelivered —
+inspect the lane before re-sending (see _A start receipt is not a running lane_ below).
 
 ## 4. The review loop: the reviewer's terms bind
 
@@ -153,8 +166,8 @@ goes red is.
 re-reading only the delta — a deliberate departure from `dispatching-work`'s
 fresh-reviewer default, because only the agent that wrote the terms can tell a
 fix that honours them from one that re-solved the problem. So every dispatch of
-the loop stays unreleased until the reviewer says CONVERGED (release closes the
-terminal the next delta needs; see _A dispatch receipt is not a running lane_
+the loop stays open until the reviewer says CONVERGED (closing the pane kills
+the session the next delta needs; see _A start receipt is not a running lane_
 below). The loop terminates
 on the **reviewer's** word — a lane declaring itself done is a report, not a
 verdict, and the round that introduces a regression is usually the one that
@@ -212,55 +225,99 @@ Public or private: <public | private — no company data or deployment-instance 
 
 Deliverable: post your findings as a comment on <PR #N | a new issue titled "...">;
 it is the agents' record. [Put <the open questions> to the owner.] Report back only the
-URL, a one-line verdict, and gate results. Do not merge. Send only ask / escalation /
-worker_done messages — never --type heartbeat, and worker_done exactly once, at the end.
+URL, a one-line verdict, and gate results — written once, at the end, to
+<report-dir>/<lane>.done; questions and blockers go to <report-dir>/<lane>.ask as they
+arise. Do not merge. No progress pings: the done-file is the report, and silence is
+not status.
 ```
 
-`Do not merge` and the message-type line stay explicit in every spec — both are
+`Do not merge` and the report-contract line stay explicit in every spec — both are
 guardrails a lane otherwise talks itself past.
 
-## Starting the worker: worktree first
+## Starting the lane: worktree first
 
-A lane runs in its own Orca worktree — created first, then pinned at start. An
-Orca worktree is also what lets the owner watch a lane; an Agent-tool worktree
-does not show up in Orca.
+A lane runs in its own git worktree — created and bootstrapped first, then attached to
+its own herdr workspace, where the owner can watch it. An Agent-tool subagent's worktree
+shows up nowhere, and the lane's herdr pane is what makes its terminal readable at all
+(`herdr agent read`).
 
 ```bash
-orca worktree create --name <lane> --repo path:<repo-root> --base-branch main --setup run
-orca orchestration worker-start --run <run> --task <task> \
-  --worktree name:<lane> --agent pi
+# 1. create + bootstrap the checkout. herdr runs no per-repo hooks — the script
+#    is what orca.yaml's `setup` hook did: git worktree add, gitignored config
+#    seeds, deploy/modal links, .claude settings, pnpm install --frozen-lockfile.
+scripts/lane-worktree.sh --repo <repo-root> --branch <lane> --path <path>
+# 2. attach it as its own workspace (--no-focus: the caller keeps its pane).
+#    --cwd <repo-root> (the repo parent workspace — a cwd inside a linked worktree
+#    is refused with `linked_worktree_source`).
+#    Read .result.workspace, .result.tab and .result.root_pane from the response.
+herdr worktree open --cwd <repo-root> --path <path> --no-focus
+# 3. a shell pane pinned to the checkout. Read .result.pane.pane_id.
+herdr pane split --pane <root-pane> --direction right --cwd <path> --no-focus
+# 4. start the agent. Names are lowercase [a-z][a-z0-9_-]{0,31}, unique among live
+#    agents. Per-kind model/flags ride after `--` (see Lane agent and model).
+herdr agent start <lane> --kind pi --pane <pane-id>
+# 4b. readiness read BEFORE the first prompt: agent load is a setup window, and a
+#     prompt submitted during it is silently swallowed. Prompt only when the
+#     ready/composer state is visible in the tail.
+herdr agent read <lane> --source recent --lines 20
+# 5. deliver the spec: file first, prompt points at it (see "Writing any agent-bound
+#    text safely"). --wait waits for observed activity, not task completion.
+herdr agent prompt <lane> "$(cat /tmp/prompt.txt)" --wait --timeout 120000
 ```
 
-No `--model` here: Orca cannot set pi's model, so the tier model the lane
-runs is pi's own
-`defaultModel` in `~/.pi/agent/settings.json` — see
-**Lane agent and model** below.
+Order is the guard — and the bootstrap half of it can fail. `herdr agent start`
+returns only after the runtime has detected the agent in that pane and considers it
+ready for input (it returns `agent_not_ready` instead of parking, and the name stays
+usable for `agent wait` and `agent read`). But the script aborts on install failure
+with a quoted reason, and the checkout must then be discarded (`git worktree remove
+--force`) and recreated after the cause is fixed — never start a lane in a
+half-bootstrapped tree. There is no worktree-setup window left (the script completes
+first); what remains is AGENT LOAD — a pi pane takes seconds to reach its composer,
+and a prompt submitted during that window is silently swallowed (observed:
+`agent_prompt_stalled`, no turn). After `agent start`, read the pane once
+(`herdr agent read <lane> --source recent --lines 20`) and prompt only when the
+ready/composer state is visible; treat `agent_prompt_stalled` per the doctrine —
+inspect, never re-submit blindly. Load also lengthens every step, so the `--timeout`
+values stay generous (`agent start` accepts up to 300000 ms).
 
-`--worktree` is what puts the worker there: `worker-start` without it opens the
-agent's terminal in the coordinator's own checkout — the one with the owner's
-dev server attached — where every save hot-reloads the app under the owner's
-hands and two lanes' edits interleave in one working tree (observed 2026-08-27:
-two lanes stopped mid-flight, their mixed WIP stashed to a salvage branch, the
-owner's checkout restored by hand).
-
-After each dispatch, verify the pin took: `git -C <repo-root> status --short`
-stays empty while lanes run. A lane that needs something from the main checkout
-(a gitignored log, a local config) gets the absolute path in its spec, marked
-read-only.
+Never let a lane run anywhere else: an agent started in a pane of the coordinator's own
+checkout works in the one tree with the owner's dev server attached — every save
+hot-reloads the app under the owner's hands and two lanes' edits interleave (observed
+2026-08-27: two lanes stopped mid-flight, their mixed WIP stashed to a salvage branch,
+the owner's checkout restored by hand). After each dispatch, verify the pin took:
+`git -C <repo-root> status --short` stays empty while lanes run. A lane that needs
+something from the main checkout (a gitignored log, a local config) gets the absolute
+path in its spec, marked read-only.
 
 **Lane agent and model (owner ruling 2026-10-27; this block is the one routing
 table, and every other routing line points here):**
 
 - **pi on `z-ai/glm-5.3-flash`** takes small and mechanical work (fixture and
   grader edits, small PRs, research), every delta review, and **every security
-  and prompt review**.
-- **Claude on Opus 5.5** (`--agent claude --model opus`) takes only large or
-  complex execution and the first-round review of a large PR. An Opus 5.5
+  and prompt review**. herdr does not set pi's model; it passes agent args after
+  `--`, and pi's own flag is per-lane:
+  `herdr agent start <lane> --kind pi --pane <pane> -- --model openrouter/z-ai/glm-5.3-flash`.
+  The alternative is pi's own `defaultModel` in `~/.pi/agent/settings.json`,
+  which must also be listed in `enabledModels` there — otherwise pi launches the
+  first enabled model silently — and a changed setting takes effect on the next
+  launched lane. Verify the model in the TUI footer after launch.
+- **Claude on Opus 5.5** takes only large or complex execution and the first-round
+  review of a large PR:
+  `herdr agent start <lane> --kind claude --pane <pane> -- --model opus`. An Opus 5.5
   review that completed without a model downgrade also counts as a security
   gate when pi is unavailable; read the transcript's model before counting it.
 - **Codex on GPT-6.1-Sol** is approved for execution and review, complex work
-  included (`--agent codex --model gpt-6.1-sol`, with `--effort high` or
-  `xhigh`); split load between its quota and Claude's.
+  included: `herdr agent start <lane> --kind codex --pane <pane> -- -m gpt-6.1-sol`.
+  Codex prompts for command approval by default, which parks the lane at a dialog
+  herdr reports as `blocked` — so an **unattended** Codex lane is started with
+  per-invocation flags and nothing else:
+  `-- -m gpt-6.1-sol -s workspace-write -a never` (`-s`/`--sandbox` selects the
+  sandbox policy: `read-only`, `workspace-write` or `danger-full-access`;
+  `-a`/`--ask-for-approval never` stops the approval prompts). Never by editing
+  `~/.codex/config.toml` or any other global config, and `danger-full-access` or
+  `--dangerously-bypass-approvals-and-sandbox` are a human decision, not a
+  dispatch. Any other per-invocation setting rides `-c key=value` (see `codex
+--help`). Split load between its quota and Claude's.
 - **Security work never runs on Fable**: its guardrails interrupt the work
   mid-turn.
 - **Read usage in the same step as every dispatch**, for both Claude and Codex
@@ -268,84 +325,64 @@ table, and every other routing line points here):**
   exhaustion kills lanes mid-flight and a figure sampled once at the start of a
   programme enforces nothing.
 
-Orca cannot set pi's model (the docs scope `--model` to Claude, Codex and
-Cursor), so the lever is pi's own `defaultModel` in `~/.pi/agent/settings.json`,
-which must also be listed in `enabledModels` there — otherwise pi launches the
-first enabled model silently. Verify the model in the TUI footer after launch; a
-changed setting takes effect on the next launched lane. Verify agent
-availability against the runtime's registry of record, never against examples in
-help text or skills.
+Verify agent availability and flags against the runtime's registry of record —
+`herdr agent` for the installed kind list, `herdr api schema --json` for the
+parameters — never against examples in help text or skills.
 
-**Dispatch after the TUI can accept input — the stall is the setup race.** A prompt
-delivered before the agent TUI can accept input is lost; the runtime reports
-`agent_prompt_stalled` (stall semantics are not documented; observed 2026-08-29/30 to
-coincide with fresh-worktree setup windows). orca.yaml's setup hook (direnv `use
-flake` eval, `pnpm install`, `pnpm baml-generate`, config copies) runs tens of
-seconds per fresh worktree, and load is a contributing factor, not a rival cause — it
-lengthens the same window (2026-08-27: nine dispatches succeeded at two–three
-concurrent lanes; four stalls came at six, load average 75+ — all also fresh
-worktrees, so the two explanations were confounded; a busy box is exactly when the
-wait matters most). The documented dispatch sequence for a terminal you create is:
-`orca worktree create` → `orca terminal wait --terminal <handle> --for tui-idle
---timeout-ms 60000` (this proves the TUI can accept input, not that setup finished)
-→ `orca orchestration dispatch --task <id> --to <handle> --inject`. The runtime also
-documents a repo-level `wait-for-setup` startup policy that gates agent launch on
-setup success — the structural fix, cheaper than remembering a procedure. For
-`worker-start`, reuse a worktree whose setup has already completed (observed to
-succeed on every attempt) or wait out its Setup terminal first. A stall marks its
-task failed and a failed task cannot start — recreate it from the same spec file and
-dispatch into the now-warm worktree. Recovery hygiene: read `orca terminal list`
-UNFILTERED (a grep truncated at 30 lines once hid a live terminal behind a page of
-others and produced a false ghost-binding diagnosis); a terminal idling at its
-composer takes `orca terminal send --terminal <handle> --enter`; and a low-level
-`dispatch --to` carries `--inject` for a recognized agent TUI — for a bare shell the
-docs prescribe the opposite (dispatch for tracking if needed, then send the prompt
-manually).
+**A start receipt is not a running lane.** After every start or prompt, confirm the
+agent is _generating_ — `herdr agent get <lane>` shows `agent_status: "working"` (its
+JSON carries status and sequence numbers, no token field), and the token counter that
+climbs between two reads a few minutes apart lives in `herdr agent read <lane>
+--source recent-unwrapped --lines 120`'s tail. `agent start` returning,
+a prompt submission acknowledged, and `--wait` observing activity are receipts about the
+hand-off; the Orca counterpart was a lane whose spec sat unsubmitted for over an hour
+while the coordinator reported it running (2026-08-27), which is why the rule is
+verification and not trust. Diagnose with `herdr agent get` and `herdr agent read`
+before touching anything. The same discipline closes the loop at the far end: verify
+**outcomes** — the commit on the lane's branch, the push, the posted comment, the
+done-file line — never bookkeeping.
 
-**A dispatch receipt is not a running lane.** After every dispatch or attach, confirm
-the agent is _generating_ — the TUI spinner with a climbing token counter
-("Puttering… ↓ 12k tokens"), not merely a delivered prompt. `worker-start` exiting 0,
-a `dispatched` task row, and `dispatch_input: accepted` are receipts about the
-hand-off; every one of them was observed (2026-08-27) on a lane whose spec sat
-unsubmitted in the composer for over an hour while the coordinator reported it
-running. Diagnose with `orca orchestration dispatch-show --task <id> --json` and
-`worker-show --dispatch <id> --json` before touching anything. The same discipline
-closes the loop at the far end: verify **outcomes** — the commit on the lane's
-branch, the push, the posted comment — never bookkeeping. And after an accepted
-`worker_done`, run `orca orchestration worker-release --dispatch <id> --json` (it
-archives inspectable output and closes only that coordinator-owned terminal; use
-`worker-read` afterwards for the transcript) — completed worker terminals left open
-are how a Run accumulates a terminal zoo (36 observed 2026-08-30). A reviewer is the
-exception to releasing at `worker_done`: release its dispatches only once it says
-CONVERGED, then all of the loop's dispatch ids together, because a delta sent to a
-released terminal dies and a fresh reviewer has to take over. Never substitute
-a broad `terminal close` when release returns `release_pending` or
-`release_unknown`; follow the receipt's recovery action.
+A `timeout` or `agent_prompt_stalled` from `agent prompt --wait` means no activity was
+observed, not that the prompt was never delivered — inspect `agent get` and `agent
+read` before re-submitting; a doubled prompt mid-turn is worse than a late one.
+`agent_status: "blocked"` means herdr recognized an approval or question dialog: inspect
+`agent read`, and answer it deliberately — never auto-answer an unfamiliar dialog, and
+prefer restarting the lane with the right flags (Codex: `-a never -s workspace-write`)
+over hand-feeding approvals. `idle`/`done` mean ready for input, not that background
+jobs have finished; `unknown` means present but unclassified — read the pane.
+
+**Close what you created, at lane close.** After the done-file is processed — and, in a
+review loop, only after the reviewer says CONVERGED — close the lane's resources:
+`herdr pane close "$PANE"` for the agent's pane, or `herdr workspace close "$WS"` for
+the whole lane workspace (closing a workspace closes its panes; it does not delete the
+git checkout — the branch ref survives worktree removal). A reviewer is the exception:
+keep its pane until it says CONVERGED, then close all of the loop's panes together,
+because a delta sent to a closed pane dies and a fresh reviewer has to take over. Never
+close workspaces, tabs or panes you did not create.
 
 **A spinner is not progress.** A lane is alive only when its token counter moves
-between two reads a few minutes apart; a "Working…" spinner, a file mtime or
+between two reads a few minutes apart — and the counter lives in the `agent read`
+tail (`herdr agent read <lane> --source recent-unwrapped --lines 120`), not in
+`agent get`'s JSON, which carries status and sequence numbers but no token field; a
+"working" status, a file mtime or
 `git status` says nothing about liveness, so when the counter is out of view, read
 a wider tail or wait and read again. A lane past its expected-by time with a frozen
 counter is stopped and restarted, never given more time. Its replacement starts in
-that worktree only after `worker-stop` has confirmed the old lane exited (a release
-is not that confirmation), so two lanes never write one tree.
+that worktree only after the old agent is gone — close the old pane, which ends the
+agent process, then open a fresh pane and `agent start` there — so two lanes never
+write one tree.
 
 ## Writing any agent-bound text safely
 
-Every text-carrying Orca flag — `--spec`, `--body`, `--payload` — is written to a file
-with a **quoted** heredoc first, then interpolated once. The enumeration is illustrative,
-not exhaustive: any flag carrying text takes the same path (`--task-title`, `--subject`,
-`--question`, `--objective` are the same class).
+Every text-carrying argument is written to a file with a **quoted** heredoc first,
+then interpolated once. The enumeration is illustrative, not exhaustive: any prompt,
+subject or message body takes the same path.
 
 ```bash
 cat > /tmp/msg.txt <<'XEOF'
 ...text, backticks and all...
 XEOF
-cat > /tmp/title.txt <<'XEOF'
-...title or subject...
-XEOF
-orca orchestration task-create --task-title "$(cat /tmp/title.txt)" --spec "$(cat /tmp/msg.txt)"
-orca orchestration send --to <handle> --subject "$(cat /tmp/title.txt)" --body "$(cat /tmp/msg.txt)"
+herdr agent prompt <lane> "$(cat /tmp/msg.txt)"
 ```
 
 Unconditionally, with no length or content test — applying one is the failure mode. Text
@@ -356,9 +393,9 @@ command-substitution output is not re-scanned, so `"$(cat ...)"` delivers the fi
 verbatim — any content that does not contain the delimiter as its own line (pick a
 delimiter the payload cannot collide with); `$()` strips the file's trailing newline.
 
-**The receipt lies.** The send returns `ok: true` — the transport succeeded, it simply
-carried text nobody wrote. One trace is `command not found` on **stderr**, which the
-usual `2>&1 | grep '"ok"'` receipt check filters out of view — but it is one shape, not
+**The receipt lies.** The send returns success — the transport succeeded, it simply
+carried text nobody wrote. One trace is `command not found` on **stderr**, which a
+receipt check that greps only stdout filters out of view — but it is one shape, not
 the worst: a fragment that happens to be a valid command substitutes silently, with no
 stderr at all. So a non-empty stderr on a send proves the message was mangled; an empty
 one proves nothing. Either way, resend from a file with an explicit ERRATUM line
@@ -366,26 +403,41 @@ telling the recipient to ignore the earlier copy, rather than assuming they will
 gap in a message that still reads as fluent prose.
 
 This rule was once scoped to "a long spec", and both words were the escape hatch — the
-messages that broke under it were short, and were `--body` rather than `--spec`
-(2026-09-19, twice in one session).
+messages that broke under it were short (2026-09-19, twice in one session).
 
-**Where the text lands (an Orca rule, open to change with a move off Orca).** Orca
-injects a message into a terminal the moment it arrives, so text sent to a terminal
-someone is typing in lands in the middle of what they are writing. Hence:
+**Where the text lands.** `herdr agent prompt` is the delivery path into a lane: it
+sends through the agent's own input channel (bracketed paste plus encoded Enter as one
+ordered submission), not by typing into whatever the pane is showing. So:
 
-- A PM or coordinator the owner types in is reached through its run mailbox
-  (`orca orchestration send --run <run> --to run:<run>`), never through its terminal.
-- A lane's terminal may get one short pointer line after a mailbox send ("mailbox
-  has X, drain it"), because an idle agent does not read its mailbox. A terminal
-  send carries that pointer and never content: long terminal sends arrive truncated.
-- A mailbox body stays under about 2,000 characters; anything longer goes in a
-  file, and the message carries its path.
-
-Any coordinator or PM may run `dispatching-work`'s `scripts/watch-inbox.sh` on
-its own mailbox, so it notices new messages without anyone typing into its
-terminal.
+- Long content still goes in a file, and the prompt carries its path — the prompt is
+  an argument to a shell command, and the lane's own outputs beyond what a pane read
+  can recover go to files too (the herdr skill prescribes the same fallback).
+- Never `herdr pane send-text` into a pane someone is using — an owner's or
+  coordinator's pane is reached through its agent, or not at all.
+- An idle lane does not read files unprompted: after dropping new context into an
+  ask-file or a revised spec, wake the lane with a one-line `herdr agent prompt` that
+  points at the file. A prompt to a **blocked** lane is refused (`agent_blocked`) —
+  settle the dialog first.
+- Any coordinator may run `dispatching-work`'s `watch-inbox.sh --runtime herdr
+--target <lane>` as a background task, so it notices a lane settling without anyone
+  typing into its terminal.
 
 ## Design record
+
+**2026-11-05 — the runtime is herdr.** From this date every agent of this repo runs on
+the server under herdr; Orca is not installed there and is not needed. The owner ruled
+the server copy need not keep Orca capabilities (the Mac remains the fallback and is
+outside this contract). What was replaced with what, verified against `herdr api schema
+--json` (protocol 22, herdr 0.9.5): the worktree setup hook became
+`scripts/lane-worktree.sh` (herdr runs no per-repo hooks); `worktree create` +
+`worker-start` became `herdr worktree open` + `herdr pane split` + `herdr agent start`;
+the orchestration mailbox, `check --wait` and its ack became a report directory of named
+files plus `herdr agent wait` / `watch-inbox.sh --runtime herdr`; `worker-show` /
+`terminal read` became `herdr agent get` / `herdr agent read`; `worker-release` became
+`herdr pane close` at lane close. Sections 1–5 (pointer line, URL deliverable, owner
+reads, review loop, merge mechanics) are unchanged apart from the Orca wording. The
+message-type vocabulary (`ask`/`escalation`/`worker_done`) is retired with Orca; the
+three report ways carry the same meanings under new names.
 
 **2026-11-03 — the comment is the agents' record.** Prompted by the owner after a board
 item linked a long agent comment, about 1,500 words, that restated an already-merged

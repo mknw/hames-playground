@@ -12,12 +12,15 @@
  *  3. The drill-down — clicking a row opens the detail overlay, which picks a
  *     renderer per event type and, for LLM-backed events, a Prompt/Output tab
  *     pair over the captured BAML template, variables and rendered messages.
+ *  4. The export menu (#1002) — Copy and Save locally are two actions over
+ *     one serialiser, so the clipboard copy and the saved file are the same
+ *     bytes; a failed clipboard write names itself instead of failing silently.
  *
  * Everything is driven through the rendered DOM; the helpers only locate rows
  * and read text, so the assertions stay on what an operator would see.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, fireEvent } from '@solidjs/testing-library'
+import { render, fireEvent, waitFor } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import type { ContextEvent, LLMCallData } from '@hames-ai/harness-patterns'
 import type { EventMetrics } from '@hames-ai/harness-patterns/types'
@@ -1066,7 +1069,7 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
   })
 })
 
-describe('ObservabilityPanel — save session', () => {
+describe('ObservabilityPanel — export menu', () => {
   const originalCreate = URL.createObjectURL
   const originalRevoke = URL.revokeObjectURL
 
@@ -1074,18 +1077,115 @@ describe('ObservabilityPanel — save session', () => {
     URL.createObjectURL = originalCreate
     URL.revokeObjectURL = originalRevoke
     delete (window as unknown as Record<string, unknown>).showSaveFilePicker
+    delete (navigator as unknown as Record<string, unknown>).clipboard
     vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
-  const clickSave = async (container: HTMLElement) => {
-    const trigger = container.querySelector<HTMLElement>('[data-part="trigger"]')!
-    fireEvent.click(trigger)
+  /** Ark renders the menu into a portal, so the items live in `document`. */
+  const menuItems = () => [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+
+  const openMenu = async (container: HTMLElement) => {
+    fireEvent.click(container.querySelector<HTMLElement>('[data-part="trigger"]')!)
+    await waitFor(() => expect(menuItems().length).toBe(2))
+  }
+
+  const choose = async (label: string) => {
+    fireEvent.click(menuItems().find((item) => item.textContent?.includes(label))!)
     await tick()
   }
 
-  it('offers no save affordance for an empty session', () => {
+  const stubClipboard = (writeText: (s: string) => Promise<void>) => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  }
+
+  const renderWithEvents = () =>
+    render(() => <ObservabilityPanel events={[ev('user_message', { content: 'hi' })]} />)
+
+  it('offers no export affordance for an empty session', () => {
     const { container } = render(() => <ObservabilityPanel events={[]} />)
     expect(container.querySelector('[data-part="trigger"]')).toBeNull()
+  })
+
+  it('copies the session JSON to the clipboard and confirms it', async () => {
+    const writeText = vi.fn(async (_s: string) => {})
+    stubClipboard(writeText)
+    const events = [ev('user_message', { content: 'hi' })]
+    const context = {
+      sessionId: 'sess-42',
+      createdAt: 0,
+      events,
+      status: 'running' as const,
+      data: {},
+      input: 'hi',
+    }
+    const { container } = render(() => <ObservabilityPanel events={events} context={context} />)
+    await openMenu(container)
+    await choose('Copy')
+
+    expect(writeText).toHaveBeenCalledOnce()
+    expect(JSON.parse(writeText.mock.calls[0][0]).sessionId).toBe('sess-42')
+    expect(document.body.textContent).toContain('Session copied to clipboard')
+  })
+
+  it('reports a copy failure when the clipboard API is unavailable', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Copy')
+
+    expect(consoleError).toHaveBeenCalledWith('Copy failed', expect.any(Error))
+    expect(document.body.textContent).toContain('Copy failed — clipboard unavailable or denied')
+  })
+
+  it('reports a copy failure when the clipboard write is refused', async () => {
+    stubClipboard(
+      vi.fn(async () => {
+        throw Object.assign(new Error('denied'), { name: 'NotAllowedError' })
+      }),
+    )
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Copy')
+    expect(consoleError).toHaveBeenCalledWith('Copy failed', expect.any(Error))
+    expect(document.body.textContent).toContain('Copy failed — clipboard unavailable or denied')
+  })
+
+  it('exports byte-identical JSON through Copy and Save locally', async () => {
+    const writeText = vi.fn(async (_s: string) => {})
+    stubClipboard(writeText)
+    const blobs: string[][] = []
+    vi.stubGlobal(
+      'Blob',
+      class {
+        parts: string[]
+        constructor(parts: string[]) {
+          this.parts = parts
+          blobs.push(parts)
+        }
+      },
+    )
+    URL.createObjectURL = vi.fn(() => 'blob:fake')
+    URL.revokeObjectURL = vi.fn()
+    const clicks: HTMLAnchorElement[] = []
+    const create = document.createElement.bind(document)
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = create(tag)
+      if (tag === 'a') (el as HTMLAnchorElement).click = () => clicks.push(el as HTMLAnchorElement)
+      return el
+    })
+
+    // No `context` prop: the payload carries an `exportedAt` stamp, so the two
+    // actions only agree if they read one serialiser's shared snapshot.
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Copy')
+    await openMenu(container)
+    await choose('Save locally')
+
+    expect(clicks).toHaveLength(1)
+    expect(blobs[0][0]).toBe(writeText.mock.calls[0][0])
   })
 
   it('falls back to a download anchor when the file picker is unavailable', async () => {
@@ -1102,10 +1202,9 @@ describe('ObservabilityPanel — save session', () => {
       return el
     })
 
-    const { container } = render(() => (
-      <ObservabilityPanel events={[ev('user_message', { content: 'hi' })]} />
-    ))
-    await clickSave(container)
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Save locally')
 
     expect(URL.createObjectURL).toHaveBeenCalledOnce()
     expect(clicks).toHaveLength(1)
@@ -1134,7 +1233,8 @@ describe('ObservabilityPanel — save session', () => {
       input: 'hi',
     }
     const { container } = render(() => <ObservabilityPanel events={events} context={context} />)
-    await clickSave(container)
+    await openMenu(container)
+    await choose('Save locally')
 
     expect(picker.mock.calls[0][0]).toMatchObject({
       suggestedName: expect.stringContaining('context-sess-42-'),
@@ -1150,10 +1250,9 @@ describe('ObservabilityPanel — save session', () => {
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const { container } = render(() => (
-      <ObservabilityPanel events={[ev('user_message', { content: 'hi' })]} />
-    ))
-    await clickSave(container)
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Save locally')
 
     expect(consoleError).not.toHaveBeenCalled()
   })
@@ -1164,10 +1263,9 @@ describe('ObservabilityPanel — save session', () => {
     })
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    const { container } = render(() => (
-      <ObservabilityPanel events={[ev('user_message', { content: 'hi' })]} />
-    ))
-    await clickSave(container)
+    const { container } = renderWithEvents()
+    await openMenu(container)
+    await choose('Save locally')
 
     expect(consoleError).toHaveBeenCalledWith('Save failed', expect.any(Error))
   })

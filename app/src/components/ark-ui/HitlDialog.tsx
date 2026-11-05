@@ -5,11 +5,13 @@
  * confirmation is ONE component. It is presentational: a controller owns the
  * selection, the answer RPC and the bound answer, and passes them in. It is one
  * SHELL with a body chosen by `kind` (decision-loop-agent slice 9): today's
- * `memory.confirm` list, and the BLOCKING body a paused run's request is
- * answered in (its controller is `BlockingRequestPrompt`). Two blocking kinds
- * carry their own copy (boundary guards slice 10, `KIND_COPY`): an outgoing
- * request held for the person (`egress-release`) and a result the screen
- * flagged (`ingress-flag`); any other kind gets the generic summary.
+ * `memory.confirm` list, the BLOCKING body a paused run's request is answered
+ * in (its controller is `BlockingRequestPrompt`), and the CLIENT-ONLY
+ * link-review body (#901 slice 2) — no request, nothing to answer, nothing to
+ * resume, and the only state it can change is the rendering on screen. Two
+ * blocking kinds carry their own copy (boundary guards slice 10, `KIND_COPY`):
+ * an outgoing request held for the person (`egress-release`) and a result the
+ * screen flagged (`ingress-flag`); any other kind gets the generic summary.
  *
  * The shell's rules, for every body:
  *
@@ -28,7 +30,17 @@
 import { Checkbox } from '@ark-ui/solid/checkbox'
 import { Dialog } from '@ark-ui/solid/dialog'
 import { ScrollArea } from '@ark-ui/solid/scroll-area'
-import { createEffect, createSignal, createUniqueId, For, on, Show, type JSX } from 'solid-js'
+import {
+  createEffect,
+  createSignal,
+  createUniqueId,
+  For,
+  Match,
+  on,
+  Show,
+  Switch,
+  type JSX,
+} from 'solid-js'
 import type { MemoryProposalView } from '~/lib/memory/proposals.server'
 import { visibleFormatChars, type BlockingRequestView } from '~/lib/hitl/blocking-view'
 
@@ -77,16 +89,18 @@ export interface BlockingDialogProps {
   onRetry: () => void
 }
 
-export type HitlDialogProps = MemoryDialogProps | BlockingDialogProps
+export type HitlDialogProps = MemoryDialogProps | BlockingDialogProps | LinkReviewDialogProps
 
 export function HitlDialog(props: HitlDialogProps) {
   return (
-    <Show
-      when={props.kind === 'blocking'}
-      fallback={<MemoryDialog {...(props as MemoryDialogProps)} />}
-    >
-      <BlockingDialog {...(props as BlockingDialogProps)} />
-    </Show>
+    <Switch fallback={<MemoryDialog {...(props as MemoryDialogProps)} />}>
+      <Match when={props.kind === 'blocking'}>
+        <BlockingDialog {...(props as BlockingDialogProps)} />
+      </Match>
+      <Match when={props.kind === 'link-review'}>
+        <LinkReviewDialog {...(props as LinkReviewDialogProps)} />
+      </Match>
+    </Switch>
   )
 }
 
@@ -1128,4 +1142,226 @@ function BlockingDialog(props: BlockingDialogProps) {
       </div>
     )
   }
+}
+
+// ============================================================================
+// The link-review body (#901 slice 2)
+// ============================================================================
+
+/** The #901-only default reason: factual, and never a judgement about the
+ *  destination (the merged design's copy rule). Slice 18 (boundary-guards
+ *  rev 6, presentation) feeds its own reason through the same prop. */
+export const DEFAULT_LINK_REVIEW_REASON = 'This address is not on the recognised host list'
+
+/** How the reason is presented and how hard the open action is to reach.
+ *  `unverified` is #901's own review (the default): the reason reads as a
+ *  plain summary and the open action is a real anchor. `detected` is what
+ *  slice 18 feeds for a reference whose content the screen flagged: the
+ *  reason rides the warning band and the open action is greyed until it is
+ *  deliberately armed. This body never COMPUTES a severity — the
+ *  classification is per content, inherited by every reference
+ *  (boundary-guards O37), and this input is the seam it arrives through. */
+export type LinkReviewSeverity = 'unverified' | 'detected'
+
+/** A third, CLIENT-ONLY body: the link-review dialog (#901 slice 2). Nothing
+ *  here binds to the server-side HITL answer/resume flow — there is no
+ *  request to answer and nothing to resume; the only state it can change is
+ *  the rendering on screen, and only through the mount's own callback. */
+export interface LinkReviewDialogProps {
+  kind: 'link-review'
+  open: boolean
+  /** Close without deciding: the shared outcome of Cancel, Escape, the close
+   *  button and the backdrop (the shell's escape-routes rule). */
+  onClose: () => void
+  /** The complete resolved destination (slice 1's `data-link-dest`): shown
+   *  whole — path and query included — and what the open action navigates to. */
+  address: string
+  /** The factual reason read on open. Defaults to the #901-only copy. */
+  reason?: string
+  /** How the reason is presented and how hard the open action is to reach.
+   *  Defaults to `unverified`. */
+  severity?: LinkReviewSeverity
+  /** "Cancel and defang": replace the chosen anchor with inert text in the
+   *  CURRENT rendering only (ruling Q5). The mount (ChatMessages) owns the
+   *  DOM mechanism; this dialog only asks for it. */
+  onDefang: () => void
+}
+
+function LinkReviewDialog(props: LinkReviewDialogProps) {
+  let cancel: HTMLButtonElement | undefined
+  const armId = createUniqueId()
+  const [armed, setArmed] = createSignal(false)
+  const detected = () => (props.severity ?? 'unverified') === 'detected'
+  const reason = () => props.reason ?? DEFAULT_LINK_REVIEW_REASON
+  // Every review starts disarmed: a greyed open action never carries over
+  // from a previous one.
+  createEffect(
+    on(
+      () => props.open,
+      (open) => {
+        if (open) setArmed(false)
+      },
+      { defer: true },
+    ),
+  )
+  return (
+    <DialogShell
+      open={props.open}
+      busy={false}
+      onClose={props.onClose}
+      testId="link-review-dialog"
+      maxWidth="34rem"
+      title="Review this link"
+      // Under the detected severity the reason rides the warning band, whose
+      // id is already in aria-describedby — the Description stays absent so
+      // opening does not read the same words twice.
+      warning={detected() ? reason() : undefined}
+      // The Description is a short summary only, NEVER the address (the
+      // shell's read-aloud rule): opening the dialog must not read the whole
+      // address aloud.
+      summary={detected() ? undefined : reason()}
+      initialFocus={() => cancel ?? null}
+      body={
+        <div flex="~ col" gap="2">
+          <p text="xs ui-text-secondary" m="0">
+            The complete address this link would open:
+          </p>
+          {/* Selectable text: one click selects the whole address, so it can
+              be copied without dragging across a wrap. A format or bidi
+              character in it is SHOWN, never applied (the shell's untrusted-
+              text rule) — the open action's href stays the real address. */}
+          <pre
+            data-testid="link-review-address"
+            font="mono"
+            text="xs ui-text-primary"
+            p="3"
+            rounded="md"
+            border="1 ui-border-secondary"
+            style={{
+              background: 'var(--ui-code-bg)',
+              'white-space': 'pre-wrap',
+              'overflow-wrap': 'anywhere',
+              margin: 0,
+              'user-select': 'all',
+            }}
+          >
+            {visibleFormatChars(props.address)}
+          </pre>
+        </div>
+      }
+      footer={
+        <div flex="~ col" items="end" gap="2" w="full">
+          <Show when={detected()}>
+            <Checkbox.Root
+              checked={armed()}
+              onCheckedChange={(d) => setArmed(d.checked === true)}
+              data-testid="link-review-arm"
+              flex="~"
+              gap="2"
+              items="center"
+              text="xs ui-text-secondary"
+            >
+              <Checkbox.Control
+                w="4"
+                h="4"
+                flex="~"
+                items="center"
+                justify="center"
+                border="1 ui-border-primary"
+                rounded="sm"
+                style={{ 'flex-shrink': 0 }}
+              >
+                <Checkbox.Indicator>
+                  <span
+                    class="i-material-symbols-check-small"
+                    w="4"
+                    h="4"
+                    text="ui-accent"
+                    aria-hidden="true"
+                  />
+                </Checkbox.Indicator>
+              </Checkbox.Control>
+              <Checkbox.Label id={armId}>I still want to open this address</Checkbox.Label>
+              <Checkbox.HiddenInput />
+            </Checkbox.Root>
+          </Show>
+          <div flex="~" gap="2" justify="end" style={{ 'flex-wrap': 'wrap' }}>
+            <Show
+              when={!detected() || armed()}
+              fallback={
+                // Greyed, and deliberately harder to activate than a click:
+                // the arm step above is the only thing that makes the open
+                // action real (slice 18's detected severity).
+                <button
+                  type="button"
+                  data-testid="link-review-open"
+                  disabled
+                  aria-describedby={armId}
+                  p="x-3 y-1.5"
+                  text="xs ui-text-tertiary"
+                  bg="transparent"
+                  border="1 ui-border-secondary"
+                  rounded="md"
+                  style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                >
+                  Open in another tab
+                </button>
+              }
+            >
+              {/* A real anchor, activated by the person's own click — never
+                  `window.open` — and stamped exactly as the sanitizer stamps
+                  every rendered link (`forceLinkTargetBlank`): `noreferrer` is
+                  what keeps the shared-transcript token out of the opened
+                  page's Referer (`s/[token].tsx`). */}
+              <a
+                data-testid="link-review-open"
+                href={props.address}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => props.onClose()}
+                cyber-button=""
+                p="x-3 y-1.5"
+                text="xs"
+                style={{ 'text-decoration': 'none' }}
+              >
+                Open in another tab
+              </a>
+            </Show>
+            <button
+              type="button"
+              data-testid="link-review-cancel"
+              ref={(el) => (cancel = el)}
+              onClick={() => props.onClose()}
+              p="x-3 y-1.5"
+              text="xs ui-text-secondary"
+              bg="transparent hover:ui-bg-hover"
+              border="1 ui-border-secondary"
+              rounded="md"
+              ring="2 transparent focus:ui-accent/40"
+              cursor="pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              data-testid="link-review-defang"
+              onClick={() => {
+                props.onDefang()
+                props.onClose()
+              }}
+              p="x-3 y-1.5"
+              text="xs ui-text-secondary"
+              bg="transparent hover:ui-bg-hover"
+              border="1 ui-border-secondary"
+              rounded="md"
+              ring="2 transparent focus:ui-accent/40"
+              cursor="pointer"
+            >
+              Cancel and defang
+            </button>
+          </div>
+        </div>
+      }
+    />
+  )
 }

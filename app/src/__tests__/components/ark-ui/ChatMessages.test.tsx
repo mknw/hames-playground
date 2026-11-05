@@ -9,7 +9,7 @@
  * into a callback.
  */
 import { describe, it, expect, vi, beforeAll } from 'vitest'
-import { render } from '@solidjs/testing-library'
+import { fireEvent, render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import { ChatMessages, type Message } from '~/components/ark-ui/ChatMessages'
 import type { RetrievalReference } from '@hames-ai/harness-patterns'
@@ -440,6 +440,156 @@ describe('ChatMessages — trailing slot', () => {
       <ChatMessages messages={[msg({ role: 'user', content: 'hi' })]} />
     ))
     expect(container.querySelector('[data-testid="progress"]')).toBeNull()
+  })
+})
+
+describe('ChatMessages — link review (#901 slice 2)', () => {
+  const linkMessage = (over: Partial<Message> = {}): Message =>
+    msg({ role: 'assistant', content: 'See [the docs](https://external.example/guide).', ...over })
+
+  /** The dialog is not open. */
+  const noDialog = () =>
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+
+  // MUTATION: drop the intercept branch from handleClick → the click
+  // navigates and no dialog opens → red.
+  it('opens the review dialog instead of navigating when an unverified link is clicked', async () => {
+    const { container } = render(() => <ChatMessages messages={[linkMessage()]} />)
+    noDialog()
+    const anchor = container.querySelector<HTMLAnchorElement>('a[data-link-review="unverified"]')!
+    expect(anchor).toBeTruthy()
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchor.dispatchEvent(event)
+    await tick()
+    // Navigation is intercepted, the dialog opens on the RESOLVED address, and
+    // nothing was decided: the anchor is still there, still live.
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+    expect(document.querySelector('[data-testid="link-review-address"]')!.textContent).toBe(
+      'https://external.example/guide',
+    )
+    expect(container.querySelector('a[data-link-review="unverified"]')).toBe(anchor)
+    // The dialog closes without deciding, and the link is untouched.
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-cancel"]')!,
+    )
+    await tick()
+    noDialog()
+    expect(container.querySelector('a[data-link-review="unverified"]')).toBe(anchor)
+  })
+
+  // MUTATION: drop the `on:auxclick` handler → a middle-click navigates with
+  // no review → red (approved Q8: auxiliary activation is intercepted where
+  // the platform permits).
+  it('intercepts auxiliary (middle-button) activation too', async () => {
+    const { container } = render(() => <ChatMessages messages={[linkMessage()]} />)
+    const anchor = container.querySelector('a[data-link-review="unverified"]')!
+    const event = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true })
+    anchor.dispatchEvent(event)
+    await tick()
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+  })
+
+  // MUTATION: make the defang persistent (store the raw; strip matching
+  // anchors when a message re-renders) → the link stays inert after a
+  // re-render derived from message.content → red. Ruling Q5: the defang is
+  // the CURRENT rendering only.
+  it('"Cancel and defang" makes the chosen link inert text — and a re-render derived from message.content presents it again', async () => {
+    const [messages, setMessages] = createSignal<Message[]>([linkMessage()])
+    const { container } = render(() => <ChatMessages messages={messages()} />)
+    const anchor = container.querySelector('a[data-link-review="unverified"]')!
+    fireEvent.click(anchor)
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+    // The chosen link became inert text: no anchor left in this rendering, its
+    // words kept, the dialog closed.
+    expect(container.querySelector('a[data-link-review]')).toBeNull()
+    expect(container.textContent).toContain('the docs')
+    noDialog()
+    // ...and the next rendering derived from message.content presents the link
+    // again: nothing was stored, so a streaming update or a reload shows the
+    // link as it was rendered.
+    setMessages([linkMessage()])
+    await tick()
+    expect(container.querySelector('a[data-link-review="unverified"]')).toBeTruthy()
+  })
+
+  // The defang keys on `data-link-raw`: every anchor in the CHOSEN message
+  // carrying that raw spelling goes inert together.
+  it('defangs every anchor with the chosen link’s raw spelling in the same message', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          linkMessage({
+            content:
+              'See [one](https://external.example/guide) and [two](https://external.example/guide).',
+          }),
+        ]}
+      />
+    ))
+    const anchors = container.querySelectorAll('a[data-link-review="unverified"]')
+    expect(anchors.length).toBe(2)
+    fireEvent.click(anchors[0])
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+    expect(container.querySelector('a[data-link-review]')).toBeNull()
+    expect(container.textContent).toContain('one')
+    expect(container.textContent).toContain('two')
+  })
+
+  // MUTATION: scope the defang to the whole transcript (drop the
+  // `.prose-chat` container) → the same address in another message is defanged
+  // too → red. "Only the chosen link in this message" (the merged design).
+  it('defangs only the chosen link in its own message, not the same address elsewhere', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          linkMessage(),
+          linkMessage({ content: 'Also [see this](https://external.example/guide) here.' }),
+        ]}
+      />
+    ))
+    const anchors = container.querySelectorAll('a[data-link-review="unverified"]')
+    expect(anchors.length).toBe(2)
+    fireEvent.click(anchors[1])
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+    // The second message's link is inert; the first message's link is untouched.
+    expect(anchors[0].isConnected).toBe(true)
+    expect(anchors[0].getAttribute('data-link-raw')).toBe('https://external.example/guide')
+    expect(container.querySelectorAll('a[data-link-review="unverified"]').length).toBe(1)
+  })
+
+  // Slice 1's fail-closed stamps only what it cannot prove recognised; the
+  // recognised link navigates as before — no dialog, no interception.
+  it('leaves a recognised link to navigate normally', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          linkMessage({
+            content: 'See [docs](https://docs.example/guide).',
+            recognisedLinkHosts: ['docs.example'],
+          }),
+        ]}
+      />
+    ))
+    expect(container.querySelector('a[data-link-review]')).toBeNull()
+    const plain = container.querySelector<HTMLAnchorElement>('a[href]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    plain.dispatchEvent(event)
+    await tick()
+    expect(event.defaultPrevented).toBe(false)
+    noDialog()
   })
 })
 

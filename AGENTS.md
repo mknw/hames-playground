@@ -98,9 +98,9 @@ not approximate a skill from memory, from a handoff brief's summary, or by
 when it is. In Codex, repo skills are linked under `.agents/skills/`. If a skill's
 body directs further loading (e.g. the orchestration stub's version-matched
 guide), that fetch is PART of calling the skill, not an extra step. Before work
-that touches a skill's scope — any `orca`
-command or dispatch (`orchestration`, `kg-lane-dispatch`, `dispatching-work`),
-test work (`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
+that touches a skill's scope — any lane dispatch or `herdr`
+runtime command (`herdr`, `kg-lane-dispatch`, `dispatching-work`), test work
+(`kg-test-pyramid`), `.tsx` work (`kg-dtalk-ui`) — load the skill
 FIRST, then act. Relevance is judged by the work's scope, never its size: a
 task that "seems simple" is not an exemption.
 

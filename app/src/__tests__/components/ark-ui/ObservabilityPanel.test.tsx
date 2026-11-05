@@ -1084,6 +1084,7 @@ describe('ObservabilityPanel — export menu', () => {
 
   /** Ark renders the menu into a portal, so the items live in `document`. */
   const menuItems = () => [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+  const menuContent = () => document.querySelector<HTMLElement>('[data-part="content"]')!
 
   const openMenu = async (container: HTMLElement) => {
     fireEvent.click(container.querySelector<HTMLElement>('[data-part="trigger"]')!)
@@ -1105,6 +1106,43 @@ describe('ObservabilityPanel — export menu', () => {
   it('offers no export affordance for an empty session', () => {
     const { container } = render(() => <ObservabilityPanel events={[]} />)
     expect(container.querySelector('[data-part="trigger"]')).toBeNull()
+  })
+
+  // Mutation guard (#1003 review): deleting the trigger's aria-label is an
+  // acceptance break ("labelled") that no other test reddens.
+  it('gives the icon-only trigger an accessible name', () => {
+    const { container } = renderWithEvents()
+    const trigger = container.querySelector<HTMLElement>('[data-part="trigger"]')!
+    expect(trigger.getAttribute('aria-label')).toBe('Export session')
+  })
+
+  // Mutation guard (#1003 review): the issue asks the menu to unfold "on hover
+  // or click"; deleting the hover affordance reddens only this test. The open
+  // state is asserted on the rendered `data-state`, because Ark keeps the
+  // portal's items mounted-but-hidden when closed — counting items proves
+  // nothing.
+  it('opens from a hover as well as a click', async () => {
+    const { container } = renderWithEvents()
+    const trigger = container.querySelector<HTMLElement>('[data-part="trigger"]')!
+    expect(menuContent().dataset.state).toBe('closed')
+    fireEvent.mouseEnter(trigger)
+    await waitFor(() => expect(menuContent().dataset.state).toBe('open'))
+  })
+
+  // Mutation guard (#1003 review): the controlled open wiring — a click opens
+  // the menu and choosing an item closes it again. Deleting the onOpenChange
+  // binding reddens this and nothing else in the file.
+  it('opens on click and closes on selection', async () => {
+    const writeText = vi.fn(async (_s: string) => {})
+    stubClipboard(writeText)
+    const { container } = renderWithEvents()
+    const trigger = container.querySelector<HTMLElement>('[data-part="trigger"]')!
+    await openMenu(container)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    expect(menuContent().dataset.state).toBe('open')
+    await choose('Copy')
+    await waitFor(() => expect(menuContent().dataset.state).toBe('closed'))
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('copies the session JSON to the clipboard and confirms it', async () => {

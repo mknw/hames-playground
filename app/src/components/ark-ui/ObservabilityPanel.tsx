@@ -244,6 +244,7 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
             onMouseEnter={() => setMenuOpen(true)}
             aria-label="Export session"
             title="Export session"
+            flex="~ items-center justify-center"
             style={{ position: 'absolute', bottom: '1rem', right: '1rem', 'z-index': '20' }}
             p="2.5"
             bg="ui-bg-tertiary hover:ui-bg-hover"

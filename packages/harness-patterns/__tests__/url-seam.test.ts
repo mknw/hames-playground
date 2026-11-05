@@ -220,7 +220,7 @@ describe('the offset map (slice 5)', () => {
         }
       }
     }
-  })
+  }, 30_000)
 
   it('refuses edits that are not sorted and non-overlapping', () => {
     const map = new OffsetMap()

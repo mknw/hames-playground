@@ -21,7 +21,7 @@
  */
 import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
-import { render } from '@solidjs/testing-library'
+import { fireEvent, render } from '@solidjs/testing-library'
 import { createSignal, createRoot, type JSX } from 'solid-js'
 import { installDomObservers } from '../../mocks/dom-observers'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
@@ -1144,5 +1144,69 @@ describe('ChatInterface — agent selection', () => {
       'kg',
       expect.objectContaining({ usesSandbox: false }),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #901 slice 3 — the session-scoped "Accept as safe" store.
+// ---------------------------------------------------------------------------
+describe('ChatInterface — session-scoped link acceptance (#901 slice 3)', () => {
+  /** A replayed assistant message with one unverified link (synthetic host). */
+  const replayedWithLink = (id: string) => ({
+    id,
+    role: 'assistant' as const,
+    content: 'See [docs](https://external.example/guide).',
+    timestamp: new Date('2026-05-10T09:30:00Z'),
+  })
+
+  beforeEach(() => {
+    loadConversation.mockResolvedValue({
+      agentId: DEFAULT_AGENT_ID,
+      kind: 'conversation',
+      serialized: JSON.stringify({ events: [] } satisfies Partial<UnifiedContext>),
+      messages: [replayedWithLink('replay-0')],
+    })
+  })
+
+  // MUTATION: drop the per-session recreation (`const linkAcceptance =
+  // createLinkAcceptanceStore()` in place of the memo on `props.sessionId`) →
+  // the store outlives its session → s2's `replay-0`, the SAME id and address
+  // as s1's accepted link, reads accepted → the click below navigates → red.
+  // Replayed ids are per-conversation (`replay-N`), so the session scope is
+  // what keeps one conversation's acceptance off another's message.
+  it('never carries an acceptance into another session, even onto the same replayed id', async () => {
+    const host = makeHost()
+    const [selected, setSelected] = createSignal('s1')
+    const { container } = host.mount(() => <ChatInterface sessionId={selected()} />)
+    await settle()
+
+    // Accept s1's replay-0 link through the message's own Accept-as-safe strip.
+    expect(container.querySelector('a[data-link-review="unverified"]')).toBeTruthy()
+    fireEvent.click(container.querySelector('[data-testid="accept-as-safe-trigger"]')!)
+    await tick()
+    fireEvent.click(document.querySelector('[data-testid="accept-as-safe-item"]')!)
+    await settle()
+
+    // s1's link now navigates without a review (accepted for this session).
+    const s1Anchor = container.querySelector<HTMLAnchorElement>('a[data-link-review="unverified"]')!
+    const s1Event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    s1Anchor.dispatchEvent(s1Event)
+    await tick()
+    expect(s1Event.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+
+    // Switch sessions: s2 replays its OWN replay-0 with the SAME address.
+    setSelected('s2')
+    await settle()
+
+    // The id and the address are identical; only the session differs — and
+    // that difference is what the store keys on. s2's link still reviews.
+    const s2Anchor = container.querySelector<HTMLAnchorElement>('a[data-link-review="unverified"]')!
+    expect(s2Anchor.getAttribute('data-link-dest')).toBe('https://external.example/guide')
+    const s2Event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    s2Anchor.dispatchEvent(s2Event)
+    await tick()
+    expect(s2Event.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
   })
 })

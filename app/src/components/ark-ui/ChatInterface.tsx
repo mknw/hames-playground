@@ -22,7 +22,7 @@
  *   threads (#47 / #105).
  */
 
-import { createSignal, createEffect, createMemo, onMount, untrack, Show } from 'solid-js'
+import { createSignal, createEffect, createMemo, onMount, untrack, Show, on } from 'solid-js'
 import { ChatMessages } from './ChatMessages'
 import { ChatInput } from './ChatInput'
 import { AgentSelector } from './AgentSelector'
@@ -56,6 +56,7 @@ import {
   type SessionRunState,
 } from '~/lib/run-registry'
 import { useSessionRegistry } from '~/lib/session-registry-context'
+import { createLinkAcceptanceStore } from '~/lib/link-acceptance'
 import { DEFAULT_AGENT_ID } from '~/lib/harness-client/agent-ids'
 
 // ============================================================================
@@ -132,6 +133,22 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
   // through this displayed-session shorthand.
   const registry = useSessionRegistry()
   const messages = () => registry.messages(props.sessionId)
+
+  // Session-scoped link acceptance (#901 slice 3): ONE store per SESSION,
+  // recreated when the session switches. The scoping is load-bearing, not
+  // hygiene: replayed transcripts reuse message ids across sessions
+  // (`replay-N`, one counter per conversation), so a store that outlived its
+  // session would carry an acceptance from one conversation's message onto
+  // ANOTHER conversation's `replay-0` — accepting one link silently accepting
+  // another, exactly what ruling Q2 forbids. A store that dies with its
+  // session can only lose acceptances (fail-closed: the link reviews
+  // again), never lend one.
+  const linkAcceptance = createMemo(
+    on(
+      () => props.sessionId,
+      () => createLinkAcceptanceStore(),
+    ),
+  )
 
   /**
    * File a batch of graph elements against the run's own conversation, and
@@ -618,6 +635,7 @@ export const ChatInterface = (props: ChatInterfaceProps) => {
       <ChatMessages
         messages={messages()}
         welcome={welcome()}
+        linkAcceptance={linkAcceptance()}
         graphEntityNames={props.graphEntityNames}
         onHighlightEntities={props.onHighlightEntities}
         onOpenReference={props.onOpenReference}

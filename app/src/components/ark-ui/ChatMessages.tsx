@@ -7,6 +7,7 @@ import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import type { OpenReferenceTarget } from '@hames-ai/agents'
 import { sanitizeMarkdownHtml } from '~/lib/sanitize-html'
 import { annotateLinkVerdicts, type RecognisedLinkHosts } from '~/lib/link-verdicts'
+import { HitlDialog } from './HitlDialog'
 
 // Rendering options only — marked passes raw HTML in the source through
 // untouched, so its output is sanitized downstream (see ~/lib/sanitize-html).
@@ -301,10 +302,67 @@ export function renderAssistantMarkdown(
   return { html, unverifiedLinks }
 }
 
+/** The link under review (#901 slice 2): the chosen anchor's own spelling
+ *  (slice 1's `data-link-raw` — the defang identity), its resolved destination
+ *  (`data-link-dest`, what the dialog shows and opens), and the one message
+ *  rendering it lives in. */
+interface LinkReviewTarget {
+  readonly raw: string
+  readonly dest: string
+  readonly container: Element
+}
+
+/** "Cancel and defang" (#901 slice 2, ruling Q5): replace every anchor in
+ *  `container` whose own spelling (`data-link-raw`, the defang identity) is
+ *  `raw` with inert text — the anchor's words as a plain text node: no href,
+ *  nothing to activate, nothing left in the tab order. Returns how many
+ *  anchors were replaced.
+ *
+ *  Current rendering ONLY: this touches the DOM built from `message.content`,
+ *  never the content itself, so the next rendering derived from it — a
+ *  streaming update, a reload, another viewer — presents the link again.
+ *  Scoping to `container` (one message's rendering) keeps "the chosen link in
+ *  this message" from reaching the same address in another message. */
+export function defangAnchors(container: Element, raw: string): number {
+  let replaced = 0
+  for (const anchor of Array.from(container.querySelectorAll('a[data-link-raw]'))) {
+    if (anchor.getAttribute('data-link-raw') !== raw) continue
+    anchor.replaceWith(document.createTextNode(anchor.textContent ?? ''))
+    replaced++
+  }
+  return replaced
+}
+
 export const ChatMessages = (props: ChatMessagesProps) => {
   let bottomRef: HTMLDivElement | undefined
   let messagesContainerRef: HTMLDivElement | undefined
   const [prevCount, setPrevCount] = createSignal(0)
+  // The link review under way (#901 slice 2). Client-only state: nothing here
+  // crosses to the server, and nothing survives a reload.
+  const [reviewTarget, setReviewTarget] = createSignal<LinkReviewTarget | null>(null)
+
+  // A link slice 1 stamped `data-link-review="unverified"` never navigates on
+  // its own: primary, keyboard and auxiliary activation open the review
+  // dialog instead, and the dialog's "Open in another tab" is the reviewed,
+  // intended path (#901, approved Q8). Context-menu, drag and address-bar
+  // entry stay outside a click handler's reach — the accepted limitation the
+  // design names, which the dialog's copy never promises away.
+  const interceptLinkReview = (e: MouseEvent): boolean => {
+    const anchor = (e.target as HTMLElement).closest('a[data-link-review="unverified"]')
+    if (!anchor) return false
+    // Even a stamped link this handler cannot review (missing stamps, no
+    // container) navigates nowhere: fail-closed, the same direction slice 1
+    // chose for the verdicts.
+    e.preventDefault()
+    e.stopPropagation()
+    const raw = anchor.getAttribute('data-link-raw')
+    const dest = anchor.getAttribute('data-link-dest')
+    const container = anchor.closest('.prose-chat')
+    if (raw !== null && dest !== null && container) {
+      setReviewTarget({ raw, dest, container })
+    }
+    return true
+  }
 
   // Auto-scroll ONLY when new messages are added (not on content updates)
   createEffect(() => {
@@ -339,6 +397,11 @@ export const ChatMessages = (props: ChatMessagesProps) => {
   }
 
   const handleClick = (e: MouseEvent) => {
+    // The link review takes the click before anything else (#901 slice 2): an
+    // anchor can wrap an entity or citation span, and the navigation is what
+    // is being gated.
+    if (interceptLinkReview(e)) return
+
     // Reference citation (inline superscript) → open the inline file viewer.
     const refTarget = (e.target as HTMLElement).closest('.doc-ref') as HTMLElement | null
     if (refTarget) {
@@ -391,112 +454,116 @@ export const ChatMessages = (props: ChatMessagesProps) => {
     )
 
   return (
-    <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
-      <ScrollArea.Viewport style={{ height: '100%' }}>
-        <ScrollArea.Content
-          ref={messagesContainerRef}
-          p="4"
-          space="y-4"
-          onMouseOver={handleMouseOver}
-          onMouseOut={handleMouseOut}
-          onClick={handleClick}
-        >
-          <For each={props.messages}>
-            {(message) => (
-              <div flex="~ col" gap="2">
-                {/* Message Bubble */}
-                <div
-                  flex="~"
-                  gap="3"
-                  data-role={message.role}
-                  class={message.role === 'user' ? 'flex-row-reverse' : ''}
-                >
-                  {/* Avatar */}
+    <>
+      <ScrollArea.Root style={{ flex: 1, overflow: 'hidden', 'min-height': 0 }}>
+        <ScrollArea.Viewport style={{ height: '100%' }}>
+          <ScrollArea.Content
+            ref={messagesContainerRef}
+            p="4"
+            space="y-4"
+            onMouseOver={handleMouseOver}
+            onMouseOut={handleMouseOut}
+            onClick={handleClick}
+            on:auxclick={(e: MouseEvent) => {
+              interceptLinkReview(e)
+            }}
+          >
+            <For each={props.messages}>
+              {(message) => (
+                <div flex="~ col" gap="2">
+                  {/* Message Bubble */}
                   <div
-                    flex="~ shrink-0"
-                    w="8"
-                    h="8"
-                    rounded="full"
-                    items="center"
-                    justify="center"
-                    text={
-                      // The three coloured avatars are solid in both themes,
-                      // so white reads on all of them. The assistant's ground
-                      // is the theme's own, and white on it disappears the
-                      // moment the theme turns light.
-                      message.role === 'user' ||
-                      message.role === 'error' ||
-                      message.role === 'warning'
-                        ? 'white xs'
-                        : 'ui-text-primary xs'
-                    }
-                    font="medium"
-                    bg={
-                      message.role === 'user'
-                        ? 'cyber-700'
-                        : message.role === 'error'
-                          ? 'red-900/50'
-                          : message.role === 'warning'
-                            ? 'amber-900/50'
-                            : 'ui-bg-tertiary'
-                    }
-                    border={
-                      message.role === 'user'
-                        ? '1 cyber-500'
-                        : message.role === 'error'
-                          ? '1 red-500/50'
-                          : message.role === 'warning'
-                            ? '1 amber-500/50'
-                            : '1 ui-accent/50'
-                    }
-                    shadow={
-                      message.role === 'user'
-                        ? '[0_0_10px_rgba(79,70,229,0.3)]'
-                        : message.role === 'error'
-                          ? '[0_0_10px_rgba(239,68,68,0.2)]'
-                          : message.role === 'warning'
-                            ? '[0_0_10px_rgba(245,158,11,0.2)]'
-                            : '[0_0_10px_rgba(0,255,255,0.2)]'
-                    }
+                    flex="~"
+                    gap="3"
+                    data-role={message.role}
+                    class={message.role === 'user' ? 'flex-row-reverse' : ''}
                   >
-                    {getInitials(message.role)}
-                  </div>
-
-                  {/* Message Content */}
-                  <div
-                    max-w="2xl"
-                    p="3"
-                    rounded="lg"
-                    bg={
-                      message.role === 'user'
-                        ? 'cyber-800/50'
-                        : message.role === 'error'
-                          ? 'red-900/20'
-                          : message.role === 'warning'
-                            ? 'amber-900/20'
-                            : 'ui-bg-tertiary'
-                    }
-                    text="ui-text-primary"
-                    border={
-                      message.role === 'user'
-                        ? '1 cyber-700/50'
-                        : message.role === 'error'
-                          ? '1 red-500/30'
-                          : message.role === 'warning'
-                            ? '1 amber-500/30'
-                            : '1 ui-border-secondary'
-                    }
-                    backdrop-blur="sm"
-                  >
-                    <Switch
-                      fallback={
-                        <div text="sm" white-space="pre-wrap" break-words>
-                          {message.content}
-                        </div>
+                    {/* Avatar */}
+                    <div
+                      flex="~ shrink-0"
+                      w="8"
+                      h="8"
+                      rounded="full"
+                      items="center"
+                      justify="center"
+                      text={
+                        // The three coloured avatars are solid in both themes,
+                        // so white reads on all of them. The assistant's ground
+                        // is the theme's own, and white on it disappears the
+                        // moment the theme turns light.
+                        message.role === 'user' ||
+                        message.role === 'error' ||
+                        message.role === 'warning'
+                          ? 'white xs'
+                          : 'ui-text-primary xs'
+                      }
+                      font="medium"
+                      bg={
+                        message.role === 'user'
+                          ? 'cyber-700'
+                          : message.role === 'error'
+                            ? 'red-900/50'
+                            : message.role === 'warning'
+                              ? 'amber-900/50'
+                              : 'ui-bg-tertiary'
+                      }
+                      border={
+                        message.role === 'user'
+                          ? '1 cyber-500'
+                          : message.role === 'error'
+                            ? '1 red-500/50'
+                            : message.role === 'warning'
+                              ? '1 amber-500/50'
+                              : '1 ui-accent/50'
+                      }
+                      shadow={
+                        message.role === 'user'
+                          ? '[0_0_10px_rgba(79,70,229,0.3)]'
+                          : message.role === 'error'
+                            ? '[0_0_10px_rgba(239,68,68,0.2)]'
+                            : message.role === 'warning'
+                              ? '[0_0_10px_rgba(245,158,11,0.2)]'
+                              : '[0_0_10px_rgba(0,255,255,0.2)]'
                       }
                     >
-                      <Match when={message.role === 'assistant'}>
-                        {/* No <think> extraction here (SA-L10). It was a local-GLM
+                      {getInitials(message.role)}
+                    </div>
+
+                    {/* Message Content */}
+                    <div
+                      max-w="2xl"
+                      p="3"
+                      rounded="lg"
+                      bg={
+                        message.role === 'user'
+                          ? 'cyber-800/50'
+                          : message.role === 'error'
+                            ? 'red-900/20'
+                            : message.role === 'warning'
+                              ? 'amber-900/20'
+                              : 'ui-bg-tertiary'
+                      }
+                      text="ui-text-primary"
+                      border={
+                        message.role === 'user'
+                          ? '1 cyber-700/50'
+                          : message.role === 'error'
+                            ? '1 red-500/30'
+                            : message.role === 'warning'
+                              ? '1 amber-500/30'
+                              : '1 ui-border-secondary'
+                      }
+                      backdrop-blur="sm"
+                    >
+                      <Switch
+                        fallback={
+                          <div text="sm" white-space="pre-wrap" break-words>
+                            {message.content}
+                          </div>
+                        }
+                      >
+                        <Match when={message.role === 'assistant'}>
+                          {/* No <think> extraction here (SA-L10). It was a local-GLM
                     leftover: a leading `<think>…</think>` was peeled off the
                     answer and shown as a collapsed reasoning block. The
                     Anthropic clients this app now routes through never expose
@@ -504,97 +571,99 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                     the only strings that pattern can still match are answers
                     that legitimately open with those literal characters —
                     which it would silently hide. */}
-                        <div
-                          text="sm"
-                          class="prose-chat"
-                          // eslint-disable-next-line solid/no-innerhtml
-                          innerHTML={renderAssistantContent(message).html}
-                        />
-                        {/* Sources footer — one chip per cited file; opens
+                          <div
+                            text="sm"
+                            class="prose-chat"
+                            // eslint-disable-next-line solid/no-innerhtml
+                            innerHTML={renderAssistantContent(message).html}
+                          />
+                          {/* Sources footer — one chip per cited file; opens
                     the inline file viewer (navigator pages chunks). */}
-                        <Show when={message.references && message.references.length > 0}>
-                          <div class="doc-ref-footer">
-                            <span text="xs ui-text-tertiary">Sources:</span>
-                            <For each={dedupeReferencesByDoc(message.references!)}>
-                              {(r) => (
-                                <button
-                                  class="doc-ref-chip"
-                                  title={`Open ${r.source} in viewer`}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    props.onOpenReference?.({ docId: r.docId })
-                                  }}
-                                >
-                                  <span
-                                    class="i-material-symbols-description-outline"
-                                    w="[11px]"
-                                    h="[11px]"
-                                    aria-hidden="true"
-                                  />
-                                  {r.source}
-                                </button>
-                              )}
-                            </For>
-                          </div>
-                        </Show>
-                      </Match>
-                      <Match when={message.role === 'error' || message.role === 'warning'}>
-                        <div flex="~ col" gap="1">
-                          <div flex="~ items-center" gap="1.5">
-                            <span
-                              class={
-                                message.role === 'error'
-                                  ? 'i-material-symbols-error'
-                                  : 'i-material-symbols-warning'
-                              }
-                              style={{
-                                width: '16px',
-                                height: '16px',
-                                'flex-shrink': '0',
-                                color: message.role === 'error' ? '#ef4444' : '#f59e0b',
-                              }}
-                            />
-                            <span
-                              text="sm"
-                              font="medium"
-                              style={{ color: message.role === 'error' ? '#ef4444' : '#f59e0b' }}
-                            >
-                              {message.role === 'error' ? 'Error' : 'Warning'}
-                              {message.patternId ? ` in ${message.patternId}` : ''}
-                              {message.turnInfo ? ` ${message.turnInfo}` : ''}
-                            </span>
-                          </div>
-                          <div text="sm" white-space="pre-wrap" break-words>
-                            {message.content}
-                          </div>
-                          <Show when={message.hint}>
-                            <div
-                              text="xs"
-                              p="2"
-                              m="t-1"
-                              rounded="md"
-                              bg={message.role === 'error' ? 'red-900/20' : 'amber-900/20'}
-                              border={message.role === 'error' ? '1 red-500/30' : '1 amber-500/30'}
-                              flex="~ items-center"
-                              gap="1.5"
-                            >
-                              <span
-                                class="i-material-symbols-lightbulb-outline"
-                                style={{
-                                  width: '14px',
-                                  height: '14px',
-                                  'flex-shrink': '0',
-                                  color: '#a3a3a3',
-                                }}
-                              />
-                              <span text="ui-text-secondary">{message.hint}</span>
+                          <Show when={message.references && message.references.length > 0}>
+                            <div class="doc-ref-footer">
+                              <span text="xs ui-text-tertiary">Sources:</span>
+                              <For each={dedupeReferencesByDoc(message.references!)}>
+                                {(r) => (
+                                  <button
+                                    class="doc-ref-chip"
+                                    title={`Open ${r.source} in viewer`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      props.onOpenReference?.({ docId: r.docId })
+                                    }}
+                                  >
+                                    <span
+                                      class="i-material-symbols-description-outline"
+                                      w="[11px]"
+                                      h="[11px]"
+                                      aria-hidden="true"
+                                    />
+                                    {r.source}
+                                  </button>
+                                )}
+                              </For>
                             </div>
                           </Show>
-                        </div>
-                      </Match>
-                    </Switch>
+                        </Match>
+                        <Match when={message.role === 'error' || message.role === 'warning'}>
+                          <div flex="~ col" gap="1">
+                            <div flex="~ items-center" gap="1.5">
+                              <span
+                                class={
+                                  message.role === 'error'
+                                    ? 'i-material-symbols-error'
+                                    : 'i-material-symbols-warning'
+                                }
+                                style={{
+                                  width: '16px',
+                                  height: '16px',
+                                  'flex-shrink': '0',
+                                  color: message.role === 'error' ? '#ef4444' : '#f59e0b',
+                                }}
+                              />
+                              <span
+                                text="sm"
+                                font="medium"
+                                style={{ color: message.role === 'error' ? '#ef4444' : '#f59e0b' }}
+                              >
+                                {message.role === 'error' ? 'Error' : 'Warning'}
+                                {message.patternId ? ` in ${message.patternId}` : ''}
+                                {message.turnInfo ? ` ${message.turnInfo}` : ''}
+                              </span>
+                            </div>
+                            <div text="sm" white-space="pre-wrap" break-words>
+                              {message.content}
+                            </div>
+                            <Show when={message.hint}>
+                              <div
+                                text="xs"
+                                p="2"
+                                m="t-1"
+                                rounded="md"
+                                bg={message.role === 'error' ? 'red-900/20' : 'amber-900/20'}
+                                border={
+                                  message.role === 'error' ? '1 red-500/30' : '1 amber-500/30'
+                                }
+                                flex="~ items-center"
+                                gap="1.5"
+                              >
+                                <span
+                                  class="i-material-symbols-lightbulb-outline"
+                                  style={{
+                                    width: '14px',
+                                    height: '14px',
+                                    'flex-shrink': '0',
+                                    color: '#a3a3a3',
+                                  }}
+                                />
+                                <span text="ui-text-secondary">{message.hint}</span>
+                              </div>
+                            </Show>
+                          </div>
+                        </Match>
+                      </Switch>
 
-                    {/* `data-testid` so the browser suite's screenshot
+                      {/* `data-testid` so the browser suite's screenshot
                         comparison can take it OUT of the page before the shot
                         (`e2e-browser/lib/surfaces.ts#hideVolatile`): a wall-clock
                         time differs between two otherwise identical runs, and a
@@ -603,69 +672,90 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                         than masked — a mask paints over an element and leaves it
                         in the flow, so a varying WIDTH still moves everything
                         beside it. */}
-                    <div data-testid="message-time" text="xs ui-text-tertiary" m="t-1">
-                      {message.timestamp.toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      <div data-testid="message-time" text="xs ui-text-tertiary" m="t-1">
+                        {message.timestamp.toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Tool Call - SEPARATE from message bubble */}
-                <Show when={message.toolCall && message.role === 'assistant'}>
-                  <div m="l-11">
-                    <ToolCallDisplay toolCall={message.toolCall!} />
+                  {/* Tool Call - SEPARATE from message bubble */}
+                  <Show when={message.toolCall && message.role === 'assistant'}>
+                    <div m="l-11">
+                      <ToolCallDisplay toolCall={message.toolCall!} />
+                    </div>
+                  </Show>
+                </div>
+              )}
+            </For>
+
+            {/* Empty State */}
+            <Show when={props.messages.length === 0}>
+              <div flex="~" items="center" justify="center" h="full" min-h="64" text="center">
+                <div>
+                  <div text="2xl ui-accent/50" m="b-2">
+                    <svg
+                      width="64"
+                      height="64"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      style={{ margin: '0 auto' }}
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                      />
+                    </svg>
                   </div>
-                </Show>
-              </div>
-            )}
-          </For>
-
-          {/* Empty State */}
-          <Show when={props.messages.length === 0}>
-            <div flex="~" items="center" justify="center" h="full" min-h="64" text="center">
-              <div>
-                <div text="2xl ui-accent/50" m="b-2">
-                  <svg
-                    width="64"
-                    height="64"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    style={{ margin: '0 auto' }}
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      stroke-width="2"
-                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                </div>
-                <div text="lg ui-text-secondary" font="medium">
-                  {props.welcome?.title ?? 'Start a conversation'}
-                </div>
-                <div text="sm ui-text-tertiary" m="t-1" max-w="md">
-                  {props.welcome?.body ?? 'Type a message below to begin'}
+                  <div text="lg ui-text-secondary" font="medium">
+                    {props.welcome?.title ?? 'Start a conversation'}
+                  </div>
+                  <div text="sm ui-text-tertiary" m="t-1" max-w="md">
+                    {props.welcome?.body ?? 'Type a message below to begin'}
+                  </div>
                 </div>
               </div>
-            </div>
-          </Show>
+            </Show>
 
-          {/* Trailing slot — e.g. the live progress bar, rendered where the
+            {/* Trailing slot — e.g. the live progress bar, rendered where the
               next assistant bubble would appear. */}
-          <Show when={props.trailing}>{(slot) => slot()()}</Show>
+            <Show when={props.trailing}>{(slot) => slot()()}</Show>
 
-          {/* Sentinel element for auto-scroll */}
-          <div ref={bottomRef} />
-        </ScrollArea.Content>
-      </ScrollArea.Viewport>
+            {/* Sentinel element for auto-scroll */}
+            <div ref={bottomRef} />
+          </ScrollArea.Content>
+        </ScrollArea.Viewport>
 
-      <ScrollArea.Scrollbar orientation="vertical" w="2" bg="ui-bg-tertiary">
-        <ScrollArea.Thumb bg="cyber-700/50 hover:cyber-600/70" rounded="full" transition="colors" />
-      </ScrollArea.Scrollbar>
-    </ScrollArea.Root>
+        <ScrollArea.Scrollbar orientation="vertical" w="2" bg="ui-bg-tertiary">
+          <ScrollArea.Thumb
+            bg="cyber-700/50 hover:cyber-600/70"
+            rounded="full"
+            transition="colors"
+          />
+        </ScrollArea.Scrollbar>
+      </ScrollArea.Root>
+      {/* The link-review dialog (#901 slice 2), mounted here so the ONE
+          renderer serves both surfaces that render assistant markdown — the
+          live transcript and the shared transcript. Client-only: no server
+          round-trip, no HITL request, nothing persisted. */}
+      <HitlDialog
+        kind="link-review"
+        open={reviewTarget() !== null}
+        onClose={() => setReviewTarget(null)}
+        address={reviewTarget()?.dest ?? ''}
+        onDefang={() => {
+          const target = reviewTarget()
+          if (!target) return
+          defangAnchors(target.container, target.raw)
+          setReviewTarget(null)
+        }}
+      />
+    </>
   )
 }
 

@@ -322,6 +322,48 @@ jobs:
           flags: app
           fail_ci_if_error: ${{ github.event_name == 'push' }}
 
+  # The multipart undici seam tests on Node 24. Production (app/Dockerfile) and
+  # every other job here run Node 22, whose undici 6 captured its `File` class
+  # at module load — so CI never saw the two undici seams the unit suite's
+  # jsdom environment breaks on Node 24 (undici 7 resolves `File` per call):
+  # the multipart parse's brand check and the Request constructor's eager
+  # FormData serialisation. The parse-scoped and constructor-scoped swaps in
+  # app/src/__tests__/setup.ts are the fix; this job runs the affected test
+  # files — the smallest set that exercises both seams — on Node 24, and rides
+  # the `check` gate, so a regression in either seam cannot land unseen.
+  unit-node24:
+    name: test · unit (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Seed local-only config
+        working-directory: .
+        run: cp -n configs/template.mcp-config.yaml configs/mcp-config.yaml || true
+
+      - name: Multipart undici seam tests (Node 24)
+        run: >-
+          pnpm exec vitest run
+          src/__tests__/lib/upload-service.test.ts
+          src/__tests__/lib/stash-upload-service.test.ts
+          src/__tests__/routes/api/agents.test.ts
+          src/__tests__/lib/multipart-request-env.test.ts
+
   # The connectors and sandbox packages' own co-located suites, each from its
   # workspace member.
   unit-packages:
@@ -466,7 +508,7 @@ jobs:
   # No checkout and no token permissions: it only reads `needs`.
   check:
     name: typecheck · lint · test · build
-    needs: [static, shell, unit, unit-packages, build]
+    needs: [static, shell, unit, unit-node24, unit-packages, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -481,7 +523,7 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$RESULTS" | jq -e 'length == 5 and all(.[]; .result == "success")' >/dev/null \
+          echo "$RESULTS" | jq -e 'length == 6 and all(.[]; .result == "success")' >/dev/null \
             || { echo "::error::a part of the gate did not succeed (failure, cancelled or skipped)"; exit 1; }
 
   # Layer 1's DB-backed tests, against a throwaway Postgres, on pull requests

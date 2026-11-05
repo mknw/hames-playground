@@ -294,3 +294,76 @@ export function buildTimelineItems(events: ContextEvent[]): TimelineItem[] {
 
   return items
 }
+
+// ============================================================================
+// Controller-run sections (#1007)
+// ============================================================================
+
+/** The event types a controller run records under its own pattern id — the
+ *  same set simpleLoop's round reconstruction reads (`ROUND_EVENTS`), which is
+ *  what makes a collapsible section hold exactly one controller run. */
+const CONTROLLER_RUN_TYPES: ReadonlySet<EventType> = new Set([
+  'controller_action',
+  'tool_call',
+  'tool_result',
+  'loop_recovery',
+])
+
+export type TimelineSection =
+  | { kind: 'controller'; patternId: string; items: TimelineItem[] }
+  | { kind: 'single'; item: TimelineItem }
+
+/**
+ * Group the timeline into display sections: one collapsible section per
+ * controller run (#1007), everything else a single item.
+ */
+export function buildTimelineSections(events: ContextEvent[]): TimelineSection[] {
+  return groupControllerRuns(buildTimelineItems(events))
+}
+
+/**
+ * Group already-merged timeline items into controller-run sections.
+ *
+ * A controller run is a MAXIMAL CONSECUTIVE run of controller events under the
+ * same patternId — consecutive, because anything the loop did not record
+ * itself (a guard's screen call, an error row, the pattern's own enter/exit
+ * dividers) stays visible in the timeline rather than folding into the group.
+ * A consecutive run of controller events that never emitted a
+ * controller_action is not a controller run — a retriever's standalone result,
+ * for one — and stays single rows too. Display-only: exports read the raw
+ * events, never this.
+ */
+export function groupControllerRuns(items: TimelineItem[]): TimelineSection[] {
+  const sections: TimelineSection[] = []
+  let pending: { patternId: string; items: TimelineItem[] } | undefined
+
+  const flush = () => {
+    if (!pending) return
+    const isRun = pending.items.some(
+      (item) => item.kind === 'event' && item.event.type === 'controller_action',
+    )
+    if (isRun) {
+      sections.push({ kind: 'controller', patternId: pending.patternId, items: pending.items })
+    } else {
+      for (const item of pending.items) sections.push({ kind: 'single', item })
+    }
+    pending = undefined
+  }
+
+  for (const item of items) {
+    const event = item.kind === 'event' ? item.event : item.call
+    const patternId = event.patternId
+    if (patternId && CONTROLLER_RUN_TYPES.has(event.type) && pending?.patternId === patternId) {
+      pending.items.push(item)
+      continue
+    }
+    flush()
+    if (patternId && CONTROLLER_RUN_TYPES.has(event.type)) {
+      pending = { patternId, items: [item] }
+    } else {
+      sections.push({ kind: 'single', item })
+    }
+  }
+  flush()
+  return sections
+}

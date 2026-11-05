@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import type { ContextEvent, EventType } from '../../types'
 import {
+  buildTimelineSections,
   buildTimelineItems,
   getEventLane,
   getEventPreview,
@@ -469,5 +470,107 @@ describe('buildTimelineItems', () => {
       { kind: 'event', event: enter },
     ])
     expect(buildTimelineItems([])).toEqual([])
+  })
+})
+
+describe('buildTimelineSections', () => {
+  const action = (tool: string, extra: Partial<ContextEvent> = {}) =>
+    ev('controller_action', { action: { tool_name: tool } }, extra)
+  const call = (tool: string, callId: string, extra: Partial<ContextEvent> = {}) =>
+    ev('tool_call', { tool, callId }, extra)
+  const result = (tool: string, callId: string, extra: Partial<ContextEvent> = {}) =>
+    ev('tool_result', { tool, success: true, callId }, extra)
+
+  it('groups a controller run — actions plus their calls and results — into one section', () => {
+    const a1 = action('x')
+    const c1 = call('x', 'c1')
+    const r1 = result('x', 'c1')
+    const a2 = action('y')
+    expect(buildTimelineSections([a1, c1, r1, a2])).toEqual([
+      {
+        kind: 'controller',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: a1 },
+          { kind: 'tool_pair', call: c1, result: r1 },
+          { kind: 'event', event: a2 },
+        ],
+      },
+    ])
+  })
+
+  it('keeps chronological order: surrounding non-controller events stay single, in place', () => {
+    const user = ev('user_message', { content: 'hi' })
+    const a1 = action('x')
+    const c1 = call('x', 'c1')
+    const r1 = result('x', 'c1')
+    const answer = ev('assistant_message', { content: 'done' })
+    expect(buildTimelineSections([user, a1, c1, r1, answer])).toEqual([
+      { kind: 'single', item: { kind: 'event', event: user } },
+      {
+        kind: 'controller',
+        patternId: 'neo4j-query',
+        items: [
+          { kind: 'event', event: a1 },
+          { kind: 'tool_pair', call: c1, result: r1 },
+        ],
+      },
+      { kind: 'single', item: { kind: 'event', event: answer } },
+    ])
+  })
+
+  it('splits a run at anything the loop did not record itself, so a screen call stays visible', () => {
+    const a1 = action('x')
+    const screen = ev('model_call', { role: 'screen', source: 'web/fetch' })
+    const a2 = action('y')
+    const sections = buildTimelineSections([a1, screen, a2])
+    expect(sections).toHaveLength(3)
+    expect(sections[0]).toEqual({
+      kind: 'controller',
+      patternId: 'neo4j-query',
+      items: [{ kind: 'event', event: a1 }],
+    })
+    expect(sections[1]).toEqual({ kind: 'single', item: { kind: 'event', event: screen } })
+    expect(sections[2].kind).toBe('controller')
+  })
+
+  it('starts a new section at the next run of the same pattern, past its exit divider', () => {
+    const a1 = action('x')
+    const exit = ev('pattern_exit', { patternId: 'neo4j-query' })
+    const enter = ev('pattern_enter', { patternId: 'neo4j-query' })
+    const a2 = action('y')
+    const sections = buildTimelineSections([a1, exit, enter, a2])
+    expect(sections).toHaveLength(4)
+    expect(sections.filter((s) => s.kind === 'controller')).toHaveLength(2)
+  })
+
+  it('leaves controller events with no controller_action as single rows', () => {
+    // A retriever's standalone tool_result under its own pattern id is not a
+    // controller run.
+    const r1 = result('retriever', 'c1', { patternId: 'retriever' })
+    expect(buildTimelineSections([r1])).toEqual([
+      { kind: 'single', item: { kind: 'event', event: r1 } },
+    ])
+  })
+
+  it('groups two runs of different patterns separately', () => {
+    const a1 = action('x', { patternId: 'one' })
+    const a2 = action('y', { patternId: 'two' })
+    const sections = buildTimelineSections([a1, a2])
+    expect(sections).toEqual([
+      { kind: 'controller', patternId: 'one', items: [{ kind: 'event', event: a1 }] },
+      { kind: 'controller', patternId: 'two', items: [{ kind: 'event', event: a2 }] },
+    ])
+  })
+
+  it('leaves a controller action with no patternId ungrouped', () => {
+    const a1 = action('x', { patternId: undefined })
+    expect(buildTimelineSections([a1])).toEqual([
+      { kind: 'single', item: { kind: 'event', event: a1 } },
+    ])
+  })
+
+  it('returns nothing for an empty stream', () => {
+    expect(buildTimelineSections([])).toEqual([])
   })
 })

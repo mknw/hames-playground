@@ -528,7 +528,9 @@ export const ChatMessages = (props: ChatMessagesProps) => {
                       rounded="lg"
                       bg={
                         message.role === 'user'
-                          ? 'ui-accent/10'
+                          ? // /6: the bubble's tertiary timestamp keeps 4.5:1
+                            // on it in dark (4.7; /10 was 4.4) (#1008).
+                            'ui-accent/6'
                           : message.role === 'error'
                             ? 'red-900/20'
                             : message.role === 'warning'

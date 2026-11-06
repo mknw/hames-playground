@@ -186,6 +186,7 @@ export default defineConfig({
         // the accent in both themes; uno-theme.test.ts pins that they emit.
         'accent-deep': 'var(--ui-accent-deep)',
         'on-accent': 'var(--ui-on-accent)',
+        'accent-text': 'var(--ui-accent-text)',
         danger: 'var(--ui-danger)',
         success: 'var(--ui-success)',
       },
@@ -343,6 +344,10 @@ export default defineConfig({
              enough that its readable partner is the page's own near-black;
              light mode's deep teal takes white. --ui-accent-deep is the
              hover/pressed tone, one step down the same ramp. */
+          /* The accent as TEXT on a tint of itself (chips, the selected tier).
+             Dark mode's accent already clears 4.5:1 there; light mode's does
+             not even on the bare page ground, so its ink is the deep teal. */
+          --ui-accent-text: #45b0b8;
           --ui-on-accent: #0f1115;
           --ui-accent-deep: #2f9aa4;
         }
@@ -433,6 +438,7 @@ export default defineConfig({
           --ui-pat-semantic-cache: #416a70;
           --ui-pat-_default: #5b6470;
 
+          --ui-accent-text: #0c637a;
           --ui-on-accent: #ffffff;
           --ui-accent-deep: #0c637a;
 

@@ -226,7 +226,7 @@ export const EventRow = (props: {
 
       <Show when={type === 'decision_made'}>
         <span
-          text="xs ui-accent"
+          text="xs ui-accent-text"
           bg="ui-accent/10"
           p="x-1.5 y-0.5"
           rounded="sm"

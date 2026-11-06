@@ -622,7 +622,13 @@ export const ToolPairDetail = (props: {
               tool call
             </span>
             <Show when={props.call.llmCall}>
-              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span
+                text="xs ui-accent-text"
+                bg="ui-accent/10"
+                p="x-1.5 y-0.5"
+                rounded="sm"
+                font="mono"
+              >
                 LLM
               </span>
             </Show>
@@ -761,7 +767,13 @@ export const EventDetailPanel = (props: {
               {type.replace(/_/g, ' ')}
             </span>
             <Show when={llmCall}>
-              <span text="xs ui-accent" bg="ui-accent/10" p="x-1.5 y-0.5" rounded="sm" font="mono">
+              <span
+                text="xs ui-accent-text"
+                bg="ui-accent/10"
+                p="x-1.5 y-0.5"
+                rounded="sm"
+                font="mono"
+              >
                 LLM
               </span>
             </Show>

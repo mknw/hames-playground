@@ -122,6 +122,40 @@ describe('event + pattern label colours clear WCAG AA in both themes', () => {
     }
   })
 
+  it('accent ink clears AA on an accent tint, the chip and selected-tier shape', async () => {
+    // `text="ui-accent-text" bg="ui-accent/10"`: the decision chip, the LLM
+    // chips and the selected tier. Light mode's plain accent cannot do this
+    // (about 3.8:1), which is why the ink is its own token. Composited over
+    // every ground the chip can sit on, the row hover included.
+    const [dark, light] = await Promise.all([palette(':root'), palette(':root.light')])
+    const mix = (fg: string, a: number, bg: string): string => {
+      const c = (h: string) => [0, 2, 4].map((i) => parseInt(h.slice(1 + i, 3 + i), 16))
+      const [f, b] = [c(fg), c(bg)]
+      return (
+        '#' +
+        f
+          .map((v, i) =>
+            Math.round(a * v + (1 - a) * b[i])
+              .toString(16)
+              .padStart(2, '0'),
+          )
+          .join('')
+      )
+    }
+    for (const [p, grounds] of [
+      [dark, [...DARK_GROUNDS, dark['--ui-bg-hover']]],
+      [light, [...LIGHT_GROUNDS, light['--ui-bg-hover']]],
+    ] as const) {
+      for (const ground of grounds) {
+        const tint = mix(p['--ui-accent'], 0.1, ground)
+        expect(
+          contrast(p['--ui-accent-text'], tint),
+          `ink on tint over ${ground}`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
   it('the accent button pair clears AA with its own text colour', async () => {
     const [dark, light] = await Promise.all([palette(':root'), palette(':root.light')])
     // Rest state: --ui-accent ground, --ui-on-accent text.

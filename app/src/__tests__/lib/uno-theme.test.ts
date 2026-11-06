@@ -92,6 +92,8 @@ const INHERITED_DARK_VALUES: Record<string, string> = {
   // #1008 round 2: the accent as a button ground, and its text.
   '--ui-on-accent': '#0f1115',
   '--ui-accent-deep': '#2f9aa4',
+  // …and as text on a tint of itself.
+  '--ui-accent-text': '#45b0b8',
 }
 
 describe('ui-* token palette', () => {
@@ -143,6 +145,7 @@ describe('ui-* utilities', () => {
     // Chat use these, and an unregistered key emits nothing at all.
     ['text-ui-on-accent', '--ui-on-accent'],
     ['hover:bg-ui-accent-deep', '--ui-accent-deep'],
+    ['text-ui-accent-text', '--ui-accent-text'],
   ] as const
 
   it.each(cases)('%s resolves through %s', async (utility, variable) => {

@@ -89,6 +89,9 @@ const INHERITED_DARK_VALUES: Record<string, string> = {
   '--ui-overlay-hairline': 'rgba(255, 255, 255, 0.05)',
   '--ui-overlay-sunken': 'rgba(0, 0, 0, 0.15)',
   '--ui-code-bg': '#0c0e11',
+  // #1008 round 2: the accent as a button ground, and its text.
+  '--ui-on-accent': '#0f1115',
+  '--ui-accent-deep': '#2f9aa4',
 }
 
 describe('ui-* token palette', () => {

@@ -13,16 +13,17 @@ import type { EventType } from '@hames-ai/harness-patterns'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 
 describe('getPatternColor', () => {
-  it('resolves a known pattern to a colour and a tint', () => {
+  it('resolves a known pattern to a theme var and a tint', () => {
     const pc = getPatternColor('neo4j-query')
-    expect(pc.color).toMatch(/^#|^rgb/)
-    expect(pc.tint).toMatch(/^#|^rgba?\(/)
+    // #1008 round 2: the colour is theme-aware — a var the preflight
+    // declares for this id — and the tint stays a literal rgba wash.
+    expect(pc.color).toBe('var(--ui-pat-neo4j-query, var(--ui-pat-default))')
+    expect(pc.tint).toMatch(/^rgba?\(/)
   })
 
-  it('falls back for an unknown pattern instead of returning undefined', () => {
+  it('falls back to the default var for an unknown pattern', () => {
     const pc = getPatternColor('a-pattern-that-does-not-exist')
-    expect(pc).toEqual(getPatternColor('_default'))
-    expect(pc.color).toBeTruthy()
+    expect(pc.color).toBe('var(--ui-pat-default)')
     expect(pc.tint).toBeTruthy()
   })
 })
@@ -33,7 +34,10 @@ describe('eventIconClasses / eventColors', () => {
     expect(types.length).toBeGreaterThan(0)
     for (const type of types) {
       expect(eventIconClasses[type]).toBeTruthy()
-      expect(eventColors[type]).toMatch(/^#[0-9a-f]{6}$/i)
+      // #1008 round 2: every label colour is a theme-resolving var, not a
+      // hex — a single hex cannot clear 4.5:1 on both themes' grounds. The
+      // 4.5:1 floor itself is asserted in event-contrast.test.ts.
+      expect(eventColors[type]).toMatch(/^var\(--ui-evt-[a-z-]+\)$/)
     }
     expect(Object.keys(eventColors).sort()).toEqual(types.sort())
   })

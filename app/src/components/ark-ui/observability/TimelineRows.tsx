@@ -119,10 +119,17 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       items="center"
       gap="2"
       p="x-3 y-1"
+      // #1008 round 2: pc.color is now a var(), so the old hex-suffix alpha
+      // (`${pc.color}40`) cannot be used — color-mix resolves the var and
+      // fades it the same way.
       style={{
         'background-color': pc.tint,
-        'border-top': isEnter ? `1px solid ${pc.color}40` : 'none',
-        'border-bottom': !isEnter ? `1px solid ${pc.color}40` : 'none',
+        'border-top': isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
+        'border-bottom': !isEnter
+          ? `1px solid color-mix(in srgb, ${pc.color} 25%, transparent)`
+          : 'none',
         'min-height': '24px',
       }}
     >
@@ -143,9 +150,12 @@ export const PatternBoundaryRow = (props: { event: ContextEvent }) => {
       >
         {patternId}
       </span>
+      {/* Not in the pattern colour: a 60%-alpha tint of it was the one
+          timeline label that could not clear 4.5:1 on a light ground, and
+          the word is decorative direction, not identity (#1008 round 2). */}
       <span
         style={{
-          color: `${pc.color}99`,
+          color: 'var(--ui-text-tertiary)',
           'font-size': '9px',
           'font-family': '"Fira Code", ui-monospace, monospace',
         }}

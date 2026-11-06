@@ -1,25 +1,69 @@
 {
-  "$comment": "Pattern colors for the observability timeline. Each pattern gets a distinct hue. The 'color' is used for enter/exit labels and the 'tint' (rgba) as a background for events within that pattern.",
-  "harness": { "color": "#64748b", "tint": "rgba(100,116,139,0.06)" },
-  "router": { "color": "#8b5cf6", "tint": "rgba(139,92,246,0.06)" },
-  "neo4j-query": { "color": "#06b6d4", "tint": "rgba(6,182,212,0.06)" },
-  "web-search": { "color": "#f59e0b", "tint": "rgba(245,158,11,0.06)" },
-  "response-synth": { "color": "#ec4899", "tint": "rgba(236,72,153,0.06)" },
-  "quality-judge": { "color": "#f43f5e", "tint": "rgba(244,63,94,0.06)" },
-  "doc-lookup": { "color": "#6366f1", "tint": "rgba(99,102,241,0.06)" },
-  "memory-store": { "color": "#14b8a6", "tint": "rgba(20,184,166,0.06)" },
-  "memory-write": { "color": "#14b8a6", "tint": "rgba(20,184,166,0.06)" },
-  "parallel-research": { "color": "#0ea5e9", "tint": "rgba(14,165,233,0.06)" },
-  "parallel-sources": { "color": "#0ea5e9", "tint": "rgba(14,165,233,0.06)" },
-  "session-tracker": { "color": "#78716c", "tint": "rgba(120,113,108,0.06)" },
-  "ontology-scope": { "color": "#d946ef", "tint": "rgba(217,70,239,0.06)" },
-  "ontology-proposal": { "color": "#c026d3", "tint": "rgba(192,38,211,0.06)" },
-  "ontology-commit": { "color": "#a21caf", "tint": "rgba(162,28,175,0.06)" },
-  "file-edit": { "color": "#84cc16", "tint": "rgba(132,204,22,0.06)" },
-  "safe-file-edit": { "color": "#84cc16", "tint": "rgba(132,204,22,0.06)" },
-  "issue-context": { "color": "#fb923c", "tint": "rgba(251,146,60,0.06)" },
-  "web-research": { "color": "#f59e0b", "tint": "rgba(245,158,11,0.06)" },
-  "kg-lookup": { "color": "#06b6d4", "tint": "rgba(6,182,212,0.06)" },
-  "semantic-cache": { "color": "#22d3ee", "tint": "rgba(34,211,238,0.06)" },
-  "_default": { "color": "#94a3b8", "tint": "rgba(148,163,184,0.06)" }
+  "$comment": "Pattern tints for the observability timeline (#1008). The label colour is now theme-aware \u2014 the preflights in uno.config.ts declare --ui-pat-<id> for each id named here (dark + light, both WCAG AA on their row grounds) and event-styles.ts returns that var; this file stays the source of the ids and of the 6% background tint, regenerated from the same muted dark hue.",
+  "harness": {
+    "tint": "rgba(112, 146, 194, 0.06)"
+  },
+  "router": {
+    "tint": "rgba(157, 129, 222, 0.06)"
+  },
+  "neo4j-query": {
+    "tint": "rgba(95, 153, 163, 0.06)"
+  },
+  "web-search": {
+    "tint": "rgba(166, 140, 96, 0.06)"
+  },
+  "response-synth": {
+    "tint": "rgba(201, 117, 159, 0.06)"
+  },
+  "quality-judge": {
+    "tint": "rgba(204, 118, 133, 0.06)"
+  },
+  "doc-lookup": {
+    "tint": "rgba(132, 134, 227, 0.06)"
+  },
+  "memory-store": {
+    "tint": "rgba(90, 156, 148, 0.06)"
+  },
+  "memory-write": {
+    "tint": "rgba(90, 156, 148, 0.06)"
+  },
+  "parallel-research": {
+    "tint": "rgba(101, 151, 173, 0.06)"
+  },
+  "parallel-sources": {
+    "tint": "rgba(101, 151, 173, 0.06)"
+  },
+  "session-tracker": {
+    "tint": "rgba(178, 135, 104, 0.06)"
+  },
+  "ontology-scope": {
+    "tint": "rgba(190, 117, 201, 0.06)"
+  },
+  "ontology-proposal": {
+    "tint": "rgba(192, 117, 201, 0.06)"
+  },
+  "ontology-commit": {
+    "tint": "rgba(192, 115, 199, 0.06)"
+  },
+  "file-edit": {
+    "tint": "rgba(128, 153, 89, 0.06)"
+  },
+  "safe-file-edit": {
+    "tint": "rgba(128, 153, 89, 0.06)"
+  },
+  "issue-context": {
+    "tint": "rgba(176, 135, 102, 0.06)"
+  },
+  "web-research": {
+    "tint": "rgba(166, 140, 96, 0.06)"
+  },
+  "kg-lookup": {
+    "tint": "rgba(95, 153, 163, 0.06)"
+  },
+  "semantic-cache": {
+    "tint": "rgba(95, 154, 163, 0.06)"
+  },
+  "_default": {
+    "tint": "rgba(112, 146, 194, 0.06)"
+  }
 }

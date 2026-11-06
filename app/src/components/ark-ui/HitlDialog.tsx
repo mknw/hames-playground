@@ -1181,9 +1181,11 @@ export interface LinkReviewDialogProps {
   /** How the reason is presented and how hard the open action is to reach.
    *  Defaults to `unverified`. */
   severity?: LinkReviewSeverity
-  /** "Cancel and defang": replace the chosen anchor with inert text in the
-   *  CURRENT rendering only (ruling Q5). The mount (ChatMessages) owns the
-   *  DOM mechanism; this dialog only asks for it. */
+  /** "Cancel and mark unsafe": replace the chosen anchor with inert text and
+   *  record the persisted mark (ruling Q5 as overridden — issue #901 comment
+   *  6618793027, 2026-11-04; the mark is persisted, not rendering-only, and
+   *  no session state beyond the mark). The mount (ChatMessages) owns the
+   *  DOM mechanism and the mark; this dialog only asks for it. */
   onDefang: () => void
 }
 
@@ -1357,7 +1359,7 @@ function LinkReviewDialog(props: LinkReviewDialogProps) {
               ring="2 transparent focus:ui-accent/40"
               cursor="pointer"
             >
-              Cancel and defang
+              Cancel and mark unsafe
             </button>
           </div>
         </div>

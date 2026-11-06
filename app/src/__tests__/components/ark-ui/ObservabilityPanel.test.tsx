@@ -50,6 +50,20 @@ const rows = (container: HTMLElement) => [
   ...container.querySelectorAll<HTMLElement>('div[cursor="pointer"][w="full"]'),
 ]
 
+/**
+ * Expand every controller section (#1007). The collapsed-by-default group is
+ * what an operator sees, so a test that reads or opens a grouped row expands
+ * its section first. Scoped by the header text so other aria-expanded
+ * triggers (the export menu) are left alone.
+ */
+const expandControllerSections = async (container: HTMLElement) => {
+  const triggers = [
+    ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+  ].filter((b) => b.textContent?.includes('controller'))
+  for (const trigger of triggers) fireEvent.click(trigger)
+  await tick()
+}
+
 /** The drill-down overlay, scoped to one rendered panel. */
 const detailIn = (root: ParentNode) =>
   [...root.querySelectorAll<HTMLElement>('div')].find(
@@ -470,7 +484,7 @@ describe('ObservabilityPanel — timeline construction', () => {
     expect(rows(container)[0].textContent).toContain('y'.repeat(50) + '...')
   })
 
-  it('flags a batched controller action with its extra calls', () => {
+  it('flags a batched controller action with its extra calls', async () => {
     const events = [
       ev('controller_action', {
         action: {
@@ -481,6 +495,7 @@ describe('ObservabilityPanel — timeline construction', () => {
       }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(container)
     expect(rows(container)[0].textContent).toContain('×2 first_tool, second_tool')
   })
 
@@ -583,7 +598,7 @@ describe('ObservabilityPanel — detail drill-down', () => {
     expect(panel.textContent).toContain('Error: timeout')
   })
 
-  it('renders a controller action with reasoning, batched calls and status', () => {
+  it('renders a controller action with reasoning, batched calls and status', async () => {
     const events = [
       ev('controller_action', {
         action: {
@@ -597,6 +612,7 @@ describe('ObservabilityPanel — detail drill-down', () => {
       }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(container)
 
     const panel = openFirstRow(container)
     expect(panel.textContent).toContain('need the node list first')
@@ -606,11 +622,12 @@ describe('ObservabilityPanel — detail drill-down', () => {
     expect(panel.textContent).toContain('No') // is_final
   })
 
-  it('omits the optional action sections when the controller sent none', () => {
+  it('omits the optional action sections when the controller sent none', async () => {
     const events = [
       ev('controller_action', { action: { tool_name: 't', tool_args: '{}', is_final: true } }),
     ]
     const { container } = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(container)
 
     const panel = openFirstRow(container)
     expect(panel.textContent).not.toContain('Reasoning')
@@ -729,7 +746,7 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     ...over,
   })
 
-  const openLLMRow = (call: LLMCallData, extra: Partial<ContextEvent> = {}) => {
+  const openLLMRow = async (call: LLMCallData, extra: Partial<ContextEvent> = {}) => {
     const events = [
       ev(
         'controller_action',
@@ -738,12 +755,13 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
 
-  it('badges the event as LLM-backed and shows the usage breakdown', () => {
-    const panel = openLLMRow(llmCall())
+  it('badges the event as LLM-backed and shows the usage breakdown', async () => {
+    const panel = await openLLMRow(llmCall())
 
     expect(panel.textContent).toContain('LLM')
     expect(panel.textContent).toContain('LoopController')
@@ -754,8 +772,8 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).toContain('1430ms')
   })
 
-  it('hides the cache rows when nothing was cached', () => {
-    const panel = openLLMRow(
+  it('hides the cache rows when nothing was cached', async () => {
+    const panel = await openLLMRow(
       llmCall({
         usage: { inputTokens: 100, outputTokens: 10, cachedInputTokens: 0, totalTokens: 110 },
       }),
@@ -764,8 +782,8 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).not.toContain('Cache write')
   })
 
-  it('shows provider, client, attempts and step cost when the metrics carry them', () => {
-    const panel = openLLMRow(
+  it('shows provider, client, attempts and step cost when the metrics carry them', async () => {
+    const panel = await openLLMRow(
       llmCall({
         provider: 'anthropic',
         clientName: 'ControllerAnthropic',
@@ -787,8 +805,8 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).not.toContain('≥')
   })
 
-  it('labels a wall-clock-billed step as compute time, with the floor caveat', () => {
-    const panel = openLLMRow(
+  it('labels a wall-clock-billed step as compute time, with the floor caveat', async () => {
+    const panel = await openLLMRow(
       llmCall({
         provider: 'openai-generic',
         clientName: 'LargeQwen',
@@ -817,12 +835,12 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(cell?.getAttribute('title')).toMatch(/cold start/)
   })
 
-  it('keeps the floor marker on a MIXED step, without calling it compute time', () => {
+  it('keeps the floor marker on a MIXED step, without calling it compute time', async () => {
     // A step that ran on the self-hosted box and retried on Anthropic ends with
     // `basis: 'tokens'`, and reading that alone dropped the `≥` from a figure
     // holding a billed GPU hour. Only part of it is wall-clock, so the label
     // stays a price — but a floor plus an exact number is still a floor.
-    const panel = openLLMRow(
+    const panel = await openLLMRow(
       llmCall({
         provider: 'anthropic',
         clientName: 'AnthropicSonnet5',
@@ -848,16 +866,16 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(cell?.getAttribute('title')).toMatch(/per MTok/)
   })
 
-  it('shows no price chip at all for an unpriced step, rather than €0', () => {
-    const panel = openLLMRow(
+  it('shows no price chip at all for an unpriced step, rather than €0', async () => {
+    const panel = await openLLMRow(
       llmCall({ clientName: 'SomeNewClient', metrics: metrics({ attempts: 1 }) }),
     )
     expect(panel.textContent).not.toContain('Cost (step)')
     expect(panel.textContent).not.toContain('Compute time (step)')
   })
 
-  it('parses the captured request body into per-role messages plus a params bar', () => {
-    const panel = openLLMRow(llmCall())
+  it('parses the captured request body into per-role messages plus a params bar', async () => {
+    const panel = await openLLMRow(llmCall())
 
     expect(panel.textContent).toContain('claude-sonnet-5')
     expect(panel.textContent).toContain('temperature')
@@ -867,14 +885,14 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).toContain('be brief')
   })
 
-  it('shows the BAML template and variables in the prompt accordion', () => {
-    const panel = openLLMRow(llmCall())
+  it('shows the BAML template and variables in the prompt accordion', async () => {
+    const panel = await openLLMRow(llmCall())
     expect(panel.textContent).toContain('You are a controller. {{ question }}')
     expect(panel.textContent).toContain('1 input')
   })
 
-  it('explains a missing template and a missing request body', () => {
-    const panel = openLLMRow(
+  it('explains a missing template and a missing request body', async () => {
+    const panel = await openLLMRow(
       llmCall({ promptTemplate: undefined, rawInput: undefined, variables: {} }),
     )
 
@@ -884,20 +902,20 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).toContain('0 inputs')
   })
 
-  it('falls back to the raw body when it is not an OpenAI-shaped payload', () => {
-    const panel = openLLMRow(llmCall({ rawInput: 'not json at all' }))
+  it('falls back to the raw body when it is not an OpenAI-shaped payload', async () => {
+    const panel = await openLLMRow(llmCall({ rawInput: 'not json at all' }))
     expect(panel.textContent).toContain('not json at all')
   })
 
-  it('treats a JSON body without a messages array as unparseable', () => {
-    const panel = openLLMRow(llmCall({ rawInput: '{"prompt":"legacy completion"}' }))
+  it('treats a JSON body without a messages array as unparseable', async () => {
+    const panel = await openLLMRow(llmCall({ rawInput: '{"prompt":"legacy completion"}' }))
     // No per-role message cards — the raw body is shown as-is.
     expect(panel.textContent).toContain('{"prompt":"legacy completion"}')
     expect(panel.textContent).not.toContain('0 messages')
   })
 
-  it('serialises a structured message content block', () => {
-    const panel = openLLMRow(
+  it('serialises a structured message content block', async () => {
+    const panel = await openLLMRow(
       llmCall({
         rawInput: JSON.stringify({
           messages: [{ role: 'user', content: [{ type: 'text', text: 'block form' }] }],
@@ -908,22 +926,22 @@ describe('ObservabilityPanel — LLM call drill-down', () => {
     expect(panel.textContent).toContain('1 message')
   })
 
-  it('switches to the Output tab and pretty-prints the parsed result', () => {
-    const panel = openLLMRow(llmCall())
+  it('switches to the Output tab and pretty-prints the parsed result', async () => {
+    const panel = await openLLMRow(llmCall())
 
     fireEvent.click([...panel.querySelectorAll('button')].find((b) => b.textContent === 'Output')!)
     expect(panel.textContent).toContain('"read_neo4j_cypher"')
     expect(panel.textContent).not.toContain('You are a controller')
   })
 
-  it('shows a string output verbatim and reports an uncaptured one', () => {
-    const stringPanel = openLLMRow(llmCall({ parsedOutput: 'plain text answer' }))
+  it('shows a string output verbatim and reports an uncaptured one', async () => {
+    const stringPanel = await openLLMRow(llmCall({ parsedOutput: 'plain text answer' }))
     fireEvent.click(
       [...stringPanel.querySelectorAll('button')].find((b) => b.textContent === 'Output')!,
     )
     expect(stringPanel.textContent).toContain('plain text answer')
 
-    const emptyPanel = openLLMRow(llmCall({ parsedOutput: undefined }))
+    const emptyPanel = await openLLMRow(llmCall({ parsedOutput: undefined }))
     fireEvent.click(
       [...emptyPanel.querySelectorAll('button')].find((b) => b.textContent === 'Output')!,
     )
@@ -1027,7 +1045,7 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
     ...over,
   })
 
-  const openError = (call: LLMCallData | undefined) => {
+  const openError = async (call: LLMCallData | undefined) => {
     const events = [
       ev(
         'error',
@@ -1041,20 +1059,21 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
 
-  it('shows the raw response for an error event, without any tab hunting', () => {
-    const panel = openError(parseFailure())
+  it('shows the raw response for an error event, without any tab hunting', async () => {
+    const panel = await openError(parseFailure())
 
     expect(panel.textContent).toContain('import pymupdf')
     expect(panel.textContent).toContain('BAML could not parse this')
     expect(panel.textContent).not.toContain('Output not captured')
   })
 
-  it('keeps the error message and hint ABOVE the raw response', () => {
-    const panel = openError(parseFailure())
+  it('keeps the error message and hint ABOVE the raw response', async () => {
+    const panel = await openError(parseFailure())
     const text = panel.textContent ?? ''
 
     expect(text.indexOf('Missing required field: tool_name')).toBeGreaterThanOrEqual(0)
@@ -1066,23 +1085,23 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
     )
   })
 
-  it('still renders the prompt drill-down for the failed call', () => {
-    const panel = openError(parseFailure())
+  it('still renders the prompt drill-down for the failed call', async () => {
+    const panel = await openError(parseFailure())
 
     fireEvent.click([...panel.querySelectorAll('button')].find((b) => b.textContent === 'Prompt')!)
     expect(panel.textContent).toContain('You are an actor')
   })
 
-  it('leaves an error with no captured call as a plain error detail', () => {
-    const panel = openError(undefined)
+  it('leaves an error with no captured call as a plain error detail', async () => {
+    const panel = await openError(undefined)
 
     expect(panel.textContent).toContain('BamlValidationError')
     expect(panel.textContent).not.toContain('Prompt')
     expect(panel.textContent).not.toContain('Raw response')
   })
 
-  it('shows the raw response alongside the parsed one when both were captured', () => {
-    const panel = openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
+  it('shows the raw response alongside the parsed one when both were captured', async () => {
+    const panel = await openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
 
     fireEvent.click([...panel.querySelectorAll('button')].find((b) => b.textContent === 'Output')!)
     expect(panel.textContent).toContain('Parsed output')
@@ -1093,8 +1112,8 @@ describe('ObservabilityPanel — raw LLM output on a failed call', () => {
     expect(panel.textContent).not.toContain('BAML could not parse this')
   })
 
-  it('opens on the Prompt tab when a parsed value exists', () => {
-    const panel = openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
+  it('opens on the Prompt tab when a parsed value exists', async () => {
+    const panel = await openError(parseFailure({ parsedOutput: { tool_name: 'sandbox_write' } }))
 
     expect(panel.textContent).toContain('You are an actor')
   })
@@ -1502,7 +1521,7 @@ describe('ObservabilityPanel — neutralized tool results', () => {
 // SA-H11 — the prompt viewer on Anthropic-shaped bodies
 // ============================================================================
 describe('ObservabilityPanel — Anthropic prompt bodies', () => {
-  const openPrompt = (rawInput: string) => {
+  const openPrompt = async (rawInput: string) => {
     const events = [
       ev(
         'controller_action',
@@ -1518,14 +1537,15 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
       ),
     ]
     const rendered = render(() => <ObservabilityPanel events={events} />)
+    await expandControllerSections(rendered.container)
     fireEvent.click(rows(rendered.container)[0])
     return detailIn(rendered.container)!
   }
 
   // Anthropic-only is this repo's dev default, so a viewer that only understood
   // the OpenAI shape blinded the primary debug surface.
-  it('flattens content blocks into readable text instead of escaped JSON', () => {
-    const panel = openPrompt(
+  it('flattens content blocks into readable text instead of escaped JSON', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         model: 'claude-sonnet-5',
         messages: [
@@ -1544,8 +1564,8 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).not.toContain('"type": "text"')
   })
 
-  it('lifts the top-level system prompt into a system message', () => {
-    const panel = openPrompt(
+  it('lifts the top-level system prompt into a system message', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         model: 'claude-sonnet-5',
         system: 'You are a controller.',
@@ -1557,8 +1577,8 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('You are a controller.')
   })
 
-  it('lifts a system prompt supplied as text blocks', () => {
-    const panel = openPrompt(
+  it('lifts a system prompt supplied as text blocks', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         system: [{ type: 'text', text: 'cached preamble' }],
         messages: [{ role: 'user', content: 'go' }],
@@ -1567,8 +1587,8 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('cached preamble')
   })
 
-  it('labels a non-text block by type rather than dropping it', () => {
-    const panel = openPrompt(
+  it('labels a non-text block by type rather than dropping it', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         messages: [
           {
@@ -1582,15 +1602,15 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('read_neo4j_cypher')
   })
 
-  it('does not surface an empty system field as a message', () => {
-    const panel = openPrompt(
+  it('does not surface an empty system field as a message', async () => {
+    const panel = await openPrompt(
       JSON.stringify({ system: '   ', messages: [{ role: 'user', content: 'go' }] }),
     )
     expect(panel.textContent).toContain('1 message')
   })
 
-  it('still renders the OpenAI shape', () => {
-    const panel = openPrompt(
+  it('still renders the OpenAI shape', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         model: 'gpt-oss-120b',
         messages: [
@@ -1603,8 +1623,8 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('be brief')
   })
 
-  it('truncates an oversized param value instead of letting it push the bar out', () => {
-    const panel = openPrompt(
+  it('truncates an oversized param value instead of letting it push the bar out', async () => {
+    const panel = await openPrompt(
       JSON.stringify({
         model: 'claude-sonnet-5',
         metadata: { note: 'x'.repeat(400) },
@@ -1617,8 +1637,10 @@ describe('ObservabilityPanel — Anthropic prompt bodies', () => {
     expect(panel.textContent).toContain('…')
   })
 
-  it('keeps the system prompt out of the params bar', () => {
-    const panel = openPrompt(JSON.stringify({ system: 'You are a controller.', messages: [] }))
+  it('keeps the system prompt out of the params bar', async () => {
+    const panel = await openPrompt(
+      JSON.stringify({ system: 'You are a controller.', messages: [] }),
+    )
     // Rendered once, as a message — the params bar has no `system` row.
     expect(panel.textContent).toContain('You are a controller.')
     expect(panel.textContent).toContain('1 message')
@@ -1688,5 +1710,104 @@ describe('ObservabilityPanel — decision_made', () => {
     // `state` is not a field of the event, so it has no place to be rendered
     // from; the detail view is built from the declared fields only.
     expect(panel.textContent).not.toContain('LEAKED STATE SENTINEL')
+  })
+})
+
+describe('ObservabilityPanel — controller sections (#1007)', () => {
+  const run = () => [
+    ev('controller_action', { action: { tool_name: 'x', tool_args: '{}' } }),
+    ev('tool_call', { tool: 'json_get', callId: 'c1' }),
+    ev('tool_result', { tool: 'json_get', success: true, callId: 'c1', result: {} }),
+    ev('controller_action', { action: { tool_name: 'y', tool_args: '{}' } }),
+  ]
+
+  /** The section header's one-line summary, whitespace-collapsed. */
+  const sectionText = (container: HTMLElement) =>
+    [...container.querySelectorAll('button[aria-expanded]')]
+      .filter((b) => b.textContent?.includes('controller'))
+      .map((b) => b.textContent?.replace(/\s+/g, ' ').trim())
+
+  it('collapses a controller run behind one labelled, keyboard-reachable section', () => {
+    const { container } = render(() => (
+      <ObservabilityPanel events={[ev('user_message', { content: 'hello' }), ...run()]} />
+    ))
+
+    const triggers = [...container.querySelectorAll('button[aria-expanded]')].filter((b) =>
+      b.textContent?.includes('controller'),
+    )
+    expect(triggers).toHaveLength(1)
+    // A real button: keyboard reachable; its visible text is its label.
+    expect(triggers[0].tagName).toBe('BUTTON')
+    expect(triggers[0].getAttribute('aria-expanded')).toBe('false')
+    expect(sectionText(container)).toEqual(['controllerneo4j-query2 actions · 1 tool call'])
+    // The run's rows are folded away; the surrounding events are not.
+    expect(container.textContent).toContain('hello')
+  })
+
+  it('expanding shows the grouped rows in chronological order, tints and all', async () => {
+    const { container } = render(() => <ObservabilityPanel events={run()} />)
+    await expandControllerSections(container)
+
+    const text = rows(container).map((r) => r.textContent ?? '')
+    expect(text[0]).toContain('x')
+    expect(text[1]).toContain('json_get')
+    expect(text[2]).toContain('y')
+    // The rows are the same rows the flat timeline renders — clickable, and
+    // the group's collapsed state is now open on the trigger.
+    expect(
+      [...container.querySelectorAll('button[aria-expanded]')]
+        .filter((b) => b.textContent?.includes('controller'))
+        .every((b) => b.getAttribute('aria-expanded') === 'true'),
+    ).toBe(true)
+  })
+
+  it('opens the detail for an event inside the group, after expanding', async () => {
+    const { container } = render(() => <ObservabilityPanel events={run()} />)
+    await expandControllerSections(container)
+
+    fireEvent.click(rows(container)[1])
+    expect(detail()!.textContent).toContain('json_get')
+    expect(detail()!.textContent).toContain('Arguments')
+  })
+
+  it('flags a failure in the collapsed summary, from a failed result', () => {
+    const events = [
+      ev('controller_action', { action: { tool_name: 'x', tool_args: '{}' } }),
+      ev('tool_call', { tool: 'json_get', callId: 'c1' }),
+      ev('tool_result', { tool: 'json_get', success: false, callId: 'c1', error: 'boom' }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(sectionText(container)[0]).toContain('error')
+    expect(sectionText(container)[0]).toContain('1 action · 1 tool call')
+  })
+
+  it('flags a failure in the collapsed summary, from a loop recovery', () => {
+    const events = [
+      ev('controller_action', { action: { tool_name: 'x', tool_args: '{}' } }),
+      ev('loop_recovery', { failure: 'unparseable_output', turn: 0, maxTurns: 8 }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(sectionText(container)[0]).toContain('error')
+  })
+
+  it('does not group tool calls that no controller action ran', () => {
+    const events = [
+      ev('tool_call', { tool: 'json_get', callId: 'c1' }),
+      ev('tool_result', { tool: 'json_get', success: true, callId: 'c1', result: {} }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(sectionText(container)).toEqual([])
+    expect(rows(container)).toHaveLength(1)
+  })
+
+  it('starts a new section at the next run of the same pattern, past its exit divider', () => {
+    const events = [
+      ...run(),
+      ev('pattern_exit', {}),
+      ev('pattern_enter', {}),
+      ev('controller_action', { action: { tool_name: 'z', tool_args: '{}' } }),
+    ]
+    const { container } = render(() => <ObservabilityPanel events={events} />)
+    expect(sectionText(container)).toHaveLength(2)
   })
 })

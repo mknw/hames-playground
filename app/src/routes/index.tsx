@@ -444,7 +444,6 @@ export default function Home() {
             bg="ui-border-primary hover:ui-accent/50"
             cursor="col-resize"
             transition="all"
-            shadow="hover:[0_0_10px_rgba(0,255,255,0.3)]"
           />
 
           {/* Support Panel (Neo4j, Memory, Context manager, Data, Sandbox).

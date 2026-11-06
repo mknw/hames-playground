@@ -15,9 +15,14 @@ import { For, Show, createSignal, createMemo, onCleanup } from 'solid-js'
 import { Menu } from '@ark-ui/solid/menu'
 import type { ContextEvent, UnifiedContext } from '@hames-ai/harness-patterns'
 import { getPatternColor } from '~/lib/observability/event-styles'
-import { buildTimelineItems } from '@hames-ai/harness-patterns/observability/projection'
+import {
+  buildTimelineItems,
+  groupControllerRuns,
+  type TimelineItem,
+} from '@hames-ai/harness-patterns/observability/projection'
 import { SummaryBar } from './observability/SummaryBar'
 import {
+  ControllerSection,
   EmptyState,
   EventRow,
   LaneHeaders,
@@ -112,6 +117,16 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   // Build merged timeline items (tool_call + tool_result → tool_pair)
   const timelineItems = createMemo(() => buildTimelineItems(timelineEvents()))
 
+  // Display sections (#1007): one collapsible per controller run, everything
+  // else a single row. Grouping is display-only — the items keep their flat
+  // timeline indices, which is what the detail panel and the tints are
+  // addressed by, and exports read the raw events, never these.
+  const timelineSections = createMemo(() => {
+    const items = timelineItems()
+    const indices = new Map<TimelineItem, number>(items.map((item, i) => [item, i]))
+    return { sections: groupControllerRuns(items), indices }
+  })
+
   // Compute per-item background tint based on active pattern stack
   const itemTints = createMemo(() => {
     const items = timelineItems()
@@ -154,6 +169,39 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
   const handleClose = () => setExpandedIndex(null)
 
   /**
+   * The panel's one row factory: the row a flat timeline renders, keyed by the
+   * item's timeline index — the detail panel's address. Controller sections
+   * reuse it so the grouped rows stay identical rows (#1007).
+   */
+  const renderTimelineItem = (item: TimelineItem, index: number) => {
+    if (item.kind === 'tool_pair') {
+      return (
+        <ToolPairRow
+          call={item.call}
+          result={item.result}
+          index={index}
+          expanded={expandedIndex() === index}
+          onExpand={() => handleExpand(index)}
+          bgTint={itemTints()[index]}
+        />
+      )
+    }
+    const event = item.event
+    const isBoundary = () => event.type === 'pattern_enter' || event.type === 'pattern_exit'
+    return (
+      <Show when={!isBoundary()} fallback={<PatternBoundaryRow event={event} />}>
+        <EventRow
+          event={event}
+          index={index}
+          expanded={expandedIndex() === index}
+          onExpand={() => handleExpand(index)}
+          bgTint={itemTints()[index]}
+        />
+      </Show>
+    )
+  }
+
+  /**
    * Open the detail panel for an event by id — the shield chip's click-through
    * from a neutralized `tool_result` to the `content_sanitized` event holding
    * the verbatim spans (SA-H10).
@@ -184,33 +232,20 @@ export const ObservabilityPanel = (props: ObservabilityPanelProps) => {
       {/* Timeline Container */}
       <div flex="1" overflow="auto">
         <Show when={hasEvents()} fallback={<EmptyState />}>
-          <For each={timelineItems()}>
-            {(item, index) => {
-              if (item.kind === 'tool_pair') {
-                return (
-                  <ToolPairRow
-                    call={item.call}
-                    result={item.result}
-                    index={index()}
-                    expanded={expandedIndex() === index()}
-                    onExpand={() => handleExpand(index())}
-                    bgTint={itemTints()[index()]}
-                  />
+          <For each={timelineSections().sections}>
+            {(section) => {
+              if (section.kind === 'single') {
+                return renderTimelineItem(
+                  section.item,
+                  timelineSections().indices.get(section.item) ?? -1,
                 )
               }
-              const event = item.event
-              const isBoundary = () =>
-                event.type === 'pattern_enter' || event.type === 'pattern_exit'
               return (
-                <Show when={!isBoundary()} fallback={<PatternBoundaryRow event={event} />}>
-                  <EventRow
-                    event={event}
-                    index={index()}
-                    expanded={expandedIndex() === index()}
-                    onExpand={() => handleExpand(index())}
-                    bgTint={itemTints()[index()]}
-                  />
-                </Show>
+                <ControllerSection
+                  section={section}
+                  indexOf={(item) => timelineSections().indices.get(item) ?? -1}
+                  renderItem={renderTimelineItem}
+                />
               )
             }}
           </For>

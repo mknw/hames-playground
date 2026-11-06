@@ -180,7 +180,7 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                   cursor="pointer"
                   transition="all"
                   ring="2 transparent focus-within:ui-accent/40"
-                  text={s().tier === 'self_deployed' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                  text={s().tier === 'self_deployed' ? 'xs ui-accent-text' : 'xs ui-text-secondary'}
                   bg={
                     s().tier === 'self_deployed' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'
                   }
@@ -205,7 +205,7 @@ export const ConversationTierSwitch = (props: ConversationTierSwitchProps) => {
                   cursor="pointer"
                   transition="all"
                   ring="2 transparent focus-within:ui-accent/40"
-                  text={s().tier === 'anthropic' ? 'xs ui-accent' : 'xs ui-text-secondary'}
+                  text={s().tier === 'anthropic' ? 'xs ui-accent-text' : 'xs ui-text-secondary'}
                   bg={s().tier === 'anthropic' ? 'ui-accent/10' : 'transparent hover:ui-bg-hover'}
                   title={
                     s().anthropicAvailable === false

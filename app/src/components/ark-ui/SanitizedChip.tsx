@@ -63,12 +63,17 @@ export const SanitizedChip = (props: {
       when={jumpable()}
       fallback={
         // Chip recipe R4, in the orange the timeline already spends on
-        // `content_sanitized` — same control, same colour.
+        // `content_sanitized` — same control, same colour, and the tint is the
+        // SAME token as the text so it flips with the theme. /6, not /10: the
+        // label keeps 4.5:1 on the tint over every ground, tertiary included
+        // (the Data Stash tooltip), in both themes (#1008 fix round 1). The
+        // rules line is secondary, not tertiary: tertiary cannot hold 4.5:1 on
+        // any orange tint over the dark tertiary ground (4.3:1 even at /6).
         <span
           data-role="sanitized-chip"
           flex="~ items-center gap-1"
-          text="xs orange-400"
-          bg="orange-400/10"
+          text="xs [var(--ui-evt-content-sanitized)]"
+          bg="[var(--ui-evt-content-sanitized)]/6"
           p="x-1.5 y-0.5"
           rounded="sm"
           font="mono"
@@ -77,7 +82,7 @@ export const SanitizedChip = (props: {
           <span class="i-material-symbols-shield-outline" w="3" h="3" aria-hidden="true" />
           {chipLabel(s())}
           <Show when={!props.compact}>
-            <span text="xs ui-text-tertiary">· {ruleSummary(s().rules)}</span>
+            <span text="xs ui-text-secondary">· {ruleSummary(s().rules)}</span>
           </Show>
         </span>
       }
@@ -90,9 +95,11 @@ export const SanitizedChip = (props: {
         }}
         aria-label={`${chipLabel(s())} — open the injection-guard audit event`}
         flex="~ items-center gap-1"
-        text="xs orange-400"
-        bg="orange-400/10 hover:orange-400/20"
-        border="1 orange-400/30 hover:orange-400/60"
+        text="xs [var(--ui-evt-content-sanitized)]"
+        // No hover tint (#1008): a heavier wash takes the label under 4.5:1;
+        // the border's 30→60 step is the hover. Same token as the text (R4).
+        bg="[var(--ui-evt-content-sanitized)]/6"
+        border="1 [var(--ui-evt-content-sanitized)]/30 hover:[var(--ui-evt-content-sanitized)]/60"
         p="x-1.5 y-0.5"
         min-h="6"
         rounded="sm"
@@ -104,7 +111,7 @@ export const SanitizedChip = (props: {
         <span class="i-material-symbols-shield-outline" w="3" h="3" aria-hidden="true" />
         {chipLabel(s())}
         <Show when={!props.compact}>
-          <span text="xs ui-text-tertiary">· {ruleSummary(s().rules)}</span>
+          <span text="xs ui-text-secondary">· {ruleSummary(s().rules)}</span>
         </Show>
       </button>
     </Show>

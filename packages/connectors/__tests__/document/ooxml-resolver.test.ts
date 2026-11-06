@@ -1599,6 +1599,7 @@ it('#551 X1 automatic/missing rich colour is black rather than cell-font inherit
   }
 })
 
+// 2.0 s on a host at load 13-16 on 8 cores, of a 5 s default (#998).
 it('#551 X1 varying XF configurations cannot move SI compilation into a tuple miss', async () => {
   const create = (n: number, unused = false) => {
     const fonts = repeat(n, (i) => font((0x100000 + i).toString(16).padStart(8, '0'))),
@@ -1629,7 +1630,7 @@ it('#551 X1 varying XF configurations cannot move SI compilation into a tuple mi
     large = await measure(() => ooxmlDisarm(create(n * 2), MIME.xlsx))
   expect(large.work / small.work).toBeLessThan(2.85)
   await pair(bytes, create(n, true), MIME.xlsx, { 'colour-contrast': n, 'too-small': n })
-})
+}, 15_000)
 
 it.each([
   'character',

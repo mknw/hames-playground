@@ -112,31 +112,37 @@ export default defineConfig({
         900: '#312e81',
         950: '#1e1b4b',
       },
+      // Graph-canvas DATA colours (#1008: same hues, toned down — saturated
+      // enough to stay distinguishable on the canvas, no longer neon).
       neon: {
-        cyan: '#00ffff',
-        magenta: '#ff00ff',
-        green: '#39ff14',
-        orange: '#ff6600',
-        purple: '#9d00ff',
-        blue: '#0080ff',
-        pink: '#ff007f',
+        cyan: '#45b0b8',
+        magenta: '#b863c9',
+        green: '#3fb950',
+        orange: '#d9822b',
+        purple: '#9a6bd8',
+        blue: '#4a9de0',
+        pink: '#d1609c',
       },
       dark: {
+        // Mirrors the dark `--ui-*` values above (#1008). No component uses
+        // these any more (theme-migration.test.ts keeps it that way); they
+        // stay in step so the graph-canvas data colours and the chrome never
+        // quietly diverge.
         bg: {
-          primary: '#0a0a0f',
-          secondary: '#12121a',
-          tertiary: '#1a1a24',
-          hover: '#22222f',
+          primary: '#0f1115',
+          secondary: '#16191e',
+          tertiary: '#1d2127',
+          hover: '#262b33',
         },
         border: {
-          primary: '#2a2a3a',
-          secondary: '#3a3a4a',
-          accent: '#4a4a5a',
+          primary: '#2b3038',
+          secondary: '#3a4048',
+          accent: '#4b525c',
         },
         text: {
-          primary: '#e4e4e7',
-          secondary: '#a1a1aa',
-          tertiary: '#71717a',
+          primary: '#e2e4e8',
+          secondary: '#9aa1ab',
+          tertiary: '#848b93',
         },
       },
       // Theme-aware semantic palette (#226 B8). These are the SAME roles as
@@ -145,10 +151,11 @@ export default defineConfig({
       // and a component never needs a `dark:` / light branch of its own.
       //
       // The dark values of these variables are byte-identical to the `dark.*`
-      // hexes, `ui-accent`'s is `neon-cyan` and `ui-success`'s is `neon-green`
-      // — so migrating a component is a rename (`dark-bg-primary` →
-      // `ui-bg-primary`) with no visual change at all in dark mode.
-      // `uno-theme.test.ts` asserts that equality so it cannot silently drift.
+      // hexes above (#1008 re-pinned them together: the sober dark palette
+      // replaced the neon accent and the violet-cast neutrals in BOTH places,
+      // so migrating a component stays a rename, `dark-bg-primary` →
+      // `ui-bg-primary`). `uno-theme.test.ts` asserts that equality so it
+      // cannot silently drift.
       //
       // `dark.*` and the unmapped `neon.*` entries above are kept because the
       // graph canvas and the per-turn palettes still need fixed hexes: those
@@ -173,6 +180,13 @@ export default defineConfig({
         },
         // Brand accent and the two status colours the themed surfaces need.
         accent: 'var(--ui-accent)',
+        // The primary button's pair (#1008 round 2). Without these keys
+        // `text-ui-on-accent` / `bg-ui-accent-deep` resolve to nothing and the
+        // button text silently inherits the body colour, which fails AA on
+        // the accent in both themes; uno-theme.test.ts pins that they emit.
+        'accent-deep': 'var(--ui-accent-deep)',
+        'on-accent': 'var(--ui-on-accent)',
+        'accent-text': 'var(--ui-accent-text)',
         danger: 'var(--ui-danger)',
         success: 'var(--ui-success)',
       },
@@ -192,11 +206,15 @@ export default defineConfig({
     },
   },
   shortcuts: {
-    // Futuristic UI shortcuts
     'glass-panel': 'bg-ui-bg-secondary/50 backdrop-blur-lg border border-ui-border-primary',
-    'neon-border': 'border-2 border-neon-cyan shadow-[0_0_10px_rgba(0,255,255,0.5)]',
+    // The primary button. #1008 round 2: the strong violet indigo leaves the
+    // primary buttons with the rest of the neon look — the button ground is
+    // the accent itself, with --ui-on-accent as its text (dark mode: the
+    // page's near-black on the muted teal; light mode: white on the deep
+    // teal) and --ui-accent-deep as the hover, one step down the same ramp
+    // in each theme. Both pairs are AA-checked in event-contrast.test.ts.
     'cyber-button':
-      'bg-cyber-700 hover:bg-cyber-600 text-white font-medium px-4 py-2 rounded-md transition-all duration-200 hover:shadow-[0_0_15px_rgba(79,70,229,0.5)]',
+      'bg-ui-accent hover:bg-ui-accent-deep text-ui-on-accent font-medium px-4 py-2 rounded-md transition-all duration-200',
   },
   preflights: [
     // Theme palette (#226 B8). `<html>` carries `dark` (UnoCSS's own dark
@@ -227,28 +245,31 @@ export default defineConfig({
           background-color: var(--ui-bg-primary);
         }
         :root {
-          --ui-bg-primary: #0a0a0f;
-          --ui-bg-secondary: #12121a;
-          --ui-bg-tertiary: #1a1a24;
-          --ui-bg-hover: #22222f;
-          --ui-border-primary: #2a2a3a;
-          --ui-border-secondary: #3a3a4a;
-          --ui-border-accent: #4a4a5a;
-          --ui-text-primary: #e4e4e7;
-          --ui-text-secondary: #a1a1aa;
-          --ui-text-tertiary: #71717a;
-          --ui-accent: #00ffff;
+          /* Sober dark neutrals (#1008): the same near-black steps as before,
+             with the violet cast dropped for flat blue-grey. */
+          --ui-bg-primary: #0f1115;
+          --ui-bg-secondary: #16191e;
+          --ui-bg-tertiary: #1d2127;
+          --ui-bg-hover: #262b33;
+          --ui-border-primary: #2b3038;
+          --ui-border-secondary: #3a4048;
+          --ui-border-accent: #4b525c;
+          --ui-text-primary: #e2e4e8;
+          --ui-text-secondary: #9aa1ab;
+          --ui-text-tertiary: #848b93;
+          /* A muted teal, not neon: 7.3:1 on --ui-bg-primary, 4.5:1 or better
+             on every surface it is written on. */
+          --ui-accent: #45b0b8;
           --ui-danger: #f87171;
-          --ui-success: #39ff14;
+          --ui-success: #3fb950;
 
           /* Tints of the accent. Written out per theme rather than mixed
-             from --ui-accent at use time: these are the exact rgba() the
-             hand-written CSS below carried as literals, so the dark render
-             is unchanged to the byte. */
-          --ui-accent-soft: rgba(0, 255, 255, 0.1);
-          --ui-accent-glow: rgba(0, 255, 255, 0.15);
-          --ui-accent-strong: rgba(0, 255, 255, 0.2);
-          --ui-accent-line: rgba(0, 255, 255, 0.4);
+             from --ui-accent at use time, for the same reason the values
+             themselves are: the hand-written CSS below reads them directly. */
+          --ui-accent-soft: rgba(69, 176, 184, 0.1);
+          --ui-accent-glow: rgba(69, 176, 184, 0.15);
+          --ui-accent-strong: rgba(69, 176, 184, 0.2);
+          --ui-accent-line: rgba(69, 176, 184, 0.4);
 
           /* Neutral washes over whatever surface they sit on. In dark they
              lighten (white at low alpha); in light they have to darken, and
@@ -262,7 +283,75 @@ export default defineConfig({
           /* Code blocks sit *below* the message surface, which is why this
              is not the tertiary background — in dark it goes darker than the
              page ground rather than lighter. */
-          --ui-code-bg: #0a0a0f;
+          --ui-code-bg: #0c0e11;
+
+          /* Observability event-label colours (#1008 round 2): one muted pair
+             per event type, AA (>= 4.5:1) against every dark row ground —
+             the hovered row (--ui-bg-hover) included, which is the lowest of
+             them and the one these were lifted for (fix round 1).
+             Consumed as vars by lib/observability/event-styles.ts. */
+          --ui-evt-user-message: #7294c3;
+          --ui-evt-assistant-message: #5d9f78;
+          --ui-evt-tool-call: #9e82de;
+          --ui-evt-tool-result: #639ba5;
+          --ui-evt-controller-action: #a1905d;
+          --ui-evt-intent-compacted: #a1905d;
+          --ui-evt-plan-created: #a1905d;
+          --ui-evt-model-call: #a1905d;
+          --ui-evt-critic-result: #ca78a1;
+          --ui-evt-pattern-enter: #94a3b8;
+          --ui-evt-pattern-exit: #94a3b8;
+          --ui-evt-approval-request: #b3896a;
+          --ui-evt-approval-response: #5d9f78;
+          --ui-evt-error: #ca7d76;
+          --ui-evt-reference-attached: #c176c8;
+          --ui-evt-content-sanitized: #b3896a;
+          --ui-evt-warning: #aa8d65;
+          --ui-evt-loop-recovery: #849959;
+          --ui-evt-hitl-request: #b3896a;
+          --ui-evt-hitl-response: #5d9f78;
+          --ui-evt-decision-made: #848bdf;
+          --ui-evt-memory-recalled: #5b9d94;
+          --ui-evt-memory-written: #5b9d94;
+          --ui-evt-egress-audit: #b3896a;
+          --ui-evt-egress-refused: #b3896a;
+          --ui-evt-egress-blocked: #b3896a;
+
+          /* Per-pattern boundary labels, same treatment; the 6 percent tint
+             wash itself lives in pattern-colors.json. */
+          --ui-pat-harness: #94a3b8;
+          --ui-pat-router: #9d81de;
+          --ui-pat-neo4j-query: #5f99a3;
+          --ui-pat-web-search: #a68c60;
+          --ui-pat-response-synth: #c9759f;
+          --ui-pat-quality-judge: #cc7685;
+          --ui-pat-doc-lookup: #8486e3;
+          --ui-pat-memory-store: #5a9c94;
+          --ui-pat-memory-write: #5a9c94;
+          --ui-pat-parallel-research: #6597ad;
+          --ui-pat-parallel-sources: #6597ad;
+          --ui-pat-session-tracker: #b28768;
+          --ui-pat-ontology-scope: #be75c9;
+          --ui-pat-ontology-proposal: #c075c9;
+          --ui-pat-ontology-commit: #c073c7;
+          --ui-pat-file-edit: #809959;
+          --ui-pat-safe-file-edit: #809959;
+          --ui-pat-issue-context: #b08766;
+          --ui-pat-web-research: #a68c60;
+          --ui-pat-kg-lookup: #5f99a3;
+          --ui-pat-semantic-cache: #5f9aa3;
+          --ui-pat-_default: #94a3b8;
+
+          /* The accent as a BUTTON ground: dark mode's muted teal is light
+             enough that its readable partner is the page's own near-black;
+             light mode's deep teal takes white. --ui-accent-deep is the
+             hover/pressed tone, one step down the same ramp. */
+          /* The accent as TEXT on a tint of itself (chips, the selected tier).
+             Dark mode's accent already clears 4.5:1 there; light mode's does
+             not even on the bare page ground, so its ink is the deep teal. */
+          --ui-accent-text: #45b0b8;
+          --ui-on-accent: #0f1115;
+          --ui-accent-deep: #2f9aa4;
         }
         :root.light {
           /* Contrast-checked against the light grounds below: every text
@@ -277,10 +366,10 @@ export default defineConfig({
           --ui-border-accent: #a7aeba;
           --ui-text-primary: #14161a;
           --ui-text-secondary: #4a4f57;
-          --ui-text-tertiary: #6b7079;
+          --ui-text-tertiary: #5f656d;
           --ui-accent: #0e7490;
           --ui-danger: #b91c1c;
-          --ui-success: #15803d;
+          --ui-success: #166534;
 
           --ui-accent-soft: rgba(14, 116, 144, 0.1);
           --ui-accent-glow: rgba(14, 116, 144, 0.15);
@@ -297,6 +386,64 @@ export default defineConfig({
           --ui-overlay-sunken: rgba(0, 0, 0, 0.04);
 
           --ui-code-bg: #f1f3f6;
+
+          /* Event + pattern label colours, the light half of each pair above:
+             the same hues darkened until every one clears 4.5:1 on white and
+             the two grey grounds. */
+          --ui-evt-user-message: #4e6687;
+          --ui-evt-assistant-message: #406e53;
+          --ui-evt-tool-call: #6c5999;
+          --ui-evt-tool-result: #436b73;
+          --ui-evt-controller-action: #706441;
+          --ui-evt-intent-compacted: #706441;
+          --ui-evt-plan-created: #706441;
+          --ui-evt-model-call: #706441;
+          --ui-evt-critic-result: #8c516f;
+          --ui-evt-pattern-enter: #5b6470;
+          --ui-evt-pattern-exit: #5b6470;
+          --ui-evt-approval-request: #7d5e48;
+          --ui-evt-approval-response: #406e53;
+          --ui-evt-error: #8c5651;
+          --ui-evt-reference-attached: #87518c;
+          --ui-evt-content-sanitized: #7d5e48;
+          --ui-evt-warning: #756144;
+          --ui-evt-loop-recovery: #5a693d;
+          --ui-evt-hitl-request: #7d5e48;
+          --ui-evt-hitl-response: #406e53;
+          --ui-evt-decision-made: #595e99;
+          --ui-evt-memory-recalled: #3e6b65;
+          --ui-evt-memory-written: #3e6b65;
+          --ui-evt-egress-audit: #7d5e48;
+          --ui-evt-egress-refused: #7d5e48;
+          --ui-evt-egress-blocked: #7d5e48;
+
+          --ui-pat-harness: #5b6470;
+          --ui-pat-router: #6c5999;
+          --ui-pat-neo4j-query: #416970;
+          --ui-pat-web-search: #736143;
+          --ui-pat-response-synth: #8c516e;
+          --ui-pat-quality-judge: #8f535d;
+          --ui-pat-doc-lookup: #595a99;
+          --ui-pat-memory-store: #3e6b66;
+          --ui-pat-memory-write: #3e6b66;
+          --ui-pat-parallel-research: #476a7a;
+          --ui-pat-parallel-sources: #476a7a;
+          --ui-pat-session-tracker: #7d5e48;
+          --ui-pat-ontology-scope: #85518c;
+          --ui-pat-ontology-proposal: #86518c;
+          --ui-pat-ontology-commit: #87518c;
+          --ui-pat-file-edit: #596b3e;
+          --ui-pat-safe-file-edit: #596b3e;
+          --ui-pat-issue-context: #7a5e47;
+          --ui-pat-web-research: #736143;
+          --ui-pat-kg-lookup: #416970;
+          --ui-pat-semantic-cache: #416a70;
+          --ui-pat-_default: #5b6470;
+
+          --ui-accent-text: #0c637a;
+          --ui-on-accent: #ffffff;
+          --ui-accent-deep: #0c637a;
+
           /* Native controls, scrollbars and form widgets follow the theme.
              Deliberately not declared on the dark default: the dark app is
              on the browser default today and this change keeps it there. */

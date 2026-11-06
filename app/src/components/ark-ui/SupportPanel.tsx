@@ -33,10 +33,10 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node[touched]',
     style: {
-      'background-color': '#ff00ff',
-      'border-color': '#ff00ff',
+      'background-color': '#b863c9',
+      'border-color': '#b863c9',
       'border-width': 4,
-      'overlay-color': '#ff00ff',
+      'overlay-color': '#b863c9',
       'overlay-opacity': 0.3,
     },
   },
@@ -47,7 +47,8 @@ const TOUCHED_NODE_STYLES: StylesheetJsonBlock[] = [
  *  by the answer's elements and moved by the next acceptance (`graph-merge.ts`).
  *  A graph-data colour, because Cytoscape reads no CSS variable; the legend's
  *  swatch reads the same constant, so the two cannot disagree. */
-export const ADDED_COLOUR = '#ff6600'
+export const ADDED_COLOUR = '#d9822b'
+
 const ADDED_STYLES: StylesheetJsonBlock[] = [
   {
     selector: 'node[?added]',
@@ -254,8 +255,12 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'stats' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'stats' ? '#f59e0b' : 'transparent',
-                color: selectedTab() === 'stats' ? '#f59e0b' : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'stats' ? 'var(--ui-evt-controller-action)' : 'transparent',
+                color:
+                  selectedTab() === 'stats'
+                    ? 'var(--ui-evt-controller-action)'
+                    : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-analytics-outline" w="4" h="4" aria-hidden="true" />
@@ -273,8 +278,12 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'data' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'data' ? '#22d3ee' : 'transparent',
-                color: selectedTab() === 'data' ? '#22d3ee' : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'data' ? 'var(--ui-evt-tool-result)' : 'transparent',
+                color:
+                  selectedTab() === 'data'
+                    ? 'var(--ui-evt-tool-result)'
+                    : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-dataset-outline" w="4" h="4" aria-hidden="true" />
@@ -298,8 +307,10 @@ export const SupportPanel = (props: SupportPanelProps) => {
               transition="all"
               data-state={selectedTab() === 'sandbox' ? 'active' : 'inactive'}
               style={{
-                'border-bottom-color': selectedTab() === 'sandbox' ? '#10b981' : 'transparent',
-                color: selectedTab() === 'sandbox' ? '#10b981' : 'var(--ui-text-secondary)',
+                'border-bottom-color':
+                  selectedTab() === 'sandbox' ? 'var(--ui-success)' : 'transparent',
+                color:
+                  selectedTab() === 'sandbox' ? 'var(--ui-success)' : 'var(--ui-text-secondary)',
               }}
             >
               <span class="i-material-symbols-terminal" w="4" h="4" aria-hidden="true" />

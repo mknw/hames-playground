@@ -139,6 +139,10 @@ describe('ui-* utilities', () => {
     ['text-ui-success', '--ui-success'],
     ['bg-ui-success', '--ui-success'],
     ['bg-ui-danger/10', '--ui-danger'],
+    // The primary button's pair (#1008 round 2): `cyber-button` and + New
+    // Chat use these, and an unregistered key emits nothing at all.
+    ['text-ui-on-accent', '--ui-on-accent'],
+    ['hover:bg-ui-accent-deep', '--ui-accent-deep'],
   ] as const
 
   it.each(cases)('%s resolves through %s', async (utility, variable) => {

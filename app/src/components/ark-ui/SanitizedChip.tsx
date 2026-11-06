@@ -67,7 +67,7 @@ export const SanitizedChip = (props: {
         <span
           data-role="sanitized-chip"
           flex="~ items-center gap-1"
-          text="xs orange-400"
+          text="xs [var(--ui-evt-content-sanitized)]"
           bg="orange-400/10"
           p="x-1.5 y-0.5"
           rounded="sm"
@@ -90,7 +90,7 @@ export const SanitizedChip = (props: {
         }}
         aria-label={`${chipLabel(s())} — open the injection-guard audit event`}
         flex="~ items-center gap-1"
-        text="xs orange-400"
+        text="xs [var(--ui-evt-content-sanitized)]"
         bg="orange-400/10 hover:orange-400/20"
         border="1 orange-400/30 hover:orange-400/60"
         p="x-1.5 y-0.5"

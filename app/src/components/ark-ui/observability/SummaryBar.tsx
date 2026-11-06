@@ -39,7 +39,7 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
       <div flex="~" items="center" gap="2">
         <span text="xs ui-text-tertiary">Success:</span>
         <span
-          text={`sm ${metrics().successRate >= 0.9 ? 'ui-success' : metrics().successRate >= 0.5 ? 'neon-yellow' : 'red-500'}`}
+          text={`sm ${metrics().successRate >= 0.9 ? 'ui-success' : metrics().successRate >= 0.5 ? '[var(--ui-evt-warning)]' : 'ui-danger'}`}
           font="mono"
         >
           {Math.round(metrics().successRate * 100)}%
@@ -49,7 +49,7 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
       <Show when={metrics().errorCount > 0}>
         <div flex="~" items="center" gap="2">
           <span text="xs ui-text-tertiary">Errors:</span>
-          <span text="sm red-400" font="mono">
+          <span text="sm ui-danger" font="mono">
             {metrics().errorCount}
           </span>
         </div>
@@ -63,11 +63,11 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
             {fmtTok(tokenTotals().inputUncached)}
           </span>
           <Show when={tokenTotals().cacheRead > 0 || tokenTotals().cacheWrite > 0}>
-            <span text="sm violet-400" font="mono" flex="~" items="center" gap="0.5">
+            <span text="sm [var(--ui-evt-tool-call)]" font="mono" flex="~" items="center" gap="0.5">
               +{fmtTok(tokenTotals().cacheRead)}
               <span class="i-material-symbols-bolt" w="3.5" h="3.5" aria-hidden="true" />
             </span>
-            <span text="sm amber-400" font="mono" flex="~" items="center" gap="0.5">
+            <span text="sm [var(--ui-evt-warning)]" font="mono" flex="~" items="center" gap="0.5">
               +{fmtTok(tokenTotals().cacheWrite)}
               <span class="i-material-symbols-edit-outline" w="3.5" h="3.5" aria-hidden="true" />
             </span>
@@ -87,7 +87,7 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
             title="Share of input tokens served from cache (0.1× rate)"
           >
             <span text="xs ui-text-tertiary">Cached:</span>
-            <span text="sm violet-400" font="mono">
+            <span text="sm [var(--ui-evt-tool-call)]" font="mono">
               {Math.round(tokenTotals().cachedPct * 100)}%
             </span>
           </div>
@@ -132,7 +132,7 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
             title="Physical API calls exceeded LLM steps — retries/fallbacks burned extra spend (already included in the totals)"
           >
             <span text="xs ui-text-tertiary">Retries:</span>
-            <span text="sm amber-400" font="mono">
+            <span text="sm [var(--ui-evt-warning)]" font="mono">
               +{tokenTotals().attempts - tokenTotals().llmCalls}
             </span>
           </div>
@@ -144,9 +144,9 @@ export const SummaryBar = (props: { events: ContextEvent[]; onClear?: () => void
           onClick={() => props.onClear?.()}
           m="l-auto"
           p="x-2 y-1"
-          text="xs red-400"
-          bg="red-600/10 hover:red-600/20"
-          border="1 red-500/30"
+          text="xs ui-danger"
+          bg="ui-danger/10 hover:ui-danger/20"
+          border="1 ui-danger/30"
           rounded="md"
           cursor="pointer"
           transition="all"

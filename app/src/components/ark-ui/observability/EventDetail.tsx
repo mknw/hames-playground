@@ -82,7 +82,7 @@ const ToolResultDetail = (props: {
       <div text="xs ui-text-tertiary" m="b-1">
         Status
       </div>
-      <div text={`sm ${props.data.success ? 'ui-success' : 'red-400'}`} font="medium">
+      <div text={`sm ${props.data.success ? 'ui-success' : 'ui-danger'}`} font="medium">
         {props.data.success ? 'Success' : `Error: ${props.data.error}`}
       </div>
     </div>
@@ -204,7 +204,7 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
             message text. */}
         <Show when={props.data.kind === 'budget_exhausted'}>
           <span
-            text="[10px] amber-400"
+            text="[10px] [var(--ui-evt-warning)]"
             bg="amber-500/10"
             border="1 amber-500/20"
             p="x-1.5 y-0.5"
@@ -216,9 +216,9 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
         </Show>
       </div>
       <div
-        text="sm red-400"
-        bg="red-500/5"
-        border="1 red-500/20"
+        text="sm ui-danger"
+        bg="ui-danger/5"
+        border="1 ui-danger/20"
         p="3"
         rounded="md"
         font="mono"
@@ -234,7 +234,7 @@ const ErrorDetail = (props: { data: ErrorEventData }) => (
             Severity
           </div>
           <div
-            text={`sm ${props.data.severity === 'irrecoverable' ? 'red-400' : 'amber-400'}`}
+            text={`sm ${props.data.severity === 'irrecoverable' ? 'ui-danger' : '[var(--ui-evt-warning)]'}`}
             font="mono"
           >
             {props.data.severity}
@@ -332,7 +332,7 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
         <div text="xs ui-text-tertiary" m="b-1">
           Source
         </div>
-        <div text="sm orange-400" font="mono">
+        <div text="sm [var(--ui-evt-content-sanitized)]" font="mono">
           {props.data.namespace}/{props.data.tool}
         </div>
       </div>
@@ -371,14 +371,14 @@ const ContentSanitizedDetail = (props: { data: ContentSanitizedEventData }) => (
           {(f) => (
             <div bg="ui-bg-tertiary" p="3" rounded="md" flex="~ col" gap="1">
               <div flex="~" items="center" gap="2">
-                <span text="xs orange-400" font="mono">
+                <span text="xs [var(--ui-evt-content-sanitized)]" font="mono">
                   {f.rule}
                 </span>
                 <span text="xs ui-text-tertiary">{f.layer}</span>
               </div>
               <div text="xs ui-text-secondary">{f.description}</div>
               <div
-                text="xs red-300"
+                text="xs ui-danger"
                 font="mono"
                 style={{ 'white-space': 'pre-wrap', 'word-break': 'break-all' }}
               >
@@ -683,7 +683,7 @@ export const ToolPairDetail = (props: {
           <div text="xs ui-text-tertiary" m="b-1">
             Status
           </div>
-          <div text={`sm ${resultData().success ? 'ui-success' : 'red-400'}`} font="medium">
+          <div text={`sm ${resultData().success ? 'ui-success' : 'ui-danger'}`} font="medium">
             {resultData().success ? 'Success' : `Error: ${resultData().error}`}
           </div>
         </div>

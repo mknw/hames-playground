@@ -70,7 +70,7 @@ export const LaneHeaders = () => (
 
     {/* Guardrails Lane Header — the orange the timeline spends on a guard firing */}
     <div w="1/3" p="2" flex="~" items="center" justify="center" gap="2">
-      <div w="2" h="2" rounded="full" bg="orange-400" />
+      <div w="2" h="2" rounded="full" bg="[var(--ui-evt-content-sanitized)]" />
       <span text="xs ui-text-primary" font="medium">
         Guardrails
       </span>
@@ -302,6 +302,9 @@ export const ToolPairRow = (props: {
   // panel — otherwise the only way to learn a result was rewritten is to open
   // every one of them (SA-H10).
   const sanitized = () => resultData().sanitized
+  // The same theme-aware pair an unmerged tool_call / error row uses, so this
+  // label clears AA in both themes too (#1008 round 2).
+  const color = () => (success() ? eventColors.tool_call : eventColors.error)
 
   return (
     <div
@@ -331,12 +334,12 @@ export const ToolPairRow = (props: {
           <span
             class="i-material-symbols-build-outline"
             text="lg"
-            style={{ color: success() ? '#a78bfa' : '#ef4444' }}
+            style={{ color: color() }}
             aria-hidden="true"
           />
           <div
             style={{
-              color: success() ? '#a78bfa' : '#ef4444',
+              color: color(),
               'font-size': '11px',
               'font-family': '"Fira Code", ui-monospace, monospace',
               'font-weight': '500',

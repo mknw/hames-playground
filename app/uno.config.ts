@@ -180,6 +180,12 @@ export default defineConfig({
         },
         // Brand accent and the two status colours the themed surfaces need.
         accent: 'var(--ui-accent)',
+        // The primary button's pair (#1008 round 2). Without these keys
+        // `text-ui-on-accent` / `bg-ui-accent-deep` resolve to nothing and the
+        // button text silently inherits the body colour, which fails AA on
+        // the accent in both themes; uno-theme.test.ts pins that they emit.
+        'accent-deep': 'var(--ui-accent-deep)',
+        'on-accent': 'var(--ui-on-accent)',
         danger: 'var(--ui-danger)',
         success: 'var(--ui-success)',
       },

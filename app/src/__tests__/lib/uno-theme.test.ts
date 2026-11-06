@@ -97,6 +97,25 @@ const INHERITED_DARK_VALUES: Record<string, string> = {
 }
 
 describe('ui-* token palette', () => {
+  it('keeps the fixed dark.* hexes equal to the dark --ui-* values they mirror', async () => {
+    // uno.config.ts promises this equality in prose; until #1008's review this
+    // test did not exist, and `dark.text.tertiary` had drifted to #7b828c.
+    const dark = await palette(':root')
+    const fixed = (
+      config as { theme: { colors: { dark: Record<string, Record<string, string>> } } }
+    ).theme.colors.dark
+    let compared = 0
+    for (const [group, entries] of Object.entries(fixed)) {
+      for (const [key, hex] of Object.entries(entries)) {
+        expect(hex, `dark.${group}.${key} vs --ui-${group}-${key}`).toBe(
+          dark[`--ui-${group}-${key}`],
+        )
+        compared++
+      }
+    }
+    expect(compared).toBeGreaterThanOrEqual(10)
+  })
+
   it('keeps the dark palette byte-identical to its pinned values (#1008)', async () => {
     const dark = await palette(':root')
     for (const [variable, hex] of Object.entries(INHERITED_DARK_VALUES)) {

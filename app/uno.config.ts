@@ -142,7 +142,7 @@ export default defineConfig({
         text: {
           primary: '#e2e4e8',
           secondary: '#9aa1ab',
-          tertiary: '#7b828c',
+          tertiary: '#848b93',
         },
       },
       // Theme-aware semantic palette (#226 B8). These are the SAME roles as

@@ -6,18 +6,22 @@
  * chip, so a guard that acted is seen as a guard (#795).
  */
 
-import { Show } from 'solid-js'
+import { For, Show, createSignal } from 'solid-js'
+import type { JSX } from 'solid-js'
 import type {
   ContextEvent,
   DecisionMadeEventData,
   ToolCallEventData,
   ToolResultEventData,
 } from '@hames-ai/harness-patterns'
+import { Collapsible } from '@ark-ui/solid/collapsible'
 import { eventColors, eventIconClasses, getPatternColor } from '~/lib/observability/event-styles'
 import {
   getEventLane,
   getEventPreview,
   isGuardEvent,
+  type TimelineItem,
+  type TimelineSection,
 } from '@hames-ai/harness-patterns/observability/projection'
 import { SanitizedChip } from '../SanitizedChip'
 
@@ -352,5 +356,106 @@ export const ToolPairRow = (props: {
         <Show when={sanitized()}>{(summary) => <SanitizedChip summary={summary()} compact />}</Show>
       </div>
     </div>
+  )
+}
+
+// ============================================================================
+// Controller Section (#1007) — one collapsible per controller run
+// ============================================================================
+
+/**
+ * One controller run, collapsed by default: the loop's actions, tool calls and
+ * results fold behind a single header that names the run, counts what it did
+ * and flags a failure. Display-only grouping — the rows inside are the same
+ * EventRow/ToolPairRow the flat timeline renders, at their own timeline index,
+ * so opening one still drives the shared detail panel.
+ */
+export const ControllerSection = (props: {
+  section: Extract<TimelineSection, { kind: 'controller' }>
+  /** The item's index in the flat timeline — the detail panel's address. */
+  indexOf: (item: TimelineItem) => number
+  /** The panel's own row factory, so grouped rows stay identical rows. */
+  renderItem: (item: TimelineItem, index: number) => JSX.Element
+}) => {
+  const [open, setOpen] = createSignal(false)
+
+  // The collapsed header's one line: what the run did and whether anything
+  // failed — a failed tool result, or a recovery (the loop's own error round).
+  const actions = () =>
+    props.section.items.filter(
+      (item) => item.kind === 'event' && item.event.type === 'controller_action',
+    ).length
+  const toolCalls = () =>
+    props.section.items.filter(
+      (item) =>
+        item.kind === 'tool_pair' || (item.kind === 'event' && item.event.type === 'tool_call'),
+    ).length
+  const failed = () =>
+    props.section.items.some((item) => {
+      if (item.kind === 'tool_pair') {
+        return (item.result.data as ToolResultEventData).success === false
+      }
+      if (item.kind !== 'event') return false
+      return (
+        item.event.type === 'loop_recovery' ||
+        (item.event.type === 'tool_result' &&
+          (item.event.data as ToolResultEventData).success === false)
+      )
+    })
+
+  return (
+    <Collapsible.Root open={open()} onOpenChange={(details) => setOpen(details.open)}>
+      <Collapsible.Trigger
+        w="full"
+        flex="~ items-center"
+        gap="2"
+        p="x-3 y-1.5"
+        bg="ui-bg-secondary hover:ui-bg-tertiary"
+        border="b ui-border-secondary/30"
+        cursor="pointer"
+        text="left"
+        transition="colors"
+        ring="2 transparent focus:ui-accent/40"
+      >
+        <Collapsible.Indicator>
+          <span
+            class={open() ? 'i-material-symbols-expand-more' : 'i-material-symbols-chevron-right'}
+            w="4"
+            h="4"
+            text="ui-text-tertiary"
+            aria-hidden="true"
+          />
+        </Collapsible.Indicator>
+        <span
+          class="i-material-symbols-adjust"
+          w="4"
+          h="4"
+          style={{ color: eventColors.controller_action }}
+          aria-hidden="true"
+        />
+        <span text="xs ui-text-primary" font="medium">
+          controller
+        </span>
+        <Show when={props.section.patternId !== 'harness'}>
+          <span text="xs ui-text-tertiary" font="mono">
+            {props.section.patternId}
+          </span>
+        </Show>
+        <span text="xs ui-text-secondary" font="mono" flex="1">
+          {actions()} action{actions() === 1 ? '' : 's'} · {toolCalls()} tool call
+          {toolCalls() === 1 ? '' : 's'}
+        </span>
+        <Show when={failed()}>
+          <span text="xs ui-danger" font="mono">
+            error
+          </span>
+        </Show>
+      </Collapsible.Trigger>
+      <Collapsible.Content>
+        <For each={props.section.items}>
+          {(item) => props.renderItem(item, props.indexOf(item))}
+        </For>
+      </Collapsible.Content>
+    </Collapsible.Root>
   )
 }

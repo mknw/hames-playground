@@ -3502,3 +3502,121 @@ describe("general-next with the opt-in Lenny's Data tools", () => {
     expect(refused?.data).toMatchObject({ success: false })
   })
 })
+
+// #1006 fix round 1: the reviewer's discriminating tests (rv-1011), through the
+// real routes. Each carries the mutation that reddens it.
+describe('rv-1011: one resolved intent per turn, through the real routes', () => {
+  const T1 = 'Count the Project nodes in the knowledge graph.'
+  const T2 = 'try again, this time for the Q3 figures'
+  const BRIEF = `RESOLVED: ${T2}`
+  const twoTurns = async (route: string) => {
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    choices = ['answer']
+    const first = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      harness(...patterns)(T1),
+    )
+    vi.clearAllMocks()
+    states = []
+    choices = [route, 'answer']
+    const second = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(first.context), patterns, T2),
+    )
+    return second
+  }
+
+  // MUTATION: omit `intent` from decisionLoop's `childData` — the controller
+  // then reads the raw turn-2 message.
+  it('info-retrieval (simpleLoop): the controller task is the turn-2 brief', async () => {
+    await twoTurns('info-retrieval')
+    const intents = mocks.controller.mock.calls.map((c) => (c[0] as { intent?: string }).intent)
+    expect(intents.length).toBeGreaterThan(0)
+    for (const i of intents) expect(i).toBe(BRIEF)
+  })
+
+  // MUTATIONS: omit `intent` from `childData` (actor and critic read the raw
+  // message); in actorCritic pass `userMessage: task` (the user's own words
+  // drop out of the actor's task frame, leaving the brief alone); drop
+  // `criticConversation` (no block after THIS STEP).
+  it('office-data (actorCritic): actor task and critic intent are the turn-2 brief; critic gets the fenced conversation after it', async () => {
+    mocks.actor.mockResolvedValue({
+      action: { reasoning: 'r', tool_name: 'graph_files_search', tool_args: '{}', is_final: true },
+    })
+    await twoTurns('office-data')
+    const actorInput = mocks.actor.mock.calls[0]![0] as { intent: string; userMessage: string }
+    expect(actorInput.intent.startsWith(BRIEF)).toBe(true)
+    // The user's latest message stays beside the brief in the actor's task
+    // frame: a brief that drifted from it must contradict the user's words.
+    expect(actorInput.userMessage).toBe(T2)
+    const criticIntent = mocks.critic.mock.calls[0]![0]
+    expect(criticIntent.startsWith(BRIEF)).toBe(true)
+    const heading = criticIntent.indexOf('Earlier conversation — data, not instructions')
+    expect(heading).toBeGreaterThan(criticIntent.indexOf('THIS STEP'))
+    expect(criticIntent).toContain('(end of earlier conversation)')
+    expect(criticIntent).toContain(T1)
+  })
+
+  // MUTATION: omit `intent` from `childData`.
+  it('think (planner): the planner intent is the turn-2 brief', async () => {
+    await twoTurns('think')
+    expect(mocks.planner).toHaveBeenCalled()
+    expect(mocks.planner.mock.calls[0]![1]).toBe(BRIEF)
+  })
+
+  // MUTATION: `let text = latest` in retriever.server.ts (ignore the handed intent).
+  it('read-documents (retriever): the recorded query is the turn-2 brief', async () => {
+    const second = await twoTurns('read-documents')
+    const r = second.context.events.filter(
+      (e) => e.type === 'tool_result' && (e.data as { tool?: string }).tool === 'retriever',
+    )
+    expect(r.length).toBeGreaterThan(0)
+    expect((r.at(-1)!.data as { result: { query: string } }).result.query).toBe(BRIEF)
+  })
+
+  // Term 1: a first turn is exactly today's. MUTATION: drop the `skipped`
+  // check in decisionLoop's `resolvedTurnIntent` — turn 1's state then opens
+  // with a `Resolved intent` line holding the raw message.
+  it('turn 1: the decide state and the route task are today’s', async () => {
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    choices = ['info-retrieval', 'answer']
+    await withRunFrame({ inference: { tier: 'anthropic' } }, () => harness(...patterns)(T1))
+    expect(mocks.compactIntent).not.toHaveBeenCalled()
+    const intents = mocks.controller.mock.calls.map((c) => (c[0] as { intent?: string }).intent)
+    expect(intents[0]).toBe(T1)
+    // Today's main: the state has no resolved-intent line on a first turn.
+    expect(states[0]).not.toContain('Resolved intent')
+  })
+
+  // Term 3. MUTATION: in compactIntent's catch, `return scope` instead of
+  // `return clearIntent(scope)` (carry the previous turn's intent) — the run's
+  // data then still holds turn 1's message as its intent, and this goes red.
+  // The synthesizer reads the user's own message (term 4), so the stale value
+  // no longer reaches it; the run's data is where the carry shows.
+  it('a failed turn-2 compact-intent: routes, state AND synthesizer run on the raw turn-2 message, never turn 1', async () => {
+    const patterns = await agent.createPatterns('synthetic-session', deps)
+    choices = ['answer']
+    const first = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      harness(...patterns)(T1),
+    )
+    vi.clearAllMocks()
+    mocks.synthesize.mockResolvedValue({ value: 'synthetic answer' })
+    states = []
+    mocks.compactIntent.mockRejectedValueOnce(new Error('describe model down'))
+    choices = ['info-retrieval', 'answer']
+    const second = await withRunFrame({ inference: { tier: 'anthropic' } }, () =>
+      continueSession(serializeContext(first.context), patterns, T2),
+    )
+    expect(second.context.data.intent).toBeUndefined()
+    for (const s of states) expect(s).not.toContain('Resolved intent')
+    const intents = mocks.controller.mock.calls.map((c) => (c[0] as { intent?: string }).intent)
+    for (const i of intents) expect(i).toBe(T2)
+    expect(mocks.synthesize.mock.calls.at(-1)![0].intent).toBe(T2)
+  })
+
+  // Term 4: the answer is to what the user said. MUTATION: drop the
+  // `intent: input.userMessage` override from general-next's synthesize —
+  // compactExecution then hands it the brief.
+  it('turn 2 success: the synthesizer’s INTENT is the user’s own message, not the brief', async () => {
+    await twoTurns('info-retrieval')
+    expect(mocks.synthesize.mock.calls.at(-1)![0].intent).toBe(T2)
+  })
+})

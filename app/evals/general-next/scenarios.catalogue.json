@@ -2983,6 +2983,59 @@
       "notes": "Built for #1006. Hermetic: the scripted brief proves the RESOLVED intent reaches the four surfaces, not that a model resolves back-references well — that is the live run's claim. Red on today's main: no intent_compacted event exists, so the resolved-intent checks fail. The actor's task and the critic's intent carry the resolved intent because decisionLoop threads data.intent and the critic reads the same task string; the earlier conversation rides the critic's argument as the labelled data block."
     },
     {
+      "id": "47-follow-up-documents-query",
+      "title": "A follow-up that searches the same uploaded document for another fact",
+      "kind": "positive",
+      "priority": "should",
+      "status": "existing",
+      "dimensions": {
+        "routes": ["read-documents"],
+        "sources": ["uploads"],
+        "intents": ["lookup-fact"],
+        "turnShape": "follow-up",
+        "toolShape": "one",
+        "output": ["answer"],
+        "tier": "self_deployed",
+        "guardPaths": ["none"],
+        "languages": ["en"],
+        "timeExpressions": ["none"],
+        "scale": "small"
+      },
+      "turns": [
+        "According to the uploaded lantern-notes.md, what is the release date?",
+        "And what does that same document say about the hosting overspend?"
+      ],
+      "expected": "Turn 2 is a back-reference (\"that same document\") that only turn 1 resolves. The decision dispatches read-documents, and the retriever's recorded query is the turn's resolved intent — the recorded compact-intent brief, naming lantern-notes.md and the hosting overspend — rather than the raw follow-up (#1006).",
+      "grader": [
+        {
+          "check": "answerContains",
+          "says": "module answerIncludes",
+          "facts": ["hosting overspend", "5"]
+        },
+        {
+          "check": "routeCompleted",
+          "says": "candidate only; module expectedRoutes",
+          "routes": ["read-documents"]
+        },
+        {
+          "check": "resolvedIntent",
+          "says": "module intentExpect: turn 2's recorded brief names the document and the fact, the decide state quotes it, and the retriever's recorded query is that brief",
+          "turn": 2,
+          "facts": ["lantern-notes.md", "hosting overspend"],
+          "routes": ["read-documents"]
+        },
+        {
+          "check": "answerWithinDecisions",
+          "says": "within 6 decisions per turn",
+          "max": 6
+        }
+      ],
+      "fixtures": [
+        "the hermetic CompactIntent answer scripts the turn-2 resolved brief (module intentExpect.brief)"
+      ],
+      "notes": "Built for #1006 (rv-1011 term 2: the retriever leg). Hermetic: the scripted brief proves the resolved intent reaches the retriever as its query, not that a model resolves the back-reference — that is the live run's claim. Red on today's main: no intent_compacted event exists, so the resolved-intent checks fail."
+    },
+    {
       "id": "p01-calendar-today",
       "title": "Read today's calendar",
       "kind": "positive",

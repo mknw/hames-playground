@@ -42,21 +42,25 @@ function resolvedIntentChecks(
   for (const fact of ie.includes)
     checks.push(check(`resolved intent names ${fact}`, containsFact(brief, fact), brief))
 
+  // Every surface below is graded against the RECORDED brief, never against
+  // the facts alone: the raw follow-up can already name every fact (46's does),
+  // so a facts-only grade passes on a run that threads no intent at all.
+  const carries = (text: string) => brief.length > 0 && text.startsWith(brief)
+
   // The decide state: the FIRST decision of the turn heads with the intent.
   const decision = events.find((e) => e.type === 'decision_made')
   const state = String(record(record(decision?.llmCall).variables).state ?? '')
   checks.push(
     check(
       `turn ${ie.turn}: decide state heads with the resolved intent`,
-      state.startsWith('Resolved intent (this turn):') &&
-        ie.includes.every((f) => state.includes(f)),
+      brief.length > 0 && state.startsWith(`Resolved intent (this turn): ${JSON.stringify(brief)}`),
       state.slice(0, 300) || 'no decision recorded this turn',
     ),
   )
 
   // The route: the turn's decisions dispatch `route`, and the dispatched
-  // child's actor task — the controller call's `intent` variable — carries the
-  // resolved intent.
+  // child's actor task — the controller call's `intent` variable — opens with
+  // the recorded brief.
   const dispatched = events.some(
     (e) =>
       e.type === 'decision_made' &&
@@ -77,16 +81,19 @@ function resolvedIntentChecks(
     .map((e) => record(e.llmCall?.variables).intent)
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
   const actorIntent = actorIntents.at(-1) ?? ''
-  checks.push(
-    check(
-      `turn ${ie.turn}: actor task carries the resolved intent`,
-      actorIntent.length > 0 && ie.includes.every((f) => containsFact(actorIntent, f)),
-      actorIntent.slice(0, 300) || 'no controller call recorded this turn',
-    ),
-  )
+  // A retriever route runs no controller: its query is graded below instead.
+  if (!ie.retriever || actorIntents.length > 0)
+    checks.push(
+      check(
+        `turn ${ie.turn}: actor task carries the resolved intent`,
+        carries(actorIntent),
+        actorIntent.slice(0, 300) || 'no controller call recorded this turn',
+      ),
+    )
 
   // The critic, when the dispatched route runs one (actorCritic): its intent
-  // argument carries the resolved intent too.
+  // argument opens with the recorded brief too (route scope and the earlier
+  // conversation follow it).
   const criticIntents = events
     .filter((e) => e.type === 'critic_result')
     .map((e) => record(e.llmCall?.variables).intent)
@@ -96,7 +103,7 @@ function resolvedIntentChecks(
     checks.push(
       check(
         `turn ${ie.turn}: critic intent carries the resolved intent`,
-        ie.includes.every((f) => containsFact(criticIntent, f)),
+        carries(criticIntent),
         criticIntent.slice(0, 300),
       ),
     )
@@ -112,7 +119,7 @@ function resolvedIntentChecks(
     checks.push(
       check(
         `turn ${ie.turn}: retriever query is the resolved intent`,
-        query.length > 0 && ie.includes.every((f) => containsFact(query, f)),
+        brief.length > 0 && query === brief,
         query || 'no retriever result this turn',
       ),
     )

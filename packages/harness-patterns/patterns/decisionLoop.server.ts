@@ -197,12 +197,13 @@ export interface DecisionLoopRoute<T> {
 
 /** What an overridden `state` builder receives. */
 export interface DecisionLoopStateInput {
-  /** Conversation lines, oldest first (user and final assistant messages). */
   /** The turn's resolved intent (#1006): the brief this turn's compact-intent
-   *  step produced, read off its `intent_compacted` event. Absent when the
-   *  chain runs no compact-intent step or the step produced no brief — the
-   *  state then renders exactly as before. An override owns its placement. */
+   *  call produced, read off its `intent_compacted` event. Absent when the
+   *  chain runs no compact-intent step, the call was skipped (a first turn) or
+   *  failed — the state then renders exactly as before. An override owns its
+   *  placement. */
   readonly intent?: string
+  /** Conversation lines, oldest first (user and final assistant messages). */
   readonly conversation: readonly string[]
   /** This turn's finished iterations, oldest first. */
   readonly records: readonly RouteOutput[]
@@ -309,7 +310,9 @@ function renderRouteScope<T>(name: string, route: DecisionLoopRoute<T>): string 
  *  turn's — an intent that survived the turn boundary in `scope.data` is never
  *  read, so a chain without a compact-intent step (or one whose step failed
  *  and cleared the intent) threads nothing and every route falls back to the
- *  raw message, as before #1006. */
+ *  raw message, as before #1006. A `skipped` event (a conversation's first
+ *  turn: no call, the message passed through) is not a resolved intent either,
+ *  so a first turn's decide state and route data are exactly as before #1006. */
 function resolvedTurnIntent(events: readonly ContextEvent[]): string | undefined {
   let turnStart = -1
   for (let i = events.length - 1; i >= 0; i--) {
@@ -322,7 +325,9 @@ function resolvedTurnIntent(events: readonly ContextEvent[]): string | undefined
   for (let i = events.length - 1; i > turnStart; i--) {
     const e = events[i]!
     if (e.type !== 'intent_compacted') continue
-    const brief = (e.data as { intent?: unknown }).intent
+    const data = e.data as { intent?: unknown; skipped?: unknown }
+    if (data.skipped) continue
+    const brief = data.intent
     if (typeof brief === 'string' && brief.trim()) return brief
   }
   return undefined

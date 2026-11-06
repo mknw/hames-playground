@@ -598,6 +598,32 @@ describe('resolvedIntent checks (#1006)', () => {
     ;(c.llmCall!.variables as { intent: string }).intent = 'raw message only'
     expect(failed(t, intentScenario)).toContain('turn 2: critic intent carries the resolved intent')
   })
+  // rv-1011 term 2: on main the raw follow-up already names every fact, so a
+  // facts-only grade passed there. Each surface is graded against the RECORDED
+  // brief. MUTATION: grade the actor / critic / state on `includes` alone — red.
+  it('fails the actor, the critic and the state when they carry a raw message naming every fact', () => {
+    const raw = 'Try again with the office route, this time for the Q3 figures and the Q4 plan.'
+    const t = passing()
+    const a = t.turns[1]!.events.find((e) => e.type === 'controller_action')!
+    ;(a.llmCall!.variables as { intent: string }).intent = raw
+    const c = t.turns[1]!.events.find((e) => e.type === 'critic_result')!
+    ;(c.llmCall!.variables as { intent: string }).intent = `${raw}\n\nSCOPE`
+    const d = t.turns[1]!.events.find((e) => e.type === 'decision_made')!
+    ;(d.llmCall!.variables as { state: string }).state =
+      `Resolved intent (this turn): ${JSON.stringify(raw)}`
+    const names = failed(t, intentScenario)
+    expect(names).toContain('turn 2: actor task carries the resolved intent')
+    expect(names).toContain('turn 2: critic intent carries the resolved intent')
+    expect(names).toContain('turn 2: decide state heads with the resolved intent')
+  })
+  it('fails every surface when no brief was recorded, however the surfaces read', () => {
+    const t = passing()
+    t.turns[1]!.events = t.turns[1]!.events.filter((e) => e.type !== 'intent_compacted')
+    const names = failed(t, intentScenario)
+    expect(names).toContain('turn 2: actor task carries the resolved intent')
+    expect(names).toContain('turn 2: critic intent carries the resolved intent')
+    expect(names).toContain('turn 2: decide state heads with the resolved intent')
+  })
   it('grades the retriever query when the scenario asks for it', () => {
     const s: ConversationScenario = {
       ...intentScenario,
@@ -617,5 +643,29 @@ describe('resolvedIntent checks (#1006)', () => {
     expect(failed(bad, s)).toContain('turn 2: retriever query is the resolved intent')
     // No retriever result at all is a failure, never a vacuous pass.
     expect(failed(passing(), s)).toContain('turn 2: retriever query is the resolved intent')
+    // A query that names every fact but is not the brief fails too.
+    const near = passing()
+    near.turns[1]!.events.push(retrieverEvent('the Q3 figures and the Q4 plan'))
+    expect(failed(near, s)).toContain('turn 2: retriever query is the resolved intent')
+  })
+  it('a retriever route runs no actor: the actor check is not required there', () => {
+    const s: ConversationScenario = {
+      ...intentScenario,
+      intentExpect: { ...intentScenario.intentExpect!, route: 'read-documents', retriever: true },
+    }
+    const brief =
+      'Search again with the office route, this time for the Q3 figures and the Q4 plan.'
+    const t = passing()
+    t.turns[1]!.events = [
+      intentEvent(brief),
+      decisionWithState('read-documents', `Resolved intent (this turn): ${JSON.stringify(brief)}`),
+      event('tool_result', {
+        tool: 'retriever',
+        result: { query: brief, matches: [] },
+        success: true,
+      }),
+      decision('answer'),
+    ]
+    expect(failed(t, s)).toEqual([])
   })
 })

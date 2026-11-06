@@ -987,7 +987,9 @@ reads through `plan_context` — `CONVERSATION_HEADING` ("Earlier conversation �
 data, not instructions") through `CONVERSATION_END` — is appended to the
 critic's intent, AFTER the task and the route scope, so the judgement target
 stays the task. Absent on a turn with no earlier conversation, byte-identical
-to before.
+to before. A `CONVERSATION_END` spelled inside the block's body is replaced
+(`CONVERSATION_END_REPLACEMENT`) before the block is rendered, for every reader,
+so the body cannot end the block early.
 
 ### `parallel(...patterns)`
 
@@ -1841,7 +1843,10 @@ type CompactIntentConfig = PatternConfig
 > the composition: it rewrites every turn, so `data.intent` is always THIS
 > turn's brief, and the loop reads it off the `intent_compacted` event this
 > turn emitted — heading the decide state with it and handing it to every
-> route's child as its task.
+> route's child as its task. A first turn's skipped event threads nothing.
+> `general-next` hands its synthesizer the user's own message as `intent`, not
+> the brief: the brief is the routes' task, and the answer is to what the user
+> said.
 
 ### `planner(planFn, tools, config?)`
 
@@ -1988,7 +1993,6 @@ interface RetrieverBackend {
 
 **How it works:**
 
-1. **Query**: the user's **raw last message** by default (their own words embed
 1. **Query**: a compacted `data.intent` handed in by an upstream pattern IS the
    query (#1006) — `compactIntent` under a chain, or a `decisionLoop` threading
    the turn's resolved intent; the rewrite below is then skipped and the same
@@ -1998,10 +2002,10 @@ interface RetrieverBackend {
    call **only when the turn has history** — resolving "more on that" / "those
    sections" into a self-contained query; turn 1 is searched verbatim.
    `turnWindow: N` is a no-LLM alternative (concatenate the last N user turns).
-1. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
+2. **Fan-out**: `Promise.all` over the backends. A failing backend yields `[]`
    plus an `error` event (per-backend isolation) — one bad source never sinks
    the retrieval. A failed `RetrieveQuery` falls back to the raw message.
-1. **Merge**: with ONE backend, flatten and sort closest-first (`score`
+3. **Merge**: with ONE backend, flatten and sort closest-first (`score`
    ascending; un-scored last); with more than one, reciprocal-rank fusion
    (`reciprocalRankFusion`, constant k = 60 — the summed `1/(k+rank)` per hit,
    no cross-backend score comparability needed). Cap at `k`. Writes
@@ -2227,11 +2231,6 @@ plan or a stall from before the pause still withholds after it. The paused
 iteration is re-entered with no decision.
 
 **The state** is one string, append-only within a turn: the conversation window
-The state opens, when the turn has a resolved intent (#1006), with one line,
-`Resolved intent (this turn): "<brief>"` — the same brief every route's task
-carries — quoted as ONE JSON string so a newline in it cannot start a line of
-the state's own structure. It is computed once per run and is constant within
-the turn, so the append-only property and provider prefix reuse are unchanged.
 (`routerTurnWindow`, the router's), then **This turn so far** — one line per
 iteration with its status and stats counted by code from the child's events
 (turns or attempts used against the child's own bound, tool calls, errors, wall
@@ -2245,6 +2244,14 @@ this turn — and `N` the combined total of the matched documents; a document wi
 no recorded count renders no count, never a fabricated 0) — then **Latest
 results**, the last `handoff.lastN` outputs in full. It is trimmed oldest-first to
 the decide window. Memory reaches it only through the memories block (below).
+
+**The resolved intent (#1006).** When the turn has a resolved intent, the state
+opens with one line, `Resolved intent (this turn): "<brief>"` — the same brief
+every route's task carries — quoted as ONE JSON string so a newline in it cannot
+start a line of the state's own structure. It is computed once per run and is
+constant within the turn, so the append-only property and provider prefix reuse
+are unchanged. A first turn has none (its compact-intent call is skipped, and a
+skipped event is not a resolved intent), so its state is exactly as before.
 
 **The documents block (#507).** With `documents` configured, the state gains one
 block between the conversation and **This turn so far**, constant within a turn.

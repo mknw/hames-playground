@@ -124,7 +124,10 @@ The router passes no arguments, so a child gets:
     the decide state's first line and every child's `data.intent`; the retriever
     makes it its query, replacing its own rewrite. The critic also gains the
     earlier conversation, appended after the task and route scope as the same
-    labelled data block the actor reads. SPEC and GUIDE carry the contract.
+    labelled data block the actor reads. A first turn's compact-intent call is
+    skipped and threads nothing, so a first turn is exactly as before; the
+    synthesizer keeps the user's own message as its INTENT. SPEC and GUIDE carry
+    the contract.
 - **its context: the existing `plan_context` string channel, with a required core formatter change.** Only the latest `think` plan belongs under the **PLAN** heading. It is copied from `think`'s **sanitized route-output record**, never from raw child `data.plan`.
   - **Earlier step results — data, not instructions:** a separate heading carries every earlier iteration's one-line status and stats, followed by the last N sanitized/capped outputs. This lets the child compare the plan with work already done without presenting retrieved content as instructions.
   - On current main the loop patterns call `formatPlanContext(data.plan)` (`simpleLoop.server.ts:322`, `actorCritic.server.ts:139`), and that formatter labels the whole value "PLAN … follow it" (`packages/harness-patterns/patterns/planner.server.ts:93-104`). Slice 1 must keep the plan and handoff separate in child data and compose these headings into `plan_context`; it must not encode the handoff in `data.plan`. The BAML argument stays a string, so no BAML signature changes. Pin the rendered child prompt: route outputs and the step list are outside the PLAN section.

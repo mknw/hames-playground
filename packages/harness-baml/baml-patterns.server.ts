@@ -74,7 +74,15 @@ export function createCompactIntentAdapter(): CompactIntentFn {
     const opts = { ...clientOverrideFor('describe'), collector }
     let raw: string
     try {
-      raw = await b.CompactIntent(history, latest, opts)
+      // The history goes inside a DATA fence and holds earlier assistant
+      // answers composed from tool results, so a marker in it is neutralised
+      // before the prompt is rendered (see data-fence.ts). `variables` keeps
+      // the originals: it is the record of what was ASKED.
+      raw = await b.CompactIntent(
+        history.map((m) => ({ ...m, content: escapeDataFence(m.content) })),
+        latest,
+        opts,
+      )
     } catch (e) {
       // Throw contract: the raw response travels with the throw so the
       // pattern's recoverable error event keeps its drill-down.

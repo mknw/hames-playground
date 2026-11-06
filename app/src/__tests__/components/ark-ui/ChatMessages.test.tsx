@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { fireEvent, render } from '@solidjs/testing-library'
 import { createSignal } from 'solid-js'
 import { ChatMessages, type Message } from '~/components/ark-ui/ChatMessages'
+import { createLinkAcceptanceStore } from '~/lib/link-acceptance'
 import type { RetrievalReference } from '@hames-ai/harness-patterns'
 import { installDomObservers } from '../../mocks/dom-observers'
 
@@ -491,11 +492,17 @@ describe('ChatMessages — link review (#901 slice 2)', () => {
     expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
   })
 
-  // MUTATION: make the defang persistent (store the raw; strip matching
-  // anchors when a message re-renders) → the link stays inert after a
-  // re-render derived from message.content → red. Ruling Q5: the defang is
-  // the CURRENT rendering only.
-  it('"Cancel and defang" makes the chosen link inert text — and a re-render derived from message.content presents it again', async () => {
+  // SUPERSEDED PIN, re-pinned per the owner's ruling: slice 2 pinned "a
+  // re-render presents the link again" (the defang rendering-only, ruling Q5
+  // of the 2026-11-03 page). The owner's answers OVERRIDE that recommendation
+  // (issue #901 comment 6618793027, 2026-11-04): the action is "Cancel and
+  // mark unsafe" and the MARK is persisted, not rendering-only — "No session
+  // state beyond the persisted mark". This pin now asserts the ruled
+  // behaviour: a re-render derived from message.content keeps the marked link
+  // inert, because the store re-derives the defang for every marked raw
+  // spelling. The mark is client-side signal state — a fresh store (a
+  // reload) starts empty, pinned in link-acceptance.test.ts and below.
+  it('"Cancel and mark unsafe" makes the chosen link inert text — and a re-render derived from message.content keeps it inert', async () => {
     const [messages, setMessages] = createSignal<Message[]>([linkMessage()])
     const { container } = render(() => <ChatMessages messages={messages()} />)
     const anchor = container.querySelector('a[data-link-review="unverified"]')!
@@ -510,12 +517,34 @@ describe('ChatMessages — link review (#901 slice 2)', () => {
     expect(container.querySelector('a[data-link-review]')).toBeNull()
     expect(container.textContent).toContain('the docs')
     noDialog()
-    // ...and the next rendering derived from message.content presents the link
-    // again: nothing was stored, so a streaming update or a reload shows the
-    // link as it was rendered.
+    // ...and the next rendering derived from message.content keeps it inert:
+    // the mark is persisted in the store, so the re-render re-derives the
+    // defang — the link is not presented again, is not counted, and the
+    // Accept-as-safe action has nothing to offer.
     setMessages([linkMessage()])
     await tick()
-    expect(container.querySelector('a[data-link-review="unverified"]')).toBeTruthy()
+    expect(container.querySelector('a[data-link-review]')).toBeNull()
+    expect(container.textContent).toContain('the docs')
+    expect(container.querySelector('[data-testid="link-review-strip"]')).toBeNull()
+  })
+
+  // The mark's client-side lifetime, at the component level: the store dies
+  // with its session, so a fresh ChatMessages instance — what a reload
+  // creates — presents the marked link again.
+  it('a fresh instance presents a marked link again (a reload starts empty)', async () => {
+    const first = render(() => <ChatMessages messages={[linkMessage()]} />)
+    const anchor = first.container.querySelector('a[data-link-review="unverified"]')!
+    fireEvent.click(anchor)
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+    expect(first.container.querySelector('a[data-link-review]')).toBeNull()
+
+    first.unmount()
+    const reloaded = render(() => <ChatMessages messages={[linkMessage()]} />)
+    expect(reloaded.container.querySelector('a[data-link-review="unverified"]')).toBeTruthy()
   })
 
   // The defang keys on `data-link-raw`: every anchor in the CHOSEN message
@@ -622,5 +651,378 @@ describe('ChatMessages — auto-scroll', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' })
 
     unmount()
+  })
+})
+
+describe('ChatMessages — link acceptance (#901 slice 3)', () => {
+  const GUIDE = 'https://external.example/guide'
+  const OTHER = 'https://external.example/other'
+
+  const linkMsg = (over: Partial<Message> = {}): Message =>
+    msg({
+      id: over.id ?? 'm-accept',
+      role: 'assistant',
+      content: 'See [the docs](https://external.example/guide).',
+      ...over,
+    })
+
+  const twoLinks = (over: Partial<Message> = {}): Message =>
+    msg({
+      id: over.id ?? 'm-two',
+      role: 'assistant',
+      content:
+        'See [first](https://external.example/guide) and [second](https://external.example/other).',
+      ...over,
+    })
+
+  const indicator = (root: HTMLElement) =>
+    root.querySelector('[data-testid="links-unverified-indicator"]')
+  const trigger = (root: HTMLElement) =>
+    root.querySelector<HTMLButtonElement>('[data-testid="accept-as-safe-trigger"]')
+  const items = () => [...document.querySelectorAll('[data-testid="accept-as-safe-item"]')]
+
+  /** Open the Accept-as-safe menu and return the offered items. */
+  const openList = async (root: HTMLElement) => {
+    fireEvent.click(trigger(root)!)
+    await tick()
+    return items()
+  }
+
+  /** Click an unverified anchor through the delegated handler, freshly. */
+  const clickAnchor = (root: HTMLElement, index: number) => {
+    const anchors = root.querySelectorAll<HTMLAnchorElement>('a[data-link-review="unverified"]')
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchors[index].dispatchEvent(event)
+    return event
+  }
+
+  /** Select a menu item the way a POINTER does — press, then release —
+   *  because zag's menu machine selects through its own ITEM_CLICK path,
+   *  which needs the pointerdown's highlight; a bare click event does not
+   *  select. (`onSelect` is what fires on both pointer and keyboard.) */
+  const acceptItem = (item: Element) => {
+    fireEvent.pointerDown(item, { pointerType: 'mouse' })
+    fireEvent.click(item)
+  }
+
+  it('shows the indicator and the Accept-as-safe action beside an assistant message with unverified links', () => {
+    const { container } = render(() => <ChatMessages messages={[linkMsg()]} />)
+    // Explicit accessible name (a11y pin): the label and the visible words agree.
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links unverified: 1')
+    expect(indicator(container)!.textContent).toBe('Links unverified: 1')
+    expect(trigger(container)!.textContent).toBe('Accept as safe')
+  })
+
+  it('shows neither for a message with no links, nor for one whose links are all recognised', () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          msg({ role: 'assistant', content: 'Plain answer, no links.' }),
+          msg({
+            role: 'assistant',
+            content: 'See [docs](https://docs.example/guide).',
+            recognisedLinkHosts: ['docs.example'],
+          }),
+        ]}
+      />
+    ))
+    expect(container.querySelector('[data-testid="link-review-strip"]')).toBeNull()
+  })
+
+  // MUTATION: widen the strip's derivation past stamped anchors — include the
+  // image pass's `.blocked-image` placeholders, the "let blocked images be
+  // acceptable too" implementation ruling Q3 rejected → the blocked image
+  // below is counted → red. The image pass keeps the last word: a placeholder
+  // is inert text, never a link, never counted.
+  it('never counts a link the image pass already blocked', () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          // Its only external reference is an image: blocked, placeholder text.
+          msg({
+            id: 'm-img',
+            role: 'assistant',
+            content: 'Pic: ![pic](https://external.example/pic.png).',
+          }),
+          // A link WRAPPING a blocked image: the image is inert, the anchor
+          // still navigates — so the link is counted, the placeholder is not.
+          msg({
+            id: 'm-wrap',
+            role: 'assistant',
+            content:
+              'Wrap: [![pic](https://external.example/pic.png)](https://external.example/page).',
+          }),
+        ]}
+      />
+    ))
+    expect(container.querySelector('.blocked-image')).toBeTruthy()
+    const strips = container.querySelectorAll('[data-testid="link-review-strip"]')
+    expect(strips.length).toBe(1)
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links unverified: 1')
+  })
+
+  it('presents this message’s unverified links for explicit selection, and accepting one accepts exactly that one', async () => {
+    const { container } = render(() => <ChatMessages messages={[twoLinks()]} />)
+    const listed = await openList(container)
+    // The item names the resolved address it accepts — explicit selection,
+    // not an unnamed "accept all".
+    expect(listed.map((el) => el.textContent)).toEqual([
+      `Accept as safe: ${GUIDE}`,
+      `Accept as safe: ${OTHER}`,
+    ])
+    acceptItem(listed[0])
+    await tick()
+
+    // Exactly the first link is accepted: its anchor navigates (no dialog)…
+    const eventA = clickAnchor(container, 0)
+    await tick()
+    expect(eventA.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+    // …slice 1's stamps are untouched on it (the store decides, not the DOM)…
+    const anchorA = container.querySelectorAll<HTMLAnchorElement>(
+      'a[data-link-review="unverified"]',
+    )[0]
+    expect(anchorA.getAttribute('data-link-review')).toBe('unverified')
+    expect(anchorA.getAttribute('data-link-dest')).toBe(GUIDE)
+    // …while the second link on the same host still reviews.
+    const eventB = clickAnchor(container, 1)
+    await tick()
+    expect(eventB.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-cancel"]')!,
+    )
+    await tick()
+    // And the indicator counts what acceptance has not taken: one link.
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links unverified: 1')
+  })
+
+  // MUTATION: drop the message id from the store's key → the same address in
+  // another message reads accepted → red. Ruling Q2: one link in ONE message.
+  it('accepting a link in one message never accepts the same address in another', async () => {
+    const { container } = render(() => (
+      <ChatMessages
+        messages={[
+          linkMsg({ id: 'm-one' }),
+          linkMsg({ id: 'm-two', content: 'Also [docs](https://external.example/guide) here.' }),
+        ]}
+      />
+    ))
+    const first = await openList(container)
+    acceptItem(first[0])
+    await tick()
+
+    // The first message's anchor navigates; the second message's same-address
+    // anchor still reviews — and its own indicator still counts it.
+    const event = clickAnchor(container, 1)
+    await tick()
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+    const labels = [
+      ...container.querySelectorAll('[data-testid="links-unverified-indicator"]'),
+    ].map((el) => el.getAttribute('aria-label'))
+    expect(labels).toEqual(['Links accepted', 'Links unverified: 1'])
+  })
+
+  it('keeps the indicator visible when every link is accepted, reading the accepted state', async () => {
+    const { container } = render(() => <ChatMessages messages={[linkMsg()]} />)
+    const listed = await openList(container)
+    acceptItem(listed[0])
+    await tick()
+
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links accepted')
+    // Nothing left to accept: the action is gone, the indicator is not.
+    expect(trigger(container)).toBeNull()
+    expect(container.querySelector('[data-testid="link-review-strip"]')).toBeTruthy()
+  })
+
+  it('announces the acceptance-state change through a polite live region', async () => {
+    const { container } = render(() => <ChatMessages messages={[twoLinks()]} />)
+    const announcer = container.querySelector('[data-testid="link-acceptance-announcer"]')!
+    expect(announcer.getAttribute('aria-live')).toBe('polite')
+    expect(announcer.textContent).toBe('')
+
+    const listed = await openList(container)
+    acceptItem(listed[0])
+    await tick()
+    expect(announcer.textContent).toContain(GUIDE)
+    expect(announcer.textContent).toContain('1 unverified link still to review')
+
+    const again = await openList(container)
+    acceptItem(again[0])
+    await tick()
+    expect(announcer.textContent).toBe('All links in this message are accepted for this session.')
+  })
+
+  // The defang composes as-is (slice 2, ruling Q5): a defanged anchor is inert
+  // text in this rendering — it leaves the count and the Accept-as-safe list,
+  // and no acceptance may bring it back.
+  it('drops a defanged link from the list, and an acceptance never resurrects it', async () => {
+    const { container } = render(() => <ChatMessages messages={[twoLinks()]} />)
+    const anchors = container.querySelectorAll<HTMLAnchorElement>(
+      'a[data-link-review="unverified"]',
+    )
+    fireEvent.click(anchors[0])
+    await tick()
+    fireEvent.click(
+      document.querySelector<HTMLButtonElement>('[data-testid="link-review-defang"]')!,
+    )
+    await tick()
+
+    // The defanged link is no longer a link: not counted, not offered.
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links unverified: 1')
+    const listed = await openList(container)
+    expect(listed.map((el) => el.textContent)).toEqual([`Accept as safe: ${OTHER}`])
+
+    acceptItem(listed[0])
+    await tick()
+    // The surviving link is accepted; the defanged one stayed inert text —
+    // never keyboard-reachable again (no anchor to its address), its words
+    // kept. The accepted link's anchor stays stamped: the store decides, the
+    // DOM records nothing.
+    const stampedAfter = [...container.querySelectorAll<HTMLAnchorElement>('a[data-link-review]')]
+    expect(stampedAfter.map((a) => a.getAttribute('data-link-dest'))).toEqual([OTHER])
+    expect(container.querySelector('a[href="https://external.example/guide"]')).toBeNull()
+    expect(container.textContent).toContain('first')
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links accepted')
+  })
+
+  it('an acceptance survives a re-render derived from message.content — the stamps are what re-render', async () => {
+    const [messages, setMessages] = createSignal<Message[]>([linkMsg({ id: 'm-stream' })])
+    const { container } = render(() => <ChatMessages messages={messages()} />)
+    const listed = await openList(container)
+    acceptItem(listed[0])
+    await tick()
+
+    // A streaming content update: a NEW message object, the same id.
+    setMessages([
+      linkMsg({
+        id: 'm-stream',
+        content: linkMsg().content + ' See [more](https://external.example/more).',
+      }),
+    ])
+    await tick()
+
+    // Both anchors re-rendered stamped (slice 1's stamps untouched)…
+    const stamped = container.querySelectorAll<HTMLAnchorElement>(
+      'a[data-link-review="unverified"]',
+    )
+    expect(stamped.length).toBe(2)
+    // …and the store still decides: the accepted one navigates, the new one reviews.
+    const eventAccepted = new MouseEvent('click', { bubbles: true, cancelable: true })
+    stamped[0].dispatchEvent(eventAccepted)
+    await tick()
+    expect(eventAccepted.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+    const eventNew = new MouseEvent('click', { bubbles: true, cancelable: true })
+    stamped[1].dispatchEvent(eventNew)
+    await tick()
+    expect(eventNew.defaultPrevented).toBe(true)
+  })
+
+  // MUST 1 (code review r1): acceptance rode Menu.Item's onClick — Ark's
+  // keyboard path selects through the machine's SELECT EVENT, never a DOM
+  // click fired by the user's handler — so a keyboard user's Enter accepted
+  // nothing (the reviewer's run: focus → Enter → Enter left the indicator at
+  // "Links unverified: 1"). `onSelect` is the both-path prop: zag invokes it
+  // on pointer AND keyboard selection. The pin drives the menu open by
+  // keyboard (Enter on the trigger) and selects the item through the event
+  // zag's keyboard path dispatches — `menu:select`, dispatched on the item
+  // element by the machine's invokeOnSelect and the only thing the item's
+  // onSelect listens for. The full machine keyboard walk (highlight →
+  // Enter → clickHighlightedItem) is unreachable in jsdom: zag builds its
+  // item selector as an UNQUOTED escaped value (`[data-ownedby=menu\:…\:]`),
+  // which jsdom's CSS engine never matches, so the machine highlights
+  // nothing here and its Enter step no-ops — environment limitation, not a
+  // claim about browsers. The mutant the pin guards: acceptance back on
+  // onClick — the select event reaches nothing and the link still reviews.
+  // The action's accessible name is asserted here too (it comes from the
+  // visible text; pinned through the role query so an orphaned name goes
+  // red — review r1's note).
+  it('accepts through the keyboard path: Enter opens, the select event accepts, the anchor navigates without a dialog', async () => {
+    const { container, getByRole } = render(() => <ChatMessages messages={[linkMsg()]} />)
+    // The action's accessible name (review r1 note: it comes from the visible
+    // text — pinned through the role query, so an orphaned name goes red).
+    const triggerEl = getByRole('button', { name: 'Accept as safe' }) as HTMLButtonElement
+    expect(triggerEl.dataset.testid).toBe('accept-as-safe-trigger')
+    expect(triggerEl.textContent).toBe('Accept as safe')
+
+    // Keyboard: Enter on the trigger opens the menu.
+    triggerEl.focus()
+    fireEvent.keyDown(triggerEl, { key: 'Enter' })
+    await tick()
+    const item = document.querySelector('[data-testid="accept-as-safe-item"]')!
+    expect(item).toBeTruthy()
+    // ...and the machine's keyboard selection dispatches `menu:select` on the
+    // highlighted item — the both-path prop fires here, not on a DOM click.
+    item.dispatchEvent(new CustomEvent('menu:select'))
+    await tick()
+
+    // The keyboard selection accepted the link: the anchor navigates with no
+    // dialog, the indicator reads the accepted state.
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    container.querySelector('a[data-link-review="unverified"]')!.dispatchEvent(event)
+    await tick()
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links accepted')
+  })
+
+  // SHOULD 1 (code review r1): the acceptance check sits in front of the
+  // fail-closed branch, so a regression that made the guard TRUST a missing
+  // key would go green. Pin both missing-key shapes: the exact pair is
+  // pre-accepted in the store, then each key is stripped from the live DOM —
+  // an unkeyable link can never prove acceptance, so its navigation stays
+  // prevented. MUTATION: a null-handling "fix" that reads a missing key as
+  // accepted (`messageId === null || dest === null || isAccepted(...)`) →
+  // both shapes navigate → red.
+  it('stays fail-closed when the anchor or its container is missing an acceptance key', async () => {
+    const store = createLinkAcceptanceStore()
+    store.accept('m-accept', GUIDE)
+    const { container } = render(() => (
+      <ChatMessages messages={[linkMsg()]} linkAcceptance={store} />
+    ))
+    const anchor = container.querySelector('a[data-link-review="unverified"]')!
+    const prose = container.querySelector('[data-message-id]')!
+
+    // Shape 1: a stamped anchor missing `data-link-dest`. Not keyable, not
+    // reviewable (the dialog needs the dest too): intercepted, no dialog.
+    anchor.removeAttribute('data-link-dest')
+    const noDest = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchor.dispatchEvent(noDest)
+    await tick()
+    expect(noDest.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+
+    // Shape 2: a prose container missing `data-message-id`, on a fully
+    // stamped anchor (shape 1's stripped dest is put back). The acceptance
+    // key is unkeyable, so the pre-accepted pair must NOT take: intercepted.
+    // The review dialog still opens — it keys on raw/dest, which remain —
+    // the honest form of "no acceptance" here: what the branch fails closed
+    // on is the NAVIGATION, and the review path is slice 2's own.
+    anchor.setAttribute('data-link-dest', GUIDE)
+    prose.removeAttribute('data-message-id')
+    const noId = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchor.dispatchEvent(noId)
+    await tick()
+    expect(noId.defaultPrevented).toBe(true)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeTruthy()
+  })
+
+  it('uses the passed session store rather than its own fallback', () => {
+    const store = createLinkAcceptanceStore()
+    store.accept('m-one', 'https://external.example/guide')
+    const { container } = render(() => (
+      <ChatMessages messages={[linkMsg({ id: 'm-one' })]} linkAcceptance={store} />
+    ))
+    // Pre-accepted on mount: the anchor navigates without a dialog, the strip
+    // reads the accepted state, and there is nothing left to accept.
+    const anchor = container.querySelector<HTMLAnchorElement>('a[data-link-review="unverified"]')!
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchor.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.querySelector('[data-testid="link-review-dialog"]')).toBeNull()
+    expect(indicator(container)!.getAttribute('aria-label')).toBe('Links accepted')
+    expect(trigger(container)).toBeNull()
   })
 })

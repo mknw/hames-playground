@@ -85,7 +85,7 @@ const NOT_GATED = [
  * These are the app's existing accessibility debt, already measured and written up
  * in `A11Y-CHECKLIST.md`. The gate's job is to stop the list GROWING; shrinking it
  * is UI work with its own review, and each entry below says why it has not had one
- * yet. Three entries have already left that way — see the note above `header-strip`.
+ * yet. Four entries have already left that way — see the notes inside the list.
  */
 const KNOWN_OPEN: Record<string, readonly string[]> = {
   // Present on all three surfaces in both themes, because all three are the same
@@ -116,16 +116,15 @@ const KNOWN_OPEN: Record<string, readonly string[]> = {
   'header-strip:dark': ['button-name'],
   'header-strip:light': ['button-name'],
 
-  // Plus, wherever a scrolling list is on screen:
-  //  - `scrollable-region-focusable` (serious): the thread list and the transcript
-  //    scroll but take no keyboard focus, so a keyboard user cannot scroll them.
-  //    A `tabindex="0"` on a scroll container is a real fix with a real
-  //    consequence for the tab order, which is `keyboard-nav` on the checklist and
-  //    a thing a person has to try rather than a line to add.
-  'sidebar-with-rows:dark': ['button-name', 'scrollable-region-focusable'],
-  'sidebar-with-rows:light': ['button-name', 'scrollable-region-focusable'],
-  'chat-view:dark': ['button-name', 'scrollable-region-focusable'],
-  'chat-view:light': ['button-name', 'scrollable-region-focusable'],
+  // A FOURTH LEFT WITH #1010: `scrollable-region-focusable` (serious). The
+  // node axe named was the Context Manager timeline's scroll container
+  // (`ObservabilityPanel`'s `overflow="auto"` body), which held no focusable
+  // content; #1010 groups controller events under a Collapsible trigger, a
+  // button, so the region now has focusable content and the rule stops firing.
+  'sidebar-with-rows:dark': ['button-name'],
+  'sidebar-with-rows:light': ['button-name'],
+  'chat-view:dark': ['button-name'],
+  'chat-view:light': ['button-name'],
 }
 
 for (const theme of THEMES) {

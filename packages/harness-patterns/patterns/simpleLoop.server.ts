@@ -61,6 +61,7 @@ import {
   isRecoverableLLMFailure,
   unparseableOutputFeedback,
   invalidToolArgsFeedback,
+  unterminatedStringFeedback,
   trackLoopRecovery,
   resolveMaxConsecutiveRecoveries,
   recoveryStreak,
@@ -439,6 +440,19 @@ function roundEffect(round: LoopRound): 'dispatched' | 'unusable' | 'none' {
 }
 
 /**
+ * The result the CONTROLLER's turn log shows for a failed call: the verbatim
+ * error, with the #1018 newline-escape fix appended when the failure is that
+ * signature. The committed `tool_result` event keeps the verbatim error.
+ */
+function seenResult(
+  resultData: ToolResultEventData,
+  toolError: string,
+  newlineFix: string | undefined,
+): ToolResultEventData {
+  return newlineFix ? { ...resultData, error: `${toolError}\n${newlineFix}` } : resultData
+}
+
+/**
  * The turn-log entry of one consumed round, or undefined for a round that ends
  * the loop. THE one builder: every branch of the loop and the resume both call
  * it, so the next controller input of a resumed run equals that of a run that
@@ -518,7 +532,12 @@ function projectRound(round: LoopRound, p: Projection): LoopTurn | undefined {
       tool: action.tool_name,
       result: truncateTo(resultStr, p.maxResultChars),
       success: result?.success ?? false,
-      error: result?.error == null ? null : truncateTo(result.error, p.maxResultChars),
+      // A recovery's `feedback` is what the live run put in the turn log for
+      // this round (#1018: the newline-escape fix appended to a tool error),
+      // so a resume rebuilds the SAME entry from it instead of the bare error.
+      error:
+        recovery?.feedback ??
+        (result?.error == null ? null : truncateTo(result.error, p.maxResultChars)),
     },
     ...(expansions.length > 0 ? { expansions } : {}),
   }
@@ -978,18 +997,30 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...(result.sanitized ? { sanitized: result.sanitized } : {}),
           ...(result.ingress ? { ingress: [result.ingress] } : {}),
         }
+        const againError = result.error ?? 'Tool call failed'
+        // Same #1018 append as the main loop's single-call path: the released
+        // call's first execution is THIS dispatch, so it can carry the
+        // signature too.
+        const againFix = result.success
+          ? undefined
+          : unterminatedStringFeedback(resolvedArgs, result.error)
         trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
         if (hitlPending()) return scope
         turns.push(
           projectRound(
-            { n: again.n, action: again.action, calls: [{ call, result: resultData }] },
+            {
+              n: again.n,
+              action: again.action,
+              calls: [{ call, result: seenResult(resultData, againError, againFix) }],
+            },
             projection,
           )!,
         )
         if (!result.success) {
           trackLoopRecovery(scope, {
             failure: 'tool_error',
-            error: result.error ?? 'Tool call failed',
+            error: againError,
+            ...(againFix ? { feedback: `${againError}\n${againFix}` } : {}),
             tool: call.tool,
             turn: again.n,
             maxTurns,
@@ -1881,6 +1912,14 @@ export function simpleLoop<T extends SimpleLoopData>(
           ...(result.sanitized ? { sanitized: result.sanitized } : {}),
           ...(result.ingress ? { ingress: [result.ingress] } : {}),
         }
+        // #1018: a tool error that is the JSON-decoded-newline signature gets
+        // the exact fix APPENDED to what the next round reads — the projected
+        // turn-log entry here, the recovery's `feedback` below — while the
+        // committed tool_result event keeps the error verbatim.
+        const toolError = result.error ?? 'Tool call failed'
+        const newlineFix = result.success
+          ? undefined
+          : unterminatedStringFeedback(resolvedArgs, result.error)
         trackEvent(scope, 'tool_result', resultData, resolved.trackHistory)
 
         // The stop check after a single call (#433): the call is waiting for a
@@ -1894,7 +1933,14 @@ export function simpleLoop<T extends SimpleLoopData>(
         // CONTROLLER's view only — the event above keeps the complete result
         // for compactExecution and the citation extractors.
         turns.push(
-          projectRound({ n: turn, action, calls: [{ call, result: resultData }] }, projection)!,
+          projectRound(
+            {
+              n: turn,
+              action,
+              calls: [{ call, result: seenResult(resultData, toolError, newlineFix) }],
+            },
+            projection,
+          )!,
         )
 
         // A failed tool call is the round's observation, not the end of the
@@ -1906,7 +1952,8 @@ export function simpleLoop<T extends SimpleLoopData>(
         if (!result.success) {
           trackLoopRecovery(scope, {
             failure: 'tool_error',
-            error: result.error ?? 'Tool call failed',
+            error: toolError,
+            ...(newlineFix ? { feedback: `${toolError}\n${newlineFix}` } : {}),
             tool: action.tool_name,
             turn,
             maxTurns,
